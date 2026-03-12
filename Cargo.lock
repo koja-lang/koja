@@ -21,6 +21,7 @@ name = "expo-fmt"
 version = "0.1.0"
 dependencies = [
  "expo-ast",
+ "expo-parser",
 ]
 
 [[package]]

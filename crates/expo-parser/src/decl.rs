@@ -363,6 +363,7 @@ impl Parser {
         };
         self.expect(&TokenKind::RParen);
 
+        self.skip_newlines();
         let return_type = if self.eat(&TokenKind::Arrow).is_some() {
             Some(self.parse_type_expr())
         } else {
@@ -386,13 +387,16 @@ impl Parser {
 
     fn parse_param_list(&mut self) -> Vec<Param> {
         let mut params = Vec::new();
+        self.skip_newlines();
         params.push(self.parse_param());
         while self.eat(&TokenKind::Comma).is_some() {
+            self.skip_newlines();
             if self.at(&TokenKind::RParen) {
                 break;
             }
             params.push(self.parse_param());
         }
+        self.skip_newlines();
         params
     }
 

@@ -665,15 +665,18 @@ impl Parser {
         self.advance(); // [
 
         let mut elements = Vec::new();
+        self.skip_newlines();
         if !self.at(&TokenKind::RBracket) {
             elements.push(self.parse_expr());
             while self.eat(&TokenKind::Comma).is_some() {
+                self.skip_newlines();
                 if self.at(&TokenKind::RBracket) {
                     break;
                 }
                 elements.push(self.parse_expr());
             }
         }
+        self.skip_newlines();
         self.expect(&TokenKind::RBracket);
 
         Expr::List {
@@ -1038,17 +1041,20 @@ impl Parser {
 
     pub(crate) fn parse_arg_list(&mut self) -> Vec<Arg> {
         let mut args = Vec::new();
+        self.skip_newlines();
         if self.at(&TokenKind::RParen) {
             return args;
         }
 
         args.push(self.parse_arg());
         while self.eat(&TokenKind::Comma).is_some() {
+            self.skip_newlines();
             if self.at(&TokenKind::RParen) {
                 break;
             }
             args.push(self.parse_arg());
         }
+        self.skip_newlines();
         args
     }
 

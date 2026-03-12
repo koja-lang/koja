@@ -291,15 +291,22 @@ impl Lexer {
 
     fn lex_comment(&mut self) {
         let start = self.position();
-        let start_pos = self.pos;
 
+        // Skip the leading '#'
+        self.advance();
+        // Skip optional space after '#'
+        if !self.at_end() && self.peek() == ' ' {
+            self.advance();
+        }
+
+        let text_start = self.pos;
         while !self.at_end() && self.peek() != '\n' {
             self.advance();
         }
 
-        let name: String = self.chars[start_pos..self.pos].iter().collect();
+        let text: String = self.chars[text_start..self.pos].iter().collect();
         self.comments.push(Comment {
-            text: name,
+            text,
             span: Span::new(start, self.position()),
         });
     }

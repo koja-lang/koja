@@ -8,17 +8,67 @@ fn main() {
     if args.len() < 2 {
         eprintln!("expo compiler v{}", env!("CARGO_PKG_VERSION"));
         eprintln!("Usage: expo <command> [args]");
-        eprintln!("Commands: parse, lex");
+        eprintln!("Commands: fmt, parse, lex");
         process::exit(1);
     }
 
     match args[1].as_str() {
+        "fmt" => cmd_fmt(&args[2..]),
         "parse" => cmd_parse(&args[2..]),
         "lex" => cmd_lex(&args[2..]),
         other => {
             eprintln!("unknown command: {other}");
             process::exit(1);
         }
+    }
+}
+
+fn cmd_fmt(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("Usage: expo fmt <file.expo> [--check] [--write]");
+        process::exit(1);
+    }
+
+    let check = args.contains(&"--check".to_string());
+    let write = args.contains(&"--write".to_string());
+    let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+
+    let mut has_diff = false;
+    for path in &files {
+        let source = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error reading {path}: {e}");
+                process::exit(1);
+            }
+        };
+
+        let formatted = expo_fmt::format(&source);
+
+        if check {
+            if source != formatted {
+                println!("{path}: would reformat");
+                has_diff = true;
+            } else {
+                println!("{path}: ok");
+            }
+        } else if write {
+            if source != formatted {
+                if let Err(e) = fs::write(path, &formatted) {
+                    eprintln!("error writing {path}: {e}");
+                    process::exit(1);
+                }
+                println!("{path}: formatted");
+            } else {
+                println!("{path}: unchanged");
+            }
+        } else {
+            print!("{formatted}");
+        }
+    }
+
+    if check && has_diff {
+        process::exit(1);
     }
 }
 
