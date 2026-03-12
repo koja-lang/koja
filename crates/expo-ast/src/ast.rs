@@ -357,6 +357,12 @@ pub enum Expr {
         fields: Vec<FieldInit>,
         span: Span,
     },
+    Ternary {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+        span: Span,
+    },
     Try {
         expr: Box<Expr>,
         span: Span,

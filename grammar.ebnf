@@ -136,7 +136,10 @@ break_stmt = "break" ;
 
 expr = pipe_expr ;
 
-pipe_expr = or_expr , { "|>" , or_expr } ;
+pipe_expr = ternary_expr , { "|>" , ternary_expr } ;
+
+ternary_expr = or_expr , [ "?" , or_expr , ":" , or_expr ] ;
+(* Note: else branch is or_expr, not ternary_expr -- nesting prohibited *)
 
 or_expr = and_expr , { "or" , and_expr } ;
 

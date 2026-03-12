@@ -6,21 +6,22 @@ use crate::parser::Parser;
 
 // Binding powers for Pratt parsing
 pub(crate) const BP_ARROW: u8 = 1;
-pub(crate) const BP_PIPE_L: u8 = 2;
-pub(crate) const BP_PIPE_R: u8 = 3;
-pub(crate) const BP_OR_L: u8 = 4;
-pub(crate) const BP_OR_R: u8 = 5;
-pub(crate) const BP_AND_L: u8 = 6;
-pub(crate) const BP_AND_R: u8 = 7;
-pub(crate) const BP_NOT_R: u8 = 7;
-pub(crate) const BP_CMP_L: u8 = 8;
-pub(crate) const BP_CMP_R: u8 = 9;
-pub(crate) const BP_ADD_L: u8 = 10;
-pub(crate) const BP_ADD_R: u8 = 11;
-pub(crate) const BP_MUL_L: u8 = 12;
-pub(crate) const BP_MUL_R: u8 = 13;
-pub(crate) const BP_UNARY_R: u8 = 15;
-pub(crate) const BP_POSTFIX: u8 = 16;
+pub(crate) const BP_TERNARY: u8 = 3;
+pub(crate) const BP_PIPE_L: u8 = 4;
+pub(crate) const BP_PIPE_R: u8 = 5;
+pub(crate) const BP_OR_L: u8 = 6;
+pub(crate) const BP_OR_R: u8 = 7;
+pub(crate) const BP_AND_L: u8 = 8;
+pub(crate) const BP_AND_R: u8 = 9;
+pub(crate) const BP_NOT_R: u8 = 9;
+pub(crate) const BP_CMP_L: u8 = 10;
+pub(crate) const BP_CMP_R: u8 = 11;
+pub(crate) const BP_ADD_L: u8 = 12;
+pub(crate) const BP_ADD_R: u8 = 13;
+pub(crate) const BP_MUL_L: u8 = 14;
+pub(crate) const BP_MUL_R: u8 = 15;
+pub(crate) const BP_UNARY_R: u8 = 17;
+pub(crate) const BP_POSTFIX: u8 = 18;
 
 fn infix_bp(kind: &TokenKind) -> Option<(u8, u8)> {
     match kind {
@@ -151,13 +152,37 @@ impl Parser {
                         continue;
                     }
                     TokenKind::Question => {
-                        let span = Span::new(expr_span(&lhs).start, self.current_span().end);
-                        self.advance(); // ?
-                        lhs = Expr::Try {
-                            expr: Box::new(lhs),
-                            span,
-                        };
-                        continue;
+                        let adjacent =
+                            self.current_span().start.offset == expr_span(&lhs).end.offset;
+                        if adjacent {
+                            let span = Span::new(expr_span(&lhs).start, self.current_span().end);
+                            self.advance(); // ?
+                            lhs = Expr::Try {
+                                expr: Box::new(lhs),
+                                span,
+                            };
+                            continue;
+                        } else if BP_TERNARY >= min_bp {
+                            if matches!(lhs, Expr::Ternary { .. }) {
+                                let espan = self.current_span();
+                                self.error(
+                                    "nested ternary not allowed, use `cond` instead".into(),
+                                    espan,
+                                );
+                            }
+                            self.advance(); // ?
+                            let then_expr = self.parse_expr_bp(0);
+                            self.expect(&TokenKind::Colon);
+                            let else_expr = self.parse_expr_bp(BP_TERNARY + 1);
+                            let span = Span::new(expr_span(&lhs).start, expr_span(&else_expr).end);
+                            lhs = Expr::Ternary {
+                                condition: Box::new(lhs),
+                                then_expr: Box::new(then_expr),
+                                else_expr: Box::new(else_expr),
+                                span,
+                            };
+                            continue;
+                        }
                     }
                     TokenKind::ColonColon => {
                         // Turbofish: expr::<Type>(args)
@@ -1204,6 +1229,7 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
         | Expr::Spawn { span, .. }
         | Expr::String { span, .. }
         | Expr::StructConstruction { span, .. }
+        | Expr::Ternary { span, .. }
         | Expr::Try { span, .. }
         | Expr::Tuple { span, .. }
         | Expr::Unary { span, .. }

@@ -608,14 +608,33 @@ impl<'a> Printer<'a> {
                 params, body, span, ..
             } => {
                 let params_doc: Vec<Doc> = params.iter().map(closure_param_to_doc).collect();
-                concat(vec![
-                    text("fn "),
-                    intersperse(params_doc, text(", ")),
-                    text(" ->"),
-                    self.body_to_doc(body, span.end.line),
-                    hardline(),
-                    text("end"),
-                ])
+                let sig = if params.is_empty() {
+                    text("fn ")
+                } else {
+                    concat(vec![
+                        text("fn "),
+                        intersperse(params_doc, text(", ")),
+                        text(" "),
+                    ])
+                };
+                if body.len() == 1 {
+                    let body_doc = self.statements_to_doc(body, span.end.line);
+                    group(concat(vec![
+                        sig,
+                        text("->"),
+                        indent(2, concat(vec![line(), body_doc])),
+                        line(),
+                        text("end"),
+                    ]))
+                } else {
+                    concat(vec![
+                        sig,
+                        text("->"),
+                        self.body_to_doc(body, span.end.line),
+                        hardline(),
+                        text("end"),
+                    ])
+                }
             }
 
             Expr::ShortClosure { params, body, .. } => {
@@ -633,6 +652,31 @@ impl<'a> Printer<'a> {
 
             Expr::Await { expr: inner, .. } => {
                 concat(vec![text("await "), self.expr_to_doc(inner)])
+            }
+
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let cond_doc = self.expr_to_doc(condition);
+                let then_doc = self.expr_to_doc(then_expr);
+                let else_doc = self.expr_to_doc(else_expr);
+                group(concat(vec![
+                    cond_doc,
+                    indent(
+                        2,
+                        concat(vec![
+                            line(),
+                            text("? "),
+                            then_doc,
+                            line(),
+                            text(": "),
+                            else_doc,
+                        ]),
+                    ),
+                ]))
             }
 
             Expr::Try { expr: inner, .. } => concat(vec![self.expr_to_doc(inner), text("?")]),
@@ -1292,6 +1336,16 @@ fn expr_contains_block(expr: &Expr) -> bool {
         Expr::Binary { right, .. } => expr_contains_block(right),
         Expr::Try { expr, .. } => expr_contains_block(expr),
         Expr::Await { expr, .. } => expr_contains_block(expr),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_contains_block(condition)
+                || expr_contains_block(then_expr)
+                || expr_contains_block(else_expr)
+        }
         _ => false,
     }
 }
@@ -1465,6 +1519,7 @@ fn expr_start_line(expr: &Expr) -> u32 {
         | Spawn { span, .. }
         | String { span, .. }
         | StructConstruction { span, .. }
+        | Ternary { span, .. }
         | Try { span, .. }
         | Tuple { span, .. }
         | Unary { span, .. }
@@ -1498,6 +1553,7 @@ fn expr_end_line(expr: &Expr) -> u32 {
         | Spawn { span, .. }
         | String { span, .. }
         | StructConstruction { span, .. }
+        | Ternary { span, .. }
         | Try { span, .. }
         | Tuple { span, .. }
         | Unary { span, .. }
