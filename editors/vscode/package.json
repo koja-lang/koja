@@ -1,0 +1,32 @@
+{
+  "name": "expo-lang",
+  "displayName": "Expo Language",
+  "description": "Syntax highlighting for the Expo programming language",
+  "version": "0.1.0",
+  "publisher": "expo-lang",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "expo",
+        "aliases": ["Expo", "expo"],
+        "extensions": [".expo"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/expo-light.svg",
+          "dark": "./icons/expo-dark.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "expo",
+        "scopeName": "source.expo",
+        "path": "./syntaxes/expo.tmLanguage.json"
+      }
+    ]
+  }
+}
