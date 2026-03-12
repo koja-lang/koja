@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/expo-ast",
+    "crates/expo-driver",
+    "crates/expo-fmt",
+    "crates/expo-lexer",
+    "crates/expo-parser",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"

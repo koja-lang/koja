@@ -1,0 +1,16 @@
+[package]
+name = "expo-driver"
+description = "CLI frontend for the Expo language compiler"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "expo"
+path = "src/main.rs"
+
+[dependencies]
+expo-ast = { path = "../expo-ast" }
+expo-fmt = { path = "../expo-fmt" }
+expo-lexer = { path = "../expo-lexer" }
+expo-parser = { path = "../expo-parser" }

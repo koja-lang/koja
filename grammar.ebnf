@@ -1,0 +1,422 @@
+(* ========================================================================== *)
+(* Expo Language Grammar -- EBNF Specification                                *)
+(* ========================================================================== *)
+(*                                                                            *)
+(* Notation:                                                                  *)
+(*   { X }       = zero or more X                                             *)
+(*   [ X ]       = optional X                                                 *)
+(*   X | Y       = X or Y                                                     *)
+(*   ( X )       = grouping                                                   *)
+(*   "keyword"   = literal keyword / symbol                                   *)
+(*   (* ... *)   = comment                                                    *)
+(*                                                                            *)
+(* Whitespace and newlines are significant as statement separators but are     *)
+(* omitted from the grammar for readability. Newlines terminate statements;   *)
+(* line continuation is implicit after binary operators, ".", and ",".         *)
+(* ========================================================================== *)
+
+
+(* ========================================================================== *)
+(* 1. Program structure                                                       *)
+(* ========================================================================== *)
+
+program = { top_level_decl } ;
+
+top_level_decl = import_decl
+               | struct_decl
+               | enum_decl
+               | impl_block
+               | function_decl
+               | constant_decl
+               | shared_decl
+               | annotation ;
+
+
+(* ========================================================================== *)
+(* 2. Imports                                                                 *)
+(* ========================================================================== *)
+
+import_decl = "import" , import_path ;
+
+import_path = module_path , "." , import_target
+            | module_path ;
+
+module_path = IDENT , { "." , IDENT } ;
+
+import_target = IDENT                                   (* single item *)
+              | "{" , IDENT , { "," , IDENT } , "}"     (* grouped *)
+              | "*" ;                                    (* wildcard *)
+
+
+(* ========================================================================== *)
+(* 3. Type declarations                                                       *)
+(* ========================================================================== *)
+
+struct_decl = [ annotation ] , "struct" , TYPE_IDENT , [ type_params ] ,
+              { struct_field } ,
+              "end" ;
+
+struct_field = IDENT , ":" , type_expr , [ "=" , expr ] ;
+
+enum_decl = [ annotation ] , "enum" , TYPE_IDENT , [ type_params ] ,
+            { enum_variant } ,
+            "end" ;
+
+enum_variant = TYPE_IDENT                                           (* unit *)
+             | TYPE_IDENT , "(" , type_expr , { "," , type_expr } , ")"   (* tuple *)
+             | TYPE_IDENT , "{" , struct_field , { "," , struct_field } , "}" ; (* struct *)
+
+type_params = "<" , TYPE_IDENT , { "," , TYPE_IDENT } , ">" ;
+
+
+(* ========================================================================== *)
+(* 4. Impl blocks                                                             *)
+(* ========================================================================== *)
+
+impl_block = "impl" , type_expr , [ "for" , type_expr ] ,
+             { impl_member } ,
+             "end" ;
+
+impl_member = function_decl
+            | type_alias ;
+
+type_alias = "type" , TYPE_IDENT , "=" , type_expr ;
+
+
+(* ========================================================================== *)
+(* 5. Functions                                                               *)
+(* ========================================================================== *)
+
+function_decl = [ annotation ] , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
+                "(" , [ param_list ] , ")" , [ "->" , type_expr ] ,
+                { statement } ,
+                "end" ;
+
+param_list = param , { "," , param } ;
+
+param = [ "move" ] , IDENT , ":" , type_expr , [ "=" , expr ]
+      | "self" ;
+
+
+(* ========================================================================== *)
+(* 6. Type expressions                                                        *)
+(* ========================================================================== *)
+
+type_expr = "ref" , "<" , type_expr , ">"                            (* reference *)
+          | named_type , "<" , type_expr , { "," , type_expr } , ">"  (* generic *)
+          | named_type                                               (* simple *)
+          | "(" , type_expr , "," , type_expr , { "," , type_expr } , ")"  (* tuple *)
+          | "(" , ")" ;                                              (* unit *)
+
+named_type = TYPE_IDENT , { "." , TYPE_IDENT } ;
+
+(* Primitive types are just named types: u8, u16, u32, u64, i8, i16, i32, i64,
+   f32, f64, bool, String, Bytes. Option, Result, Vec, HashMap are generic
+   named types. No special grammar rules needed. *)
+
+
+(* ========================================================================== *)
+(* 7. Expressions                                                             *)
+(* ========================================================================== *)
+
+statement = expr
+          | assignment
+          | compound_assign
+          | return_stmt
+          | break_stmt ;
+
+lvalue = IDENT , { "." , IDENT } ;
+
+assignment = lvalue , "=" , expr
+           | pattern , "=" , expr ;
+
+return_stmt = "return" , [ expr ] ;
+
+break_stmt = "break" ;
+
+expr = pipe_expr ;
+
+pipe_expr = or_expr , { "|>" , or_expr } ;
+
+or_expr = and_expr , { "or" , and_expr } ;
+
+and_expr = not_expr , { "and" , not_expr } ;
+
+not_expr = "not" , not_expr
+         | comparison ;
+
+comparison = addition , [ comp_op , addition ] ;
+
+comp_op = "==" | "!=" | "<" | ">" | "<=" | ">=" ;
+
+addition = multiplication , { ( "+" | "-" ) , multiplication } ;
+
+multiplication = unary , { ( "*" | "/" | "%" ) , unary } ;
+
+unary = "-" , unary
+      | postfix ;
+
+postfix = primary , { postfix_op } ;
+
+postfix_op = "." , IDENT , "(" , [ arg_list ] , ")"        (* method call *)
+           | "." , IDENT                                    (* field access *)
+           | "(" , [ arg_list ] , ")"                       (* function call *)
+           | "?"                                            (* error propagation *)
+           | "::" , "<" , type_expr , { "," , type_expr } , ">"  (* turbofish *) ;
+
+arg_list = arg , { "," , arg } ;
+
+arg = [ IDENT , ":" ] , expr ;    (* positional or keyword *)
+
+primary = literal
+        | IDENT
+        | "self"
+        | struct_construction
+        | enum_construction
+        | closure
+        | short_closure
+        
+        | if_expr
+        | unless_expr
+        | match_expr
+        | cond_expr
+        | for_expr
+        | loop_expr
+        | arena_expr
+        | await_expr
+        | receive_expr
+        | spawn_call
+        | "(" , expr , ")"                                  (* grouping *)
+        | tuple_expr ;
+
+struct_construction = named_type , "{" ,
+                      field_init , { "," , field_init } , [ "," ] ,
+                      "}" ;
+
+field_init = IDENT , ":" , expr ;
+
+enum_construction = named_type , "." , TYPE_IDENT                     (* unit *)
+                  | named_type , "." , TYPE_IDENT ,
+                    "(" , expr , { "," , expr } , ")"                 (* tuple *)
+                  | named_type , "." , TYPE_IDENT ,
+                    "{" , field_init , { "," , field_init } , "}" ;   (* struct *)
+
+tuple_expr = "(" , expr , "," , expr , { "," , expr } , ")" ;
+
+
+(* ========================================================================== *)
+(* 8. Closures                                                                *)
+(* ========================================================================== *)
+
+(* Full closure: fn args -> body end *)
+closure = "fn" , [ closure_params ] , "->" ,
+          { statement } ,
+          "end" ;
+
+closure_params = closure_param , { "," , closure_param } ;
+
+closure_param = IDENT
+              | "(" , IDENT , { "," , IDENT } , ")"     (* destructured *)
+              | "_" ;
+
+(* Short arrow closure: (args -> expr) -- delimited by enclosing parens *)
+short_closure = closure_param_short , "->" , expr ;
+
+closure_param_short = IDENT
+                    | "(" , IDENT , { "," , IDENT } , ")"
+                    | "_" ;
+
+(* Function references are bare identifiers -- no sigil needed.
+   Since Expo has no function overloading, a bare function name
+   unambiguously refers to the function. foo() calls it, foo references it.
+   This is handled by the IDENT rule in primary. *)
+
+
+(* ========================================================================== *)
+(* 9. Control flow                                                            *)
+(* ========================================================================== *)
+
+if_expr = "if" , expr ,
+          { statement } ,
+          [ "else" , { statement } ] ,
+          "end" ;
+
+unless_expr = "unless" , expr ,
+              { statement } ,
+              "end" ;
+
+match_expr = "match" , expr ,
+             { match_arm } ,
+             "end" ;
+
+match_arm = pattern , [ "when" , expr ] , "->" , match_body ;
+
+match_body = statement
+           | { statement } ;       (* multi-line arm *)
+
+cond_expr = "cond" ,
+            { cond_arm } ,
+            "end" ;
+
+cond_arm = expr , "->" , match_body ;
+
+for_expr = "for" , pattern , "in" , expr ,
+           { statement } ,
+           "end" ;
+
+loop_expr = "loop" ,
+            { statement } ,
+            "end" ;
+
+
+(* ========================================================================== *)
+(* 10. Arena                                                                  *)
+(* ========================================================================== *)
+
+arena_expr = "arena" ,
+             { statement } ,
+             "end" ;
+
+
+(* ========================================================================== *)
+(* 11. Async                                                                  *)
+(* ========================================================================== *)
+
+(* spawn is a regular function call that takes a closure *)
+spawn_call = "spawn" , "(" , closure , ")" ;
+
+(* await is a keyword prefix on a handle expression *)
+await_expr = "await" , expr ;
+
+(* receive waits for the first of multiple async sources *)
+receive_expr = "receive" ,
+               { receive_arm } ,
+               "end" ;
+
+receive_arm = pattern , "=" , expr , "->" , match_body ;
+
+
+(* ========================================================================== *)
+(* 12. Pattern matching                                                       *)
+(* ========================================================================== *)
+
+pattern = "_"                                                       (* wildcard *)
+        | literal                                                   (* literal *)
+        | IDENT                                                     (* binding *)
+        | named_type , "." , TYPE_IDENT                             (* enum unit *)
+        | named_type , "." , TYPE_IDENT ,
+          "(" , pattern , { "," , pattern } , ")"                   (* enum tuple *)
+        | named_type , "." , TYPE_IDENT ,
+          "{" , field_pattern , { "," , field_pattern } , "}"       (* enum struct *)
+        | "(" , pattern , "," , pattern , { "," , pattern } , ")"   (* tuple *)
+        | "[" , [ pattern , { "," , pattern } ] , "]"               (* list *)
+        | TYPE_IDENT ,
+          "(" , pattern , { "," , pattern } , ")" ;                 (* Some/Ok/Err *)
+
+field_pattern = IDENT , [ ":" , pattern ] ;
+
+
+(* ========================================================================== *)
+(* 13. Literals                                                               *)
+(* ========================================================================== *)
+
+literal = integer_lit
+        | float_lit
+        | string_lit
+        | multiline_string_lit
+        | bool_lit
+        | list_lit
+        | "None"
+        | "()" ;                                                    (* unit *)
+
+integer_lit = DECIMAL_INT | HEX_INT | BIN_INT ;
+
+DECIMAL_INT = DIGIT , { DIGIT | "_" } ;
+HEX_INT     = "0x" , HEX_DIGIT , { HEX_DIGIT | "_" } ;
+BIN_INT     = "0b" , BIN_DIGIT , { BIN_DIGIT | "_" } ;
+
+float_lit = DECIMAL_INT , "." , DECIMAL_INT ;
+
+string_lit = '"' , { string_char | interpolation } , '"' ;
+multiline_string_lit = '"""' , { any_char | interpolation } , '"""' ;
+
+interpolation = "#{" , expr , [ ":" , FORMAT_SPEC ] , "}" ;
+
+FORMAT_SPEC = { DIGIT | LOWER | UPPER | "." | "<" | ">" | "^" | "+" | "-" | "0" } ;
+
+bool_lit = "true" | "false" ;
+
+list_lit = "[" , [ expr , { "," , expr } , [ "," ] ] , "]" ;
+
+
+(* ========================================================================== *)
+(* 14. Operators                                                              *)
+(* ========================================================================== *)
+
+(* Precedence (lowest to highest):                                            *)
+(*   1. |>  (pipe)                                                            *)
+(*   2. or                                                                    *)
+(*   3. and                                                                   *)
+(*   4. not                                                                   *)
+(*   5. ==  !=  <  >  <=  >=                                                  *)
+(*   6. +  -                                                                  *)
+(*   7. *  /  %                                                               *)
+(*   8. unary -                                                               *)
+(*   9. postfix: .method()  .field  ()  ?  ::<>                               *)
+(*                                                                            *)
+(* Assignment operators: =  +=  -=  *=  /=                                    *)
+
+compound_assign = lvalue , ( "+=" | "-=" | "*=" | "/=" ) , expr ;
+
+
+(* ========================================================================== *)
+(* 15. Annotations                                                            *)
+(* ========================================================================== *)
+
+annotation = "@" , IDENT , [ annotation_value ] ;
+
+annotation_value = string_lit
+                 | multiline_string_lit ;
+
+
+(* ========================================================================== *)
+(* 16. Comments                                                               *)
+(* ========================================================================== *)
+
+(* Line comments begin with # and extend to end of line.
+   No block comment syntax. *)
+
+comment = "#" , { any_char_except_newline } ;
+
+
+(* ========================================================================== *)
+(* 17. Other top-level declarations                                           *)
+(* ========================================================================== *)
+
+constant_decl = CONST_IDENT , "=" , expr ;
+
+shared_decl = "shared" , IDENT , ":" , type_expr ;
+
+
+(* ========================================================================== *)
+(* 18. Lexical elements                                                       *)
+(* ========================================================================== *)
+
+IDENT       = LOWER , { LOWER | UPPER | DIGIT | "_" | "?" } ;
+TYPE_IDENT  = UPPER , { LOWER | UPPER | DIGIT } ;
+CONST_IDENT = UPPER , { UPPER | DIGIT | "_" } ;
+
+LOWER     = "a" | ... | "z" ;
+UPPER     = "A" | ... | "Z" ;
+DIGIT     = "0" | ... | "9" ;
+HEX_DIGIT = DIGIT | "a" | ... | "f" | "A" | ... | "F" ;
+BIN_DIGIT = "0" | "1" ;
+
+
+(* ========================================================================== *)
+(* Reserved keywords                                                          *)
+(* ========================================================================== *)
+
+(* and, arena, await, break, cond, else, end, enum, false, fn, for, if,       *)
+(* impl, import, in, loop, match, move, none, not, or, priv, receive, ref,    *)
+(* return, self, shared, spawn, struct, true, type, unless, when               *)
