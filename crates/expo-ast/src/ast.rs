@@ -172,11 +172,26 @@ pub struct SharedDecl {
 
 #[derive(Debug, Clone)]
 pub enum TypeExpr {
-    Named { path: Vec<String>, span: Span },
-    Generic { path: Vec<String>, args: Vec<TypeExpr>, span: Span },
-    Ref { inner: Box<TypeExpr>, span: Span },
-    Tuple { elements: Vec<TypeExpr>, span: Span },
-    Unit { span: Span },
+    Named {
+        path: Vec<String>,
+        span: Span,
+    },
+    Generic {
+        path: Vec<String>,
+        args: Vec<TypeExpr>,
+        span: Span,
+    },
+    Ref {
+        inner: Box<TypeExpr>,
+        span: Span,
+    },
+    Tuple {
+        elements: Vec<TypeExpr>,
+        span: Span,
+    },
+    Unit {
+        span: Span,
+    },
 }
 
 // ============================================================================
@@ -411,8 +426,15 @@ pub struct FieldInit {
 
 #[derive(Debug, Clone)]
 pub enum StringPart {
-    Literal { value: String, span: Span },
-    Interpolation { expr: Expr, format: Option<String>, span: Span },
+    Literal {
+        value: String,
+        span: Span,
+    },
+    Interpolation {
+        expr: Expr,
+        format: Option<String>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

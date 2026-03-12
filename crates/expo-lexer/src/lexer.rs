@@ -145,7 +145,15 @@ impl Lexer {
                 'A'..='Z' => self.lex_upper_ident(),
                 '0'..='9' => self.lex_number(),
                 '#' => self.lex_comment(),
-                '"' => self.lex_string(),
+                '"' => {
+                    if self.peek_next() == Some('"')
+                        && self.chars.get(self.pos + 2).copied() == Some('"')
+                    {
+                        self.lex_multiline_string();
+                    } else {
+                        self.lex_string();
+                    }
+                }
                 '\n' => self.lex_newline(),
 
                 c => {
@@ -304,12 +312,55 @@ impl Lexer {
             return;
         }
 
+        // Suppress newline before tokens that continue the previous expression
+        if self.next_nonws_continues() {
+            return;
+        }
+
         // Collapse consecutive newlines into one
         if self.last_token_kind() == Some(&TokenKind::Newline) {
             return;
         }
 
         self.emit(TokenKind::Newline, start);
+    }
+
+    /// Peek past whitespace (and comment lines) to check if the next
+    /// meaningful token starts with a continuation (`.` or `|>`).
+    fn next_nonws_continues(&self) -> bool {
+        let mut i = self.pos;
+        loop {
+            // Skip whitespace
+            while i < self.chars.len() && matches!(self.chars[i], ' ' | '\t' | '\r') {
+                i += 1;
+            }
+            if i >= self.chars.len() {
+                return false;
+            }
+            // Skip comment lines (# ... \n) and blank lines
+            if self.chars[i] == '#' {
+                while i < self.chars.len() && self.chars[i] != '\n' {
+                    i += 1;
+                }
+                if i < self.chars.len() {
+                    i += 1; // skip the \n
+                }
+                continue;
+            }
+            if self.chars[i] == '\n' {
+                i += 1;
+                continue;
+            }
+            break;
+        }
+        if i >= self.chars.len() {
+            return false;
+        }
+        match self.chars[i] {
+            '.' => true,
+            '|' => i + 1 < self.chars.len() && self.chars[i + 1] == '>',
+            _ => false,
+        }
     }
 
     /// Returns true if the last token indicates the expression continues on
@@ -383,6 +434,45 @@ impl Lexer {
         } else {
             self.errors.push(LexError {
                 message: "unterminated string".into(),
+                span: Span::new(start, self.position()),
+            });
+        }
+    }
+
+    fn lex_multiline_string(&mut self) {
+        let start = self.position();
+        self.advance(); // "
+        self.advance(); // "
+        self.advance(); // "
+        self.emit(TokenKind::MultilineStringStart, start);
+
+        let frag_start = self.position();
+        let frag_start_pos = self.pos;
+
+        while !self.at_end() {
+            if self.peek() == '"'
+                && self.peek_next() == Some('"')
+                && self.chars.get(self.pos + 2).copied() == Some('"')
+            {
+                break;
+            }
+            self.advance();
+        }
+
+        if frag_start_pos < self.pos {
+            let text: String = self.chars[frag_start_pos..self.pos].iter().collect();
+            self.emit(TokenKind::StringFragment(text), frag_start);
+        }
+
+        if !self.at_end() {
+            let end_start = self.position();
+            self.advance(); // "
+            self.advance(); // "
+            self.advance(); // "
+            self.emit(TokenKind::MultilineStringEnd, end_start);
+        } else {
+            self.errors.push(LexError {
+                message: "unterminated multiline string".into(),
                 span: Span::new(start, self.position()),
             });
         }
