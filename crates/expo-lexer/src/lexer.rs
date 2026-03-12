@@ -1,5 +1,26 @@
 use crate::{Comment, Position, Span, Token, TokenKind};
 
+// =============================================================================
+// Unfinished lexer features (not needed for basic auth-manager-expo parsing):
+//
+// - String interpolation: #{expr} and #{expr:format_spec} inside strings.
+//   Requires a mode stack to switch between string and normal lexing.
+//   Token sequence: StringStart, StringFragment, InterpolStart, ...tokens...,
+//   InterpolEnd, StringFragment, StringEnd.
+//
+// - Multiline strings: """...""" delimiters. Similar to regular strings but
+//   allow newlines. Need to detect three consecutive " chars.
+//
+// - Escape sequences in strings: \", \\, \n, \t, etc. Currently the lexer
+//   treats backslash as a regular character inside strings.
+//
+// - Hex integer literals: 0x1F, 0xFF_00. Check for '0x' prefix then consume
+//   hex digits [0-9a-fA-F_].
+//
+// - Binary integer literals: 0b1010, 0b1111_0000. Check for '0b' prefix then
+//   consume [01_].
+// =============================================================================
+
 #[derive(Debug)]
 pub struct LexResult {
     pub comments: Vec<Comment>,
@@ -123,24 +144,9 @@ impl Lexer {
                 'a'..='z' | '_' => self.lex_ident(),
                 'A'..='Z' => self.lex_upper_ident(),
                 '0'..='9' => self.lex_number(),
-                // ---------------------------------------------------------
-                // TODO: Fill in match arms layer by layer.
-                // Layer 5: numbers
-                //   '0'..='9' => self.lex_number(),
-                //
-                // Layer 6: comments
-                //   '#' => self.lex_comment(),
-                //
-                // Layer 7: strings
-                //   '"' => self.lex_string(),
-                //
-                // Layer 8: newlines
-                //   '\n' => self.lex_newline(),
-                // ---------------------------------------------------------
-                '\n' => {
-                    self.advance();
-                    // Newline handling will go here
-                }
+                '#' => self.lex_comment(),
+                '"' => self.lex_string(),
+                '\n' => self.lex_newline(),
 
                 c => {
                     let end = self.position();
@@ -170,11 +176,14 @@ impl Lexer {
         let name: String = self.chars[start_pos..self.pos].iter().collect();
         let kind = self.keyword_or_ident(name);
         self.emit(kind, start);
-
     }
 
     fn is_ident_char(&self, c: char) -> bool {
-        c.is_ascii_lowercase() || c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_' || c == '?'
+        c.is_ascii_lowercase()
+            || c.is_ascii_uppercase()
+            || c.is_ascii_digit()
+            || c == '_'
+            || c == '?'
     }
 
     fn keyword_or_ident(&self, name: String) -> TokenKind {
@@ -232,7 +241,11 @@ impl Lexer {
         }
 
         let name: String = self.chars[start_pos..self.pos].iter().collect();
-        let kind = if is_const { TokenKind::ConstIdent(name) } else { TokenKind::TypeIdent(name) };
+        let kind = if is_const {
+            TokenKind::ConstIdent(name)
+        } else {
+            TokenKind::TypeIdent(name)
+        };
         self.emit(kind, start);
     }
 
@@ -248,12 +261,131 @@ impl Lexer {
             self.advance();
         }
 
+        if !self.at_end() && self.peek() == '.' {
+            if self.peek_next().is_some_and(|c| c.is_ascii_digit()) {
+                self.advance();
+                while !self.at_end() && self.is_number_char(self.peek()) {
+                    self.advance();
+                }
+                let name: String = self.chars[start_pos..self.pos].iter().collect();
+                self.emit(TokenKind::FloatLit(name), start);
+                return;
+            }
+        }
+
         let name: String = self.chars[start_pos..self.pos].iter().collect();
         self.emit(TokenKind::IntLit(name), start);
     }
 
     fn is_number_char(&self, c: char) -> bool {
         c.is_ascii_digit() || c == '_'
+    }
+
+    fn lex_comment(&mut self) {
+        let start = self.position();
+        let start_pos = self.pos;
+
+        while !self.at_end() && self.peek() != '\n' {
+            self.advance();
+        }
+
+        let name: String = self.chars[start_pos..self.pos].iter().collect();
+        self.comments.push(Comment {
+            text: name,
+            span: Span::new(start, self.position()),
+        });
+    }
+
+    fn lex_newline(&mut self) {
+        let start = self.position();
+        self.advance();
+
+        if self.continues_line() {
+            return;
+        }
+
+        // Collapse consecutive newlines into one
+        if self.last_token_kind() == Some(&TokenKind::Newline) {
+            return;
+        }
+
+        self.emit(TokenKind::Newline, start);
+    }
+
+    /// Returns true if the last token indicates the expression continues on
+    /// the next line. Newlines after these tokens are suppressed.
+    fn continues_line(&self) -> bool {
+        match self.last_token_kind() {
+            None => true,
+            Some(kind) => matches!(
+                kind,
+                // Binary operators
+                TokenKind::Plus
+                    | TokenKind::Minus
+                    | TokenKind::Star
+                    | TokenKind::Slash
+                    | TokenKind::Percent
+                    | TokenKind::PipeRight
+                    | TokenKind::And
+                    | TokenKind::Or
+                    | TokenKind::Not
+                    | TokenKind::EqEq
+                    | TokenKind::NotEq
+                    | TokenKind::Lt
+                    | TokenKind::Gt
+                    | TokenKind::LtEq
+                    | TokenKind::GtEq
+                    // Assignment operators
+                    | TokenKind::Eq
+                    | TokenKind::PlusEq
+                    | TokenKind::MinusEq
+                    | TokenKind::StarEq
+                    | TokenKind::SlashEq
+                    // Punctuation that expects more
+                    | TokenKind::Arrow
+                    | TokenKind::Comma
+                    | TokenKind::Dot
+                    | TokenKind::Colon
+                    | TokenKind::ColonColon
+                    | TokenKind::At
+                    // Opening delimiters
+                    | TokenKind::LParen
+                    | TokenKind::LBrace
+                    | TokenKind::LBracket
+                    // Keywords that start blocks
+                    | TokenKind::Import
+                    | TokenKind::Newline
+            ),
+        }
+    }
+
+    fn lex_string(&mut self) {
+        let start = self.position();
+        self.advance();
+        self.emit(TokenKind::StringStart, start);
+
+        let frag_start = self.position();
+        let frag_start_pos = self.pos;
+
+        while !self.at_end() && self.peek() != '"' && self.peek() != '\n' {
+            self.advance();
+        }
+
+        if frag_start_pos < self.pos {
+            let text: String = self.chars[frag_start_pos..self.pos].iter().collect();
+            self.emit(TokenKind::StringFragment(text), frag_start);
+        }
+
+        if !self.at_end() && self.peek() == '"' {
+            let end_start = self.position();
+            self.advance();
+            self.emit(TokenKind::StringEnd, end_start);
+        } else {
+            self.errors.push(LexError {
+                message: "unterminated string".into(),
+                span: Span::new(start, self.position()),
+            });
+        }
     }
 
     // =====================================================================
