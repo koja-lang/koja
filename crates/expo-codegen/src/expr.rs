@@ -65,6 +65,8 @@ pub fn compile_expr<'ctx>(
 
         Expr::String { parts, .. } => compile_string(c, parts),
 
+        Expr::Loop { body, .. } => compile_loop(c, body, function),
+
         Expr::Self_ { .. } => {
             if let Some((ptr, ty)) = c.variables.get("self") {
                 let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)
@@ -124,6 +126,40 @@ fn compile_string<'ctx>(
     }
     let global = c.builder.build_global_string_ptr(&combined, "str").unwrap();
     Ok(Some(global.as_pointer_value().into()))
+}
+
+fn compile_loop<'ctx>(
+    c: &mut Compiler<'ctx>,
+    body: &[expo_ast::ast::Statement],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let loop_header = c.context.append_basic_block(function, "loop_header");
+    let loop_body = c.context.append_basic_block(function, "loop_body");
+    let loop_exit = c.context.append_basic_block(function, "loop_exit");
+
+    c.builder.build_unconditional_branch(loop_header).unwrap();
+
+    c.builder.position_at_end(loop_header);
+    c.builder.build_unconditional_branch(loop_body).unwrap();
+
+    c.builder.position_at_end(loop_body);
+    c.loop_exit_stack.push(loop_exit);
+
+    for stmt in body {
+        if c.current_block_terminated() {
+            break;
+        }
+        crate::stmt::compile_statement(c, stmt, function)?;
+    }
+
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(loop_header).unwrap();
+    }
+
+    c.loop_exit_stack.pop();
+    c.builder.position_at_end(loop_exit);
+
+    Ok(None)
 }
 
 fn compile_binary<'ctx>(

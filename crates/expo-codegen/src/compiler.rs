@@ -5,6 +5,7 @@ use expo_ast::ast::{Function, ImplMember, Item, Module, Param, TypeExpr};
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::Type;
 use inkwell::OptimizationLevel;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
@@ -25,6 +26,7 @@ pub struct Compiler<'ctx> {
     pub functions: HashMap<String, FunctionValue<'ctx>>,
     pub variables: HashMap<String, (PointerValue<'ctx>, Type)>,
     pub struct_types: HashMap<String, StructType<'ctx>>,
+    pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
     pub type_ctx: &'ctx TypeContext,
 }
 
@@ -39,6 +41,7 @@ impl<'ctx> Compiler<'ctx> {
             functions: HashMap::new(),
             variables: HashMap::new(),
             struct_types: HashMap::new(),
+            loop_exit_stack: Vec::new(),
             type_ctx,
         }
     }

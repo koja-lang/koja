@@ -68,7 +68,9 @@ pub fn compile_statement<'ctx>(
         }
 
         Statement::Break { .. } => {
-            Err("break outside of loop not yet supported in compilation".to_string())
+            let exit_block = c.loop_exit_stack.last().ok_or("break outside of loop")?;
+            c.builder.build_unconditional_branch(*exit_block).unwrap();
+            Ok(None)
         }
 
         Statement::CompoundAssign {

@@ -177,7 +177,11 @@ fn check_statement(
                 AssignTarget::Pattern(_) => {}
             }
         }
-        Statement::Break { .. } => {}
+        Statement::Break { span, .. } => {
+            if ctx.loop_depth == 0 {
+                ctx.error("break outside of loop".to_string(), *span);
+            }
+        }
         Statement::CompoundAssign {
             target,
             value,
@@ -586,6 +590,7 @@ fn infer_expr(
         Expr::For { iterable, body, .. } => {
             infer_expr(iterable, ctx, env, struct_names, enum_names);
             let mut loop_env = env.clone();
+            ctx.loop_depth += 1;
             check_body(
                 body,
                 ctx,
@@ -594,6 +599,7 @@ fn infer_expr(
                 struct_names,
                 enum_names,
             );
+            ctx.loop_depth -= 1;
             Type::Unit
         }
 
@@ -663,6 +669,7 @@ fn infer_expr(
 
         Expr::Loop { body, .. } => {
             let mut loop_env = env.clone();
+            ctx.loop_depth += 1;
             check_body(
                 body,
                 ctx,
@@ -671,7 +678,8 @@ fn infer_expr(
                 struct_names,
                 enum_names,
             );
-            Type::Unknown
+            ctx.loop_depth -= 1;
+            Type::Unit
         }
 
         Expr::Match { subject, arms, .. } => {

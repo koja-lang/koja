@@ -9,6 +9,7 @@ pub struct TypeContext {
     pub diagnostics: Vec<Diagnostic>,
     pub enums: HashMap<String, EnumInfo>,
     pub functions: HashMap<String, FunctionSig>,
+    pub loop_depth: usize,
     pub structs: HashMap<String, StructInfo>,
 }
 
@@ -56,6 +57,7 @@ impl TypeContext {
             diagnostics: Vec::new(),
             enums: HashMap::new(),
             functions: HashMap::new(),
+            loop_depth: 0,
             structs: HashMap::new(),
         }
     }
