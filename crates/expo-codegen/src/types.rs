@@ -1,10 +1,17 @@
+use std::collections::HashMap;
+
 use expo_typecheck::types::{Primitive, Type};
 use inkwell::context::Context;
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
 
-pub fn to_llvm_type<'ctx>(ty: &Type, context: &'ctx Context) -> Option<BasicTypeEnum<'ctx>> {
+pub fn to_llvm_type<'ctx>(
+    ty: &Type,
+    context: &'ctx Context,
+    struct_types: &HashMap<String, StructType<'ctx>>,
+) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
         Type::Primitive(p) => Some(primitive_to_llvm(p, context)),
+        Type::Struct(name) => struct_types.get(name).map(|st| (*st).into()),
         Type::Unit => None,
         _ => None,
     }
@@ -13,8 +20,9 @@ pub fn to_llvm_type<'ctx>(ty: &Type, context: &'ctx Context) -> Option<BasicType
 pub fn to_llvm_metadata_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
+    struct_types: &HashMap<String, StructType<'ctx>>,
 ) -> Option<BasicMetadataTypeEnum<'ctx>> {
-    to_llvm_type(ty, context).map(|t| t.into())
+    to_llvm_type(ty, context, struct_types).map(|t| t.into())
 }
 
 pub fn primitive_to_llvm<'ctx>(p: &Primitive, context: &'ctx Context) -> BasicTypeEnum<'ctx> {

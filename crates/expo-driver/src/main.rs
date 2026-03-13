@@ -9,7 +9,7 @@ fn main() {
     if args.len() < 2 {
         eprintln!("expo compiler v{}", env!("CARGO_PKG_VERSION"));
         eprintln!("Usage: expo <command> [args]");
-        eprintln!("Commands: build, check, format, lex, parse");
+        eprintln!("Commands: build, check, format, lex, parse, run");
         process::exit(1);
     }
 
@@ -19,6 +19,7 @@ fn main() {
         "format" => cmd_format(&args[2..]),
         "lex" => cmd_lex(&args[2..]),
         "parse" => cmd_parse(&args[2..]),
+        "run" => cmd_run(&args[2..]),
         other => {
             eprintln!("unknown command: {other}");
             process::exit(1);
@@ -27,6 +28,10 @@ fn main() {
 }
 
 fn cmd_build(args: &[String]) {
+    build(args, false);
+}
+
+fn build(args: &[String], quiet: bool) {
     if args.is_empty() {
         eprintln!("Usage: expo build <file.expo> [-o output]");
         process::exit(1);
@@ -108,7 +113,9 @@ fn cmd_build(args: &[String]) {
     match status {
         Ok(s) if s.success() => {
             let _ = fs::remove_file(&obj_path);
-            println!("compiled: {output}");
+            if !quiet {
+                println!("compiled: {output}");
+            }
         }
         Ok(s) => {
             eprintln!("linker failed with exit code: {}", s.code().unwrap_or(-1));
@@ -118,6 +125,41 @@ fn cmd_build(args: &[String]) {
         Err(e) => {
             eprintln!("failed to run linker: {e}");
             let _ = fs::remove_file(&obj_path);
+            process::exit(1);
+        }
+    }
+}
+
+fn cmd_run(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("Usage: expo run <file.expo>");
+        process::exit(1);
+    }
+
+    let path = &args[0];
+    let tmp_dir = env::temp_dir();
+    let binary = tmp_dir.join(format!(
+        "expo_run_{}",
+        Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("out")
+    ));
+    let output = binary.to_str().unwrap().to_string();
+
+    let build_args = vec![path.clone(), "-o".to_string(), output.clone()];
+    build(&build_args, true);
+
+    let status = process::Command::new(&binary)
+        .args(&args[1..])
+        .status();
+
+    let _ = fs::remove_file(&binary);
+
+    match status {
+        Ok(s) => process::exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("failed to run binary: {e}");
             process::exit(1);
         }
     }

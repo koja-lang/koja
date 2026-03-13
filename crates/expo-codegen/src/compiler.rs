@@ -10,7 +10,7 @@ use inkwell::module::Module as LlvmModule;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::{BasicMetadataTypeEnum, BasicType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, StructType};
 use inkwell::values::{FunctionValue, PointerValue};
 use inkwell::OptimizationLevel;
 
@@ -24,6 +24,7 @@ pub struct Compiler<'ctx> {
     pub builder: Builder<'ctx>,
     pub functions: HashMap<String, FunctionValue<'ctx>>,
     pub variables: HashMap<String, (PointerValue<'ctx>, Type)>,
+    pub struct_types: HashMap<String, StructType<'ctx>>,
     pub type_ctx: &'ctx TypeContext,
 }
 
@@ -37,17 +38,32 @@ impl<'ctx> Compiler<'ctx> {
             builder,
             functions: HashMap::new(),
             variables: HashMap::new(),
+            struct_types: HashMap::new(),
             type_ctx,
         }
     }
 
     pub fn compile_module(&mut self, module: &Module) -> Result<(), String> {
+        self.register_struct_types();
         self.declare_builtins();
         self.declare_functions(module)?;
         self.define_functions(module)?;
         self.module
             .verify()
             .map_err(|e| format!("LLVM verification failed: {}", e.to_string()))
+    }
+
+    fn register_struct_types(&mut self) {
+        for (name, info) in &self.type_ctx.structs {
+            let struct_type = self.context.opaque_struct_type(name);
+            let field_types: Vec<_> = info
+                .fields
+                .iter()
+                .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
+                .collect();
+            struct_type.set_body(&field_types, false);
+            self.struct_types.insert(name.clone(), struct_type);
+        }
     }
 
     fn declare_builtins(&mut self) {
@@ -78,7 +94,7 @@ impl<'ctx> Compiler<'ctx> {
                 .i32_type()
                 .fn_type(&param_types, false)
         } else {
-            match to_llvm_type(&return_type, self.context) {
+            match to_llvm_type(&return_type, self.context, &self.struct_types) {
                 Some(ret_ty) => ret_ty.fn_type(&param_types, false),
                 None => self.context.void_type().fn_type(&param_types, false),
             }
@@ -113,7 +129,7 @@ impl<'ctx> Compiler<'ctx> {
             } = param
             {
                 let param_ty = self.resolve_type_expr(type_expr);
-                if let Some(llvm_ty) = to_llvm_type(&param_ty, self.context) {
+                if let Some(llvm_ty) = to_llvm_type(&param_ty, self.context, &self.struct_types) {
                     let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
                     let param_val = fn_value.get_nth_param(i as u32).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
@@ -191,7 +207,8 @@ impl<'ctx> Compiler<'ctx> {
         for param in params {
             if let Param::Regular { type_expr, .. } = param {
                 let ty = self.resolve_type_expr(type_expr);
-                if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context) {
+                if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context, &self.struct_types)
+                {
                     types.push(llvm_ty);
                 }
             }
@@ -221,6 +238,24 @@ impl<'ctx> Compiler<'ctx> {
         machine
             .write_to_file(&self.module, FileType::Object, path)
             .map_err(|e| format!("failed to write object file: {}", e.to_string()))
+    }
+
+    pub fn get_field_index(&self, struct_name: &str, field_name: &str) -> Option<u32> {
+        self.type_ctx.structs.get(struct_name).and_then(|info| {
+            info.fields
+                .iter()
+                .position(|(name, _)| name == field_name)
+                .map(|i| i as u32)
+        })
+    }
+
+    pub fn get_field_type(&self, struct_name: &str, field_name: &str) -> Option<Type> {
+        self.type_ctx.structs.get(struct_name).and_then(|info| {
+            info.fields
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, ty)| ty.clone())
+        })
     }
 }
 
