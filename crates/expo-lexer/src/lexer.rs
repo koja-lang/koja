@@ -15,12 +15,6 @@ use crate::{Comment, Position, Span, Token, TokenKind};
 //
 // - Escape sequences in strings: \", \\, \n, \t, etc. Currently the lexer
 //   treats backslash as a regular character inside strings.
-//
-// - Hex integer literals: 0x1F, 0xFF_00. Check for '0x' prefix then consume
-//   hex digits [0-9a-fA-F_].
-//
-// - Binary integer literals: 0b1010, 0b1111_0000. Check for '0b' prefix then
-//   consume [01_].
 // =============================================================================
 
 #[derive(Debug)]
@@ -268,6 +262,50 @@ impl Lexer {
         let start = self.position();
         let start_pos = self.pos;
 
+        if self.peek() == '0'
+            && let Some(next) = self.peek_next()
+        {
+            if next == 'x' || next == 'X' {
+                self.advance(); // 0
+                self.advance(); // x
+                let digit_start = self.pos;
+                while !self.at_end() && self.is_hex_char(self.peek()) {
+                    self.advance();
+                }
+                if self.pos == digit_start {
+                    self.errors.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: "expected hex digits after '0x'".into(),
+                        hint: Some("hex literals use digits 0-9 and a-f, e.g. 0xFF".into()),
+                        span: Span::new(start, self.position()),
+                    });
+                    return;
+                }
+                let name: String = self.chars[start_pos..self.pos].iter().collect();
+                self.emit(TokenKind::IntLit(name), start);
+                return;
+            } else if next == 'b' || next == 'B' {
+                self.advance(); // 0
+                self.advance(); // b
+                let digit_start = self.pos;
+                while !self.at_end() && self.is_binary_char(self.peek()) {
+                    self.advance();
+                }
+                if self.pos == digit_start {
+                    self.errors.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: "expected binary digits after '0b'".into(),
+                        hint: Some("binary literals use digits 0 and 1, e.g. 0b1010".into()),
+                        span: Span::new(start, self.position()),
+                    });
+                    return;
+                }
+                let name: String = self.chars[start_pos..self.pos].iter().collect();
+                self.emit(TokenKind::IntLit(name), start);
+                return;
+            }
+        }
+
         while !self.at_end() && self.is_number_char(self.peek()) {
             self.advance();
         }
@@ -291,6 +329,14 @@ impl Lexer {
 
     fn is_number_char(&self, c: char) -> bool {
         c.is_ascii_digit() || c == '_'
+    }
+
+    fn is_hex_char(&self, c: char) -> bool {
+        c.is_ascii_hexdigit() || c == '_'
+    }
+
+    fn is_binary_char(&self, c: char) -> bool {
+        c == '0' || c == '1' || c == '_'
     }
 
     fn lex_comment(&mut self) {

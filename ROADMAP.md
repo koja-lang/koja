@@ -33,7 +33,7 @@ Enums, match, cond, for, closures (both forms), arena, await/receive/spawn, tern
 ### Known gaps
 
 - **Type checker**: generics resolve to `Unknown`, no multi-module name resolution, no `priv fn` visibility enforcement, `ref<T>` unresolved
-- **Lexer**: hex/binary integer literals not implemented, string interpolation is a stub, escape sequences incomplete
+- **Lexer**: string interpolation is a stub, escape sequences incomplete
 
 ### Design artifacts
 
@@ -64,7 +64,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work.
 
-**Remaining gaps**: hex/binary integer literals (`0x`, `0b`) not tokenized, string interpolation (`#{}`) is a stub in the lexer, escape sequences incomplete.
+**Remaining gaps**: string interpolation (`#{}`) is a stub in the lexer, escape sequences incomplete.
 
 ### Month 2 -- Type system and semantic analysis (~40% complete)
 

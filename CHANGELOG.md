@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Hex (`0xFF`) and binary (`0b1010`) integer literals.
+- Underscore separators in numeric literals (`1_000`, `0xFF_FF`).
+
 ## [0.1.0] - 2026-03-13
 
 ### Added

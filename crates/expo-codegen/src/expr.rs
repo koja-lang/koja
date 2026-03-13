@@ -97,7 +97,20 @@ fn compile_literal<'ctx>(
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     match lit {
         Literal::Int(s) => {
-            let val: i64 = s.parse().map_err(|_| format!("invalid integer: {s}"))?;
+            let clean: String = s.chars().filter(|c| *c != '_').collect();
+            let val: i64 = if let Some(hex) = clean
+                .strip_prefix("0x")
+                .or_else(|| clean.strip_prefix("0X"))
+            {
+                i64::from_str_radix(hex, 16).map_err(|_| format!("invalid hex integer: {s}"))?
+            } else if let Some(bin) = clean
+                .strip_prefix("0b")
+                .or_else(|| clean.strip_prefix("0B"))
+            {
+                i64::from_str_radix(bin, 2).map_err(|_| format!("invalid binary integer: {s}"))?
+            } else {
+                clean.parse().map_err(|_| format!("invalid integer: {s}"))?
+            };
             Ok(Some(
                 c.context.i32_type().const_int(val as u64, true).into(),
             ))
