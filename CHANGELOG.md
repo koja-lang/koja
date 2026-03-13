@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- String interpolation (`"hello #{name}"`).
+- Escape sequences in strings: `\"`, `\\`, `\n`, `\t`, `\#`.
+- Multiline strings (`"""`) in expression position.
 - Hex (`0xFF`) and binary (`0b1010`) integer literals.
 - Underscore separators in numeric literals (`1_000`, `0xFF_FF`).
 

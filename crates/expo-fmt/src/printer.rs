@@ -840,7 +840,7 @@ impl<'a> Printer<'a> {
             for part in parts {
                 match part {
                     StringPart::Literal { value, .. } => {
-                        doc_parts.push(text(value.clone()));
+                        doc_parts.push(text(escape_string_literal(value)));
                     }
                     StringPart::Interpolation { expr, format, .. } => {
                         doc_parts.push(text("#{"));
@@ -1575,4 +1575,20 @@ fn expr_end_line(expr: &Expr) -> u32 {
         | Unless { span, .. }
         | While { span, .. } => span.end.line,
     }
+}
+
+fn escape_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '#' if chars.peek() == Some(&'{') => out.push_str("\\#"),
+            _ => out.push(c),
+        }
+    }
+    out
 }

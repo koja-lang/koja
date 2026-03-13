@@ -2,26 +2,23 @@ use expo_ast::ast::{Diagnostic, Severity};
 
 use crate::{Comment, Position, Span, Token, TokenKind};
 
-// =============================================================================
-// Unfinished lexer features (not needed for basic auth-manager-expo parsing):
-//
-// - String interpolation: #{expr} and #{expr:format_spec} inside strings.
-//   Requires a mode stack to switch between string and normal lexing.
-//   Token sequence: StringStart, StringFragment, InterpolStart, ...tokens...,
-//   InterpolEnd, StringFragment, StringEnd.
-//
-// - Multiline strings: """...""" delimiters. Similar to regular strings but
-//   allow newlines. Need to detect three consecutive " chars.
-//
-// - Escape sequences in strings: \", \\, \n, \t, etc. Currently the lexer
-//   treats backslash as a regular character inside strings.
-// =============================================================================
-
 #[derive(Debug)]
 pub struct LexResult {
     pub comments: Vec<Comment>,
     pub errors: Vec<Diagnostic>,
     pub tokens: Vec<Token>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum StringMode {
+    Single,
+    Multiline,
+}
+
+#[derive(Debug)]
+struct InterpolState {
+    mode: StringMode,
+    brace_depth: u32,
 }
 
 struct Lexer {
@@ -32,6 +29,7 @@ struct Lexer {
     tokens: Vec<Token>,
     comments: Vec<Comment>,
     errors: Vec<Diagnostic>,
+    string_stack: Vec<InterpolState>,
 }
 
 pub fn lex(source: &str) -> LexResult {
@@ -54,6 +52,7 @@ impl Lexer {
             tokens: Vec::new(),
             comments: Vec::new(),
             errors: Vec::new(),
+            string_stack: Vec::new(),
         }
     }
 
@@ -69,8 +68,29 @@ impl Lexer {
             match self.peek() {
                 '(' => self.single(TokenKind::LParen),
                 ')' => self.single(TokenKind::RParen),
-                '{' => self.single(TokenKind::LBrace),
-                '}' => self.single(TokenKind::RBrace),
+                '{' => {
+                    self.single(TokenKind::LBrace);
+                    if let Some(state) = self.string_stack.last_mut() {
+                        state.brace_depth += 1;
+                    }
+                }
+                '}' => {
+                    if let Some(state) = self.string_stack.last_mut() {
+                        if state.brace_depth > 0 {
+                            state.brace_depth -= 1;
+                            self.single(TokenKind::RBrace);
+                        } else {
+                            let mode = state.mode;
+                            self.string_stack.pop();
+                            let interp_end = self.position();
+                            self.advance();
+                            self.emit(TokenKind::InterpolEnd, interp_end);
+                            self.lex_string_body(mode == StringMode::Multiline);
+                        }
+                    } else {
+                        self.single(TokenKind::RBrace);
+                    }
+                }
                 '[' => self.single(TokenKind::LBracket),
                 ']' => self.single(TokenKind::RBracket),
                 ',' => self.single(TokenKind::Comma),
@@ -469,33 +489,9 @@ impl Lexer {
 
     fn lex_string(&mut self) {
         let start = self.position();
-        self.advance();
+        self.advance(); // opening "
         self.emit(TokenKind::StringStart, start);
-
-        let frag_start = self.position();
-        let frag_start_pos = self.pos;
-
-        while !self.at_end() && self.peek() != '"' && self.peek() != '\n' {
-            self.advance();
-        }
-
-        if frag_start_pos < self.pos {
-            let text: String = self.chars[frag_start_pos..self.pos].iter().collect();
-            self.emit(TokenKind::StringFragment(text), frag_start);
-        }
-
-        if !self.at_end() && self.peek() == '"' {
-            let end_start = self.position();
-            self.advance();
-            self.emit(TokenKind::StringEnd, end_start);
-        } else {
-            self.errors.push(Diagnostic {
-                severity: Severity::Error,
-                message: "unterminated string".into(),
-                hint: Some("add a closing '\"'".into()),
-                span: Span::new(start, self.position()),
-            });
-        }
+        self.lex_string_body(false);
     }
 
     fn lex_multiline_string(&mut self) {
@@ -504,38 +500,151 @@ impl Lexer {
         self.advance(); // "
         self.advance(); // "
         self.emit(TokenKind::MultilineStringStart, start);
+        self.lex_string_body(true);
+    }
 
+    fn lex_string_body(&mut self, multiline: bool) {
         let frag_start = self.position();
-        let frag_start_pos = self.pos;
+        let mut text = String::new();
 
-        while !self.at_end() {
-            if self.peek() == '"'
+        loop {
+            if self.at_end() {
+                if !text.is_empty() {
+                    self.emit(TokenKind::StringFragment(text), frag_start);
+                }
+                let label = if multiline {
+                    "unterminated multiline string"
+                } else {
+                    "unterminated string"
+                };
+                let hint = if multiline {
+                    "add a closing '\"\"\"'"
+                } else {
+                    "add a closing '\"'"
+                };
+                self.errors.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: label.into(),
+                    hint: Some(hint.into()),
+                    span: Span::new(frag_start, self.position()),
+                });
+                return;
+            }
+
+            let c = self.peek();
+
+            // Single-line string terminator
+            if !multiline && c == '"' {
+                if !text.is_empty() {
+                    self.emit(TokenKind::StringFragment(text), frag_start);
+                }
+                let end_start = self.position();
+                self.advance();
+                self.emit(TokenKind::StringEnd, end_start);
+                return;
+            }
+
+            // Multiline string terminator
+            if multiline
+                && c == '"'
                 && self.peek_next() == Some('"')
                 && self.chars.get(self.pos + 2).copied() == Some('"')
             {
-                break;
+                if !text.is_empty() {
+                    self.emit(TokenKind::StringFragment(text), frag_start);
+                }
+                let end_start = self.position();
+                self.advance(); // "
+                self.advance(); // "
+                self.advance(); // "
+                self.emit(TokenKind::MultilineStringEnd, end_start);
+                return;
             }
+
+            // Newline terminates single-line strings
+            if !multiline && c == '\n' {
+                if !text.is_empty() {
+                    self.emit(TokenKind::StringFragment(text), frag_start);
+                }
+                self.errors.push(Diagnostic {
+                    severity: Severity::Error,
+                    message: "unterminated string".into(),
+                    hint: Some("add a closing '\"'".into()),
+                    span: Span::new(frag_start, self.position()),
+                });
+                return;
+            }
+
+            // Interpolation: #{
+            if c == '#' && self.peek_next() == Some('{') {
+                if !text.is_empty() {
+                    self.emit(TokenKind::StringFragment(text), frag_start);
+                }
+                let interp_start = self.position();
+                self.advance(); // #
+                self.advance(); // {
+                self.emit(TokenKind::InterpolStart, interp_start);
+                let mode = if multiline {
+                    StringMode::Multiline
+                } else {
+                    StringMode::Single
+                };
+                self.string_stack.push(InterpolState {
+                    mode,
+                    brace_depth: 0,
+                });
+                return;
+            }
+
+            // Escape sequences
+            if c == '\\'
+                && let Some(next) = self.peek_next()
+            {
+                match next {
+                    '"' => {
+                        self.advance();
+                        self.advance();
+                        text.push('"');
+                    }
+                    '\\' => {
+                        self.advance();
+                        self.advance();
+                        text.push('\\');
+                    }
+                    'n' => {
+                        self.advance();
+                        self.advance();
+                        text.push('\n');
+                    }
+                    't' => {
+                        self.advance();
+                        self.advance();
+                        text.push('\t');
+                    }
+                    '#' => {
+                        self.advance();
+                        self.advance();
+                        text.push('#');
+                    }
+                    _ => {
+                        let esc_start = self.position();
+                        self.advance();
+                        self.advance();
+                        self.errors.push(Diagnostic {
+                            severity: Severity::Error,
+                            message: format!("unknown escape sequence '\\{next}'"),
+                            hint: Some("supported escapes: \\\\, \\\", \\n, \\t, \\#".into()),
+                            span: Span::new(esc_start, self.position()),
+                        });
+                        text.push('\\');
+                        text.push(next);
+                    }
+                }
+                continue;
+            }
+
             self.advance();
-        }
-
-        if frag_start_pos < self.pos {
-            let text: String = self.chars[frag_start_pos..self.pos].iter().collect();
-            self.emit(TokenKind::StringFragment(text), frag_start);
-        }
-
-        if !self.at_end() {
-            let end_start = self.position();
-            self.advance(); // "
-            self.advance(); // "
-            self.advance(); // "
-            self.emit(TokenKind::MultilineStringEnd, end_start);
-        } else {
-            self.errors.push(Diagnostic {
-                severity: Severity::Error,
-                message: "unterminated multiline string".into(),
-                hint: Some("add a closing '\"\"\"'".into()),
-                span: Span::new(start, self.position()),
-            });
+            text.push(c);
         }
     }
 
@@ -639,5 +748,213 @@ mod tests {
     #[test]
     fn test_whitespace_only() {
         assert_eq!(lex_kinds("   \t  "), vec![TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_simple_string() {
+        assert_eq!(
+            lex_kinds(r#""hello""#),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringFragment("hello".into()),
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_escape_newline() {
+        assert_eq!(
+            lex_kinds(r#""hello\nworld""#),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringFragment("hello\nworld".into()),
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_escape_tab() {
+        assert_eq!(
+            lex_kinds(r#""col1\tcol2""#),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringFragment("col1\tcol2".into()),
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_escape_quote() {
+        assert_eq!(
+            lex_kinds(r#""say \"hello\"""#),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringFragment("say \"hello\"".into()),
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_escape_backslash() {
+        assert_eq!(
+            lex_kinds(r#""path\\file""#),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringFragment("path\\file".into()),
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_escape_hash() {
+        assert_eq!(
+            lex_kinds(r#""use \#{name}""#),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringFragment("use #{name}".into()),
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unknown_escape() {
+        let result = lex(r#""bad\x""#);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].message.contains("unknown escape"));
+    }
+
+    #[test]
+    fn test_interpolation_basic() {
+        assert_eq!(
+            lex_kinds(r##""hello #{name}""##),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringFragment("hello ".into()),
+                TokenKind::InterpolStart,
+                TokenKind::Ident("name".into()),
+                TokenKind::InterpolEnd,
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_interpolation_at_start() {
+        assert_eq!(
+            lex_kinds(r##""#{x} done""##),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::InterpolStart,
+                TokenKind::Ident("x".into()),
+                TokenKind::InterpolEnd,
+                TokenKind::StringFragment(" done".into()),
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_interpolation_multiple() {
+        assert_eq!(
+            lex_kinds(r##""#{a} and #{b}""##),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::InterpolStart,
+                TokenKind::Ident("a".into()),
+                TokenKind::InterpolEnd,
+                TokenKind::StringFragment(" and ".into()),
+                TokenKind::InterpolStart,
+                TokenKind::Ident("b".into()),
+                TokenKind::InterpolEnd,
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_interpolation_nested_braces() {
+        assert_eq!(
+            lex_kinds(r##""#{map{key: 1}}""##),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::InterpolStart,
+                TokenKind::Ident("map".into()),
+                TokenKind::LBrace,
+                TokenKind::Ident("key".into()),
+                TokenKind::Colon,
+                TokenKind::IntLit("1".into()),
+                TokenKind::RBrace,
+                TokenKind::InterpolEnd,
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_multiline_escapes() {
+        let src = r##""""hello\nworld""""##;
+        assert_eq!(
+            lex_kinds(src),
+            vec![
+                TokenKind::MultilineStringStart,
+                TokenKind::StringFragment("hello\nworld".into()),
+                TokenKind::MultilineStringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_multiline_interpolation() {
+        let src = r##""""hello #{name}""""##;
+        assert_eq!(
+            lex_kinds(src),
+            vec![
+                TokenKind::MultilineStringStart,
+                TokenKind::StringFragment("hello ".into()),
+                TokenKind::InterpolStart,
+                TokenKind::Ident("name".into()),
+                TokenKind::InterpolEnd,
+                TokenKind::MultilineStringEnd,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_empty_string() {
+        assert_eq!(
+            lex_kinds(r#""""#),
+            vec![TokenKind::StringStart, TokenKind::StringEnd, TokenKind::Eof,]
+        );
+    }
+
+    #[test]
+    fn test_hash_without_brace() {
+        assert_eq!(
+            lex_kinds(r#""color #fff""#),
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringFragment("color #fff".into()),
+                TokenKind::StringEnd,
+                TokenKind::Eof,
+            ]
+        );
     }
 }

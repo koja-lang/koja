@@ -296,6 +296,7 @@ impl Parser {
             }
 
             TokenKind::StringStart => self.parse_string_expr(false),
+            TokenKind::MultilineStringStart => self.parse_string_expr(true),
 
             TokenKind::Ident(name) => {
                 let start = self.current_span();

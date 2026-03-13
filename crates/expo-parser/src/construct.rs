@@ -6,11 +6,12 @@ use crate::expr::expr_span;
 use crate::parser::Parser;
 
 impl Parser {
-    pub(crate) fn parse_string_expr(&mut self, _multiline: bool) -> Expr {
+    pub(crate) fn parse_string_expr(&mut self, multiline: bool) -> Expr {
         let start = self.current_span();
         self.advance(); // StringStart or MultilineStringStart
 
         let mut parts = Vec::new();
+        let mut closing_column: Option<u32> = None;
         loop {
             match self.peek().clone() {
                 TokenKind::StringFragment(text) => {
@@ -25,7 +26,16 @@ impl Parser {
                     let interp_start = self.current_span();
                     self.advance(); // InterpolStart
                     let expr = self.parse_expr();
-                    let format = None;
+                    let format = if self.eat(&TokenKind::Colon).is_some() {
+                        if let TokenKind::Ident(spec) = self.peek().clone() {
+                            self.advance();
+                            Some(spec)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
                     self.expect(&TokenKind::InterpolEnd);
                     parts.push(StringPart::Interpolation {
                         expr,
@@ -34,6 +44,9 @@ impl Parser {
                     });
                 }
                 TokenKind::StringEnd | TokenKind::MultilineStringEnd => {
+                    if multiline {
+                        closing_column = Some(self.current_span().start.column);
+                    }
                     self.advance();
                     break;
                 }
@@ -44,19 +57,23 @@ impl Parser {
             }
         }
 
+        if multiline && let Some(col) = closing_column {
+            dedent_multiline_parts(&mut parts, col);
+        }
+
         if parts.is_empty() {
             Expr::String {
                 parts: vec![StringPart::Literal {
                     value: String::new(),
                     span: self.span_from(start),
                 }],
-                multiline: _multiline,
+                multiline,
                 span: self.span_from(start),
             }
         } else {
             Expr::String {
                 parts,
-                multiline: _multiline,
+                multiline,
                 span: self.span_from(start),
             }
         }
@@ -423,5 +440,143 @@ impl Parser {
             }
             _ => vec!["<error>".to_string()],
         }
+    }
+}
+
+fn dedent_multiline_parts(parts: &mut [StringPart], closing_column: u32) {
+    if parts.is_empty() {
+        return;
+    }
+    let indent = (closing_column - 1) as usize;
+
+    if let Some(StringPart::Literal { value, .. }) = parts.first_mut()
+        && let Some(stripped) = value.strip_prefix('\n')
+    {
+        *value = stripped.to_string();
+    }
+
+    for (i, part) in parts.iter_mut().enumerate() {
+        if let StringPart::Literal { value, .. } = part {
+            *value = dedent_string(value, indent, i == 0);
+        }
+    }
+
+    if let Some(StringPart::Literal { value, .. }) = parts.last_mut()
+        && value.ends_with('\n')
+    {
+        value.pop();
+    }
+}
+
+fn dedent_string(s: &str, indent: usize, dedent_first_line: bool) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut at_line_start = dedent_first_line;
+    let mut stripped = 0;
+
+    for ch in s.chars() {
+        if ch == '\n' {
+            result.push('\n');
+            at_line_start = true;
+            stripped = 0;
+        } else if at_line_start && ch == ' ' && stripped < indent {
+            stripped += 1;
+        } else {
+            at_line_start = false;
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parse;
+    use expo_ast::ast::{Expr, Statement, StringPart};
+
+    fn parse_string_parts(source: &str) -> Vec<StringPart> {
+        let result = parse(source);
+        for item in &result.module.items {
+            if let expo_ast::ast::Item::Function(func) = item {
+                for stmt in &func.body {
+                    if let Statement::Assignment { value, .. } = stmt {
+                        if let Expr::String { parts, .. } = value {
+                            return parts.clone();
+                        }
+                    }
+                }
+            }
+        }
+        panic!("no string found in parsed output");
+    }
+
+    fn literal_values(parts: &[StringPart]) -> Vec<&str> {
+        parts
+            .iter()
+            .filter_map(|p| match p {
+                StringPart::Literal { value, .. } => Some(value.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_dedent_basic() {
+        let src = "fn main\n  x = \"\"\"\n    hello\n    world\n    \"\"\"\nend\n";
+        let parts = parse_string_parts(src);
+        assert_eq!(literal_values(&parts), vec!["hello\nworld"]);
+    }
+
+    #[test]
+    fn test_dedent_preserves_extra_indent() {
+        let src = "fn main\n  x = \"\"\"\n    line1\n      indented\n    line3\n    \"\"\"\nend\n";
+        let parts = parse_string_parts(src);
+        assert_eq!(literal_values(&parts), vec!["line1\n  indented\nline3"]);
+    }
+
+    #[test]
+    fn test_dedent_empty_lines_preserved() {
+        let src = "fn main\n  x = \"\"\"\n    hello\n\n    world\n    \"\"\"\nend\n";
+        let parts = parse_string_parts(src);
+        assert_eq!(literal_values(&parts), vec!["hello\n\nworld"]);
+    }
+
+    #[test]
+    fn test_dedent_trailing_newline_stripped() {
+        let src = "fn main\n  x = \"\"\"\n    hello\n    \"\"\"\nend\n";
+        let parts = parse_string_parts(src);
+        let vals = literal_values(&parts);
+        assert_eq!(vals, vec!["hello"]);
+        assert!(!vals[0].ends_with('\n'));
+    }
+
+    #[test]
+    fn test_dedent_with_interpolation() {
+        let src = "fn main\n  x = \"\"\"\n    hello #{name}\n    world\n    \"\"\"\nend\n";
+        let parts = parse_string_parts(src);
+        assert_eq!(parts.len(), 3);
+        match &parts[0] {
+            StringPart::Literal { value, .. } => assert_eq!(value, "hello "),
+            _ => panic!("expected literal"),
+        }
+        assert!(matches!(&parts[1], StringPart::Interpolation { .. }));
+        match &parts[2] {
+            StringPart::Literal { value, .. } => assert_eq!(value, "\nworld"),
+            _ => panic!("expected literal"),
+        }
+    }
+
+    #[test]
+    fn test_dedent_no_indent() {
+        let src = "fn main\n  x = \"\"\"\nhello\nworld\n\"\"\"\nend\n";
+        let parts = parse_string_parts(src);
+        assert_eq!(literal_values(&parts), vec!["hello\nworld"]);
+    }
+
+    #[test]
+    fn test_multiline_escapes_in_parser() {
+        let src = "fn main\n  x = \"\"\"\n    hello\\tworld\n    \"\"\"\nend\n";
+        let parts = parse_string_parts(src);
+        assert_eq!(literal_values(&parts), vec!["hello\tworld"]);
     }
 }

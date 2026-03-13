@@ -10,9 +10,9 @@
 (*   "keyword"   = literal keyword / symbol                                   *)
 (*   (* ... *)   = comment                                                    *)
 (*                                                                            *)
-(* Whitespace and newlines are significant as statement separators but are     *)
+(* Whitespace and newlines are significant as statement separators but are    *)
 (* omitted from the grammar for readability. Newlines terminate statements;   *)
-(* line continuation is implicit after binary operators, ".", and ",".         *)
+(* line continuation is implicit after binary operators, ".", and ",".        *)
 (* ========================================================================== *)
 
 
@@ -341,7 +341,16 @@ BIN_INT     = "0b" , BIN_DIGIT , { BIN_DIGIT | "_" } ;
 float_lit = DECIMAL_INT , "." , DECIMAL_INT ;
 
 string_lit = '"' , { string_char | interpolation } , '"' ;
-multiline_string_lit = '"""' , { any_char | interpolation } , '"""' ;
+string_char = escape_seq | any_char_except_quote_backslash_newline ;
+escape_seq = "\\" , ( '"' | "\\" | "n" | "t" | "#" ) ;
+
+multiline_string_lit = '"""' , { multiline_char | interpolation } , '"""' ;
+multiline_char = escape_seq | any_char_except_triple_quote_backslash ;
+(* Multiline strings support the same escape sequences as single-line strings.       *)
+(* Indentation is stripped based on the closing """ column position:                 *)
+(*   1. The first newline after the opening """ is consumed                          *)
+(*   2. Leading spaces matching the closing """ indentation are stripped per line    *)
+(*   3. The trailing newline before the closing """ is stripped                      *)
 
 interpolation = "#{" , expr , [ ":" , FORMAT_SPEC ] , "}" ;
 

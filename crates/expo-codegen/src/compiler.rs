@@ -76,6 +76,13 @@ impl<'ctx> Compiler<'ctx> {
         let printf_type = i32_type.fn_type(&[i8_ptr_type.into()], true);
         let printf = self.module.add_function("printf", printf_type, None);
         self.functions.insert("printf".to_string(), printf);
+
+        let snprintf_type = i32_type.fn_type(
+            &[i8_ptr_type.into(), i32_type.into(), i8_ptr_type.into()],
+            true,
+        );
+        let snprintf = self.module.add_function("snprintf", snprintf_type, None);
+        self.functions.insert("snprintf".to_string(), snprintf);
     }
 
     fn declare_functions(&mut self, module: &Module) -> Result<(), String> {

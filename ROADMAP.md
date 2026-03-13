@@ -28,12 +28,11 @@ Functions, structs, impl blocks, methods (`self`), if/else, while, loop, break, 
 
 ### Parsed and type-checked but NOT yet in codegen
 
-Enums, match, cond, for, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe (`|>`), generics, `ref<T>`, tuples, lists, string interpolation.
+Enums, match, cond, for, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe (`|>`), generics, `ref<T>`, tuples, lists.
 
 ### Known gaps
 
 - **Type checker**: generics resolve to `Unknown`, no multi-module name resolution, no `priv fn` visibility enforcement, `ref<T>` unresolved
-- **Lexer**: string interpolation is a stub, escape sequences incomplete
 
 ### Design artifacts
 
@@ -45,7 +44,7 @@ Enums, match, cond, for, closures (both forms), arena, await/receive/spawn, tern
 
 ### Tooling (pulled forward)
 
-- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config
+- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness
 - **VSCode extension** -- syntax highlighting for `.expo` files
 
 ---
@@ -54,7 +53,7 @@ Enums, match, cond, for, closures (both forms), arena, await/receive/spawn, tern
 
 Build a minimal Expo compiler in Rust that can compile trivial programs to native binaries via LLVM.
 
-### Month 1 -- Lexer and parser (~90% complete)
+### Month 1 -- Lexer and parser (complete)
 
 - ~~Custom recursive descent parser (not a generator -- easier to produce good error messages, and the grammar is simple enough)~~
 - ~~Lex all tokens defined in `grammar.ebnf` section 18 (identifiers, keywords, literals, operators)~~
@@ -62,9 +61,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 - ~~Closures and annotations can be parsed but don't need to do anything yet~~
 - ~~**Deliverable**: `expo parse file.expo` prints the AST~~
 
-**Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work.
-
-**Remaining gaps**: string interpolation (`#{}`) is a stub in the lexer, escape sequences incomplete.
+**Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work. String interpolation (`#{}`) and escape sequences (`\"`, `\\`, `\n`, `\t`, `\#`) fully implemented in the lexer with a mode stack for nested interpolation. Multiline strings (`"""`) have no escape sequences -- backslash is a regular character.
 
 ### Month 2 -- Type system and semantic analysis (~40% complete)
 
@@ -90,7 +87,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: Functions, structs, impl methods, if/else, while, loop, break, return, compound assignment all compile to working native binaries. `expo build` and `expo run` work. Linking via system `cc`.
 
-**Remaining gaps**: match, cond, for, closures (both forms), enums, ternary, try (`?`), pipe (`|>`), tuples, lists, string interpolation -- none of these generate LLVM IR yet.
+**Remaining gaps**: match, cond, for, closures (both forms), enums, ternary, try (`?`), pipe (`|>`), tuples, lists -- none of these generate LLVM IR yet. String interpolation codegen is implemented (two-pass `snprintf` with type-based format specifiers); format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation.
 
 ### Key decisions
 
@@ -323,20 +320,38 @@ Commands live inside modules alongside `fn`, `struct`, and `enum` -- not a separ
 
 ---
 
+## Future: Folded multiline strings (post-v1)
+
+A second multiline string type where newlines become spaces and blank lines become `\n` -- for long log messages, error messages, and other prose where source-level wrapping shouldn't produce newlines in the output.
+
+```expo
+log.info(???
+  User #{user.id} authenticated
+  via #{method} and was granted
+  access to #{resource}
+  ???)
+```
+
+Would produce: `User 42 authenticated via oauth and was granted access to /admin`
+
+Syntax undecided -- candidates include `~"""`, `'''`, or something else entirely. The current workaround is a single-line string (the formatter leaves string literals alone regardless of length).
+
+---
+
 ## Summary timeline
 
 Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18-month estimate assumed a slower pace. The timeline below reflects actual velocity for scaffolding while staying conservative on genuinely hard problems (borrow checker, async runtime, self-hosting).
 
 ### Done
 
-| Phase     | Milestone                                                | Status |
-| --------- | -------------------------------------------------------- | ------ |
-| Bootstrap | Lexer + parser -- all grammar constructs parse           | ~90%   |
-| Bootstrap | Type system -- `expo check` works for primitives/structs | ~40%   |
-| Bootstrap | LLVM codegen -- native binaries for basic programs       | ~40%   |
-| Tooling   | Formatter (`expo format --write`/`--check`)              | Done   |
-| Tooling   | `expo run` (compile + execute)                           | Done   |
-| Tooling   | VSCode extension (syntax highlighting)                   | Done   |
+| Phase     | Milestone                                                                           | Status |
+| --------- | ----------------------------------------------------------------------------------- | ------ |
+| Bootstrap | Lexer + parser -- all grammar constructs parse, string interpolation + escapes | Done   |
+| Bootstrap | Type system -- `expo check` works for primitives/structs                            | ~40%   |
+| Bootstrap | LLVM codegen -- native binaries for basic programs, string interpolation done       | ~45%   |
+| Tooling   | Formatter (`expo format --write`/`--check`)                                         | Done   |
+| Tooling   | `expo run` (compile + execute)                                                      | Done   |
+| Tooling   | VSCode extension (syntax highlighting)                                              | Done   |
 
 ### Remaining
 

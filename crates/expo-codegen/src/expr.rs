@@ -65,7 +65,7 @@ pub fn compile_expr<'ctx>(
             ..
         } => compile_method_call(c, receiver, method, args, function),
 
-        Expr::String { parts, .. } => compile_string(c, parts),
+        Expr::String { parts, .. } => compile_string(c, parts, function),
 
         Expr::Loop { body, .. } => compile_loop(c, body, function),
 
@@ -131,18 +131,108 @@ fn compile_literal<'ctx>(
 }
 
 fn compile_string<'ctx>(
-    c: &Compiler<'ctx>,
+    c: &mut Compiler<'ctx>,
     parts: &[StringPart],
+    function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let mut combined = String::new();
+    let has_interpolation = parts
+        .iter()
+        .any(|p| matches!(p, StringPart::Interpolation { .. }));
+
+    if !has_interpolation {
+        let mut combined = String::new();
+        for part in parts {
+            if let StringPart::Literal { value, .. } = part {
+                combined.push_str(value);
+            }
+        }
+        let global = c.builder.build_global_string_ptr(&combined, "str").unwrap();
+        return Ok(Some(global.as_pointer_value().into()));
+    }
+
+    let snprintf = *c.functions.get("snprintf").ok_or("snprintf not declared")?;
+
+    let mut fmt_string = String::new();
+    let mut interp_values: Vec<BasicValueEnum<'ctx>> = Vec::new();
+
     for part in parts {
         match part {
-            StringPart::Literal { value, .. } => combined.push_str(value),
-            StringPart::Interpolation { .. } => {
-                return Err("string interpolation not yet supported in compilation".to_string());
+            StringPart::Literal { value, .. } => {
+                for ch in value.chars() {
+                    if ch == '%' {
+                        fmt_string.push_str("%%");
+                    } else {
+                        fmt_string.push(ch);
+                    }
+                }
+            }
+            StringPart::Interpolation { expr, .. } => {
+                let val = compile_expr(c, expr, function)?
+                    .ok_or("interpolated expression produced no value")?;
+
+                let spec = if val.is_int_value() {
+                    let width = val.into_int_value().get_type().get_bit_width();
+                    match width {
+                        1 => "%d",
+                        32 => "%d",
+                        64 => "%lld",
+                        _ => "%d",
+                    }
+                } else if val.is_float_value() {
+                    "%f"
+                } else if val.is_pointer_value() {
+                    "%s"
+                } else {
+                    return Err("cannot interpolate value of unsupported type".to_string());
+                };
+
+                fmt_string.push_str(spec);
+                interp_values.push(val);
             }
         }
     }
-    let global = c.builder.build_global_string_ptr(&combined, "str").unwrap();
-    Ok(Some(global.as_pointer_value().into()))
+
+    let fmt_global = c
+        .builder
+        .build_global_string_ptr(&fmt_string, "interp_fmt")
+        .unwrap();
+    let fmt_ptr = fmt_global.as_pointer_value();
+
+    let i32_type = c.context.i32_type();
+    let i8_ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
+    let null_ptr = i8_ptr_type.const_null();
+    let zero = i32_type.const_int(0, false);
+
+    let mut size_args: Vec<BasicValueEnum> = vec![null_ptr.into(), zero.into(), fmt_ptr.into()];
+    size_args.extend_from_slice(&interp_values);
+    let size_args_meta: Vec<_> = size_args.iter().map(|v| (*v).into()).collect();
+
+    let size_call = c
+        .builder
+        .build_call(snprintf, &size_args_meta, "interp_len")
+        .unwrap();
+    let needed = size_call
+        .try_as_basic_value()
+        .left()
+        .ok_or("snprintf did not return a value")?
+        .into_int_value();
+
+    let one = i32_type.const_int(1, false);
+    let buf_size = c.builder.build_int_add(needed, one, "buf_size").unwrap();
+
+    let i8_type = c.context.i8_type();
+    let buf = c
+        .builder
+        .build_array_alloca(i8_type, buf_size, "interp_buf")
+        .unwrap();
+
+    let mut write_args: Vec<BasicValueEnum> = vec![buf.into(), buf_size.into(), fmt_ptr.into()];
+    write_args.extend_from_slice(&interp_values);
+    let write_args_meta: Vec<_> = write_args.iter().map(|v| (*v).into()).collect();
+
+    c.builder
+        .build_call(snprintf, &write_args_meta, "interp_write")
+        .unwrap();
+
+    Ok(Some(buf.into()))
 }
