@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use expo_ast::ast::{Diagnostic, Function, ImplMember, Item, Module, Param, Severity, TypeExpr};
-use expo_typecheck::context::TypeContext;
+use expo_typecheck::context::{TypeContext, VariantData};
 use expo_typecheck::types::Type;
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
@@ -26,6 +26,8 @@ pub struct Compiler<'ctx> {
     pub functions: HashMap<String, FunctionValue<'ctx>>,
     pub variables: HashMap<String, (PointerValue<'ctx>, Type)>,
     pub struct_types: HashMap<String, StructType<'ctx>>,
+    pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
+    pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
     pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
     pub type_ctx: &'ctx TypeContext,
 }
@@ -41,13 +43,15 @@ impl<'ctx> Compiler<'ctx> {
             functions: HashMap::new(),
             variables: HashMap::new(),
             struct_types: HashMap::new(),
+            enum_variant_payloads: HashMap::new(),
+            enum_name_tables: HashMap::new(),
             loop_exit_stack: Vec::new(),
             type_ctx,
         }
     }
 
     pub fn compile_module(&mut self, module: &Module) -> Result<(), String> {
-        self.register_struct_types();
+        self.register_types();
         self.declare_builtins();
         self.declare_functions(module)?;
         self.define_functions(module)?;
@@ -56,17 +60,122 @@ impl<'ctx> Compiler<'ctx> {
             .map_err(|e| format!("LLVM verification failed: {}", e.to_string()))
     }
 
-    fn register_struct_types(&mut self) {
+    fn register_types(&mut self) {
+        // Pass 1: create opaque types so cross-references resolve
+        for name in self.type_ctx.structs.keys() {
+            let st = self.context.opaque_struct_type(name);
+            self.struct_types.insert(name.clone(), st);
+        }
+        for name in self.type_ctx.enums.keys() {
+            let et = self.context.opaque_struct_type(name);
+            self.struct_types.insert(name.clone(), et);
+        }
+
+        // Pass 2: set struct bodies
         for (name, info) in &self.type_ctx.structs {
-            let struct_type = self.context.opaque_struct_type(name);
+            let struct_type = *self.struct_types.get(name).unwrap();
             let field_types: Vec<_> = info
                 .fields
                 .iter()
                 .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
                 .collect();
             struct_type.set_body(&field_types, false);
-            self.struct_types.insert(name.clone(), struct_type);
         }
+
+        // Pass 3: set enum bodies
+        for (name, info) in &self.type_ctx.enums {
+            let mut variant_payloads = Vec::new();
+            let mut max_payload_size: u32 = 0;
+
+            for variant in &info.variants {
+                match &variant.data {
+                    VariantData::Unit => {
+                        variant_payloads.push((variant.name.clone(), None));
+                    }
+                    VariantData::Tuple(types) => {
+                        let field_llvm: Vec<_> = types
+                            .iter()
+                            .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
+                            .collect();
+                        let payload = self.context.struct_type(&field_llvm, true);
+                        let size: u32 = types.iter().map(type_byte_size).sum();
+                        max_payload_size = max_payload_size.max(size);
+                        variant_payloads.push((variant.name.clone(), Some(payload)));
+                    }
+                    VariantData::Struct(fields) => {
+                        let field_llvm: Vec<_> = fields
+                            .iter()
+                            .filter_map(|(_, ty)| {
+                                to_llvm_type(ty, self.context, &self.struct_types)
+                            })
+                            .collect();
+                        let payload = self.context.struct_type(&field_llvm, true);
+                        let size: u32 = fields.iter().map(|(_, ty)| type_byte_size(ty)).sum();
+                        max_payload_size = max_payload_size.max(size);
+                        variant_payloads.push((variant.name.clone(), Some(payload)));
+                    }
+                }
+            }
+
+            let enum_type = *self.struct_types.get(name).unwrap();
+            let i8_type = self.context.i8_type();
+            if max_payload_size > 0 {
+                let payload_array = i8_type.array_type(max_payload_size);
+                enum_type.set_body(&[i8_type.into(), payload_array.into()], false);
+            } else {
+                enum_type.set_body(&[i8_type.into()], false);
+            }
+
+            self.enum_variant_payloads
+                .insert(name.clone(), variant_payloads);
+
+            let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+            let name_ptrs: Vec<_> = info
+                .variants
+                .iter()
+                .map(|v| {
+                    let bytes = self.context.const_string(v.name.as_bytes(), true);
+                    let g = self.module.add_global(
+                        bytes.get_type(),
+                        None,
+                        &format!("{name}_{}_name", v.name),
+                    );
+                    g.set_initializer(&bytes);
+                    g.set_constant(true);
+                    g.as_pointer_value()
+                })
+                .collect();
+            let table_init = ptr_type.const_array(&name_ptrs);
+            let table_global = self.module.add_global(
+                table_init.get_type(),
+                None,
+                &format!("{name}_variant_names"),
+            );
+            table_global.set_initializer(&table_init);
+            table_global.set_constant(true);
+            self.enum_name_tables
+                .insert(name.clone(), table_global.as_pointer_value());
+        }
+    }
+
+    pub fn get_variant_tag(&self, enum_name: &str, variant_name: &str) -> Option<u8> {
+        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
+            vs.iter()
+                .position(|(name, _)| name == variant_name)
+                .map(|i| i as u8)
+        })
+    }
+
+    pub fn get_variant_payload_type(
+        &self,
+        enum_name: &str,
+        variant_name: &str,
+    ) -> Option<StructType<'ctx>> {
+        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
+            vs.iter()
+                .find(|(name, _)| name == variant_name)
+                .and_then(|(_, pt)| *pt)
+        })
     }
 
     fn declare_builtins(&mut self) {
@@ -349,6 +458,19 @@ impl<'ctx> Compiler<'ctx> {
                 .find(|(name, _)| name == field_name)
                 .map(|(_, ty)| ty.clone())
         })
+    }
+}
+
+fn type_byte_size(ty: &Type) -> u32 {
+    use expo_typecheck::types::Primitive;
+    match ty {
+        Type::Primitive(p) => match p {
+            Primitive::Bool | Primitive::I8 | Primitive::U8 => 1,
+            Primitive::I16 | Primitive::U16 => 2,
+            Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
+            Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::String => 8,
+        },
+        _ => 8,
     }
 }
 

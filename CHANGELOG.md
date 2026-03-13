@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Enum types with unit, tuple, and struct variants.
+- `match` expressions with pattern matching (wildcard, literal, binding, enum, and constructor patterns).
+- Nested pattern matching in `match` arms.
+- `when` guards on `match` arms.
+- Match exhaustiveness checking for enum types.
 - `cond` expressions.
 - Multiline string indentation stripping (dedent based on closing `"""` position).
 - Escape sequences in multiline strings (same set as single-line: `\"`, `\\`, `\n`, `\t`, `\#`).

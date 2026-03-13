@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use expo_ast::ast::*;
 use expo_ast::span::Span;
@@ -8,6 +8,7 @@ use crate::types::{Primitive, Type, resolve_type_expr};
 
 struct CheckEnv<'a> {
     env: HashMap<String, Type>,
+    used_vars: HashSet<String>,
     loop_depth: usize,
     return_type: Type,
     struct_names: &'a [&'a str],
@@ -18,6 +19,7 @@ impl<'a> CheckEnv<'a> {
     fn child(&self, return_type: Type) -> CheckEnv<'a> {
         CheckEnv {
             env: self.env.clone(),
+            used_vars: HashSet::new(),
             loop_depth: self.loop_depth,
             return_type,
             struct_names: self.struct_names,
@@ -108,6 +110,7 @@ fn check_function(
 
     let mut ce = CheckEnv {
         env,
+        used_vars: HashSet::new(),
         loop_depth: 0,
         return_type: declared_return.clone(),
         struct_names,
@@ -608,6 +611,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
 
         Expr::Ident { name, span } => {
             if let Some(ty) = ce.env.get(name) {
+                ce.used_vars.insert(name.clone());
                 ty.clone()
             } else if ctx.functions.contains_key(name) {
                 Type::Unknown
@@ -665,17 +669,28 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             Type::Unit
         }
 
-        Expr::Match { subject, arms, .. } => {
+        Expr::Match {
+            subject,
+            arms,
+            span,
+        } => {
             let subject_type = infer_expr(subject, ctx, ce);
             for arm in arms {
                 let mut arm_ce = ce.child(Type::Unknown);
+                let bound_vars = collect_pattern_bindings(&arm.pattern);
                 check_pattern(&arm.pattern, &subject_type, ctx, &mut arm_ce.env);
                 if let Some(guard) = &arm.guard {
                     let guard_ty = infer_expr(guard, ctx, &mut arm_ce);
                     check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);
                 }
                 check_body(&arm.body, ctx, &mut arm_ce);
+                for (name, name_span) in &bound_vars {
+                    if !name.starts_with('_') && !arm_ce.used_vars.contains(name) {
+                        ctx.warning(format!("unused variable `{name}`"), *name_span);
+                    }
+                }
             }
+            check_match_exhaustiveness(&subject_type, arms, *span, ctx);
             Type::Unknown
         }
 
@@ -968,6 +983,65 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
 }
 
 // =========================================================================
+// Match exhaustiveness
+// =========================================================================
+
+fn check_match_exhaustiveness(
+    subject_type: &Type,
+    arms: &[MatchArm],
+    span: Span,
+    ctx: &mut TypeContext,
+) {
+    let Type::Enum(enum_name) = subject_type else {
+        return;
+    };
+    let Some(enum_info) = ctx.enums.get(enum_name) else {
+        return;
+    };
+
+    let has_catch_all = arms.iter().any(|arm| {
+        matches!(
+            arm.pattern,
+            Pattern::Wildcard { .. } | Pattern::Binding { .. }
+        ) && arm.guard.is_none()
+    });
+    if has_catch_all {
+        return;
+    }
+
+    let matched: Vec<&str> = arms
+        .iter()
+        .filter(|arm| arm.guard.is_none())
+        .filter_map(|arm| match &arm.pattern {
+            Pattern::EnumUnit { variant, .. }
+            | Pattern::EnumTuple { variant, .. }
+            | Pattern::EnumStruct { variant, .. } => Some(variant.as_str()),
+            Pattern::Constructor { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    let missing: Vec<&str> = enum_info
+        .variants
+        .iter()
+        .filter(|v| !matched.contains(&v.name.as_str()))
+        .map(|v| v.name.as_str())
+        .collect();
+
+    if !missing.is_empty() {
+        let missing_list = missing.join(", ");
+        ctx.error_with_hint(
+            format!(
+                "non-exhaustive match: missing variant(s) `{}`",
+                missing_list
+            ),
+            format!("add a `_ ->` catch-all or handle: {}", missing_list),
+            span,
+        );
+    }
+}
+
+// =========================================================================
 // Pattern checking
 // =========================================================================
 
@@ -1253,5 +1327,37 @@ fn expr_span(expr: &Expr) -> Span {
         | Expr::Unary { span, .. }
         | Expr::Unless { span, .. }
         | Expr::While { span, .. } => *span,
+    }
+}
+
+fn collect_pattern_bindings(pat: &Pattern) -> Vec<(String, Span)> {
+    let mut bindings = Vec::new();
+    collect_bindings_inner(pat, &mut bindings);
+    bindings
+}
+
+fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
+    match pat {
+        Pattern::Binding { name, span, .. } => {
+            out.push((name.clone(), *span));
+        }
+        Pattern::EnumTuple { elements, .. }
+        | Pattern::Tuple { elements, .. }
+        | Pattern::Constructor { elements, .. }
+        | Pattern::List { elements, .. } => {
+            for sub in elements {
+                collect_bindings_inner(sub, out);
+            }
+        }
+        Pattern::EnumStruct { fields, .. } => {
+            for f in fields {
+                if let Some(sub) = &f.pattern {
+                    collect_bindings_inner(sub, out);
+                } else {
+                    out.push((f.name.clone(), f.span));
+                }
+            }
+        }
+        Pattern::Wildcard { .. } | Pattern::Literal { .. } | Pattern::EnumUnit { .. } => {}
     }
 }

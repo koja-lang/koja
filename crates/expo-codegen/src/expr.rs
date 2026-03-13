@@ -3,7 +3,8 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
 use crate::compiler::Compiler;
-use crate::control::{compile_cond, compile_if, compile_loop, compile_while};
+use crate::control::{compile_cond, compile_if, compile_loop, compile_match, compile_while};
+use crate::enums::compile_enum_construction;
 use crate::ops::{compile_binary, compile_unary};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
@@ -85,6 +86,15 @@ pub fn compile_expr<'ctx>(
         }
 
         Expr::Cond { arms, .. } => compile_cond(c, arms, function),
+
+        Expr::EnumConstruction {
+            type_path,
+            variant,
+            data,
+            ..
+        } => compile_enum_construction(c, type_path, variant, data, function),
+
+        Expr::Match { subject, arms, .. } => compile_match(c, subject, arms, function),
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
@@ -172,24 +182,29 @@ fn compile_string<'ctx>(
                 let val = compile_expr(c, expr, function)?
                     .ok_or("interpolated expression produced no value")?;
 
-                let spec = if val.is_int_value() {
+                if val.is_int_value() {
                     let width = val.into_int_value().get_type().get_bit_width();
-                    match width {
+                    let spec = match width {
                         1 => "%d",
                         32 => "%d",
                         64 => "%lld",
                         _ => "%d",
-                    }
+                    };
+                    fmt_string.push_str(spec);
+                    interp_values.push(val);
                 } else if val.is_float_value() {
-                    "%f"
+                    fmt_string.push_str("%f");
+                    interp_values.push(val);
                 } else if val.is_pointer_value() {
-                    "%s"
+                    fmt_string.push_str("%s");
+                    interp_values.push(val);
+                } else if val.is_struct_value() {
+                    let str_ptr = enum_value_to_string(c, val, function)?;
+                    fmt_string.push_str("%s");
+                    interp_values.push(str_ptr.into());
                 } else {
                     return Err("cannot interpolate value of unsupported type".to_string());
-                };
-
-                fmt_string.push_str(spec);
-                interp_values.push(val);
+                }
             }
         }
     }
@@ -237,4 +252,92 @@ fn compile_string<'ctx>(
         .unwrap();
 
     Ok(Some(buf.into()))
+}
+
+fn enum_value_to_string<'ctx>(
+    c: &mut Compiler<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    _function: FunctionValue<'ctx>,
+) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+    let sv = val.into_struct_value();
+    let st = sv.get_type();
+    let enum_name = st
+        .get_name()
+        .and_then(|n| n.to_str().ok())
+        .ok_or("cannot determine enum type for interpolation")?;
+
+    if !c.type_ctx.enums.contains_key(enum_name) {
+        return Err(format!(
+            "cannot interpolate struct value `{enum_name}` (not an enum)"
+        ));
+    }
+
+    if let Some(sig) = c
+        .type_ctx
+        .enums
+        .get(enum_name)
+        .and_then(|ei| ei.methods.get("to_string"))
+    {
+        let _ = sig;
+        let mangled = format!("{enum_name}_to_string");
+        if let Some(to_string_fn) = c.functions.get(&mangled) {
+            let result = c
+                .builder
+                .build_call(*to_string_fn, &[val.into()], "to_str_ret")
+                .unwrap();
+            return result
+                .try_as_basic_value()
+                .left()
+                .map(|v| v.into_pointer_value())
+                .ok_or("to_string did not return a value".to_string());
+        }
+    }
+
+    let enum_type = *c
+        .struct_types
+        .get(enum_name)
+        .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
+    let table_ptr = *c
+        .enum_name_tables
+        .get(enum_name)
+        .ok_or_else(|| format!("no name table for enum: {enum_name}"))?;
+
+    let alloca = c.builder.build_alloca(enum_type, "interp_enum").unwrap();
+    c.builder.build_store(alloca, val).unwrap();
+    let tag_ptr = c
+        .builder
+        .build_struct_gep(enum_type, alloca, 0, "interp_tag_ptr")
+        .unwrap();
+    let tag = c
+        .builder
+        .build_load(c.context.i8_type(), tag_ptr, "interp_tag")
+        .unwrap()
+        .into_int_value();
+
+    let tag_i32 = c
+        .builder
+        .build_int_z_extend(tag, c.context.i32_type(), "tag_ext")
+        .unwrap();
+
+    let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
+    let variant_count = c
+        .type_ctx
+        .enums
+        .get(enum_name)
+        .map(|ei| ei.variants.len() as u32)
+        .unwrap_or(0);
+    let table_type = ptr_type.array_type(variant_count);
+    let zero = c.context.i32_type().const_int(0, false);
+    let name_ptr_ptr = unsafe {
+        c.builder
+            .build_in_bounds_gep(table_type, table_ptr, &[zero, tag_i32], "name_ptr_ptr")
+            .unwrap()
+    };
+    let name_ptr = c
+        .builder
+        .build_load(ptr_type, name_ptr_ptr, "variant_name")
+        .unwrap()
+        .into_pointer_value();
+
+    Ok(name_ptr)
 }

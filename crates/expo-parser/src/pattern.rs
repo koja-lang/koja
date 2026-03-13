@@ -187,8 +187,9 @@ impl Parser {
             };
         }
 
-        Pattern::Binding {
+        Pattern::Constructor {
             name: first,
+            elements: vec![],
             span: self.span_from(start),
         }
     }

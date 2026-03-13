@@ -28,7 +28,7 @@ Functions, structs, impl blocks, methods (`self`), if/else, while, loop, break, 
 
 ### Parsed and type-checked but NOT yet in codegen
 
-Enums, match, cond, for, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe (`|>`), generics, `ref<T>`, tuples, lists.
+For, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe (`|>`), generics, `ref<T>`, tuples, lists.
 
 ### Known gaps
 
@@ -75,19 +75,19 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: Primitives, structs, and basic method resolution work. `expo check` reports diagnostics with line/column positions. Hello-world and struct programs pass.
 
-**Remaining gaps**: generics resolve to `Unknown`, `ref<T>` unresolved, no multi-module name resolution (single-file only), no `priv fn` enforcement, enum types checked but not fully wired through to codegen.
+**Remaining gaps**: generics resolve to `Unknown`, `ref<T>` unresolved, no multi-module name resolution (single-file only), no `priv fn` enforcement. Enum types are fully checked and wired through to codegen with exhaustiveness checking on `match`.
 
 ### Month 3 -- LLVM codegen (~40% complete)
 
 - ~~Integrate LLVM via `inkwell` (Rust LLVM bindings)~~
-- ~~Code generation for: function calls, arithmetic, string literals, `if`/`else`,~~ `match` (simple cases), ~~`return`~~
+- ~~Code generation for: function calls, arithmetic, string literals, `if`/`else`, `match` (simple cases), `return`~~
 - ~~Stack allocation for primitives and small structs~~
 - ~~Link against libc for `main` entry point and basic I/O~~
 - ~~**Deliverable**: `expo build hello.expo` produces a native binary that runs~~
 
 **Status**: Functions, structs, impl methods, if/else, while, loop, break, return, compound assignment all compile to working native binaries. `expo build` and `expo run` work. Linking via system `cc`.
 
-**Remaining gaps**: match, for, closures (both forms), enums, ternary, try (`?`), pipe (`|>`), tuples, lists -- none of these generate LLVM IR yet. String interpolation codegen is implemented (two-pass `snprintf` with type-based format specifiers); format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation. `cond` compiles to a cascade of conditional branches.
+**Remaining gaps**: for, closures (both forms), ternary, try (`?`), pipe (`|>`), tuples, lists -- none of these generate LLVM IR yet. String interpolation codegen is implemented (two-pass `snprintf` with type-based format specifiers); format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation. `cond` compiles to a cascade of conditional branches. Enums compile to tagged unions (`{ i8 tag, [N x i8] payload }`); `match` compiles with full pattern matching (wildcard, literal, binding, enum unit/tuple/struct, constructor, nested patterns, `when` guards).
 
 ### Key decisions
 
@@ -120,11 +120,11 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ow
 
 ### Pattern matching and enums
 
-- Full pattern matching: destructuring, `when` guards, nested patterns, wildcard `_`
-- Enum variants: unit, tuple, and struct forms
+- ~~Full pattern matching: destructuring, `when` guards, nested patterns, wildcard `_`~~
+- ~~Enum variants: unit, tuple, and struct forms~~
 - `Option<T>` and `Result<T,E>` as built-in enum types with `Some`/`None`/`Ok`/`Err`
 - The `?` operator for error propagation (desugars to early `return Err(...)`)
-- Exhaustiveness checking on `match`
+- ~~Exhaustiveness checking on `match`~~
 - **Done when**: the `WriteOp` enum from `state_machine.expo` compiles and pattern-matches correctly
 
 ### Collections and closures
@@ -357,8 +357,8 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 
 | Phase      | Milestone                                               |
 | ---------- | ------------------------------------------------------- |
-| Bootstrap  | Finish type checker (generics, enums, multi-module)     |
-| Bootstrap  | Finish codegen (match, for, closures, enums, try)       |
+| Bootstrap  | Finish type checker (generics, multi-module)             |
+| Bootstrap  | Finish codegen (for, closures, try)                     |
 | Core       | Ownership + borrow checker                              |
 | Core       | Collections, closures, arena, `ua_parser.expo` compiles |
 | Async      | Green thread scheduler, `spawn`/`await`                 |

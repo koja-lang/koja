@@ -11,7 +11,7 @@ pub fn to_llvm_type<'ctx>(
 ) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
         Type::Primitive(p) => Some(primitive_to_llvm(p, context)),
-        Type::Struct(name) => struct_types.get(name).map(|st| (*st).into()),
+        Type::Struct(name) | Type::Enum(name) => struct_types.get(name).map(|st| (*st).into()),
         Type::Unit => None,
         _ => None,
     }

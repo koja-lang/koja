@@ -144,7 +144,13 @@ fn build(args: &[String], quiet: bool, color: bool) {
     let ctx = expo_typecheck::check(&parse_result.module);
     if !ctx.diagnostics.is_empty() {
         render_diagnostics(&path, &source, &ctx.diagnostics, color);
-        process::exit(1);
+        if ctx
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
+        {
+            process::exit(1);
+        }
     }
 
     let obj_path = format!("{output}.o");

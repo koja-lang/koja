@@ -214,9 +214,13 @@ fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) ->
         let st = sv.get_type();
         if let Some(name) = st.get_name()
             && let Ok(name_str) = name.to_str()
-            && c.type_ctx.structs.contains_key(name_str)
         {
-            return Type::Struct(name_str.to_string());
+            if c.type_ctx.structs.contains_key(name_str) {
+                return Type::Struct(name_str.to_string());
+            }
+            if c.type_ctx.enums.contains_key(name_str) {
+                return Type::Enum(name_str.to_string());
+            }
         }
         Type::Unknown
     } else {

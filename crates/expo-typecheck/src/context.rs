@@ -83,4 +83,13 @@ impl TypeContext {
             span,
         });
     }
+
+    pub fn warning(&mut self, message: String, span: Span) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            message,
+            hint: None,
+            span,
+        });
+    }
 }

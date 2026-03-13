@@ -1,10 +1,14 @@
-use expo_ast::ast::{CondArm, Expr, Statement};
+use expo_ast::ast::{CondArm, Expr, FieldPattern, Literal, MatchArm, Pattern, Statement};
+use expo_typecheck::context::VariantData;
+use expo_typecheck::types::Type;
+use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
+use crate::types::to_llvm_type;
 
 pub fn compile_if<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -239,4 +243,495 @@ pub fn compile_loop<'ctx>(
     c.builder.position_at_end(loop_exit);
 
     Ok(None)
+}
+
+pub fn compile_match<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject: &Expr,
+    arms: &[MatchArm],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let subject_val =
+        compile_expr(c, subject, function)?.ok_or("match subject produced no value")?;
+
+    let subject_type = infer_subject_type(c, subject, &subject_val);
+
+    let subject_alloca = c
+        .builder
+        .build_alloca(subject_val.get_type(), "match_subject")
+        .unwrap();
+    c.builder.build_store(subject_alloca, subject_val).unwrap();
+
+    let merge_bb = c.context.append_basic_block(function, "match_end");
+
+    for (i, arm) in arms.iter().enumerate() {
+        let body_bb = c
+            .context
+            .append_basic_block(function, &format!("match_body_{i}"));
+        let next_bb = if i + 1 < arms.len() {
+            c.context
+                .append_basic_block(function, &format!("match_test_{}", i + 1))
+        } else {
+            merge_bb
+        };
+
+        let saved_vars = c.variables.clone();
+
+        let condition = compile_pattern(c, &arm.pattern, subject_alloca, &subject_type, function)?;
+
+        let final_cond = if let Some(guard) = &arm.guard {
+            let guard_val =
+                compile_expr(c, guard, function)?.ok_or("match guard produced no value")?;
+            c.builder
+                .build_and(condition, guard_val.into_int_value(), "guard_and")
+                .unwrap()
+        } else {
+            condition
+        };
+
+        c.builder
+            .build_conditional_branch(final_cond, body_bb, next_bb)
+            .unwrap();
+
+        c.builder.position_at_end(body_bb);
+        for stmt in &arm.body {
+            if c.current_block_terminated() {
+                break;
+            }
+            compile_statement(c, stmt, function)?;
+        }
+        if !c.current_block_terminated() {
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+
+        c.variables = saved_vars;
+        c.builder.position_at_end(next_bb);
+    }
+
+    c.builder.position_at_end(merge_bb);
+    Ok(None)
+}
+
+fn compile_pattern<'ctx>(
+    c: &mut Compiler<'ctx>,
+    pattern: &Pattern,
+    subject_ptr: PointerValue<'ctx>,
+    subject_type: &Type,
+    function: FunctionValue<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    let true_val = c.context.bool_type().const_int(1, false);
+
+    match pattern {
+        Pattern::Wildcard { .. } => Ok(true_val),
+
+        Pattern::Binding { name, .. } => {
+            let llvm_ty = to_llvm_type(subject_type, c.context, &c.struct_types)
+                .ok_or("cannot load subject of unsupported type in pattern")?;
+            let val = c.builder.build_load(llvm_ty, subject_ptr, name).unwrap();
+            let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
+            c.builder.build_store(alloca, val).unwrap();
+            c.variables
+                .insert(name.clone(), (alloca, subject_type.clone()));
+            Ok(true_val)
+        }
+
+        Pattern::Literal { value, .. } => {
+            let llvm_ty = to_llvm_type(subject_type, c.context, &c.struct_types)
+                .ok_or("cannot load subject for literal comparison")?;
+            let subject_val = c
+                .builder
+                .build_load(llvm_ty, subject_ptr, "lit_subj")
+                .unwrap();
+            let lit_val = compile_literal_for_pattern(c, value)?;
+            match_values(c, &subject_val, &lit_val)
+        }
+
+        Pattern::EnumUnit {
+            type_path, variant, ..
+        } => {
+            let enum_name = enum_name_from_path(type_path, subject_type)?;
+            compile_tag_check(c, subject_ptr, &enum_name, variant)
+        }
+
+        Pattern::EnumTuple {
+            type_path,
+            variant,
+            elements,
+            ..
+        } => {
+            let enum_name = enum_name_from_path(type_path, subject_type)?;
+            let mut result = compile_tag_check(c, subject_ptr, &enum_name, variant)?;
+
+            let payload_type = c
+                .get_variant_payload_type(&enum_name, variant)
+                .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
+            let enum_type = *c
+                .struct_types
+                .get(&enum_name)
+                .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
+            let payload_ptr = c
+                .builder
+                .build_struct_gep(enum_type, subject_ptr, 1, "payload_ptr")
+                .unwrap();
+
+            let field_types = get_tuple_variant_types(c, &enum_name, variant)?;
+
+            for (i, sub_pat) in elements.iter().enumerate() {
+                let field_type = &field_types[i];
+                let field_llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
+                    .ok_or("unsupported field type in enum variant")?;
+                let field_ptr = c
+                    .builder
+                    .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("f{i}"))
+                    .unwrap();
+                let field_val = c
+                    .builder
+                    .build_load(field_llvm_ty, field_ptr, &format!("f{i}_val"))
+                    .unwrap();
+                let field_alloca = c
+                    .builder
+                    .build_alloca(field_llvm_ty, &format!("f{i}_tmp"))
+                    .unwrap();
+                c.builder.build_store(field_alloca, field_val).unwrap();
+
+                let sub_result = compile_pattern(c, sub_pat, field_alloca, field_type, function)?;
+                result = c
+                    .builder
+                    .build_and(result, sub_result, &format!("and_{i}"))
+                    .unwrap();
+            }
+
+            Ok(result)
+        }
+
+        Pattern::EnumStruct {
+            type_path,
+            variant,
+            fields,
+            ..
+        } => {
+            let enum_name = enum_name_from_path(type_path, subject_type)?;
+            let mut result = compile_tag_check(c, subject_ptr, &enum_name, variant)?;
+
+            let payload_type = c
+                .get_variant_payload_type(&enum_name, variant)
+                .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
+            let enum_type = *c
+                .struct_types
+                .get(&enum_name)
+                .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
+            let payload_ptr = c
+                .builder
+                .build_struct_gep(enum_type, subject_ptr, 1, "payload_ptr")
+                .unwrap();
+
+            let expected_fields = get_struct_variant_fields(c, &enum_name, variant)?;
+
+            for fp in fields {
+                result = compile_field_pattern(
+                    c,
+                    fp,
+                    &expected_fields,
+                    payload_type,
+                    payload_ptr,
+                    result,
+                    &enum_name,
+                    variant,
+                    function,
+                )?;
+            }
+
+            Ok(result)
+        }
+
+        Pattern::Constructor { name, elements, .. } => {
+            let enum_name = find_constructor_enum(c, name, subject_type)?;
+            let mut result = compile_tag_check(c, subject_ptr, &enum_name, name)?;
+
+            if !elements.is_empty() {
+                let payload_type = c
+                    .get_variant_payload_type(&enum_name, name)
+                    .ok_or_else(|| format!("no payload type for {enum_name}.{name}"))?;
+                let enum_type = *c
+                    .struct_types
+                    .get(&enum_name)
+                    .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
+                let payload_ptr = c
+                    .builder
+                    .build_struct_gep(enum_type, subject_ptr, 1, "payload_ptr")
+                    .unwrap();
+
+                let field_types = get_tuple_variant_types(c, &enum_name, name)?;
+
+                for (i, sub_pat) in elements.iter().enumerate() {
+                    let field_type = &field_types[i];
+                    let field_llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
+                        .ok_or("unsupported field type in constructor pattern")?;
+                    let field_ptr = c
+                        .builder
+                        .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("cf{i}"))
+                        .unwrap();
+                    let field_val = c
+                        .builder
+                        .build_load(field_llvm_ty, field_ptr, &format!("cf{i}_val"))
+                        .unwrap();
+                    let field_alloca = c
+                        .builder
+                        .build_alloca(field_llvm_ty, &format!("cf{i}_tmp"))
+                        .unwrap();
+                    c.builder.build_store(field_alloca, field_val).unwrap();
+
+                    let sub_result =
+                        compile_pattern(c, sub_pat, field_alloca, field_type, function)?;
+                    result = c
+                        .builder
+                        .build_and(result, sub_result, &format!("cand_{i}"))
+                        .unwrap();
+                }
+            }
+
+            Ok(result)
+        }
+
+        Pattern::Tuple { .. } | Pattern::List { .. } => {
+            Err("tuple and list patterns not yet supported in compilation".to_string())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pattern helpers
+// ---------------------------------------------------------------------------
+
+fn compile_tag_check<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject_ptr: PointerValue<'ctx>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<IntValue<'ctx>, String> {
+    let enum_type = *c
+        .struct_types
+        .get(enum_name)
+        .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
+    let tag = c
+        .get_variant_tag(enum_name, variant)
+        .ok_or_else(|| format!("unknown variant: {enum_name}.{variant}"))?;
+    let tag_ptr = c
+        .builder
+        .build_struct_gep(enum_type, subject_ptr, 0, "tag_ptr")
+        .unwrap();
+    let tag_val = c
+        .builder
+        .build_load(c.context.i8_type(), tag_ptr, "tag")
+        .unwrap()
+        .into_int_value();
+    let expected = c.context.i8_type().const_int(tag as u64, false);
+    Ok(c.builder
+        .build_int_compare(IntPredicate::EQ, tag_val, expected, "tag_eq")
+        .unwrap())
+}
+
+fn match_values<'ctx>(
+    c: &Compiler<'ctx>,
+    subject: &BasicValueEnum<'ctx>,
+    lit: &BasicValueEnum<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    if subject.is_int_value() && lit.is_int_value() {
+        Ok(c.builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                subject.into_int_value(),
+                lit.into_int_value(),
+                "lit_eq",
+            )
+            .unwrap())
+    } else if subject.is_float_value() && lit.is_float_value() {
+        Ok(c.builder
+            .build_float_compare(
+                FloatPredicate::OEQ,
+                subject.into_float_value(),
+                lit.into_float_value(),
+                "lit_feq",
+            )
+            .unwrap())
+    } else {
+        Err("unsupported literal pattern comparison".to_string())
+    }
+}
+
+fn compile_literal_for_pattern<'ctx>(
+    c: &Compiler<'ctx>,
+    lit: &Literal,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    match lit {
+        Literal::Int(s) => {
+            let clean: String = s.chars().filter(|ch| *ch != '_').collect();
+            let val: i64 = if let Some(hex) = clean
+                .strip_prefix("0x")
+                .or_else(|| clean.strip_prefix("0X"))
+            {
+                i64::from_str_radix(hex, 16).map_err(|_| format!("invalid hex integer: {s}"))?
+            } else if let Some(bin) = clean
+                .strip_prefix("0b")
+                .or_else(|| clean.strip_prefix("0B"))
+            {
+                i64::from_str_radix(bin, 2).map_err(|_| format!("invalid binary integer: {s}"))?
+            } else {
+                clean.parse().map_err(|_| format!("invalid integer: {s}"))?
+            };
+            Ok(c.context.i32_type().const_int(val as u64, true).into())
+        }
+        Literal::Float(s) => {
+            let val: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
+            Ok(c.context.f64_type().const_float(val).into())
+        }
+        Literal::Bool(b) => Ok(c
+            .context
+            .bool_type()
+            .const_int(if *b { 1 } else { 0 }, false)
+            .into()),
+        _ => Err("unsupported literal in match pattern".to_string()),
+    }
+}
+
+fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<String, String> {
+    if !type_path.is_empty() {
+        Ok(type_path.join("."))
+    } else if let Type::Enum(name) = subject_type {
+        Ok(name.clone())
+    } else {
+        Err("cannot determine enum name for pattern".to_string())
+    }
+}
+
+fn find_constructor_enum<'ctx>(
+    c: &Compiler<'ctx>,
+    variant_name: &str,
+    subject_type: &Type,
+) -> Result<String, String> {
+    if let Type::Enum(name) = subject_type {
+        return Ok(name.clone());
+    }
+    for (enum_name, info) in &c.type_ctx.enums {
+        if info.variants.iter().any(|v| v.name == variant_name) {
+            return Ok(enum_name.clone());
+        }
+    }
+    Err(format!("no enum found with variant `{variant_name}`"))
+}
+
+fn get_tuple_variant_types(
+    c: &Compiler<'_>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<Vec<Type>, String> {
+    let vi = c
+        .type_ctx
+        .enums
+        .get(enum_name)
+        .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
+        .ok_or_else(|| format!("variant not found: {enum_name}.{variant}"))?;
+    match &vi.data {
+        VariantData::Tuple(types) => Ok(types.clone()),
+        _ => Err(format!("{enum_name}.{variant} is not a tuple variant")),
+    }
+}
+
+fn get_struct_variant_fields(
+    c: &Compiler<'_>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<Vec<(String, Type)>, String> {
+    let vi = c
+        .type_ctx
+        .enums
+        .get(enum_name)
+        .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
+        .ok_or_else(|| format!("variant not found: {enum_name}.{variant}"))?;
+    match &vi.data {
+        VariantData::Struct(fields) => Ok(fields.clone()),
+        _ => Err(format!("{enum_name}.{variant} is not a struct variant")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_field_pattern<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fp: &FieldPattern,
+    expected_fields: &[(String, Type)],
+    payload_type: inkwell::types::StructType<'ctx>,
+    payload_ptr: PointerValue<'ctx>,
+    mut result: IntValue<'ctx>,
+    enum_name: &str,
+    variant: &str,
+    function: FunctionValue<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    let (field_idx, (_, field_type)) = expected_fields
+        .iter()
+        .enumerate()
+        .find(|(_, (name, _))| *name == fp.name)
+        .ok_or_else(|| format!("unknown field `{}` in {enum_name}.{variant}", fp.name))?;
+
+    let field_llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
+        .ok_or_else(|| format!("unsupported field type for `{}`", fp.name))?;
+    let field_ptr = c
+        .builder
+        .build_struct_gep(payload_type, payload_ptr, field_idx as u32, &fp.name)
+        .unwrap();
+    let field_val = c
+        .builder
+        .build_load(field_llvm_ty, field_ptr, &format!("{}_val", fp.name))
+        .unwrap();
+    let field_alloca = c
+        .builder
+        .build_alloca(field_llvm_ty, &format!("{}_tmp", fp.name))
+        .unwrap();
+    c.builder.build_store(field_alloca, field_val).unwrap();
+
+    if let Some(sub_pat) = &fp.pattern {
+        let sub_result = compile_pattern(c, sub_pat, field_alloca, field_type, function)?;
+        result = c
+            .builder
+            .build_and(result, sub_result, &format!("{}_and", fp.name))
+            .unwrap();
+    } else {
+        c.variables
+            .insert(fp.name.clone(), (field_alloca, field_type.clone()));
+    }
+
+    Ok(result)
+}
+
+fn infer_subject_type<'ctx>(
+    c: &Compiler<'ctx>,
+    subject: &Expr,
+    val: &BasicValueEnum<'ctx>,
+) -> Type {
+    if let Expr::Ident { name, .. } = subject
+        && let Some((_, ty)) = c.variables.get(name)
+    {
+        return ty.clone();
+    }
+    if val.is_int_value() {
+        match val.into_int_value().get_type().get_bit_width() {
+            1 => Type::Primitive(expo_typecheck::types::Primitive::Bool),
+            32 => Type::Primitive(expo_typecheck::types::Primitive::I32),
+            64 => Type::Primitive(expo_typecheck::types::Primitive::I64),
+            _ => Type::Unknown,
+        }
+    } else if val.is_struct_value() {
+        let st = val.into_struct_value().get_type();
+        if let Some(name) = st.get_name() {
+            let name_str = name.to_str().unwrap_or("");
+            if c.type_ctx.enums.contains_key(name_str) {
+                return Type::Enum(name_str.to_string());
+            }
+            if c.type_ctx.structs.contains_key(name_str) {
+                return Type::Struct(name_str.to_string());
+            }
+        }
+        Type::Unknown
+    } else {
+        Type::Unknown
+    }
 }
