@@ -1,3 +1,7 @@
+# Build artifacts
 /target
 /target-check
+
+# Misc
 install.sh
+.DS_Store

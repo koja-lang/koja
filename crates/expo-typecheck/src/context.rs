@@ -6,15 +6,17 @@ use expo_ast::span::Span;
 use crate::types::Type;
 
 pub struct TypeContext {
-    pub structs: HashMap<String, StructInfo>,
-    pub functions: HashMap<String, FunctionSig>,
     pub diagnostics: Vec<Diagnostic>,
+    pub enums: HashMap<String, EnumInfo>,
+    pub functions: HashMap<String, FunctionSig>,
+    pub structs: HashMap<String, StructInfo>,
 }
 
-pub struct StructInfo {
-    pub fields: Vec<(String, Type)>,
+pub struct EnumInfo {
+    pub methods: HashMap<String, FunctionSig>,
     #[allow(dead_code)]
     pub span: Span,
+    pub variants: Vec<VariantInfo>,
 }
 
 pub struct FunctionSig {
@@ -29,12 +31,32 @@ pub struct ParamInfo {
     pub ty: Type,
 }
 
+pub struct StructInfo {
+    pub fields: Vec<(String, Type)>,
+    pub methods: HashMap<String, FunctionSig>,
+    #[allow(dead_code)]
+    pub span: Span,
+}
+
+pub struct VariantInfo {
+    pub data: VariantData,
+    pub name: String,
+}
+
+#[derive(Clone)]
+pub enum VariantData {
+    Struct(Vec<(String, Type)>),
+    Tuple(Vec<Type>),
+    Unit,
+}
+
 impl TypeContext {
     pub fn new() -> Self {
         Self {
-            structs: HashMap::new(),
-            functions: HashMap::new(),
             diagnostics: Vec::new(),
+            enums: HashMap::new(),
+            functions: HashMap::new(),
+            structs: HashMap::new(),
         }
     }
 

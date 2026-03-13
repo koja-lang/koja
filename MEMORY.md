@@ -30,7 +30,7 @@ scope, the value is dropped (memory freed, file handles closed, etc).
 
 ```
 # Borrow -- params borrow by default, no annotation needed
-fn get_session(self, token: String) -> Result<Option<SessionToken>, DatabaseError>
+fn get_session(self, token: string) -> Result<Option<SessionToken>, DatabaseError>
 
 # Move -- use `move` keyword when a function takes ownership
 fn new(move db: Database) -> AuthStateMachine
@@ -90,7 +90,7 @@ compiler tells you when something needs to be cloned.
 
 When a type needs to express "this contains a reference, not an owned value," use
 `ref<T>` syntax. This appears in return types (`-> ref<Database>`) and inside
-generics (`Option<ref<String>>`).
+generics (`Option<ref<string>>`).
 
 Function references use bare names without any sigil. The compiler distinguishes
 calls from references by the presence of parentheses: `foo()` calls the function,

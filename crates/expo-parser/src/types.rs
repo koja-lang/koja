@@ -164,6 +164,17 @@ impl Parser {
 fn is_primitive(name: &str) -> bool {
     matches!(
         name,
-        "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64" | "bool"
+        "bool"
+            | "f32"
+            | "f64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "string"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
     )
 }

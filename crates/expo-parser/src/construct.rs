@@ -378,11 +378,7 @@ impl Parser {
         }
     }
 
-    pub(crate) fn expr_to_closure_params(
-        &mut self,
-        expr: &Expr,
-        span: Span,
-    ) -> Vec<ClosureParam> {
+    pub(crate) fn expr_to_closure_params(&mut self, expr: &Expr, span: Span) -> Vec<ClosureParam> {
         match expr {
             Expr::Ident { name, span } if name == "_" => {
                 vec![ClosureParam::Wildcard { span: *span }]

@@ -102,8 +102,7 @@ impl Parser {
                                     self.advance(); // (
                                     let args = self.parse_arg_list();
                                     self.expect(&TokenKind::RParen);
-                                    let span =
-                                        Span::new(expr_span(&lhs).start, self.prev_end());
+                                    let span = Span::new(expr_span(&lhs).start, self.prev_end());
                                     lhs = Expr::MethodCall {
                                         receiver: Box::new(lhs),
                                         method: name,
@@ -112,8 +111,7 @@ impl Parser {
                                         span,
                                     };
                                 } else {
-                                    let span =
-                                        Span::new(expr_span(&lhs).start, self.prev_end());
+                                    let span = Span::new(expr_span(&lhs).start, self.prev_end());
                                     lhs = Expr::FieldAccess {
                                         receiver: Box::new(lhs),
                                         field: name,
@@ -180,8 +178,7 @@ impl Parser {
                             let then_expr = self.parse_expr_bp(0);
                             self.expect(&TokenKind::Colon);
                             let else_expr = self.parse_expr_bp(BP_TERNARY + 1);
-                            let span =
-                                Span::new(expr_span(&lhs).start, expr_span(&else_expr).end);
+                            let span = Span::new(expr_span(&lhs).start, expr_span(&else_expr).end);
                             lhs = Expr::Ternary {
                                 condition: Box::new(lhs),
                                 then_expr: Box::new(then_expr),

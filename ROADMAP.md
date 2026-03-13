@@ -140,7 +140,7 @@ Build the stdlib modules that the example codebase imports.
 
 ### Month 9 -- Core types and I/O
 
-- `String` with UTF-8 internals, interpolation (`#{}` with format specs), `.trim()`, `.split()`, `.starts_with?()`, `.empty?()`, `.contains?()`
+- `string` with UTF-8 internals, interpolation (`#{}` with format specs), `.trim()`, `.split()`, `.starts_with?()`, `.empty?()`, `.contains?()`
 - `Vec<T>` and `HashMap<K,V>` with full method sets
 - `Option<T>` and `Result<T,E>` methods (`.map()`, `.unwrap_or()`, `.ok?()`)
 - File I/O: `file.read()`, `file.write()`, `file.exists?()`
@@ -250,10 +250,10 @@ A language-native `command` keyword for typed, composable pipelines -- inspired 
 
 ```expo
 command RegisterUser
-  param email: String
-  param password: String
+  param email: string
+  param password: string
 
-  step hash_password -> password_hash: String
+  step hash_password -> password_hash: string
     Crypto.hash_sha256(password)
   end
 

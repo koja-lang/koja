@@ -24,6 +24,7 @@ syn match expoAnnotation    /@\w\+/
 
 " --- Types (PascalCase identifiers) -----------------------------------------
 
+syn keyword expoPrimitiveType bool f32 f64 i8 i16 i32 i64 string u8 u16 u32 u64
 syn match expoType          /\<[A-Z][A-Za-z0-9]*\>/
 
 " --- Constants (ALL_CAPS identifiers) ---------------------------------------
@@ -68,6 +69,7 @@ hi def link expoStructure     Structure
 hi def link expoBoolean       Boolean
 hi def link expoConstant      Constant
 hi def link expoSelf          Constant
+hi def link expoPrimitiveType  Type
 hi def link expoType          Type
 hi def link expoModuleConst   Constant
 hi def link expoNumber        Number

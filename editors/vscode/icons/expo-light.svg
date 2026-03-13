@@ -1,10 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#5C2FDF"/>
-      <stop offset="100%" stop-color="#2962FF"/>
-    </linearGradient>
-  </defs>
-  <rect x="2" y="2" width="28" height="28" rx="6" fill="url(#g)"/>
-  <text x="16" y="22.5" text-anchor="middle" font-family="SF Mono,Menlo,monospace" font-weight="700" font-size="18" fill="#fff">E</text>
-</svg>
+<?xml version="1.0" encoding="UTF-8"?><svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"><defs><style>.cls-1{letter-spacing:0em;}.cls-2{fill:#dd6900;font-family:ZeroesOne-Regular, 'Zeroes 1';font-size:738.14px;}.cls-3{letter-spacing:-.05em;}</style></defs><text class="cls-2" transform="translate(16.16 699.67)"><tspan class="cls-3" x="0" y="0">E</tspan><tspan class="cls-1" x="395.63" y="0">X</tspan></text></svg>

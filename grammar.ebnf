@@ -111,7 +111,7 @@ type_expr = "ref" , "<" , type_expr , ">"                            (* referenc
 named_type = TYPE_IDENT , { "." , TYPE_IDENT } ;
 
 (* Primitive types are just named types: u8, u16, u32, u64, i8, i16, i32, i64,
-   f32, f64, bool, String, Bytes. Option, Result, Vec, HashMap are generic
+   f32, f64, bool, string, bytes. Option, Result, Vec, HashMap are generic
    named types. No special grammar rules needed. *)
 
 
