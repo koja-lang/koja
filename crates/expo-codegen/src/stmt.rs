@@ -17,11 +17,9 @@ pub fn compile_statement<'ctx>(
             Ok(None)
         }
 
-        Statement::Assignment {
-            target, value, ..
-        } => {
-            let val = compile_expr(c, value, function)?
-                .ok_or("assignment value produced no value")?;
+        Statement::Assignment { target, value, .. } => {
+            let val =
+                compile_expr(c, value, function)?.ok_or("assignment value produced no value")?;
 
             match target {
                 AssignTarget::LValue(lvalue) => {
@@ -30,10 +28,7 @@ pub fn compile_statement<'ctx>(
                         if let Some((ptr, _)) = c.variables.get(name) {
                             c.builder.build_store(*ptr, val).unwrap();
                         } else {
-                            let alloca = c
-                                .builder
-                                .build_alloca(val.get_type(), name)
-                                .unwrap();
+                            let alloca = c.builder.build_alloca(val.get_type(), name).unwrap();
                             c.builder.build_store(alloca, val).unwrap();
                             let ty = infer_type_from_llvm(c, &val);
                             c.variables.insert(name.clone(), (alloca, ty));
@@ -44,10 +39,7 @@ pub fn compile_statement<'ctx>(
                 }
                 AssignTarget::Pattern(pat) => {
                     if let expo_ast::ast::Pattern::Binding { name, .. } = pat {
-                        let alloca = c
-                            .builder
-                            .build_alloca(val.get_type(), name)
-                            .unwrap();
+                        let alloca = c.builder.build_alloca(val.get_type(), name).unwrap();
                         c.builder.build_store(alloca, val).unwrap();
                         let ty = infer_type_from_llvm(c, &val);
                         c.variables.insert(name.clone(), (alloca, ty));
@@ -165,7 +157,7 @@ fn compile_field_assignment<'ctx>(
             _ => {
                 return Err(format!(
                     "cannot access field `{field_name}` on non-struct type"
-                ))
+                ));
             }
         };
 
@@ -176,15 +168,11 @@ fn compile_field_assignment<'ctx>(
 
         let field_idx = c
             .get_field_index(&struct_name, field_name)
-            .ok_or_else(|| {
-                format!("unknown field `{field_name}` on struct `{struct_name}`")
-            })?;
+            .ok_or_else(|| format!("unknown field `{field_name}` on struct `{struct_name}`"))?;
 
         let field_ty = c
             .get_field_type(&struct_name, field_name)
-            .ok_or_else(|| {
-                format!("unknown field `{field_name}` on struct `{struct_name}`")
-            })?;
+            .ok_or_else(|| format!("unknown field `{field_name}` on struct `{struct_name}`"))?;
 
         ptr = c
             .builder
@@ -203,10 +191,7 @@ fn compile_field_assignment<'ctx>(
     Ok(())
 }
 
-fn infer_type_from_llvm<'ctx>(
-    c: &Compiler<'ctx>,
-    val: &BasicValueEnum<'ctx>,
-) -> Type {
+fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) -> Type {
     use expo_typecheck::types::Primitive;
 
     if val.is_int_value() {

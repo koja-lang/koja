@@ -150,9 +150,7 @@ fn cmd_run(args: &[String]) {
     let build_args = vec![path.clone(), "-o".to_string(), output.clone()];
     build(&build_args, true);
 
-    let status = process::Command::new(&binary)
-        .args(&args[1..])
-        .status();
+    let status = process::Command::new(&binary).args(&args[1..]).status();
 
     let _ = fs::remove_file(&binary);
 

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use expo_ast::ast::{Function, Item, Module, Param, TypeExpr};
+use expo_ast::ast::{Function, ImplMember, Item, Module, Param, TypeExpr};
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::Type;
+use inkwell::OptimizationLevel;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
@@ -12,7 +13,6 @@ use inkwell::targets::{
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, StructType};
 use inkwell::values::{FunctionValue, PointerValue};
-use inkwell::OptimizationLevel;
 
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
@@ -77,22 +77,58 @@ impl<'ctx> Compiler<'ctx> {
 
     fn declare_functions(&mut self, module: &Module) -> Result<(), String> {
         for item in &module.items {
-            if let Item::Function(func) = item {
-                let fn_value = self.declare_function(func)?;
-                self.functions.insert(func.name.clone(), fn_value);
+            match item {
+                Item::Function(func) => {
+                    let fn_value = self.declare_function(func, None)?;
+                    self.functions.insert(func.name.clone(), fn_value);
+                }
+                Item::Impl(impl_block) => {
+                    let target_name = self.type_name_from_expr(&impl_block.target);
+                    if let Some(target_name) = target_name {
+                        for member in &impl_block.members {
+                            if let ImplMember::Function(func) = member {
+                                let mangled = format!("{}_{}", target_name, func.name);
+                                let fn_value = self.declare_function(func, Some(&target_name))?;
+                                self.functions.insert(mangled, fn_value);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
     }
 
-    fn declare_function(&self, func: &Function) -> Result<FunctionValue<'ctx>, String> {
+    fn declare_function(
+        &self,
+        func: &Function,
+        self_type_name: Option<&str>,
+    ) -> Result<FunctionValue<'ctx>, String> {
         let return_type = self.resolve_return_type(&func.return_type);
-        let param_types = self.resolve_param_types(&func.params)?;
+        let mut param_types = Vec::new();
 
-        let fn_type = if func.name == "main" {
-            self.context
-                .i32_type()
-                .fn_type(&param_types, false)
+        if let Some(name) = self_type_name {
+            if func
+                .params
+                .first()
+                .map_or(false, |p| matches!(p, Param::Self_ { .. }))
+            {
+                if let Some(st) = self.struct_types.get(name) {
+                    param_types.push((*st).into());
+                }
+            }
+        }
+
+        param_types.extend(self.resolve_param_types(&func.params)?);
+
+        let mangled = match self_type_name {
+            Some(tn) => format!("{}_{}", tn, func.name),
+            None => func.name.clone(),
+        };
+
+        let fn_type = if func.name == "main" && self_type_name.is_none() {
+            self.context.i32_type().fn_type(&param_types, false)
         } else {
             match to_llvm_type(&return_type, self.context, &self.struct_types) {
                 Some(ret_ty) => ret_ty.fn_type(&param_types, false),
@@ -100,30 +136,80 @@ impl<'ctx> Compiler<'ctx> {
             }
         };
 
-        Ok(self.module.add_function(&func.name, fn_type, None))
+        Ok(self.module.add_function(&mangled, fn_type, None))
     }
 
     fn define_functions(&mut self, module: &Module) -> Result<(), String> {
         for item in &module.items {
-            if let Item::Function(func) = item {
-                self.define_function(func)?;
+            match item {
+                Item::Function(func) => {
+                    self.define_function(func, None)?;
+                }
+                Item::Impl(impl_block) => {
+                    let target_name = self.type_name_from_expr(&impl_block.target);
+                    if let Some(target_name) = target_name {
+                        for member in &impl_block.members {
+                            if let ImplMember::Function(func) = member {
+                                self.define_function(func, Some(&target_name))?;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
     }
 
-    fn define_function(&mut self, func: &Function) -> Result<(), String> {
+    fn type_name_from_expr(&self, te: &TypeExpr) -> Option<String> {
+        if let TypeExpr::Named { path, .. } = te {
+            if path.len() == 1 {
+                return Some(path[0].clone());
+            }
+        }
+        None
+    }
+
+    fn define_function(
+        &mut self,
+        func: &Function,
+        self_type_name: Option<&str>,
+    ) -> Result<(), String> {
+        let mangled = match self_type_name {
+            Some(tn) => format!("{}_{}", tn, func.name),
+            None => func.name.clone(),
+        };
+
         let fn_value = *self
             .functions
-            .get(&func.name)
-            .ok_or_else(|| format!("undeclared function: {}", func.name))?;
+            .get(&mangled)
+            .ok_or_else(|| format!("undeclared function: {}", mangled))?;
 
         let entry = self.context.append_basic_block(fn_value, "entry");
         self.builder.position_at_end(entry);
 
         self.variables.clear();
 
-        for (i, param) in func.params.iter().enumerate() {
+        let mut llvm_param_idx: u32 = 0;
+
+        if let Some(type_name) = self_type_name {
+            if func
+                .params
+                .first()
+                .map_or(false, |p| matches!(p, Param::Self_ { .. }))
+            {
+                let self_ty = Type::Struct(type_name.to_string());
+                if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
+                    let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
+                    let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
+                    self.builder.build_store(alloca, param_val).unwrap();
+                    self.variables.insert("self".to_string(), (alloca, self_ty));
+                    llvm_param_idx += 1;
+                }
+            }
+        }
+
+        for param in func.params.iter() {
             if let Param::Regular {
                 name, type_expr, ..
             } = param
@@ -131,9 +217,10 @@ impl<'ctx> Compiler<'ctx> {
                 let param_ty = self.resolve_type_expr(type_expr);
                 if let Some(llvm_ty) = to_llvm_type(&param_ty, self.context, &self.struct_types) {
                     let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
-                    let param_val = fn_value.get_nth_param(i as u32).unwrap();
+                    let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.variables.insert(name.clone(), (alloca, param_ty));
+                    llvm_param_idx += 1;
                 }
             }
         }
@@ -166,7 +253,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if !self.current_block_terminated() {
-            if func.name == "main" {
+            if func.name == "main" && self_type_name.is_none() {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
             } else if return_type == Type::Unit {
@@ -259,11 +346,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 }
 
-pub fn compile(
-    module: &Module,
-    type_ctx: &TypeContext,
-    output_path: &Path,
-) -> Result<(), String> {
+pub fn compile(module: &Module, type_ctx: &TypeContext, output_path: &Path) -> Result<(), String> {
     let context = Context::create();
     let mut compiler = Compiler::new(&context, type_ctx);
     compiler.compile_module(module)?;
