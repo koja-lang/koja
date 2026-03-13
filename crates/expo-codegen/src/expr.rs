@@ -1,4 +1,4 @@
-use expo_ast::ast::{BinOp, Expr, Literal, UnaryOp};
+use expo_ast::ast::{BinOp, Expr, Literal, StringPart, UnaryOp};
 use expo_typecheck::types::Type;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, IntPredicate};
@@ -63,6 +63,8 @@ pub fn compile_expr<'ctx>(
             ..
         } => compile_method_call(c, receiver, method, args, function),
 
+        Expr::String { parts, .. } => compile_string(c, parts),
+
         Expr::Self_ { .. } => {
             if let Some((ptr, ty)) = c.variables.get("self") {
                 let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)
@@ -105,6 +107,23 @@ fn compile_literal<'ctx>(
         Literal::Unit => Ok(None),
         Literal::None => Ok(None),
     }
+}
+
+fn compile_string<'ctx>(
+    c: &Compiler<'ctx>,
+    parts: &[StringPart],
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let mut combined = String::new();
+    for part in parts {
+        match part {
+            StringPart::Literal { value, .. } => combined.push_str(value),
+            StringPart::Interpolation { .. } => {
+                return Err("string interpolation not yet supported in compilation".to_string());
+            }
+        }
+    }
+    let global = c.builder.build_global_string_ptr(&combined, "str").unwrap();
+    Ok(Some(global.as_pointer_value().into()))
 }
 
 fn compile_binary<'ctx>(
@@ -269,7 +288,7 @@ fn compile_call<'ctx>(
     }
 
     match name {
-        "print_i32" | "print_i64" | "print_bool" | "print_f64" => {
+        "print_i32" | "print_i64" | "print_bool" | "print_f64" | "print_string" => {
             compile_print_builtin(c, name, args, function)
         }
         _ => {
@@ -315,6 +334,7 @@ fn compile_print_builtin<'ctx>(
         "print_i64" => "%lld\n",
         "print_f64" => "%f\n",
         "print_bool" => "%d\n",
+        "print_string" => "%s\n",
         _ => return Err(format!("unknown print builtin: {name}")),
     };
 

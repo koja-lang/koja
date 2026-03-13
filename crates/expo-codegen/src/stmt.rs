@@ -205,6 +205,8 @@ fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) ->
         }
     } else if val.is_float_value() {
         Type::Primitive(Primitive::F64)
+    } else if val.is_pointer_value() {
+        Type::Primitive(Primitive::String)
     } else if val.is_struct_value() {
         let sv = val.into_struct_value();
         let st = sv.get_type();

@@ -34,7 +34,7 @@ pub fn primitive_to_llvm<'ctx>(p: &Primitive, context: &'ctx Context) -> BasicTy
         Primitive::I16 | Primitive::U16 => context.i16_type().into(),
         Primitive::I32 | Primitive::U32 => context.i32_type().into(),
         Primitive::I64 | Primitive::U64 => context.i64_type().into(),
-        Primitive::String => unimplemented!("string codegen not yet supported"),
+        Primitive::String => context.ptr_type(inkwell::AddressSpace::default()).into(),
     }
 }
 
