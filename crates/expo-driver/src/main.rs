@@ -15,13 +15,20 @@ fn main() {
         process::exit(1);
     }
 
+    let color = !args.contains(&"--no-color".to_string()) && env::var("NO_COLOR").is_err();
+    let cmd_args: Vec<String> = args[2..]
+        .iter()
+        .filter(|a| *a != "--no-color")
+        .cloned()
+        .collect();
+
     match args[1].as_str() {
-        "build" => cmd_build(&args[2..]),
-        "check" => cmd_check(&args[2..]),
-        "format" => cmd_format(&args[2..]),
-        "lex" => cmd_lex(&args[2..]),
-        "parse" => cmd_parse(&args[2..]),
-        "run" => cmd_run(&args[2..]),
+        "build" => cmd_build(&cmd_args, color),
+        "check" => cmd_check(&cmd_args, color),
+        "format" => cmd_format(&cmd_args, color),
+        "lex" => cmd_lex(&cmd_args, color),
+        "parse" => cmd_parse(&cmd_args, color),
+        "run" => cmd_run(&cmd_args, color),
         other => {
             eprintln!("unknown command: {other}");
             process::exit(1);
@@ -29,7 +36,7 @@ fn main() {
     }
 }
 
-fn render_diagnostics(filename: &str, source: &str, diagnostics: &[Diagnostic]) {
+fn render_diagnostics(filename: &str, source: &str, diagnostics: &[Diagnostic], color: bool) {
     let lines: Vec<&str> = source.lines().collect();
     let max_line = diagnostics
         .iter()
@@ -39,13 +46,15 @@ fn render_diagnostics(filename: &str, source: &str, diagnostics: &[Diagnostic]) 
     let gutter_width = max_line.to_string().len();
 
     for d in diagnostics {
-        let severity = match d.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Note => "note",
+        let severity_label = match (&d.severity, color) {
+            (Severity::Error, true) => "\x1b[1;31merror\x1b[0m",
+            (Severity::Error, false) => "error",
+            (Severity::Warning, true) => "\x1b[1;33mwarning\x1b[0m",
+            (Severity::Warning, false) => "warning",
+            (Severity::Note, _) => "note",
         };
 
-        eprintln!("{severity}: {}", d.message);
+        eprintln!("{severity_label}: {}", d.message);
         eprintln!(
             "{:>gutter_width$}--> {filename}:{}:{}",
             " ", d.span.start.line, d.span.start.column
@@ -77,11 +86,11 @@ fn render_diagnostics(filename: &str, source: &str, diagnostics: &[Diagnostic]) 
     }
 }
 
-fn cmd_build(args: &[String]) {
-    build(args, false);
+fn cmd_build(args: &[String], color: bool) {
+    build(args, false, color);
 }
 
-fn build(args: &[String], quiet: bool) {
+fn build(args: &[String], quiet: bool, color: bool) {
     if args.is_empty() {
         eprintln!("Usage: expo build <file.expo> [-o output]");
         process::exit(1);
@@ -128,13 +137,13 @@ fn build(args: &[String], quiet: bool) {
 
     let parse_result = expo_parser::parse(&source);
     if !parse_result.errors.is_empty() {
-        render_diagnostics(&path, &source, &parse_result.errors);
+        render_diagnostics(&path, &source, &parse_result.errors, color);
         process::exit(1);
     }
 
     let ctx = expo_typecheck::check(&parse_result.module);
     if !ctx.diagnostics.is_empty() {
-        render_diagnostics(&path, &source, &ctx.diagnostics);
+        render_diagnostics(&path, &source, &ctx.diagnostics, color);
         process::exit(1);
     }
 
@@ -142,7 +151,7 @@ fn build(args: &[String], quiet: bool) {
     if let Err(diagnostics) =
         expo_codegen::compile(&parse_result.module, &ctx, Path::new(&obj_path))
     {
-        render_diagnostics(&path, &source, &diagnostics);
+        render_diagnostics(&path, &source, &diagnostics, color);
         process::exit(1);
     }
 
@@ -170,7 +179,7 @@ fn build(args: &[String], quiet: bool) {
     }
 }
 
-fn cmd_run(args: &[String]) {
+fn cmd_run(args: &[String], color: bool) {
     if args.is_empty() {
         eprintln!("Usage: expo run <file.expo>");
         process::exit(1);
@@ -188,7 +197,7 @@ fn cmd_run(args: &[String]) {
     let output = binary.to_str().unwrap().to_string();
 
     let build_args = vec![path.clone(), "-o".to_string(), output.clone()];
-    build(&build_args, true);
+    build(&build_args, true, color);
 
     let status = process::Command::new(&binary).args(&args[1..]).status();
 
@@ -203,7 +212,7 @@ fn cmd_run(args: &[String]) {
     }
 }
 
-fn cmd_check(args: &[String]) {
+fn cmd_check(args: &[String], color: bool) {
     if args.is_empty() {
         eprintln!("Usage: expo check <file.expo>");
         process::exit(1);
@@ -220,7 +229,7 @@ fn cmd_check(args: &[String]) {
 
         let parse_result = expo_parser::parse(&source);
         if !parse_result.errors.is_empty() {
-            render_diagnostics(path, &source, &parse_result.errors);
+            render_diagnostics(path, &source, &parse_result.errors, color);
             continue;
         }
 
@@ -228,12 +237,12 @@ fn cmd_check(args: &[String]) {
         if ctx.diagnostics.is_empty() {
             println!("{path}: OK");
         } else {
-            render_diagnostics(path, &source, &ctx.diagnostics);
+            render_diagnostics(path, &source, &ctx.diagnostics, color);
         }
     }
 }
 
-fn cmd_format(args: &[String]) {
+fn cmd_format(args: &[String], color: bool) {
     if args.is_empty() {
         eprintln!("Usage: expo format <file.expo> [--check] [--write]");
         process::exit(1);
@@ -256,7 +265,7 @@ fn cmd_format(args: &[String]) {
         let formatted = match expo_fmt::format(&source) {
             expo_fmt::FormatResult::Ok(s) => s,
             expo_fmt::FormatResult::ParseErrors(errors) => {
-                render_diagnostics(path, &source, &errors);
+                render_diagnostics(path, &source, &errors, color);
                 has_diff = true;
                 continue;
             }
@@ -289,7 +298,7 @@ fn cmd_format(args: &[String]) {
     }
 }
 
-fn cmd_parse(args: &[String]) {
+fn cmd_parse(args: &[String], color: bool) {
     if args.is_empty() {
         eprintln!("Usage: expo parse <file.expo>");
         process::exit(1);
@@ -309,12 +318,12 @@ fn cmd_parse(args: &[String]) {
         if result.errors.is_empty() {
             println!("{path}: OK ({} items)", result.module.items.len());
         } else {
-            render_diagnostics(path, &source, &result.errors);
+            render_diagnostics(path, &source, &result.errors, color);
         }
     }
 }
 
-fn cmd_lex(args: &[String]) {
+fn cmd_lex(args: &[String], color: bool) {
     if args.is_empty() {
         eprintln!("Usage: expo lex <file.expo>");
         process::exit(1);
@@ -332,7 +341,7 @@ fn cmd_lex(args: &[String]) {
         let result = expo_lexer::lex(&source);
 
         if !result.errors.is_empty() {
-            render_diagnostics(path, &source, &result.errors);
+            render_diagnostics(path, &source, &result.errors, color);
         }
 
         println!(
