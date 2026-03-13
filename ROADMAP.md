@@ -6,65 +6,109 @@ Solo developer + AI assistance. Bootstrap in Rust, self-host in Expo.
 
 ## Current state
 
-What exists today:
+### Compiler
+
+A 7-crate Rust workspace (~8,500 LOC) that compiles Expo source to native binaries via LLVM:
+
+- `expo-ast` -- tokens, spans, AST node definitions
+- `expo-lexer` -- custom tokenizer
+- `expo-parser` -- recursive descent parser (Pratt precedence for expressions)
+- `expo-typecheck` -- type inference and semantic analysis
+- `expo-codegen` -- LLVM IR generation via `inkwell`
+- `expo-fmt` -- opinionated code formatter
+- `expo-driver` -- CLI binary (`expo`)
+
+### CLI
+
+Six commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo lex`, `expo parse`.
+
+### What compiles to native binaries today
+
+Functions, structs, impl blocks, methods (`self`), if/else, while, loop, break, return, compound assignment (`+=`, `-=`, `*=`, `/=`), `print` builtin, i32/i64/f32/f64/bool/String primitives.
+
+### Parsed and type-checked but NOT yet in codegen
+
+Enums, match, cond, for, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe (`|>`), generics, `ref<T>`, tuples, lists, string interpolation.
+
+### Known gaps
+
+- **Type checker**: generics resolve to `Unknown`, no multi-module name resolution, no `priv fn` visibility enforcement, `ref<T>` unresolved
+- **Lexer**: hex/binary integer literals not implemented, string interpolation is a stub, escape sequences incomplete
+
+### Design artifacts
 
 - **Language design** -- syntax decisions, memory model, async model, module system, all finalized through iterative design sessions
-- **EBNF grammar** -- `grammar.ebnf`, 418 lines covering all syntax constructs
+- **EBNF grammar** -- `grammar.ebnf`, 426 lines covering all syntax constructs
 - **Example codebase** -- 17 `.expo` files porting `auth-manager` (a real Rust microservice) into Expo pseudocode, validating the language feels right
 - **Memory strategy** -- documented in `MEMORY.md` (stack, ownership+move, explicit arena)
 - **Project config format** -- `project.expo` replacing `Cargo.toml`
 
-What does NOT exist yet: a compiler, a runtime, a standard library, or any tooling.
+### Tooling (pulled forward)
+
+- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config
+- **VSCode extension** -- syntax highlighting for `.expo` files
 
 ---
 
-## Phase 1: Bootstrap compiler (months 1-3)
+## Phase 1: Bootstrap compiler -- IN PROGRESS
 
 Build a minimal Expo compiler in Rust that can compile trivial programs to native binaries via LLVM.
 
-### Month 1 -- Lexer and parser
+### Month 1 -- Lexer and parser (~90% complete)
 
-- Hand-written recursive descent parser (not a generator -- easier to produce good error messages, and the grammar is simple enough)
-- Lex all tokens defined in `grammar.ebnf` section 18 (identifiers, keywords, literals, operators)
-- Parse into a typed AST covering: imports, structs, enums, functions, `if`/`match`/`cond`, `for`/`loop`, expressions, assignments
-- Closures and annotations can be parsed but don't need to do anything yet
-- **Deliverable**: `expo parse file.expo` prints the AST
-- **Done when**: all 17 `.expo` files in this repo parse without errors
+- ~~Custom recursive descent parser (not a generator -- easier to produce good error messages, and the grammar is simple enough)~~
+- ~~Lex all tokens defined in `grammar.ebnf` section 18 (identifiers, keywords, literals, operators)~~
+- ~~Parse into a typed AST covering: imports, structs, enums, functions, `if`/`match`/`cond`, `for`/`loop`, expressions, assignments~~
+- ~~Closures and annotations can be parsed but don't need to do anything yet~~
+- ~~**Deliverable**: `expo parse file.expo` prints the AST~~
 
-### Month 2 -- Type system and semantic analysis
+**Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work.
 
-- Type checking: primitives, structs, enums, generics, `Option<T>`, `Result<T,E>`, `Vec<T>`, `HashMap<K,V>`
-- Type inference for local variables (explicit types on function signatures, inferred inside bodies)
-- Method resolution for `impl` blocks and trait impls
+**Remaining gaps**: hex/binary integer literals (`0x`, `0b`) not tokenized, string interpolation (`#{}`) is a stub in the lexer, escape sequences incomplete.
+
+### Month 2 -- Type system and semantic analysis (~40% complete)
+
+- ~~Type checking: primitives, structs~~ (enums, generics, `Option<T>`, `Result<T,E>`, `Vec<T>`, `HashMap<K,V>` not yet resolved)
+- ~~Type inference for local variables (explicit types on function signatures, inferred inside bodies)~~
+- ~~Method resolution for `impl` blocks~~ (trait impls not yet)
 - Name resolution across modules (file = module, auto-discovered)
 - `priv fn` visibility enforcement
-- **Deliverable**: `expo check file.expo` reports type errors with clear messages
-- **Done when**: a hello-world program and a simple struct program pass type checking
+- ~~**Deliverable**: `expo check file.expo` reports type errors with clear messages~~
+- ~~**Done when**: a hello-world program and a simple struct program pass type checking~~
 
-### Month 3 -- LLVM codegen (hello world)
+**Status**: Primitives, structs, and basic method resolution work. `expo check` reports diagnostics with line/column positions. Hello-world and struct programs pass.
 
-- Integrate LLVM via `inkwell` (Rust LLVM bindings)
-- Code generation for: function calls, arithmetic, string literals, `if`/`else`, `match` (simple cases), `return`
-- Stack allocation for primitives and small structs
-- Link against libc for `main` entry point and basic I/O
-- **Deliverable**: `expo build hello.expo` produces a native binary that runs
-- **Done when**: a program that prints output, does arithmetic, and uses `if`/`match` compiles and runs correctly
+**Remaining gaps**: generics resolve to `Unknown`, `ref<T>` unresolved, no multi-module name resolution (single-file only), no `priv fn` enforcement, enum types checked but not fully wired through to codegen.
+
+### Month 3 -- LLVM codegen (~40% complete)
+
+- ~~Integrate LLVM via `inkwell` (Rust LLVM bindings)~~
+- ~~Code generation for: function calls, arithmetic, string literals, `if`/`else`,~~ `match` (simple cases), ~~`return`~~
+- ~~Stack allocation for primitives and small structs~~
+- ~~Link against libc for `main` entry point and basic I/O~~
+- ~~**Deliverable**: `expo build hello.expo` produces a native binary that runs~~
+
+**Status**: Functions, structs, impl methods, if/else, while, loop, break, return, compound assignment all compile to working native binaries. `expo build` and `expo run` work. Linking via system `cc`.
+
+**Remaining gaps**: match, cond, for, closures (both forms), enums, ternary, try (`?`), pipe (`|>`), tuples, lists, string interpolation -- none of these generate LLVM IR yet.
 
 ### Key decisions
 
-| Decision              | Recommendation                                                                                                                                           |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Parser strategy       | Hand-written recursive descent. Better error messages, full control, no external dependency. The grammar is small enough.                                |
-| LLVM bindings         | `inkwell`. Mature, well-documented, widely used in Rust compiler projects. Cranelift is faster to compile but has a less mature API for a full language. |
-| Error message quality | Invest early. Elm proved this matters more than features for adoption. Every error should show the source line, point to the problem, and suggest a fix. |
+| Decision              | Recommendation                                                                                                                                                                                                                                                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Parser strategy       | Custom recursive descent. Better error messages, full control, no external dependency. The grammar is small enough.                                                                                                                                                                                                           |
+| LLVM bindings         | `inkwell`. Mature, well-documented, widely used in Rust compiler projects. Cranelift is faster to compile but has a less mature API for a full language.                                                                                                                                                                      |
+| Error message quality | Invest early. Elm proved this matters more than features for adoption. Every error should show the source line, point to the problem, and suggest a fix. Errors should be self-contained and unambiguous -- the same quality bar that helps junior developers also helps AI fix its own generated code without extra context. |
 
 ---
 
-## Phase 2: Core language (months 4-6)
+## Phase 2: Core language
 
 Make the compiler powerful enough to compile non-trivial programs with Expo's ownership model.
 
-### Month 4 -- Ownership and borrowing
+**Note**: The parser and AST already handle all Phase 2 constructs (enums, match, cond, for, closures, arena). The work here is wiring up type checking and codegen, not design or parsing. There is significant overlap between finishing Phase 1 codegen gaps (match, enums, closures, for) and the Phase 2 milestones below.
+
+### Ownership and borrowing
 
 - Implement move semantics: assignment moves, use-after-move is a compile error
 - Borrow-by-default: function parameters are read-only borrows unless marked `move`
@@ -77,7 +121,7 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ow
 - The `&` symbol does not exist in Expo -- borrowing is implicit, references use `ref<T>`
 - **Done when**: programs that move, borrow, and clone compile correctly, and use-after-move is caught
 
-### Month 5 -- Pattern matching and enums
+### Pattern matching and enums
 
 - Full pattern matching: destructuring, `when` guards, nested patterns, wildcard `_`
 - Enum variants: unit, tuple, and struct forms
@@ -86,7 +130,7 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ow
 - Exhaustiveness checking on `match`
 - **Done when**: the `WriteOp` enum from `state_machine.expo` compiles and pattern-matches correctly
 
-### Month 6 -- Collections and closures
+### Collections and closures
 
 - `Vec<T>`, `HashMap<K,V>` as built-in generic types backed by native implementations
 - Both closure forms: `(args -> expr)`, `fn args -> body end`
@@ -104,11 +148,11 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ow
 
 ---
 
-## Phase 3: Async runtime (months 7-8)
+## Phase 3: Async runtime
 
 Build the green thread runtime that makes `spawn`/`await`/`receive` work.
 
-### Month 7 -- Green threads and scheduler
+### Green threads and scheduler
 
 - Implement a work-stealing scheduler (N green threads on M OS threads)
 - `spawn(fn -> ... end)` creates a new green thread, returns `Handle<T>`
@@ -117,7 +161,7 @@ Build the green thread runtime that makes `spawn`/`await`/`receive` work.
 - No function coloring -- every function is the same, the runtime handles suspension
 - **Done when**: a program that spawns 10,000 green threads that each sleep and return a value runs correctly
 
-### Month 8 -- Channels and receive
+### Channels and receive
 
 - `receive...end` block that waits for the first of multiple async sources
 - Basic channel/message-passing primitives
@@ -134,20 +178,20 @@ Build the green thread runtime that makes `spawn`/`await`/`receive` work.
 
 ---
 
-## Phase 4: Standard library (months 9-11)
+## Phase 4: Standard library
 
 Build the stdlib modules that the example codebase imports.
 
-### Month 9 -- Core types and I/O
+### Core types and I/O
 
-- `string` with UTF-8 internals, interpolation (`#{}` with format specs), `.trim()`, `.split()`, `.starts_with?()`, `.empty?()`, `.contains?()`
+- `String` with UTF-8 internals, interpolation (`#{}` with format specs), `.trim()`, `.split()`, `.starts_with?()`, `.empty?()`, `.contains?()`
 - `Vec<T>` and `HashMap<K,V>` with full method sets
 - `Option<T>` and `Result<T,E>` methods (`.map()`, `.unwrap_or()`, `.ok?()`)
 - File I/O: `file.read()`, `file.write()`, `file.exists?()`
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
 - **Done when**: `config.expo` compiles (exercises strings, file reading, option handling, duration)
 
-### Month 10 -- HTTP and networking
+### HTTP and networking
 
 - HTTP server: listener, routing, request/response types, middleware pattern
 - HTTP client: `Req`-style interface for making outbound requests
@@ -156,7 +200,7 @@ Build the stdlib modules that the example codebase imports.
 - TLS support (link against a system TLS library or bundle)
 - **Done when**: a basic HTTP server that handles JSON requests and responds compiles and runs
 
-### Month 11 -- Crypto, logging, serialization
+### Crypto, logging, serialization
 
 - `crypto.random_hex()`, `crypto.sha256()` (native or thin C wrapper over libsodium)
 - `log` module with structured logging (the `key: value` syntax in log calls)
@@ -172,52 +216,56 @@ Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use th
 
 ---
 
-## Phase 5: Tooling (months 12-14)
+## Phase 5: Tooling
 
-### Month 12 -- Package manager and project system
+### Already done
+
+- ~~`expo run` for development (compile + execute)~~ -- implemented during Phase 1
+- ~~`expo fmt` -- opinionated, zero-config code formatter~~ -- `expo format --write` / `--check` implemented during Phase 1
+- ~~VS Code extension~~ -- syntax highlighting for `.expo` files implemented during Phase 1
+
+### Package manager and project system
 
 - `expo build` compiles a project based on `project.expo`
 - `expo test` discovers and runs `@test` annotated functions
-- Dependency resolution: fetch from git URLs and a package registry
+- Dependency resolution: fetch from git URLs (Go-style, no central registry)
 - Lock file generation for reproducible builds
-- `expo run` for development (compile + execute)
 - **Done when**: `project.expo` from this repo resolves its three dependencies and builds the project
 
-### Month 13 -- Formatter and documentation
+### Documentation
 
-- `expo fmt` -- opinionated, zero-config code formatter (like `gofmt`)
 - `expo doc` -- generates HTML documentation from `@doc` annotations, similar to HexDocs
 - Doctest support: code examples in `@doc` strings are compiled and run as tests
-- **Done when**: running `expo fmt` on all `.expo` files produces consistent output, and `expo doc` generates browsable HTML
+- **Done when**: `expo doc` generates browsable HTML
 
-### Month 14 -- Language server (LSP)
+### Language server (LSP)
 
 - Basic LSP: go-to-definition, hover for types, diagnostics (errors/warnings)
 - Autocomplete for module names, function names, struct fields
 - Inline type hints for inferred types
-- Integration with VS Code / Cursor via an extension
+- Integration with the existing VS Code / Cursor extension
 - **Done when**: editing `.expo` files in Cursor shows real-time errors and supports go-to-definition
 
 ---
 
-## Phase 6: Self-hosting (months 15-17)
+## Phase 6: Self-hosting
 
 Rewrite the Expo compiler in Expo.
 
-### Month 15 -- Port the lexer and parser
+### Port the lexer and parser
 
-- Rewrite the hand-written lexer and parser from Rust to Expo
+- Rewrite the lexer and parser from Rust to Expo
 - This is the first real stress test of the language for non-trivial code
 - Expect to discover language shortcomings -- feed them back into design
 - **Done when**: the Expo-written parser can parse all `.expo` files identically to the Rust parser
 
-### Month 16 -- Port type checking and codegen
+### Port type checking and codegen
 
 - Rewrite semantic analysis, type checker, and LLVM codegen in Expo
 - LLVM bindings via C FFI (Expo calling into the LLVM C API)
 - **Done when**: the Expo-written compiler can compile itself (the compiler compiles itself)
 
-### Month 17 -- Retire the bootstrap
+### Retire the bootstrap
 
 - Run the full test suite through the self-hosted compiler
 - Fix any remaining differences between Rust bootstrap output and Expo self-hosted output
@@ -226,7 +274,7 @@ Rewrite the Expo compiler in Expo.
 
 ---
 
-## Phase 7: Validation (month 18)
+## Phase 7: Validation
 
 ### Compile auth-manager-expo for real
 
@@ -250,10 +298,10 @@ A language-native `command` keyword for typed, composable pipelines -- inspired 
 
 ```expo
 command RegisterUser
-  param email: string
-  param password: string
+  param email: String
+  param password: String
 
-  step hash_password -> password_hash: string
+  step hash_password -> password_hash: String
     Crypto.hash_sha256(password)
   end
 
@@ -277,26 +325,39 @@ Commands live inside modules alongside `fn`, `struct`, and `enum` -- not a separ
 
 ## Summary timeline
 
-| Month | Phase      | Milestone                                               |
-| ----- | ---------- | ------------------------------------------------------- |
-| 1     | Bootstrap  | Lexer + parser, all `.expo` files parse                 |
-| 2     | Bootstrap  | Type system, `expo check` works                         |
-| 3     | Bootstrap  | LLVM codegen, first native binary                       |
-| 4     | Core       | Ownership + borrow checker                              |
-| 5     | Core       | Pattern matching + enums + `?` operator                 |
-| 6     | Core       | Collections, closures, arena, `ua_parser.expo` compiles |
-| 7     | Async      | Green thread scheduler, `spawn`/`await`                 |
-| 8     | Async      | Channels, `receive`, `cleaner.expo` compiles            |
-| 9     | Stdlib     | Core types, I/O, time, `config.expo` compiles           |
-| 10    | Stdlib     | HTTP server/client, JSON                                |
-| 11    | Stdlib     | Crypto, logging, `handlers.expo` compiles               |
-| 12    | Tooling    | Package manager, test runner                            |
-| 13    | Tooling    | Formatter, doc generator                                |
-| 14    | Tooling    | LSP for Cursor/VS Code                                  |
-| 15    | Self-host  | Lexer + parser in Expo                                  |
-| 16    | Self-host  | Full compiler in Expo                                   |
-| 17    | Self-host  | Retire Rust bootstrap                                   |
-| 18    | Validation | auth-manager-expo runs for real                         |
+Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18-month estimate assumed a slower pace. The timeline below reflects actual velocity for scaffolding while staying conservative on genuinely hard problems (borrow checker, async runtime, self-hosting).
+
+### Done
+
+| Phase     | Milestone                                                | Status |
+| --------- | -------------------------------------------------------- | ------ |
+| Bootstrap | Lexer + parser -- all grammar constructs parse           | ~90%   |
+| Bootstrap | Type system -- `expo check` works for primitives/structs | ~40%   |
+| Bootstrap | LLVM codegen -- native binaries for basic programs       | ~40%   |
+| Tooling   | Formatter (`expo format --write`/`--check`)              | Done   |
+| Tooling   | `expo run` (compile + execute)                           | Done   |
+| Tooling   | VSCode extension (syntax highlighting)                   | Done   |
+
+### Remaining
+
+| Phase      | Milestone                                               |
+| ---------- | ------------------------------------------------------- |
+| Bootstrap  | Finish type checker (generics, enums, multi-module)     |
+| Bootstrap  | Finish codegen (match, cond, for, closures, enums, try) |
+| Core       | Ownership + borrow checker                              |
+| Core       | Collections, closures, arena, `ua_parser.expo` compiles |
+| Async      | Green thread scheduler, `spawn`/`await`                 |
+| Async      | Channels, `receive`, `cleaner.expo` compiles            |
+| Stdlib     | Core types, I/O, time, `config.expo` compiles           |
+| Stdlib     | HTTP server/client, JSON                                |
+| Stdlib     | Crypto, logging, `handlers.expo` compiles               |
+| Tooling    | Package manager, test runner                            |
+| Tooling    | Documentation generator                                 |
+| Tooling    | LSP for Cursor/VS Code                                  |
+| Self-host  | Lexer + parser in Expo                                  |
+| Self-host  | Full compiler in Expo                                   |
+| Self-host  | Retire Rust bootstrap                                   |
+| Validation | auth-manager-expo runs for real                         |
 
 ---
 
