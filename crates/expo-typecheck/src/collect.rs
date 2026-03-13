@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use expo_ast::ast::{EnumVariantData, ImplMember, Item, Module, Param, TypeExpr};
+use expo_ast::ast::{EnumVariantData, ImplMember, ImportTarget, Item, Module, Param, TypeExpr};
 use expo_ast::span::Span;
 
 use crate::context::{
@@ -154,6 +154,7 @@ pub fn collect(module: &Module) -> TypeContext {
     ctx.functions.insert(
         "print".to_string(),
         FunctionSig {
+            is_private: false,
             params: vec![ParamInfo {
                 name: "value".to_string(),
                 ty: Type::Unknown,
@@ -196,8 +197,219 @@ fn build_function_sig(
         .unwrap_or(Type::Unit);
 
     Some(FunctionSig {
+        is_private: f.is_private,
         params,
         return_type,
         span: f.span,
     })
+}
+
+pub fn resolve_imports(
+    module: &Module,
+    ctx: &mut TypeContext,
+    module_contexts: &HashMap<String, TypeContext>,
+) {
+    for item in &module.items {
+        if let Item::Import(import) = item {
+            let base_path = import.path.join(".");
+
+            match &import.target {
+                ImportTarget::Module => {
+                    if let Some(source_ctx) = module_contexts.get(&base_path) {
+                        merge_all_public(ctx, source_ctx, &base_path, import.span);
+                    } else {
+                        ctx.error(
+                            format!("unresolved import: module `{base_path}` not found"),
+                            import.span,
+                        );
+                    }
+                }
+                ImportTarget::Wildcard => {
+                    if let Some(source_ctx) = module_contexts.get(&base_path) {
+                        merge_all_public(ctx, source_ctx, &base_path, import.span);
+                    } else {
+                        ctx.error(
+                            format!("unresolved import: module `{base_path}` not found"),
+                            import.span,
+                        );
+                    }
+                }
+                ImportTarget::Item(name) => {
+                    let full_path = format!("{base_path}.{name}");
+                    if let Some(source_ctx) = module_contexts.get(&full_path) {
+                        merge_all_public(ctx, source_ctx, &full_path, import.span);
+                    } else if let Some(source_ctx) = module_contexts.get(&base_path) {
+                        merge_named(ctx, source_ctx, name, &base_path, import.span);
+                    } else {
+                        ctx.error(
+                            format!("unresolved import: module `{base_path}` not found"),
+                            import.span,
+                        );
+                    }
+                }
+                ImportTarget::Group(names) => {
+                    if let Some(source_ctx) = module_contexts.get(&base_path) {
+                        for name in names {
+                            merge_named(ctx, source_ctx, name, &base_path, import.span);
+                        }
+                    } else {
+                        ctx.error(
+                            format!("unresolved import: module `{base_path}` not found"),
+                            import.span,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn merge_all_public(ctx: &mut TypeContext, source: &TypeContext, _module_path: &str, _span: Span) {
+    for (name, sig) in &source.functions {
+        if !sig.is_private && !ctx.functions.contains_key(name) {
+            ctx.functions.insert(
+                name.clone(),
+                FunctionSig {
+                    is_private: false,
+                    params: sig
+                        .params
+                        .iter()
+                        .map(|p| ParamInfo {
+                            name: p.name.clone(),
+                            ty: p.ty.clone(),
+                        })
+                        .collect(),
+                    return_type: sig.return_type.clone(),
+                    span: sig.span,
+                },
+            );
+        }
+    }
+    for (name, info) in &source.structs {
+        if !ctx.structs.contains_key(name) {
+            ctx.structs.insert(name.clone(), clone_struct_info(info));
+        }
+    }
+    for (name, info) in &source.enums {
+        if !ctx.enums.contains_key(name) {
+            ctx.enums.insert(name.clone(), clone_enum_info(info));
+        }
+    }
+}
+
+fn merge_named(
+    ctx: &mut TypeContext,
+    source: &TypeContext,
+    name: &str,
+    module_path: &str,
+    span: Span,
+) {
+    if let Some(sig) = source.functions.get(name) {
+        if sig.is_private {
+            ctx.error(
+                format!("function `{name}` is private to module `{module_path}`"),
+                span,
+            );
+        } else if !ctx.functions.contains_key(name) {
+            ctx.functions.insert(
+                name.to_string(),
+                FunctionSig {
+                    is_private: false,
+                    params: sig
+                        .params
+                        .iter()
+                        .map(|p| ParamInfo {
+                            name: p.name.clone(),
+                            ty: p.ty.clone(),
+                        })
+                        .collect(),
+                    return_type: sig.return_type.clone(),
+                    span: sig.span,
+                },
+            );
+        }
+        return;
+    }
+    if let Some(info) = source.structs.get(name) {
+        if !ctx.structs.contains_key(name) {
+            ctx.structs
+                .insert(name.to_string(), clone_struct_info(info));
+        }
+        return;
+    }
+    if let Some(info) = source.enums.get(name) {
+        if !ctx.enums.contains_key(name) {
+            ctx.enums.insert(name.to_string(), clone_enum_info(info));
+        }
+        return;
+    }
+    ctx.error(
+        format!("`{name}` not found in module `{module_path}`"),
+        span,
+    );
+}
+
+fn clone_struct_info(info: &StructInfo) -> StructInfo {
+    StructInfo {
+        fields: info.fields.clone(),
+        methods: info
+            .methods
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    FunctionSig {
+                        is_private: v.is_private,
+                        params: v
+                            .params
+                            .iter()
+                            .map(|p| ParamInfo {
+                                name: p.name.clone(),
+                                ty: p.ty.clone(),
+                            })
+                            .collect(),
+                        return_type: v.return_type.clone(),
+                        span: v.span,
+                    },
+                )
+            })
+            .collect(),
+        span: info.span,
+    }
+}
+
+fn clone_enum_info(info: &EnumInfo) -> EnumInfo {
+    EnumInfo {
+        methods: info
+            .methods
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    FunctionSig {
+                        is_private: v.is_private,
+                        params: v
+                            .params
+                            .iter()
+                            .map(|p| ParamInfo {
+                                name: p.name.clone(),
+                                ty: p.ty.clone(),
+                            })
+                            .collect(),
+                        return_type: v.return_type.clone(),
+                        span: v.span,
+                    },
+                )
+            })
+            .collect(),
+        span: info.span,
+        variants: info
+            .variants
+            .iter()
+            .map(|v| VariantInfo {
+                name: v.name.clone(),
+                data: v.data.clone(),
+            })
+            .collect(),
+    }
 }

@@ -8,4 +8,4 @@ mod stmt;
 mod structs;
 mod types;
 
-pub use compiler::compile;
+pub use compiler::{compile, compile_modules};

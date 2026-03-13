@@ -24,11 +24,38 @@ impl<'a> Printer<'a> {
     fn print_module(&mut self, module: &Module) -> Doc {
         let mut parts: Vec<Doc> = Vec::new();
         let mut emitted = false;
+        let mut moduledoc_emitted = false;
+        let mut after_moduledoc = false;
+
+        let moduledoc_line = module.moduledoc.as_ref().map(|md| md.span.start.line);
+
         let mut i = 0;
 
         while i < module.items.len() {
+            let next_item_line = match &module.items[i] {
+                Item::Import(imp) => imp.span.start.line,
+                other => item_span(other).start.line,
+            };
+
+            if !moduledoc_emitted
+                && let Some(md) = &module.moduledoc
+                && moduledoc_line.is_some_and(|ml| ml < next_item_line)
+            {
+                let comment_docs = self.comments.drain_before(md.span.start.line);
+                for c in comment_docs {
+                    parts.push(c);
+                }
+                if emitted {
+                    parts.push(hardline());
+                }
+                parts.push(annotation_to_doc(md));
+                parts.push(hardline());
+                emitted = true;
+                moduledoc_emitted = true;
+                after_moduledoc = true;
+            }
+
             if let Item::Import(_) = &module.items[i] {
-                // Collect the consecutive run of imports
                 let run_start = i;
                 let mut imports: Vec<&Import> = Vec::new();
                 while i < module.items.len() {
@@ -40,15 +67,12 @@ impl<'a> Printer<'a> {
                     }
                 }
 
-                // Drain all comments that belong to this import block
                 let block_end = imports.last().unwrap().span.end.line + 1;
                 self.comments.drain_before(block_end);
 
-                // Sort alphabetically
                 imports.sort_by_key(|imp| import_sort_key(imp));
 
-                // Separate with blank line from previous non-import items
-                if emitted && run_start > 0 {
+                if emitted && (run_start > 0 || after_moduledoc) {
                     parts.push(hardline());
                 }
 
@@ -57,6 +81,7 @@ impl<'a> Printer<'a> {
                     parts.push(hardline());
                 }
                 emitted = true;
+                after_moduledoc = false;
             } else {
                 let item = &module.items[i];
                 let span = item_span(item);
@@ -70,8 +95,17 @@ impl<'a> Printer<'a> {
                 parts.push(self.item_to_doc(item));
                 parts.push(hardline());
                 emitted = true;
+                after_moduledoc = false;
                 i += 1;
             }
+        }
+
+        if !moduledoc_emitted && let Some(md) = &module.moduledoc {
+            if emitted {
+                parts.push(hardline());
+            }
+            parts.push(annotation_to_doc(md));
+            parts.push(hardline());
         }
 
         let trailing = self.comments.drain_rest();

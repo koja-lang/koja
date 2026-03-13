@@ -9,19 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Multi-module support with import-driven discovery (`import math`, `import utils.strings`).
+- `priv fn` visibility enforcement -- private functions are inaccessible from other modules.
+- Circular import detection with clear error messages.
+- `@moduledoc` annotation for module-level documentation.
+- `@doc` annotation support on `struct` and `enum` declarations (in addition to functions).
+- `undefined function` diagnostic when calling functions that don't exist.
 - Enum types with unit, tuple, and struct variants.
-- `match` expressions with pattern matching (wildcard, literal, binding, enum, and constructor patterns).
-- Nested pattern matching in `match` arms.
-- `when` guards on `match` arms.
-- Match exhaustiveness checking for enum types.
+- `match` expressions with pattern matching, nested patterns, `when` guards, and exhaustiveness checking.
 - `cond` expressions.
-- Multiline string indentation stripping (dedent based on closing `"""` position).
-- Escape sequences in multiline strings (same set as single-line: `\"`, `\\`, `\n`, `\t`, `\#`).
-- String interpolation (`"hello #{name}"`).
-- Escape sequences in strings: `\"`, `\\`, `\n`, `\t`, `\#`.
-- Multiline strings (`"""`) in expression position.
+- String interpolation (`"hello #{name}"`) including enum values (prints variant name by default).
+- Multiline strings (`"""`) with automatic dedent and escape sequences.
 - Hex (`0xFF`) and binary (`0b1010`) integer literals.
 - Underscore separators in numeric literals (`1_000`, `0xFF_FF`).
+- Unused variable warnings (suppressed with `_` prefix).
 
 ## [0.1.0] - 2026-03-13
 

@@ -387,11 +387,20 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                         }
                     }
                     return_type
-                } else {
+                } else if ce.env.contains_key(name)
+                    || ctx.structs.contains_key(name)
+                    || ctx.enums.contains_key(name)
+                {
                     for arg in args {
                         infer_expr(&arg.value, ctx, ce);
                     }
                     Type::Unknown
+                } else {
+                    ctx.error(format!("undefined function `{name}`"), *span);
+                    for arg in args {
+                        infer_expr(&arg.value, ctx, ce);
+                    }
+                    Type::Error
                 }
             } else {
                 infer_expr(callee, ctx, ce);

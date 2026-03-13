@@ -50,16 +50,6 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    pub fn compile_module(&mut self, module: &Module) -> Result<(), String> {
-        self.register_types();
-        self.declare_builtins();
-        self.declare_functions(module)?;
-        self.define_functions(module)?;
-        self.module
-            .verify()
-            .map_err(|e| format!("LLVM verification failed: {}", e.to_string()))
-    }
-
     fn register_types(&mut self) {
         // Pass 1: create opaque types so cross-references resolve
         for name in self.type_ctx.structs.keys() {
@@ -479,22 +469,59 @@ pub fn compile(
     type_ctx: &TypeContext,
     output_path: &Path,
 ) -> Result<(), Vec<Diagnostic>> {
+    compile_modules(&[module], type_ctx, output_path)
+}
+
+pub fn compile_modules(
+    modules: &[&Module],
+    type_ctx: &TypeContext,
+    output_path: &Path,
+) -> Result<(), Vec<Diagnostic>> {
     let context = Context::create();
     let mut compiler = Compiler::new(&context, type_ctx);
-    compiler.compile_module(module).map_err(|e| {
+
+    compiler.register_types();
+    compiler.declare_builtins();
+
+    for module in modules {
+        compiler.declare_functions(module).map_err(|e| {
+            vec![Diagnostic {
+                severity: Severity::Error,
+                message: e,
+                hint: None,
+                span: module.span,
+            }]
+        })?;
+    }
+
+    for module in modules {
+        compiler.define_functions(module).map_err(|e| {
+            vec![Diagnostic {
+                severity: Severity::Error,
+                message: e,
+                hint: None,
+                span: module.span,
+            }]
+        })?;
+    }
+
+    compiler.module.verify().map_err(|e| {
+        let span = modules.first().map(|m| m.span).unwrap_or_default();
         vec![Diagnostic {
             severity: Severity::Error,
-            message: e,
+            message: format!("LLVM verification failed: {e}"),
             hint: None,
-            span: module.span,
+            span,
         }]
     })?;
+
+    let span = modules.first().map(|m| m.span).unwrap_or_default();
     compiler.emit_object_file(output_path).map_err(|e| {
         vec![Diagnostic {
             severity: Severity::Error,
             message: e,
             hint: None,
-            span: module.span,
+            span,
         }]
     })
 }

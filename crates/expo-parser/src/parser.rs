@@ -1,4 +1,4 @@
-use expo_ast::ast::{Comment, Diagnostic, Item, Module, Severity};
+use expo_ast::ast::{Annotation, Comment, Diagnostic, Item, Module, Severity};
 use expo_ast::span::{Position, Span};
 use expo_ast::token::{Token, TokenKind};
 use expo_lexer::{LexResult, lex};
@@ -242,23 +242,25 @@ impl Parser {
     pub(crate) fn parse_module(&mut self) -> Module {
         let start = self.current_span();
         let mut items = Vec::new();
+        let mut moduledoc = None;
 
         self.skip_newlines();
         while !self.at_eof() {
-            if let Some(item) = self.parse_item() {
+            if let Some(item) = self.parse_item(&mut moduledoc) {
                 items.push(item);
             }
             self.skip_newlines();
         }
 
         Module {
+            moduledoc,
             items,
             comments: self.comments.clone(),
             span: self.span_from(start),
         }
     }
 
-    fn parse_item(&mut self) -> Option<Item> {
+    fn parse_item(&mut self, moduledoc: &mut Option<Annotation>) -> Option<Item> {
         self.skip_newlines();
         match self.peek().clone() {
             TokenKind::Import => Some(self.parse_import_item()),
@@ -272,6 +274,10 @@ impl Parser {
             }
             TokenKind::At => {
                 let annotation = self.parse_annotation();
+                if annotation.name == "moduledoc" {
+                    *moduledoc = Some(annotation);
+                    return None;
+                }
                 self.skip_newlines();
                 match self.peek().clone() {
                     TokenKind::Struct => {
@@ -283,10 +289,7 @@ impl Parser {
                         self.advance();
                         Some(self.parse_function_item(Some(annotation), true))
                     }
-                    TokenKind::ConstIdent(_) => {
-                        // Annotated constant -- annotation is discarded for now
-                        Some(self.parse_constant_item())
-                    }
+                    TokenKind::ConstIdent(_) => Some(self.parse_constant_item()),
                     _ => {
                         let span = self.current_span();
                         self.error(

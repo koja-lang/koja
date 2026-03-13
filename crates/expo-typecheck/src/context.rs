@@ -20,6 +20,7 @@ pub struct EnumInfo {
 }
 
 pub struct FunctionSig {
+    pub is_private: bool,
     pub params: Vec<ParamInfo>,
     pub return_type: Type,
     #[allow(dead_code)]

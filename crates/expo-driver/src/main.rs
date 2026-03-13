@@ -1,3 +1,5 @@
+mod resolve;
+
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -127,37 +129,127 @@ fn build(args: &[String], quiet: bool, color: bool) {
             .to_string()
     });
 
-    let source = match fs::read_to_string(&path) {
-        Ok(s) => s,
+    let entry_path = Path::new(&path).canonicalize().unwrap_or_else(|_| {
+        eprintln!("error: file not found: {path}");
+        process::exit(1);
+    });
+
+    let graph = match resolve::resolve_modules(&entry_path) {
+        Ok(g) => g,
         Err(e) => {
-            eprintln!("error reading {path}: {e}");
+            eprintln!("error: {e}");
             process::exit(1);
         }
     };
 
-    let parse_result = expo_parser::parse(&source);
-    if !parse_result.errors.is_empty() {
-        render_diagnostics(&path, &source, &parse_result.errors, color);
+    let mut has_errors = false;
+    for name in &graph.order {
+        let rm = &graph.modules[name];
+        if !rm.errors.is_empty() {
+            render_diagnostics(
+                rm.path.to_str().unwrap_or(&rm.name),
+                &rm.source,
+                &rm.errors,
+                color,
+            );
+            has_errors = true;
+        }
+    }
+    if has_errors {
         process::exit(1);
     }
 
-    let ctx = expo_typecheck::check(&parse_result.module);
-    if !ctx.diagnostics.is_empty() {
-        render_diagnostics(&path, &source, &ctx.diagnostics, color);
-        if ctx
-            .diagnostics
-            .iter()
-            .any(|d| d.severity == Severity::Error)
-        {
-            process::exit(1);
+    let mut module_contexts: std::collections::HashMap<
+        String,
+        expo_typecheck::context::TypeContext,
+    > = std::collections::HashMap::new();
+
+    for name in &graph.order {
+        let rm = &graph.modules[name];
+        let mut ctx = expo_typecheck::collect_module(&rm.module);
+        expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
+        expo_typecheck::check_module(&rm.module, &mut ctx);
+        module_contexts.insert(name.clone(), ctx);
+    }
+
+    for name in &graph.order {
+        let rm = &graph.modules[name];
+        let ctx = &module_contexts[name];
+        if !ctx.diagnostics.is_empty() {
+            render_diagnostics(
+                rm.path.to_str().unwrap_or(&rm.name),
+                &rm.source,
+                &ctx.diagnostics,
+                color,
+            );
+            if ctx
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error)
+            {
+                has_errors = true;
+            }
+        }
+    }
+    if has_errors {
+        process::exit(1);
+    }
+
+    let mut merged_ctx = expo_typecheck::context::TypeContext::new();
+    for ctx in module_contexts.values() {
+        for (name, sig) in &ctx.functions {
+            if !merged_ctx.functions.contains_key(name) {
+                merged_ctx.functions.insert(
+                    name.clone(),
+                    expo_typecheck::context::FunctionSig {
+                        is_private: sig.is_private,
+                        params: sig
+                            .params
+                            .iter()
+                            .map(|p| expo_typecheck::context::ParamInfo {
+                                name: p.name.clone(),
+                                ty: p.ty.clone(),
+                            })
+                            .collect(),
+                        return_type: sig.return_type.clone(),
+                        span: sig.span,
+                    },
+                );
+            }
+        }
+        for (name, info) in &ctx.structs {
+            if !merged_ctx.structs.contains_key(name) {
+                merged_ctx
+                    .structs
+                    .insert(name.clone(), clone_struct_info_for_merge(info));
+            }
+        }
+        for (name, info) in &ctx.enums {
+            if !merged_ctx.enums.contains_key(name) {
+                merged_ctx
+                    .enums
+                    .insert(name.clone(), clone_enum_info_for_merge(info));
+            }
         }
     }
 
+    let modules_ast: Vec<&expo_ast::ast::Module> = graph
+        .order
+        .iter()
+        .map(|name| &graph.modules[name].module)
+        .collect();
+
     let obj_path = format!("{output}.o");
     if let Err(diagnostics) =
-        expo_codegen::compile(&parse_result.module, &ctx, Path::new(&obj_path))
+        expo_codegen::compile_modules(&modules_ast, &merged_ctx, Path::new(&obj_path))
     {
-        render_diagnostics(&path, &source, &diagnostics, color);
+        let entry_rm = &graph.modules[&graph.entry];
+        render_diagnostics(
+            entry_rm.path.to_str().unwrap_or(&entry_rm.name),
+            &entry_rm.source,
+            &diagnostics,
+            color,
+        );
         process::exit(1);
     }
 
@@ -182,6 +274,59 @@ fn build(args: &[String], quiet: bool, color: bool) {
             let _ = fs::remove_file(&obj_path);
             process::exit(1);
         }
+    }
+}
+
+fn clone_struct_info_for_merge(
+    info: &expo_typecheck::context::StructInfo,
+) -> expo_typecheck::context::StructInfo {
+    expo_typecheck::context::StructInfo {
+        fields: info.fields.clone(),
+        methods: info
+            .methods
+            .iter()
+            .map(|(k, v)| (k.clone(), clone_fn_sig(v)))
+            .collect(),
+        span: info.span,
+    }
+}
+
+fn clone_enum_info_for_merge(
+    info: &expo_typecheck::context::EnumInfo,
+) -> expo_typecheck::context::EnumInfo {
+    expo_typecheck::context::EnumInfo {
+        methods: info
+            .methods
+            .iter()
+            .map(|(k, v)| (k.clone(), clone_fn_sig(v)))
+            .collect(),
+        span: info.span,
+        variants: info
+            .variants
+            .iter()
+            .map(|v| expo_typecheck::context::VariantInfo {
+                name: v.name.clone(),
+                data: v.data.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn clone_fn_sig(
+    sig: &expo_typecheck::context::FunctionSig,
+) -> expo_typecheck::context::FunctionSig {
+    expo_typecheck::context::FunctionSig {
+        is_private: sig.is_private,
+        params: sig
+            .params
+            .iter()
+            .map(|p| expo_typecheck::context::ParamInfo {
+                name: p.name.clone(),
+                ty: p.ty.clone(),
+            })
+            .collect(),
+        return_type: sig.return_type.clone(),
+        span: sig.span,
     }
 }
 
@@ -225,25 +370,68 @@ fn cmd_check(args: &[String], color: bool) {
     }
 
     for path in args {
-        let source = match fs::read_to_string(path) {
-            Ok(s) => s,
+        let entry_path = match Path::new(path).canonicalize() {
+            Ok(p) => p,
             Err(e) => {
-                eprintln!("error reading {path}: {e}");
+                eprintln!("error: {path}: {e}");
                 process::exit(1);
             }
         };
 
-        let parse_result = expo_parser::parse(&source);
-        if !parse_result.errors.is_empty() {
-            render_diagnostics(path, &source, &parse_result.errors, color);
+        let graph = match resolve::resolve_modules(&entry_path) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("error: {e}");
+                continue;
+            }
+        };
+
+        let mut has_issues = false;
+        for name in &graph.order {
+            let rm = &graph.modules[name];
+            if !rm.errors.is_empty() {
+                render_diagnostics(
+                    rm.path.to_str().unwrap_or(&rm.name),
+                    &rm.source,
+                    &rm.errors,
+                    color,
+                );
+                has_issues = true;
+            }
+        }
+        if has_issues {
             continue;
         }
 
-        let ctx = expo_typecheck::check(&parse_result.module);
-        if ctx.diagnostics.is_empty() {
+        let mut module_contexts: std::collections::HashMap<
+            String,
+            expo_typecheck::context::TypeContext,
+        > = std::collections::HashMap::new();
+
+        for name in &graph.order {
+            let rm = &graph.modules[name];
+            let mut ctx = expo_typecheck::collect_module(&rm.module);
+            expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
+            expo_typecheck::check_module(&rm.module, &mut ctx);
+            module_contexts.insert(name.clone(), ctx);
+        }
+
+        for name in &graph.order {
+            let rm = &graph.modules[name];
+            let ctx = &module_contexts[name];
+            if !ctx.diagnostics.is_empty() {
+                render_diagnostics(
+                    rm.path.to_str().unwrap_or(&rm.name),
+                    &rm.source,
+                    &ctx.diagnostics,
+                    color,
+                );
+                has_issues = true;
+            }
+        }
+
+        if !has_issues {
             println!("{path}: OK");
-        } else {
-            render_diagnostics(path, &source, &ctx.diagnostics, color);
         }
     }
 }

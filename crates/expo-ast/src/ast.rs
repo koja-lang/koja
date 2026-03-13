@@ -6,6 +6,7 @@ use crate::span::Span;
 
 #[derive(Debug, Clone)]
 pub struct Module {
+    pub moduledoc: Option<Annotation>,
     pub items: Vec<Item>,
     pub comments: Vec<Comment>,
     pub span: Span,

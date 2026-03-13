@@ -20,11 +20,11 @@ A 7-crate Rust workspace (~8,500 LOC) that compiles Expo source to native binari
 
 ### CLI
 
-Six commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo lex`, `expo parse`.
+Six commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo lex`, `expo parse`. All commands support multi-module projects.
 
 ### What compiles to native binaries today
 
-Functions, structs, impl blocks, methods (`self`), if/else, while, loop, break, return, compound assignment (`+=`, `-=`, `*=`, `/=`), `print` builtin, i32/i64/f32/f64/bool/String primitives.
+Multi-module programs with imports. Functions (`fn`/`priv fn`), structs, enums, impl blocks, methods (`self`), if/else, while, loop, break, return, match, cond, compound assignment (`+=`, `-=`, `*=`, `/=`), string interpolation, `print` builtin, i32/i64/f32/f64/bool/String primitives.
 
 ### Parsed and type-checked but NOT yet in codegen
 
@@ -32,7 +32,7 @@ For, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe
 
 ### Known gaps
 
-- **Type checker**: generics resolve to `Unknown`, no multi-module name resolution, no `priv fn` visibility enforcement, `ref<T>` unresolved
+- **Type checker**: generics resolve to `Unknown`, `ref<T>` unresolved, qualified imports not yet implemented (`math.add()` style -- currently `import math` dumps all public symbols into scope)
 
 ### Design artifacts
 
@@ -44,7 +44,7 @@ For, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe
 
 ### Tooling (pulled forward)
 
-- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness
+- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@moduledoc`/`@doc` annotations
 - **VSCode extension** -- syntax highlighting for `.expo` files
 
 ---
@@ -63,21 +63,22 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work. String interpolation (`#{}`) and escape sequences (`\"`, `\\`, `\n`, `\t`, `\#`) fully implemented in the lexer with a mode stack for nested interpolation. Multiline strings (`"""`) support the same escapes as single-line strings and are automatically dedented based on the closing delimiter's column position.
 
-### Month 2 -- Type system and semantic analysis (~40% complete)
+### Month 2 -- Type system and semantic analysis (~70% complete)
 
 - ~~Type checking: primitives, structs~~ (enums, generics, `Option<T>`, `Result<T,E>`, `Vec<T>`, `HashMap<K,V>` not yet resolved)
 - ~~Type inference for local variables (explicit types on function signatures, inferred inside bodies)~~
 - ~~Method resolution for `impl` blocks~~ (trait impls not yet)
-- Name resolution across modules (file = module, auto-discovered)
-- `priv fn` visibility enforcement
+- ~~Name resolution across modules (file = module, import-driven discovery)~~
+- ~~`priv fn` visibility enforcement~~
+- ~~Circular import detection~~
 - ~~**Deliverable**: `expo check file.expo` reports type errors with clear messages~~
 - ~~**Done when**: a hello-world program and a simple struct program pass type checking~~
 
-**Status**: Primitives, structs, and basic method resolution work. `expo check` reports diagnostics with line/column positions. Hello-world and struct programs pass.
+**Status**: Primitives, structs, enums, and method resolution work. Multi-module type checking with import-driven discovery. `priv fn` visibility enforcement across modules. `expo check` reports diagnostics with line/column positions. Hello-world, struct, enum, and multi-file programs pass. Match exhaustiveness checking catches missing variants. Unused variable warnings implemented (suppressed with `_` prefix). Warnings and errors are distinguished -- warnings no longer halt compilation. `undefined function` errors reported for unknown calls.
 
-**Remaining gaps**: generics resolve to `Unknown`, `ref<T>` unresolved, no multi-module name resolution (single-file only), no `priv fn` enforcement. Enum types are fully checked and wired through to codegen with exhaustiveness checking on `match`.
+**Remaining gaps**: generics resolve to `Unknown`, `ref<T>` unresolved, qualified imports (`math.add()` style) not yet implemented.
 
-### Month 3 -- LLVM codegen (~40% complete)
+### Month 3 -- LLVM codegen (~55% complete)
 
 - ~~Integrate LLVM via `inkwell` (Rust LLVM bindings)~~
 - ~~Code generation for: function calls, arithmetic, string literals, `if`/`else`, `match` (simple cases), `return`~~
@@ -85,9 +86,11 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 - ~~Link against libc for `main` entry point and basic I/O~~
 - ~~**Deliverable**: `expo build hello.expo` produces a native binary that runs~~
 
-**Status**: Functions, structs, impl methods, if/else, while, loop, break, return, compound assignment all compile to working native binaries. `expo build` and `expo run` work. Linking via system `cc`.
+**Status**: Multi-module programs compile to a single native binary. Functions, structs, enums, impl methods, if/else, while, loop, break, return, compound assignment, cond, match all compile to working native binaries. `expo build` and `expo run` work. Linking via system `cc`.
 
-**Remaining gaps**: for, closures (both forms), ternary, try (`?`), pipe (`|>`), tuples, lists -- none of these generate LLVM IR yet. String interpolation codegen is implemented (two-pass `snprintf` with type-based format specifiers); format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation. `cond` compiles to a cascade of conditional branches. Enums compile to tagged unions (`{ i8 tag, [N x i8] payload }`); `match` compiles with full pattern matching (wildcard, literal, binding, enum unit/tuple/struct, constructor, nested patterns, `when` guards).
+Enums compile to tagged unions (`{ i8 tag, [N x i8] payload }`). Match compiles with full pattern matching (wildcard, literal, binding, enum unit/tuple/struct, constructor, nested patterns, `when` guards). Bare variant names resolve to the correct enum from context. String interpolation of enum values prints the variant name by default, with custom `to_string` override support. Cond compiles to a cascade of conditional branches. Capitalized identifiers are enforced as types/constructors at the parser level.
+
+**Remaining gaps**: for, closures (both forms), ternary, try (`?`), pipe (`|>`), tuples, lists -- none of these generate LLVM IR yet. Format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation.
 
 ### Key decisions
 
@@ -347,8 +350,8 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Phase     | Milestone                                                                           | Status |
 | --------- | ----------------------------------------------------------------------------------- | ------ |
 | Bootstrap | Lexer + parser -- all grammar constructs parse, string interpolation + escapes | Done   |
-| Bootstrap | Type system -- `expo check` works for primitives/structs                            | ~40%   |
-| Bootstrap | LLVM codegen -- native binaries for basic programs, string interpolation done       | ~45%   |
+| Bootstrap | Type system -- multi-module, `priv fn`, enums, match exhaustiveness, unused var warnings | ~70%   |
+| Bootstrap | LLVM codegen -- native binaries, enums, match, cond, string interpolation          | ~55%   |
 | Tooling   | Formatter (`expo format --write`/`--check`)                                         | Done   |
 | Tooling   | `expo run` (compile + execute)                                                      | Done   |
 | Tooling   | VSCode extension (syntax highlighting)                                              | Done   |
@@ -357,8 +360,8 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 
 | Phase      | Milestone                                               |
 | ---------- | ------------------------------------------------------- |
-| Bootstrap  | Finish type checker (generics, multi-module)             |
-| Bootstrap  | Finish codegen (for, closures, try)                     |
+| Bootstrap  | Finish type checker (generics, qualified imports)        |
+| Bootstrap  | Finish codegen (for, closures, tuples, try, pipe)       |
 | Core       | Ownership + borrow checker                              |
 | Core       | Collections, closures, arena, `ua_parser.expo` compiles |
 | Async      | Green thread scheduler, `spawn`/`await`                 |

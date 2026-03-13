@@ -11,6 +11,12 @@ pub struct Span {
     pub end: Position,
 }
 
+impl Default for Span {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
 impl Span {
     pub fn new(start: Position, end: Position) -> Self {
         Self { start, end }
