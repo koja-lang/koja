@@ -74,4 +74,13 @@ impl TypeContext {
             span,
         });
     }
+
+    pub fn error_with_hint(&mut self, message: String, hint: String, span: Span) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            message,
+            hint: Some(hint),
+            span,
+        });
+    }
 }

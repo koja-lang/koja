@@ -102,15 +102,20 @@ pub fn compile_while<'ctx>(
     c.builder.build_unconditional_branch(while_header).unwrap();
 
     c.builder.position_at_end(while_header);
-    let cond_val = compile_expr(c, condition, function)?
-        .ok_or("while condition produced no value")?;
+    let cond_val =
+        compile_expr(c, condition, function)?.ok_or("while condition produced no value")?;
     let cond_int = if cond_val.is_int_value() {
         let iv = cond_val.into_int_value();
         if iv.get_type().get_bit_width() == 1 {
             iv
         } else {
             c.builder
-                .build_int_compare(IntPredicate::NE, iv, iv.get_type().const_zero(), "whilecond")
+                .build_int_compare(
+                    IntPredicate::NE,
+                    iv,
+                    iv.get_type().const_zero(),
+                    "whilecond",
+                )
                 .unwrap()
         }
     } else {

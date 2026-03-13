@@ -154,7 +154,10 @@ pub fn collect(module: &Module) -> TypeContext {
     ctx.functions.insert(
         "print".to_string(),
         FunctionSig {
-            params: vec![ParamInfo { name: "value".to_string(), ty: Type::Unknown }],
+            params: vec![ParamInfo {
+                name: "value".to_string(),
+                ty: Type::Unknown,
+            }],
             return_type: Type::Unit,
             span: Span::zero(),
         },

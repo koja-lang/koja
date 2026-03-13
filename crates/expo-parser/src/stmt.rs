@@ -55,7 +55,11 @@ impl Parser {
                 } else if let Some(pattern) = self.try_expr_to_pattern(&expr) {
                     AssignTarget::Pattern(pattern)
                 } else {
-                    self.error("invalid assignment target".to_string(), start_span);
+                    self.error_with_hint(
+                        "invalid assignment target".to_string(),
+                        "only variables and fields can be assigned to".into(),
+                        start_span,
+                    );
                     AssignTarget::LValue(LValue {
                         segments: vec!["<error>".to_string()],
                         span: start_span,
@@ -83,7 +87,11 @@ impl Parser {
                 let target = if let Some(lvalue) = try_expr_to_lvalue(&expr) {
                     lvalue
                 } else {
-                    self.error("invalid compound assignment target".to_string(), start_span);
+                    self.error_with_hint(
+                        "invalid compound assignment target".to_string(),
+                        "only variables and fields can be assigned to".into(),
+                        start_span,
+                    );
                     LValue {
                         segments: vec!["<error>".to_string()],
                         span: start_span,

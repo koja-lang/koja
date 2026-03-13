@@ -110,8 +110,8 @@ impl Lexer {
                     _ => {
                         self.errors.push(Diagnostic {
                             severity: Severity::Error,
-                            message: "unexpected character '!' did you mean '!='?".into(),
-                            hint: None,
+                            message: "unexpected character '!'".into(),
+                            hint: Some("use '!=' for not-equal comparison".into()),
                             span: Span::new(start, start),
                         });
                         self.advance();
@@ -130,8 +130,8 @@ impl Lexer {
                     _ => {
                         self.errors.push(Diagnostic {
                             severity: Severity::Error,
-                            message: "unexpected character '|' did you mean '|>'?".into(),
-                            hint: None,
+                            message: "unexpected character '|'".into(),
+                            hint: Some("use '|>' for the pipe operator".into()),
                             span: Span::new(start, start),
                         });
                         self.advance();
@@ -446,7 +446,7 @@ impl Lexer {
             self.errors.push(Diagnostic {
                 severity: Severity::Error,
                 message: "unterminated string".into(),
-                hint: None,
+                hint: Some("add a closing '\"'".into()),
                 span: Span::new(start, self.position()),
             });
         }
@@ -487,7 +487,7 @@ impl Lexer {
             self.errors.push(Diagnostic {
                 severity: Severity::Error,
                 message: "unterminated multiline string".into(),
-                hint: None,
+                hint: Some("add a closing '\"\"\"'".into()),
                 span: Span::new(start, self.position()),
             });
         }

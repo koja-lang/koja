@@ -73,8 +73,8 @@ fn compile_print<'ctx>(
         return Err("print expects exactly 1 argument".to_string());
     }
 
-    let val = compile_expr(c, &args[0].value, function)?
-        .ok_or("argument to print produced no value")?;
+    let val =
+        compile_expr(c, &args[0].value, function)?.ok_or("argument to print produced no value")?;
 
     let printf = *c.functions.get("printf").ok_or("printf not declared")?;
 

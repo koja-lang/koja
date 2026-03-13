@@ -73,8 +73,17 @@ impl Parser {
             self.advance()
         } else {
             let span = self.current_span();
-            self.error(format!("expected {kind:?}, found {:?}", self.peek()), span);
-            // Advance past the unexpected token to prevent infinite loops
+            let message = format!("expected {kind:?}, found {:?}", self.peek());
+            let hint = match kind {
+                TokenKind::End => Some("every 'fn', 'if', 'while', 'loop', 'for', and 'struct' must be closed with 'end'".into()),
+                _ => None,
+            };
+            self.errors.push(Diagnostic {
+                severity: Severity::Error,
+                message,
+                hint,
+                span,
+            });
             self.advance()
         }
     }
@@ -178,8 +187,9 @@ impl Parser {
     pub(crate) fn expect_newline_or_eof(&mut self) {
         if !matches!(self.peek(), TokenKind::Newline | TokenKind::Eof) {
             let span = self.current_span();
-            self.error(
+            self.error_with_hint(
                 format!("expected newline or end of file, found {:?}", self.peek()),
+                "separate statements with newlines".into(),
                 span,
             );
         } else if matches!(self.peek(), TokenKind::Newline) {
@@ -212,6 +222,15 @@ impl Parser {
             severity: Severity::Error,
             message,
             hint: None,
+            span,
+        });
+    }
+
+    pub(crate) fn error_with_hint(&mut self, message: String, hint: String, span: Span) {
+        self.errors.push(Diagnostic {
+            severity: Severity::Error,
+            message,
+            hint: Some(hint),
             span,
         });
     }

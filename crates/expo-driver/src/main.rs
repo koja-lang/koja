@@ -29,17 +29,51 @@ fn main() {
     }
 }
 
-fn print_diagnostics(diagnostics: &[Diagnostic]) {
+fn render_diagnostics(filename: &str, source: &str, diagnostics: &[Diagnostic]) {
+    let lines: Vec<&str> = source.lines().collect();
+    let max_line = diagnostics
+        .iter()
+        .map(|d| d.span.start.line as usize)
+        .max()
+        .unwrap_or(1);
+    let gutter_width = max_line.to_string().len();
+
     for d in diagnostics {
         let severity = match d.severity {
             Severity::Error => "error",
             Severity::Warning => "warning",
             Severity::Note => "note",
         };
+
+        eprintln!("{severity}: {}", d.message);
         eprintln!(
-            "  {}:{}: {}: {}",
-            d.span.start.line, d.span.start.column, severity, d.message
+            "{:>gutter_width$}--> {filename}:{}:{}",
+            " ", d.span.start.line, d.span.start.column
         );
+
+        let line_idx = d.span.start.line.saturating_sub(1) as usize;
+        if let Some(source_line) = lines.get(line_idx) {
+            eprintln!("{:>gutter_width$} |", "");
+            eprintln!("{:>gutter_width$} | {source_line}", d.span.start.line);
+
+            let col_start = d.span.start.column.saturating_sub(1) as usize;
+            let col_end = if d.span.start.line == d.span.end.line {
+                (d.span.end.column as usize).max(col_start + 1)
+            } else {
+                source_line.len().max(col_start + 1)
+            };
+            let caret_count = col_end.saturating_sub(col_start).max(1);
+            let padding = " ".repeat(col_start);
+            let carets = "^".repeat(caret_count);
+            eprintln!("{:>gutter_width$} | {padding}{carets}", "");
+        }
+
+        if let Some(hint) = &d.hint {
+            eprintln!("{:>gutter_width$} |", "");
+            eprintln!("{:>gutter_width$} = hint: {hint}", "");
+        }
+
+        eprintln!();
     }
 }
 
@@ -94,15 +128,13 @@ fn build(args: &[String], quiet: bool) {
 
     let parse_result = expo_parser::parse(&source);
     if !parse_result.errors.is_empty() {
-        eprintln!("{path}: {} parse error(s)", parse_result.errors.len());
-        print_diagnostics(&parse_result.errors);
+        render_diagnostics(&path, &source, &parse_result.errors);
         process::exit(1);
     }
 
     let ctx = expo_typecheck::check(&parse_result.module);
     if !ctx.diagnostics.is_empty() {
-        eprintln!("{path}: {} type error(s)", ctx.diagnostics.len());
-        print_diagnostics(&ctx.diagnostics);
+        render_diagnostics(&path, &source, &ctx.diagnostics);
         process::exit(1);
     }
 
@@ -110,8 +142,7 @@ fn build(args: &[String], quiet: bool) {
     if let Err(diagnostics) =
         expo_codegen::compile(&parse_result.module, &ctx, Path::new(&obj_path))
     {
-        eprintln!("{path}: {} codegen error(s)", diagnostics.len());
-        print_diagnostics(&diagnostics);
+        render_diagnostics(&path, &source, &diagnostics);
         process::exit(1);
     }
 
@@ -189,8 +220,7 @@ fn cmd_check(args: &[String]) {
 
         let parse_result = expo_parser::parse(&source);
         if !parse_result.errors.is_empty() {
-            println!("{path}: {} parse error(s)", parse_result.errors.len());
-            print_diagnostics(&parse_result.errors);
+            render_diagnostics(path, &source, &parse_result.errors);
             continue;
         }
 
@@ -198,8 +228,7 @@ fn cmd_check(args: &[String]) {
         if ctx.diagnostics.is_empty() {
             println!("{path}: OK");
         } else {
-            println!("{path}: {} type error(s)", ctx.diagnostics.len());
-            print_diagnostics(&ctx.diagnostics);
+            render_diagnostics(path, &source, &ctx.diagnostics);
         }
     }
 }
@@ -227,8 +256,7 @@ fn cmd_format(args: &[String]) {
         let formatted = match expo_fmt::format(&source) {
             expo_fmt::FormatResult::Ok(s) => s,
             expo_fmt::FormatResult::ParseErrors(errors) => {
-                eprintln!("{path}: cannot format due to parse errors");
-                print_diagnostics(&errors);
+                render_diagnostics(path, &source, &errors);
                 has_diff = true;
                 continue;
             }
@@ -281,8 +309,7 @@ fn cmd_parse(args: &[String]) {
         if result.errors.is_empty() {
             println!("{path}: OK ({} items)", result.module.items.len());
         } else {
-            println!("{path}: {} error(s)", result.errors.len());
-            print_diagnostics(&result.errors);
+            render_diagnostics(path, &source, &result.errors);
         }
     }
 }
@@ -305,8 +332,7 @@ fn cmd_lex(args: &[String]) {
         let result = expo_lexer::lex(&source);
 
         if !result.errors.is_empty() {
-            eprintln!("{path}: {} lex error(s)", result.errors.len());
-            print_diagnostics(&result.errors);
+            render_diagnostics(path, &source, &result.errors);
         }
 
         println!(

@@ -17,7 +17,11 @@ impl Span {
     }
 
     pub fn zero() -> Self {
-        let p = Position { offset: 0, line: 0, column: 0 };
+        let p = Position {
+            offset: 0,
+            line: 0,
+            column: 0,
+        };
         Self { start: p, end: p }
     }
 }

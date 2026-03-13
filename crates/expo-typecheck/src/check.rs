@@ -122,11 +122,15 @@ fn check_function(
         if let Some(Statement::Expr(expr)) = f.body.last() {
             let actual = infer_expr(expr, ctx, &mut ce);
             if actual != Type::Unknown && actual != Type::Error && actual != declared_return {
-                ctx.error(
+                ctx.error_with_hint(
                     format!(
                         "return type mismatch: expected `{}`, found `{}`",
                         declared_return.display(),
                         actual.display()
+                    ),
+                    format!(
+                        "function is declared to return `{}`",
+                        declared_return.display()
                     ),
                     expr_span(expr),
                 );
@@ -158,12 +162,16 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                                 && value_type != Type::Error
                                 && *existing != value_type
                             {
-                                ctx.error(
+                                ctx.error_with_hint(
                                     format!(
                                         "type mismatch: `{}` has type `{}`, cannot assign `{}`",
                                         name,
                                         existing.display(),
                                         value_type.display()
+                                    ),
+                                    format!(
+                                        "variable was first assigned as `{}`",
+                                        existing.display()
                                     ),
                                     lv.span,
                                 );
@@ -178,7 +186,11 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
         }
         Statement::Break { span, .. } => {
             if ce.loop_depth == 0 {
-                ctx.error("break outside of loop".to_string(), *span);
+                ctx.error_with_hint(
+                    "break outside of loop".to_string(),
+                    "'break' can only be used inside 'loop' or 'while'".into(),
+                    *span,
+                );
             }
         }
         Statement::CompoundAssign {
@@ -189,7 +201,11 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
         } => {
             let target_name = &target.segments[0];
             let target_type = ce.env.get(target_name).cloned().unwrap_or_else(|| {
-                ctx.error(format!("unknown variable `{}`", target_name), *span);
+                ctx.error_with_hint(
+                    format!("unknown variable `{}`", target_name),
+                    "check the spelling or make sure it is defined before this line".into(),
+                    *span,
+                );
                 Type::Error
             });
             let value_type = infer_expr(value, ctx, ce);
@@ -222,11 +238,15 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                 && actual != Type::Error
                 && ce.return_type != actual
             {
-                ctx.error(
+                ctx.error_with_hint(
                     format!(
                         "return type mismatch: expected `{}`, found `{}`",
                         ce.return_type.display(),
                         actual.display()
+                    ),
+                    format!(
+                        "function is declared to return `{}`",
+                        ce.return_type.display()
                     ),
                     *span,
                 );
@@ -255,11 +275,12 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             match op {
                 BinOp::Add | BinOp::Div | BinOp::Mod | BinOp::Mul | BinOp::Sub => {
                     if left_ty != Type::Unknown && left_ty != Type::Error && !left_ty.is_numeric() {
-                        ctx.error(
+                        ctx.error_with_hint(
                             format!(
                                 "arithmetic requires numeric type, found `{}`",
                                 left_ty.display()
                             ),
+                            "expected i32, i64, f32, or f64".into(),
                             *span,
                         );
                         return Type::Error;
@@ -328,11 +349,16 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                         .collect();
 
                     if expected_count != actual_count {
-                        ctx.error(
+                        let params: Vec<String> = param_types
+                            .iter()
+                            .map(|(n, t)| format!("{}: {}", n, t.display()))
+                            .collect();
+                        ctx.error_with_hint(
                             format!(
-                                "function `{}` expects {} arguments, got {}",
+                                "function `{}` expects {} argument(s), got {}",
                                 name, expected_count, actual_count
                             ),
+                            format!("signature: fn {}({})", name, params.join(", ")),
                             *span,
                         );
                     } else {
@@ -546,7 +572,13 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                         {
                             field_ty.clone()
                         } else {
-                            ctx.error(format!("struct `{}` has no field `{}`", name, field), *span);
+                            let available: Vec<&str> =
+                                struct_info.fields.iter().map(|(n, _)| n.as_str()).collect();
+                            ctx.error_with_hint(
+                                format!("struct `{}` has no field `{}`", name, field),
+                                format!("available fields: {}", available.join(", ")),
+                                *span,
+                            );
                             Type::Error
                         }
                     } else {
@@ -580,7 +612,11 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             } else if ctx.functions.contains_key(name) {
                 Type::Unknown
             } else {
-                ctx.error(format!("unknown variable `{}`", name), *span);
+                ctx.error_with_hint(
+                    format!("unknown variable `{}`", name),
+                    "check the spelling or make sure it is defined before this line".into(),
+                    *span,
+                );
                 Type::Error
             }
         }
@@ -669,11 +705,16 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                     .collect();
 
                 if expected_count != actual_count {
-                    ctx.error(
+                    let params: Vec<String> = param_types
+                        .iter()
+                        .map(|(n, t)| format!("{}: {}", n, t.display()))
+                        .collect();
+                    ctx.error_with_hint(
                         format!(
-                            "method `{}` expects {} arguments, got {}",
+                            "function `{}` expects {} argument(s), got {}",
                             method, expected_count, actual_count
                         ),
+                        format!("signature: fn {}(self, {})", method, params.join(", ")),
                         *span,
                     );
                 } else {
@@ -705,14 +746,39 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                 }
                 match &recv_ty {
                     Type::Struct(name) => {
-                        ctx.error(
-                            format!("struct `{}` has no method `{}`", name, method),
+                        let available: Vec<&str> = ctx
+                            .structs
+                            .get(name)
+                            .map(|s| s.methods.keys().map(|k| k.as_str()).collect())
+                            .unwrap_or_default();
+                        let hint = if available.is_empty() {
+                            format!("struct `{}` has no functions defined", name)
+                        } else {
+                            format!("available functions: {}", available.join(", "))
+                        };
+                        ctx.error_with_hint(
+                            format!("struct `{}` has no function `{}`", name, method),
+                            hint,
                             *span,
                         );
                         Type::Error
                     }
                     Type::Enum(name) => {
-                        ctx.error(format!("enum `{}` has no method `{}`", name, method), *span);
+                        let available: Vec<&str> = ctx
+                            .enums
+                            .get(name)
+                            .map(|e| e.methods.keys().map(|k| k.as_str()).collect())
+                            .unwrap_or_default();
+                        let hint = if available.is_empty() {
+                            format!("enum `{}` has no functions defined", name)
+                        } else {
+                            format!("available functions: {}", available.join(", "))
+                        };
+                        ctx.error_with_hint(
+                            format!("enum `{}` has no function `{}`", name, method),
+                            hint,
+                            *span,
+                        );
                         Type::Error
                     }
                     _ => Type::Unknown,
@@ -760,8 +826,11 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                             );
                         }
                     } else {
-                        ctx.error(
+                        let available: Vec<&str> =
+                            struct_fields.iter().map(|(n, _)| n.as_str()).collect();
+                        ctx.error_with_hint(
                             format!("struct `{}` has no field `{}`", name, fi.name),
+                            format!("available fields: {}", available.join(", ")),
                             fi.span,
                         );
                     }
@@ -830,11 +899,12 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                         && operand_ty != Type::Error
                         && !operand_ty.is_numeric()
                     {
-                        ctx.error(
+                        ctx.error_with_hint(
                             format!(
                                 "negation requires numeric type, found `{}`",
                                 operand_ty.display()
                             ),
+                            "expected i32, i64, f32, or f64".into(),
                             *span,
                         );
                         Type::Error
@@ -884,7 +954,11 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             if let Some(ty) = ce.env.get("self") {
                 ty.clone()
             } else {
-                ctx.error("`self` used outside of impl block".to_string(), *span);
+                ctx.error_with_hint(
+                    "`self` used outside of impl block".to_string(),
+                    "'self' is only available inside functions defined in an 'impl' block".into(),
+                    *span,
+                );
                 Type::Error
             }
         }
