@@ -16,6 +16,7 @@ pub fn compile_call<'ctx>(
     }
 
     match name {
+        "print" => compile_print(c, args, function),
         "print_i32" | "print_i64" | "print_bool" | "print_f64" | "print_string" => {
             compile_print_builtin(c, name, args, function)
         }
@@ -61,6 +62,52 @@ fn compile_call_as_struct<'ctx>(
         .collect();
 
     compile_struct_construction(c, &[name.to_string()], &fields, function)
+}
+
+fn compile_print<'ctx>(
+    c: &mut Compiler<'ctx>,
+    args: &[Arg],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    if args.len() != 1 {
+        return Err("print expects exactly 1 argument".to_string());
+    }
+
+    let val = compile_expr(c, &args[0].value, function)?
+        .ok_or("argument to print produced no value")?;
+
+    let printf = *c.functions.get("printf").ok_or("printf not declared")?;
+
+    let fmt_str = if val.is_int_value() {
+        let width = val.into_int_value().get_type().get_bit_width();
+        match width {
+            1 => "%d\n",
+            32 => "%d\n",
+            64 => "%lld\n",
+            _ => "%d\n",
+        }
+    } else if val.is_float_value() {
+        "%f\n"
+    } else if val.is_pointer_value() {
+        "%s\n"
+    } else {
+        return Err("print: unsupported argument type".to_string());
+    };
+
+    let fmt = c
+        .builder
+        .build_global_string_ptr(fmt_str, "fmt_print")
+        .unwrap();
+
+    c.builder
+        .build_call(
+            printf,
+            &[fmt.as_pointer_value().into(), val.into()],
+            "printf_call",
+        )
+        .unwrap();
+
+    Ok(None)
 }
 
 fn compile_print_builtin<'ctx>(

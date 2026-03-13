@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{EnumVariantData, ImplMember, Item, Module, Param, TypeExpr};
+use expo_ast::span::Span;
 
 use crate::context::{
     EnumInfo, FunctionSig, ParamInfo, StructInfo, TypeContext, VariantData, VariantInfo,
@@ -149,6 +150,15 @@ pub fn collect(module: &Module) -> TypeContext {
             _ => {}
         }
     }
+
+    ctx.functions.insert(
+        "print".to_string(),
+        FunctionSig {
+            params: vec![ParamInfo { name: "value".to_string(), ty: Type::Unknown }],
+            return_type: Type::Unit,
+            span: Span::zero(),
+        },
+    );
 
     ctx
 }

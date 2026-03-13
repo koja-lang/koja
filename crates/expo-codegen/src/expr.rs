@@ -3,7 +3,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
 use crate::compiler::Compiler;
-use crate::control::{compile_if, compile_loop};
+use crate::control::{compile_if, compile_loop, compile_while};
 use crate::ops::{compile_binary, compile_unary};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
@@ -68,6 +68,10 @@ pub fn compile_expr<'ctx>(
         Expr::String { parts, .. } => compile_string(c, parts),
 
         Expr::Loop { body, .. } => compile_loop(c, body, function),
+
+        Expr::While {
+            condition, body, ..
+        } => compile_while(c, condition, body, function),
 
         Expr::Self_ { .. } => {
             if let Some((ptr, ty)) = c.variables.get("self") {

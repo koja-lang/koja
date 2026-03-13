@@ -597,6 +597,18 @@ impl<'a> Printer<'a> {
                 text("end"),
             ]),
 
+            Expr::While {
+                condition,
+                body,
+                span,
+            } => concat(vec![
+                text("while "),
+                self.expr_to_doc(condition),
+                self.body_to_doc(body, span.end.line),
+                hardline(),
+                text("end"),
+            ]),
+
             Expr::Arena { body, span, .. } => concat(vec![
                 text("arena"),
                 self.body_to_doc(body, span.end.line),
@@ -1322,6 +1334,7 @@ fn expr_contains_block(expr: &Expr) -> bool {
         | Expr::For { .. }
         | Expr::Loop { .. }
         | Expr::Unless { .. }
+        | Expr::While { .. }
         | Expr::Closure { .. }
         | Expr::Receive { .. }
         | Expr::Arena { .. } => true,
@@ -1365,6 +1378,7 @@ fn arm_is_multiline(body: &[Statement]) -> bool {
                 | Expr::For { .. }
                 | Expr::Loop { .. }
                 | Expr::Unless { .. }
+                | Expr::While { .. }
                 | Expr::Closure { .. }
                 | Expr::Receive { .. }
                 | Expr::Arena { .. }
@@ -1523,7 +1537,8 @@ fn expr_start_line(expr: &Expr) -> u32 {
         | Try { span, .. }
         | Tuple { span, .. }
         | Unary { span, .. }
-        | Unless { span, .. } => span.start.line,
+        | Unless { span, .. }
+        | While { span, .. } => span.start.line,
     }
 }
 
@@ -1557,6 +1572,7 @@ fn expr_end_line(expr: &Expr) -> u32 {
         | Try { span, .. }
         | Tuple { span, .. }
         | Unary { span, .. }
-        | Unless { span, .. } => span.end.line,
+        | Unless { span, .. }
+        | While { span, .. } => span.end.line,
     }
 }

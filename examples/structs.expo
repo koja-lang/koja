@@ -1,0 +1,23 @@
+struct Point
+  x: i32
+  y: i32
+end
+
+impl Point
+  fn distance_squared(self) -> i32
+    self.x * self.x + self.y * self.y
+  end
+
+  fn translate(self, dx: i32, dy: i32) -> Point
+    Point(x: self.x + dx, y: self.y + dy)
+  end
+end
+
+fn main()
+  p = Point(x: 3, y: 4)
+  print(p.distance_squared())
+
+  q = p.translate(1, 2)
+  print(q.x)
+  print(q.y)
+end

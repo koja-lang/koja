@@ -15,4 +15,9 @@ impl Span {
     pub fn new(start: Position, end: Position) -> Self {
         Self { start, end }
     }
+
+    pub fn zero() -> Self {
+        let p = Position { offset: 0, line: 0, column: 0 };
+        Self { start: p, end: p }
+    }
 }

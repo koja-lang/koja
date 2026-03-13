@@ -108,7 +108,7 @@
         },
         {
           "name": "keyword.control.loop.expo",
-          "match": "\\b(for|loop|in)\\b"
+          "match": "\\b(for|loop|while|in)\\b"
         },
         {
           "name": "keyword.control.concurrency.expo",

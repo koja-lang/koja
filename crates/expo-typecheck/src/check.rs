@@ -849,6 +849,22 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             }
         }
 
+        Expr::While {
+            condition, body, ..
+        } => {
+            let cond_ty = infer_expr(condition, ctx, ce);
+            check_type(
+                &cond_ty,
+                &Type::Primitive(Primitive::Bool),
+                expr_span(expr),
+                ctx,
+            );
+            let mut child = ce.child(Type::Unknown);
+            child.loop_depth += 1;
+            check_body(body, ctx, &mut child);
+            Type::Unit
+        }
+
         Expr::Unless {
             condition, body, ..
         } => {
@@ -1161,6 +1177,7 @@ fn expr_span(expr: &Expr) -> Span {
         | Expr::Try { span, .. }
         | Expr::Tuple { span, .. }
         | Expr::Unary { span, .. }
-        | Expr::Unless { span, .. } => *span,
+        | Expr::Unless { span, .. }
+        | Expr::While { span, .. } => *span,
     }
 }

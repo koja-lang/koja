@@ -58,6 +58,7 @@ pub enum TokenKind {
     Type,
     Unless,
     When,
+    While,
 
     // Operators
     Plus,
@@ -135,6 +136,7 @@ impl TokenKind {
                 | TokenKind::Type
                 | TokenKind::Unless
                 | TokenKind::When
+                | TokenKind::While
         )
     }
 }

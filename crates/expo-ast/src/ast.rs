@@ -390,6 +390,11 @@ pub enum Expr {
         body: Vec<Statement>,
         span: Span,
     },
+    While {
+        condition: Box<Expr>,
+        body: Vec<Statement>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

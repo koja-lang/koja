@@ -200,6 +200,20 @@ impl Parser {
         }
     }
 
+    pub(crate) fn parse_while_expr(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // while
+        let condition = self.parse_expr();
+        let body = self.parse_block();
+        self.expect(&TokenKind::End);
+
+        Expr::While {
+            condition: Box::new(condition),
+            body,
+            span: self.span_from(start),
+        }
+    }
+
     pub(crate) fn parse_arena_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.advance(); // arena

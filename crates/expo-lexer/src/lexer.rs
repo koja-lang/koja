@@ -230,6 +230,7 @@ impl Lexer {
             "type" => TokenKind::Type,
             "unless" => TokenKind::Unless,
             "when" => TokenKind::When,
+            "while" => TokenKind::While,
             "none" => TokenKind::None_,
             _ => TokenKind::Ident(name),
         }
