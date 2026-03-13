@@ -8,14 +8,15 @@ fn main() {
     if args.len() < 2 {
         eprintln!("expo compiler v{}", env!("CARGO_PKG_VERSION"));
         eprintln!("Usage: expo <command> [args]");
-        eprintln!("Commands: fmt, parse, lex");
+        eprintln!("Commands: check, format, lex, parse");
         process::exit(1);
     }
 
     match args[1].as_str() {
-        "fmt" => cmd_fmt(&args[2..]),
-        "parse" => cmd_parse(&args[2..]),
+        "check" => cmd_check(&args[2..]),
+        "format" => cmd_format(&args[2..]),
         "lex" => cmd_lex(&args[2..]),
+        "parse" => cmd_parse(&args[2..]),
         other => {
             eprintln!("unknown command: {other}");
             process::exit(1);
@@ -23,9 +24,51 @@ fn main() {
     }
 }
 
-fn cmd_fmt(args: &[String]) {
+fn cmd_check(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: expo fmt <file.expo> [--check] [--write]");
+        eprintln!("Usage: expo check <file.expo>");
+        process::exit(1);
+    }
+
+    for path in args {
+        let source = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error reading {path}: {e}");
+                process::exit(1);
+            }
+        };
+
+        let parse_result = expo_parser::parse(&source);
+        if !parse_result.errors.is_empty() {
+            println!("{path}: {} parse errors", parse_result.errors.len());
+            for err in &parse_result.errors {
+                println!(
+                    "  line {}:{}: {}",
+                    err.span.start.line, err.span.start.column, err.message
+                );
+            }
+            continue;
+        }
+
+        let type_errors = expo_typecheck::check(&parse_result.module);
+        if type_errors.is_empty() {
+            println!("{path}: OK");
+        } else {
+            println!("{path}: {} type errors", type_errors.len());
+            for err in &type_errors {
+                println!(
+                    "  line {}:{}: {}",
+                    err.span.start.line, err.span.start.column, err.message
+                );
+            }
+        }
+    }
+}
+
+fn cmd_format(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("Usage: expo format <file.expo> [--check] [--write]");
         process::exit(1);
     }
 
@@ -43,7 +86,20 @@ fn cmd_fmt(args: &[String]) {
             }
         };
 
-        let formatted = expo_fmt::format(&source);
+        let formatted = match expo_fmt::format(&source) {
+            expo_fmt::FormatResult::Ok(s) => s,
+            expo_fmt::FormatResult::ParseErrors(errors) => {
+                eprintln!("{path}: cannot format due to parse errors");
+                for err in &errors {
+                    eprintln!(
+                        "  line {}:{}: {}",
+                        err.span.start.line, err.span.start.column, err.message
+                    );
+                }
+                has_diff = true;
+                continue;
+            }
+        };
 
         if check {
             if source != formatted {

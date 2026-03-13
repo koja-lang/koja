@@ -1,3 +1,5 @@
+mod construct;
+mod control;
 mod decl;
 mod expr;
 mod parser;

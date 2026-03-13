@@ -88,7 +88,7 @@ type_alias = "type" , TYPE_IDENT , "=" , type_expr ;
 (* ========================================================================== *)
 
 function_decl = [ annotation ] , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
-                "(" , [ param_list ] , ")" , [ "->" , type_expr ] ,
+                [ "(" , [ param_list ] , ")" ] , [ "->" , type_expr ] ,
                 { statement } ,
                 "end" ;
 

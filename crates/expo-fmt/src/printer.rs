@@ -256,7 +256,7 @@ impl<'a> Printer<'a> {
         };
 
         let params_inline = if params_doc.is_empty() {
-            text("()")
+            text("")
         } else {
             group(concat(vec![
                 text("("),

@@ -6,6 +6,7 @@ members = [
     "crates/expo-fmt",
     "crates/expo-lexer",
     "crates/expo-parser",
+    "crates/expo-typecheck",
 ]
 
 [workspace.package]

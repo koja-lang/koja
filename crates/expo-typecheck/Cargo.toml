@@ -1,0 +1,9 @@
+[package]
+name = "expo-typecheck"
+description = "Type checker for the Expo language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+expo-ast = { path = "../expo-ast" }

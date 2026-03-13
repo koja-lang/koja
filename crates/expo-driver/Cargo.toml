@@ -14,3 +14,4 @@ expo-ast = { path = "../expo-ast" }
 expo-fmt = { path = "../expo-fmt" }
 expo-lexer = { path = "../expo-lexer" }
 expo-parser = { path = "../expo-parser" }
+expo-typecheck = { path = "../expo-typecheck" }

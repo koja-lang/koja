@@ -355,13 +355,18 @@ impl Parser {
         let name = self.expect_ident();
         let type_params = self.parse_optional_type_params();
 
-        self.expect(&TokenKind::LParen);
-        let params = if self.at(&TokenKind::RParen) {
-            Vec::new()
+        let params = if self.at(&TokenKind::LParen) {
+            self.advance(); // (
+            let params = if self.at(&TokenKind::RParen) {
+                Vec::new()
+            } else {
+                self.parse_param_list()
+            };
+            self.expect(&TokenKind::RParen);
+            params
         } else {
-            self.parse_param_list()
+            Vec::new()
         };
-        self.expect(&TokenKind::RParen);
 
         self.skip_newlines();
         let return_type = if self.eat(&TokenKind::Arrow).is_some() {

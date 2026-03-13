@@ -14,6 +14,7 @@ dependencies = [
  "expo-fmt",
  "expo-lexer",
  "expo-parser",
+ "expo-typecheck",
 ]
 
 [[package]]
@@ -37,4 +38,11 @@ version = "0.1.0"
 dependencies = [
  "expo-ast",
  "expo-lexer",
+]
+
+[[package]]
+name = "expo-typecheck"
+version = "0.1.0"
+dependencies = [
+ "expo-ast",
 ]
