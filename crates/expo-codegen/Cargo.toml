@@ -1,0 +1,11 @@
+[package]
+name = "expo-codegen"
+description = "LLVM code generator for the Expo language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+expo-ast = { path = "../expo-ast" }
+expo-typecheck = { path = "../expo-typecheck" }
+inkwell = { version = "0.5", features = ["llvm18-0"] }

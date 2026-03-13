@@ -1,12 +1,13 @@
 mod check;
 mod collect;
-mod context;
-mod types;
+pub mod context;
+pub mod types;
 
-use expo_ast::ast::{Diagnostic, Module};
+use context::TypeContext;
+use expo_ast::ast::Module;
 
-pub fn check(module: &Module) -> Vec<Diagnostic> {
+pub fn check(module: &Module) -> TypeContext {
     let mut ctx = collect::collect(module);
     check::check_module(module, &mut ctx);
-    ctx.diagnostics
+    ctx
 }
