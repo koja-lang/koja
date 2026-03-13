@@ -110,6 +110,7 @@ pub fn collect(module: &Module) -> TypeContext {
                         if let Some(methods) = methods {
                             if methods.contains_key(&f.name) {
                                 ctx.diagnostics.push(expo_ast::ast::Diagnostic {
+                                    severity: expo_ast::ast::Severity::Error,
                                     message: format!(
                                         "duplicate method `{}` in impl for `{}`",
                                         f.name, target_name

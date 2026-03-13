@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use expo_ast::ast::Diagnostic;
+use expo_ast::ast::{Diagnostic, Severity};
 use expo_ast::span::Span;
 
 use crate::types::Type;
@@ -68,6 +68,7 @@ impl TypeContext {
 
     pub fn error(&mut self, message: String, span: Span) {
         self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             message,
             hint: None,
             span,

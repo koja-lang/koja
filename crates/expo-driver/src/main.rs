@@ -3,6 +3,8 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
+use expo_ast::ast::{Diagnostic, Severity};
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -24,6 +26,20 @@ fn main() {
             eprintln!("unknown command: {other}");
             process::exit(1);
         }
+    }
+}
+
+fn print_diagnostics(diagnostics: &[Diagnostic]) {
+    for d in diagnostics {
+        let severity = match d.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Note => "note",
+        };
+        eprintln!(
+            "  {}:{}: {}: {}",
+            d.span.start.line, d.span.start.column, severity, d.message
+        );
     }
 }
 
@@ -78,31 +94,24 @@ fn build(args: &[String], quiet: bool) {
 
     let parse_result = expo_parser::parse(&source);
     if !parse_result.errors.is_empty() {
-        eprintln!("{path}: {} parse errors", parse_result.errors.len());
-        for err in &parse_result.errors {
-            eprintln!(
-                "  line {}:{}: {}",
-                err.span.start.line, err.span.start.column, err.message
-            );
-        }
+        eprintln!("{path}: {} parse error(s)", parse_result.errors.len());
+        print_diagnostics(&parse_result.errors);
         process::exit(1);
     }
 
     let ctx = expo_typecheck::check(&parse_result.module);
     if !ctx.diagnostics.is_empty() {
-        eprintln!("{path}: {} type errors", ctx.diagnostics.len());
-        for err in &ctx.diagnostics {
-            eprintln!(
-                "  line {}:{}: {}",
-                err.span.start.line, err.span.start.column, err.message
-            );
-        }
+        eprintln!("{path}: {} type error(s)", ctx.diagnostics.len());
+        print_diagnostics(&ctx.diagnostics);
         process::exit(1);
     }
 
     let obj_path = format!("{output}.o");
-    if let Err(e) = expo_codegen::compile(&parse_result.module, &ctx, Path::new(&obj_path)) {
-        eprintln!("codegen error: {e}");
+    if let Err(diagnostics) =
+        expo_codegen::compile(&parse_result.module, &ctx, Path::new(&obj_path))
+    {
+        eprintln!("{path}: {} codegen error(s)", diagnostics.len());
+        print_diagnostics(&diagnostics);
         process::exit(1);
     }
 
@@ -180,13 +189,8 @@ fn cmd_check(args: &[String]) {
 
         let parse_result = expo_parser::parse(&source);
         if !parse_result.errors.is_empty() {
-            println!("{path}: {} parse errors", parse_result.errors.len());
-            for err in &parse_result.errors {
-                println!(
-                    "  line {}:{}: {}",
-                    err.span.start.line, err.span.start.column, err.message
-                );
-            }
+            println!("{path}: {} parse error(s)", parse_result.errors.len());
+            print_diagnostics(&parse_result.errors);
             continue;
         }
 
@@ -194,13 +198,8 @@ fn cmd_check(args: &[String]) {
         if ctx.diagnostics.is_empty() {
             println!("{path}: OK");
         } else {
-            println!("{path}: {} type errors", ctx.diagnostics.len());
-            for err in &ctx.diagnostics {
-                println!(
-                    "  line {}:{}: {}",
-                    err.span.start.line, err.span.start.column, err.message
-                );
-            }
+            println!("{path}: {} type error(s)", ctx.diagnostics.len());
+            print_diagnostics(&ctx.diagnostics);
         }
     }
 }
@@ -229,12 +228,7 @@ fn cmd_format(args: &[String]) {
             expo_fmt::FormatResult::Ok(s) => s,
             expo_fmt::FormatResult::ParseErrors(errors) => {
                 eprintln!("{path}: cannot format due to parse errors");
-                for err in &errors {
-                    eprintln!(
-                        "  line {}:{}: {}",
-                        err.span.start.line, err.span.start.column, err.message
-                    );
-                }
+                print_diagnostics(&errors);
                 has_diff = true;
                 continue;
             }
@@ -287,13 +281,8 @@ fn cmd_parse(args: &[String]) {
         if result.errors.is_empty() {
             println!("{path}: OK ({} items)", result.module.items.len());
         } else {
-            println!("{path}: {} errors", result.errors.len());
-            for err in &result.errors {
-                println!(
-                    "  line {}:{}: {}",
-                    err.span.start.line, err.span.start.column, err.message
-                );
-            }
+            println!("{path}: {} error(s)", result.errors.len());
+            print_diagnostics(&result.errors);
         }
     }
 }
@@ -314,6 +303,11 @@ fn cmd_lex(args: &[String]) {
         };
 
         let result = expo_lexer::lex(&source);
+
+        if !result.errors.is_empty() {
+            eprintln!("{path}: {} lex error(s)", result.errors.len());
+            print_diagnostics(&result.errors);
+        }
 
         println!(
             "{path}: {} tokens, {} comments",

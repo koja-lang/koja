@@ -1,3 +1,5 @@
+use expo_ast::ast::{Diagnostic, Severity};
+
 use crate::{Comment, Position, Span, Token, TokenKind};
 
 // =============================================================================
@@ -24,14 +26,8 @@ use crate::{Comment, Position, Span, Token, TokenKind};
 #[derive(Debug)]
 pub struct LexResult {
     pub comments: Vec<Comment>,
-    pub errors: Vec<LexError>,
+    pub errors: Vec<Diagnostic>,
     pub tokens: Vec<Token>,
-}
-
-#[derive(Debug)]
-pub struct LexError {
-    pub message: String,
-    pub span: Span,
 }
 
 struct Lexer {
@@ -41,7 +37,7 @@ struct Lexer {
     column: u32,
     tokens: Vec<Token>,
     comments: Vec<Comment>,
-    errors: Vec<LexError>,
+    errors: Vec<Diagnostic>,
 }
 
 pub fn lex(source: &str) -> LexResult {
@@ -112,8 +108,10 @@ impl Lexer {
                 '!' => match self.peek_next() {
                     Some('=') => self.double(TokenKind::NotEq),
                     _ => {
-                        self.errors.push(LexError {
+                        self.errors.push(Diagnostic {
+                            severity: Severity::Error,
                             message: "unexpected character '!' did you mean '!='?".into(),
+                            hint: None,
                             span: Span::new(start, start),
                         });
                         self.advance();
@@ -130,8 +128,10 @@ impl Lexer {
                 '|' => match self.peek_next() {
                     Some('>') => self.double(TokenKind::PipeRight),
                     _ => {
-                        self.errors.push(LexError {
+                        self.errors.push(Diagnostic {
+                            severity: Severity::Error,
                             message: "unexpected character '|' did you mean '|>'?".into(),
+                            hint: None,
                             span: Span::new(start, start),
                         });
                         self.advance();
@@ -158,8 +158,10 @@ impl Lexer {
 
                 c => {
                     let end = self.position();
-                    self.errors.push(LexError {
+                    self.errors.push(Diagnostic {
+                        severity: Severity::Error,
                         message: format!("unexpected character: '{c}'"),
+                        hint: None,
                         span: Span::new(start, end),
                     });
                     self.advance();
@@ -440,8 +442,10 @@ impl Lexer {
             self.advance();
             self.emit(TokenKind::StringEnd, end_start);
         } else {
-            self.errors.push(LexError {
+            self.errors.push(Diagnostic {
+                severity: Severity::Error,
                 message: "unterminated string".into(),
+                hint: None,
                 span: Span::new(start, self.position()),
             });
         }
@@ -479,8 +483,10 @@ impl Lexer {
             self.advance(); // "
             self.emit(TokenKind::MultilineStringEnd, end_start);
         } else {
-            self.errors.push(LexError {
+            self.errors.push(Diagnostic {
+                severity: Severity::Error,
                 message: "unterminated multiline string".into(),
+                hint: None,
                 span: Span::new(start, self.position()),
             });
         }

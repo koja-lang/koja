@@ -1,4 +1,4 @@
-use expo_ast::ast::{Comment, Diagnostic, Item, Module};
+use expo_ast::ast::{Comment, Diagnostic, Item, Module, Severity};
 use expo_ast::span::{Position, Span};
 use expo_ast::token::{Token, TokenKind};
 use expo_lexer::{LexResult, lex};
@@ -21,7 +21,7 @@ impl Parser {
             tokens: lex_result.tokens,
             comments: lex_result.comments,
             pos: 0,
-            errors: Vec::new(),
+            errors: lex_result.errors,
         }
     }
 
@@ -209,6 +209,7 @@ impl Parser {
 
     pub(crate) fn error(&mut self, message: String, span: Span) {
         self.errors.push(Diagnostic {
+            severity: Severity::Error,
             message,
             hint: None,
             span,

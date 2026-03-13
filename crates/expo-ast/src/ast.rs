@@ -35,8 +35,16 @@ pub struct Comment {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Severity {
+    Error,
+    Warning,
+    Note,
+}
+
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
+    pub severity: Severity,
     pub message: String,
     pub hint: Option<String>,
     pub span: Span,

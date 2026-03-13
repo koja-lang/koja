@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use expo_ast::ast::{Function, ImplMember, Item, Module, Param, TypeExpr};
+use expo_ast::ast::{Diagnostic, Function, ImplMember, Item, Module, Param, Severity, TypeExpr};
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::Type;
 use inkwell::OptimizationLevel;
@@ -345,9 +345,27 @@ impl<'ctx> Compiler<'ctx> {
     }
 }
 
-pub fn compile(module: &Module, type_ctx: &TypeContext, output_path: &Path) -> Result<(), String> {
+pub fn compile(
+    module: &Module,
+    type_ctx: &TypeContext,
+    output_path: &Path,
+) -> Result<(), Vec<Diagnostic>> {
     let context = Context::create();
     let mut compiler = Compiler::new(&context, type_ctx);
-    compiler.compile_module(module)?;
-    compiler.emit_object_file(output_path)
+    compiler.compile_module(module).map_err(|e| {
+        vec![Diagnostic {
+            severity: Severity::Error,
+            message: e,
+            hint: None,
+            span: module.span,
+        }]
+    })?;
+    compiler.emit_object_file(output_path).map_err(|e| {
+        vec![Diagnostic {
+            severity: Severity::Error,
+            message: e,
+            hint: None,
+            span: module.span,
+        }]
+    })
 }
