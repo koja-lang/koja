@@ -1,4 +1,4 @@
-use expo_ast::ast::{Expr, Statement};
+use expo_ast::ast::{CondArm, Expr, Statement};
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
@@ -142,6 +142,68 @@ pub fn compile_while<'ctx>(
     c.loop_exit_stack.pop();
     c.builder.position_at_end(while_exit);
 
+    Ok(None)
+}
+
+pub fn compile_cond<'ctx>(
+    c: &mut Compiler<'ctx>,
+    arms: &[CondArm],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    if arms.is_empty() {
+        return Ok(None);
+    }
+
+    let merge_bb = c.context.append_basic_block(function, "cond_end");
+
+    for (i, arm) in arms.iter().enumerate() {
+        let cond_val =
+            compile_expr(c, &arm.condition, function)?.ok_or("cond arm produced no value")?;
+
+        let cond_int = if cond_val.is_int_value() {
+            let iv = cond_val.into_int_value();
+            if iv.get_type().get_bit_width() == 1 {
+                iv
+            } else {
+                c.builder
+                    .build_int_compare(IntPredicate::NE, iv, iv.get_type().const_zero(), "condcmp")
+                    .unwrap()
+            }
+        } else {
+            return Err("cond arm condition must be a boolean".to_string());
+        };
+
+        let body_bb = c
+            .context
+            .append_basic_block(function, &format!("cond_body_{i}"));
+        let next_bb = if i + 1 < arms.len() {
+            c.context
+                .append_basic_block(function, &format!("cond_check_{}", i + 1))
+        } else {
+            merge_bb
+        };
+
+        c.builder
+            .build_conditional_branch(cond_int, body_bb, next_bb)
+            .unwrap();
+
+        c.builder.position_at_end(body_bb);
+        for stmt in &arm.body {
+            if c.current_block_terminated() {
+                break;
+            }
+            compile_statement(c, stmt, function)?;
+        }
+        if !c.current_block_terminated() {
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+
+        if next_bb != merge_bb {
+            c.builder.position_at_end(next_bb);
+        }
+    }
+
+    c.builder.position_at_end(merge_bb);
     Ok(None)
 }
 

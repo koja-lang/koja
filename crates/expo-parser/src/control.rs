@@ -149,7 +149,7 @@ impl Parser {
         while !self.at(&TokenKind::End) && !self.at_eof() {
             let before = self.pos;
             let arm_start = self.current_span();
-            let condition = self.parse_expr();
+            let condition = self.parse_expr_bp(crate::expr::BP_ARROW + 1);
             self.expect(&TokenKind::Arrow);
             let body = self.parse_match_body();
             arms.push(CondArm {

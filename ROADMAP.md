@@ -61,7 +61,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 - ~~Closures and annotations can be parsed but don't need to do anything yet~~
 - ~~**Deliverable**: `expo parse file.expo` prints the AST~~
 
-**Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work. String interpolation (`#{}`) and escape sequences (`\"`, `\\`, `\n`, `\t`, `\#`) fully implemented in the lexer with a mode stack for nested interpolation. Multiline strings (`"""`) have no escape sequences -- backslash is a regular character.
+**Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work. String interpolation (`#{}`) and escape sequences (`\"`, `\\`, `\n`, `\t`, `\#`) fully implemented in the lexer with a mode stack for nested interpolation. Multiline strings (`"""`) support the same escapes as single-line strings and are automatically dedented based on the closing delimiter's column position.
 
 ### Month 2 -- Type system and semantic analysis (~40% complete)
 
@@ -87,7 +87,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: Functions, structs, impl methods, if/else, while, loop, break, return, compound assignment all compile to working native binaries. `expo build` and `expo run` work. Linking via system `cc`.
 
-**Remaining gaps**: match, cond, for, closures (both forms), enums, ternary, try (`?`), pipe (`|>`), tuples, lists -- none of these generate LLVM IR yet. String interpolation codegen is implemented (two-pass `snprintf` with type-based format specifiers); format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation.
+**Remaining gaps**: match, for, closures (both forms), enums, ternary, try (`?`), pipe (`|>`), tuples, lists -- none of these generate LLVM IR yet. String interpolation codegen is implemented (two-pass `snprintf` with type-based format specifiers); format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation. `cond` compiles to a cascade of conditional branches.
 
 ### Key decisions
 
@@ -358,7 +358,7 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Phase      | Milestone                                               |
 | ---------- | ------------------------------------------------------- |
 | Bootstrap  | Finish type checker (generics, enums, multi-module)     |
-| Bootstrap  | Finish codegen (match, cond, for, closures, enums, try) |
+| Bootstrap  | Finish codegen (match, for, closures, enums, try)       |
 | Core       | Ownership + borrow checker                              |
 | Core       | Collections, closures, arena, `ua_parser.expo` compiles |
 | Async      | Green thread scheduler, `spawn`/`await`                 |

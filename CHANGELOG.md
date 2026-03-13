@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `cond` expressions.
+- Multiline string indentation stripping (dedent based on closing `"""` position).
+- Escape sequences in multiline strings (same set as single-line: `\"`, `\\`, `\n`, `\t`, `\#`).
 - String interpolation (`"hello #{name}"`).
 - Escape sequences in strings: `\"`, `\\`, `\n`, `\t`, `\#`.
 - Multiline strings (`"""`) in expression position.

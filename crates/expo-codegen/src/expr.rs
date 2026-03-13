@@ -3,7 +3,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
 use crate::compiler::Compiler;
-use crate::control::{compile_if, compile_loop, compile_while};
+use crate::control::{compile_cond, compile_if, compile_loop, compile_while};
 use crate::ops::{compile_binary, compile_unary};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
@@ -83,6 +83,8 @@ pub fn compile_expr<'ctx>(
                 Err("self used outside of impl method".to_string())
             }
         }
+
+        Expr::Cond { arms, .. } => compile_cond(c, arms, function),
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
