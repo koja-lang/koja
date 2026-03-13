@@ -244,7 +244,7 @@ impl<'a> Printer<'a> {
         }
 
         let params_doc: Vec<Doc> = f.params.iter().map(|p| self.param_to_doc(p)).collect();
-        let has_return = f.return_type.as_ref().map_or(false, |rt| !is_unit_type(rt));
+        let has_return = f.return_type.as_ref().is_some_and(|rt| !is_unit_type(rt));
 
         let return_doc = if has_return {
             Some(concat(vec![
@@ -1354,21 +1354,21 @@ fn arm_is_multiline(body: &[Statement]) -> bool {
     if body.len() > 1 {
         return true;
     }
-    if body.len() == 1 {
-        if let Statement::Expr(expr) = &body[0] {
-            return matches!(
-                expr,
-                Expr::If { .. }
-                    | Expr::Match { .. }
-                    | Expr::Cond { .. }
-                    | Expr::For { .. }
-                    | Expr::Loop { .. }
-                    | Expr::Unless { .. }
-                    | Expr::Closure { .. }
-                    | Expr::Receive { .. }
-                    | Expr::Arena { .. }
-            );
-        }
+    if body.len() == 1
+        && let Statement::Expr(expr) = &body[0]
+    {
+        return matches!(
+            expr,
+            Expr::If { .. }
+                | Expr::Match { .. }
+                | Expr::Cond { .. }
+                | Expr::For { .. }
+                | Expr::Loop { .. }
+                | Expr::Unless { .. }
+                | Expr::Closure { .. }
+                | Expr::Receive { .. }
+                | Expr::Arena { .. }
+        );
     }
     false
 }
@@ -1416,11 +1416,11 @@ fn sig_will_break(f: &Function) -> bool {
         len += param_text_len(p);
     }
     len += 1;
-    if let Some(rt) = &f.return_type {
-        if !is_unit_type(rt) {
-            len += 4;
-            len += type_expr_text_len(rt);
-        }
+    if let Some(rt) = &f.return_type
+        && !is_unit_type(rt)
+    {
+        len += 4;
+        len += type_expr_text_len(rt);
     }
     len > 80
 }

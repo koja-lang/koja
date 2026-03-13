@@ -9,7 +9,6 @@ pub struct TypeContext {
     pub diagnostics: Vec<Diagnostic>,
     pub enums: HashMap<String, EnumInfo>,
     pub functions: HashMap<String, FunctionSig>,
-    pub loop_depth: usize,
     pub structs: HashMap<String, StructInfo>,
 }
 
@@ -51,13 +50,18 @@ pub enum VariantData {
     Unit,
 }
 
+impl Default for TypeContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeContext {
     pub fn new() -> Self {
         Self {
             diagnostics: Vec::new(),
             enums: HashMap::new(),
             functions: HashMap::new(),
-            loop_depth: 0,
             structs: HashMap::new(),
         }
     }

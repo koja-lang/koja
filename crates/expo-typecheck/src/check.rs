@@ -6,6 +6,26 @@ use expo_ast::span::Span;
 use crate::context::{TypeContext, VariantData};
 use crate::types::{Primitive, Type, resolve_type_expr};
 
+struct CheckEnv<'a> {
+    env: HashMap<String, Type>,
+    loop_depth: usize,
+    return_type: Type,
+    struct_names: &'a [&'a str],
+    enum_names: &'a [&'a str],
+}
+
+impl<'a> CheckEnv<'a> {
+    fn child(&self, return_type: Type) -> CheckEnv<'a> {
+        CheckEnv {
+            env: self.env.clone(),
+            loop_depth: self.loop_depth,
+            return_type,
+            struct_names: self.struct_names,
+            enum_names: self.enum_names,
+        }
+    }
+}
+
 pub fn check_module(module: &Module, ctx: &mut TypeContext) {
     let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
     let struct_name_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
@@ -35,16 +55,16 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                     continue;
                 };
                 for member in &impl_block.members {
-                    if let ImplMember::Function(f) = member {
-                        if f.type_params.is_empty() {
-                            check_function(
-                                f,
-                                ctx,
-                                Some(&self_type),
-                                &struct_name_refs,
-                                &enum_name_refs,
-                            );
-                        }
+                    if let ImplMember::Function(f) = member
+                        && f.type_params.is_empty()
+                    {
+                        check_function(
+                            f,
+                            ctx,
+                            Some(&self_type),
+                            &struct_name_refs,
+                            &enum_name_refs,
+                        );
                     }
                 }
             }
@@ -86,21 +106,21 @@ fn check_function(
         return;
     }
 
+    let mut ce = CheckEnv {
+        env,
+        loop_depth: 0,
+        return_type: declared_return.clone(),
+        struct_names,
+        enum_names,
+    };
+
     let check_implicit_return = declared_return != Type::Unit && declared_return != Type::Unknown;
     let last_is_expr = matches!(f.body.last(), Some(Statement::Expr(_)));
 
-    // Check all statements except the last if we need to handle implicit return specially
     if check_implicit_return && last_is_expr {
-        check_body(
-            &f.body[..f.body.len() - 1],
-            ctx,
-            &mut env,
-            &declared_return,
-            struct_names,
-            enum_names,
-        );
+        check_body(&f.body[..f.body.len() - 1], ctx, &mut ce);
         if let Some(Statement::Expr(expr)) = f.body.last() {
-            let actual = infer_expr(expr, ctx, &mut env, struct_names, enum_names);
+            let actual = infer_expr(expr, ctx, &mut ce);
             if actual != Type::Unknown && actual != Type::Error && actual != declared_return {
                 ctx.error(
                     format!(
@@ -113,46 +133,25 @@ fn check_function(
             }
         }
     } else {
-        check_body(
-            &f.body,
-            ctx,
-            &mut env,
-            &declared_return,
-            struct_names,
-            enum_names,
-        );
+        check_body(&f.body, ctx, &mut ce);
     }
 }
 
-fn check_body(
-    stmts: &[Statement],
-    ctx: &mut TypeContext,
-    env: &mut HashMap<String, Type>,
-    return_type: &Type,
-    struct_names: &[&str],
-    enum_names: &[&str],
-) {
+fn check_body(stmts: &[Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) {
     for stmt in stmts {
-        check_statement(stmt, ctx, env, return_type, struct_names, enum_names);
+        check_statement(stmt, ctx, ce);
     }
 }
 
-fn check_statement(
-    stmt: &Statement,
-    ctx: &mut TypeContext,
-    env: &mut HashMap<String, Type>,
-    return_type: &Type,
-    struct_names: &[&str],
-    enum_names: &[&str],
-) {
+fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
     match stmt {
         Statement::Assignment { target, value, .. } => {
-            let value_type = infer_expr(value, ctx, env, struct_names, enum_names);
+            let value_type = infer_expr(value, ctx, ce);
             match target {
                 AssignTarget::LValue(lv) => {
                     if lv.segments.len() == 1 {
                         let name = &lv.segments[0];
-                        if let Some(existing) = env.get(name) {
+                        if let Some(existing) = ce.env.get(name) {
                             if *existing != Type::Unknown
                                 && *existing != Type::Error
                                 && value_type != Type::Unknown
@@ -170,7 +169,7 @@ fn check_statement(
                                 );
                             }
                         } else {
-                            env.insert(name.clone(), value_type);
+                            ce.env.insert(name.clone(), value_type);
                         }
                     }
                 }
@@ -178,7 +177,7 @@ fn check_statement(
             }
         }
         Statement::Break { span, .. } => {
-            if ctx.loop_depth == 0 {
+            if ce.loop_depth == 0 {
                 ctx.error("break outside of loop".to_string(), *span);
             }
         }
@@ -189,11 +188,11 @@ fn check_statement(
             ..
         } => {
             let target_name = &target.segments[0];
-            let target_type = env.get(target_name).cloned().unwrap_or_else(|| {
+            let target_type = ce.env.get(target_name).cloned().unwrap_or_else(|| {
                 ctx.error(format!("unknown variable `{}`", target_name), *span);
                 Type::Error
             });
-            let value_type = infer_expr(value, ctx, env, struct_names, enum_names);
+            let value_type = infer_expr(value, ctx, ce);
             if target_type != Type::Unknown
                 && target_type != Type::Error
                 && value_type != Type::Unknown
@@ -210,23 +209,23 @@ fn check_statement(
             }
         }
         Statement::Expr(expr) => {
-            infer_expr(expr, ctx, env, struct_names, enum_names);
+            infer_expr(expr, ctx, ce);
         }
         Statement::Return { value, span } => {
             let actual = value
                 .as_ref()
-                .map(|v| infer_expr(v, ctx, env, struct_names, enum_names))
+                .map(|v| infer_expr(v, ctx, ce))
                 .unwrap_or(Type::Unit);
-            if *return_type != Type::Unknown
-                && *return_type != Type::Error
+            if ce.return_type != Type::Unknown
+                && ce.return_type != Type::Error
                 && actual != Type::Unknown
                 && actual != Type::Error
-                && *return_type != actual
+                && ce.return_type != actual
             {
                 ctx.error(
                     format!(
                         "return type mismatch: expected `{}`, found `{}`",
-                        return_type.display(),
+                        ce.return_type.display(),
                         actual.display()
                     ),
                     *span,
@@ -236,16 +235,10 @@ fn check_statement(
     }
 }
 
-fn infer_expr(
-    expr: &Expr,
-    ctx: &mut TypeContext,
-    env: &mut HashMap<String, Type>,
-    struct_names: &[&str],
-    enum_names: &[&str],
-) -> Type {
+fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
     match expr {
         Expr::Await { expr: inner, .. } => {
-            infer_expr(inner, ctx, env, struct_names, enum_names);
+            infer_expr(inner, ctx, ce);
             Type::Unknown
         }
 
@@ -256,8 +249,8 @@ fn infer_expr(
             span,
             ..
         } => {
-            let left_ty = infer_expr(left, ctx, env, struct_names, enum_names);
-            let right_ty = infer_expr(right, ctx, env, struct_names, enum_names);
+            let left_ty = infer_expr(left, ctx, ce);
+            let right_ty = infer_expr(right, ctx, ce);
 
             match op {
                 BinOp::Add | BinOp::Div | BinOp::Mod | BinOp::Mul | BinOp::Sub => {
@@ -344,7 +337,7 @@ fn infer_expr(
                         );
                     } else {
                         for (i, arg) in args.iter().enumerate() {
-                            let arg_ty = infer_expr(&arg.value, ctx, env, struct_names, enum_names);
+                            let arg_ty = infer_expr(&arg.value, ctx, ce);
                             let (param_name, param_ty) = &param_types[i];
                             if *param_ty != Type::Unknown
                                 && *param_ty != Type::Error
@@ -367,44 +360,30 @@ fn infer_expr(
                     return_type
                 } else {
                     for arg in args {
-                        infer_expr(&arg.value, ctx, env, struct_names, enum_names);
+                        infer_expr(&arg.value, ctx, ce);
                     }
                     Type::Unknown
                 }
             } else {
-                infer_expr(callee, ctx, env, struct_names, enum_names);
+                infer_expr(callee, ctx, ce);
                 for arg in args {
-                    infer_expr(&arg.value, ctx, env, struct_names, enum_names);
+                    infer_expr(&arg.value, ctx, ce);
                 }
                 Type::Unknown
             }
         }
 
         Expr::Closure { body, .. } => {
-            let mut closure_env = env.clone();
-            check_body(
-                body,
-                ctx,
-                &mut closure_env,
-                &Type::Unknown,
-                struct_names,
-                enum_names,
-            );
+            let mut child = ce.child(Type::Unknown);
+            check_body(body, ctx, &mut child);
             Type::Unknown
         }
 
         Expr::Cond { arms, .. } => {
             for arm in arms {
-                infer_expr(&arm.condition, ctx, env, struct_names, enum_names);
-                let mut arm_env = env.clone();
-                check_body(
-                    &arm.body,
-                    ctx,
-                    &mut arm_env,
-                    &Type::Unknown,
-                    struct_names,
-                    enum_names,
-                );
+                infer_expr(&arm.condition, ctx, ce);
+                let mut child = ce.child(Type::Unknown);
+                check_body(&arm.body, ctx, &mut child);
             }
             Type::Unknown
         }
@@ -435,8 +414,7 @@ fn infer_expr(
                                 );
                             } else {
                                 for (i, arg_expr) in args.iter().enumerate() {
-                                    let arg_ty =
-                                        infer_expr(arg_expr, ctx, env, struct_names, enum_names);
+                                    let arg_ty = infer_expr(arg_expr, ctx, ce);
                                     let expected_ty = &expected[i];
                                     if *expected_ty != Type::Unknown
                                         && *expected_ty != Type::Error
@@ -462,8 +440,7 @@ fn infer_expr(
                             VariantData::Struct(expected_fields),
                         ) => {
                             for fi in fields {
-                                let value_ty =
-                                    infer_expr(&fi.value, ctx, env, struct_names, enum_names);
+                                let value_ty = infer_expr(&fi.value, ctx, ce);
                                 if let Some((_, field_ty)) =
                                     expected_fields.iter().find(|(n, _)| *n == fi.name)
                                 {
@@ -502,7 +479,7 @@ fn infer_expr(
                         }
                         (EnumConstructionData::Tuple(args), _) => {
                             for a in args {
-                                infer_expr(a, ctx, env, struct_names, enum_names);
+                                infer_expr(a, ctx, ce);
                             }
                             ctx.error(
                                 format!(
@@ -514,7 +491,7 @@ fn infer_expr(
                         }
                         (EnumConstructionData::Struct(fields), _) => {
                             for fi in fields {
-                                infer_expr(&fi.value, ctx, env, struct_names, enum_names);
+                                infer_expr(&fi.value, ctx, ce);
                             }
                             ctx.error(
                                 format!(
@@ -537,17 +514,17 @@ fn infer_expr(
                 match data {
                     EnumConstructionData::Tuple(args) => {
                         for a in args {
-                            infer_expr(a, ctx, env, struct_names, enum_names);
+                            infer_expr(a, ctx, ce);
                         }
                     }
                     EnumConstructionData::Struct(fields) => {
                         for fi in fields {
-                            infer_expr(&fi.value, ctx, env, struct_names, enum_names);
+                            infer_expr(&fi.value, ctx, ce);
                         }
                     }
                     EnumConstructionData::Unit => {}
                 }
-                if enum_names.contains(&enum_name.as_str()) {
+                if ce.enum_names.contains(&enum_name.as_str()) {
                     Type::Enum(enum_name)
                 } else {
                     Type::Unknown
@@ -560,7 +537,7 @@ fn infer_expr(
             field,
             span,
         } => {
-            let recv_ty = infer_expr(receiver, ctx, env, struct_names, enum_names);
+            let recv_ty = infer_expr(receiver, ctx, ce);
             match &recv_ty {
                 Type::Struct(name) => {
                     if let Some(struct_info) = ctx.structs.get(name) {
@@ -588,25 +565,17 @@ fn infer_expr(
         }
 
         Expr::For { iterable, body, .. } => {
-            infer_expr(iterable, ctx, env, struct_names, enum_names);
-            let mut loop_env = env.clone();
-            ctx.loop_depth += 1;
-            check_body(
-                body,
-                ctx,
-                &mut loop_env,
-                &Type::Unknown,
-                struct_names,
-                enum_names,
-            );
-            ctx.loop_depth -= 1;
+            infer_expr(iterable, ctx, ce);
+            let mut child = ce.child(Type::Unknown);
+            child.loop_depth += 1;
+            check_body(body, ctx, &mut child);
             Type::Unit
         }
 
-        Expr::Group { expr: inner, .. } => infer_expr(inner, ctx, env, struct_names, enum_names),
+        Expr::Group { expr: inner, .. } => infer_expr(inner, ctx, ce),
 
         Expr::Ident { name, span } => {
-            if let Some(ty) = env.get(name) {
+            if let Some(ty) = ce.env.get(name) {
                 ty.clone()
             } else if ctx.functions.contains_key(name) {
                 Type::Unknown
@@ -622,39 +591,25 @@ fn infer_expr(
             else_body,
             ..
         } => {
-            let cond_ty = infer_expr(condition, ctx, env, struct_names, enum_names);
+            let cond_ty = infer_expr(condition, ctx, ce);
             check_type(
                 &cond_ty,
                 &Type::Primitive(Primitive::Bool),
                 expr_span(expr),
                 ctx,
             );
-            let mut then_env = env.clone();
-            check_body(
-                then_body,
-                ctx,
-                &mut then_env,
-                &Type::Unknown,
-                struct_names,
-                enum_names,
-            );
+            let mut then_ce = ce.child(Type::Unknown);
+            check_body(then_body, ctx, &mut then_ce);
             if let Some(else_stmts) = else_body {
-                let mut else_env = env.clone();
-                check_body(
-                    else_stmts,
-                    ctx,
-                    &mut else_env,
-                    &Type::Unknown,
-                    struct_names,
-                    enum_names,
-                );
+                let mut else_ce = ce.child(Type::Unknown);
+                check_body(else_stmts, ctx, &mut else_ce);
             }
             Type::Unknown
         }
 
         Expr::List { elements, .. } => {
             for e in elements {
-                infer_expr(e, ctx, env, struct_names, enum_names);
+                infer_expr(e, ctx, ce);
             }
             Type::Unknown
         }
@@ -668,37 +623,22 @@ fn infer_expr(
         },
 
         Expr::Loop { body, .. } => {
-            let mut loop_env = env.clone();
-            ctx.loop_depth += 1;
-            check_body(
-                body,
-                ctx,
-                &mut loop_env,
-                &Type::Unknown,
-                struct_names,
-                enum_names,
-            );
-            ctx.loop_depth -= 1;
+            let mut child = ce.child(Type::Unknown);
+            child.loop_depth += 1;
+            check_body(body, ctx, &mut child);
             Type::Unit
         }
 
         Expr::Match { subject, arms, .. } => {
-            let subject_type = infer_expr(subject, ctx, env, struct_names, enum_names);
+            let subject_type = infer_expr(subject, ctx, ce);
             for arm in arms {
-                let mut arm_env = env.clone();
-                check_pattern(&arm.pattern, &subject_type, ctx, &mut arm_env);
+                let mut arm_ce = ce.child(Type::Unknown);
+                check_pattern(&arm.pattern, &subject_type, ctx, &mut arm_ce.env);
                 if let Some(guard) = &arm.guard {
-                    let guard_ty = infer_expr(guard, ctx, &mut arm_env, struct_names, enum_names);
+                    let guard_ty = infer_expr(guard, ctx, &mut arm_ce);
                     check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);
                 }
-                check_body(
-                    &arm.body,
-                    ctx,
-                    &mut arm_env,
-                    &Type::Unknown,
-                    struct_names,
-                    enum_names,
-                );
+                check_body(&arm.body, ctx, &mut arm_ce);
             }
             Type::Unknown
         }
@@ -710,7 +650,7 @@ fn infer_expr(
             span,
             ..
         } => {
-            let recv_ty = infer_expr(receiver, ctx, env, struct_names, enum_names);
+            let recv_ty = infer_expr(receiver, ctx, ce);
 
             let method_sig = match &recv_ty {
                 Type::Struct(name) => ctx.structs.get(name).and_then(|si| si.methods.get(method)),
@@ -738,7 +678,7 @@ fn infer_expr(
                     );
                 } else {
                     for (i, arg) in args.iter().enumerate() {
-                        let arg_ty = infer_expr(&arg.value, ctx, env, struct_names, enum_names);
+                        let arg_ty = infer_expr(&arg.value, ctx, ce);
                         let (param_name, param_ty) = &param_types[i];
                         if *param_ty != Type::Unknown
                             && *param_ty != Type::Error
@@ -761,7 +701,7 @@ fn infer_expr(
                 return_type
             } else {
                 for arg in args {
-                    infer_expr(&arg.value, ctx, env, struct_names, enum_names);
+                    infer_expr(&arg.value, ctx, ce);
                 }
                 match &recv_ty {
                     Type::Struct(name) => {
@@ -781,12 +721,12 @@ fn infer_expr(
         }
 
         Expr::ShortClosure { body, .. } => {
-            infer_expr(body, ctx, env, struct_names, enum_names);
+            infer_expr(body, ctx, ce);
             Type::Unknown
         }
 
         Expr::Spawn { expr: inner, .. } => {
-            infer_expr(inner, ctx, env, struct_names, enum_names);
+            infer_expr(inner, ctx, ce);
             Type::Unknown
         }
 
@@ -801,7 +741,7 @@ fn infer_expr(
             if let Some(struct_info) = ctx.structs.get(&name) {
                 let struct_fields = struct_info.fields.clone();
                 for fi in fields {
-                    let value_ty = infer_expr(&fi.value, ctx, env, struct_names, enum_names);
+                    let value_ty = infer_expr(&fi.value, ctx, ce);
                     if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
                         if *field_ty != Type::Unknown
                             && *field_ty != Type::Error
@@ -829,9 +769,9 @@ fn infer_expr(
                 Type::Struct(name)
             } else {
                 for fi in fields {
-                    infer_expr(&fi.value, ctx, env, struct_names, enum_names);
+                    infer_expr(&fi.value, ctx, ce);
                 }
-                if struct_names.contains(&name.as_str()) {
+                if ce.struct_names.contains(&name.as_str()) {
                     Type::Struct(name)
                 } else {
                     ctx.error(format!("unknown struct `{}`", name), *span);
@@ -846,10 +786,10 @@ fn infer_expr(
             else_expr,
             span,
         } => {
-            let cond_ty = infer_expr(condition, ctx, env, struct_names, enum_names);
+            let cond_ty = infer_expr(condition, ctx, ce);
             check_type(&cond_ty, &Type::Primitive(Primitive::Bool), *span, ctx);
-            let then_ty = infer_expr(then_expr, ctx, env, struct_names, enum_names);
-            let else_ty = infer_expr(else_expr, ctx, env, struct_names, enum_names);
+            let then_ty = infer_expr(then_expr, ctx, ce);
+            let else_ty = infer_expr(else_expr, ctx, ce);
             if then_ty != Type::Unknown
                 && then_ty != Type::Error
                 && else_ty != Type::Unknown
@@ -873,20 +813,17 @@ fn infer_expr(
         }
 
         Expr::Try { expr: inner, .. } => {
-            infer_expr(inner, ctx, env, struct_names, enum_names);
+            infer_expr(inner, ctx, ce);
             Type::Unknown
         }
 
         Expr::Tuple { elements, .. } => {
-            let types: Vec<Type> = elements
-                .iter()
-                .map(|e| infer_expr(e, ctx, env, struct_names, enum_names))
-                .collect();
+            let types: Vec<Type> = elements.iter().map(|e| infer_expr(e, ctx, ce)).collect();
             Type::Tuple(types)
         }
 
         Expr::Unary { op, operand, span } => {
-            let operand_ty = infer_expr(operand, ctx, env, struct_names, enum_names);
+            let operand_ty = infer_expr(operand, ctx, ce);
             match op {
                 UnaryOp::Neg => {
                     if operand_ty != Type::Unknown
@@ -915,27 +852,20 @@ fn infer_expr(
         Expr::Unless {
             condition, body, ..
         } => {
-            let cond_ty = infer_expr(condition, ctx, env, struct_names, enum_names);
+            let cond_ty = infer_expr(condition, ctx, ce);
             check_type(
                 &cond_ty,
                 &Type::Primitive(Primitive::Bool),
                 expr_span(expr),
                 ctx,
             );
-            let mut branch_env = env.clone();
-            check_body(
-                body,
-                ctx,
-                &mut branch_env,
-                &Type::Unknown,
-                struct_names,
-                enum_names,
-            );
+            let mut child = ce.child(Type::Unknown);
+            check_body(body, ctx, &mut child);
             Type::Unknown
         }
 
         Expr::Self_ { span } => {
-            if let Some(ty) = env.get("self") {
+            if let Some(ty) = ce.env.get("self") {
                 ty.clone()
             } else {
                 ctx.error("`self` used outside of impl block".to_string(), *span);

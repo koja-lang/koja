@@ -426,11 +426,11 @@ fn compile_if<'ctx>(
         if c.current_block_terminated() {
             break;
         }
-        if i == then_body.len() - 1 {
-            if let expo_ast::ast::Statement::Expr(expr) = stmt {
-                then_val = compile_expr(c, expr, function)?;
-                continue;
-            }
+        if i == then_body.len() - 1
+            && let expo_ast::ast::Statement::Expr(expr) = stmt
+        {
+            then_val = compile_expr(c, expr, function)?;
+            continue;
         }
         crate::stmt::compile_statement(c, stmt, function)?;
     }
@@ -446,11 +446,11 @@ fn compile_if<'ctx>(
             if c.current_block_terminated() {
                 break;
             }
-            if i == else_stmts.len() - 1 {
-                if let expo_ast::ast::Statement::Expr(expr) = stmt {
-                    else_val = compile_expr(c, expr, function)?;
-                    continue;
-                }
+            if i == else_stmts.len() - 1
+                && let expo_ast::ast::Statement::Expr(expr) = stmt
+            {
+                else_val = compile_expr(c, expr, function)?;
+                continue;
             }
             crate::stmt::compile_statement(c, stmt, function)?;
         }
@@ -462,12 +462,12 @@ fn compile_if<'ctx>(
 
     c.builder.position_at_end(merge_bb);
 
-    if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
-        if tv.get_type() == ev.get_type() {
-            let phi = c.builder.build_phi(tv.get_type(), "ifval").unwrap();
-            phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
-            return Ok(Some(phi.as_basic_value()));
-        }
+    if let (Some(tv), Some(ev)) = (&then_val, &else_val)
+        && tv.get_type() == ev.get_type()
+    {
+        let phi = c.builder.build_phi(tv.get_type(), "ifval").unwrap();
+        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
+        return Ok(Some(phi.as_basic_value()));
     }
 
     Ok(None)
@@ -683,21 +683,20 @@ fn resolve_struct_name<'ctx>(
     receiver: &Expr,
     recv_val: &BasicValueEnum<'ctx>,
 ) -> Result<String, String> {
-    if let Expr::Ident { name, .. } = receiver {
-        if let Some((_, ty)) = c.variables.get(name) {
-            if let Type::Struct(n) = ty {
-                return Ok(n.clone());
-            }
-        }
+    if let Expr::Ident { name, .. } = receiver
+        && let Some((_, ty)) = c.variables.get(name)
+        && let Type::Struct(n) = ty
+    {
+        return Ok(n.clone());
     }
 
     if recv_val.is_struct_value() {
         let sv = recv_val.into_struct_value();
         let st = sv.get_type();
-        if let Some(n) = st.get_name() {
-            if let Ok(s) = n.to_str() {
-                return Ok(s.to_string());
-            }
+        if let Some(n) = st.get_name()
+            && let Ok(s) = n.to_str()
+        {
+            return Ok(s.to_string());
         }
     }
 

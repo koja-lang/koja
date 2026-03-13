@@ -97,28 +97,28 @@ pub fn collect(module: &Module) -> TypeContext {
                     _ => continue,
                 };
                 for member in &impl_block.members {
-                    if let ImplMember::Function(f) = member {
-                        if let Some(sig) = build_function_sig(f, &struct_names, &enum_names) {
-                            let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
-                                Some(&mut si.methods)
-                            } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
-                                Some(&mut ei.methods)
+                    if let ImplMember::Function(f) = member
+                        && let Some(sig) = build_function_sig(f, &struct_names, &enum_names)
+                    {
+                        let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
+                            Some(&mut si.methods)
+                        } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
+                            Some(&mut ei.methods)
+                        } else {
+                            None
+                        };
+                        if let Some(methods) = methods {
+                            if methods.contains_key(&f.name) {
+                                ctx.diagnostics.push(expo_ast::ast::Diagnostic {
+                                    message: format!(
+                                        "duplicate method `{}` in impl for `{}`",
+                                        f.name, target_name
+                                    ),
+                                    hint: None,
+                                    span: f.span,
+                                });
                             } else {
-                                None
-                            };
-                            if let Some(methods) = methods {
-                                if methods.contains_key(&f.name) {
-                                    ctx.diagnostics.push(expo_ast::ast::Diagnostic {
-                                        message: format!(
-                                            "duplicate method `{}` in impl for `{}`",
-                                            f.name, target_name
-                                        ),
-                                        hint: None,
-                                        span: f.span,
-                                    });
-                                } else {
-                                    methods.insert(f.name.clone(), sig);
-                                }
+                                methods.insert(f.name.clone(), sig);
                             }
                         }
                     }

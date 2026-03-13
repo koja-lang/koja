@@ -37,14 +37,3 @@ pub fn primitive_to_llvm<'ctx>(p: &Primitive, context: &'ctx Context) -> BasicTy
         Primitive::String => context.ptr_type(inkwell::AddressSpace::default()).into(),
     }
 }
-
-pub fn is_signed(p: &Primitive) -> bool {
-    matches!(
-        p,
-        Primitive::I8 | Primitive::I16 | Primitive::I32 | Primitive::I64
-    )
-}
-
-pub fn is_float(p: &Primitive) -> bool {
-    matches!(p, Primitive::F32 | Primitive::F64)
-}

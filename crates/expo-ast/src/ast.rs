@@ -139,6 +139,7 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Param {
     Self_ {
         span: Span,

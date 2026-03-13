@@ -116,11 +116,8 @@ impl Parser {
                     value,
                     span: self.span_from(field_start),
                 });
-                if self.eat(&TokenKind::Comma).is_none() {
-                    self.skip_newlines();
-                } else {
-                    self.skip_newlines();
-                }
+                self.eat(&TokenKind::Comma);
+                self.skip_newlines();
             }
             self.expect(&TokenKind::RBrace);
             Expr::StructConstruction {
@@ -192,11 +189,8 @@ impl Parser {
                     value,
                     span: self.span_from(field_start),
                 });
-                if self.eat(&TokenKind::Comma).is_none() {
-                    self.skip_newlines();
-                } else {
-                    self.skip_newlines();
-                }
+                self.eat(&TokenKind::Comma);
+                self.skip_newlines();
             }
             self.expect(&TokenKind::RBrace);
             Expr::EnumConstruction {

@@ -424,17 +424,17 @@ impl Parser {
     fn parse_arg(&mut self) -> Arg {
         let start = self.current_span();
 
-        if let TokenKind::Ident(name) = self.peek().clone() {
-            if matches!(self.peek_nth(1), TokenKind::Colon) {
-                self.advance(); // ident
-                self.advance(); // :
-                let value = self.parse_expr();
-                return Arg {
-                    name: Some(name),
-                    value,
-                    span: self.span_from(start),
-                };
-            }
+        if let TokenKind::Ident(name) = self.peek().clone()
+            && matches!(self.peek_nth(1), TokenKind::Colon)
+        {
+            self.advance(); // ident
+            self.advance(); // :
+            let value = self.parse_expr();
+            return Arg {
+                name: Some(name),
+                value,
+                span: self.span_from(start),
+            };
         }
 
         let value = self.parse_expr();

@@ -269,16 +269,17 @@ impl Lexer {
             self.advance();
         }
 
-        if !self.at_end() && self.peek() == '.' {
-            if self.peek_next().is_some_and(|c| c.is_ascii_digit()) {
+        if !self.at_end()
+            && self.peek() == '.'
+            && self.peek_next().is_some_and(|c| c.is_ascii_digit())
+        {
+            self.advance();
+            while !self.at_end() && self.is_number_char(self.peek()) {
                 self.advance();
-                while !self.at_end() && self.is_number_char(self.peek()) {
-                    self.advance();
-                }
-                let name: String = self.chars[start_pos..self.pos].iter().collect();
-                self.emit(TokenKind::FloatLit(name), start);
-                return;
             }
+            let name: String = self.chars[start_pos..self.pos].iter().collect();
+            self.emit(TokenKind::FloatLit(name), start);
+            return;
         }
 
         let name: String = self.chars[start_pos..self.pos].iter().collect();

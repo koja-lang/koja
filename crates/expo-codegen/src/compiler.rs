@@ -111,16 +111,14 @@ impl<'ctx> Compiler<'ctx> {
         let return_type = self.resolve_return_type(&func.return_type);
         let mut param_types = Vec::new();
 
-        if let Some(name) = self_type_name {
-            if func
+        if let Some(name) = self_type_name
+            && func
                 .params
                 .first()
-                .map_or(false, |p| matches!(p, Param::Self_ { .. }))
-            {
-                if let Some(st) = self.struct_types.get(name) {
-                    param_types.push((*st).into());
-                }
-            }
+                .is_some_and(|p| matches!(p, Param::Self_ { .. }))
+            && let Some(st) = self.struct_types.get(name)
+        {
+            param_types.push((*st).into());
         }
 
         param_types.extend(self.resolve_param_types(&func.params)?);
@@ -165,10 +163,10 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn type_name_from_expr(&self, te: &TypeExpr) -> Option<String> {
-        if let TypeExpr::Named { path, .. } = te {
-            if path.len() == 1 {
-                return Some(path[0].clone());
-            }
+        if let TypeExpr::Named { path, .. } = te
+            && path.len() == 1
+        {
+            return Some(path[0].clone());
         }
         None
     }
@@ -195,20 +193,19 @@ impl<'ctx> Compiler<'ctx> {
 
         let mut llvm_param_idx: u32 = 0;
 
-        if let Some(type_name) = self_type_name {
-            if func
+        if let Some(type_name) = self_type_name
+            && func
                 .params
                 .first()
-                .map_or(false, |p| matches!(p, Param::Self_ { .. }))
-            {
-                let self_ty = Type::Struct(type_name.to_string());
-                if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
-                    let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
-                    let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
-                    self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables.insert("self".to_string(), (alloca, self_ty));
-                    llvm_param_idx += 1;
-                }
+                .is_some_and(|p| matches!(p, Param::Self_ { .. }))
+        {
+            let self_ty = Type::Struct(type_name.to_string());
+            if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
+                let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
+                let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
+                self.builder.build_store(alloca, param_val).unwrap();
+                self.variables.insert("self".to_string(), (alloca, self_ty));
+                llvm_param_idx += 1;
             }
         }
 
@@ -238,18 +235,19 @@ impl<'ctx> Compiler<'ctx> {
                 break;
             }
 
-            if is_last && return_type != Type::Unit {
-                if let expo_ast::ast::Statement::Expr(expr) = stmt {
-                    let val = compile_expr(self, expr, fn_value)?;
-                    if !self.current_block_terminated() {
-                        if let Some(v) = val {
-                            self.builder.build_return(Some(&v)).unwrap();
-                        } else {
-                            self.builder.build_return(None).unwrap();
-                        }
+            if is_last
+                && return_type != Type::Unit
+                && let expo_ast::ast::Statement::Expr(expr) = stmt
+            {
+                let val = compile_expr(self, expr, fn_value)?;
+                if !self.current_block_terminated() {
+                    if let Some(v) = val {
+                        self.builder.build_return(Some(&v)).unwrap();
+                    } else {
+                        self.builder.build_return(None).unwrap();
                     }
-                    continue;
                 }
+                continue;
             }
 
             compile_statement(self, stmt, fn_value)?;
@@ -259,8 +257,6 @@ impl<'ctx> Compiler<'ctx> {
             if func.name == "main" && self_type_name.is_none() {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
-            } else if return_type == Type::Unit {
-                self.builder.build_return(None).unwrap();
             } else {
                 self.builder.build_return(None).unwrap();
             }

@@ -212,12 +212,11 @@ fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) ->
     } else if val.is_struct_value() {
         let sv = val.into_struct_value();
         let st = sv.get_type();
-        if let Some(name) = st.get_name() {
-            if let Ok(name_str) = name.to_str() {
-                if c.type_ctx.structs.contains_key(name_str) {
-                    return Type::Struct(name_str.to_string());
-                }
-            }
+        if let Some(name) = st.get_name()
+            && let Ok(name_str) = name.to_str()
+            && c.type_ctx.structs.contains_key(name_str)
+        {
+            return Type::Struct(name_str.to_string());
         }
         Type::Unknown
     } else {
