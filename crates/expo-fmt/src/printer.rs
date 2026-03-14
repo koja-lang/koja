@@ -385,7 +385,12 @@ impl<'a> Printer<'a> {
     // =====================================================================
 
     fn constant_to_doc(&mut self, c: &Constant) -> Doc {
-        concat(vec![text(&c.name), text(" = "), self.expr_to_doc(&c.value)])
+        concat(vec![
+            text("const "),
+            text(&c.name),
+            text(" = "),
+            self.expr_to_doc(&c.value),
+        ])
     }
 
     // =====================================================================

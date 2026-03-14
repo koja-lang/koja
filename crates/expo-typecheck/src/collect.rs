@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use expo_ast::ast::{EnumVariantData, ImplMember, ImportTarget, Item, Module, Param, TypeExpr};
+use expo_ast::ast::{
+    EnumVariantData, Expr, ImplMember, ImportTarget, Item, Literal, Module, Param, TypeExpr,
+};
 use expo_ast::span::Span;
 
 use crate::context::{
@@ -124,6 +126,49 @@ pub fn collect(module: &Module) -> TypeContext {
                             }
                         }
                     }
+                }
+            }
+            Item::Constant(c) => {
+                let ty = match &c.value {
+                    Expr::Literal {
+                        value: Literal::Bool(_),
+                        ..
+                    } => Type::Primitive(crate::types::Primitive::Bool),
+                    Expr::Literal {
+                        value: Literal::Int(_),
+                        ..
+                    } => Type::Primitive(crate::types::Primitive::I32),
+                    Expr::Literal {
+                        value: Literal::Float(_),
+                        ..
+                    } => Type::Primitive(crate::types::Primitive::F64),
+                    Expr::String { .. } => Type::Primitive(crate::types::Primitive::String),
+                    _ => {
+                        ctx.error(
+                            format!(
+                                "constant `{}` must be a literal value (int, float, string, or bool)",
+                                c.name
+                            ),
+                            c.span,
+                        );
+                        Type::Error
+                    }
+                };
+                if ctx.constants.contains_key(&c.name) {
+                    ctx.error(format!("duplicate constant `{}`", c.name), c.span);
+                } else if ctx.functions.contains_key(&c.name)
+                    || ctx.structs.contains_key(&c.name)
+                    || ctx.enums.contains_key(&c.name)
+                {
+                    ctx.error(
+                        format!(
+                            "constant `{}` conflicts with an existing declaration",
+                            c.name
+                        ),
+                        c.span,
+                    );
+                } else {
+                    ctx.constants.insert(c.name.clone(), ty);
                 }
             }
             Item::Struct(s) => {

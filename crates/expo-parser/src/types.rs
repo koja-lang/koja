@@ -8,7 +8,7 @@ impl Parser {
         match self.peek().clone() {
             TokenKind::Ref => self.parse_ref_type(),
             TokenKind::LParen => self.parse_paren_type(),
-            TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_) => self.parse_named_type(),
+            TokenKind::TypeIdent(_) => self.parse_named_type(),
             TokenKind::Ident(ref name) if is_primitive(name) => self.parse_primitive_type(),
             TokenKind::Ident(_) if self.is_module_type_path() => self.parse_module_qualified_type(),
             _ => {
@@ -79,10 +79,7 @@ impl Parser {
         let mut path = vec![first];
 
         while self.eat(&TokenKind::Dot).is_some() {
-            if matches!(
-                self.peek(),
-                TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-            ) {
+            if matches!(self.peek(), TokenKind::TypeIdent(_)) {
                 path.push(self.expect_type_ident());
             } else {
                 break;
@@ -107,16 +104,10 @@ impl Parser {
             }
         }
 
-        if matches!(
-            self.peek(),
-            TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-        ) {
+        if matches!(self.peek(), TokenKind::TypeIdent(_)) {
             path.push(self.expect_type_ident());
             while self.eat(&TokenKind::Dot).is_some() {
-                if matches!(
-                    self.peek(),
-                    TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-                ) {
+                if matches!(self.peek(), TokenKind::TypeIdent(_)) {
                     path.push(self.expect_type_ident());
                 } else {
                     break;

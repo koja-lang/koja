@@ -1,0 +1,17 @@
+const MAX_SIZE = 100
+const PI = 3.14159
+const GREETING = "hello"
+const DEBUG = false
+
+fn circumference(radius: f64) -> f64
+  2.0 * PI * radius
+end
+
+fn main
+  print("Max size: #{MAX_SIZE}")
+  print("Circumference: #{circumference(5.0)}")
+
+  if DEBUG
+    print("debug mode enabled")
+  end
+end

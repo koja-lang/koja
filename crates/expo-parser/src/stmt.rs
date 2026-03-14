@@ -9,6 +9,16 @@ impl Parser {
         match self.peek() {
             TokenKind::Return => self.parse_return(),
             TokenKind::Break => self.parse_break(),
+            TokenKind::Const => {
+                let span = self.current_span();
+                self.error_with_hint(
+                    "constants must be declared at the module level".to_string(),
+                    "move this `const` outside of the function body".into(),
+                    span,
+                );
+                self.advance();
+                self.parse_expr_or_assign()
+            }
             _ => self.parse_expr_or_assign(),
         }
     }

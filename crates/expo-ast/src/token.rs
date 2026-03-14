@@ -13,7 +13,6 @@ pub enum TokenKind {
     // Identifiers
     Ident(String),
     TypeIdent(String),
-    ConstIdent(String),
 
     // Literals
     IntLit(String),
@@ -35,6 +34,7 @@ pub enum TokenKind {
     Await,
     Break,
     Cond,
+    Const,
     Else,
     End,
     Enum,
@@ -111,6 +111,7 @@ impl TokenKind {
                 | TokenKind::Await
                 | TokenKind::Break
                 | TokenKind::Cond
+                | TokenKind::Const
                 | TokenKind::Else
                 | TokenKind::End
                 | TokenKind::Enum

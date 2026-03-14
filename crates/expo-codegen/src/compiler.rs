@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use expo_ast::ast::{Diagnostic, Function, ImplMember, Item, Module, Param, Severity, TypeExpr};
+use expo_ast::ast::{
+    Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, TypeExpr,
+};
 use expo_typecheck::context::{TypeContext, VariantData};
 use expo_typecheck::types::Type;
 use inkwell::OptimizationLevel;
@@ -13,7 +15,7 @@ use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, StructType};
-use inkwell::values::{FunctionValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
@@ -25,6 +27,7 @@ pub struct Compiler<'ctx> {
     pub context: &'ctx Context,
     pub module: LlvmModule<'ctx>,
     pub builder: Builder<'ctx>,
+    pub constants: HashMap<String, BasicValueEnum<'ctx>>,
     pub functions: HashMap<String, FunctionValue<'ctx>>,
     pub variables: HashMap<String, (PointerValue<'ctx>, Type)>,
     pub struct_types: HashMap<String, StructType<'ctx>>,
@@ -44,6 +47,7 @@ impl<'ctx> Compiler<'ctx> {
             context,
             module,
             builder,
+            constants: HashMap::new(),
             functions: HashMap::new(),
             variables: HashMap::new(),
             struct_types: HashMap::new(),
@@ -199,6 +203,53 @@ impl<'ctx> Compiler<'ctx> {
         };
 
         Ok(self.module.add_function(&mangled, fn_type, None))
+    }
+
+    fn declare_constants(&mut self, module: &Module) -> Result<(), String> {
+        for item in &module.items {
+            if let Item::Constant(c) = item {
+                let val: BasicValueEnum = match &c.value {
+                    Expr::Literal {
+                        value: Literal::Int(s),
+                        ..
+                    } => {
+                        let v = crate::util::parse_int_literal(s)?;
+                        self.context.i32_type().const_int(v as u64, true).into()
+                    }
+                    Expr::Literal {
+                        value: Literal::Float(s),
+                        ..
+                    } => {
+                        let v: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
+                        self.context.f64_type().const_float(v).into()
+                    }
+                    Expr::Literal {
+                        value: Literal::Bool(b),
+                        ..
+                    } => self
+                        .context
+                        .bool_type()
+                        .const_int(if *b { 1 } else { 0 }, false)
+                        .into(),
+                    Expr::String { parts, .. } => {
+                        let mut combined = String::new();
+                        for part in parts {
+                            if let expo_ast::ast::StringPart::Literal { value, .. } = part {
+                                combined.push_str(value);
+                            }
+                        }
+                        self.builder
+                            .build_global_string_ptr(&combined, &c.name)
+                            .unwrap()
+                            .as_pointer_value()
+                            .into()
+                    }
+                    _ => continue,
+                };
+                self.constants.insert(c.name.clone(), val);
+            }
+        }
+        Ok(())
     }
 
     fn declare_functions(&mut self, module: &Module) -> Result<(), String> {
@@ -494,6 +545,17 @@ pub fn compile_modules(
 
     compiler.register_types();
     compiler.declare_builtins();
+
+    for module in modules {
+        compiler.declare_constants(module).map_err(|e| {
+            vec![Diagnostic {
+                severity: Severity::Error,
+                message: e,
+                hint: None,
+                span: module.span,
+            }]
+        })?;
+    }
 
     for module in modules {
         compiler.declare_functions(module).map_err(|e| {

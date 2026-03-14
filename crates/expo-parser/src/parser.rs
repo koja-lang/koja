@@ -106,11 +106,10 @@ impl Parser {
         }
     }
 
-    /// Accept both TypeIdent and ConstIdent (single-letter type params like T
-    /// are lexed as ConstIdent).
+    /// Accept a TypeIdent token and return its name.
     pub(crate) fn expect_type_ident(&mut self) -> String {
         match self.peek().clone() {
-            TokenKind::TypeIdent(name) | TokenKind::ConstIdent(name) => {
+            TokenKind::TypeIdent(name) => {
                 self.advance();
                 name
             }
@@ -289,7 +288,7 @@ impl Parser {
                         self.advance();
                         Some(self.parse_function_item(Some(annotation), true))
                     }
-                    TokenKind::ConstIdent(_) => Some(self.parse_constant_item()),
+                    TokenKind::Const => Some(self.parse_constant_item()),
                     _ => {
                         let span = self.current_span();
                         self.error(
@@ -301,7 +300,7 @@ impl Parser {
                 }
             }
             TokenKind::Shared => Some(self.parse_shared_item()),
-            TokenKind::ConstIdent(_) => Some(self.parse_constant_item()),
+            TokenKind::Const => Some(self.parse_constant_item()),
             _ => {
                 let span = self.current_span();
                 self.error(

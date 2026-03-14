@@ -405,7 +405,7 @@ comment = "#" , { any_char_except_newline } ;
 (* 17. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
-constant_decl = CONST_IDENT , "=" , expr ;
+constant_decl = "const" , IDENT , "=" , expr ;
 
 shared_decl = "shared" , IDENT , ":" , type_expr ;
 
@@ -416,7 +416,6 @@ shared_decl = "shared" , IDENT , ":" , type_expr ;
 
 IDENT       = LOWER , { LOWER | UPPER | DIGIT | "_" | "?" } ;
 TYPE_IDENT  = UPPER , { LOWER | UPPER | DIGIT } ;
-CONST_IDENT = UPPER , { UPPER | DIGIT | "_" } ;
 
 LOWER     = "a" | ... | "z" ;
 UPPER     = "A" | ... | "Z" ;
@@ -429,6 +428,6 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* and, arena, await, break, cond, else, end, enum, false, fn, for, if,       *)
-(* impl, import, in, loop, match, move, none, not, or, priv, receive, ref,    *)
-(* return, self, shared, spawn, struct, true, type, unless, when               *)
+(* and, arena, await, break, cond, const, else, end, enum, false, fn, for,    *)
+(* if, impl, import, in, loop, match, move, none, not, or, priv, receive,     *)
+(* ref, return, self, shared, spawn, struct, true, type, unless, when          *)

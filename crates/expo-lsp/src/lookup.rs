@@ -4,11 +4,12 @@ use expo_typecheck::context::TypeContext;
 
 #[derive(Debug)]
 pub enum SymbolInfo {
-    Function { name: String },
-    Struct { name: String },
+    Constant { name: String },
     Enum { name: String },
+    Function { name: String },
     Module { path: Vec<String> },
     ModuleFunction { module: String, name: String },
+    Struct { name: String },
     Variable { name: String },
 }
 
@@ -382,6 +383,10 @@ fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo> {
         })
     } else if ctx.enums.contains_key(name) {
         Some(SymbolInfo::Enum {
+            name: name.to_string(),
+        })
+    } else if ctx.constants.contains_key(name) {
+        Some(SymbolInfo::Constant {
             name: name.to_string(),
         })
     } else if ctx.imported_modules.contains_key(name) {

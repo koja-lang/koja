@@ -217,6 +217,7 @@ impl Lexer {
             "await" => TokenKind::Await,
             "break" => TokenKind::Break,
             "cond" => TokenKind::Cond,
+            "const" => TokenKind::Const,
             "else" => TokenKind::Else,
             "end" => TokenKind::End,
             "enum" => TokenKind::Enum,
@@ -253,29 +254,17 @@ impl Lexer {
     fn lex_upper_ident(&mut self) {
         let start = self.position();
         let start_pos = self.pos;
-        let mut is_const = true;
 
         while !self.at_end() {
             let c = self.peek();
             if !self.is_ident_char(c) {
                 break;
             }
-
-            is_const = is_const && self.is_upper_ident_char(c);
             self.advance();
         }
 
         let name: String = self.chars[start_pos..self.pos].iter().collect();
-        let kind = if is_const {
-            TokenKind::ConstIdent(name)
-        } else {
-            TokenKind::TypeIdent(name)
-        };
-        self.emit(kind, start);
-    }
-
-    fn is_upper_ident_char(&self, c: char) -> bool {
-        c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'
+        self.emit(TokenKind::TypeIdent(name), start);
     }
 
     fn lex_number(&mut self) {

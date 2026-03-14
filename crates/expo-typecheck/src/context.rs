@@ -7,6 +7,7 @@ use crate::types::Type;
 
 /// Holds all type information gathered during collection and checking for a single module.
 pub struct TypeContext {
+    pub constants: HashMap<String, Type>,
     pub diagnostics: Vec<Diagnostic>,
     pub enums: HashMap<String, EnumInfo>,
     pub functions: HashMap<String, FunctionSig>,
@@ -94,6 +95,7 @@ impl TypeContext {
     /// Creates an empty context with no registered types or diagnostics.
     pub fn new() -> Self {
         Self {
+            constants: HashMap::new(),
             diagnostics: Vec::new(),
             enums: HashMap::new(),
             functions: HashMap::new(),

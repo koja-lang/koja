@@ -17,22 +17,13 @@ impl Parser {
                 let start = self.current_span();
                 self.advance();
                 // Check for module-qualified enum pattern: module.Type.Variant
-                if self.at(&TokenKind::Dot)
-                    && matches!(
-                        self.peek_nth(1),
-                        TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-                    )
-                {
+                if self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
                     let mut type_path = vec![name];
                     self.advance(); // .
                     let next = self.expect_type_ident();
                     type_path.push(next);
-                    // Continue consuming .TypeIdent segments
                     while self.at(&TokenKind::Dot)
-                        && matches!(
-                            self.peek_nth(1),
-                            TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-                        )
+                        && matches!(self.peek_nth(1), TokenKind::TypeIdent(_))
                     {
                         self.advance(); // .
                         type_path.push(self.expect_type_ident());
@@ -99,7 +90,7 @@ impl Parser {
                     span: self.span_from(start),
                 }
             }
-            TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_) => self.parse_type_pattern(),
+            TokenKind::TypeIdent(_) => self.parse_type_pattern(),
             TokenKind::LParen => self.parse_tuple_pattern(),
             TokenKind::LBracket => self.parse_list_pattern(),
             TokenKind::Minus => {
@@ -147,19 +138,9 @@ impl Parser {
         let first = self.expect_type_ident();
 
         // Collect dotted segments: Type.Sub.Variant
-        if self.at(&TokenKind::Dot)
-            && matches!(
-                self.peek_nth(1),
-                TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-            )
-        {
+        if self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
             let mut segments = vec![first];
-            while self.at(&TokenKind::Dot)
-                && matches!(
-                    self.peek_nth(1),
-                    TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-                )
-            {
+            while self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
                 self.advance(); // .
                 segments.push(self.expect_type_ident());
             }

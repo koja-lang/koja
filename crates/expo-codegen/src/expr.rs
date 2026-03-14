@@ -29,6 +29,8 @@ pub fn compile_expr<'ctx>(
                     .ok_or_else(|| format!("cannot load variable of unsupported type: {name}"))?;
                 let val = c.builder.build_load(llvm_ty, *ptr, name).unwrap();
                 Ok(Some(val))
+            } else if let Some(val) = c.constants.get(name) {
+                Ok(Some(*val))
             } else {
                 Err(format!("undefined variable: {name}"))
             }

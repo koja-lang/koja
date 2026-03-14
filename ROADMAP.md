@@ -25,7 +25,7 @@ Six commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo lex`,
 
 ### What compiles to native binaries today
 
-Multi-module programs with imports (including qualified calls like `math.add()`). Functions (`fn`/`priv fn`), structs, enums, impl blocks, methods (`self`), if/else, while, loop, break, return, match, cond, ternary, pipe (`|>`), compound assignment (`+=`, `-=`, `*=`, `/=`), string interpolation, closures (non-capturing, inline and block forms), `print` builtin, i32/i64/f32/f64/bool/String primitives.
+Multi-module programs with imports (including qualified calls like `math.add()`). Functions (`fn`/`priv fn`), constants (`const`), structs, enums, impl blocks, methods (`self`), if/else, while, loop, break, return, match, cond, ternary, pipe (`|>`), compound assignment (`+=`, `-=`, `*=`, `/=`), string interpolation, closures (non-capturing, inline and block forms), `print` builtin, i32/i64/f32/f64/bool/String primitives.
 
 ### Parsed and type-checked but NOT yet in codegen
 
@@ -36,6 +36,7 @@ For, arena, await/receive/spawn, try (`?`), generics, `ref<T>`, lists.
 - **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. After generics land, `Pair<A, B>` (with `.first` / `.second`) will be available in the stdlib for lightweight two-value cases. 3+ values should always be a struct.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
 - **Closures (Phase 1)**: Block closures only with explicit types and parens: `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax. Inline closures (`x -> expr`) are parsed but not compiled -- they land in Phase 2 with type inference and generics.
+- **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 
 ### Known gaps
 

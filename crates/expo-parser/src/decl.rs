@@ -60,9 +60,7 @@ impl Parser {
                     let mut names = Vec::new();
                     loop {
                         match self.peek().clone() {
-                            TokenKind::Ident(name)
-                            | TokenKind::TypeIdent(name)
-                            | TokenKind::ConstIdent(name) => {
+                            TokenKind::Ident(name) | TokenKind::TypeIdent(name) => {
                                 self.advance();
                                 names.push(name);
                             }
@@ -510,12 +508,21 @@ impl Parser {
 
     pub(crate) fn parse_constant_item(&mut self) -> Item {
         let start = self.current_span();
+        self.expect(&TokenKind::Const);
         let name = match self.peek().clone() {
-            TokenKind::ConstIdent(name) => {
+            TokenKind::Ident(name) | TokenKind::TypeIdent(name) => {
                 self.advance();
                 name
             }
-            _ => unreachable!(),
+            _ => {
+                let span = self.current_span();
+                self.error(
+                    format!("expected constant name, found {:?}", self.peek()),
+                    span,
+                );
+                self.advance();
+                String::from("<error>")
+            }
         };
         self.expect(&TokenKind::Eq);
         let value = self.parse_expr();

@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LSP: nested module path resolution (`import what.util` correctly resolves to `what/util.expo`).
 - LSP: closure body traversal for hover and go-to-definition inside closures.
 - Vim/VSCode syntax highlighting for module names in imports and qualified calls.
+- `const` keyword for module-level constants (`const MAX_SIZE = 100`). Constants are compile-time inlined literal values (int, float, string, bool). Replaces the previous `SCREAMING_SNAKE` naming convention with an explicit keyword. Fully wired through type checker and codegen.
 
-### Changed
+### Removed
 
 - Tuples removed from the language. `(a, b)` is now grouping only; use a struct for multiple values. `Pair<A, B>` will be available in stdlib after generics land.
 

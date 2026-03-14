@@ -120,7 +120,7 @@ impl Parser {
                                 }
                                 continue;
                             }
-                            TokenKind::TypeIdent(variant) | TokenKind::ConstIdent(variant) => {
+                            TokenKind::TypeIdent(variant) => {
                                 self.advance();
                                 let type_path = self.extract_type_path(&lhs);
                                 lhs = self.parse_enum_construction_tail(
@@ -334,7 +334,7 @@ impl Parser {
                 }
             }
 
-            TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_) => self.parse_type_construction(),
+            TokenKind::TypeIdent(_) => self.parse_type_construction(),
 
             TokenKind::Self_ => {
                 let start = self.current_span();

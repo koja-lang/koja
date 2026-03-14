@@ -8,7 +8,7 @@ endif
 
 " --- Keywords ---------------------------------------------------------------
 
-syn keyword expoKeyword     fn priv end move spawn await return break
+syn keyword expoKeyword     const fn priv end move spawn await return break
 syn keyword expoKeyword     impl for type shared import in
 syn keyword expoConditional if else unless match cond when
 syn keyword expoRepeat      for loop while

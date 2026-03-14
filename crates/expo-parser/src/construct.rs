@@ -85,10 +85,7 @@ impl Parser {
         let mut path = vec![first];
 
         while self.at(&TokenKind::Dot) {
-            if matches!(
-                self.peek_nth(1),
-                TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-            ) {
+            if matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
                 self.advance(); // .
                 let seg = self.expect_type_ident();
 
@@ -97,10 +94,7 @@ impl Parser {
                     || self.at(&TokenKind::Dot)
                 {
                     if self.at(&TokenKind::Dot)
-                        && matches!(
-                            self.peek_nth(1),
-                            TokenKind::TypeIdent(_) | TokenKind::ConstIdent(_)
-                        )
+                        && matches!(self.peek_nth(1), TokenKind::TypeIdent(_))
                     {
                         path.push(seg);
                         continue;

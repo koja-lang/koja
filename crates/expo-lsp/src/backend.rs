@@ -257,6 +257,14 @@ impl LanguageServer for Backend {
                     return Ok(None);
                 }
             }
+            SymbolInfo::Constant { name } => {
+                if let Some(ty) = state.ctx.constants.get(name) {
+                    let signature = format!("const {}: {}", name, ty.display());
+                    format_hover(&signature, None)
+                } else {
+                    return Ok(None);
+                }
+            }
             SymbolInfo::Enum { name } => {
                 if let Some(info) = state.ctx.enums.get(name) {
                     let variants: Vec<String> = info
@@ -403,7 +411,8 @@ impl LanguageServer for Backend {
         let symbol_name = match &symbol {
             SymbolInfo::Function { name }
             | SymbolInfo::Struct { name }
-            | SymbolInfo::Enum { name } => Some(name.as_str()),
+            | SymbolInfo::Enum { name }
+            | SymbolInfo::Constant { name } => Some(name.as_str()),
             _ => None,
         };
 
@@ -417,6 +426,15 @@ impl LanguageServer for Backend {
             SymbolInfo::Function { name } => state.ctx.functions.get(name).map(|sig| sig.span),
             SymbolInfo::Struct { name } => state.ctx.structs.get(name).map(|info| info.span),
             SymbolInfo::Enum { name } => state.ctx.enums.get(name).map(|info| info.span),
+            SymbolInfo::Constant { name } => state.module.items.iter().find_map(|item| {
+                if let Item::Constant(c) = item
+                    && c.name == *name
+                {
+                    Some(c.span)
+                } else {
+                    None
+                }
+            }),
             SymbolInfo::Variable { .. }
             | SymbolInfo::Module { .. }
             | SymbolInfo::ModuleFunction { .. } => None,

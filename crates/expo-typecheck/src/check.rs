@@ -162,6 +162,14 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                 AssignTarget::LValue(lv) => {
                     if lv.segments.len() == 1 {
                         let name = &lv.segments[0];
+                        if ctx.constants.contains_key(name) {
+                            ctx.error_with_hint(
+                                format!("cannot assign to constant `{}`", name),
+                                "constants are immutable and cannot be reassigned".into(),
+                                lv.span,
+                            );
+                            return;
+                        }
                         if let Some(existing) = ce.env.get(name) {
                             if existing.is_known()
                                 && value_type.is_known()
@@ -205,6 +213,14 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
             ..
         } => {
             let target_name = &target.segments[0];
+            if ctx.constants.contains_key(target_name) {
+                ctx.error_with_hint(
+                    format!("cannot assign to constant `{}`", target_name),
+                    "constants are immutable and cannot be reassigned".into(),
+                    *span,
+                );
+                return;
+            }
             let target_type = ce.env.get(target_name).cloned().unwrap_or_else(|| {
                 ctx.error_with_hint(
                     format!("unknown variable `{}`", target_name),
@@ -339,6 +355,8 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
         Expr::Ident { name, span } => {
             if let Some(ty) = ce.env.get(name) {
                 ce.used_vars.insert(name.clone());
+                ty.clone()
+            } else if let Some(ty) = ctx.constants.get(name) {
                 ty.clone()
             } else if ctx.functions.contains_key(name) {
                 Type::Unknown
