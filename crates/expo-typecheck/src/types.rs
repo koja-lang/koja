@@ -1,5 +1,6 @@
 use expo_ast::ast::TypeExpr;
 
+/// The resolved type representation used throughout the type checker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Enum(String),
@@ -15,6 +16,7 @@ pub enum Type {
     Unknown,
 }
 
+/// Built-in primitive types with known sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Primitive {
     Bool,
@@ -32,6 +34,7 @@ pub enum Primitive {
 }
 
 impl Type {
+    /// Returns a human-readable string representation of this type for diagnostics.
     pub fn display(&self) -> String {
         match self {
             Type::Enum(name) => name.clone(),
@@ -54,6 +57,12 @@ impl Type {
         }
     }
 
+    /// Returns true if this type is a concrete, resolved type (not `Unknown` or `Error`).
+    pub fn is_known(&self) -> bool {
+        !matches!(self, Type::Unknown | Type::Error)
+    }
+
+    /// Returns true if this type is an integer or floating-point primitive.
     pub fn is_numeric(&self) -> bool {
         matches!(
             self,
@@ -74,6 +83,7 @@ impl Type {
 }
 
 impl Primitive {
+    /// Returns the Expo source-level name of this primitive type.
     pub fn display(&self) -> &'static str {
         match self {
             Primitive::Bool => "bool",
@@ -92,6 +102,8 @@ impl Primitive {
     }
 }
 
+/// Converts an AST type expression into a resolved [`Type`], looking up user-defined
+/// struct and enum names from the provided slices.
 pub fn resolve_type_expr(
     type_expr: &TypeExpr,
     known_structs: &[&str],

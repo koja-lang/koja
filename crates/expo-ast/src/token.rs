@@ -1,11 +1,13 @@
 use crate::span::Span;
 
+/// A lexed token with its source span.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
 }
 
+/// The kind of a lexed token.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Identifiers
@@ -100,6 +102,7 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
+    /// Returns `true` if this token is a reserved keyword.
     pub fn is_keyword(&self) -> bool {
         matches!(
             self,

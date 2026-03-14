@@ -8,6 +8,8 @@ use crate::context::{
 };
 use crate::types::{Type, resolve_type_expr};
 
+/// Walks all top-level items in a module and builds a [`TypeContext`] containing
+/// function signatures, struct definitions, and enum definitions.
 pub fn collect(module: &Module) -> TypeContext {
     let mut ctx = TypeContext::new();
 
@@ -110,15 +112,13 @@ pub fn collect(module: &Module) -> TypeContext {
                         };
                         if let Some(methods) = methods {
                             if methods.contains_key(&f.name) {
-                                ctx.diagnostics.push(expo_ast::ast::Diagnostic {
-                                    severity: expo_ast::ast::Severity::Error,
-                                    message: format!(
+                                ctx.error(
+                                    format!(
                                         "duplicate method `{}` in impl for `{}`",
                                         f.name, target_name
                                     ),
-                                    hint: None,
-                                    span: f.span,
-                                });
+                                    f.span,
+                                );
                             } else {
                                 methods.insert(f.name.clone(), sig);
                             }
@@ -167,43 +167,8 @@ pub fn collect(module: &Module) -> TypeContext {
     ctx
 }
 
-fn build_function_sig(
-    f: &expo_ast::ast::Function,
-    known_structs: &[&str],
-    known_enums: &[&str],
-) -> Option<FunctionSig> {
-    if !f.type_params.is_empty() {
-        return None;
-    }
-
-    let params: Vec<ParamInfo> = f
-        .params
-        .iter()
-        .filter_map(|p| match p {
-            Param::Regular {
-                name, type_expr, ..
-            } => Some(ParamInfo {
-                name: name.clone(),
-                ty: resolve_type_expr(type_expr, known_structs, known_enums),
-            }),
-            Param::Self_ { .. } => None,
-        })
-        .collect();
-
-    let return_type = f
-        .return_type
-        .as_ref()
-        .map(|t| resolve_type_expr(t, known_structs, known_enums))
-        .unwrap_or(Type::Unit);
-
-    Some(FunctionSig {
-        is_private: f.is_private,
-        params,
-        return_type,
-        span: f.span,
-    })
-}
-
+/// Processes import statements and merges symbols from other module contexts
+/// into the current one, detecting name conflicts and missing modules.
 pub fn resolve_imports(
     module: &Module,
     ctx: &mut TypeContext,
@@ -303,6 +268,62 @@ pub fn resolve_imports(
     }
 }
 
+fn build_function_sig(
+    f: &expo_ast::ast::Function,
+    known_structs: &[&str],
+    known_enums: &[&str],
+) -> Option<FunctionSig> {
+    if !f.type_params.is_empty() {
+        return None;
+    }
+
+    let params: Vec<ParamInfo> = f
+        .params
+        .iter()
+        .filter_map(|p| match p {
+            Param::Regular {
+                name, type_expr, ..
+            } => Some(ParamInfo {
+                name: name.clone(),
+                ty: resolve_type_expr(type_expr, known_structs, known_enums),
+            }),
+            Param::Self_ { .. } => None,
+        })
+        .collect();
+
+    let return_type = f
+        .return_type
+        .as_ref()
+        .map(|t| resolve_type_expr(t, known_structs, known_enums))
+        .unwrap_or(Type::Unit);
+
+    Some(FunctionSig {
+        is_private: f.is_private,
+        params,
+        return_type,
+        span: f.span,
+    })
+}
+
+/// Builds a new context containing only the public symbols from `source`.
+fn clone_public_context(source: &TypeContext) -> TypeContext {
+    let mut ctx = TypeContext::new();
+    for (name, sig) in &source.functions {
+        if !sig.is_private {
+            let mut cloned = sig.clone();
+            cloned.is_private = false;
+            ctx.functions.insert(name.clone(), cloned);
+        }
+    }
+    for (name, info) in &source.structs {
+        ctx.structs.insert(name.clone(), info.clone());
+    }
+    for (name, info) in &source.enums {
+        ctx.enums.insert(name.clone(), info.clone());
+    }
+    ctx
+}
+
 fn insert_module_or_error(
     ctx: &mut TypeContext,
     module_name: &str,
@@ -310,16 +331,17 @@ fn insert_module_or_error(
     span: Span,
 ) {
     if ctx.imported_modules.contains_key(module_name) {
-        ctx.error(
+        return ctx.error(
             format!("module qualifier `{module_name}` is already in use from another import"),
             span,
         );
-    } else {
-        ctx.imported_modules
-            .insert(module_name.to_string(), clone_public_context(source_ctx));
     }
+    ctx.imported_modules
+        .insert(module_name.to_string(), clone_public_context(source_ctx));
 }
 
+/// Copies all public functions, structs, and enums from `source` into `ctx`,
+/// detecting duplicate imports across modules.
 fn merge_all_public(
     ctx: &mut TypeContext,
     source: &TypeContext,
@@ -338,24 +360,10 @@ fn merge_all_public(
             );
         } else if !ctx.functions.contains_key(name) {
             imported_names.insert(name.clone());
-            ctx.functions.insert(
-                name.clone(),
-                FunctionSig {
-                    is_private: false,
-                    params: sig
-                        .params
-                        .iter()
-                        .map(|p| ParamInfo {
-                            name: p.name.clone(),
-                            ty: p.ty.clone(),
-                        })
-                        .collect(),
-                    return_type: sig.return_type.clone(),
-                    span: sig.span,
-                },
-            );
+            let mut cloned = sig.clone();
+            cloned.is_private = false;
+            ctx.functions.insert(name.clone(), cloned);
         }
-        // name in ctx.functions but not in imported_names -> local definition, skip silently
     }
     for (name, info) in &source.structs {
         if imported_names.contains(name) {
@@ -365,7 +373,7 @@ fn merge_all_public(
             );
         } else if !ctx.structs.contains_key(name) {
             imported_names.insert(name.clone());
-            ctx.structs.insert(name.clone(), clone_struct_info(info));
+            ctx.structs.insert(name.clone(), info.clone());
         }
     }
     for (name, info) in &source.enums {
@@ -376,11 +384,13 @@ fn merge_all_public(
             );
         } else if !ctx.enums.contains_key(name) {
             imported_names.insert(name.clone());
-            ctx.enums.insert(name.clone(), clone_enum_info(info));
+            ctx.enums.insert(name.clone(), info.clone());
         }
     }
 }
 
+/// Imports a single named symbol from `source` into `ctx`, checking for
+/// privacy violations and duplicate imports.
 fn merge_named(
     ctx: &mut TypeContext,
     source: &TypeContext,
@@ -402,22 +412,9 @@ fn merge_named(
             );
         } else if !ctx.functions.contains_key(name) {
             imported_names.insert(name.to_string());
-            ctx.functions.insert(
-                name.to_string(),
-                FunctionSig {
-                    is_private: false,
-                    params: sig
-                        .params
-                        .iter()
-                        .map(|p| ParamInfo {
-                            name: p.name.clone(),
-                            ty: p.ty.clone(),
-                        })
-                        .collect(),
-                    return_type: sig.return_type.clone(),
-                    span: sig.span,
-                },
-            );
+            let mut cloned = sig.clone();
+            cloned.is_private = false;
+            ctx.functions.insert(name.to_string(), cloned);
         }
         return;
     }
@@ -429,8 +426,7 @@ fn merge_named(
             );
         } else if !ctx.structs.contains_key(name) {
             imported_names.insert(name.to_string());
-            ctx.structs
-                .insert(name.to_string(), clone_struct_info(info));
+            ctx.structs.insert(name.to_string(), info.clone());
         }
         return;
     }
@@ -442,7 +438,7 @@ fn merge_named(
             );
         } else if !ctx.enums.contains_key(name) {
             imported_names.insert(name.to_string());
-            ctx.enums.insert(name.to_string(), clone_enum_info(info));
+            ctx.enums.insert(name.to_string(), info.clone());
         }
         return;
     }
@@ -450,100 +446,4 @@ fn merge_named(
         format!("`{name}` not found in module `{module_path}`"),
         span,
     );
-}
-
-fn clone_public_context(source: &TypeContext) -> TypeContext {
-    let mut ctx = TypeContext::new();
-    for (name, sig) in &source.functions {
-        if !sig.is_private {
-            ctx.functions.insert(
-                name.clone(),
-                FunctionSig {
-                    is_private: false,
-                    params: sig
-                        .params
-                        .iter()
-                        .map(|p| ParamInfo {
-                            name: p.name.clone(),
-                            ty: p.ty.clone(),
-                        })
-                        .collect(),
-                    return_type: sig.return_type.clone(),
-                    span: sig.span,
-                },
-            );
-        }
-    }
-    for (name, info) in &source.structs {
-        ctx.structs.insert(name.clone(), clone_struct_info(info));
-    }
-    for (name, info) in &source.enums {
-        ctx.enums.insert(name.clone(), clone_enum_info(info));
-    }
-    ctx
-}
-
-fn clone_struct_info(info: &StructInfo) -> StructInfo {
-    StructInfo {
-        fields: info.fields.clone(),
-        methods: info
-            .methods
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    FunctionSig {
-                        is_private: v.is_private,
-                        params: v
-                            .params
-                            .iter()
-                            .map(|p| ParamInfo {
-                                name: p.name.clone(),
-                                ty: p.ty.clone(),
-                            })
-                            .collect(),
-                        return_type: v.return_type.clone(),
-                        span: v.span,
-                    },
-                )
-            })
-            .collect(),
-        span: info.span,
-    }
-}
-
-fn clone_enum_info(info: &EnumInfo) -> EnumInfo {
-    EnumInfo {
-        methods: info
-            .methods
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    FunctionSig {
-                        is_private: v.is_private,
-                        params: v
-                            .params
-                            .iter()
-                            .map(|p| ParamInfo {
-                                name: p.name.clone(),
-                                ty: p.ty.clone(),
-                            })
-                            .collect(),
-                        return_type: v.return_type.clone(),
-                        span: v.span,
-                    },
-                )
-            })
-            .collect(),
-        span: info.span,
-        variants: info
-            .variants
-            .iter()
-            .map(|v| VariantInfo {
-                name: v.name.clone(),
-                data: v.data.clone(),
-            })
-            .collect(),
-    }
 }

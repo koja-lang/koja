@@ -5,6 +5,7 @@ use expo_ast::span::Span;
 
 use crate::types::Type;
 
+/// Holds all type information gathered during collection and checking for a single module.
 pub struct TypeContext {
     pub diagnostics: Vec<Diagnostic>,
     pub enums: HashMap<String, EnumInfo>,
@@ -13,6 +14,8 @@ pub struct TypeContext {
     pub structs: HashMap<String, StructInfo>,
 }
 
+/// Collected metadata for an enum declaration.
+#[derive(Clone)]
 pub struct EnumInfo {
     pub methods: HashMap<String, FunctionSig>,
     #[allow(dead_code)]
@@ -20,6 +23,8 @@ pub struct EnumInfo {
     pub variants: Vec<VariantInfo>,
 }
 
+/// Resolved type signature for a function or method.
+#[derive(Clone)]
 pub struct FunctionSig {
     pub is_private: bool,
     pub params: Vec<ParamInfo>,
@@ -28,11 +33,15 @@ pub struct FunctionSig {
     pub span: Span,
 }
 
+/// A single parameter's name and resolved type.
+#[derive(Clone)]
 pub struct ParamInfo {
     pub name: String,
     pub ty: Type,
 }
 
+/// Collected metadata for a struct declaration.
+#[derive(Clone)]
 pub struct StructInfo {
     pub fields: Vec<(String, Type)>,
     pub methods: HashMap<String, FunctionSig>,
@@ -40,11 +49,14 @@ pub struct StructInfo {
     pub span: Span,
 }
 
+/// A single variant within an enum.
+#[derive(Clone)]
 pub struct VariantInfo {
     pub data: VariantData,
     pub name: String,
 }
 
+/// The shape of data carried by an enum variant.
 #[derive(Clone)]
 pub enum VariantData {
     Struct(Vec<(String, Type)>),
@@ -59,6 +71,27 @@ impl Default for TypeContext {
 }
 
 impl TypeContext {
+    /// Records an error diagnostic at the given span.
+    pub fn error(&mut self, message: String, span: Span) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            message,
+            hint: None,
+            span,
+        });
+    }
+
+    /// Records an error diagnostic with an additional hint message.
+    pub fn error_with_hint(&mut self, message: String, hint: String, span: Span) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            message,
+            hint: Some(hint),
+            span,
+        });
+    }
+
+    /// Creates an empty context with no registered types or diagnostics.
     pub fn new() -> Self {
         Self {
             diagnostics: Vec::new(),
@@ -69,24 +102,7 @@ impl TypeContext {
         }
     }
 
-    pub fn error(&mut self, message: String, span: Span) {
-        self.diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            message,
-            hint: None,
-            span,
-        });
-    }
-
-    pub fn error_with_hint(&mut self, message: String, hint: String, span: Span) {
-        self.diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            message,
-            hint: Some(hint),
-            span,
-        });
-    }
-
+    /// Records a warning diagnostic at the given span.
     pub fn warning(&mut self, message: String, span: Span) {
         self.diagnostics.push(Diagnostic {
             severity: Severity::Warning,

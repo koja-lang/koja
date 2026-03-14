@@ -3,9 +3,11 @@ use std::collections::{HashMap, HashSet};
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
-use crate::context::{TypeContext, VariantData};
+use crate::context::{ParamInfo, TypeContext, VariantData};
 use crate::types::{Primitive, Type, resolve_type_expr};
 
+/// Per-function environment used during type checking, tracking local variable
+/// types, the expected return type, and loop nesting depth.
 struct CheckEnv<'a> {
     env: HashMap<String, Type>,
     used_vars: HashSet<String>,
@@ -28,6 +30,8 @@ impl<'a> CheckEnv<'a> {
     }
 }
 
+/// Type-checks all function bodies and impl blocks in a module, emitting
+/// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
 pub fn check_module(module: &Module, ctx: &mut TypeContext) {
     let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
     let struct_name_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
@@ -124,7 +128,7 @@ fn check_function(
         check_body(&f.body[..f.body.len() - 1], ctx, &mut ce);
         if let Some(Statement::Expr(expr)) = f.body.last() {
             let actual = infer_expr(expr, ctx, &mut ce);
-            if actual != Type::Unknown && actual != Type::Error && actual != declared_return {
+            if actual.is_known() && actual != declared_return {
                 ctx.error_with_hint(
                     format!(
                         "return type mismatch: expected `{}`, found `{}`",
@@ -159,10 +163,8 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                     if lv.segments.len() == 1 {
                         let name = &lv.segments[0];
                         if let Some(existing) = ce.env.get(name) {
-                            if *existing != Type::Unknown
-                                && *existing != Type::Error
-                                && value_type != Type::Unknown
-                                && value_type != Type::Error
+                            if existing.is_known()
+                                && value_type.is_known()
                                 && *existing != value_type
                             {
                                 ctx.error_with_hint(
@@ -212,12 +214,7 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                 Type::Error
             });
             let value_type = infer_expr(value, ctx, ce);
-            if target_type != Type::Unknown
-                && target_type != Type::Error
-                && value_type != Type::Unknown
-                && value_type != Type::Error
-                && !target_type.is_numeric()
-            {
+            if target_type.is_known() && value_type.is_known() && !target_type.is_numeric() {
                 ctx.error(
                     format!(
                         "compound assignment requires numeric type, found `{}`",
@@ -235,12 +232,7 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                 .as_ref()
                 .map(|v| infer_expr(v, ctx, ce))
                 .unwrap_or(Type::Unit);
-            if ce.return_type != Type::Unknown
-                && ce.return_type != Type::Error
-                && actual != Type::Unknown
-                && actual != Type::Error
-                && ce.return_type != actual
-            {
+            if ce.return_type.is_known() && actual.is_known() && ce.return_type != actual {
                 ctx.error_with_hint(
                     format!(
                         "return type mismatch: expected `{}`, found `{}`",
@@ -258,6 +250,9 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
     }
 }
 
+/// Infers the type of an expression, emitting diagnostics for any type errors
+/// encountered during traversal. Returns `Type::Unknown` when the type cannot
+/// be determined.
 fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
     match expr {
         Expr::Await { expr: inner, .. } => {
@@ -266,182 +261,16 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
         }
 
         Expr::Binary {
-            op: BinOp::Pipe,
-            left,
-            right,
-            ..
-        } => {
-            infer_expr(left, ctx, ce);
-            let func_name = match right.as_ref() {
-                Expr::Ident { name, .. } => Some(name.as_str()),
-                Expr::Call { callee, args, .. } => {
-                    for arg in args {
-                        infer_expr(&arg.value, ctx, ce);
-                    }
-                    if let Expr::Ident { name, .. } = callee.as_ref() {
-                        Some(name.as_str())
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            if let Some(name) = func_name {
-                if let Some(sig) = ctx.functions.get(name) {
-                    sig.return_type.clone()
-                } else {
-                    Type::Unknown
-                }
-            } else {
-                Type::Unknown
-            }
-        }
-
-        Expr::Binary {
             op,
             left,
             right,
             span,
             ..
-        } => {
-            let left_ty = infer_expr(left, ctx, ce);
-            let right_ty = infer_expr(right, ctx, ce);
-
-            match op {
-                BinOp::Add | BinOp::Div | BinOp::Mod | BinOp::Mul | BinOp::Sub => {
-                    if left_ty != Type::Unknown && left_ty != Type::Error && !left_ty.is_numeric() {
-                        ctx.error_with_hint(
-                            format!(
-                                "arithmetic requires numeric type, found `{}`",
-                                left_ty.display()
-                            ),
-                            "expected i32, i64, f32, or f64".into(),
-                            *span,
-                        );
-                        return Type::Error;
-                    }
-                    if left_ty != Type::Unknown
-                        && left_ty != Type::Error
-                        && right_ty != Type::Unknown
-                        && right_ty != Type::Error
-                        && left_ty != right_ty
-                    {
-                        ctx.error(
-                            format!(
-                                "type mismatch in arithmetic: `{}` and `{}`",
-                                left_ty.display(),
-                                right_ty.display()
-                            ),
-                            *span,
-                        );
-                        return Type::Error;
-                    }
-                    if left_ty != Type::Unknown && left_ty != Type::Error {
-                        left_ty
-                    } else {
-                        right_ty
-                    }
-                }
-                BinOp::And | BinOp::Or => {
-                    check_type(&left_ty, &Type::Primitive(Primitive::Bool), *span, ctx);
-                    check_type(&right_ty, &Type::Primitive(Primitive::Bool), *span, ctx);
-                    Type::Primitive(Primitive::Bool)
-                }
-                BinOp::Eq | BinOp::Gt | BinOp::GtEq | BinOp::Lt | BinOp::LtEq | BinOp::NotEq => {
-                    if left_ty != Type::Unknown
-                        && left_ty != Type::Error
-                        && right_ty != Type::Unknown
-                        && right_ty != Type::Error
-                        && left_ty != right_ty
-                    {
-                        ctx.error(
-                            format!(
-                                "cannot compare `{}` and `{}`",
-                                left_ty.display(),
-                                right_ty.display()
-                            ),
-                            *span,
-                        );
-                    }
-                    Type::Primitive(Primitive::Bool)
-                }
-                BinOp::Pipe => unreachable!("handled above"),
-            }
-        }
+        } => infer_binary(op, left, right, *span, ctx, ce),
 
         Expr::Call {
             callee, args, span, ..
-        } => {
-            if let Expr::Ident { name, .. } = callee.as_ref() {
-                if let Some(sig) = ctx.functions.get(name) {
-                    let expected_count = sig.params.len();
-                    let actual_count = args.len();
-                    let return_type = sig.return_type.clone();
-                    let param_types: Vec<(String, Type)> = sig
-                        .params
-                        .iter()
-                        .map(|p| (p.name.clone(), p.ty.clone()))
-                        .collect();
-
-                    if expected_count != actual_count {
-                        let params: Vec<String> = param_types
-                            .iter()
-                            .map(|(n, t)| format!("{}: {}", n, t.display()))
-                            .collect();
-                        ctx.error_with_hint(
-                            format!(
-                                "function `{}` expects {} argument(s), got {}",
-                                name, expected_count, actual_count
-                            ),
-                            format!("signature: fn {}({})", name, params.join(", ")),
-                            *span,
-                        );
-                    } else {
-                        for (i, arg) in args.iter().enumerate() {
-                            let arg_ty = infer_expr(&arg.value, ctx, ce);
-                            let (param_name, param_ty) = &param_types[i];
-                            if *param_ty != Type::Unknown
-                                && *param_ty != Type::Error
-                                && arg_ty != Type::Unknown
-                                && arg_ty != Type::Error
-                                && *param_ty != arg_ty
-                            {
-                                ctx.error(
-                                    format!(
-                                        "argument `{}`: expected `{}`, found `{}`",
-                                        param_name,
-                                        param_ty.display(),
-                                        arg_ty.display()
-                                    ),
-                                    arg.span,
-                                );
-                            }
-                        }
-                    }
-                    return_type
-                } else if ce.env.contains_key(name)
-                    || ctx.structs.contains_key(name)
-                    || ctx.enums.contains_key(name)
-                {
-                    for arg in args {
-                        infer_expr(&arg.value, ctx, ce);
-                    }
-                    Type::Unknown
-                } else {
-                    ctx.error(format!("undefined function `{name}`"), *span);
-                    for arg in args {
-                        infer_expr(&arg.value, ctx, ce);
-                    }
-                    Type::Error
-                }
-            } else {
-                infer_expr(callee, ctx, ce);
-                for arg in args {
-                    infer_expr(&arg.value, ctx, ce);
-                }
-                Type::Unknown
-            }
-        }
+        } => infer_call(callee, args, *span, ctx, ce),
 
         Expr::Closure {
             params, body, span, ..
@@ -489,182 +318,13 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             variant,
             data,
             span,
-        } => {
-            let enum_name = type_path.join(".");
-            if let Some(enum_info) = ctx.enums.get(&enum_name) {
-                if let Some(vi) = enum_info.variants.iter().find(|v| v.name == *variant) {
-                    let variant_data = vi.data.clone();
-                    match (data, &variant_data) {
-                        (EnumConstructionData::Unit, VariantData::Unit) => {}
-                        (EnumConstructionData::Tuple(args), VariantData::Tuple(expected)) => {
-                            if args.len() != expected.len() {
-                                ctx.error(
-                                    format!(
-                                        "variant `{}.{}` expects {} arguments, got {}",
-                                        enum_name,
-                                        variant,
-                                        expected.len(),
-                                        args.len()
-                                    ),
-                                    *span,
-                                );
-                            } else {
-                                for (i, arg_expr) in args.iter().enumerate() {
-                                    let arg_ty = infer_expr(arg_expr, ctx, ce);
-                                    let expected_ty = &expected[i];
-                                    if *expected_ty != Type::Unknown
-                                        && *expected_ty != Type::Error
-                                        && arg_ty != Type::Unknown
-                                        && arg_ty != Type::Error
-                                        && *expected_ty != arg_ty
-                                    {
-                                        ctx.error(
-                                            format!(
-                                                "variant `{}.{}` argument {}: expected `{}`, found `{}`",
-                                                enum_name, variant, i + 1,
-                                                expected_ty.display(),
-                                                arg_ty.display()
-                                            ),
-                                            *span,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        (
-                            EnumConstructionData::Struct(fields),
-                            VariantData::Struct(expected_fields),
-                        ) => {
-                            for fi in fields {
-                                let value_ty = infer_expr(&fi.value, ctx, ce);
-                                if let Some((_, field_ty)) =
-                                    expected_fields.iter().find(|(n, _)| *n == fi.name)
-                                {
-                                    if *field_ty != Type::Unknown
-                                        && *field_ty != Type::Error
-                                        && value_ty != Type::Unknown
-                                        && value_ty != Type::Error
-                                        && *field_ty != value_ty
-                                    {
-                                        ctx.error(
-                                            format!(
-                                                "variant `{}.{}` field `{}`: expected `{}`, found `{}`",
-                                                enum_name, variant, fi.name,
-                                                field_ty.display(),
-                                                value_ty.display()
-                                            ),
-                                            fi.span,
-                                        );
-                                    }
-                                } else {
-                                    ctx.error(
-                                        format!(
-                                            "variant `{}.{}` has no field `{}`",
-                                            enum_name, variant, fi.name
-                                        ),
-                                        fi.span,
-                                    );
-                                }
-                            }
-                        }
-                        (EnumConstructionData::Unit, _) => {
-                            ctx.error(
-                                format!("variant `{}.{}` requires arguments", enum_name, variant),
-                                *span,
-                            );
-                        }
-                        (EnumConstructionData::Tuple(args), _) => {
-                            for a in args {
-                                infer_expr(a, ctx, ce);
-                            }
-                            ctx.error(
-                                format!(
-                                    "variant `{}.{}` does not take positional arguments",
-                                    enum_name, variant
-                                ),
-                                *span,
-                            );
-                        }
-                        (EnumConstructionData::Struct(fields), _) => {
-                            for fi in fields {
-                                infer_expr(&fi.value, ctx, ce);
-                            }
-                            ctx.error(
-                                format!(
-                                    "variant `{}.{}` does not take named fields",
-                                    enum_name, variant
-                                ),
-                                *span,
-                            );
-                        }
-                    }
-                    Type::Enum(enum_name)
-                } else {
-                    ctx.error(
-                        format!("enum `{}` has no variant `{}`", enum_name, variant),
-                        *span,
-                    );
-                    Type::Error
-                }
-            } else {
-                match data {
-                    EnumConstructionData::Tuple(args) => {
-                        for a in args {
-                            infer_expr(a, ctx, ce);
-                        }
-                    }
-                    EnumConstructionData::Struct(fields) => {
-                        for fi in fields {
-                            infer_expr(&fi.value, ctx, ce);
-                        }
-                    }
-                    EnumConstructionData::Unit => {}
-                }
-                if ce.enum_names.contains(&enum_name.as_str()) {
-                    Type::Enum(enum_name)
-                } else {
-                    Type::Unknown
-                }
-            }
-        }
+        } => infer_enum_construction(type_path, variant, data, *span, ctx, ce),
 
         Expr::FieldAccess {
             receiver,
             field,
             span,
-        } => {
-            let recv_ty = infer_expr(receiver, ctx, ce);
-            match &recv_ty {
-                Type::Struct(name) => {
-                    if let Some(struct_info) = ctx.structs.get(name) {
-                        if let Some((_, field_ty)) =
-                            struct_info.fields.iter().find(|(n, _)| n == field)
-                        {
-                            field_ty.clone()
-                        } else {
-                            let available: Vec<&str> =
-                                struct_info.fields.iter().map(|(n, _)| n.as_str()).collect();
-                            ctx.error_with_hint(
-                                format!("struct `{}` has no field `{}`", name, field),
-                                format!("available fields: {}", available.join(", ")),
-                                *span,
-                            );
-                            Type::Error
-                        }
-                    } else {
-                        Type::Unknown
-                    }
-                }
-                Type::Unknown | Type::Error => recv_ty,
-                _ => {
-                    ctx.error(
-                        format!("field access on non-struct type `{}`", recv_ty.display()),
-                        *span,
-                    );
-                    Type::Error
-                }
-            }
-        }
+        } => infer_field_access(receiver, field, *span, ctx, ce),
 
         Expr::For { iterable, body, .. } => {
             infer_expr(iterable, ctx, ce);
@@ -767,185 +427,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             args,
             span,
             ..
-        } => {
-            if let Expr::Ident { name: mod_name, .. } = receiver.as_ref() {
-                let mod_lookup = ctx.imported_modules.get(mod_name).map(|mod_ctx| {
-                    mod_ctx.functions.get(method).map(|sig| {
-                        (
-                            sig.params.len(),
-                            sig.return_type.clone(),
-                            sig.params
-                                .iter()
-                                .map(|p| (p.name.clone(), p.ty.clone()))
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                });
-
-                match mod_lookup {
-                    Some(Some((expected_count, return_type, param_types))) => {
-                        let actual_count = args.len();
-                        if expected_count != actual_count {
-                            let params: Vec<String> = param_types
-                                .iter()
-                                .map(|(n, t)| format!("{}: {}", n, t.display()))
-                                .collect();
-                            ctx.error_with_hint(
-                                format!(
-                                    "function `{}.{}` expects {} argument(s), got {}",
-                                    mod_name, method, expected_count, actual_count
-                                ),
-                                format!("signature: fn {}({})", method, params.join(", ")),
-                                *span,
-                            );
-                        } else {
-                            for (i, arg) in args.iter().enumerate() {
-                                let arg_ty = infer_expr(&arg.value, ctx, ce);
-                                let (param_name, param_ty) = &param_types[i];
-                                if *param_ty != Type::Unknown
-                                    && *param_ty != Type::Error
-                                    && arg_ty != Type::Unknown
-                                    && arg_ty != Type::Error
-                                    && *param_ty != arg_ty
-                                {
-                                    ctx.error(
-                                        format!(
-                                            "argument `{}`: expected `{}`, found `{}`",
-                                            param_name,
-                                            param_ty.display(),
-                                            arg_ty.display()
-                                        ),
-                                        arg.span,
-                                    );
-                                }
-                            }
-                        }
-                        return return_type;
-                    }
-                    Some(None) => {
-                        for arg in args {
-                            infer_expr(&arg.value, ctx, ce);
-                        }
-                        let available: Vec<String> = ctx
-                            .imported_modules
-                            .get(mod_name)
-                            .map(|m| m.functions.keys().cloned().collect())
-                            .unwrap_or_default();
-                        let hint = if available.is_empty() {
-                            format!("module `{}` has no public functions", mod_name)
-                        } else {
-                            format!("available functions: {}", available.join(", "))
-                        };
-                        ctx.error_with_hint(
-                            format!("module `{}` has no function `{}`", mod_name, method),
-                            hint,
-                            *span,
-                        );
-                        return Type::Error;
-                    }
-                    None => {}
-                }
-            }
-
-            let recv_ty = infer_expr(receiver, ctx, ce);
-
-            let method_sig = match &recv_ty {
-                Type::Struct(name) => ctx.structs.get(name).and_then(|si| si.methods.get(method)),
-                Type::Enum(name) => ctx.enums.get(name).and_then(|ei| ei.methods.get(method)),
-                _ => None,
-            };
-
-            if let Some(sig) = method_sig {
-                let expected_count = sig.params.len();
-                let actual_count = args.len();
-                let return_type = sig.return_type.clone();
-                let param_types: Vec<(String, Type)> = sig
-                    .params
-                    .iter()
-                    .map(|p| (p.name.clone(), p.ty.clone()))
-                    .collect();
-
-                if expected_count != actual_count {
-                    let params: Vec<String> = param_types
-                        .iter()
-                        .map(|(n, t)| format!("{}: {}", n, t.display()))
-                        .collect();
-                    ctx.error_with_hint(
-                        format!(
-                            "function `{}` expects {} argument(s), got {}",
-                            method, expected_count, actual_count
-                        ),
-                        format!("signature: fn {}(self, {})", method, params.join(", ")),
-                        *span,
-                    );
-                } else {
-                    for (i, arg) in args.iter().enumerate() {
-                        let arg_ty = infer_expr(&arg.value, ctx, ce);
-                        let (param_name, param_ty) = &param_types[i];
-                        if *param_ty != Type::Unknown
-                            && *param_ty != Type::Error
-                            && arg_ty != Type::Unknown
-                            && arg_ty != Type::Error
-                            && *param_ty != arg_ty
-                        {
-                            ctx.error(
-                                format!(
-                                    "argument `{}`: expected `{}`, found `{}`",
-                                    param_name,
-                                    param_ty.display(),
-                                    arg_ty.display()
-                                ),
-                                arg.span,
-                            );
-                        }
-                    }
-                }
-                return_type
-            } else {
-                for arg in args {
-                    infer_expr(&arg.value, ctx, ce);
-                }
-                match &recv_ty {
-                    Type::Struct(name) => {
-                        let available: Vec<&str> = ctx
-                            .structs
-                            .get(name)
-                            .map(|s| s.methods.keys().map(|k| k.as_str()).collect())
-                            .unwrap_or_default();
-                        let hint = if available.is_empty() {
-                            format!("struct `{}` has no functions defined", name)
-                        } else {
-                            format!("available functions: {}", available.join(", "))
-                        };
-                        ctx.error_with_hint(
-                            format!("struct `{}` has no function `{}`", name, method),
-                            hint,
-                            *span,
-                        );
-                        Type::Error
-                    }
-                    Type::Enum(name) => {
-                        let available: Vec<&str> = ctx
-                            .enums
-                            .get(name)
-                            .map(|e| e.methods.keys().map(|k| k.as_str()).collect())
-                            .unwrap_or_default();
-                        let hint = if available.is_empty() {
-                            format!("enum `{}` has no functions defined", name)
-                        } else {
-                            format!("available functions: {}", available.join(", "))
-                        };
-                        ctx.error_with_hint(
-                            format!("enum `{}` has no function `{}`", name, method),
-                            hint,
-                            *span,
-                        );
-                        Type::Error
-                    }
-                    _ => Type::Unknown,
-                }
-            }
-        }
+        } => infer_method_call(receiver, method, args, *span, ctx, ce),
 
         Expr::ShortClosure { params, body, span } => {
             let mut closure_env = CheckEnv {
@@ -975,52 +457,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             type_path,
             fields,
             span,
-        } => {
-            let name = type_path.join(".");
-            if let Some(struct_info) = ctx.structs.get(&name) {
-                let struct_fields = struct_info.fields.clone();
-                for fi in fields {
-                    let value_ty = infer_expr(&fi.value, ctx, ce);
-                    if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
-                        if *field_ty != Type::Unknown
-                            && *field_ty != Type::Error
-                            && value_ty != Type::Unknown
-                            && value_ty != Type::Error
-                            && *field_ty != value_ty
-                        {
-                            ctx.error(
-                                format!(
-                                    "field `{}`: expected `{}`, found `{}`",
-                                    fi.name,
-                                    field_ty.display(),
-                                    value_ty.display()
-                                ),
-                                fi.span,
-                            );
-                        }
-                    } else {
-                        let available: Vec<&str> =
-                            struct_fields.iter().map(|(n, _)| n.as_str()).collect();
-                        ctx.error_with_hint(
-                            format!("struct `{}` has no field `{}`", name, fi.name),
-                            format!("available fields: {}", available.join(", ")),
-                            fi.span,
-                        );
-                    }
-                }
-                Type::Struct(name)
-            } else {
-                for fi in fields {
-                    infer_expr(&fi.value, ctx, ce);
-                }
-                if ce.struct_names.contains(&name.as_str()) {
-                    Type::Struct(name)
-                } else {
-                    ctx.error(format!("unknown struct `{}`", name), *span);
-                    Type::Error
-                }
-            }
-        }
+        } => infer_struct_construction(type_path, fields, *span, ctx, ce),
 
         Expr::Ternary {
             condition,
@@ -1032,12 +469,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             check_type(&cond_ty, &Type::Primitive(Primitive::Bool), *span, ctx);
             let then_ty = infer_expr(then_expr, ctx, ce);
             let else_ty = infer_expr(else_expr, ctx, ce);
-            if then_ty != Type::Unknown
-                && then_ty != Type::Error
-                && else_ty != Type::Unknown
-                && else_ty != Type::Error
-                && then_ty != else_ty
-            {
+            if then_ty.is_known() && else_ty.is_known() && then_ty != else_ty {
                 ctx.error(
                     format!(
                         "ternary branches have different types: `{}` and `{}`",
@@ -1047,11 +479,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                     *span,
                 );
             }
-            if then_ty != Type::Unknown && then_ty != Type::Error {
-                then_ty
-            } else {
-                else_ty
-            }
+            if then_ty.is_known() { then_ty } else { else_ty }
         }
 
         Expr::Try { expr: inner, .. } => {
@@ -1068,10 +496,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             let operand_ty = infer_expr(operand, ctx, ce);
             match op {
                 UnaryOp::Neg => {
-                    if operand_ty != Type::Unknown
-                        && operand_ty != Type::Error
-                        && !operand_ty.is_numeric()
-                    {
+                    if operand_ty.is_known() && !operand_ty.is_numeric() {
                         ctx.error_with_hint(
                             format!(
                                 "negation requires numeric type, found `{}`",
@@ -1140,10 +565,470 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
     }
 }
 
-// =========================================================================
-// Match exhaustiveness
-// =========================================================================
+/// Type-checks a binary operation, handling pipe desugaring and arithmetic/comparison/logical ops.
+fn infer_binary(
+    op: &BinOp,
+    left: &Expr,
+    right: &Expr,
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    if *op == BinOp::Pipe {
+        infer_expr(left, ctx, ce);
+        let func_name = match right {
+            Expr::Ident { name, .. } => Some(name.as_str()),
+            Expr::Call { callee, args, .. } => {
+                for arg in args {
+                    infer_expr(&arg.value, ctx, ce);
+                }
+                if let Expr::Ident { name, .. } = callee.as_ref() {
+                    Some(name.as_str())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        return if let Some(name) = func_name {
+            if let Some(sig) = ctx.functions.get(name) {
+                sig.return_type.clone()
+            } else {
+                Type::Unknown
+            }
+        } else {
+            Type::Unknown
+        };
+    }
 
+    let left_ty = infer_expr(left, ctx, ce);
+    let right_ty = infer_expr(right, ctx, ce);
+
+    match op {
+        BinOp::Add | BinOp::Div | BinOp::Mod | BinOp::Mul | BinOp::Sub => {
+            if left_ty.is_known() && !left_ty.is_numeric() {
+                ctx.error_with_hint(
+                    format!(
+                        "arithmetic requires numeric type, found `{}`",
+                        left_ty.display()
+                    ),
+                    "expected i32, i64, f32, or f64".into(),
+                    span,
+                );
+                return Type::Error;
+            }
+            if left_ty.is_known() && right_ty.is_known() && left_ty != right_ty {
+                ctx.error(
+                    format!(
+                        "type mismatch in arithmetic: `{}` and `{}`",
+                        left_ty.display(),
+                        right_ty.display()
+                    ),
+                    span,
+                );
+                return Type::Error;
+            }
+            if left_ty.is_known() {
+                left_ty
+            } else {
+                right_ty
+            }
+        }
+        BinOp::And | BinOp::Or => {
+            check_type(&left_ty, &Type::Primitive(Primitive::Bool), span, ctx);
+            check_type(&right_ty, &Type::Primitive(Primitive::Bool), span, ctx);
+            Type::Primitive(Primitive::Bool)
+        }
+        BinOp::Eq | BinOp::Gt | BinOp::GtEq | BinOp::Lt | BinOp::LtEq | BinOp::NotEq => {
+            if left_ty.is_known() && right_ty.is_known() && left_ty != right_ty {
+                ctx.error(
+                    format!(
+                        "cannot compare `{}` and `{}`",
+                        left_ty.display(),
+                        right_ty.display()
+                    ),
+                    span,
+                );
+            }
+            Type::Primitive(Primitive::Bool)
+        }
+        BinOp::Pipe => unreachable!("handled above"),
+    }
+}
+
+/// Type-checks a function call expression, resolving the callee and validating arguments.
+fn infer_call(
+    callee: &Expr,
+    args: &[Arg],
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    if let Expr::Ident { name, .. } = callee {
+        if let Some(sig) = ctx.functions.get(name) {
+            let return_type = sig.return_type.clone();
+            let params = sig.params.clone();
+            check_call_args(name, &params, args, "", span, ctx, ce);
+            return_type
+        } else if ce.env.contains_key(name)
+            || ctx.structs.contains_key(name)
+            || ctx.enums.contains_key(name)
+        {
+            for arg in args {
+                infer_expr(&arg.value, ctx, ce);
+            }
+            Type::Unknown
+        } else {
+            ctx.error(format!("undefined function `{name}`"), span);
+            for arg in args {
+                infer_expr(&arg.value, ctx, ce);
+            }
+            Type::Error
+        }
+    } else {
+        infer_expr(callee, ctx, ce);
+        for arg in args {
+            infer_expr(&arg.value, ctx, ce);
+        }
+        Type::Unknown
+    }
+}
+
+/// Type-checks an enum variant construction, validating variant existence and data shape.
+fn infer_enum_construction(
+    type_path: &[String],
+    variant: &str,
+    data: &EnumConstructionData,
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    let enum_name = type_path.join(".");
+    if let Some(enum_info) = ctx.enums.get(&enum_name) {
+        if let Some(vi) = enum_info.variants.iter().find(|v| v.name == *variant) {
+            let variant_data = vi.data.clone();
+            match (data, &variant_data) {
+                (EnumConstructionData::Unit, VariantData::Unit) => {}
+                (EnumConstructionData::Tuple(args), VariantData::Tuple(expected)) => {
+                    if args.len() != expected.len() {
+                        ctx.error(
+                            format!(
+                                "variant `{}.{}` expects {} arguments, got {}",
+                                enum_name,
+                                variant,
+                                expected.len(),
+                                args.len()
+                            ),
+                            span,
+                        );
+                    } else {
+                        for (i, arg_expr) in args.iter().enumerate() {
+                            let arg_ty = infer_expr(arg_expr, ctx, ce);
+                            let expected_ty = &expected[i];
+                            if expected_ty.is_known() && arg_ty.is_known() && *expected_ty != arg_ty
+                            {
+                                ctx.error(
+                                    format!(
+                                        "variant `{}.{}` argument {}: expected `{}`, found `{}`",
+                                        enum_name,
+                                        variant,
+                                        i + 1,
+                                        expected_ty.display(),
+                                        arg_ty.display()
+                                    ),
+                                    span,
+                                );
+                            }
+                        }
+                    }
+                }
+                (EnumConstructionData::Struct(fields), VariantData::Struct(expected_fields)) => {
+                    for fi in fields {
+                        let value_ty = infer_expr(&fi.value, ctx, ce);
+                        if let Some((_, field_ty)) =
+                            expected_fields.iter().find(|(n, _)| *n == fi.name)
+                        {
+                            if field_ty.is_known() && value_ty.is_known() && *field_ty != value_ty {
+                                ctx.error(
+                                    format!(
+                                        "variant `{}.{}` field `{}`: expected `{}`, found `{}`",
+                                        enum_name,
+                                        variant,
+                                        fi.name,
+                                        field_ty.display(),
+                                        value_ty.display()
+                                    ),
+                                    fi.span,
+                                );
+                            }
+                        } else {
+                            ctx.error(
+                                format!(
+                                    "variant `{}.{}` has no field `{}`",
+                                    enum_name, variant, fi.name
+                                ),
+                                fi.span,
+                            );
+                        }
+                    }
+                }
+                (EnumConstructionData::Unit, _) => {
+                    ctx.error(
+                        format!("variant `{}.{}` requires arguments", enum_name, variant),
+                        span,
+                    );
+                }
+                (EnumConstructionData::Tuple(args), _) => {
+                    for a in args {
+                        infer_expr(a, ctx, ce);
+                    }
+                    ctx.error(
+                        format!(
+                            "variant `{}.{}` does not take positional arguments",
+                            enum_name, variant
+                        ),
+                        span,
+                    );
+                }
+                (EnumConstructionData::Struct(fields), _) => {
+                    for fi in fields {
+                        infer_expr(&fi.value, ctx, ce);
+                    }
+                    ctx.error(
+                        format!(
+                            "variant `{}.{}` does not take named fields",
+                            enum_name, variant
+                        ),
+                        span,
+                    );
+                }
+            }
+            Type::Enum(enum_name)
+        } else {
+            ctx.error(
+                format!("enum `{}` has no variant `{}`", enum_name, variant),
+                span,
+            );
+            Type::Error
+        }
+    } else {
+        match data {
+            EnumConstructionData::Tuple(args) => {
+                for a in args {
+                    infer_expr(a, ctx, ce);
+                }
+            }
+            EnumConstructionData::Struct(fields) => {
+                for fi in fields {
+                    infer_expr(&fi.value, ctx, ce);
+                }
+            }
+            EnumConstructionData::Unit => {}
+        }
+        if ce.enum_names.contains(&enum_name.as_str()) {
+            Type::Enum(enum_name)
+        } else {
+            Type::Unknown
+        }
+    }
+}
+
+/// Type-checks a field access expression, resolving struct fields and reporting mismatches.
+fn infer_field_access(
+    receiver: &Expr,
+    field: &str,
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    let recv_ty = infer_expr(receiver, ctx, ce);
+    match &recv_ty {
+        Type::Struct(name) => {
+            if let Some(struct_info) = ctx.structs.get(name) {
+                if let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) {
+                    field_ty.clone()
+                } else {
+                    let available: Vec<&str> =
+                        struct_info.fields.iter().map(|(n, _)| n.as_str()).collect();
+                    ctx.error_with_hint(
+                        format!("struct `{}` has no field `{}`", name, field),
+                        format!("available fields: {}", available.join(", ")),
+                        span,
+                    );
+                    Type::Error
+                }
+            } else {
+                Type::Unknown
+            }
+        }
+        Type::Unknown | Type::Error => recv_ty,
+        _ => {
+            ctx.error(
+                format!("field access on non-struct type `{}`", recv_ty.display()),
+                span,
+            );
+            Type::Error
+        }
+    }
+}
+
+/// Type-checks a method call, resolving module-qualified calls and struct/enum methods.
+fn infer_method_call(
+    receiver: &Expr,
+    method: &str,
+    args: &[Arg],
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    if let Expr::Ident { name: mod_name, .. } = receiver {
+        let mod_lookup = ctx.imported_modules.get(mod_name).map(|mod_ctx| {
+            mod_ctx
+                .functions
+                .get(method)
+                .map(|sig| (sig.return_type.clone(), sig.params.clone()))
+        });
+
+        match mod_lookup {
+            Some(Some((return_type, params))) => {
+                let display = format!("{}.{}", mod_name, method);
+                check_call_args(&display, &params, args, "", span, ctx, ce);
+                return return_type;
+            }
+            Some(None) => {
+                for arg in args {
+                    infer_expr(&arg.value, ctx, ce);
+                }
+                let available: Vec<String> = ctx
+                    .imported_modules
+                    .get(mod_name)
+                    .map(|m| m.functions.keys().cloned().collect())
+                    .unwrap_or_default();
+                let hint = if available.is_empty() {
+                    format!("module `{}` has no public functions", mod_name)
+                } else {
+                    format!("available functions: {}", available.join(", "))
+                };
+                ctx.error_with_hint(
+                    format!("module `{}` has no function `{}`", mod_name, method),
+                    hint,
+                    span,
+                );
+                return Type::Error;
+            }
+            None => {}
+        }
+    }
+
+    let recv_ty = infer_expr(receiver, ctx, ce);
+
+    let method_sig = match &recv_ty {
+        Type::Struct(name) => ctx.structs.get(name).and_then(|si| si.methods.get(method)),
+        Type::Enum(name) => ctx.enums.get(name).and_then(|ei| ei.methods.get(method)),
+        _ => None,
+    };
+
+    if let Some(sig) = method_sig {
+        let return_type = sig.return_type.clone();
+        let params = sig.params.clone();
+        check_call_args(method, &params, args, "self, ", span, ctx, ce);
+        return_type
+    } else {
+        for arg in args {
+            infer_expr(&arg.value, ctx, ce);
+        }
+        match &recv_ty {
+            Type::Struct(name) => {
+                let available: Vec<&str> = ctx
+                    .structs
+                    .get(name)
+                    .map(|s| s.methods.keys().map(|k| k.as_str()).collect())
+                    .unwrap_or_default();
+                let hint = if available.is_empty() {
+                    format!("struct `{}` has no functions defined", name)
+                } else {
+                    format!("available functions: {}", available.join(", "))
+                };
+                ctx.error_with_hint(
+                    format!("struct `{}` has no function `{}`", name, method),
+                    hint,
+                    span,
+                );
+                Type::Error
+            }
+            Type::Enum(name) => {
+                let available: Vec<&str> = ctx
+                    .enums
+                    .get(name)
+                    .map(|e| e.methods.keys().map(|k| k.as_str()).collect())
+                    .unwrap_or_default();
+                let hint = if available.is_empty() {
+                    format!("enum `{}` has no functions defined", name)
+                } else {
+                    format!("available functions: {}", available.join(", "))
+                };
+                ctx.error_with_hint(
+                    format!("enum `{}` has no function `{}`", name, method),
+                    hint,
+                    span,
+                );
+                Type::Error
+            }
+            _ => Type::Unknown,
+        }
+    }
+}
+
+/// Type-checks a struct construction expression, validating fields and their types.
+fn infer_struct_construction(
+    type_path: &[String],
+    fields: &[FieldInit],
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    let name = type_path.join(".");
+    if let Some(struct_info) = ctx.structs.get(&name) {
+        let struct_fields = struct_info.fields.clone();
+        for fi in fields {
+            let value_ty = infer_expr(&fi.value, ctx, ce);
+            if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
+                if field_ty.is_known() && value_ty.is_known() && *field_ty != value_ty {
+                    ctx.error(
+                        format!(
+                            "field `{}`: expected `{}`, found `{}`",
+                            fi.name,
+                            field_ty.display(),
+                            value_ty.display()
+                        ),
+                        fi.span,
+                    );
+                }
+            } else {
+                let available: Vec<&str> = struct_fields.iter().map(|(n, _)| n.as_str()).collect();
+                ctx.error_with_hint(
+                    format!("struct `{}` has no field `{}`", name, fi.name),
+                    format!("available fields: {}", available.join(", ")),
+                    fi.span,
+                );
+            }
+        }
+        Type::Struct(name)
+    } else {
+        for fi in fields {
+            infer_expr(&fi.value, ctx, ce);
+        }
+        if ce.struct_names.contains(&name.as_str()) {
+            Type::Struct(name)
+        } else {
+            ctx.error(format!("unknown struct `{}`", name), span);
+            Type::Error
+        }
+    }
+}
+
+/// Checks whether a match expression covers all variants of an enum subject,
+/// emitting a diagnostic if any variants are missing and no catch-all exists.
 fn check_match_exhaustiveness(
     subject_type: &Type,
     arms: &[MatchArm],
@@ -1199,10 +1084,8 @@ fn check_match_exhaustiveness(
     }
 }
 
-// =========================================================================
-// Pattern checking
-// =========================================================================
-
+/// Recursively validates a match pattern against the expected subject type,
+/// binding pattern variables into the environment.
 fn check_pattern(
     pat: &Pattern,
     subject_type: &Type,
@@ -1378,11 +1261,7 @@ fn check_pattern(
                 Literal::None => Type::Unknown,
                 Literal::Unit => Type::Unit,
             };
-            if lit_type != Type::Unknown
-                && *subject_type != Type::Unknown
-                && *subject_type != Type::Error
-                && lit_type != *subject_type
-            {
+            if lit_type.is_known() && subject_type.is_known() && lit_type != *subject_type {
                 ctx.error(
                     format!(
                         "pattern type mismatch: matching `{}` against `{}`",
@@ -1431,15 +1310,58 @@ fn check_pattern(
     }
 }
 
-// =========================================================================
-// Helpers
-// =========================================================================
+/// Validates that call arguments match the expected parameter count and types,
+/// emitting diagnostics for arity mismatches or type mismatches.
+fn check_call_args(
+    display_name: &str,
+    params: &[ParamInfo],
+    args: &[Arg],
+    sig_prefix: &str,
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) {
+    if params.len() != args.len() {
+        let param_list: Vec<String> = params
+            .iter()
+            .map(|p| format!("{}: {}", p.name, p.ty.display()))
+            .collect();
+        ctx.error_with_hint(
+            format!(
+                "function `{}` expects {} argument(s), got {}",
+                display_name,
+                params.len(),
+                args.len()
+            ),
+            format!(
+                "signature: fn {}({}{})",
+                display_name,
+                sig_prefix,
+                param_list.join(", ")
+            ),
+            span,
+        );
+    } else {
+        for (i, arg) in args.iter().enumerate() {
+            let arg_ty = infer_expr(&arg.value, ctx, ce);
+            let param = &params[i];
+            if param.ty.is_known() && arg_ty.is_known() && param.ty != arg_ty {
+                ctx.error(
+                    format!(
+                        "argument `{}`: expected `{}`, found `{}`",
+                        param.name,
+                        param.ty.display(),
+                        arg_ty.display()
+                    ),
+                    arg.span,
+                );
+            }
+        }
+    }
+}
 
 fn check_type(actual: &Type, expected: &Type, span: Span, ctx: &mut TypeContext) {
-    if *actual == Type::Unknown || *actual == Type::Error {
-        return;
-    }
-    if *expected == Type::Unknown || *expected == Type::Error {
+    if !actual.is_known() || !expected.is_known() {
         return;
     }
     if actual != expected {

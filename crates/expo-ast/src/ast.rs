@@ -1,17 +1,40 @@
+//! The Expo abstract syntax tree.
+//!
+//! A single source file parses into a [`Module`], which contains a list of
+//! top-level [`Item`]s (functions, structs, enums, imports, constants, impls).
+//! Functions hold a body of [`Statement`]s, which in turn contain [`Expr`]
+//! nodes. [`Pattern`]s appear in `match` arms, `for` loops, and destructuring
+//! assignments.
+
 use crate::span::Span;
 
-// ============================================================================
 // Top level
-// ============================================================================
 
+/// A metadata annotation such as `@doc` or `@moduledoc`.
 #[derive(Debug, Clone)]
-pub struct Module {
-    pub moduledoc: Option<Annotation>,
-    pub items: Vec<Item>,
-    pub comments: Vec<Comment>,
+pub struct Annotation {
+    pub name: String,
+    pub value: Option<String>,
     pub span: Span,
 }
 
+/// A source comment preserved for formatting and documentation tooling.
+#[derive(Debug, Clone)]
+pub struct Comment {
+    pub text: String,
+    pub span: Span,
+}
+
+/// A compiler diagnostic emitted during parsing, type checking, or codegen.
+#[derive(Debug, Clone)]
+pub struct Diagnostic {
+    pub severity: Severity,
+    pub message: String,
+    pub hint: Option<String>,
+    pub span: Span,
+}
+
+/// A top-level declaration within a module.
 #[derive(Debug, Clone)]
 pub enum Item {
     Constant(Constant),
@@ -23,19 +46,16 @@ pub enum Item {
     Struct(StructDecl),
 }
 
+/// The root AST node representing a single Expo source file.
 #[derive(Debug, Clone)]
-pub struct Annotation {
-    pub name: String,
-    pub value: Option<String>,
+pub struct Module {
+    pub moduledoc: Option<Annotation>,
+    pub items: Vec<Item>,
+    pub comments: Vec<Comment>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
-pub struct Comment {
-    pub text: String,
-    pub span: Span,
-}
-
+/// The severity level of a compiler diagnostic.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Severity {
     Error,
@@ -43,18 +63,9 @@ pub enum Severity {
     Note,
 }
 
-#[derive(Debug, Clone)]
-pub struct Diagnostic {
-    pub severity: Severity,
-    pub message: String,
-    pub hint: Option<String>,
-    pub span: Span,
-}
-
-// ============================================================================
 // Imports
-// ============================================================================
 
+/// An `import` statement bringing names into scope from another module.
 #[derive(Debug, Clone)]
 pub struct Import {
     pub path: Vec<String>,
@@ -62,35 +73,30 @@ pub struct Import {
     pub span: Span,
 }
 
+/// What an import statement brings into scope.
 #[derive(Debug, Clone)]
 pub enum ImportTarget {
+    /// `import path` — import the module itself as a qualified name.
     Module,
+    /// `import path.{name}` — import a single named item.
     Item(String),
+    /// `import path.{a, b, c}` — import multiple named items.
     Group(Vec<String>),
+    /// `import path.*` — import all public items.
     Wildcard,
 }
 
-// ============================================================================
 // Declarations
-// ============================================================================
 
+/// A module-level constant: `const NAME = expr`.
 #[derive(Debug, Clone)]
-pub struct StructDecl {
-    pub annotation: Option<Annotation>,
+pub struct Constant {
     pub name: String,
-    pub type_params: Vec<String>,
-    pub fields: Vec<StructField>,
+    pub value: Expr,
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
-pub struct StructField {
-    pub name: String,
-    pub type_expr: TypeExpr,
-    pub default: Option<Expr>,
-    pub span: Span,
-}
-
+/// An enum declaration: `enum Color ... end`.
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
     pub annotation: Option<Annotation>,
@@ -100,6 +106,7 @@ pub struct EnumDecl {
     pub span: Span,
 }
 
+/// A single variant within an enum declaration.
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
     pub name: String,
@@ -107,34 +114,18 @@ pub struct EnumVariant {
     pub span: Span,
 }
 
+/// The data shape of an enum variant.
 #[derive(Debug, Clone)]
 pub enum EnumVariantData {
+    /// A unit variant carrying no data: `None`.
     Unit,
+    /// A tuple variant: `Some(i32)`.
     Tuple(Vec<TypeExpr>),
+    /// A struct variant with named fields: `Move { x: i32, y: i32 }`.
     Struct(Vec<StructField>),
 }
 
-#[derive(Debug, Clone)]
-pub struct ImplBlock {
-    pub target: TypeExpr,
-    pub trait_expr: Option<TypeExpr>,
-    pub members: Vec<ImplMember>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub enum ImplMember {
-    Function(Function),
-    TypeAlias(TypeAlias),
-}
-
-#[derive(Debug, Clone)]
-pub struct TypeAlias {
-    pub name: String,
-    pub type_expr: TypeExpr,
-    pub span: Span,
-}
-
+/// A function declaration: `fn name(params) -> ReturnType ... end`.
 #[derive(Debug, Clone)]
 pub struct Function {
     pub annotation: Option<Annotation>,
@@ -147,12 +138,29 @@ pub struct Function {
     pub span: Span,
 }
 
+/// An `impl` block attaching methods to a struct or enum.
+#[derive(Debug, Clone)]
+pub struct ImplBlock {
+    pub target: TypeExpr,
+    pub trait_expr: Option<TypeExpr>,
+    pub members: Vec<ImplMember>,
+    pub span: Span,
+}
+
+/// A member within an `impl` block.
+#[derive(Debug, Clone)]
+pub enum ImplMember {
+    Function(Function),
+    TypeAlias(TypeAlias),
+}
+
+/// A function parameter.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Param {
-    Self_ {
-        span: Span,
-    },
+    /// The `self` receiver in a method.
+    Self_ { span: Span },
+    /// A regular named parameter with an optional default value.
     Regular {
         is_move: bool,
         name: String,
@@ -162,13 +170,7 @@ pub enum Param {
     },
 }
 
-#[derive(Debug, Clone)]
-pub struct Constant {
-    pub name: String,
-    pub value: Expr,
-    pub span: Span,
-}
-
+/// A `shared` declaration for concurrent shared state.
 #[derive(Debug, Clone)]
 pub struct SharedDecl {
     pub name: String,
@@ -176,73 +178,66 @@ pub struct SharedDecl {
     pub span: Span,
 }
 
-// ============================================================================
-// Type expressions
-// ============================================================================
+/// A struct declaration: `struct Point ... end`.
+#[derive(Debug, Clone)]
+pub struct StructDecl {
+    pub annotation: Option<Annotation>,
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub fields: Vec<StructField>,
+    pub span: Span,
+}
 
+/// A single field within a struct declaration.
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: String,
+    pub type_expr: TypeExpr,
+    pub default: Option<Expr>,
+    pub span: Span,
+}
+
+/// A type alias within an `impl` block: `type Name = TypeExpr`.
+#[derive(Debug, Clone)]
+pub struct TypeAlias {
+    pub name: String,
+    pub type_expr: TypeExpr,
+    pub span: Span,
+}
+
+// Type expressions
+
+/// A type annotation in source code (e.g., `i32`, `List<String>`, `ref<T>`).
 #[derive(Debug, Clone)]
 pub enum TypeExpr {
-    Named {
-        path: Vec<String>,
-        span: Span,
-    },
+    /// A simple named type: `i32`, `String`, `MyStruct`.
+    Named { path: Vec<String>, span: Span },
+    /// A generic type with type arguments: `List<i32>`, `Map<String, i32>`.
     Generic {
         path: Vec<String>,
         args: Vec<TypeExpr>,
         span: Span,
     },
-    Ref {
-        inner: Box<TypeExpr>,
-        span: Span,
-    },
-    Tuple {
-        elements: Vec<TypeExpr>,
-        span: Span,
-    },
-    Unit {
-        span: Span,
-    },
+    /// A reference type: `ref<T>`.
+    Ref { inner: Box<TypeExpr>, span: Span },
+    /// A tuple type: `(i32, String)`.
+    Tuple { elements: Vec<TypeExpr>, span: Span },
+    /// The unit type: `()`.
+    Unit { span: Span },
 }
 
-// ============================================================================
 // Statements
-// ============================================================================
 
-#[derive(Debug, Clone)]
-pub enum Statement {
-    Expr(Expr),
-    Assignment {
-        target: AssignTarget,
-        value: Expr,
-        span: Span,
-    },
-    CompoundAssign {
-        target: LValue,
-        op: CompoundOp,
-        value: Expr,
-        span: Span,
-    },
-    Return {
-        value: Option<Expr>,
-        span: Span,
-    },
-    Break {
-        span: Span,
-    },
-}
-
+/// The left-hand side of an assignment.
 #[derive(Debug, Clone)]
 pub enum AssignTarget {
+    /// A simple or dotted lvalue: `x`, `point.x`.
     LValue(LValue),
+    /// A destructuring pattern: `(a, b) = expr`.
     Pattern(Pattern),
 }
 
-#[derive(Debug, Clone)]
-pub struct LValue {
-    pub segments: Vec<String>,
-    pub span: Span,
-}
-
+/// Compound assignment operators: `+=`, `-=`, `*=`, `/=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompoundOp {
     Add,
@@ -251,155 +246,48 @@ pub enum CompoundOp {
     Sub,
 }
 
-// ============================================================================
-// Expressions
-// ============================================================================
-
+/// A dotted lvalue path used in assignments: `x`, `point.x`, `self.name`.
 #[derive(Debug, Clone)]
-pub enum Expr {
-    Arena {
-        body: Vec<Statement>,
-        span: Span,
-    },
-    Await {
-        expr: Box<Expr>,
-        span: Span,
-    },
-    Binary {
-        op: BinOp,
-        left: Box<Expr>,
-        right: Box<Expr>,
-        span: Span,
-    },
-    Call {
-        callee: Box<Expr>,
-        type_args: Option<Vec<TypeExpr>>,
-        args: Vec<Arg>,
-        span: Span,
-    },
-    Closure {
-        params: Vec<ClosureParam>,
-        return_type: Option<TypeExpr>,
-        body: Vec<Statement>,
-        span: Span,
-    },
-    Cond {
-        arms: Vec<CondArm>,
-        else_body: Option<Vec<Statement>>,
-        span: Span,
-    },
-    EnumConstruction {
-        type_path: Vec<String>,
-        variant: String,
-        data: EnumConstructionData,
-        span: Span,
-    },
-    FieldAccess {
-        receiver: Box<Expr>,
-        field: String,
-        span: Span,
-    },
-    For {
-        pattern: Pattern,
-        iterable: Box<Expr>,
-        body: Vec<Statement>,
-        span: Span,
-    },
-    Group {
-        expr: Box<Expr>,
-        span: Span,
-    },
-    Ident {
-        name: String,
-        span: Span,
-    },
-    If {
-        condition: Box<Expr>,
-        then_body: Vec<Statement>,
-        else_body: Option<Vec<Statement>>,
-        span: Span,
-    },
-    List {
-        elements: Vec<Expr>,
-        span: Span,
-    },
-    Literal {
-        value: Literal,
-        span: Span,
-    },
-    Loop {
-        body: Vec<Statement>,
-        span: Span,
-    },
-    Match {
-        subject: Box<Expr>,
-        arms: Vec<MatchArm>,
-        span: Span,
-    },
-    MethodCall {
-        receiver: Box<Expr>,
-        method: String,
-        type_args: Option<Vec<TypeExpr>>,
-        args: Vec<Arg>,
-        span: Span,
-    },
-    Receive {
-        arms: Vec<ReceiveArm>,
-        span: Span,
-    },
-    Self_ {
-        span: Span,
-    },
-    ShortClosure {
-        params: Vec<ClosureParam>,
-        body: Box<Expr>,
-        span: Span,
-    },
-    Spawn {
-        expr: Box<Expr>,
-        span: Span,
-    },
-    String {
-        parts: Vec<StringPart>,
-        multiline: bool,
-        span: Span,
-    },
-    StructConstruction {
-        type_path: Vec<String>,
-        fields: Vec<FieldInit>,
-        span: Span,
-    },
-    Ternary {
-        condition: Box<Expr>,
-        then_expr: Box<Expr>,
-        else_expr: Box<Expr>,
-        span: Span,
-    },
-    Try {
-        expr: Box<Expr>,
-        span: Span,
-    },
-    Tuple {
-        elements: Vec<Expr>,
-        span: Span,
-    },
-    Unary {
-        op: UnaryOp,
-        operand: Box<Expr>,
-        span: Span,
-    },
-    Unless {
-        condition: Box<Expr>,
-        body: Vec<Statement>,
-        span: Span,
-    },
-    While {
-        condition: Box<Expr>,
-        body: Vec<Statement>,
-        span: Span,
-    },
+pub struct LValue {
+    pub segments: Vec<String>,
+    pub span: Span,
 }
 
+/// A statement within a function or block body.
+#[derive(Debug, Clone)]
+pub enum Statement {
+    /// A bare expression evaluated for its side effects.
+    Expr(Expr),
+    /// A variable or pattern assignment: `x = expr`, `(a, b) = expr`.
+    Assignment {
+        target: AssignTarget,
+        value: Expr,
+        span: Span,
+    },
+    /// A compound assignment: `x += 1`.
+    CompoundAssign {
+        target: LValue,
+        op: CompoundOp,
+        value: Expr,
+        span: Span,
+    },
+    /// An explicit return: `return expr`.
+    Return { value: Option<Expr>, span: Span },
+    /// A loop break: `break`.
+    Break { span: Span },
+}
+
+// Expressions
+
+/// A positional or named argument in a function/method call.
+#[derive(Debug, Clone)]
+pub struct Arg {
+    pub name: Option<String>,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// Binary operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Add,
@@ -418,12 +306,181 @@ pub enum BinOp {
     Sub,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp {
-    Neg,
-    Not,
+/// A parameter in a closure expression.
+#[derive(Debug, Clone)]
+pub enum ClosureParam {
+    /// A named parameter with optional type: `x`, `x: i32`.
+    Name {
+        name: String,
+        type_expr: Option<TypeExpr>,
+        span: Span,
+    },
+    /// A destructuring parameter: `(a, b)`.
+    Destructured { names: Vec<String>, span: Span },
+    /// A wildcard parameter: `_`.
+    Wildcard { span: Span },
 }
 
+/// The data payload when constructing an enum variant value.
+#[derive(Debug, Clone)]
+pub enum EnumConstructionData {
+    /// No data: `Color.Red`.
+    Unit,
+    /// Positional data: `Option.Some(42)`.
+    Tuple(Vec<Expr>),
+    /// Named fields: `Shape.Rect { width: 10, height: 20 }`.
+    Struct(Vec<FieldInit>),
+}
+
+/// An expression node in the AST.
+#[derive(Debug, Clone)]
+pub enum Expr {
+    /// An arena allocation block: `arena ... end`.
+    Arena { body: Vec<Statement>, span: Span },
+    /// An await expression: `await expr`.
+    Await { expr: Box<Expr>, span: Span },
+    /// A binary operation: `a + b`, `x |> f`.
+    Binary {
+        op: BinOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: Span,
+    },
+    /// A function call: `f(args)`.
+    Call {
+        callee: Box<Expr>,
+        type_args: Option<Vec<TypeExpr>>,
+        args: Vec<Arg>,
+        span: Span,
+    },
+    /// A block closure: `fn (x: i32) -> i32 ... end`.
+    Closure {
+        params: Vec<ClosureParam>,
+        return_type: Option<TypeExpr>,
+        body: Vec<Statement>,
+        span: Span,
+    },
+    /// A multi-branch conditional: `cond ... end`.
+    Cond {
+        arms: Vec<CondArm>,
+        else_body: Option<Vec<Statement>>,
+        span: Span,
+    },
+    /// An enum variant construction: `Color.Red`, `Option.Some(42)`.
+    EnumConstruction {
+        type_path: Vec<String>,
+        variant: String,
+        data: EnumConstructionData,
+        span: Span,
+    },
+    /// A field access: `point.x`.
+    FieldAccess {
+        receiver: Box<Expr>,
+        field: String,
+        span: Span,
+    },
+    /// A for loop: `for x in items ... end`.
+    For {
+        pattern: Pattern,
+        iterable: Box<Expr>,
+        body: Vec<Statement>,
+        span: Span,
+    },
+    /// A parenthesized grouping: `(expr)`.
+    Group { expr: Box<Expr>, span: Span },
+    /// A variable reference: `x`, `my_var`.
+    Ident { name: String, span: Span },
+    /// An if/else expression: `if cond ... end`.
+    If {
+        condition: Box<Expr>,
+        then_body: Vec<Statement>,
+        else_body: Option<Vec<Statement>>,
+        span: Span,
+    },
+    /// A list literal: `[1, 2, 3]`.
+    List { elements: Vec<Expr>, span: Span },
+    /// A literal value: `42`, `true`, `"hello"`.
+    Literal { value: Literal, span: Span },
+    /// An infinite loop: `loop ... end`.
+    Loop { body: Vec<Statement>, span: Span },
+    /// A pattern match expression: `match subject ... end`.
+    Match {
+        subject: Box<Expr>,
+        arms: Vec<MatchArm>,
+        span: Span,
+    },
+    /// A method or qualified call: `obj.method(args)`, `math.add(1, 2)`.
+    MethodCall {
+        receiver: Box<Expr>,
+        method: String,
+        type_args: Option<Vec<TypeExpr>>,
+        args: Vec<Arg>,
+        span: Span,
+    },
+    /// An actor receive block: `receive ... end`.
+    Receive { arms: Vec<ReceiveArm>, span: Span },
+    /// A self reference: `self`.
+    Self_ { span: Span },
+    /// An inline closure: `x -> x * 2`.
+    ShortClosure {
+        params: Vec<ClosureParam>,
+        body: Box<Expr>,
+        span: Span,
+    },
+    /// A spawn expression: `spawn expr`.
+    Spawn { expr: Box<Expr>, span: Span },
+    /// A string literal, possibly with interpolation: `"hello #{name}"`.
+    String {
+        parts: Vec<StringPart>,
+        multiline: bool,
+        span: Span,
+    },
+    /// A struct construction: `Point { x: 1, y: 2 }`.
+    StructConstruction {
+        type_path: Vec<String>,
+        fields: Vec<FieldInit>,
+        span: Span,
+    },
+    /// A ternary expression: `cond ? then_expr : else_expr`.
+    Ternary {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+        span: Span,
+    },
+    /// A try expression for error propagation: `try expr`.
+    Try { expr: Box<Expr>, span: Span },
+    /// A tuple literal: `(1, "hello")`.
+    Tuple { elements: Vec<Expr>, span: Span },
+    /// A unary operation: `-x`, `not flag`.
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+        span: Span,
+    },
+    /// An unless guard: `unless cond ... end`.
+    Unless {
+        condition: Box<Expr>,
+        body: Vec<Statement>,
+        span: Span,
+    },
+    /// A while loop: `while cond ... end`.
+    While {
+        condition: Box<Expr>,
+        body: Vec<Statement>,
+        span: Span,
+    },
+}
+
+/// A named field initializer in a struct or enum struct construction.
+#[derive(Debug, Clone)]
+pub struct FieldInit {
+    pub name: String,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// A literal value in source code.
 #[derive(Debug, Clone)]
 pub enum Literal {
     Bool(bool),
@@ -433,26 +490,12 @@ pub enum Literal {
     Unit,
 }
 
-#[derive(Debug, Clone)]
-pub struct Arg {
-    pub name: Option<String>,
-    pub value: Expr,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct FieldInit {
-    pub name: String,
-    pub value: Expr,
-    pub span: Span,
-}
-
+/// A segment of a string literal, either raw text or an interpolation.
 #[derive(Debug, Clone)]
 pub enum StringPart {
-    Literal {
-        value: String,
-        span: Span,
-    },
+    /// A raw text fragment within a string.
+    Literal { value: String, span: Span },
+    /// An interpolated expression: `#{expr}`.
     Interpolation {
         expr: Expr,
         format: Option<String>,
@@ -460,33 +503,24 @@ pub enum StringPart {
     },
 }
 
-#[derive(Debug, Clone)]
-pub enum EnumConstructionData {
-    Unit,
-    Tuple(Vec<Expr>),
-    Struct(Vec<FieldInit>),
+/// Unary operators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    Neg,
+    Not,
 }
 
+// Arms
+
+/// A single branch in a `cond` expression.
 #[derive(Debug, Clone)]
-pub enum ClosureParam {
-    Name {
-        name: String,
-        type_expr: Option<TypeExpr>,
-        span: Span,
-    },
-    Destructured {
-        names: Vec<String>,
-        span: Span,
-    },
-    Wildcard {
-        span: Span,
-    },
+pub struct CondArm {
+    pub condition: Expr,
+    pub body: Vec<Statement>,
+    pub span: Span,
 }
 
-// ============================================================================
-// Match / cond / receive arms
-// ============================================================================
-
+/// A single branch in a `match` expression with a pattern and optional guard.
 #[derive(Debug, Clone)]
 pub struct MatchArm {
     pub pattern: Pattern,
@@ -495,13 +529,7 @@ pub struct MatchArm {
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
-pub struct CondArm {
-    pub condition: Expr,
-    pub body: Vec<Statement>,
-    pub span: Span,
-}
-
+/// A single branch in a `receive` block matching a message pattern.
 #[derive(Debug, Clone)]
 pub struct ReceiveArm {
     pub pattern: Pattern,
@@ -510,59 +538,53 @@ pub struct ReceiveArm {
     pub span: Span,
 }
 
-// ============================================================================
 // Patterns
-// ============================================================================
 
+/// A named field within an enum struct pattern: `name: pattern` or shorthand `name`.
+#[derive(Debug, Clone)]
+pub struct FieldPattern {
+    pub name: String,
+    pub pattern: Option<Pattern>,
+    pub span: Span,
+}
+
+/// A destructuring pattern used in `match` arms, `for` loops, and assignments.
 #[derive(Debug, Clone)]
 pub enum Pattern {
-    Wildcard {
-        span: Span,
-    },
-    Literal {
-        value: Literal,
-        span: Span,
-    },
-    Binding {
-        name: String,
-        span: Span,
-    },
+    /// A wildcard that matches anything: `_`.
+    Wildcard { span: Span },
+    /// A literal match: `42`, `true`.
+    Literal { value: Literal, span: Span },
+    /// A variable binding: `x`, `name`.
+    Binding { name: String, span: Span },
+    /// A unit enum variant: `Color.Red`.
     EnumUnit {
         type_path: Vec<String>,
         variant: String,
         span: Span,
     },
+    /// A tuple enum variant: `Option.Some(x)`.
     EnumTuple {
         type_path: Vec<String>,
         variant: String,
         elements: Vec<Pattern>,
         span: Span,
     },
+    /// A struct enum variant: `Shape.Rect { width, height }`.
     EnumStruct {
         type_path: Vec<String>,
         variant: String,
         fields: Vec<FieldPattern>,
         span: Span,
     },
-    /// Shorthand constructors: Some(x), Ok(x), Err(x)
+    /// Shorthand constructors: `Some(x)`, `Ok(x)`, `Err(x)`.
     Constructor {
         name: String,
         elements: Vec<Pattern>,
         span: Span,
     },
-    Tuple {
-        elements: Vec<Pattern>,
-        span: Span,
-    },
-    List {
-        elements: Vec<Pattern>,
-        span: Span,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct FieldPattern {
-    pub name: String,
-    pub pattern: Option<Pattern>,
-    pub span: Span,
+    /// A tuple pattern: `(a, b)`.
+    Tuple { elements: Vec<Pattern>, span: Span },
+    /// A list pattern: `[head, tail]`.
+    List { elements: Vec<Pattern>, span: Span },
 }
