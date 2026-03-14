@@ -12,6 +12,8 @@
     { "include": "#primitive-types" },
     { "include": "#types" },
     { "include": "#module-constants" },
+    { "include": "#module-qualified-call" },
+    { "include": "#import-path" },
     { "include": "#function-call" },
     { "include": "#identifiers" }
   ],
@@ -203,6 +205,27 @@
         {
           "name": "constant.other.expo",
           "match": "\\b[A-Z][A-Z0-9_]{1,}\\b"
+        }
+      ]
+    },
+    "import-path": {
+      "patterns": [
+        {
+          "match": "(?<=\\bimport\\s)([a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)*)",
+          "captures": {
+            "1": { "name": "entity.name.namespace.expo" }
+          }
+        }
+      ]
+    },
+    "module-qualified-call": {
+      "patterns": [
+        {
+          "match": "\\b([a-z_][a-z0-9_]*)\\.([a-z_][a-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.namespace.expo" },
+            "2": { "name": "entity.name.function.expo" }
+          }
         }
       ]
     },

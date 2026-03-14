@@ -45,6 +45,11 @@ syn region expoMultiString  start=/"""/ end=/"""/       contains=expoInterpolati
 syn match  expoEscape       /\\[nrt\\"#]/ contained
 syn region expoInterpolation matchgroup=expoInterpDelim start=/#{/ end=/}/ contained contains=TOP
 
+" --- Module names -----------------------------------------------------------
+
+syn match expoModulePath      /\(\<import\s\+\)\@<=\l\w*\(\.\l\w*\)*/
+syn match expoModuleQualifier /\<\l\w*\ze\.\l\w*\s*(/
+
 " --- Operators --------------------------------------------------------------
 
 syn match expoOperator      /|>/
@@ -76,6 +81,8 @@ hi def link expoMultiString   String
 hi def link expoEscape        SpecialChar
 hi def link expoInterpolation Normal
 hi def link expoInterpDelim   Special
+hi def link expoModulePath     Include
+hi def link expoModuleQualifier Include
 hi def link expoOperator      Operator
 hi def link expoAnnotation    PreProc
 hi def link expoComment       Comment

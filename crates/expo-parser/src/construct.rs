@@ -251,10 +251,12 @@ impl Parser {
                 }
             }
             self.expect(&TokenKind::RParen);
-            Expr::Tuple {
-                elements,
-                span: self.span_from(start),
-            }
+            let span = self.span_from(start);
+            self.error(
+                "tuples are not supported, use a struct instead".to_string(),
+                span,
+            );
+            Expr::Tuple { elements, span }
         } else {
             self.expect(&TokenKind::RParen);
             Expr::Group {

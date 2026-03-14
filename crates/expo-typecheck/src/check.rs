@@ -748,6 +748,85 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             span,
             ..
         } => {
+            if let Expr::Ident { name: mod_name, .. } = receiver.as_ref() {
+                let mod_lookup = ctx.imported_modules.get(mod_name).map(|mod_ctx| {
+                    mod_ctx.functions.get(method).map(|sig| {
+                        (
+                            sig.params.len(),
+                            sig.return_type.clone(),
+                            sig.params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.ty.clone()))
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                });
+
+                match mod_lookup {
+                    Some(Some((expected_count, return_type, param_types))) => {
+                        let actual_count = args.len();
+                        if expected_count != actual_count {
+                            let params: Vec<String> = param_types
+                                .iter()
+                                .map(|(n, t)| format!("{}: {}", n, t.display()))
+                                .collect();
+                            ctx.error_with_hint(
+                                format!(
+                                    "function `{}.{}` expects {} argument(s), got {}",
+                                    mod_name, method, expected_count, actual_count
+                                ),
+                                format!("signature: fn {}({})", method, params.join(", ")),
+                                *span,
+                            );
+                        } else {
+                            for (i, arg) in args.iter().enumerate() {
+                                let arg_ty = infer_expr(&arg.value, ctx, ce);
+                                let (param_name, param_ty) = &param_types[i];
+                                if *param_ty != Type::Unknown
+                                    && *param_ty != Type::Error
+                                    && arg_ty != Type::Unknown
+                                    && arg_ty != Type::Error
+                                    && *param_ty != arg_ty
+                                {
+                                    ctx.error(
+                                        format!(
+                                            "argument `{}`: expected `{}`, found `{}`",
+                                            param_name,
+                                            param_ty.display(),
+                                            arg_ty.display()
+                                        ),
+                                        arg.span,
+                                    );
+                                }
+                            }
+                        }
+                        return return_type;
+                    }
+                    Some(None) => {
+                        for arg in args {
+                            infer_expr(&arg.value, ctx, ce);
+                        }
+                        let available: Vec<String> = ctx
+                            .imported_modules
+                            .get(mod_name)
+                            .map(|m| m.functions.keys().cloned().collect())
+                            .unwrap_or_default();
+                        let hint = if available.is_empty() {
+                            format!("module `{}` has no public functions", mod_name)
+                        } else {
+                            format!("available functions: {}", available.join(", "))
+                        };
+                        ctx.error_with_hint(
+                            format!("module `{}` has no function `{}`", mod_name, method),
+                            hint,
+                            *span,
+                        );
+                        return Type::Error;
+                    }
+                    None => {}
+                }
+            }
+
             let recv_ty = infer_expr(receiver, ctx, ce);
 
             let method_sig = match &recv_ty {

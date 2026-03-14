@@ -8,6 +8,7 @@ pub enum SymbolInfo {
     Struct { name: String },
     Enum { name: String },
     Module { path: Vec<String> },
+    ModuleFunction { module: String, name: String },
     Variable { name: String },
 }
 
@@ -185,6 +186,7 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
         }
         Expr::MethodCall {
             receiver,
+            method,
             args,
             span,
             ..
@@ -192,6 +194,24 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
             if span_contains(span, line, col) {
                 if let Some(info) = find_in_expr(receiver, line, col, ctx) {
                     return Some(info);
+                }
+                if let Expr::Ident {
+                    name: mod_name,
+                    span: recv_span,
+                } = receiver.as_ref()
+                {
+                    let method_start = recv_span.end.column + 2;
+                    let method_end = method_start + method.len() as u32;
+                    if line == recv_span.end.line
+                        && col >= method_start
+                        && col <= method_end
+                        && ctx.imported_modules.contains_key(mod_name)
+                    {
+                        return Some(SymbolInfo::ModuleFunction {
+                            module: mod_name.clone(),
+                            name: method.clone(),
+                        });
+                    }
                 }
                 for arg in args {
                     if let Some(info) = find_in_expr(&arg.value, line, col, ctx) {
@@ -349,6 +369,10 @@ fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo> {
     } else if ctx.enums.contains_key(name) {
         Some(SymbolInfo::Enum {
             name: name.to_string(),
+        })
+    } else if ctx.imported_modules.contains_key(name) {
+        Some(SymbolInfo::Module {
+            path: vec![name.to_string()],
         })
     } else {
         Some(SymbolInfo::Variable {

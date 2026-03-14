@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cond` expressions are now value-producing (can be used in assignments when all arms + `else` produce values).
 - `match` expressions are now value-producing (can be used in assignments when all arms produce values).
 - Ternary expressions (`condition ? then : else`), with nested ternaries disallowed.
+- Qualified imports (`math.add(1, 2)`) -- module-prefixed function calls now type-check and compile. Both `add(1, 2)` and `math.add(1, 2)` work after `import math`.
+- Import conflict detection -- errors on duplicate names from different imports and duplicate module qualifiers.
+- LSP: hover and go-to-definition for qualified calls (`math.add()` shows signature and docs from the source module).
+- LSP: nested module path resolution (`import what.util` correctly resolves to `what/util.expo`).
+- Vim/VSCode syntax highlighting for module names in imports and qualified calls.
+
+### Changed
+
+- Tuples removed from the language. `(a, b)` is now grouping only; use a struct for multiple values. `Pair<A, B>` will be available in stdlib after generics land.
 
 ### Fixed
 

@@ -9,6 +9,7 @@ pub struct TypeContext {
     pub diagnostics: Vec<Diagnostic>,
     pub enums: HashMap<String, EnumInfo>,
     pub functions: HashMap<String, FunctionSig>,
+    pub imported_modules: HashMap<String, TypeContext>,
     pub structs: HashMap<String, StructInfo>,
 }
 
@@ -63,6 +64,7 @@ impl TypeContext {
             diagnostics: Vec::new(),
             enums: HashMap::new(),
             functions: HashMap::new(),
+            imported_modules: HashMap::new(),
             structs: HashMap::new(),
         }
     }

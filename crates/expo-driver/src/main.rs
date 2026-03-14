@@ -231,6 +231,13 @@ fn build(args: &[String], quiet: bool, color: bool) {
                     .insert(name.clone(), clone_enum_info_for_merge(info));
             }
         }
+        for (mod_name, mod_ctx) in &ctx.imported_modules {
+            if !merged_ctx.imported_modules.contains_key(mod_name) {
+                merged_ctx
+                    .imported_modules
+                    .insert(mod_name.clone(), clone_type_context_for_merge(mod_ctx));
+            }
+        }
     }
 
     let modules_ast: Vec<&expo_ast::ast::Module> = graph
@@ -275,6 +282,26 @@ fn build(args: &[String], quiet: bool, color: bool) {
             process::exit(1);
         }
     }
+}
+
+fn clone_type_context_for_merge(
+    ctx: &expo_typecheck::context::TypeContext,
+) -> expo_typecheck::context::TypeContext {
+    let mut new_ctx = expo_typecheck::context::TypeContext::new();
+    for (name, sig) in &ctx.functions {
+        new_ctx.functions.insert(name.clone(), clone_fn_sig(sig));
+    }
+    for (name, info) in &ctx.structs {
+        new_ctx
+            .structs
+            .insert(name.clone(), clone_struct_info_for_merge(info));
+    }
+    for (name, info) in &ctx.enums {
+        new_ctx
+            .enums
+            .insert(name.clone(), clone_enum_info_for_merge(info));
+    }
+    new_ctx
 }
 
 fn clone_struct_info_for_merge(

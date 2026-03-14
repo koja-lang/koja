@@ -2,6 +2,7 @@ use expo_ast::ast::Expr;
 use expo_typecheck::types::Type;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
+use crate::calls::compile_call;
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 use crate::types::to_llvm_type;
@@ -162,6 +163,12 @@ pub fn compile_method_call<'ctx>(
     args: &[expo_ast::ast::Arg],
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    if let Expr::Ident { name, .. } = receiver
+        && c.type_ctx.imported_modules.contains_key(name)
+    {
+        return compile_call(c, method, args, function);
+    }
+
     let recv_val = compile_expr(c, receiver, function)?
         .ok_or("method call on expression that produced no value")?;
 

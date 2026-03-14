@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use expo_ast::ast::{EnumVariantData, ImplMember, ImportTarget, Item, Module, Param, TypeExpr};
 use expo_ast::span::Span;
@@ -209,6 +209,8 @@ pub fn resolve_imports(
     ctx: &mut TypeContext,
     module_contexts: &HashMap<String, TypeContext>,
 ) {
+    let mut imported_names: HashSet<String> = HashSet::new();
+
     for item in &module.items {
         if let Item::Import(import) = item {
             let base_path = import.path.join(".");
@@ -216,7 +218,15 @@ pub fn resolve_imports(
             match &import.target {
                 ImportTarget::Module => {
                     if let Some(source_ctx) = module_contexts.get(&base_path) {
-                        merge_all_public(ctx, source_ctx, &base_path, import.span);
+                        merge_all_public(
+                            ctx,
+                            source_ctx,
+                            &base_path,
+                            import.span,
+                            &mut imported_names,
+                        );
+                        let module_name = import.path.last().unwrap().clone();
+                        insert_module_or_error(ctx, &module_name, source_ctx, import.span);
                     } else {
                         ctx.error(
                             format!("unresolved import: module `{base_path}` not found"),
@@ -226,7 +236,15 @@ pub fn resolve_imports(
                 }
                 ImportTarget::Wildcard => {
                     if let Some(source_ctx) = module_contexts.get(&base_path) {
-                        merge_all_public(ctx, source_ctx, &base_path, import.span);
+                        merge_all_public(
+                            ctx,
+                            source_ctx,
+                            &base_path,
+                            import.span,
+                            &mut imported_names,
+                        );
+                        let module_name = import.path.last().unwrap().clone();
+                        insert_module_or_error(ctx, &module_name, source_ctx, import.span);
                     } else {
                         ctx.error(
                             format!("unresolved import: module `{base_path}` not found"),
@@ -237,9 +255,23 @@ pub fn resolve_imports(
                 ImportTarget::Item(name) => {
                     let full_path = format!("{base_path}.{name}");
                     if let Some(source_ctx) = module_contexts.get(&full_path) {
-                        merge_all_public(ctx, source_ctx, &full_path, import.span);
+                        merge_all_public(
+                            ctx,
+                            source_ctx,
+                            &full_path,
+                            import.span,
+                            &mut imported_names,
+                        );
+                        insert_module_or_error(ctx, name, source_ctx, import.span);
                     } else if let Some(source_ctx) = module_contexts.get(&base_path) {
-                        merge_named(ctx, source_ctx, name, &base_path, import.span);
+                        merge_named(
+                            ctx,
+                            source_ctx,
+                            name,
+                            &base_path,
+                            import.span,
+                            &mut imported_names,
+                        );
                     } else {
                         ctx.error(
                             format!("unresolved import: module `{base_path}` not found"),
@@ -250,7 +282,14 @@ pub fn resolve_imports(
                 ImportTarget::Group(names) => {
                     if let Some(source_ctx) = module_contexts.get(&base_path) {
                         for name in names {
-                            merge_named(ctx, source_ctx, name, &base_path, import.span);
+                            merge_named(
+                                ctx,
+                                source_ctx,
+                                name,
+                                &base_path,
+                                import.span,
+                                &mut imported_names,
+                            );
                         }
                     } else {
                         ctx.error(
@@ -264,9 +303,41 @@ pub fn resolve_imports(
     }
 }
 
-fn merge_all_public(ctx: &mut TypeContext, source: &TypeContext, _module_path: &str, _span: Span) {
+fn insert_module_or_error(
+    ctx: &mut TypeContext,
+    module_name: &str,
+    source_ctx: &TypeContext,
+    span: Span,
+) {
+    if ctx.imported_modules.contains_key(module_name) {
+        ctx.error(
+            format!("module qualifier `{module_name}` is already in use from another import"),
+            span,
+        );
+    } else {
+        ctx.imported_modules
+            .insert(module_name.to_string(), clone_public_context(source_ctx));
+    }
+}
+
+fn merge_all_public(
+    ctx: &mut TypeContext,
+    source: &TypeContext,
+    _module_path: &str,
+    span: Span,
+    imported_names: &mut HashSet<String>,
+) {
     for (name, sig) in &source.functions {
-        if !sig.is_private && !ctx.functions.contains_key(name) {
+        if sig.is_private {
+            continue;
+        }
+        if imported_names.contains(name) {
+            ctx.error(
+                format!("`{name}` is already imported from another module"),
+                span,
+            );
+        } else if !ctx.functions.contains_key(name) {
+            imported_names.insert(name.clone());
             ctx.functions.insert(
                 name.clone(),
                 FunctionSig {
@@ -284,14 +355,27 @@ fn merge_all_public(ctx: &mut TypeContext, source: &TypeContext, _module_path: &
                 },
             );
         }
+        // name in ctx.functions but not in imported_names -> local definition, skip silently
     }
     for (name, info) in &source.structs {
-        if !ctx.structs.contains_key(name) {
+        if imported_names.contains(name) {
+            ctx.error(
+                format!("struct `{name}` is already imported from another module"),
+                span,
+            );
+        } else if !ctx.structs.contains_key(name) {
+            imported_names.insert(name.clone());
             ctx.structs.insert(name.clone(), clone_struct_info(info));
         }
     }
     for (name, info) in &source.enums {
-        if !ctx.enums.contains_key(name) {
+        if imported_names.contains(name) {
+            ctx.error(
+                format!("enum `{name}` is already imported from another module"),
+                span,
+            );
+        } else if !ctx.enums.contains_key(name) {
+            imported_names.insert(name.clone());
             ctx.enums.insert(name.clone(), clone_enum_info(info));
         }
     }
@@ -303,6 +387,7 @@ fn merge_named(
     name: &str,
     module_path: &str,
     span: Span,
+    imported_names: &mut HashSet<String>,
 ) {
     if let Some(sig) = source.functions.get(name) {
         if sig.is_private {
@@ -310,7 +395,13 @@ fn merge_named(
                 format!("function `{name}` is private to module `{module_path}`"),
                 span,
             );
+        } else if imported_names.contains(name) {
+            ctx.error(
+                format!("`{name}` is already imported from another module"),
+                span,
+            );
         } else if !ctx.functions.contains_key(name) {
+            imported_names.insert(name.to_string());
             ctx.functions.insert(
                 name.to_string(),
                 FunctionSig {
@@ -331,14 +422,26 @@ fn merge_named(
         return;
     }
     if let Some(info) = source.structs.get(name) {
-        if !ctx.structs.contains_key(name) {
+        if imported_names.contains(name) {
+            ctx.error(
+                format!("struct `{name}` is already imported from another module"),
+                span,
+            );
+        } else if !ctx.structs.contains_key(name) {
+            imported_names.insert(name.to_string());
             ctx.structs
                 .insert(name.to_string(), clone_struct_info(info));
         }
         return;
     }
     if let Some(info) = source.enums.get(name) {
-        if !ctx.enums.contains_key(name) {
+        if imported_names.contains(name) {
+            ctx.error(
+                format!("enum `{name}` is already imported from another module"),
+                span,
+            );
+        } else if !ctx.enums.contains_key(name) {
+            imported_names.insert(name.to_string());
             ctx.enums.insert(name.to_string(), clone_enum_info(info));
         }
         return;
@@ -347,6 +450,37 @@ fn merge_named(
         format!("`{name}` not found in module `{module_path}`"),
         span,
     );
+}
+
+fn clone_public_context(source: &TypeContext) -> TypeContext {
+    let mut ctx = TypeContext::new();
+    for (name, sig) in &source.functions {
+        if !sig.is_private {
+            ctx.functions.insert(
+                name.clone(),
+                FunctionSig {
+                    is_private: false,
+                    params: sig
+                        .params
+                        .iter()
+                        .map(|p| ParamInfo {
+                            name: p.name.clone(),
+                            ty: p.ty.clone(),
+                        })
+                        .collect(),
+                    return_type: sig.return_type.clone(),
+                    span: sig.span,
+                },
+            );
+        }
+    }
+    for (name, info) in &source.structs {
+        ctx.structs.insert(name.clone(), clone_struct_info(info));
+    }
+    for (name, info) in &source.enums {
+        ctx.enums.insert(name.clone(), clone_enum_info(info));
+    }
+    ctx
 }
 
 fn clone_struct_info(info: &StructInfo) -> StructInfo {

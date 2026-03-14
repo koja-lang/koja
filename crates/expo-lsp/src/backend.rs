@@ -7,7 +7,9 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
-use expo_ast::ast::{Diagnostic as ExpoDiagnostic, Item, Module, Severity as ExpoSeverity};
+use expo_ast::ast::{
+    Diagnostic as ExpoDiagnostic, ImportTarget, Item, Module, Severity as ExpoSeverity,
+};
 use expo_typecheck::context::{TypeContext, VariantData};
 
 use crate::lookup::{self, SymbolInfo};
@@ -18,6 +20,7 @@ struct DocumentState {
     #[allow(dead_code)]
     source: String,
     imported_origins: HashMap<String, String>,
+    module_uris: HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -45,17 +48,31 @@ impl Backend {
 
         let mut all_diags: Vec<ExpoDiagnostic> = parse_result.errors;
 
-        let (ctx, imported_origins) = if all_diags
+        let (ctx, imported_origins, module_uris) = if all_diags
             .iter()
             .all(|d| !matches!(d.severity, ExpoSeverity::Error))
         {
             let mut module_contexts: HashMap<String, TypeContext> = HashMap::new();
             let mut origins: HashMap<String, String> = HashMap::new();
+            let mut mod_uris: HashMap<String, String> = HashMap::new();
 
             for item in &parse_result.module.items {
                 if let Item::Import(import) = item {
-                    let module_name = import.path.join(".");
-                    if let Some(dep_path) = resolve_module_file(&uri, &import.path)
+                    let (resolve_path, module_key, qualifier) = match &import.target {
+                        ImportTarget::Item(name) => {
+                            let mut full = import.path.clone();
+                            full.push(name.clone());
+                            let key = full.join(".");
+                            (full, key, Some(name.clone()))
+                        }
+                        _ => {
+                            let key = import.path.join(".");
+                            let q = import.path.last().cloned();
+                            (import.path.clone(), key, q)
+                        }
+                    };
+
+                    if let Some(dep_path) = resolve_module_file(&uri, &resolve_path)
                         && let Ok(dep_source) = std::fs::read_to_string(&dep_path)
                     {
                         let dep_parsed = expo_parser::parse(&dep_source);
@@ -74,7 +91,11 @@ impl Backend {
                             origins.insert(name.clone(), dep_uri.clone());
                         }
 
-                        module_contexts.insert(module_name, dep_ctx);
+                        if let Some(q) = qualifier {
+                            mod_uris.insert(q, dep_uri);
+                        }
+
+                        module_contexts.insert(module_key, dep_ctx);
                     }
                 }
             }
@@ -83,9 +104,9 @@ impl Backend {
             expo_typecheck::resolve_imports(&parse_result.module, &mut ctx, &module_contexts);
             expo_typecheck::check_module(&parse_result.module, &mut ctx);
             all_diags.extend(ctx.diagnostics.clone());
-            (ctx, origins)
+            (ctx, origins, mod_uris)
         } else {
-            (TypeContext::new(), HashMap::new())
+            (TypeContext::new(), HashMap::new(), HashMap::new())
         };
 
         {
@@ -97,6 +118,7 @@ impl Backend {
                     ctx,
                     source: text.to_string(),
                     imported_origins,
+                    module_uris,
                 },
             );
         }
@@ -266,12 +288,49 @@ impl LanguageServer for Backend {
                     return Ok(None);
                 }
             }
+            SymbolInfo::ModuleFunction { module, name } => {
+                let sig = state
+                    .ctx
+                    .imported_modules
+                    .get(module)
+                    .and_then(|m| m.functions.get(name));
+                if let Some(sig) = sig {
+                    let params_str: Vec<String> = sig
+                        .params
+                        .iter()
+                        .map(|p| format!("{}: {}", p.name, p.ty.display()))
+                        .collect();
+                    let signature = format!(
+                        "fn {}.{}({}) -> {}",
+                        module,
+                        name,
+                        params_str.join(", "),
+                        sig.return_type.display()
+                    );
+                    let doc = state
+                        .module_uris
+                        .get(module)
+                        .and_then(|uri_str| find_doc_from_uri(uri_str, name));
+                    format_hover(&signature, doc.as_deref())
+                } else {
+                    return Ok(None);
+                }
+            }
             SymbolInfo::Variable { name } => format!("```expo\n{}\n```", name),
             SymbolInfo::Module { path } => {
                 let module_name = path.join(".");
                 let signature = format!("module {}", module_name);
-                let doc = resolve_module_file(&uri, path)
-                    .and_then(|p| std::fs::read_to_string(p).ok())
+                let doc = state
+                    .module_uris
+                    .get(&module_name)
+                    .and_then(|uri_str| {
+                        let p = uri_str.strip_prefix("file://")?;
+                        std::fs::read_to_string(p).ok()
+                    })
+                    .or_else(|| {
+                        resolve_module_file(&uri, path)
+                            .and_then(|p| std::fs::read_to_string(p).ok())
+                    })
                     .and_then(|source| {
                         let parsed = expo_parser::parse(&source);
                         parsed.module.moduledoc.and_then(|d| d.value)
@@ -311,12 +370,14 @@ impl LanguageServer for Backend {
         };
 
         if let SymbolInfo::Module { ref path } = symbol {
-            if let Some(module_path) = resolve_module_file(&uri, path) {
-                let target_uri: Uri = format!("file://{}", module_path.display())
-                    .parse()
-                    .map_err(|_| {
-                        tower_lsp_server::jsonrpc::Error::invalid_params("invalid module URI")
-                    })?;
+            let module_name = path.join(".");
+            let target_uri_str = state.module_uris.get(&module_name).cloned().or_else(|| {
+                resolve_module_file(&uri, path).map(|p| format!("file://{}", p.display()))
+            });
+            if let Some(uri_str) = target_uri_str {
+                let target_uri: Uri = uri_str.parse().map_err(|_| {
+                    tower_lsp_server::jsonrpc::Error::invalid_params("invalid module URI")
+                })?;
                 return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                     uri: target_uri,
                     range: Range {
@@ -324,6 +385,17 @@ impl LanguageServer for Backend {
                         end: Position::new(0, 0),
                     },
                 })));
+            }
+            return Ok(None);
+        }
+
+        if let SymbolInfo::ModuleFunction {
+            ref module,
+            ref name,
+        } = symbol
+        {
+            if let Some(module_uri) = state.module_uris.get(module) {
+                return goto_definition_in_file(module_uri, name);
             }
             return Ok(None);
         }
@@ -345,7 +417,9 @@ impl LanguageServer for Backend {
             SymbolInfo::Function { name } => state.ctx.functions.get(name).map(|sig| sig.span),
             SymbolInfo::Struct { name } => state.ctx.structs.get(name).map(|info| info.span),
             SymbolInfo::Enum { name } => state.ctx.enums.get(name).map(|info| info.span),
-            SymbolInfo::Variable { .. } | SymbolInfo::Module { .. } => None,
+            SymbolInfo::Variable { .. }
+            | SymbolInfo::Module { .. }
+            | SymbolInfo::ModuleFunction { .. } => None,
         };
 
         let span = match def_span {

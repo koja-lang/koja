@@ -29,15 +29,16 @@ Multi-module programs with imports. Functions (`fn`/`priv fn`), structs, enums, 
 
 ### Parsed and type-checked but NOT yet in codegen
 
-For, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe (`|>`), generics, `ref<T>`, tuples, lists.
+For, closures (both forms), arena, await/receive/spawn, try (`?`), generics, `ref<T>`, lists.
 
 ### Design notes
 
-- **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing), not a zero-element tuple. Tuples are 2+ elements only. Use `else -> ()` in `cond` for side-effect-only fallthrough.
+- **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. After generics land, `Pair<A, B>` (with `.first` / `.second`) will be available in the stdlib for lightweight two-value cases. 3+ values should always be a struct.
+- **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
 
 ### Known gaps
 
-- **Type checker**: generics resolve to `Unknown`, `ref<T>` unresolved, qualified imports not yet implemented (`math.add()` style -- currently `import math` dumps all public symbols into scope)
+- **Type checker**: generics resolve to `Unknown`, `ref<T>` unresolved
 
 ### Design artifacts
 
@@ -200,14 +201,14 @@ Expo has two concurrency primitives (tasks in Phase 2, actors here) because in n
 
 ### Key decisions
 
-| Decision           | Recommendation                                                                                                                                     |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Two primitives     | Tasks (stackless, structured, short-lived) and actors (stacked, isolated, long-lived). Different costs, different guarantees, both first-class.     |
-| Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with actor lifecycle management.    |
-| Scheduler model    | Work-stealing, similar to Tokio/Go. M:N threading. Start with a simple round-robin scheduler, upgrade to work-stealing once correctness is proven. |
-| I/O model          | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the actor/task.                                   |
-| Actor stack size   | Real stacks for actors (4-8KB). Tasks are stackless state machines (zero stack overhead).                                                          |
-| Typed mailboxes    | Each actor declares a message enum. `send` and `receive` are type-checked at compile time. Exhaustiveness checking catches unhandled messages.     |
+| Decision         | Recommendation                                                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Two primitives   | Tasks (stackless, structured, short-lived) and actors (stacked, isolated, long-lived). Different costs, different guarantees, both first-class.    |
+| Native runtime   | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with actor lifecycle management.     |
+| Scheduler model  | Work-stealing, similar to Tokio/Go. M:N threading. Start with a simple round-robin scheduler, upgrade to work-stealing once correctness is proven. |
+| I/O model        | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the actor/task.                                   |
+| Actor stack size | Real stacks for actors (4-8KB). Tasks are stackless state machines (zero stack overhead).                                                          |
+| Typed mailboxes  | Each actor declares a message enum. `send` and `receive` are type-checked at compile time. Exhaustiveness checking catches unhandled messages.     |
 
 ### Risks
 
@@ -437,23 +438,23 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 
 ### Remaining
 
-| Phase       | Milestone                                                        |
-| ----------- | ---------------------------------------------------------------- |
-| Bootstrap   | Finish type checker (generics, qualified imports)                |
-| Bootstrap   | Finish codegen (for, closures, tuples, try, pipe)                |
-| Core        | Ownership + borrow checker + tasks (structured concurrency)      |
-| Core        | Collections, closures, arena, `ua_parser.expo` compiles          |
-| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)       |
-| Reliability | Preemption/priority, supervision, `shared_map`                   |
-| Stdlib      | Core types, I/O, time, `config.expo` compiles                    |
-| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)               |
-| Tooling     | Package manager, test runner                                     |
-| Tooling     | Documentation generator                                          |
-| Tooling     | LSP -- autocomplete, inline type hints, multi-module             |
-| Self-host   | Lexer + parser in Expo                                           |
-| Self-host   | Full compiler in Expo                                            |
-| Self-host   | Retire Rust bootstrap                                            |
-| Validation  | auth-manager-expo runs for real                                  |
+| Phase       | Milestone                                                   |
+| ----------- | ----------------------------------------------------------- |
+| Bootstrap   | Finish type checker (generics, qualified imports)           |
+| Bootstrap   | Finish codegen (for, closures, tuples, try, pipe)           |
+| Core        | Ownership + borrow checker + tasks (structured concurrency) |
+| Core        | Collections, closures, arena, `ua_parser.expo` compiles     |
+| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)  |
+| Reliability | Preemption/priority, supervision, `shared_map`              |
+| Stdlib      | Core types, I/O, time, `config.expo` compiles               |
+| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)          |
+| Tooling     | Package manager, test runner                                |
+| Tooling     | Documentation generator                                     |
+| Tooling     | LSP -- autocomplete, inline type hints, multi-module        |
+| Self-host   | Lexer + parser in Expo                                      |
+| Self-host   | Full compiler in Expo                                       |
+| Self-host   | Retire Rust bootstrap                                       |
+| Validation  | auth-manager-expo runs for real                             |
 
 ---
 
