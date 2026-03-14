@@ -1,0 +1,6 @@
+import math
+
+fn main
+  result = add(10, 20)
+  print("10 + 20 = #{result}")
+end

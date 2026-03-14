@@ -1,0 +1,36 @@
+@moduledoc "Demonstrates enums, match, and cond."
+
+@doc "A direction on the compass."
+enum Direction
+  North
+  South
+  East
+  West
+end
+
+@doc """
+Returns the opposite direction.
+"""
+fn opposite(dir: Direction) -> Direction
+  match dir
+    North -> Direction.South
+    South -> Direction.North
+    East -> Direction.West
+    West -> Direction.East
+  end
+end
+
+fn describe(value: i32) -> string
+  cond
+    value > 100 -> "big"
+    value > 10 -> "medium"
+    true -> "small"
+  end
+end
+
+fn main
+  dir = Direction.North
+  other = opposite(dir)
+  print("opposite of North is #{other}")
+  print("42 is #{describe(42)}")
+end

@@ -1,0 +1,18 @@
+[package]
+name = "expo-lsp"
+description = "Language Server Protocol implementation for the Expo language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "expo-lsp"
+path = "src/main.rs"
+
+[dependencies]
+expo-ast = { path = "../expo-ast" }
+expo-fmt = { path = "../expo-fmt" }
+expo-parser = { path = "../expo-parser" }
+expo-typecheck = { path = "../expo-typecheck" }
+tokio = { version = "1", features = ["full"] }
+tower-lsp-server = "0.23"

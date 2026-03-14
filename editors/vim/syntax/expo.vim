@@ -42,7 +42,7 @@ syn match expoNumber        /\<0b[01_]\+\>/
 
 syn region expoString       start=/"/ skip=/\\"/ end=/"/ contains=expoInterpolation,expoEscape oneline
 syn region expoMultiString  start=/"""/ end=/"""/       contains=expoInterpolation,expoEscape
-syn match  expoEscape       /\\[nrt\\"]/ contained
+syn match  expoEscape       /\\[nrt\\"#]/ contained
 syn region expoInterpolation matchgroup=expoInterpDelim start=/#{/ end=/}/ contained contains=TOP
 
 " --- Operators --------------------------------------------------------------

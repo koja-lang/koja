@@ -20,13 +20,18 @@ scope, the value is dropped (memory freed, file handles closed, etc).
 - Function parameters **borrow by default** (read-only). Use `move` to take
   ownership explicitly.
 - Borrows are scoped to the function call -- no lifetime annotations.
+- Borrows are **always read-only**. This is a permanent design commitment, not
+  a current limitation. Expo has exactly two access modes: "I own it and can do
+  anything" or "I'm borrowing it and can only read." There is no `&mut T` and
+  there never will be. Concurrent in-place mutation is handled through
+  ownership splitting (`split_owned`) instead of mutable borrows -- see
+  `CONCURRENCY.md`.
 - If you need to return data, return owned values. Clone where Rust would use a
   lifetime.
 - No `Box`, `Rc`, `Arc` in user code. The compiler handles heap placement.
-- No `mut` keyword: if you own a value, you can mutate it. Borrows are always
-  read-only.
+- No `mut` keyword: if you own a value, you can mutate it.
 
-**Typical patterns in this repo:**
+**Typical patterns:**
 
 ```
 # Borrow -- params borrow by default, no annotation needed
@@ -45,6 +50,22 @@ session_token = SessionToken{
 # Clone -- when you need the data to outlive the borrow
 id: s.id.clone()
 ```
+
+**At concurrency boundaries:**
+
+Ownership rules extend to tasks and actors (see `CONCURRENCY.md` for full
+details):
+
+- **Tasks** can borrow from their parent scope. Structured concurrency
+  guarantees the data outlives the task, so read-only borrows are safe without
+  lifetime annotations.
+- **Actors** must move or clone data across their boundary. Actors have
+  isolated memory -- no borrowing across actors. Messages transfer ownership
+  (zero-copy).
+- When an actor crashes, all its owned values are dropped deterministically.
+  The supervisor starts a fresh instance with clean state -- no leaked memory,
+  no zombie state. This is the same cleanup guarantee Erlang gets from
+  per-process heaps, achieved through ownership instead of garbage collection.
 
 ### 3. Arena (explicit opt-in)
 
@@ -77,29 +98,31 @@ expired = arena
 end
 ```
 
-The arena is used in this repo for:
-
-- `delete_expired_sessions` / `delete_expired_api_keys` -- phase 1 collects
-  expiry index entries, phase 2 processes them. The collection is temporary.
+Arenas are useful in database operations and batch processing where there's a
+clear "collect then process" boundary. Framework code (like an HTTP server)
+might offer implicit per-request arenas, but that's a framework concern, not a
+language concern.
 
 ## What this means in practice
 
-Most code in this repo uses plain ownership + borrow. You write normal code,
-pass values to functions (borrowed by default), clone when you need a copy. The
+Most Expo code uses plain ownership + borrow. You write normal code, pass
+values to functions (borrowed by default), clone when you need a copy. The
 compiler tells you when something needs to be cloned.
 
-When a type needs to express "this contains a reference, not an owned value," use
-`ref<T>` syntax. This appears in return types (`-> ref<Database>`) and inside
-generics (`Option<ref<string>>`).
+When a type needs to express "this contains a reference, not an owned value,"
+use `ref<T>` syntax. This appears in return types (`-> ref<Database>`) and
+inside generics (`Option<ref<string>>`).
 
-Function references use bare names without any sigil. The compiler distinguishes
-calls from references by the presence of parentheses: `foo()` calls the function,
-`foo` references it. This works because Expo has no function overloading.
+Function references use bare names without any sigil. The compiler
+distinguishes calls from references by the presence of parentheses: `foo()`
+calls the function, `foo` references it. This works because Expo has no
+function overloading.
 
 The `&` symbol does not exist in Expo.
 
-Arena shows up in database operations where there's a clear "collect then
-process" boundary. Framework code (like an HTTP server) might offer implicit
-per-request arenas, but that's a framework concern, not a language concern.
-
 There is no garbage collector. There are no lifetime annotations.
+
+---
+
+See `CONCURRENCY.md` for how ownership interacts with tasks, actors, message
+passing, and crash recovery.

@@ -58,9 +58,7 @@
           "endCaptures": {
             "0": { "name": "punctuation.section.interpolation.end.expo" }
           },
-          "patterns": [
-            { "include": "source.expo" }
-          ]
+          "patterns": [{ "include": "source.expo" }]
         }
       ]
     },
@@ -68,7 +66,7 @@
       "patterns": [
         {
           "name": "constant.character.escape.expo",
-          "match": "\\\\[nrt\\\\\"0]"
+          "match": "\\\\[nrt\\\\\"#0]"
         }
       ]
     },

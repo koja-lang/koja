@@ -5,6 +5,11 @@
 *.out
 *.exe
 
+# VSCode extension
+editors/vscode/node_modules
+editors/vscode/out
+
 # Misc
 install.sh
+lsp-install.sh
 .DS_Store

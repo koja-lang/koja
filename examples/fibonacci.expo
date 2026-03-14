@@ -6,7 +6,7 @@ fn fib(n: i32) -> i32
   end
 end
 
-fn main()
+fn main
   i = 0
   while i < 10
     print(fib(i))

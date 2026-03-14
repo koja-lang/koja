@@ -5,24 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.2.0] - 2026-03-13
 
 ### Added
 
 - Multi-module support with import-driven discovery (`import math`, `import utils.strings`).
-- `priv fn` visibility enforcement -- private functions are inaccessible from other modules.
-- Circular import detection with clear error messages.
-- `@moduledoc` annotation for module-level documentation.
-- `@doc` annotation support on `struct` and `enum` declarations (in addition to functions).
-- `undefined function` diagnostic when calling functions that don't exist.
 - Enum types with unit, tuple, and struct variants.
 - `match` expressions with pattern matching, nested patterns, `when` guards, and exhaustiveness checking.
 - `cond` expressions.
 - String interpolation (`"hello #{name}"`) including enum values (prints variant name by default).
 - Multiline strings (`"""`) with automatic dedent and escape sequences.
+- `priv fn` visibility enforcement -- private functions are inaccessible from other modules.
+- Circular import detection with clear error messages.
+- `undefined function` diagnostic when calling functions that don't exist.
+- Unused variable warnings (suppressed with `_` prefix).
+- `@moduledoc` annotation for module-level documentation.
+- `@doc` annotation support on `struct` and `enum` declarations (in addition to functions).
+- Language server (LSP) with real-time diagnostics, document formatting, hover (type signatures + `@doc` with Markdown-rendered code blocks), go-to-definition, and module documentation on import hover.
 - Hex (`0xFF`) and binary (`0b1010`) integer literals.
 - Underscore separators in numeric literals (`1_000`, `0xFF_FF`).
-- Unused variable warnings (suppressed with `_` prefix).
 
 ## [0.1.0] - 2026-03-13
 

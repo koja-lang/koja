@@ -1,0 +1,10 @@
+@moduledoc "Basic math utilities."
+
+@doc "Adds two integers."
+fn add(a: i32, b: i32) -> i32
+  a + b
+end
+
+priv fn internal_helper(x: i32) -> i32
+  x * 2
+end

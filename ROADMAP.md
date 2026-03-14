@@ -8,7 +8,7 @@ Solo developer + AI assistance. Bootstrap in Rust, self-host in Expo.
 
 ### Compiler
 
-A 7-crate Rust workspace (~8,500 LOC) that compiles Expo source to native binaries via LLVM:
+An 8-crate Rust workspace (~8,800 LOC) that compiles Expo source to native binaries via LLVM:
 
 - `expo-ast` -- tokens, spans, AST node definitions
 - `expo-lexer` -- custom tokenizer
@@ -17,6 +17,7 @@ A 7-crate Rust workspace (~8,500 LOC) that compiles Expo source to native binari
 - `expo-codegen` -- LLVM IR generation via `inkwell`
 - `expo-fmt` -- opinionated code formatter
 - `expo-driver` -- CLI binary (`expo`)
+- `expo-lsp` -- language server (diagnostics, formatting, hover, go-to-definition)
 
 ### CLI
 
@@ -40,12 +41,14 @@ For, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe
 - **EBNF grammar** -- `grammar.ebnf`, 426 lines covering all syntax constructs
 - **Example codebase** -- 17 `.expo` files porting `auth-manager` (a real Rust microservice) into Expo pseudocode, validating the language feels right
 - **Memory strategy** -- documented in `MEMORY.md` (stack, ownership+move, explicit arena)
+- **Concurrency model** -- documented in `CONCURRENCY.md` (tasks, actors, native runtime, supervision)
 - **Project config format** -- `project.expo` replacing `Cargo.toml`
 
 ### Tooling (pulled forward)
 
 - **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@moduledoc`/`@doc` annotations
-- **VSCode extension** -- syntax highlighting for `.expo` files
+- **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`/`@moduledoc`), and go-to-definition over stdio, integrated with the VSCode/Cursor extension
+- **VSCode extension** -- syntax highlighting and LSP client for `.expo` files
 
 ---
 
@@ -65,7 +68,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 ### Month 2 -- Type system and semantic analysis (~70% complete)
 
-- ~~Type checking: primitives, structs~~ (enums, generics, `Option<T>`, `Result<T,E>`, `Vec<T>`, `HashMap<K,V>` not yet resolved)
+- ~~Type checking: primitives, structs~~ (enums, generics, `Option<T>`, `Result<T,E>`, `List<T>`, `Map<K,V>` not yet resolved)
 - ~~Type inference for local variables (explicit types on function signatures, inferred inside bodies)~~
 - ~~Method resolution for `impl` blocks~~ (trait impls not yet)
 - ~~Name resolution across modules (file = module, import-driven discovery)~~
@@ -76,7 +79,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: Primitives, structs, enums, and method resolution work. Multi-module type checking with import-driven discovery. `priv fn` visibility enforcement across modules. `expo check` reports diagnostics with line/column positions. Hello-world, struct, enum, and multi-file programs pass. Match exhaustiveness checking catches missing variants. Unused variable warnings implemented (suppressed with `_` prefix). Warnings and errors are distinguished -- warnings no longer halt compilation. `undefined function` errors reported for unknown calls.
 
-**Remaining gaps**: generics resolve to `Unknown`, `ref<T>` unresolved, qualified imports (`math.add()` style) not yet implemented.
+**Remaining gaps**: generics resolve to `Unknown`, qualified imports (`math.add()` style) not yet implemented. (`ref<T>` is intentionally deferred to Phase 2 ownership.)
 
 ### Month 3 -- LLVM codegen (~55% complete)
 
@@ -104,14 +107,15 @@ Enums compile to tagged unions (`{ i8 tag, [N x i8] payload }`). Match compiles 
 
 ## Phase 2: Core language
 
-Make the compiler powerful enough to compile non-trivial programs with Expo's ownership model.
+Make the compiler powerful enough to compile non-trivial programs with Expo's ownership model and structured concurrency.
 
-**Note**: The parser and AST already handle all Phase 2 constructs (enums, match, cond, for, closures, arena). The work here is wiring up type checking and codegen, not design or parsing. There is significant overlap between finishing Phase 1 codegen gaps (match, enums, closures, for) and the Phase 2 milestones below.
+**Note**: The parser and AST already handle all Phase 2 constructs (enums, match, cond, for, closures, arena, spawn/await). The work here is wiring up type checking and codegen, not design or parsing. There is significant overlap between finishing Phase 1 codegen gaps (match, enums, closures, for) and the Phase 2 milestones below. Ownership and tasks are developed together because tasks need borrow semantics to work correctly.
 
 ### Ownership and borrowing
 
 - Implement move semantics: assignment moves, use-after-move is a compile error
 - Borrow-by-default: function parameters are read-only borrows unless marked `move`
+- Borrows are always read-only -- no `&mut T`, ever (see `MEMORY.md`)
 - `move` keyword on parameters for explicit ownership transfer
 - `ref<T>` syntax for reference types in return positions and generics
 - For loops iterate by reference by default (no annotation needed)
@@ -120,6 +124,19 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ow
 - Drop insertion at scope boundaries (deterministic destruction)
 - The `&` symbol does not exist in Expo -- borrowing is implicit, references use `ref<T>`
 - **Done when**: programs that move, borrow, and clone compile correctly, and use-after-move is caught
+
+### Tasks and structured concurrency
+
+- `spawn fn -> ... end` creates a stackless task (compiler transforms to a state machine), returns `Handle<T>`
+- `await handle` returns `Result<T, TaskError>`
+- Tasks can borrow (read-only) from the parent scope -- structured concurrency guarantees the parent outlives the task
+- `task.async_stream` for bounded concurrent enumeration with back-pressure
+- Cooperative yielding at `await` and I/O points
+- No preemption for tasks -- they're short-lived computations, not long-running entities
+- Tasks are cancelled if the parent returns or crashes (structured lifetime)
+- **Done when**: a program that spawns tasks, borrows parent data, and awaits results compiles correctly
+
+See `CONCURRENCY.md` "Tasks" section and `MEMORY.md` "At concurrency boundaries" for full design details.
 
 ### Pattern matching and enums
 
@@ -132,87 +149,139 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ow
 
 ### Collections and closures
 
-- `Vec<T>`, `HashMap<K,V>` as built-in generic types backed by native implementations
+- `List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations
 - Both closure forms: `(args -> expr)`, `fn args -> body end`
 - Bare function names as references (no sigil -- `foo` references, `foo()` calls)
 - Closure capture analysis (move vs. borrow)
 - Iterator methods: `.map()`, `.filter()`, `.any?()`, `.all?()`, `.retain()`, `.iter()`
+- Ownership splitting for concurrent mutation patterns (tasks receive owned, non-overlapping chunks -- specific API designed during stdlib phase)
 - `for` loops over iterables
 - `arena...end` blocks with bulk-free semantics
 - **Done when**: `ua_parser.expo` compiles -- it exercises structs, enums, match, closures, method chaining, and returns
 
 ### Risks
 
-- **Borrow checker complexity**: Expo's model is simpler than Rust's (no lifetimes), but still requires flow analysis. Start with a conservative checker that rejects some valid programs rather than accepting invalid ones. Loosen over time.
+- **Borrow checker complexity**: Expo's model is simpler than Rust's (no lifetimes, no mutable borrows), but still requires flow analysis. Start with a conservative checker that rejects some valid programs rather than accepting invalid ones. Loosen over time.
+- **Task borrow safety**: structured concurrency simplifies this (parent outlives tasks by construction), but the compiler must still prove that borrowed data isn't moved while tasks hold references. Flow analysis required.
 - **Generic monomorphization**: generics like `Patch<T>` need to be monomorphized at compile time. This is well-understood (Rust, C++ do it) but adds compiler complexity. Implement for concrete types first, generics second.
 
 ---
 
-## Phase 3: Async runtime
+## Phase 3: Actors and runtime
 
-Build the green thread runtime that makes `spawn`/`await`/`receive` work.
+Build the actor primitive and the native runtime that schedules actors and tasks. This phase gets actors running -- the raw construct and the infrastructure that supports them. Supervision, preemption, and priority come in Phase 3b.
 
-### Green threads and scheduler
+Expo has two concurrency primitives (tasks in Phase 2, actors here) because in native compiled code without a VM, the cost difference between a short-lived computation and a long-lived stateful entity is significant. See `CONCURRENCY.md` for the full design rationale.
 
-- Implement a work-stealing scheduler (N green threads on M OS threads)
-- `spawn(fn -> ... end)` creates a new green thread, returns `Handle<T>`
-- `await handle` blocks the current green thread until the handle resolves
-- Cooperative yielding at I/O boundaries
-- No function coloring -- every function is the same, the runtime handles suspension
-- **Done when**: a program that spawns 10,000 green threads that each sleep and return a value runs correctly
+### Actors
 
-### Channels and receive
+- `actor` keyword defines a long-lived stateful entity with typed mailboxes
+- `receive` with compile-time exhaustiveness checking on message enum variants
+- Actor memory is fully isolated -- data crosses boundaries via `move` or `clone`
+- Fire-and-forget `send` for one-way messages
+- Request/reply `call` with default 5-second timeout, returns `Result<T, CallError>`
+- Explicit `reply(from, value)` with compiler warning for `call`-pattern messages that never reply
+- Starting actors: handle-based (anonymous) and named (string registration)
+- Stopping actors: graceful shutdown with deterministic cleanup via ownership
+- **Done when**: a counter actor with typed messages compiles and runs
 
-- `receive...end` block that waits for the first of multiple async sources
-- Basic channel/message-passing primitives
-- `interval()` and `timer` support for periodic tasks
-- **Done when**: `cleaner.expo` compiles and runs (spawns tasks, awaits handles, uses interval timer)
+### Runtime
+
+- Work-stealing scheduler (M:N -- many actors/tasks on few OS threads)
+- I/O reactor (epoll on Linux, kqueue on macOS) -- the user sees blocking calls, the runtime suspends transparently
+- Timer wheel for timeouts, intervals, and `call` deadlines
+- Actor lifecycle manager (start, stop, crash detection)
+- All functions can suspend; the runtime handles it -- no function coloring
+- **Done when**: 10,000 actors run concurrently with correct scheduling
 
 ### Key decisions
 
-| Decision        | Recommendation                                                                                                                                     |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scheduler model | Work-stealing, similar to Tokio/Go. M:N threading. Start with a simple round-robin scheduler, upgrade to work-stealing once correctness is proven. |
-| I/O model       | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the green thread.                                 |
-| Stack size      | Segmented or growable stacks for green threads. Start with a fixed 8KB stack, add growable stacks later.                                           |
+| Decision           | Recommendation                                                                                                                                     |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Two primitives     | Tasks (stackless, structured, short-lived) and actors (stacked, isolated, long-lived). Different costs, different guarantees, both first-class.     |
+| Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with actor lifecycle management.    |
+| Scheduler model    | Work-stealing, similar to Tokio/Go. M:N threading. Start with a simple round-robin scheduler, upgrade to work-stealing once correctness is proven. |
+| I/O model          | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the actor/task.                                   |
+| Actor stack size   | Real stacks for actors (4-8KB). Tasks are stackless state machines (zero stack overhead).                                                          |
+| Typed mailboxes    | Each actor declares a message enum. `send` and `receive` are type-checked at compile time. Exhaustiveness checking catches unhandled messages.     |
+
+### Risks
+
+- **Runtime complexity**: building a work-stealing scheduler with I/O integration is substantial engineering. Start with round-robin and single-threaded I/O, then scale up.
+- **Typed mailbox ergonomics**: forcing every actor to declare a message enum adds boilerplate. Monitor whether this feels natural or burdensome in practice.
+
+---
+
+## Phase 3b: Reliability
+
+Build on the working actor runtime with production-grade reliability features. These are layered on top -- actors must work before they can be supervised or prioritized.
+
+### Preemption and priority
+
+- Compiler-inserted yield checks at function call preambles and loop back-edges
+- Priority levels (`Low`, `Normal`, `High`) control actor scheduling budget -- higher priority actors get more CPU time before yielding
+- Actors default to `Normal` priority; configurable at spawn time
+- Tasks are not preempted (they're short-lived and yield cooperatively at `await`)
+- **Done when**: a low-priority actor yields to high-priority actors under load
+
+### Supervision
+
+- Supervisors are stdlib actors -- not a language primitive, but a standard library pattern
+- Restart strategies: `OneForOne`, `OneForAll`, `RestForOne`
+- Max-restarts-exceeded crashes the supervisor
+- Root supervisor crash exits the process (deterministic shutdown)
+- Ownership ensures deterministic cleanup on actor crash -- all owned memory is freed, no leaks
+- **Done when**: a supervised actor tree restarts crashed children correctly
+
+### Shared data
+
+- `shared_map` (stdlib concurrent hash map, needs a proper name) for shared caches across actors
+- `put` moves values in (ownership transfer, no races)
+- `get` borrows values out (zero-copy read access)
+- `delete` removes and drops values
+- Solves the two core problems of shared state: memory explosion from copying, and corruption from concurrent modification
+- **Done when**: multiple actors read/write a `shared_map` without corruption
+
+### Risks
+
+- **Preemption yield-check overhead**: every function call and loop back-edge gets a yield check. Must be cheap (single counter decrement + branch). Profile to ensure overhead stays under 1-2%.
+- **Supervision ergonomics**: defining child specs and restart strategies should feel lightweight, not XML-configuration-heavy. Design the API carefully.
+- **`shared_map` naming**: needs a proper name before 1.0. Candidates TBD.
 
 ---
 
 ## Phase 4: Standard library
 
-Build the stdlib modules that the example codebase imports.
+Build the minimal stdlib -- only primitives that will still be relevant in 20 years. Everything else ships as first-party packages that version independently of the compiler.
 
-### Core types and I/O
+Concurrency primitives (tasks, actors, `shared_map`, supervisors) already ship in Phases 2, 3, and 3b.
+
+### Stdlib (ships with the compiler, always available)
 
 - `String` with UTF-8 internals, interpolation (`#{}` with format specs), `.trim()`, `.split()`, `.starts_with?()`, `.empty?()`, `.contains?()`
-- `Vec<T>` and `HashMap<K,V>` with full method sets
+- `List<T>`, `Map<K,V>`, and `Set<T>` with full method sets
 - `Option<T>` and `Result<T,E>` methods (`.map()`, `.unwrap_or()`, `.ok?()`)
 - File I/O: `file.read()`, `file.write()`, `file.exists?()`
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
+- Serialization trait/interface that packages can implement
 - **Done when**: `config.expo` compiles (exercises strings, file reading, option handling, duration)
 
-### HTTP and networking
+### First-party packages (maintained by the Expo team, versioned independently)
 
-- HTTP server: listener, routing, request/response types, middleware pattern
-- HTTP client: `Req`-style interface for making outbound requests
-- JSON: serialization/deserialization via `@json` annotation (compile-time codegen, no reflection)
-- URL parsing, query string handling
-- TLS support (link against a system TLS library or bundle)
-- **Done when**: a basic HTTP server that handles JSON requests and responds compiles and runs
+These need the package manager (Phase 5) to exist first. They are high-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline.
 
-### Crypto, logging, serialization
-
-- `crypto.random_hex()`, `crypto.sha256()` (native or thin C wrapper over libsodium)
-- `log` module with structured logging (the `key: value` syntax in log calls)
-- MessagePack serialization (for the database layer in auth-manager)
-- UUID generation
-- Regular expressions (RE2 or similar)
-- User-agent parsing (`woothee` or native port)
-- **Done when**: `handlers.expo` compiles -- it's the richest file, exercising HTTP, JSON, crypto, logging, and UUID generation
+- HTTP server and client
+- JSON serialization/deserialization
+- TLS (thin wrapper over system TLS library)
+- Crypto: hashing, random bytes (thin wrapper over libsodium or similar)
+- Structured logging
+- MessagePack serialization
+- UUID generation, regex, URL parsing
+- **Done when**: `handlers.expo` compiles using stdlib + first-party packages -- it exercises HTTP, JSON, crypto, logging, and UUID generation
 
 ### Approach
 
-Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use thin C FFI only for security-critical crypto (libsodium) and performance-critical parsing (JSON via yyjson, HTTP via llhttp). Over time, replace C wrappers with native implementations.
+Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use thin C FFI only for security-critical crypto and performance-critical parsing. The stdlib provides traits/interfaces (e.g., serialization) that first-party packages implement, so formats can be added or replaced without touching the compiler.
 
 ---
 
@@ -228,7 +297,7 @@ Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use th
 
 - `expo build` compiles a project based on `project.expo`
 - `expo test` discovers and runs `@test` annotated functions
-- Dependency resolution: fetch from git URLs (Go-style, no central registry)
+- Dependency resolution: fetch from hosted sources (git URLs initially, registry/mirror possible long-term)
 - Lock file generation for reproducible builds
 - **Done when**: `project.expo` from this repo resolves its three dependencies and builds the project
 
@@ -238,12 +307,17 @@ Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use th
 - Doctest support: code examples in `@doc` strings are compiled and run as tests
 - **Done when**: `expo doc` generates browsable HTML
 
-### Language server (LSP)
+### Language server (LSP) -- started
 
-- Basic LSP: go-to-definition, hover for types, diagnostics (errors/warnings)
+- ~~Real-time diagnostics (parse errors + type-check warnings/errors) on every keystroke~~
+- ~~Document formatting via LSP (`textDocument/formatting`)~~
+- ~~VSCode/Cursor extension integration (LSP client over stdio)~~
+- ~~Go-to-definition for functions, structs, enums, and imports (jumps to module file)~~
+- ~~Hover showing type signatures, `@doc`, and `@moduledoc` for imports~~
+- ~~Restart Language Server command~~
 - Autocomplete for module names, function names, struct fields
 - Inline type hints for inferred types
-- Integration with the existing VS Code / Cursor extension
+- Multi-module resolution (cross-file diagnostics)
 - **Done when**: editing `.expo` files in Cursor shows real-time errors and supports go-to-definition
 
 ---
@@ -347,35 +421,35 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 
 ### Done
 
-| Phase     | Milestone                                                                           | Status |
-| --------- | ----------------------------------------------------------------------------------- | ------ |
-| Bootstrap | Lexer + parser -- all grammar constructs parse, string interpolation + escapes | Done   |
+| Phase     | Milestone                                                                                | Status |
+| --------- | ---------------------------------------------------------------------------------------- | ------ |
+| Bootstrap | Lexer + parser -- all grammar constructs parse, string interpolation + escapes           | Done   |
 | Bootstrap | Type system -- multi-module, `priv fn`, enums, match exhaustiveness, unused var warnings | ~70%   |
-| Bootstrap | LLVM codegen -- native binaries, enums, match, cond, string interpolation          | ~55%   |
-| Tooling   | Formatter (`expo format --write`/`--check`)                                         | Done   |
-| Tooling   | `expo run` (compile + execute)                                                      | Done   |
-| Tooling   | VSCode extension (syntax highlighting)                                              | Done   |
+| Bootstrap | LLVM codegen -- native binaries, enums, match, cond, string interpolation                | ~55%   |
+| Tooling   | Formatter (`expo format --write`/`--check`)                                              | Done   |
+| Tooling   | `expo run` (compile + execute)                                                           | Done   |
+| Tooling   | VSCode extension (syntax highlighting)                                                   | Done   |
+| Tooling   | LSP -- diagnostics, formatting, hover, go-to-definition                                  | Done   |
 
 ### Remaining
 
-| Phase      | Milestone                                               |
-| ---------- | ------------------------------------------------------- |
-| Bootstrap  | Finish type checker (generics, qualified imports)        |
-| Bootstrap  | Finish codegen (for, closures, tuples, try, pipe)       |
-| Core       | Ownership + borrow checker                              |
-| Core       | Collections, closures, arena, `ua_parser.expo` compiles |
-| Async      | Green thread scheduler, `spawn`/`await`                 |
-| Async      | Channels, `receive`, `cleaner.expo` compiles            |
-| Stdlib     | Core types, I/O, time, `config.expo` compiles           |
-| Stdlib     | HTTP server/client, JSON                                |
-| Stdlib     | Crypto, logging, `handlers.expo` compiles               |
-| Tooling    | Package manager, test runner                            |
-| Tooling    | Documentation generator                                 |
-| Tooling    | LSP for Cursor/VS Code                                  |
-| Self-host  | Lexer + parser in Expo                                  |
-| Self-host  | Full compiler in Expo                                   |
-| Self-host  | Retire Rust bootstrap                                   |
-| Validation | auth-manager-expo runs for real                         |
+| Phase       | Milestone                                                        |
+| ----------- | ---------------------------------------------------------------- |
+| Bootstrap   | Finish type checker (generics, qualified imports)                |
+| Bootstrap   | Finish codegen (for, closures, tuples, try, pipe)                |
+| Core        | Ownership + borrow checker + tasks (structured concurrency)      |
+| Core        | Collections, closures, arena, `ua_parser.expo` compiles          |
+| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)       |
+| Reliability | Preemption/priority, supervision, `shared_map`                   |
+| Stdlib      | Core types, I/O, time, `config.expo` compiles                    |
+| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)               |
+| Tooling     | Package manager, test runner                                     |
+| Tooling     | Documentation generator                                          |
+| Tooling     | LSP -- autocomplete, inline type hints, multi-module             |
+| Self-host   | Lexer + parser in Expo                                           |
+| Self-host   | Full compiler in Expo                                            |
+| Self-host   | Retire Rust bootstrap                                            |
+| Validation  | auth-manager-expo runs for real                                  |
 
 ---
 
@@ -384,6 +458,9 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 - **Readability over cleverness.** Every language feature decision is judged by: "can a reader understand this line without reading any other line?"
 - **Error messages are a feature.** Invest in them from month 1. A confusing error message is a bug.
 - **The example codebase is the test suite.** Every phase targets compiling a specific `.expo` file from this repo. The language grows toward real code, not toy examples.
-- **AI writes, humans read.** The language is optimized for reading comprehension and signal density, not keystroke reduction.
+- **AI writes, humans read.** The language is concise and readable because that's good design -- Ruby over Java, signal density over ceremony. Every line should carry meaning without boilerplate. AI-friendliness is a natural consequence of those values, not the driver.
 - **No magic.** Explicit is better than implicit. If a feature requires the reader to know something they can't see on screen, it's wrong for Expo.
 - **No macros.** Bake common patterns into the language as native constructs instead. Macros create invisible control flow, fragment the language per-codebase, and are hostile to AI tooling. Every Expo codebase should read the same way.
+- **Approachable by default.** A beginner should be able to write their first program without knowing about ownership, actors, or type annotations. Advanced features reveal themselves as you grow -- you learn `move` when you hit a performance problem, tasks when you need concurrency, actors when you build a stateful service. The language has a Ruby-shaped learning curve backed by Rust-grade safety.
+- **Built to last.** Every design decision passes the decades test -- will this still make sense in 20 years? Features tied to today's trends are packages, not language constructs. The stdlib only contains primitives that are as fundamental as integers and files.
+- **Stable after 1.0.** The language spec locks at 1.0. Post-1.0 changes are additive only -- new features, never removals or breaking changes. No edition system. If something truly needs to break (hopefully a decade+ out), it's a clean 2.0 with migration tooling -- one decisive move, not death by a thousand editions.

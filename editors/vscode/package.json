@@ -1,13 +1,15 @@
 {
   "name": "expo-lang",
   "displayName": "Expo Language",
-  "description": "Syntax highlighting for the Expo programming language",
+  "description": "Syntax highlighting and language server support for the Expo programming language",
   "version": "0.1.0",
   "publisher": "expo-lang",
   "engines": {
     "vscode": "^1.75.0"
   },
   "categories": ["Programming Languages"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onLanguage:expo"],
   "contributes": {
     "languages": [
       {
@@ -27,6 +29,33 @@
         "scopeName": "source.expo",
         "path": "./syntaxes/expo.tmLanguage.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "expo.restartServer",
+        "title": "Expo: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "Expo",
+      "properties": {
+        "expo.lsp.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the expo-lsp binary. If empty, searches $PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
   }
 }
