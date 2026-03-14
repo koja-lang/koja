@@ -506,7 +506,7 @@ impl Parser {
         })
     }
 
-    pub(crate) fn parse_constant_item(&mut self) -> Item {
+    pub(crate) fn parse_constant_item(&mut self, annotation: Option<Annotation>) -> Item {
         let start = self.current_span();
         self.expect(&TokenKind::Const);
         let name = match self.peek().clone() {
@@ -527,6 +527,7 @@ impl Parser {
         self.expect(&TokenKind::Eq);
         let value = self.parse_expr();
         Item::Constant(Constant {
+            annotation,
             name,
             value,
             span: self.span_from(start),

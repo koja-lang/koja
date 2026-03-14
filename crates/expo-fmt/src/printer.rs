@@ -385,12 +385,16 @@ impl<'a> Printer<'a> {
     // =====================================================================
 
     fn constant_to_doc(&mut self, c: &Constant) -> Doc {
-        concat(vec![
-            text("const "),
-            text(&c.name),
-            text(" = "),
-            self.expr_to_doc(&c.value),
-        ])
+        let mut parts = Vec::new();
+        if let Some(ann) = &c.annotation {
+            parts.push(annotation_to_doc(ann));
+            parts.push(hardline());
+        }
+        parts.push(text("const "));
+        parts.push(text(&c.name));
+        parts.push(text(" = "));
+        parts.push(self.expr_to_doc(&c.value));
+        concat(parts)
     }
 
     // =====================================================================

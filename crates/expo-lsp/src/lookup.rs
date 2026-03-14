@@ -87,6 +87,9 @@ pub fn find_doc_for(module: &Module, name: &str) -> Option<String> {
             Item::Enum(e) if e.name == name => {
                 return annotation_doc(&e.annotation);
             }
+            Item::Constant(c) if c.name == name => {
+                return annotation_doc(&c.annotation);
+            }
             Item::Impl(imp) => {
                 for member in &imp.members {
                     if let ImplMember::Function(f) = member

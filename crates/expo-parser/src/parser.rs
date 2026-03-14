@@ -288,7 +288,7 @@ impl Parser {
                         self.advance();
                         Some(self.parse_function_item(Some(annotation), true))
                     }
-                    TokenKind::Const => Some(self.parse_constant_item()),
+                    TokenKind::Const => Some(self.parse_constant_item(Some(annotation))),
                     _ => {
                         let span = self.current_span();
                         self.error(
@@ -300,7 +300,7 @@ impl Parser {
                 }
             }
             TokenKind::Shared => Some(self.parse_shared_item()),
-            TokenKind::Const => Some(self.parse_constant_item()),
+            TokenKind::Const => Some(self.parse_constant_item(None)),
             _ => {
                 let span = self.current_span();
                 self.error(

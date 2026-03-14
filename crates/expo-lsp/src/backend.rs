@@ -260,7 +260,8 @@ impl LanguageServer for Backend {
             SymbolInfo::Constant { name } => {
                 if let Some(ty) = state.ctx.constants.get(name) {
                     let signature = format!("const {}: {}", name, ty.display());
-                    format_hover(&signature, None)
+                    let doc = lookup::find_doc_for(&state.module, name);
+                    format_hover(&signature, doc.as_deref())
                 } else {
                     return Ok(None);
                 }
