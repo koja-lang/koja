@@ -24,7 +24,7 @@ fn describe(value: i32) -> string
   cond
     value > 100 -> "big"
     value > 10 -> "medium"
-    true -> "small"
+    else -> "small"
   end
 end
 

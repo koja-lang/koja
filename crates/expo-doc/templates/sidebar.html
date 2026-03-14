@@ -1,0 +1,10 @@
+<nav class="sidebar">
+  <h1>Expo</h1>
+
+  <h2>Modules</h2>
+  <ul>
+    {% for m in all_modules %}
+    <li><a href="{{ m }}.html"{% if m == name %} class="active"{% endif %}>{{ m }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>

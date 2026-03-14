@@ -4,9 +4,8 @@ fn main
   print(double(5))
 
   add =
-    fn (a: i32, b: i32) -> 
-      print("omg lol")
-      i32 a + b 
+    fn (a: i32, b: i32) -> i32
+      a + b
     end
 
   print(add(3, 7))

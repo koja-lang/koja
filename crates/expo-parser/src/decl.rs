@@ -447,8 +447,12 @@ impl Parser {
         }
     }
 
-    fn parse_annotation_value(&mut self) -> Option<String> {
+    fn parse_annotation_value(&mut self) -> Option<AnnotationValue> {
         match self.peek() {
+            TokenKind::False => {
+                self.advance();
+                Some(AnnotationValue::False)
+            }
             TokenKind::StringStart => {
                 self.advance(); // StringStart
                 let mut text = String::new();
@@ -465,7 +469,7 @@ impl Parser {
                         _ => break,
                     }
                 }
-                Some(text)
+                Some(AnnotationValue::String(text))
             }
             TokenKind::MultilineStringStart => {
                 self.advance();
@@ -483,7 +487,7 @@ impl Parser {
                         _ => break,
                     }
                 }
-                Some(text)
+                Some(AnnotationValue::String(text))
             }
             _ => None,
         }

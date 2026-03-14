@@ -8,7 +8,7 @@ Solo developer + AI assistance. Bootstrap in Rust, self-host in Expo.
 
 ### Compiler
 
-An 8-crate Rust workspace (~8,800 LOC) that compiles Expo source to native binaries via LLVM:
+A 9-crate Rust workspace that compiles Expo source to native binaries via LLVM:
 
 - `expo-ast` -- tokens, spans, AST node definitions
 - `expo-lexer` -- custom tokenizer
@@ -16,12 +16,13 @@ An 8-crate Rust workspace (~8,800 LOC) that compiles Expo source to native binar
 - `expo-typecheck` -- type inference and semantic analysis
 - `expo-codegen` -- LLVM IR generation via `inkwell`
 - `expo-fmt` -- opinionated code formatter
+- `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
 - `expo-driver` -- CLI binary (`expo`)
 - `expo-lsp` -- language server (diagnostics, formatting, hover, go-to-definition)
 
 ### CLI
 
-Six commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo lex`, `expo parse`. All commands support multi-module projects.
+Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc`, `expo lex`, `expo parse`. All commands support multi-module projects.
 
 ### What compiles to native binaries today
 
@@ -60,7 +61,7 @@ For, arena, await/receive/spawn, try (`?`), generics, `ref<T>`, lists.
 
 ---
 
-## Phase 1: Bootstrap compiler -- IN PROGRESS
+## Phase 1: Bootstrap compiler -- COMPLETE
 
 Build a minimal Expo compiler in Rust that can compile trivial programs to native binaries via LLVM.
 
@@ -74,34 +75,31 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work. String interpolation (`#{}`) and escape sequences (`\"`, `\\`, `\n`, `\t`, `\#`) fully implemented in the lexer with a mode stack for nested interpolation. Multiline strings (`"""`) support the same escapes as single-line strings and are automatically dedented based on the closing delimiter's column position.
 
-### Month 2 -- Type system and semantic analysis (~95% complete)
+### Month 2 -- Type system and semantic analysis (complete)
 
-- ~~Type checking: primitives, structs~~ (enums, generics, `Option<T>`, `Result<T,E>`, `List<T>`, `Map<K,V>` not yet resolved)
+- ~~Type checking: primitives, structs, enums~~
 - ~~Type inference for local variables (explicit types on function signatures, inferred inside bodies)~~
-- ~~Method resolution for `impl` blocks~~ (trait impls not yet)
+- ~~Method resolution for `impl` blocks~~
 - ~~Name resolution across modules (file = module, import-driven discovery)~~
 - ~~`priv fn` visibility enforcement~~
 - ~~Circular import detection~~
+- ~~Match exhaustiveness checking, unused variable warnings~~
+- ~~Import conflict detection, qualified imports (`math.add()`)~~
 - ~~**Deliverable**: `expo check file.expo` reports type errors with clear messages~~
-- ~~**Done when**: a hello-world program and a simple struct program pass type checking~~
 
-**Status**: Primitives, structs, enums, and method resolution work. Multi-module type checking with import-driven discovery. `priv fn` visibility enforcement across modules. `expo check` reports diagnostics with line/column positions. Hello-world, struct, enum, and multi-file programs pass. Match exhaustiveness checking catches missing variants. Unused variable warnings implemented (suppressed with `_` prefix). Warnings and errors are distinguished -- warnings no longer halt compilation. `undefined function` errors reported for unknown calls.
+Remaining work (generics, `ref<T>`, trait impls) is Phase 2 scope.
 
-**Remaining gaps**: generics resolve to `Unknown` (Phase 2). Import conflict detection implemented. Qualified imports (`math.add()`) fully working. (`ref<T>` is intentionally deferred to Phase 2 ownership.)
-
-### Month 3 -- LLVM codegen (~95% complete)
+### Month 3 -- LLVM codegen (complete)
 
 - ~~Integrate LLVM via `inkwell` (Rust LLVM bindings)~~
-- ~~Code generation for: function calls, arithmetic, string literals, `if`/`else`, `match` (simple cases), `return`~~
+- ~~Code generation for: functions, structs, enums, impl methods, if/else, while, loop, break, return, compound assignment, cond, match, string interpolation, closures (non-capturing block form), pipe operator~~
 - ~~Stack allocation for primitives and small structs~~
 - ~~Link against libc for `main` entry point and basic I/O~~
+- ~~Enums as tagged unions, full pattern matching (wildcard, literal, binding, nested, `when` guards)~~
+- ~~Multi-module compilation to a single native binary~~
 - ~~**Deliverable**: `expo build hello.expo` produces a native binary that runs~~
 
-**Status**: Multi-module programs compile to a single native binary. Functions, structs, enums, impl methods, if/else, while, loop, break, return, compound assignment, cond, match all compile to working native binaries. `expo build` and `expo run` work. Linking via system `cc`.
-
-Enums compile to tagged unions (`{ i8 tag, [N x i8] payload }`). Match compiles with full pattern matching (wildcard, literal, binding, enum unit/tuple/struct, constructor, nested patterns, `when` guards). Bare variant names resolve to the correct enum from context. String interpolation of enum values prints the variant name by default, with custom `to_string` override support. Cond compiles to a cascade of conditional branches. Capitalized identifiers are enforced as types/constructors at the parser level.
-
-**Remaining gaps**: Non-capturing block closures compile as function pointers (`fn (params) -> type ... end`). Inline closures (`x -> expr`) are parsed but codegen is deferred to Phase 2 (requires type inference + generics). For loops, try (`?`), and lists are deferred to Phase 2 (require collections/generics). Closure capture analysis (move vs. borrow) is Phase 2. Format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation.
+Remaining work (inline closures, for loops, try `?`, closure capture analysis) is Phase 2 scope.
 
 ### Key decisions
 
@@ -318,11 +316,20 @@ Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use th
 - Lock file generation for reproducible builds
 - **Done when**: `project.expo` from this repo resolves its three dependencies and builds the project
 
-### Documentation
+### Documentation -- started
 
-- `expo doc` -- generates HTML documentation from `@doc` annotations, similar to HexDocs
+- ~~`expo doc` -- generates static HTML documentation from `@doc` and `@moduledoc` annotations~~
+- ~~Markdown rendering in doc strings (via pulldown-cmark)~~
+- ~~`@doc false` and `@moduledoc false` to exclude items from docs~~
+- ~~Recursive directory input with dotted module names (e.g. `src/what/util.expo` → `what.util`)~~
+- ~~Global sidebar navigation across all module pages~~
+- ~~Askama templates for HTML generation~~
+- ~~Brand-themed output (burnt orange + warm charcoal, Source Sans 3 / Source Code Pro typography)~~
 - Doctest support: code examples in `@doc` strings are compiled and run as tests
-- **Done when**: `expo doc` generates browsable HTML
+- Prose pages from `docs/*.md` alongside API reference
+- Client-side fuzzy search
+- Clickable type cross-references in signatures
+- **Done when**: `expo doc src/` generates browsable, searchable HTML for a multi-module project
 
 ### Language server (LSP) -- started
 
@@ -441,19 +448,19 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Phase     | Milestone                                                                                | Status |
 | --------- | ---------------------------------------------------------------------------------------- | ------ |
 | Bootstrap | Lexer + parser -- all grammar constructs parse, string interpolation + escapes           | Done   |
-| Bootstrap | Type system -- multi-module, `priv fn`, enums, match exhaustiveness, unused var warnings | ~70%   |
-| Bootstrap | LLVM codegen -- native binaries, enums, match, cond, string interpolation                | ~55%   |
+| Bootstrap | Type system -- multi-module, `priv fn`, enums, match exhaustiveness, unused var warnings | Done   |
+| Bootstrap | LLVM codegen -- native binaries, enums, match, cond, string interpolation                | Done   |
 | Tooling   | Formatter (`expo format --write`/`--check`)                                              | Done   |
 | Tooling   | `expo run` (compile + execute)                                                           | Done   |
 | Tooling   | VSCode extension (syntax highlighting)                                                   | Done   |
 | Tooling   | LSP -- diagnostics, formatting, hover, go-to-definition                                  | Done   |
+| Tooling   | Documentation generator (`expo doc`) -- HTML output, sidebar nav, brand theme             | Done   |
 
 ### Remaining
 
 | Phase       | Milestone                                                   |
 | ----------- | ----------------------------------------------------------- |
-| Bootstrap   | Finish type checker (generics, qualified imports)           |
-| Bootstrap   | Finish codegen (for, closures, tuples, try, pipe)           |
+| Core        | Generics + monomorphization (the gate to Phase 2)           |
 | Core        | Ownership + borrow checker + tasks (structured concurrency) |
 | Core        | Collections, closures, arena, `ua_parser.expo` compiles     |
 | Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)  |
@@ -461,7 +468,7 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Stdlib      | Core types, I/O, time, `config.expo` compiles               |
 | Stdlib      | First-party packages (HTTP, JSON, crypto, logging)          |
 | Tooling     | Package manager, test runner                                |
-| Tooling     | Documentation generator                                     |
+| Tooling     | Documentation generator (doctests, search, prose pages)     |
 | Tooling     | LSP -- autocomplete, inline type hints, multi-module        |
 | Self-host   | Lexer + parser in Expo                                      |
 | Self-host   | Full compiler in Expo                                       |

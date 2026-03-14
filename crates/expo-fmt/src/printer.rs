@@ -1262,7 +1262,7 @@ fn shared_to_doc(s: &SharedDecl) -> Doc {
 
 fn annotation_to_doc(ann: &Annotation) -> Doc {
     match &ann.value {
-        Some(val) => {
+        Some(AnnotationValue::String(val)) => {
             if val.contains('\n') {
                 concat(vec![
                     text(format!("@{} \"\"\"", ann.name)),
@@ -1275,6 +1275,7 @@ fn annotation_to_doc(ann: &Annotation) -> Doc {
                 text(format!("@{} \"{}\"", ann.name, val))
             }
         }
+        Some(AnnotationValue::False) => text(format!("@{} false", ann.name)),
         None => text(format!("@{}", ann.name)),
     }
 }

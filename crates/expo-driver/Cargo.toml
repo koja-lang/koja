@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 expo-ast = { path = "../expo-ast" }
 expo-codegen = { path = "../expo-codegen" }
+expo-doc = { path = "../expo-doc" }
 expo-fmt = { path = "../expo-fmt" }
 expo-lexer = { path = "../expo-lexer" }
 expo-parser = { path = "../expo-parser" }

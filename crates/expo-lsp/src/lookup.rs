@@ -109,7 +109,10 @@ fn annotation_doc(annotation: &Option<Annotation>) -> Option<String> {
     annotation
         .as_ref()
         .filter(|a| a.name == "doc")
-        .and_then(|a| a.value.clone())
+        .and_then(|a| match &a.value {
+            Some(AnnotationValue::String(s)) => Some(s.clone()),
+            _ => None,
+        })
 }
 
 fn span_contains(span: &Span, line: u32, col: u32) -> bool {

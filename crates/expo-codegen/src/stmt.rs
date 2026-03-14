@@ -1,4 +1,4 @@
-use expo_ast::ast::{AssignTarget, Statement};
+use expo_ast::ast::{AssignTarget, ClosureParam, Expr, Statement};
 use expo_typecheck::types::Type;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
@@ -23,6 +23,9 @@ pub fn compile_statement<'ctx>(
             let val =
                 compile_expr(c, value, function)?.ok_or("assignment value produced no value")?;
 
+            let ty =
+                infer_type_from_expr(c, value).unwrap_or_else(|| infer_type_from_llvm(c, &val));
+
             match target {
                 AssignTarget::LValue(lvalue) => {
                     if lvalue.segments.len() == 1 {
@@ -32,7 +35,6 @@ pub fn compile_statement<'ctx>(
                         } else {
                             let alloca = c.builder.build_alloca(val.get_type(), name).unwrap();
                             c.builder.build_store(alloca, val).unwrap();
-                            let ty = infer_type_from_llvm(c, &val);
                             c.variables.insert(name.clone(), (alloca, ty));
                         }
                     } else {
@@ -48,7 +50,6 @@ pub fn compile_statement<'ctx>(
 
                     let alloca = c.builder.build_alloca(val.get_type(), name).unwrap();
                     c.builder.build_store(alloca, val).unwrap();
-                    let ty = infer_type_from_llvm(c, &val);
                     c.variables.insert(name.clone(), (alloca, ty));
                 }
             }
@@ -192,6 +193,38 @@ fn compile_field_assignment<'ctx>(
 
     c.builder.build_store(ptr, val).unwrap();
     Ok(())
+}
+
+/// Attempts to derive the Expo type directly from the expression AST. Returns
+/// `Some(Type::Function{..})` for closures so the variable is stored with the
+/// correct callable type rather than being misidentified as a string pointer.
+fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
+    if let Expr::Closure {
+        params,
+        return_type,
+        ..
+    } = expr
+    {
+        let param_types: Vec<Type> = params
+            .iter()
+            .map(|p| match p {
+                ClosureParam::Name {
+                    type_expr: Some(te),
+                    ..
+                } => c.resolve_type_expr(te),
+                _ => Type::Primitive(expo_typecheck::types::Primitive::I32),
+            })
+            .collect();
+        let ret = match return_type {
+            Some(te) => c.resolve_type_expr(te),
+            None => Type::Unit,
+        };
+        return Some(Type::Function {
+            params: param_types,
+            return_type: Box::new(ret),
+        });
+    }
+    None
 }
 
 /// Reconstructs an Expo type from an LLVM value by inspecting bit widths and

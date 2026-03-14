@@ -238,11 +238,12 @@ impl<'ctx> Compiler<'ctx> {
                                 combined.push_str(value);
                             }
                         }
-                        self.builder
-                            .build_global_string_ptr(&combined, &c.name)
-                            .unwrap()
-                            .as_pointer_value()
-                            .into()
+                        let bytes = combined.as_bytes();
+                        let str_type = self.context.i8_type().array_type((bytes.len() + 1) as u32);
+                        let global = self.module.add_global(str_type, None, &c.name);
+                        global.set_initializer(&self.context.const_string(bytes, true));
+                        global.set_constant(true);
+                        global.as_pointer_value().into()
                     }
                     _ => continue,
                 };

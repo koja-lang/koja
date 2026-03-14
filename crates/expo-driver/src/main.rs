@@ -13,7 +13,7 @@ fn main() {
     if args.len() < 2 {
         eprintln!("expo compiler v{}", env!("CARGO_PKG_VERSION"));
         eprintln!("Usage: expo <command> [args]");
-        eprintln!("Commands: build, check, format, lex, parse, run");
+        eprintln!("Commands: build, check, doc, format, lex, parse, run");
         process::exit(1);
     }
 
@@ -27,6 +27,7 @@ fn main() {
     match args[1].as_str() {
         "build" => cmd_build(&cmd_args, color),
         "check" => cmd_check(&cmd_args, color),
+        "doc" => cmd_doc(&cmd_args, color),
         "format" => cmd_format(&cmd_args, color),
         "lex" => cmd_lex(&cmd_args, color),
         "parse" => cmd_parse(&cmd_args, color),
@@ -459,6 +460,129 @@ fn cmd_check(args: &[String], color: bool) {
 
         if !has_issues {
             println!("{path}: OK");
+        }
+    }
+}
+
+fn cmd_doc(args: &[String], color: bool) {
+    if args.is_empty() {
+        eprintln!("Usage: expo doc <file.expo ...> [-o output_dir]");
+        process::exit(1);
+    }
+
+    let mut inputs = Vec::new();
+    let mut output_dir = "doc".to_string();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "-o" {
+            if i + 1 < args.len() {
+                output_dir = args[i + 1].clone();
+                i += 2;
+            } else {
+                eprintln!("-o requires an argument");
+                process::exit(1);
+            }
+        } else {
+            inputs.push(args[i].clone());
+            i += 1;
+        }
+    }
+
+    let mut files: Vec<(String, String)> = Vec::new();
+    for input in &inputs {
+        let p = Path::new(input);
+        if p.is_dir() {
+            collect_expo_files(p, p, &mut files);
+        } else {
+            let name = Path::new(input)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            files.push((input.clone(), name));
+        }
+    }
+    files.sort_by(|a, b| a.1.cmp(&b.1));
+
+    let mut doc_modules = Vec::new();
+
+    for (path, module_name) in &files {
+        let source = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error reading {path}: {e}");
+                process::exit(1);
+            }
+        };
+
+        let parse_result = expo_parser::parse(&source);
+        if !parse_result.errors.is_empty() {
+            render_diagnostics(path, &source, &parse_result.errors, color);
+            continue;
+        }
+
+        if let Some(doc_module) = expo_doc::extract_module(module_name, &parse_result.module) {
+            doc_modules.push(doc_module);
+        }
+    }
+
+    if doc_modules.is_empty() {
+        println!("no modules to document");
+        return;
+    }
+
+    let out_path = Path::new(&output_dir);
+    if let Err(e) = fs::create_dir_all(out_path) {
+        eprintln!("error creating output directory: {e}");
+        process::exit(1);
+    }
+
+    let all_module_names: Vec<String> = doc_modules.iter().map(|m| m.name.clone()).collect();
+
+    for m in &doc_modules {
+        let html = expo_doc::render_module(m, &all_module_names);
+        let file_path = out_path.join(format!("{}.html", m.name));
+        if let Err(e) = fs::write(&file_path, &html) {
+            eprintln!("error writing {}: {e}", file_path.display());
+            process::exit(1);
+        }
+        println!("  {}", file_path.display());
+    }
+
+    let index_html = expo_doc::render_index(&doc_modules);
+    let index_path = out_path.join("index.html");
+    if let Err(e) = fs::write(&index_path, &index_html) {
+        eprintln!("error writing {}: {e}", index_path.display());
+        process::exit(1);
+    }
+    println!("  {}", index_path.display());
+    println!("docs generated: {}", out_path.display());
+}
+
+fn collect_expo_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error reading directory {}: {e}", dir.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_expo_files(&path, root, out);
+        } else if path.extension().is_some_and(|ext| ext == "expo") {
+            let module_name = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .with_extension("")
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            if let Some(s) = path.to_str() {
+                out.push((s.to_string(), module_name));
+            }
         }
     }
 }

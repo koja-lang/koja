@@ -1,0 +1,9 @@
+<div class="detail" id="fn-{{ f.name }}">
+  <div class="detail-signature">
+    <a class="anchor" href="#fn-{{ f.name }}">#</a>fn {{ f.name }}({% for p in f.params %}{% if !loop.first %}, {% endif %}{{ p.name }}{% if !p.type_name.is_empty() %}: {{ p.type_name }}{% endif %}{% endfor %}){% if let Some(ret) = f.return_type %} -&gt; {{ ret }}{% endif %}
+  </div>
+
+  {% if let Some(doc) = f.doc %}
+  <div class="detail-doc">{{ doc|md }}</div>
+  {% endif %}
+</div>

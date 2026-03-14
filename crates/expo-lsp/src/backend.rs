@@ -8,7 +8,8 @@ use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
 use expo_ast::ast::{
-    Diagnostic as ExpoDiagnostic, ImportTarget, Item, Module, Severity as ExpoSeverity,
+    AnnotationValue, Diagnostic as ExpoDiagnostic, ImportTarget, Item, Module,
+    Severity as ExpoSeverity,
 };
 use expo_typecheck::context::{TypeContext, VariantData};
 
@@ -342,7 +343,10 @@ impl LanguageServer for Backend {
                     })
                     .and_then(|source| {
                         let parsed = expo_parser::parse(&source);
-                        parsed.module.moduledoc.and_then(|d| d.value)
+                        parsed.module.moduledoc.and_then(|d| match d.value {
+                            Some(AnnotationValue::String(s)) => Some(s),
+                            _ => None,
+                        })
                     });
                 format_hover(&signature, doc.as_deref())
             }

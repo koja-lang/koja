@@ -10,11 +10,20 @@ use crate::span::Span;
 
 // Top level
 
+/// The value attached to an annotation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnnotationValue {
+    /// A string value: `@doc "text"` or `@doc """text"""`.
+    String(String),
+    /// An explicit false: `@doc false` — suppresses documentation.
+    False,
+}
+
 /// A metadata annotation such as `@doc` or `@moduledoc`.
 #[derive(Debug, Clone)]
 pub struct Annotation {
     pub name: String,
-    pub value: Option<String>,
+    pub value: Option<AnnotationValue>,
     pub span: Span,
 }
 
