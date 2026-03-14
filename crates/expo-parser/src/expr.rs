@@ -175,9 +175,23 @@ impl Parser {
                                 );
                             }
                             self.advance(); // ?
+                            self.skip_newlines();
                             let then_expr = self.parse_expr_bp(0);
+                            if matches!(then_expr, Expr::Ternary { .. }) {
+                                self.error(
+                                    "nested ternary not allowed, use `cond` instead".into(),
+                                    expr_span(&then_expr),
+                                );
+                            }
+                            self.skip_newlines();
                             self.expect(&TokenKind::Colon);
                             let else_expr = self.parse_expr_bp(BP_TERNARY + 1);
+                            if matches!(else_expr, Expr::Ternary { .. }) {
+                                self.error(
+                                    "nested ternary not allowed, use `cond` instead".into(),
+                                    expr_span(&else_expr),
+                                );
+                            }
                             let span = Span::new(expr_span(&lhs).start, expr_span(&else_expr).end);
                             lhs = Expr::Ternary {
                                 condition: Box::new(lhs),
@@ -222,6 +236,19 @@ impl Parser {
                     }
                     _ => {}
                 }
+            }
+
+            // Ternary continuation across newlines: `expr\n  ? ...`
+            if matches!(self.peek(), TokenKind::Newline) && BP_TERNARY >= min_bp {
+                let saved = self.save_pos();
+                self.skip_newlines();
+                if matches!(self.peek(), TokenKind::Question) {
+                    let adjacent = self.current_span().start.offset == expr_span(&lhs).end.offset;
+                    if !adjacent {
+                        continue;
+                    }
+                }
+                self.restore_pos(saved);
             }
 
             // Infix operators

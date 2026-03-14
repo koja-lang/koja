@@ -31,6 +31,10 @@ Multi-module programs with imports. Functions (`fn`/`priv fn`), structs, enums, 
 
 For, closures (both forms), arena, await/receive/spawn, ternary, try (`?`), pipe (`|>`), generics, `ref<T>`, tuples, lists.
 
+### Design notes
+
+- **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing), not a zero-element tuple. Tuples are 2+ elements only. Use `else -> ()` in `cond` for side-effect-only fallthrough.
+
 ### Known gaps
 
 - **Type checker**: generics resolve to `Unknown`, `ref<T>` unresolved, qualified imports not yet implemented (`math.add()` style -- currently `import math` dumps all public symbols into scope)

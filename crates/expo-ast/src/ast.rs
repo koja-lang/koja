@@ -284,6 +284,7 @@ pub enum Expr {
     },
     Cond {
         arms: Vec<CondArm>,
+        else_body: Option<Vec<Statement>>,
         span: Span,
     },
     EnumConstruction {

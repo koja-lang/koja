@@ -3,7 +3,9 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
 use crate::compiler::Compiler;
-use crate::control::{compile_cond, compile_if, compile_loop, compile_match, compile_while};
+use crate::control::{
+    compile_cond, compile_if, compile_loop, compile_match, compile_ternary, compile_while,
+};
 use crate::enums::compile_enum_construction;
 use crate::ops::{compile_binary, compile_unary};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
@@ -85,7 +87,9 @@ pub fn compile_expr<'ctx>(
             }
         }
 
-        Expr::Cond { arms, .. } => compile_cond(c, arms, function),
+        Expr::Cond {
+            arms, else_body, ..
+        } => compile_cond(c, arms, else_body, function),
 
         Expr::EnumConstruction {
             type_path,
@@ -95,6 +99,13 @@ pub fn compile_expr<'ctx>(
         } => compile_enum_construction(c, type_path, variant, data, function),
 
         Expr::Match { subject, arms, .. } => compile_match(c, subject, arms, function),
+
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+            ..
+        } => compile_ternary(c, condition, then_expr, else_expr, function),
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",

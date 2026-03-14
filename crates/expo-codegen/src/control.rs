@@ -93,6 +93,64 @@ pub fn compile_if<'ctx>(
     Ok(None)
 }
 
+pub fn compile_ternary<'ctx>(
+    c: &mut Compiler<'ctx>,
+    condition: &Expr,
+    then_expr: &Expr,
+    else_expr: &Expr,
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let cond_val =
+        compile_expr(c, condition, function)?.ok_or("ternary condition produced no value")?;
+
+    let cond_int = if cond_val.is_int_value() {
+        let iv = cond_val.into_int_value();
+        if iv.get_type().get_bit_width() == 1 {
+            iv
+        } else {
+            c.builder
+                .build_int_compare(IntPredicate::NE, iv, iv.get_type().const_zero(), "terncond")
+                .unwrap()
+        }
+    } else {
+        return Err("ternary condition must be a boolean".to_string());
+    };
+
+    let then_bb = c.context.append_basic_block(function, "tern_then");
+    let else_bb = c.context.append_basic_block(function, "tern_else");
+    let merge_bb = c.context.append_basic_block(function, "tern_cont");
+
+    c.builder
+        .build_conditional_branch(cond_int, then_bb, else_bb)
+        .unwrap();
+
+    c.builder.position_at_end(then_bb);
+    let then_val = compile_expr(c, then_expr, function)?;
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+    let then_end_bb = c.builder.get_insert_block().unwrap();
+
+    c.builder.position_at_end(else_bb);
+    let else_val = compile_expr(c, else_expr, function)?;
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+    let else_end_bb = c.builder.get_insert_block().unwrap();
+
+    c.builder.position_at_end(merge_bb);
+
+    if let (Some(tv), Some(ev)) = (&then_val, &else_val)
+        && tv.get_type() == ev.get_type()
+    {
+        let phi = c.builder.build_phi(tv.get_type(), "ternval").unwrap();
+        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
+        return Ok(Some(phi.as_basic_value()));
+    }
+
+    Ok(None)
+}
+
 pub fn compile_while<'ctx>(
     c: &mut Compiler<'ctx>,
     condition: &Expr,
@@ -152,13 +210,17 @@ pub fn compile_while<'ctx>(
 pub fn compile_cond<'ctx>(
     c: &mut Compiler<'ctx>,
     arms: &[CondArm],
+    else_body: &Option<Vec<Statement>>,
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    if arms.is_empty() {
+    if arms.is_empty() && else_body.is_none() {
         return Ok(None);
     }
 
     let merge_bb = c.context.append_basic_block(function, "cond_end");
+    let fallthrough_bb = c.context.append_basic_block(function, "cond_none");
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+        Vec::new();
 
     for (i, arm) in arms.iter().enumerate() {
         let cond_val =
@@ -184,7 +246,7 @@ pub fn compile_cond<'ctx>(
             c.context
                 .append_basic_block(function, &format!("cond_check_{}", i + 1))
         } else {
-            merge_bb
+            fallthrough_bb
         };
 
         c.builder
@@ -192,22 +254,72 @@ pub fn compile_cond<'ctx>(
             .unwrap();
 
         c.builder.position_at_end(body_bb);
-        for stmt in &arm.body {
+        let mut arm_val: Option<BasicValueEnum> = None;
+        for (j, stmt) in arm.body.iter().enumerate() {
             if c.current_block_terminated() {
                 break;
+            }
+            if j == arm.body.len() - 1
+                && let Statement::Expr(expr) = stmt
+            {
+                arm_val = compile_expr(c, expr, function)?;
+                continue;
             }
             compile_statement(c, stmt, function)?;
         }
         if !c.current_block_terminated() {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
+        let arm_end_bb = c.builder.get_insert_block().unwrap();
+        if let Some(val) = arm_val {
+            incoming.push((val, arm_end_bb));
+        }
 
-        if next_bb != merge_bb {
+        if next_bb != merge_bb && next_bb != fallthrough_bb {
             c.builder.position_at_end(next_bb);
         }
     }
 
+    c.builder.position_at_end(fallthrough_bb);
+    if let Some(body) = else_body {
+        let mut else_val: Option<BasicValueEnum> = None;
+        for (j, stmt) in body.iter().enumerate() {
+            if c.current_block_terminated() {
+                break;
+            }
+            if j == body.len() - 1
+                && let Statement::Expr(expr) = stmt
+            {
+                else_val = compile_expr(c, expr, function)?;
+                continue;
+            }
+            compile_statement(c, stmt, function)?;
+        }
+        if !c.current_block_terminated() {
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+        let else_end_bb = c.builder.get_insert_block().unwrap();
+        if let Some(val) = else_val {
+            incoming.push((val, else_end_bb));
+        }
+    } else {
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+
     c.builder.position_at_end(merge_bb);
+
+    let expected_sources = arms.len() + if else_body.is_some() { 1 } else { 0 };
+    if !incoming.is_empty() && incoming.len() == expected_sources {
+        let first_ty = incoming[0].0.get_type();
+        if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
+            let phi = c.builder.build_phi(first_ty, "condval").unwrap();
+            for (v, bb) in &incoming {
+                phi.add_incoming(&[(v, *bb)]);
+            }
+            return Ok(Some(phi.as_basic_value()));
+        }
+    }
+
     Ok(None)
 }
 
@@ -263,6 +375,9 @@ pub fn compile_match<'ctx>(
     c.builder.build_store(subject_alloca, subject_val).unwrap();
 
     let merge_bb = c.context.append_basic_block(function, "match_end");
+    let fallthrough_bb = c.context.append_basic_block(function, "match_none");
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+        Vec::new();
 
     for (i, arm) in arms.iter().enumerate() {
         let body_bb = c
@@ -272,7 +387,7 @@ pub fn compile_match<'ctx>(
             c.context
                 .append_basic_block(function, &format!("match_test_{}", i + 1))
         } else {
-            merge_bb
+            fallthrough_bb
         };
 
         let saved_vars = c.variables.clone();
@@ -294,21 +409,50 @@ pub fn compile_match<'ctx>(
             .unwrap();
 
         c.builder.position_at_end(body_bb);
-        for stmt in &arm.body {
+        let mut arm_val: Option<BasicValueEnum> = None;
+        for (j, stmt) in arm.body.iter().enumerate() {
             if c.current_block_terminated() {
                 break;
+            }
+            if j == arm.body.len() - 1
+                && let Statement::Expr(expr) = stmt
+            {
+                arm_val = compile_expr(c, expr, function)?;
+                continue;
             }
             compile_statement(c, stmt, function)?;
         }
         if !c.current_block_terminated() {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
+        let arm_end_bb = c.builder.get_insert_block().unwrap();
+        if let Some(val) = arm_val {
+            incoming.push((val, arm_end_bb));
+        }
 
         c.variables = saved_vars;
         c.builder.position_at_end(next_bb);
     }
 
+    c.builder.position_at_end(fallthrough_bb);
+    c.builder.build_unconditional_branch(merge_bb).unwrap();
+
     c.builder.position_at_end(merge_bb);
+
+    if !incoming.is_empty() && incoming.len() == arms.len() {
+        let first_ty = incoming[0].0.get_type();
+        if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
+            let undef = first_ty.const_zero();
+            incoming.push((undef, fallthrough_bb));
+
+            let phi = c.builder.build_phi(first_ty, "matchval").unwrap();
+            for (v, bb) in &incoming {
+                phi.add_incoming(&[(v, *bb)]);
+            }
+            return Ok(Some(phi.as_basic_value()));
+        }
+    }
+
     Ok(None)
 }
 

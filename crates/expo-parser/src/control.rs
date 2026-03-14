@@ -146,7 +146,8 @@ impl Parser {
         self.skip_newlines();
 
         let mut arms = Vec::new();
-        while !self.at(&TokenKind::End) && !self.at_eof() {
+        let mut else_body = None;
+        while !self.at(&TokenKind::End) && !self.at(&TokenKind::Else) && !self.at_eof() {
             let before = self.pos;
             let arm_start = self.current_span();
             let condition = self.parse_expr_bp(crate::expr::BP_ARROW + 1);
@@ -162,10 +163,18 @@ impl Parser {
             }
             self.skip_newlines();
         }
+        if self.eat(&TokenKind::Else).is_some() {
+            self.expect(&TokenKind::Arrow);
+            else_body = Some(self.parse_match_body());
+            self.skip_newlines();
+        } else {
+            self.error("cond requires an `else ->` arm".into(), self.current_span());
+        }
         self.expect(&TokenKind::End);
 
         Expr::Cond {
             arms,
+            else_body,
             span: self.span_from(start),
         }
     }

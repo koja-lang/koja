@@ -580,13 +580,24 @@ impl<'a> Printer<'a> {
                 concat(parts)
             }
 
-            Expr::Cond { arms, span, .. } => {
-                let any_multiline = arms.iter().any(|a| arm_is_multiline(&a.body));
+            Expr::Cond {
+                arms,
+                else_body,
+                span,
+                ..
+            } => {
+                let else_multiline = else_body.as_ref().is_some_and(|b| arm_is_multiline(b));
+                let any_multiline =
+                    else_multiline || arms.iter().any(|a| arm_is_multiline(&a.body));
                 let mut parts = vec![text("cond")];
                 let mut arm_docs = Vec::new();
                 for arm in arms {
                     arm_docs.push(hardline());
                     arm_docs.push(self.cond_arm_to_doc(arm, any_multiline, span.end.line));
+                }
+                if let Some(body) = else_body {
+                    arm_docs.push(hardline());
+                    arm_docs.push(self.else_arm_to_doc(body, any_multiline, span.end.line));
                 }
                 parts.push(indent(2, concat(arm_docs)));
                 parts.push(hardline());
@@ -908,6 +919,11 @@ impl<'a> Printer<'a> {
     fn cond_arm_to_doc(&mut self, arm: &CondArm, force_break: bool, block_end: u32) -> Doc {
         let head = concat(vec![self.expr_to_doc(&arm.condition), text(" ->")]);
         self.arm_body_to_doc(head, &arm.body, force_break, block_end)
+    }
+
+    fn else_arm_to_doc(&mut self, body: &[Statement], force_break: bool, block_end: u32) -> Doc {
+        let head = text("else ->");
+        self.arm_body_to_doc(head, body, force_break, block_end)
     }
 
     fn receive_arm_to_doc(&mut self, arm: &ReceiveArm, force_break: bool, block_end: u32) -> Doc {

@@ -417,11 +417,17 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             Type::Unknown
         }
 
-        Expr::Cond { arms, .. } => {
+        Expr::Cond {
+            arms, else_body, ..
+        } => {
             for arm in arms {
                 infer_expr(&arm.condition, ctx, ce);
                 let mut child = ce.child(Type::Unknown);
                 check_body(&arm.body, ctx, &mut child);
+            }
+            if let Some(body) = else_body {
+                let mut child = ce.child(Type::Unknown);
+                check_body(body, ctx, &mut child);
             }
             Type::Unknown
         }

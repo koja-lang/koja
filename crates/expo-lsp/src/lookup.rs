@@ -261,13 +261,24 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Cond { arms, span } => {
+        Expr::Cond {
+            arms,
+            else_body,
+            span,
+        } => {
             if span_contains(span, line, col) {
                 for arm in arms {
                     if let Some(info) = find_in_expr(&arm.condition, line, col, ctx) {
                         return Some(info);
                     }
                     for stmt in &arm.body {
+                        if let Some(info) = find_in_statement(stmt, line, col, ctx) {
+                            return Some(info);
+                        }
+                    }
+                }
+                if let Some(body) = else_body {
+                    for stmt in body {
                         if let Some(info) = find_in_statement(stmt, line, col, ctx) {
                             return Some(info);
                         }
