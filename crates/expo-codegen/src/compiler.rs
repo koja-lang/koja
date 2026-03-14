@@ -30,6 +30,7 @@ pub struct Compiler<'ctx> {
     pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
     pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
     pub type_ctx: &'ctx TypeContext,
+    pub closure_counter: usize,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -47,6 +48,7 @@ impl<'ctx> Compiler<'ctx> {
             enum_name_tables: HashMap::new(),
             loop_exit_stack: Vec::new(),
             type_ctx,
+            closure_counter: 0,
         }
     }
 

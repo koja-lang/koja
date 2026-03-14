@@ -279,6 +279,7 @@ pub enum Expr {
     },
     Closure {
         params: Vec<ClosureParam>,
+        return_type: Option<TypeExpr>,
         body: Vec<Statement>,
         span: Span,
     },
@@ -468,9 +469,18 @@ pub enum EnumConstructionData {
 
 #[derive(Debug, Clone)]
 pub enum ClosureParam {
-    Name { name: String, span: Span },
-    Destructured { names: Vec<String>, span: Span },
-    Wildcard { span: Span },
+    Name {
+        name: String,
+        type_expr: Option<TypeExpr>,
+        span: Span,
+    },
+    Destructured {
+        names: Vec<String>,
+        span: Span,
+    },
+    Wildcard {
+        span: Span,
+    },
 }
 
 // ============================================================================

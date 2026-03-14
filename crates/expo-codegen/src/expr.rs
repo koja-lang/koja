@@ -1,5 +1,6 @@
-use expo_ast::ast::{Arg, BinOp, Expr, Literal, StringPart};
+use expo_ast::ast::{Arg, BinOp, ClosureParam, Expr, Literal, Statement, StringPart};
 use expo_ast::span::Span;
+use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
@@ -114,6 +115,13 @@ pub fn compile_expr<'ctx>(
             else_expr,
             ..
         } => compile_ternary(c, condition, then_expr, else_expr, function),
+
+        Expr::Closure {
+            params,
+            return_type,
+            body,
+            ..
+        } => compile_closure(c, params, return_type, body, function),
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
@@ -361,6 +369,106 @@ fn enum_value_to_string<'ctx>(
         .into_pointer_value();
 
     Ok(name_ptr)
+}
+
+fn resolve_closure_params<'ctx>(
+    c: &Compiler<'ctx>,
+    params: &[ClosureParam],
+) -> Vec<expo_typecheck::types::Type> {
+    params
+        .iter()
+        .map(|p| match p {
+            ClosureParam::Name {
+                type_expr: Some(te),
+                ..
+            } => c.resolve_type_expr(te),
+            _ => expo_typecheck::types::Type::Primitive(expo_typecheck::types::Primitive::I32),
+        })
+        .collect()
+}
+
+fn compile_closure<'ctx>(
+    c: &mut Compiler<'ctx>,
+    params: &[ClosureParam],
+    return_type: &Option<expo_ast::ast::TypeExpr>,
+    body: &[Statement],
+    _parent_fn: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let param_types = resolve_closure_params(c, params);
+
+    let llvm_param_types: Vec<_> = param_types
+        .iter()
+        .filter_map(|ty| to_llvm_type(ty, c.context, &c.struct_types))
+        .collect();
+
+    let llvm_meta_params: Vec<inkwell::types::BasicMetadataTypeEnum> =
+        llvm_param_types.iter().map(|t| (*t).into()).collect();
+
+    let ret_type = match return_type {
+        Some(te) => c.resolve_type_expr(te),
+        None => expo_typecheck::types::Type::Unit,
+    };
+    let fn_type = match to_llvm_type(&ret_type, c.context, &c.struct_types) {
+        Some(ret_llvm) => ret_llvm.fn_type(&llvm_meta_params, false),
+        None => c.context.void_type().fn_type(&llvm_meta_params, false),
+    };
+
+    let closure_name = format!("__closure_{}", c.closure_counter);
+    c.closure_counter += 1;
+
+    let closure_fn = c.module.add_function(&closure_name, fn_type, None);
+    let entry = c.context.append_basic_block(closure_fn, "entry");
+
+    let saved_vars = std::mem::take(&mut c.variables);
+    let saved_block = c.builder.get_insert_block();
+
+    c.builder.position_at_end(entry);
+
+    for (i, param) in params.iter().enumerate() {
+        if let ClosureParam::Name { name, .. } = param {
+            let ty = &param_types[i];
+            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.struct_types) {
+                let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
+                let param_val = closure_fn.get_nth_param(i as u32).unwrap();
+                c.builder.build_store(alloca, param_val).unwrap();
+                c.variables.insert(name.clone(), (alloca, ty.clone()));
+            }
+        }
+    }
+
+    let body_len = body.len();
+    for (i, stmt) in body.iter().enumerate() {
+        if c.current_block_terminated() {
+            break;
+        }
+        let is_last = i == body_len - 1;
+        if is_last && let Statement::Expr(expr) = stmt {
+            let val = compile_expr(c, expr, closure_fn)?;
+            if !c.current_block_terminated() {
+                match val {
+                    Some(v) => {
+                        c.builder.build_return(Some(&v)).unwrap();
+                    }
+                    None => {
+                        c.builder.build_return(None).unwrap();
+                    }
+                }
+            }
+            continue;
+        }
+        crate::stmt::compile_statement(c, stmt, closure_fn)?;
+    }
+
+    if !c.current_block_terminated() {
+        c.builder.build_return(None).unwrap();
+    }
+
+    c.variables = saved_vars;
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+
+    Ok(Some(closure_fn.as_global_value().as_pointer_value().into()))
 }
 
 fn compile_pipe<'ctx>(

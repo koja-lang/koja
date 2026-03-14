@@ -4,6 +4,10 @@ use expo_ast::ast::TypeExpr;
 pub enum Type {
     Enum(String),
     Error,
+    Function {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
     Primitive(Primitive),
     Struct(String),
     Tuple(Vec<Type>),
@@ -32,6 +36,13 @@ impl Type {
         match self {
             Type::Enum(name) => name.clone(),
             Type::Error => "<error>".to_string(),
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                let p: Vec<String> = params.iter().map(|t| t.display()).collect();
+                format!("({}) -> {}", p.join(", "), return_type.display())
+            }
             Type::Primitive(p) => p.display().to_string(),
             Type::Struct(name) => name.clone(),
             Type::Tuple(elems) => {

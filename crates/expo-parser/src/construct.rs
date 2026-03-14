@@ -319,18 +319,26 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // fn
 
-        let params = if self.at(&TokenKind::Arrow) {
+        self.expect(&TokenKind::LParen);
+        let params = if self.at(&TokenKind::RParen) {
             Vec::new()
         } else {
             self.parse_closure_params()
         };
+        self.expect(&TokenKind::RParen);
 
-        self.expect(&TokenKind::Arrow);
+        let return_type = if self.eat(&TokenKind::Arrow).is_some() {
+            Some(self.parse_type_expr())
+        } else {
+            None
+        };
+
         let body = self.parse_block();
         self.expect(&TokenKind::End);
 
         Expr::Closure {
             params,
+            return_type,
             body,
             span: self.span_from(start),
         }
@@ -359,8 +367,14 @@ impl Parser {
             }
             TokenKind::Ident(name) => {
                 self.advance();
+                let type_expr = if self.eat(&TokenKind::Colon).is_some() {
+                    Some(self.parse_type_expr())
+                } else {
+                    None
+                };
                 ClosureParam::Name {
                     name,
+                    type_expr,
                     span: self.span_from(start),
                 }
             }
@@ -399,6 +413,7 @@ impl Parser {
             Expr::Ident { name, span } => {
                 vec![ClosureParam::Name {
                     name: name.clone(),
+                    type_expr: None,
                     span: *span,
                 }]
             }
@@ -409,6 +424,7 @@ impl Parser {
                         Expr::Ident { name, span } => {
                             params.push(ClosureParam::Name {
                                 name: name.clone(),
+                                type_expr: None,
                                 span: *span,
                             });
                         }

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Non-capturing block closures -- `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax with required parens and explicit types. Closures compile to function pointers and can be called through variables.
+- `Type::Function` in the type system -- closures are typed as `(params) -> return_type`.
 - Pipe operator (`|>`) -- desugars `a |> f(b)` to `f(a, b)`. Formatter keeps short chains on one line, breaks with consistent indentation when long.
 - `else ->` catch-all arm for `cond` expressions (required by the parser).
 - `cond` expressions are now value-producing (can be used in assignments when all arms + `else` produce values).
@@ -18,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Import conflict detection -- errors on duplicate names from different imports and duplicate module qualifiers.
 - LSP: hover and go-to-definition for qualified calls (`math.add()` shows signature and docs from the source module).
 - LSP: nested module path resolution (`import what.util` correctly resolves to `what/util.expo`).
+- LSP: closure body traversal for hover and go-to-definition inside closures.
 - Vim/VSCode syntax highlighting for module names in imports and qualified calls.
 
 ### Changed

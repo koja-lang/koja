@@ -666,23 +666,26 @@ impl<'a> Printer<'a> {
             ]),
 
             Expr::Closure {
-                params, body, span, ..
+                params,
+                return_type,
+                body,
+                span,
             } => {
                 let params_doc: Vec<Doc> = params.iter().map(closure_param_to_doc).collect();
-                let sig = if params.is_empty() {
-                    text("fn ")
-                } else {
-                    concat(vec![
-                        text("fn "),
-                        intersperse(params_doc, text(", ")),
-                        text(" "),
-                    ])
-                };
+                let mut sig_parts = vec![
+                    text("fn ("),
+                    intersperse(params_doc, text(", ")),
+                    text(")"),
+                ];
+                if let Some(rt) = return_type {
+                    sig_parts.push(text(" -> "));
+                    sig_parts.push(type_expr_to_doc(rt));
+                }
+                let sig = concat(sig_parts);
                 if body.len() == 1 {
                     let body_doc = self.statements_to_doc(body, span.end.line);
                     group(concat(vec![
                         sig,
-                        text("->"),
                         indent(2, concat(vec![line(), body_doc])),
                         line(),
                         text("end"),
@@ -690,7 +693,6 @@ impl<'a> Printer<'a> {
                 } else {
                     concat(vec![
                         sig,
-                        text("->"),
                         self.body_to_doc(body, span.end.line),
                         hardline(),
                         text("end"),
@@ -1393,7 +1395,15 @@ fn literal_to_doc(lit: &Literal) -> Doc {
 
 fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
     match cp {
-        ClosureParam::Name { name, .. } => text(name.clone()),
+        ClosureParam::Name {
+            name, type_expr, ..
+        } => {
+            if let Some(te) = type_expr {
+                concat(vec![text(name.clone()), text(": "), type_expr_to_doc(te)])
+            } else {
+                text(name.clone())
+            }
+        }
         ClosureParam::Destructured { names, .. } => concat(vec![
             text("("),
             intersperse(names.iter().map(|n| text(n.clone())).collect(), text(", ")),

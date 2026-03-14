@@ -25,20 +25,22 @@ Six commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo lex`,
 
 ### What compiles to native binaries today
 
-Multi-module programs with imports. Functions (`fn`/`priv fn`), structs, enums, impl blocks, methods (`self`), if/else, while, loop, break, return, match, cond, compound assignment (`+=`, `-=`, `*=`, `/=`), string interpolation, `print` builtin, i32/i64/f32/f64/bool/String primitives.
+Multi-module programs with imports (including qualified calls like `math.add()`). Functions (`fn`/`priv fn`), structs, enums, impl blocks, methods (`self`), if/else, while, loop, break, return, match, cond, ternary, pipe (`|>`), compound assignment (`+=`, `-=`, `*=`, `/=`), string interpolation, closures (non-capturing, inline and block forms), `print` builtin, i32/i64/f32/f64/bool/String primitives.
 
 ### Parsed and type-checked but NOT yet in codegen
 
-For, closures (both forms), arena, await/receive/spawn, try (`?`), generics, `ref<T>`, lists.
+For, arena, await/receive/spawn, try (`?`), generics, `ref<T>`, lists.
 
 ### Design notes
 
 - **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. After generics land, `Pair<A, B>` (with `.first` / `.second`) will be available in the stdlib for lightweight two-value cases. 3+ values should always be a struct.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
+- **Closures (Phase 1)**: Block closures only with explicit types and parens: `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax. Inline closures (`x -> expr`) are parsed but not compiled -- they land in Phase 2 with type inference and generics.
 
 ### Known gaps
 
-- **Type checker**: generics resolve to `Unknown`, `ref<T>` unresolved
+- **Type checker**: generics resolve to `Unknown`, `ref<T>` unresolved (both Phase 2)
+- **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
 
 ### Design artifacts
 
@@ -52,7 +54,7 @@ For, closures (both forms), arena, await/receive/spawn, try (`?`), generics, `re
 ### Tooling (pulled forward)
 
 - **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@moduledoc`/`@doc` annotations
-- **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`/`@moduledoc`), and go-to-definition over stdio, integrated with the VSCode/Cursor extension
+- **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`/`@moduledoc`), and go-to-definition (including qualified module calls) over stdio, integrated with the VSCode/Cursor extension
 - **VSCode extension** -- syntax highlighting and LSP client for `.expo` files
 
 ---
@@ -71,7 +73,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work. String interpolation (`#{}`) and escape sequences (`\"`, `\\`, `\n`, `\t`, `\#`) fully implemented in the lexer with a mode stack for nested interpolation. Multiline strings (`"""`) support the same escapes as single-line strings and are automatically dedented based on the closing delimiter's column position.
 
-### Month 2 -- Type system and semantic analysis (~70% complete)
+### Month 2 -- Type system and semantic analysis (~95% complete)
 
 - ~~Type checking: primitives, structs~~ (enums, generics, `Option<T>`, `Result<T,E>`, `List<T>`, `Map<K,V>` not yet resolved)
 - ~~Type inference for local variables (explicit types on function signatures, inferred inside bodies)~~
@@ -84,9 +86,9 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 **Status**: Primitives, structs, enums, and method resolution work. Multi-module type checking with import-driven discovery. `priv fn` visibility enforcement across modules. `expo check` reports diagnostics with line/column positions. Hello-world, struct, enum, and multi-file programs pass. Match exhaustiveness checking catches missing variants. Unused variable warnings implemented (suppressed with `_` prefix). Warnings and errors are distinguished -- warnings no longer halt compilation. `undefined function` errors reported for unknown calls.
 
-**Remaining gaps**: generics resolve to `Unknown`, qualified imports (`math.add()` style) not yet implemented. (`ref<T>` is intentionally deferred to Phase 2 ownership.)
+**Remaining gaps**: generics resolve to `Unknown` (Phase 2). Import conflict detection implemented. Qualified imports (`math.add()`) fully working. (`ref<T>` is intentionally deferred to Phase 2 ownership.)
 
-### Month 3 -- LLVM codegen (~55% complete)
+### Month 3 -- LLVM codegen (~95% complete)
 
 - ~~Integrate LLVM via `inkwell` (Rust LLVM bindings)~~
 - ~~Code generation for: function calls, arithmetic, string literals, `if`/`else`, `match` (simple cases), `return`~~
@@ -98,7 +100,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 
 Enums compile to tagged unions (`{ i8 tag, [N x i8] payload }`). Match compiles with full pattern matching (wildcard, literal, binding, enum unit/tuple/struct, constructor, nested patterns, `when` guards). Bare variant names resolve to the correct enum from context. String interpolation of enum values prints the variant name by default, with custom `to_string` override support. Cond compiles to a cascade of conditional branches. Capitalized identifiers are enforced as types/constructors at the parser level.
 
-**Remaining gaps**: for, closures (both forms), ternary, try (`?`), pipe (`|>`), tuples, lists -- none of these generate LLVM IR yet. Format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation.
+**Remaining gaps**: Non-capturing block closures compile as function pointers (`fn (params) -> type ... end`). Inline closures (`x -> expr`) are parsed but codegen is deferred to Phase 2 (requires type inference + generics). For loops, try (`?`), and lists are deferred to Phase 2 (require collections/generics). Closure capture analysis (move vs. borrow) is Phase 2. Format specs (`:FORMAT_SPEC`) are parsed and stored in the AST but ignored during compilation.
 
 ### Key decisions
 
@@ -112,9 +114,27 @@ Enums compile to tagged unions (`{ i8 tag, [N x i8] payload }`). Match compiles 
 
 ## Phase 2: Core language
 
-Make the compiler powerful enough to compile non-trivial programs with Expo's ownership model and structured concurrency.
+Make the compiler powerful enough to compile non-trivial programs with Expo's generics, ownership model, and structured concurrency.
 
-**Note**: The parser and AST already handle all Phase 2 constructs (enums, match, cond, for, closures, arena, spawn/await). The work here is wiring up type checking and codegen, not design or parsing. There is significant overlap between finishing Phase 1 codegen gaps (match, enums, closures, for) and the Phase 2 milestones below. Ownership and tasks are developed together because tasks need borrow semantics to work correctly.
+**Note**: The parser and AST already handle all Phase 2 constructs (for, closures, arena, spawn/await, generics). The work here is wiring up type checking and codegen, not design or parsing. Generics are the gate to Phase 2 -- `Option<T>`, `Result<T,E>`, collections, `Pair<A,B>`, try (`?`), and `ref<T>` all depend on them.
+
+**Implementation order**: Generics first (the shared gate -- unlocks everything). After generics, two independent tracks can proceed in parallel:
+
+- **Track A -- Ownership/borrowing**: move semantics, borrow checking, drop insertion (pure compile-time flow analysis, no dependency on collections)
+- **Track B -- Collections/closures**: `List<T>`, `Map<K,V>`, inline closure codegen, iterators, `for` loops (no dependency on ownership)
+
+Tasks require both tracks to converge (borrow safety across spawn boundaries + practical collection passing). Closure capture analysis also sits at the intersection (move vs. borrow into closures).
+
+### Generics and monomorphization
+
+- Type parameter syntax already parsed: `struct Pair<A, B>`, `fn identity<T>(x: T) -> T`
+- Monomorphization: generate specialized LLVM IR for each concrete instantiation
+- Type variable unification across call sites
+- Generic structs, enums, and functions
+- `Option<T>` and `Result<T,E>` as built-in enum types with `Some`/`None`/`Ok`/`Err`
+- `Pair<A, B>` stdlib struct (with `.first` / `.second`)
+- The `?` operator for error propagation (desugars to early `return Err(...)`)
+- **Done when**: `Option<T>`, `Result<T,E>`, and `Pair<A,B>` compile and work in match expressions
 
 ### Ownership and borrowing
 
@@ -130,6 +150,18 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ow
 - The `&` symbol does not exist in Expo -- borrowing is implicit, references use `ref<T>`
 - **Done when**: programs that move, borrow, and clone compile correctly, and use-after-move is caught
 
+### Collections, closures, and iteration
+
+- `List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations
+- Closure capture analysis (move vs. borrow) -- non-capturing block closures (`fn (params) -> type ... end`) land in Phase 1, capturing closures need ownership semantics from this phase
+- Inline closure codegen (`x -> expr`) -- requires type inference and generics to compile without explicit annotations
+- Bare function names as references (no sigil -- `foo` references, `foo()` calls)
+- Iterator methods: `.map()`, `.filter()`, `.any?()`, `.all?()`, `.retain()`, `.iter()`
+- Ownership splitting for concurrent mutation patterns (tasks receive owned, non-overlapping chunks -- specific API designed during stdlib phase)
+- `for` loops over iterables
+- `arena...end` blocks with bulk-free semantics
+- **Done when**: `ua_parser.expo` compiles -- it exercises structs, enums, match, closures, method chaining, and returns
+
 ### Tasks and structured concurrency
 
 - `spawn fn -> ... end` creates a stackless task (compiler transforms to a state machine), returns `Handle<T>`
@@ -143,32 +175,11 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ow
 
 See `CONCURRENCY.md` "Tasks" section and `MEMORY.md` "At concurrency boundaries" for full design details.
 
-### Pattern matching and enums
-
-- ~~Full pattern matching: destructuring, `when` guards, nested patterns, wildcard `_`~~
-- ~~Enum variants: unit, tuple, and struct forms~~
-- `Option<T>` and `Result<T,E>` as built-in enum types with `Some`/`None`/`Ok`/`Err`
-- The `?` operator for error propagation (desugars to early `return Err(...)`)
-- ~~Exhaustiveness checking on `match`~~
-- **Done when**: the `WriteOp` enum from `state_machine.expo` compiles and pattern-matches correctly
-
-### Collections and closures
-
-- `List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations
-- Both closure forms: `(args -> expr)`, `fn args -> body end`
-- Bare function names as references (no sigil -- `foo` references, `foo()` calls)
-- Closure capture analysis (move vs. borrow)
-- Iterator methods: `.map()`, `.filter()`, `.any?()`, `.all?()`, `.retain()`, `.iter()`
-- Ownership splitting for concurrent mutation patterns (tasks receive owned, non-overlapping chunks -- specific API designed during stdlib phase)
-- `for` loops over iterables
-- `arena...end` blocks with bulk-free semantics
-- **Done when**: `ua_parser.expo` compiles -- it exercises structs, enums, match, closures, method chaining, and returns
-
 ### Risks
 
+- **Generic monomorphization**: generics like `Patch<T>` need to be monomorphized at compile time. This is well-understood (Rust, C++ do it) but adds compiler complexity. Start with concrete types, then generalize.
 - **Borrow checker complexity**: Expo's model is simpler than Rust's (no lifetimes, no mutable borrows), but still requires flow analysis. Start with a conservative checker that rejects some valid programs rather than accepting invalid ones. Loosen over time.
 - **Task borrow safety**: structured concurrency simplifies this (parent outlives tasks by construction), but the compiler must still prove that borrowed data isn't moved while tasks hold references. Flow analysis required.
-- **Generic monomorphization**: generics like `Patch<T>` need to be monomorphized at compile time. This is well-understood (Rust, C++ do it) but adds compiler complexity. Implement for concrete types first, generics second.
 
 ---
 

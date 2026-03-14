@@ -1,9 +1,12 @@
 use expo_ast::ast::Arg;
+use expo_typecheck::types::Type;
+use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 use crate::structs::compile_struct_construction;
+use crate::types::to_llvm_type;
 
 pub fn compile_call<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -21,24 +24,65 @@ pub fn compile_call<'ctx>(
             compile_print_builtin(c, name, args, function)
         }
         _ => {
-            let callee = *c
-                .functions
-                .get(name)
-                .ok_or_else(|| format!("undefined function: {name}"))?;
+            if let Some(callee) = c.functions.get(name).copied() {
+                let mut compiled_args = Vec::new();
+                for arg in args {
+                    let val = compile_expr(c, &arg.value, function)?
+                        .ok_or_else(|| format!("argument to {name} produced no value"))?;
+                    compiled_args.push(val.into());
+                }
 
-            let mut compiled_args = Vec::new();
-            for arg in args {
-                let val = compile_expr(c, &arg.value, function)?
-                    .ok_or_else(|| format!("argument to {name} produced no value"))?;
-                compiled_args.push(val.into());
+                let result = c
+                    .builder
+                    .build_call(callee, &compiled_args, &format!("call_{name}"))
+                    .unwrap();
+
+                Ok(result.try_as_basic_value().left())
+            } else if let Some((
+                ptr,
+                Type::Function {
+                    params,
+                    return_type,
+                },
+            )) = c.variables.get(name).cloned()
+            {
+                let llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = params
+                    .iter()
+                    .filter_map(|ty| to_llvm_type(ty, c.context, &c.struct_types))
+                    .map(|t| t.into())
+                    .collect();
+
+                let fn_type = match to_llvm_type(&return_type, c.context, &c.struct_types) {
+                    Some(ret) => ret.fn_type(&llvm_param_types, false),
+                    None => c.context.void_type().fn_type(&llvm_param_types, false),
+                };
+
+                let fn_ptr = c
+                    .builder
+                    .build_load(
+                        c.context.ptr_type(inkwell::AddressSpace::default()),
+                        ptr,
+                        &format!("{name}_ptr"),
+                    )
+                    .unwrap()
+                    .into_pointer_value();
+
+                let mut compiled_args = Vec::new();
+                for arg in args {
+                    let val = compile_expr(c, &arg.value, function)?
+                        .ok_or_else(|| format!("argument to {name} produced no value"))?;
+                    compiled_args.push(val.into());
+                }
+
+                let call_val = c
+                    .builder
+                    .build_indirect_call(fn_type, fn_ptr, &compiled_args, &format!("call_{name}"))
+                    .unwrap();
+
+                Ok(call_val.try_as_basic_value().left())
+            } else {
+                Err(format!("undefined function: {name}"))
             }
-
-            let result = c
-                .builder
-                .build_call(callee, &compiled_args, &format!("call_{name}"))
-                .unwrap();
-
-            Ok(result.try_as_basic_value().left())
         }
     }
 }

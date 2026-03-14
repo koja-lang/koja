@@ -352,6 +352,20 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
+        Expr::Closure { body, span, .. } => {
+            if span_contains(span, line, col) {
+                for stmt in body {
+                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
+        Expr::ShortClosure { body, span, .. } => {
+            if span_contains(span, line, col) {
+                return find_in_expr(body, line, col, ctx);
+            }
+        }
         _ => {}
     }
     None

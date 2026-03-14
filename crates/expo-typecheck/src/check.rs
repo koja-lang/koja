@@ -443,10 +443,28 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             }
         }
 
-        Expr::Closure { body, .. } => {
-            let mut child = ce.child(Type::Unknown);
-            check_body(body, ctx, &mut child);
-            Type::Unknown
+        Expr::Closure { params, body, span, .. } => {
+            let mut closure_env = CheckEnv {
+                env: HashMap::new(),
+                used_vars: HashSet::new(),
+                loop_depth: 0,
+                return_type: Type::Unknown,
+                struct_names: ce.struct_names,
+                enum_names: ce.enum_names,
+            };
+            let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
+            check_body(body, ctx, &mut closure_env);
+            let return_type = body
+                .last()
+                .and_then(|s| match s {
+                    Statement::Expr(e) => Some(infer_expr(e, ctx, &mut closure_env)),
+                    _ => None,
+                })
+                .unwrap_or(Type::Unit);
+            Type::Function {
+                params: param_types,
+                return_type: Box::new(return_type),
+            }
         }
 
         Expr::Cond {
@@ -927,9 +945,21 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             }
         }
 
-        Expr::ShortClosure { body, .. } => {
-            infer_expr(body, ctx, ce);
-            Type::Unknown
+        Expr::ShortClosure { params, body, span } => {
+            let mut closure_env = CheckEnv {
+                env: HashMap::new(),
+                used_vars: HashSet::new(),
+                loop_depth: 0,
+                return_type: Type::Unknown,
+                struct_names: ce.struct_names,
+                enum_names: ce.enum_names,
+            };
+            let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
+            let return_type = infer_expr(body, ctx, &mut closure_env);
+            Type::Function {
+                params: param_types,
+                return_type: Box::new(return_type),
+            }
         }
 
         Expr::Spawn { expr: inner, .. } => {
@@ -1420,6 +1450,45 @@ fn check_type(actual: &Type, expected: &Type, span: Span, ctx: &mut TypeContext)
             span,
         );
     }
+}
+
+fn bind_closure_params(
+    params: &[ClosureParam],
+    ce: &mut CheckEnv,
+    ctx: &mut TypeContext,
+    _closure_span: Span,
+) -> Vec<Type> {
+    let mut types = Vec::new();
+    for p in params {
+        match p {
+            ClosureParam::Name {
+                name, type_expr, ..
+            } => {
+                let ty = if let Some(te) = type_expr {
+                    resolve_type_expr(te, ce.struct_names, ce.enum_names)
+                } else {
+                    Type::Unknown
+                };
+                ce.env.insert(name.clone(), ty.clone());
+                types.push(ty);
+            }
+            ClosureParam::Destructured { names, span, .. } => {
+                ctx.error_with_hint(
+                    "destructured closure parameters are not yet supported".to_string(),
+                    "use individual named parameters instead".into(),
+                    *span,
+                );
+                for name in names {
+                    ce.env.insert(name.clone(), Type::Unknown);
+                    types.push(Type::Unknown);
+                }
+            }
+            ClosureParam::Wildcard { .. } => {
+                types.push(Type::Unknown);
+            }
+        }
+    }
+    types
 }
 
 fn expr_span(expr: &Expr) -> Span {
