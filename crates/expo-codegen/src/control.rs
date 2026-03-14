@@ -721,7 +721,9 @@ fn compile_literal_for_pattern<'ctx>(
             {
                 i64::from_str_radix(bin, 2).map_err(|_| format!("invalid binary integer: {s}"))?
             } else {
-                clean.parse().map_err(|_| format!("invalid integer: {s}"))?
+                clean
+                    .parse()
+                    .map_err(|_| format!("integer literals cannot exceed {}", i64::MAX))?
             };
             Ok(c.context.i32_type().const_int(val as u64, true).into())
         }

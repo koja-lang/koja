@@ -49,10 +49,8 @@ syn region expoInterpolation matchgroup=expoInterpDelim start=/#{/ end=/}/ conta
 
 syn match expoOperator      /|>/
 syn match expoOperator      /->/
-syn match expoOperator      /[+\-*/%]=\?/
-syn match expoOperator      /[!=]=\|[<>]=\?/
-syn match expoOperator      /=/
-syn match expoOperator      /?/
+syn match expoOperator      /[+\-*/%]=/
+syn match expoOperator      /[!=]=\|[<>]=/
 
 " --- Comments ---------------------------------------------------------------
 

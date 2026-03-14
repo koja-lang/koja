@@ -403,12 +403,16 @@ impl<'a> Printer<'a> {
             } => {
                 let op_str = binop_str(op);
                 if matches!(op, BinOp::Pipe) {
-                    group(concat(vec![
-                        self.expr_to_doc(left),
-                        hardline(),
-                        text("|> "),
-                        self.expr_to_doc(right),
-                    ]))
+                    let mut segments = Vec::new();
+                    self.collect_pipe_chain(left, &mut segments);
+                    self.collect_pipe_chain(right, &mut segments);
+                    let mut parts = vec![segments[0].clone()];
+                    for seg in &segments[1..] {
+                        parts.push(line());
+                        parts.push(text("|> "));
+                        parts.push(seg.clone());
+                    }
+                    group(concat(parts))
                 } else {
                     group(concat(vec![
                         self.expr_to_doc(left),
@@ -926,6 +930,21 @@ impl<'a> Printer<'a> {
         self.arm_body_to_doc(head, body, force_break, block_end)
     }
 
+    fn collect_pipe_chain(&mut self, expr: &Expr, segments: &mut Vec<Doc>) {
+        if let Expr::Binary {
+            op: BinOp::Pipe,
+            left,
+            right,
+            ..
+        } = expr
+        {
+            self.collect_pipe_chain(left, segments);
+            self.collect_pipe_chain(right, segments);
+        } else {
+            segments.push(self.expr_to_doc(expr));
+        }
+    }
+
     fn receive_arm_to_doc(&mut self, arm: &ReceiveArm, force_break: bool, block_end: u32) -> Doc {
         let head = concat(vec![
             pattern_to_doc(&arm.pattern),
@@ -978,6 +997,18 @@ impl<'a> Printer<'a> {
                         text(" ="),
                         indent(2, concat(vec![hardline(), value_doc])),
                     ])
+                } else if matches!(
+                    value,
+                    Expr::Binary {
+                        op: BinOp::Pipe,
+                        ..
+                    }
+                ) {
+                    group(concat(vec![
+                        target_doc,
+                        text(" ="),
+                        indent(2, concat(vec![line(), value_doc])),
+                    ]))
                 } else {
                     group(concat(vec![target_doc, text(" = "), value_doc]))
                 }

@@ -9,10 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pipe operator (`|>`) -- desugars `a |> f(b)` to `f(a, b)`. Formatter keeps short chains on one line, breaks with consistent indentation when long.
 - `else ->` catch-all arm for `cond` expressions (required by the parser).
 - `cond` expressions are now value-producing (can be used in assignments when all arms + `else` produce values).
 - `match` expressions are now value-producing (can be used in assignments when all arms produce values).
 - Ternary expressions (`condition ? then : else`), with nested ternaries disallowed.
+
+### Fixed
+
+- Better error message for integer literals that overflow i64.
 
 ## [0.2.0] - 2026-03-13
 

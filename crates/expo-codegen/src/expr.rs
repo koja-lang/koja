@@ -1,4 +1,5 @@
-use expo_ast::ast::{Expr, Literal, StringPart};
+use expo_ast::ast::{Arg, BinOp, Expr, Literal, StringPart};
+use expo_ast::span::Span;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
@@ -31,6 +32,13 @@ pub fn compile_expr<'ctx>(
         }
 
         Expr::Group { expr, .. } => compile_expr(c, expr, function),
+
+        Expr::Binary {
+            op: BinOp::Pipe,
+            left,
+            right,
+            ..
+        } => compile_pipe(c, left, right, function),
 
         Expr::Binary {
             op, left, right, ..
@@ -132,7 +140,9 @@ fn compile_literal<'ctx>(
             {
                 i64::from_str_radix(bin, 2).map_err(|_| format!("invalid binary integer: {s}"))?
             } else {
-                clean.parse().map_err(|_| format!("invalid integer: {s}"))?
+                clean
+                    .parse()
+                    .map_err(|_| format!("integer literals cannot exceed {}", i64::MAX))?
             };
             Ok(Some(
                 c.context.i32_type().const_int(val as u64, true).into(),
@@ -351,4 +361,31 @@ fn enum_value_to_string<'ctx>(
         .into_pointer_value();
 
     Ok(name_ptr)
+}
+
+fn compile_pipe<'ctx>(
+    c: &mut Compiler<'ctx>,
+    left: &Expr,
+    right: &Expr,
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let pipe_arg = Arg {
+        name: None,
+        value: left.clone(),
+        span: Span::default(),
+    };
+
+    match right {
+        Expr::Ident { name, .. } => compile_call(c, name, &[pipe_arg], function),
+        Expr::Call { callee, args, .. } => {
+            if let Expr::Ident { name, .. } = callee.as_ref() {
+                let mut new_args = vec![pipe_arg];
+                new_args.extend(args.iter().cloned());
+                compile_call(c, name, &new_args, function)
+            } else {
+                Err("pipe right-hand side must be a named function call".to_string())
+            }
+        }
+        _ => Err("pipe right-hand side must be a function or function call".to_string()),
+    }
 }

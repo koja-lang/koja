@@ -266,6 +266,38 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
         }
 
         Expr::Binary {
+            op: BinOp::Pipe,
+            left,
+            right,
+            ..
+        } => {
+            infer_expr(left, ctx, ce);
+            let func_name = match right.as_ref() {
+                Expr::Ident { name, .. } => Some(name.as_str()),
+                Expr::Call { callee, args, .. } => {
+                    for arg in args {
+                        infer_expr(&arg.value, ctx, ce);
+                    }
+                    if let Expr::Ident { name, .. } = callee.as_ref() {
+                        Some(name.as_str())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(name) = func_name {
+                if let Some(sig) = ctx.functions.get(name) {
+                    sig.return_type.clone()
+                } else {
+                    Type::Unknown
+                }
+            } else {
+                Type::Unknown
+            }
+        }
+
+        Expr::Binary {
             op,
             left,
             right,
@@ -333,7 +365,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                     }
                     Type::Primitive(Primitive::Bool)
                 }
-                BinOp::Pipe => Type::Unknown,
+                BinOp::Pipe => unreachable!("handled above"),
             }
         }
 
