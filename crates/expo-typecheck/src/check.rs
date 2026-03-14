@@ -443,7 +443,9 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             }
         }
 
-        Expr::Closure { params, body, span, .. } => {
+        Expr::Closure {
+            params, body, span, ..
+        } => {
             let mut closure_env = CheckEnv {
                 env: HashMap::new(),
                 used_vars: HashSet::new(),

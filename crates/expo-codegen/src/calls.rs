@@ -8,6 +8,9 @@ use crate::expr::compile_expr;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
 
+/// Compiles a function call by name. Handles struct constructors, builtins
+/// (`print`), direct function calls, and indirect calls through function
+/// pointer variables.
 pub fn compile_call<'ctx>(
     c: &mut Compiler<'ctx>,
     name: &str,
@@ -122,21 +125,8 @@ fn compile_print<'ctx>(
 
     let printf = *c.functions.get("printf").ok_or("printf not declared")?;
 
-    let fmt_str = if val.is_int_value() {
-        let width = val.into_int_value().get_type().get_bit_width();
-        match width {
-            1 => "%d\n",
-            32 => "%d\n",
-            64 => "%lld\n",
-            _ => "%d\n",
-        }
-    } else if val.is_float_value() {
-        "%f\n"
-    } else if val.is_pointer_value() {
-        "%s\n"
-    } else {
-        return Err("print: unsupported argument type".to_string());
-    };
+    let spec = crate::util::printf_format_spec(&val)?;
+    let fmt_str = &format!("{spec}\n");
 
     let fmt = c
         .builder

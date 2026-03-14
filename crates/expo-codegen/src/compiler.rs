@@ -19,6 +19,8 @@ use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
 use crate::types::{to_llvm_metadata_type, to_llvm_type};
 
+/// Holds all LLVM state needed to compile an Expo module: the LLVM context,
+/// module, builder, declared functions, variable bindings, and type mappings.
 pub struct Compiler<'ctx> {
     pub context: &'ctx Context,
     pub module: LlvmModule<'ctx>,
@@ -34,6 +36,7 @@ pub struct Compiler<'ctx> {
 }
 
 impl<'ctx> Compiler<'ctx> {
+    /// Creates a new compiler instance with an empty LLVM module.
     pub fn new(context: &'ctx Context, type_ctx: &'ctx TypeContext) -> Self {
         let module = context.create_module("expo_module");
         let builder = context.create_builder();
@@ -52,6 +55,299 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    /// Returns true if the current basic block already has a terminator
+    /// instruction (branch, return, etc.).
+    pub fn current_block_terminated(&self) -> bool {
+        self.builder
+            .get_insert_block()
+            .map(|bb| bb.get_terminator().is_some())
+            .unwrap_or(true)
+    }
+
+    /// Writes the compiled LLVM module to a native object file at `path`.
+    pub fn emit_object_file(&self, path: &Path) -> Result<(), String> {
+        Target::initialize_native(&InitializationConfig::default())
+            .map_err(|e| format!("failed to initialize native target: {e}"))?;
+
+        let triple = TargetMachine::get_default_triple();
+        let target = Target::from_triple(&triple)
+            .map_err(|e| format!("failed to get target: {}", e.to_string()))?;
+
+        let machine = target
+            .create_target_machine(
+                &triple,
+                "generic",
+                "",
+                OptimizationLevel::Default,
+                RelocMode::Default,
+                CodeModel::Default,
+            )
+            .ok_or("failed to create target machine")?;
+
+        machine
+            .write_to_file(&self.module, FileType::Object, path)
+            .map_err(|e| format!("failed to write object file: {}", e.to_string()))
+    }
+
+    /// Returns the LLVM struct field index for the given struct and field name.
+    pub fn get_field_index(&self, struct_name: &str, field_name: &str) -> Option<u32> {
+        self.type_ctx.structs.get(struct_name).and_then(|info| {
+            info.fields
+                .iter()
+                .position(|(name, _)| name == field_name)
+                .map(|i| i as u32)
+        })
+    }
+
+    /// Returns the Expo type of a struct field.
+    pub fn get_field_type(&self, struct_name: &str, field_name: &str) -> Option<Type> {
+        self.type_ctx.structs.get(struct_name).and_then(|info| {
+            info.fields
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, ty)| ty.clone())
+        })
+    }
+
+    /// Returns the LLVM struct type for an enum variant's payload, if it has one.
+    pub fn get_variant_payload_type(
+        &self,
+        enum_name: &str,
+        variant_name: &str,
+    ) -> Option<StructType<'ctx>> {
+        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
+            vs.iter()
+                .find(|(name, _)| name == variant_name)
+                .and_then(|(_, pt)| *pt)
+        })
+    }
+
+    /// Returns the tag index (0-based) for an enum variant.
+    pub fn get_variant_tag(&self, enum_name: &str, variant_name: &str) -> Option<u8> {
+        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
+            vs.iter()
+                .position(|(name, _)| name == variant_name)
+                .map(|i| i as u8)
+        })
+    }
+
+    /// Resolves an optional return type annotation to an Expo type, defaulting
+    /// to `Unit` when absent.
+    pub fn resolve_return_type(&self, return_type: &Option<TypeExpr>) -> Type {
+        match return_type {
+            Some(te) => self.resolve_type_expr(te),
+            None => Type::Unit,
+        }
+    }
+
+    /// Resolves a type expression AST node into an Expo type, using the
+    /// currently registered struct and enum names for lookup.
+    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Type {
+        let struct_names: Vec<&str> = self.type_ctx.structs.keys().map(|s| s.as_str()).collect();
+        let enum_names: Vec<&str> = self.type_ctx.enums.keys().map(|s| s.as_str()).collect();
+        expo_typecheck::types::resolve_type_expr(type_expr, &struct_names, &enum_names)
+    }
+
+    fn declare_builtins(&mut self) {
+        let i32_type = self.context.i32_type();
+        let i8_ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+
+        let printf_type = i32_type.fn_type(&[i8_ptr_type.into()], true);
+        let printf = self.module.add_function("printf", printf_type, None);
+        self.functions.insert("printf".to_string(), printf);
+
+        let snprintf_type = i32_type.fn_type(
+            &[i8_ptr_type.into(), i32_type.into(), i8_ptr_type.into()],
+            true,
+        );
+        let snprintf = self.module.add_function("snprintf", snprintf_type, None);
+        self.functions.insert("snprintf".to_string(), snprintf);
+    }
+
+    fn declare_function(
+        &self,
+        func: &Function,
+        self_type_name: Option<&str>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let return_type = self.resolve_return_type(&func.return_type);
+        let mut param_types = Vec::new();
+
+        if let Some(name) = self_type_name
+            && func
+                .params
+                .first()
+                .is_some_and(|p| matches!(p, Param::Self_ { .. }))
+            && let Some(st) = self.struct_types.get(name)
+        {
+            param_types.push((*st).into());
+        }
+
+        param_types.extend(self.resolve_param_types(&func.params)?);
+
+        let mangled = match self_type_name {
+            Some(tn) => format!("{}_{}", tn, func.name),
+            None => func.name.clone(),
+        };
+
+        let fn_type = if func.name == "main" && self_type_name.is_none() {
+            self.context.i32_type().fn_type(&param_types, false)
+        } else {
+            match to_llvm_type(&return_type, self.context, &self.struct_types) {
+                Some(ret_ty) => ret_ty.fn_type(&param_types, false),
+                None => self.context.void_type().fn_type(&param_types, false),
+            }
+        };
+
+        Ok(self.module.add_function(&mangled, fn_type, None))
+    }
+
+    fn declare_functions(&mut self, module: &Module) -> Result<(), String> {
+        for item in &module.items {
+            match item {
+                Item::Function(func) => {
+                    let fn_value = self.declare_function(func, None)?;
+                    self.functions.insert(func.name.clone(), fn_value);
+                }
+                Item::Impl(impl_block) => {
+                    let target_name = self.type_name_from_expr(&impl_block.target);
+                    if let Some(target_name) = target_name {
+                        for member in &impl_block.members {
+                            if let ImplMember::Function(func) = member {
+                                let mangled = format!("{}_{}", target_name, func.name);
+                                let fn_value = self.declare_function(func, Some(&target_name))?;
+                                self.functions.insert(mangled, fn_value);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Emits the LLVM IR body for a single Expo function. Handles parameter
+    /// binding (including `self`), implicit return of the last expression, and
+    /// auto-inserted terminators for `main`.
+    fn define_function(
+        &mut self,
+        func: &Function,
+        self_type_name: Option<&str>,
+    ) -> Result<(), String> {
+        let mangled = match self_type_name {
+            Some(tn) => format!("{}_{}", tn, func.name),
+            None => func.name.clone(),
+        };
+
+        let fn_value = *self
+            .functions
+            .get(&mangled)
+            .ok_or_else(|| format!("undeclared function: {}", mangled))?;
+
+        let entry = self.context.append_basic_block(fn_value, "entry");
+        self.builder.position_at_end(entry);
+
+        self.variables.clear();
+
+        let mut llvm_param_idx: u32 = 0;
+
+        if let Some(type_name) = self_type_name
+            && func
+                .params
+                .first()
+                .is_some_and(|p| matches!(p, Param::Self_ { .. }))
+        {
+            let self_ty = Type::Struct(type_name.to_string());
+            if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
+                let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
+                let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
+                self.builder.build_store(alloca, param_val).unwrap();
+                self.variables.insert("self".to_string(), (alloca, self_ty));
+                llvm_param_idx += 1;
+            }
+        }
+
+        for param in func.params.iter() {
+            if let Param::Regular {
+                name, type_expr, ..
+            } = param
+            {
+                let param_ty = self.resolve_type_expr(type_expr);
+                if let Some(llvm_ty) = to_llvm_type(&param_ty, self.context, &self.struct_types) {
+                    let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
+                    let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
+                    self.builder.build_store(alloca, param_val).unwrap();
+                    self.variables.insert(name.clone(), (alloca, param_ty));
+                    llvm_param_idx += 1;
+                }
+            }
+        }
+
+        let return_type = self.resolve_return_type(&func.return_type);
+        let body_len = func.body.len();
+
+        for (i, stmt) in func.body.iter().enumerate() {
+            let is_last = i == body_len - 1;
+
+            if self.current_block_terminated() {
+                break;
+            }
+
+            if is_last
+                && return_type != Type::Unit
+                && let expo_ast::ast::Statement::Expr(expr) = stmt
+            {
+                let val = compile_expr(self, expr, fn_value)?;
+                if !self.current_block_terminated() {
+                    if let Some(v) = val {
+                        self.builder.build_return(Some(&v)).unwrap();
+                    } else {
+                        self.builder.build_return(None).unwrap();
+                    }
+                }
+                continue;
+            }
+
+            compile_statement(self, stmt, fn_value)?;
+        }
+
+        if !self.current_block_terminated() {
+            if func.name == "main" && self_type_name.is_none() {
+                let zero = self.context.i32_type().const_int(0, false);
+                self.builder.build_return(Some(&zero)).unwrap();
+            } else {
+                self.builder.build_return(None).unwrap();
+            }
+        }
+
+        Ok(())
+    }
+
+    fn define_functions(&mut self, module: &Module) -> Result<(), String> {
+        for item in &module.items {
+            match item {
+                Item::Function(func) => {
+                    self.define_function(func, None)?;
+                }
+                Item::Impl(impl_block) => {
+                    let target_name = self.type_name_from_expr(&impl_block.target);
+                    if let Some(target_name) = target_name {
+                        for member in &impl_block.members {
+                            if let ImplMember::Function(func) = member {
+                                self.define_function(func, Some(&target_name))?;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Translates Expo type-checked structs and enums into LLVM struct types.
+    /// Uses a two-pass approach (opaque types first, then bodies) so
+    /// cross-referencing types resolve correctly.
     fn register_types(&mut self) {
         // Pass 1: create opaque types so cross-references resolve
         for name in self.type_ctx.structs.keys() {
@@ -150,249 +446,6 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    pub fn get_variant_tag(&self, enum_name: &str, variant_name: &str) -> Option<u8> {
-        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
-            vs.iter()
-                .position(|(name, _)| name == variant_name)
-                .map(|i| i as u8)
-        })
-    }
-
-    pub fn get_variant_payload_type(
-        &self,
-        enum_name: &str,
-        variant_name: &str,
-    ) -> Option<StructType<'ctx>> {
-        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
-            vs.iter()
-                .find(|(name, _)| name == variant_name)
-                .and_then(|(_, pt)| *pt)
-        })
-    }
-
-    fn declare_builtins(&mut self) {
-        let i32_type = self.context.i32_type();
-        let i8_ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-
-        let printf_type = i32_type.fn_type(&[i8_ptr_type.into()], true);
-        let printf = self.module.add_function("printf", printf_type, None);
-        self.functions.insert("printf".to_string(), printf);
-
-        let snprintf_type = i32_type.fn_type(
-            &[i8_ptr_type.into(), i32_type.into(), i8_ptr_type.into()],
-            true,
-        );
-        let snprintf = self.module.add_function("snprintf", snprintf_type, None);
-        self.functions.insert("snprintf".to_string(), snprintf);
-    }
-
-    fn declare_functions(&mut self, module: &Module) -> Result<(), String> {
-        for item in &module.items {
-            match item {
-                Item::Function(func) => {
-                    let fn_value = self.declare_function(func, None)?;
-                    self.functions.insert(func.name.clone(), fn_value);
-                }
-                Item::Impl(impl_block) => {
-                    let target_name = self.type_name_from_expr(&impl_block.target);
-                    if let Some(target_name) = target_name {
-                        for member in &impl_block.members {
-                            if let ImplMember::Function(func) = member {
-                                let mangled = format!("{}_{}", target_name, func.name);
-                                let fn_value = self.declare_function(func, Some(&target_name))?;
-                                self.functions.insert(mangled, fn_value);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn declare_function(
-        &self,
-        func: &Function,
-        self_type_name: Option<&str>,
-    ) -> Result<FunctionValue<'ctx>, String> {
-        let return_type = self.resolve_return_type(&func.return_type);
-        let mut param_types = Vec::new();
-
-        if let Some(name) = self_type_name
-            && func
-                .params
-                .first()
-                .is_some_and(|p| matches!(p, Param::Self_ { .. }))
-            && let Some(st) = self.struct_types.get(name)
-        {
-            param_types.push((*st).into());
-        }
-
-        param_types.extend(self.resolve_param_types(&func.params)?);
-
-        let mangled = match self_type_name {
-            Some(tn) => format!("{}_{}", tn, func.name),
-            None => func.name.clone(),
-        };
-
-        let fn_type = if func.name == "main" && self_type_name.is_none() {
-            self.context.i32_type().fn_type(&param_types, false)
-        } else {
-            match to_llvm_type(&return_type, self.context, &self.struct_types) {
-                Some(ret_ty) => ret_ty.fn_type(&param_types, false),
-                None => self.context.void_type().fn_type(&param_types, false),
-            }
-        };
-
-        Ok(self.module.add_function(&mangled, fn_type, None))
-    }
-
-    fn define_functions(&mut self, module: &Module) -> Result<(), String> {
-        for item in &module.items {
-            match item {
-                Item::Function(func) => {
-                    self.define_function(func, None)?;
-                }
-                Item::Impl(impl_block) => {
-                    let target_name = self.type_name_from_expr(&impl_block.target);
-                    if let Some(target_name) = target_name {
-                        for member in &impl_block.members {
-                            if let ImplMember::Function(func) = member {
-                                self.define_function(func, Some(&target_name))?;
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn type_name_from_expr(&self, te: &TypeExpr) -> Option<String> {
-        if let TypeExpr::Named { path, .. } = te
-            && path.len() == 1
-        {
-            return Some(path[0].clone());
-        }
-        None
-    }
-
-    fn define_function(
-        &mut self,
-        func: &Function,
-        self_type_name: Option<&str>,
-    ) -> Result<(), String> {
-        let mangled = match self_type_name {
-            Some(tn) => format!("{}_{}", tn, func.name),
-            None => func.name.clone(),
-        };
-
-        let fn_value = *self
-            .functions
-            .get(&mangled)
-            .ok_or_else(|| format!("undeclared function: {}", mangled))?;
-
-        let entry = self.context.append_basic_block(fn_value, "entry");
-        self.builder.position_at_end(entry);
-
-        self.variables.clear();
-
-        let mut llvm_param_idx: u32 = 0;
-
-        if let Some(type_name) = self_type_name
-            && func
-                .params
-                .first()
-                .is_some_and(|p| matches!(p, Param::Self_ { .. }))
-        {
-            let self_ty = Type::Struct(type_name.to_string());
-            if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
-                let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
-                let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
-                self.builder.build_store(alloca, param_val).unwrap();
-                self.variables.insert("self".to_string(), (alloca, self_ty));
-                llvm_param_idx += 1;
-            }
-        }
-
-        for param in func.params.iter() {
-            if let Param::Regular {
-                name, type_expr, ..
-            } = param
-            {
-                let param_ty = self.resolve_type_expr(type_expr);
-                if let Some(llvm_ty) = to_llvm_type(&param_ty, self.context, &self.struct_types) {
-                    let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
-                    let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
-                    self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables.insert(name.clone(), (alloca, param_ty));
-                    llvm_param_idx += 1;
-                }
-            }
-        }
-
-        let return_type = self.resolve_return_type(&func.return_type);
-        let body_len = func.body.len();
-
-        for (i, stmt) in func.body.iter().enumerate() {
-            let is_last = i == body_len - 1;
-
-            if self.current_block_terminated() {
-                break;
-            }
-
-            if is_last
-                && return_type != Type::Unit
-                && let expo_ast::ast::Statement::Expr(expr) = stmt
-            {
-                let val = compile_expr(self, expr, fn_value)?;
-                if !self.current_block_terminated() {
-                    if let Some(v) = val {
-                        self.builder.build_return(Some(&v)).unwrap();
-                    } else {
-                        self.builder.build_return(None).unwrap();
-                    }
-                }
-                continue;
-            }
-
-            compile_statement(self, stmt, fn_value)?;
-        }
-
-        if !self.current_block_terminated() {
-            if func.name == "main" && self_type_name.is_none() {
-                let zero = self.context.i32_type().const_int(0, false);
-                self.builder.build_return(Some(&zero)).unwrap();
-            } else {
-                self.builder.build_return(None).unwrap();
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn current_block_terminated(&self) -> bool {
-        self.builder
-            .get_insert_block()
-            .map(|bb| bb.get_terminator().is_some())
-            .unwrap_or(true)
-    }
-
-    pub fn resolve_return_type(&self, return_type: &Option<TypeExpr>) -> Type {
-        match return_type {
-            Some(te) => self.resolve_type_expr(te),
-            None => Type::Unit,
-        }
-    }
-
-    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Type {
-        let struct_names: Vec<&str> = self.type_ctx.structs.keys().map(|s| s.as_str()).collect();
-        let enum_names: Vec<&str> = self.type_ctx.enums.keys().map(|s| s.as_str()).collect();
-        expo_typecheck::types::resolve_type_expr(type_expr, &struct_names, &enum_names)
-    }
-
     fn resolve_param_types(
         &self,
         params: &[Param],
@@ -410,62 +463,17 @@ impl<'ctx> Compiler<'ctx> {
         Ok(types)
     }
 
-    pub fn emit_object_file(&self, path: &Path) -> Result<(), String> {
-        Target::initialize_native(&InitializationConfig::default())
-            .map_err(|e| format!("failed to initialize native target: {e}"))?;
-
-        let triple = TargetMachine::get_default_triple();
-        let target = Target::from_triple(&triple)
-            .map_err(|e| format!("failed to get target: {}", e.to_string()))?;
-
-        let machine = target
-            .create_target_machine(
-                &triple,
-                "generic",
-                "",
-                OptimizationLevel::Default,
-                RelocMode::Default,
-                CodeModel::Default,
-            )
-            .ok_or("failed to create target machine")?;
-
-        machine
-            .write_to_file(&self.module, FileType::Object, path)
-            .map_err(|e| format!("failed to write object file: {}", e.to_string()))
-    }
-
-    pub fn get_field_index(&self, struct_name: &str, field_name: &str) -> Option<u32> {
-        self.type_ctx.structs.get(struct_name).and_then(|info| {
-            info.fields
-                .iter()
-                .position(|(name, _)| name == field_name)
-                .map(|i| i as u32)
-        })
-    }
-
-    pub fn get_field_type(&self, struct_name: &str, field_name: &str) -> Option<Type> {
-        self.type_ctx.structs.get(struct_name).and_then(|info| {
-            info.fields
-                .iter()
-                .find(|(name, _)| name == field_name)
-                .map(|(_, ty)| ty.clone())
-        })
+    fn type_name_from_expr(&self, te: &TypeExpr) -> Option<String> {
+        if let TypeExpr::Named { path, .. } = te
+            && path.len() == 1
+        {
+            return Some(path[0].clone());
+        }
+        None
     }
 }
 
-fn type_byte_size(ty: &Type) -> u32 {
-    use expo_typecheck::types::Primitive;
-    match ty {
-        Type::Primitive(p) => match p {
-            Primitive::Bool | Primitive::I8 | Primitive::U8 => 1,
-            Primitive::I16 | Primitive::U16 => 2,
-            Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
-            Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::String => 8,
-        },
-        _ => 8,
-    }
-}
-
+/// Compiles a single Expo module to a native object file.
 pub fn compile(
     module: &Module,
     type_ctx: &TypeContext,
@@ -474,6 +482,8 @@ pub fn compile(
     compile_modules(&[module], type_ctx, output_path)
 }
 
+/// Compiles multiple Expo modules into a single native object file. Registers
+/// types, declares all functions across modules, then defines their bodies.
 pub fn compile_modules(
     modules: &[&Module],
     type_ctx: &TypeContext,
@@ -526,4 +536,17 @@ pub fn compile_modules(
             span,
         }]
     })
+}
+
+fn type_byte_size(ty: &Type) -> u32 {
+    use expo_typecheck::types::Primitive;
+    match ty {
+        Type::Primitive(p) => match p {
+            Primitive::Bool | Primitive::I8 | Primitive::U8 => 1,
+            Primitive::I16 | Primitive::U16 => 2,
+            Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
+            Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::String => 8,
+        },
+        _ => 8,
+    }
 }

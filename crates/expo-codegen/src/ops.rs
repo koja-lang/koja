@@ -5,6 +5,8 @@ use inkwell::{FloatPredicate, IntPredicate};
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 
+/// Compiles a binary operation. Dispatches on operand types (float vs int)
+/// and supports arithmetic, comparison, and logical operators.
 pub fn compile_binary<'ctx>(
     c: &mut Compiler<'ctx>,
     op: &BinOp,
@@ -113,6 +115,7 @@ pub fn compile_binary<'ctx>(
     }
 }
 
+/// Compiles a unary operation (negation or logical not).
 pub fn compile_unary<'ctx>(
     c: &mut Compiler<'ctx>,
     op: &UnaryOp,

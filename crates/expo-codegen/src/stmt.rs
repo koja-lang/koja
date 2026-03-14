@@ -6,6 +6,8 @@ use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 use crate::types::to_llvm_type;
 
+/// Compiles a single statement (assignment, return, break, or compound
+/// assignment). Expression statements are compiled for side effects only.
 pub fn compile_statement<'ctx>(
     c: &mut Compiler<'ctx>,
     stmt: &Statement,
@@ -38,16 +40,16 @@ pub fn compile_statement<'ctx>(
                     }
                 }
                 AssignTarget::Pattern(pat) => {
-                    if let expo_ast::ast::Pattern::Binding { name, .. } = pat {
-                        let alloca = c.builder.build_alloca(val.get_type(), name).unwrap();
-                        c.builder.build_store(alloca, val).unwrap();
-                        let ty = infer_type_from_llvm(c, &val);
-                        c.variables.insert(name.clone(), (alloca, ty));
-                    } else {
+                    let expo_ast::ast::Pattern::Binding { name, .. } = pat else {
                         return Err(
                             "destructuring patterns not yet supported in compilation".to_string()
                         );
-                    }
+                    };
+
+                    let alloca = c.builder.build_alloca(val.get_type(), name).unwrap();
+                    c.builder.build_store(alloca, val).unwrap();
+                    let ty = infer_type_from_llvm(c, &val);
+                    c.variables.insert(name.clone(), (alloca, ty));
                 }
             }
             Ok(None)
@@ -76,11 +78,10 @@ pub fn compile_statement<'ctx>(
         Statement::CompoundAssign {
             target, op, value, ..
         } => {
-            let name = if target.segments.len() == 1 {
-                &target.segments[0]
-            } else {
+            if target.segments.len() != 1 {
                 return Err("compound assignment to fields not yet supported".to_string());
-            };
+            }
+            let name = &target.segments[0];
 
             let (ptr, var_ty) = c
                 .variables
@@ -193,6 +194,8 @@ fn compile_field_assignment<'ctx>(
     Ok(())
 }
 
+/// Reconstructs an Expo type from an LLVM value by inspecting bit widths and
+/// struct names. Used when assigning to a new variable without a type annotation.
 fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) -> Type {
     use expo_typecheck::types::Primitive;
 

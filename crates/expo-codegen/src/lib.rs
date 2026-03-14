@@ -7,5 +7,6 @@ mod ops;
 mod stmt;
 mod structs;
 mod types;
+mod util;
 
 pub use compiler::{compile, compile_modules};

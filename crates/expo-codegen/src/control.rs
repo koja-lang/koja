@@ -10,203 +10,32 @@ use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
 use crate::types::to_llvm_type;
 
-pub fn compile_if<'ctx>(
+/// Compiles a statement list and returns the value of the last expression.
+/// Non-expression statements produce no value; only a trailing `Expr` is captured.
+pub(crate) fn compile_body_as_value<'ctx>(
     c: &mut Compiler<'ctx>,
-    condition: &Expr,
-    then_body: &[Statement],
-    else_body: &Option<Vec<Statement>>,
+    body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let cond_val = compile_expr(c, condition, function)?.ok_or("if condition produced no value")?;
-
-    let cond_int = if cond_val.is_int_value() {
-        let iv = cond_val.into_int_value();
-        if iv.get_type().get_bit_width() == 1 {
-            iv
-        } else {
-            c.builder
-                .build_int_compare(IntPredicate::NE, iv, iv.get_type().const_zero(), "ifcond")
-                .unwrap()
-        }
-    } else {
-        return Err("if condition must be a boolean".to_string());
-    };
-
-    let then_bb = c.context.append_basic_block(function, "then");
-    let else_bb = c.context.append_basic_block(function, "else");
-    let merge_bb = c.context.append_basic_block(function, "ifcont");
-
-    c.builder
-        .build_conditional_branch(cond_int, then_bb, else_bb)
-        .unwrap();
-
-    c.builder.position_at_end(then_bb);
-    let mut then_val: Option<BasicValueEnum> = None;
-    for (i, stmt) in then_body.iter().enumerate() {
+    let mut val: Option<BasicValueEnum> = None;
+    for (i, stmt) in body.iter().enumerate() {
         if c.current_block_terminated() {
             break;
         }
-        if i == then_body.len() - 1
+        if i == body.len() - 1
             && let Statement::Expr(expr) = stmt
         {
-            then_val = compile_expr(c, expr, function)?;
+            val = compile_expr(c, expr, function)?;
             continue;
         }
         compile_statement(c, stmt, function)?;
     }
-    if !c.current_block_terminated() {
-        c.builder.build_unconditional_branch(merge_bb).unwrap();
-    }
-    let then_end_bb = c.builder.get_insert_block().unwrap();
-
-    c.builder.position_at_end(else_bb);
-    let mut else_val: Option<BasicValueEnum> = None;
-    if let Some(else_stmts) = else_body {
-        for (i, stmt) in else_stmts.iter().enumerate() {
-            if c.current_block_terminated() {
-                break;
-            }
-            if i == else_stmts.len() - 1
-                && let Statement::Expr(expr) = stmt
-            {
-                else_val = compile_expr(c, expr, function)?;
-                continue;
-            }
-            compile_statement(c, stmt, function)?;
-        }
-    }
-    if !c.current_block_terminated() {
-        c.builder.build_unconditional_branch(merge_bb).unwrap();
-    }
-    let else_end_bb = c.builder.get_insert_block().unwrap();
-
-    c.builder.position_at_end(merge_bb);
-
-    if let (Some(tv), Some(ev)) = (&then_val, &else_val)
-        && tv.get_type() == ev.get_type()
-    {
-        let phi = c.builder.build_phi(tv.get_type(), "ifval").unwrap();
-        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
-        return Ok(Some(phi.as_basic_value()));
-    }
-
-    Ok(None)
+    Ok(val)
 }
 
-pub fn compile_ternary<'ctx>(
-    c: &mut Compiler<'ctx>,
-    condition: &Expr,
-    then_expr: &Expr,
-    else_expr: &Expr,
-    function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let cond_val =
-        compile_expr(c, condition, function)?.ok_or("ternary condition produced no value")?;
-
-    let cond_int = if cond_val.is_int_value() {
-        let iv = cond_val.into_int_value();
-        if iv.get_type().get_bit_width() == 1 {
-            iv
-        } else {
-            c.builder
-                .build_int_compare(IntPredicate::NE, iv, iv.get_type().const_zero(), "terncond")
-                .unwrap()
-        }
-    } else {
-        return Err("ternary condition must be a boolean".to_string());
-    };
-
-    let then_bb = c.context.append_basic_block(function, "tern_then");
-    let else_bb = c.context.append_basic_block(function, "tern_else");
-    let merge_bb = c.context.append_basic_block(function, "tern_cont");
-
-    c.builder
-        .build_conditional_branch(cond_int, then_bb, else_bb)
-        .unwrap();
-
-    c.builder.position_at_end(then_bb);
-    let then_val = compile_expr(c, then_expr, function)?;
-    if !c.current_block_terminated() {
-        c.builder.build_unconditional_branch(merge_bb).unwrap();
-    }
-    let then_end_bb = c.builder.get_insert_block().unwrap();
-
-    c.builder.position_at_end(else_bb);
-    let else_val = compile_expr(c, else_expr, function)?;
-    if !c.current_block_terminated() {
-        c.builder.build_unconditional_branch(merge_bb).unwrap();
-    }
-    let else_end_bb = c.builder.get_insert_block().unwrap();
-
-    c.builder.position_at_end(merge_bb);
-
-    if let (Some(tv), Some(ev)) = (&then_val, &else_val)
-        && tv.get_type() == ev.get_type()
-    {
-        let phi = c.builder.build_phi(tv.get_type(), "ternval").unwrap();
-        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
-        return Ok(Some(phi.as_basic_value()));
-    }
-
-    Ok(None)
-}
-
-pub fn compile_while<'ctx>(
-    c: &mut Compiler<'ctx>,
-    condition: &Expr,
-    body: &[Statement],
-    function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let while_header = c.context.append_basic_block(function, "while_header");
-    let while_body = c.context.append_basic_block(function, "while_body");
-    let while_exit = c.context.append_basic_block(function, "while_exit");
-
-    c.builder.build_unconditional_branch(while_header).unwrap();
-
-    c.builder.position_at_end(while_header);
-    let cond_val =
-        compile_expr(c, condition, function)?.ok_or("while condition produced no value")?;
-    let cond_int = if cond_val.is_int_value() {
-        let iv = cond_val.into_int_value();
-        if iv.get_type().get_bit_width() == 1 {
-            iv
-        } else {
-            c.builder
-                .build_int_compare(
-                    IntPredicate::NE,
-                    iv,
-                    iv.get_type().const_zero(),
-                    "whilecond",
-                )
-                .unwrap()
-        }
-    } else {
-        return Err("while condition must be a boolean".to_string());
-    };
-    c.builder
-        .build_conditional_branch(cond_int, while_body, while_exit)
-        .unwrap();
-
-    c.builder.position_at_end(while_body);
-    c.loop_exit_stack.push(while_exit);
-
-    for stmt in body {
-        if c.current_block_terminated() {
-            break;
-        }
-        compile_statement(c, stmt, function)?;
-    }
-
-    if !c.current_block_terminated() {
-        c.builder.build_unconditional_branch(while_header).unwrap();
-    }
-
-    c.loop_exit_stack.pop();
-    c.builder.position_at_end(while_exit);
-
-    Ok(None)
-}
-
+/// Compiles a `cond` expression (multi-arm conditional). Each arm's condition is
+/// tested in order; the first truthy branch executes. Returns a phi value when
+/// all arms (including `else`) produce a value of the same type.
 pub fn compile_cond<'ctx>(
     c: &mut Compiler<'ctx>,
     arms: &[CondArm],
@@ -225,19 +54,7 @@ pub fn compile_cond<'ctx>(
     for (i, arm) in arms.iter().enumerate() {
         let cond_val =
             compile_expr(c, &arm.condition, function)?.ok_or("cond arm produced no value")?;
-
-        let cond_int = if cond_val.is_int_value() {
-            let iv = cond_val.into_int_value();
-            if iv.get_type().get_bit_width() == 1 {
-                iv
-            } else {
-                c.builder
-                    .build_int_compare(IntPredicate::NE, iv, iv.get_type().const_zero(), "condcmp")
-                    .unwrap()
-            }
-        } else {
-            return Err("cond arm condition must be a boolean".to_string());
-        };
+        let cond_int = coerce_to_bool(c, cond_val, "cond arm condition")?;
 
         let body_bb = c
             .context
@@ -254,19 +71,7 @@ pub fn compile_cond<'ctx>(
             .unwrap();
 
         c.builder.position_at_end(body_bb);
-        let mut arm_val: Option<BasicValueEnum> = None;
-        for (j, stmt) in arm.body.iter().enumerate() {
-            if c.current_block_terminated() {
-                break;
-            }
-            if j == arm.body.len() - 1
-                && let Statement::Expr(expr) = stmt
-            {
-                arm_val = compile_expr(c, expr, function)?;
-                continue;
-            }
-            compile_statement(c, stmt, function)?;
-        }
+        let arm_val = compile_body_as_value(c, &arm.body, function)?;
         if !c.current_block_terminated() {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
@@ -282,19 +87,7 @@ pub fn compile_cond<'ctx>(
 
     c.builder.position_at_end(fallthrough_bb);
     if let Some(body) = else_body {
-        let mut else_val: Option<BasicValueEnum> = None;
-        for (j, stmt) in body.iter().enumerate() {
-            if c.current_block_terminated() {
-                break;
-            }
-            if j == body.len() - 1
-                && let Statement::Expr(expr) = stmt
-            {
-                else_val = compile_expr(c, expr, function)?;
-                continue;
-            }
-            compile_statement(c, stmt, function)?;
-        }
+        let else_val = compile_body_as_value(c, body, function)?;
         if !c.current_block_terminated() {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
@@ -323,6 +116,58 @@ pub fn compile_cond<'ctx>(
     Ok(None)
 }
 
+/// Compiles an `if`/`else` expression. Returns a phi value when both branches
+/// produce a value of the same type, otherwise returns `None`.
+pub fn compile_if<'ctx>(
+    c: &mut Compiler<'ctx>,
+    condition: &Expr,
+    then_body: &[Statement],
+    else_body: &Option<Vec<Statement>>,
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let cond_val = compile_expr(c, condition, function)?.ok_or("if condition produced no value")?;
+    let cond_int = coerce_to_bool(c, cond_val, "if condition")?;
+
+    let then_bb = c.context.append_basic_block(function, "then");
+    let else_bb = c.context.append_basic_block(function, "else");
+    let merge_bb = c.context.append_basic_block(function, "ifcont");
+
+    c.builder
+        .build_conditional_branch(cond_int, then_bb, else_bb)
+        .unwrap();
+
+    c.builder.position_at_end(then_bb);
+    let then_val = compile_body_as_value(c, then_body, function)?;
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+    let then_end_bb = c.builder.get_insert_block().unwrap();
+
+    c.builder.position_at_end(else_bb);
+    let else_val = if let Some(else_stmts) = else_body {
+        compile_body_as_value(c, else_stmts, function)?
+    } else {
+        None
+    };
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+    let else_end_bb = c.builder.get_insert_block().unwrap();
+
+    c.builder.position_at_end(merge_bb);
+
+    if let (Some(tv), Some(ev)) = (&then_val, &else_val)
+        && tv.get_type() == ev.get_type()
+    {
+        let phi = c.builder.build_phi(tv.get_type(), "ifval").unwrap();
+        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
+        return Ok(Some(phi.as_basic_value()));
+    }
+
+    Ok(None)
+}
+
+/// Compiles an infinite `loop` block. Only exits via `break`.
 pub fn compile_loop<'ctx>(
     c: &mut Compiler<'ctx>,
     body: &[Statement],
@@ -357,6 +202,9 @@ pub fn compile_loop<'ctx>(
     Ok(None)
 }
 
+/// Compiles a `match` expression. Patterns are tested sequentially; the first
+/// matching arm executes. Bindings introduced by patterns are scoped to their
+/// arm. Returns a phi value when all arms produce a value of the same type.
 pub fn compile_match<'ctx>(
     c: &mut Compiler<'ctx>,
     subject: &Expr,
@@ -409,19 +257,7 @@ pub fn compile_match<'ctx>(
             .unwrap();
 
         c.builder.position_at_end(body_bb);
-        let mut arm_val: Option<BasicValueEnum> = None;
-        for (j, stmt) in arm.body.iter().enumerate() {
-            if c.current_block_terminated() {
-                break;
-            }
-            if j == arm.body.len() - 1
-                && let Statement::Expr(expr) = stmt
-            {
-                arm_val = compile_expr(c, expr, function)?;
-                continue;
-            }
-            compile_statement(c, stmt, function)?;
-        }
+        let arm_val = compile_body_as_value(c, &arm.body, function)?;
         if !c.current_block_terminated() {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
@@ -456,6 +292,155 @@ pub fn compile_match<'ctx>(
     Ok(None)
 }
 
+/// Compiles a ternary expression (`condition ? then_expr : else_expr`).
+/// Always value-producing when both branches yield the same type.
+pub fn compile_ternary<'ctx>(
+    c: &mut Compiler<'ctx>,
+    condition: &Expr,
+    then_expr: &Expr,
+    else_expr: &Expr,
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let cond_val =
+        compile_expr(c, condition, function)?.ok_or("ternary condition produced no value")?;
+    let cond_int = coerce_to_bool(c, cond_val, "ternary condition")?;
+
+    let then_bb = c.context.append_basic_block(function, "tern_then");
+    let else_bb = c.context.append_basic_block(function, "tern_else");
+    let merge_bb = c.context.append_basic_block(function, "tern_cont");
+
+    c.builder
+        .build_conditional_branch(cond_int, then_bb, else_bb)
+        .unwrap();
+
+    c.builder.position_at_end(then_bb);
+    let then_val = compile_expr(c, then_expr, function)?;
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+    let then_end_bb = c.builder.get_insert_block().unwrap();
+
+    c.builder.position_at_end(else_bb);
+    let else_val = compile_expr(c, else_expr, function)?;
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+    let else_end_bb = c.builder.get_insert_block().unwrap();
+
+    c.builder.position_at_end(merge_bb);
+
+    if let (Some(tv), Some(ev)) = (&then_val, &else_val)
+        && tv.get_type() == ev.get_type()
+    {
+        let phi = c.builder.build_phi(tv.get_type(), "ternval").unwrap();
+        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
+        return Ok(Some(phi.as_basic_value()));
+    }
+
+    Ok(None)
+}
+
+/// Compiles a `while` loop. Condition is re-evaluated each iteration.
+pub fn compile_while<'ctx>(
+    c: &mut Compiler<'ctx>,
+    condition: &Expr,
+    body: &[Statement],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let while_header = c.context.append_basic_block(function, "while_header");
+    let while_body = c.context.append_basic_block(function, "while_body");
+    let while_exit = c.context.append_basic_block(function, "while_exit");
+
+    c.builder.build_unconditional_branch(while_header).unwrap();
+
+    c.builder.position_at_end(while_header);
+    let cond_val =
+        compile_expr(c, condition, function)?.ok_or("while condition produced no value")?;
+    let cond_int = coerce_to_bool(c, cond_val, "while condition")?;
+    c.builder
+        .build_conditional_branch(cond_int, while_body, while_exit)
+        .unwrap();
+
+    c.builder.position_at_end(while_body);
+    c.loop_exit_stack.push(while_exit);
+
+    for stmt in body {
+        if c.current_block_terminated() {
+            break;
+        }
+        compile_statement(c, stmt, function)?;
+    }
+
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(while_header).unwrap();
+    }
+
+    c.loop_exit_stack.pop();
+    c.builder.position_at_end(while_exit);
+
+    Ok(None)
+}
+
+/// Converts an integer value to a 1-bit bool. Already-boolean values pass
+/// through; wider ints are compared != 0.
+fn coerce_to_bool<'ctx>(
+    c: &Compiler<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    label: &str,
+) -> Result<IntValue<'ctx>, String> {
+    if !val.is_int_value() {
+        return Err(format!("{label} must be a boolean"));
+    }
+
+    let iv = val.into_int_value();
+    if iv.get_type().get_bit_width() == 1 {
+        Ok(iv)
+    } else {
+        Ok(c.builder
+            .build_int_compare(IntPredicate::NE, iv, iv.get_type().const_zero(), label)
+            .unwrap())
+    }
+}
+
+/// Reconstructs the Expo type from an LLVM value, since LLVM IR discards
+/// source-level type information. Checks variable bindings first, then
+/// falls back to inspecting the LLVM type.
+fn infer_subject_type<'ctx>(
+    c: &Compiler<'ctx>,
+    subject: &Expr,
+    val: &BasicValueEnum<'ctx>,
+) -> Type {
+    if let Expr::Ident { name, .. } = subject
+        && let Some((_, ty)) = c.variables.get(name)
+    {
+        return ty.clone();
+    }
+    if val.is_int_value() {
+        match val.into_int_value().get_type().get_bit_width() {
+            1 => Type::Primitive(expo_typecheck::types::Primitive::Bool),
+            32 => Type::Primitive(expo_typecheck::types::Primitive::I32),
+            64 => Type::Primitive(expo_typecheck::types::Primitive::I64),
+            _ => Type::Unknown,
+        }
+    } else if val.is_struct_value() {
+        let st = val.into_struct_value().get_type();
+        if let Some(name) = st.get_name() {
+            let name_str = name.to_str().unwrap_or("");
+            if c.type_ctx.enums.contains_key(name_str) {
+                return Type::Enum(name_str.to_string());
+            }
+            if c.type_ctx.structs.contains_key(name_str) {
+                return Type::Struct(name_str.to_string());
+            }
+        }
+        Type::Unknown
+    } else {
+        Type::Unknown
+    }
+}
+
+/// Recursively compiles a match pattern into a boolean condition. As a side
+/// effect, binds matched variables into the compiler's variable scope.
 fn compile_pattern<'ctx>(
     c: &mut Compiler<'ctx>,
     pattern: &Pattern,
@@ -505,46 +490,17 @@ fn compile_pattern<'ctx>(
         } => {
             let enum_name = enum_name_from_path(type_path, subject_type)?;
             let mut result = compile_tag_check(c, subject_ptr, &enum_name, variant)?;
-
-            let payload_type = c
-                .get_variant_payload_type(&enum_name, variant)
-                .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
-            let enum_type = *c
-                .struct_types
-                .get(&enum_name)
-                .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
-            let payload_ptr = c
-                .builder
-                .build_struct_gep(enum_type, subject_ptr, 1, "payload_ptr")
-                .unwrap();
-
+            let (payload_type, payload_ptr) = get_payload_ptr(c, subject_ptr, &enum_name, variant)?;
             let field_types = get_tuple_variant_types(c, &enum_name, variant)?;
-
-            for (i, sub_pat) in elements.iter().enumerate() {
-                let field_type = &field_types[i];
-                let field_llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
-                    .ok_or("unsupported field type in enum variant")?;
-                let field_ptr = c
-                    .builder
-                    .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("f{i}"))
-                    .unwrap();
-                let field_val = c
-                    .builder
-                    .build_load(field_llvm_ty, field_ptr, &format!("f{i}_val"))
-                    .unwrap();
-                let field_alloca = c
-                    .builder
-                    .build_alloca(field_llvm_ty, &format!("f{i}_tmp"))
-                    .unwrap();
-                c.builder.build_store(field_alloca, field_val).unwrap();
-
-                let sub_result = compile_pattern(c, sub_pat, field_alloca, field_type, function)?;
-                result = c
-                    .builder
-                    .build_and(result, sub_result, &format!("and_{i}"))
-                    .unwrap();
-            }
-
+            result = compile_tuple_elements(
+                c,
+                elements,
+                &field_types,
+                payload_type,
+                payload_ptr,
+                result,
+                function,
+            )?;
             Ok(result)
         }
 
@@ -556,19 +512,7 @@ fn compile_pattern<'ctx>(
         } => {
             let enum_name = enum_name_from_path(type_path, subject_type)?;
             let mut result = compile_tag_check(c, subject_ptr, &enum_name, variant)?;
-
-            let payload_type = c
-                .get_variant_payload_type(&enum_name, variant)
-                .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
-            let enum_type = *c
-                .struct_types
-                .get(&enum_name)
-                .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
-            let payload_ptr = c
-                .builder
-                .build_struct_gep(enum_type, subject_ptr, 1, "payload_ptr")
-                .unwrap();
-
+            let (payload_type, payload_ptr) = get_payload_ptr(c, subject_ptr, &enum_name, variant)?;
             let expected_fields = get_struct_variant_fields(c, &enum_name, variant)?;
 
             for fp in fields {
@@ -593,45 +537,18 @@ fn compile_pattern<'ctx>(
             let mut result = compile_tag_check(c, subject_ptr, &enum_name, name)?;
 
             if !elements.is_empty() {
-                let payload_type = c
-                    .get_variant_payload_type(&enum_name, name)
-                    .ok_or_else(|| format!("no payload type for {enum_name}.{name}"))?;
-                let enum_type = *c
-                    .struct_types
-                    .get(&enum_name)
-                    .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
-                let payload_ptr = c
-                    .builder
-                    .build_struct_gep(enum_type, subject_ptr, 1, "payload_ptr")
-                    .unwrap();
-
+                let (payload_type, payload_ptr) =
+                    get_payload_ptr(c, subject_ptr, &enum_name, name)?;
                 let field_types = get_tuple_variant_types(c, &enum_name, name)?;
-
-                for (i, sub_pat) in elements.iter().enumerate() {
-                    let field_type = &field_types[i];
-                    let field_llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
-                        .ok_or("unsupported field type in constructor pattern")?;
-                    let field_ptr = c
-                        .builder
-                        .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("cf{i}"))
-                        .unwrap();
-                    let field_val = c
-                        .builder
-                        .build_load(field_llvm_ty, field_ptr, &format!("cf{i}_val"))
-                        .unwrap();
-                    let field_alloca = c
-                        .builder
-                        .build_alloca(field_llvm_ty, &format!("cf{i}_tmp"))
-                        .unwrap();
-                    c.builder.build_store(field_alloca, field_val).unwrap();
-
-                    let sub_result =
-                        compile_pattern(c, sub_pat, field_alloca, field_type, function)?;
-                    result = c
-                        .builder
-                        .build_and(result, sub_result, &format!("cand_{i}"))
-                        .unwrap();
-                }
+                result = compile_tuple_elements(
+                    c,
+                    elements,
+                    &field_types,
+                    payload_type,
+                    payload_ptr,
+                    result,
+                    function,
+                )?;
             }
 
             Ok(result)
@@ -640,163 +557,6 @@ fn compile_pattern<'ctx>(
         Pattern::Tuple { .. } | Pattern::List { .. } => {
             Err("tuple and list patterns not yet supported in compilation".to_string())
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Pattern helpers
-// ---------------------------------------------------------------------------
-
-fn compile_tag_check<'ctx>(
-    c: &mut Compiler<'ctx>,
-    subject_ptr: PointerValue<'ctx>,
-    enum_name: &str,
-    variant: &str,
-) -> Result<IntValue<'ctx>, String> {
-    let enum_type = *c
-        .struct_types
-        .get(enum_name)
-        .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
-    let tag = c
-        .get_variant_tag(enum_name, variant)
-        .ok_or_else(|| format!("unknown variant: {enum_name}.{variant}"))?;
-    let tag_ptr = c
-        .builder
-        .build_struct_gep(enum_type, subject_ptr, 0, "tag_ptr")
-        .unwrap();
-    let tag_val = c
-        .builder
-        .build_load(c.context.i8_type(), tag_ptr, "tag")
-        .unwrap()
-        .into_int_value();
-    let expected = c.context.i8_type().const_int(tag as u64, false);
-    Ok(c.builder
-        .build_int_compare(IntPredicate::EQ, tag_val, expected, "tag_eq")
-        .unwrap())
-}
-
-fn match_values<'ctx>(
-    c: &Compiler<'ctx>,
-    subject: &BasicValueEnum<'ctx>,
-    lit: &BasicValueEnum<'ctx>,
-) -> Result<IntValue<'ctx>, String> {
-    if subject.is_int_value() && lit.is_int_value() {
-        Ok(c.builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                subject.into_int_value(),
-                lit.into_int_value(),
-                "lit_eq",
-            )
-            .unwrap())
-    } else if subject.is_float_value() && lit.is_float_value() {
-        Ok(c.builder
-            .build_float_compare(
-                FloatPredicate::OEQ,
-                subject.into_float_value(),
-                lit.into_float_value(),
-                "lit_feq",
-            )
-            .unwrap())
-    } else {
-        Err("unsupported literal pattern comparison".to_string())
-    }
-}
-
-fn compile_literal_for_pattern<'ctx>(
-    c: &Compiler<'ctx>,
-    lit: &Literal,
-) -> Result<BasicValueEnum<'ctx>, String> {
-    match lit {
-        Literal::Int(s) => {
-            let clean: String = s.chars().filter(|ch| *ch != '_').collect();
-            let val: i64 = if let Some(hex) = clean
-                .strip_prefix("0x")
-                .or_else(|| clean.strip_prefix("0X"))
-            {
-                i64::from_str_radix(hex, 16).map_err(|_| format!("invalid hex integer: {s}"))?
-            } else if let Some(bin) = clean
-                .strip_prefix("0b")
-                .or_else(|| clean.strip_prefix("0B"))
-            {
-                i64::from_str_radix(bin, 2).map_err(|_| format!("invalid binary integer: {s}"))?
-            } else {
-                clean
-                    .parse()
-                    .map_err(|_| format!("integer literals cannot exceed {}", i64::MAX))?
-            };
-            Ok(c.context.i32_type().const_int(val as u64, true).into())
-        }
-        Literal::Float(s) => {
-            let val: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
-            Ok(c.context.f64_type().const_float(val).into())
-        }
-        Literal::Bool(b) => Ok(c
-            .context
-            .bool_type()
-            .const_int(if *b { 1 } else { 0 }, false)
-            .into()),
-        _ => Err("unsupported literal in match pattern".to_string()),
-    }
-}
-
-fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<String, String> {
-    if !type_path.is_empty() {
-        Ok(type_path.join("."))
-    } else if let Type::Enum(name) = subject_type {
-        Ok(name.clone())
-    } else {
-        Err("cannot determine enum name for pattern".to_string())
-    }
-}
-
-fn find_constructor_enum<'ctx>(
-    c: &Compiler<'ctx>,
-    variant_name: &str,
-    subject_type: &Type,
-) -> Result<String, String> {
-    if let Type::Enum(name) = subject_type {
-        return Ok(name.clone());
-    }
-    for (enum_name, info) in &c.type_ctx.enums {
-        if info.variants.iter().any(|v| v.name == variant_name) {
-            return Ok(enum_name.clone());
-        }
-    }
-    Err(format!("no enum found with variant `{variant_name}`"))
-}
-
-fn get_tuple_variant_types(
-    c: &Compiler<'_>,
-    enum_name: &str,
-    variant: &str,
-) -> Result<Vec<Type>, String> {
-    let vi = c
-        .type_ctx
-        .enums
-        .get(enum_name)
-        .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
-        .ok_or_else(|| format!("variant not found: {enum_name}.{variant}"))?;
-    match &vi.data {
-        VariantData::Tuple(types) => Ok(types.clone()),
-        _ => Err(format!("{enum_name}.{variant} is not a tuple variant")),
-    }
-}
-
-fn get_struct_variant_fields(
-    c: &Compiler<'_>,
-    enum_name: &str,
-    variant: &str,
-) -> Result<Vec<(String, Type)>, String> {
-    let vi = c
-        .type_ctx
-        .enums
-        .get(enum_name)
-        .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
-        .ok_or_else(|| format!("variant not found: {enum_name}.{variant}"))?;
-    match &vi.data {
-        VariantData::Struct(fields) => Ok(fields.clone()),
-        _ => Err(format!("{enum_name}.{variant} is not a struct variant")),
     }
 }
 
@@ -848,36 +608,196 @@ fn compile_field_pattern<'ctx>(
     Ok(result)
 }
 
-fn infer_subject_type<'ctx>(
+fn compile_literal_for_pattern<'ctx>(
     c: &Compiler<'ctx>,
-    subject: &Expr,
-    val: &BasicValueEnum<'ctx>,
-) -> Type {
-    if let Expr::Ident { name, .. } = subject
-        && let Some((_, ty)) = c.variables.get(name)
-    {
-        return ty.clone();
+    lit: &Literal,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    match lit {
+        Literal::Int(s) => {
+            let val = crate::util::parse_int_literal(s)?;
+            Ok(c.context.i32_type().const_int(val as u64, true).into())
+        }
+        Literal::Float(s) => {
+            let val: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
+            Ok(c.context.f64_type().const_float(val).into())
+        }
+        Literal::Bool(b) => Ok(c
+            .context
+            .bool_type()
+            .const_int(if *b { 1 } else { 0 }, false)
+            .into()),
+        _ => Err("unsupported literal in match pattern".to_string()),
     }
-    if val.is_int_value() {
-        match val.into_int_value().get_type().get_bit_width() {
-            1 => Type::Primitive(expo_typecheck::types::Primitive::Bool),
-            32 => Type::Primitive(expo_typecheck::types::Primitive::I32),
-            64 => Type::Primitive(expo_typecheck::types::Primitive::I64),
-            _ => Type::Unknown,
-        }
-    } else if val.is_struct_value() {
-        let st = val.into_struct_value().get_type();
-        if let Some(name) = st.get_name() {
-            let name_str = name.to_str().unwrap_or("");
-            if c.type_ctx.enums.contains_key(name_str) {
-                return Type::Enum(name_str.to_string());
-            }
-            if c.type_ctx.structs.contains_key(name_str) {
-                return Type::Struct(name_str.to_string());
-            }
-        }
-        Type::Unknown
+}
+
+fn compile_tag_check<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject_ptr: PointerValue<'ctx>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<IntValue<'ctx>, String> {
+    let enum_type = *c
+        .struct_types
+        .get(enum_name)
+        .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
+    let tag = c
+        .get_variant_tag(enum_name, variant)
+        .ok_or_else(|| format!("unknown variant: {enum_name}.{variant}"))?;
+    let tag_ptr = c
+        .builder
+        .build_struct_gep(enum_type, subject_ptr, 0, "tag_ptr")
+        .unwrap();
+    let tag_val = c
+        .builder
+        .build_load(c.context.i8_type(), tag_ptr, "tag")
+        .unwrap()
+        .into_int_value();
+    let expected = c.context.i8_type().const_int(tag as u64, false);
+    Ok(c.builder
+        .build_int_compare(IntPredicate::EQ, tag_val, expected, "tag_eq")
+        .unwrap())
+}
+
+fn compile_tuple_elements<'ctx>(
+    c: &mut Compiler<'ctx>,
+    elements: &[Pattern],
+    field_types: &[Type],
+    payload_type: inkwell::types::StructType<'ctx>,
+    payload_ptr: PointerValue<'ctx>,
+    mut result: IntValue<'ctx>,
+    function: FunctionValue<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    for (i, sub_pat) in elements.iter().enumerate() {
+        let field_type = &field_types[i];
+        let field_llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
+            .ok_or("unsupported field type in enum variant")?;
+        let field_ptr = c
+            .builder
+            .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("tp{i}"))
+            .unwrap();
+        let field_val = c
+            .builder
+            .build_load(field_llvm_ty, field_ptr, &format!("tp{i}_val"))
+            .unwrap();
+        let field_alloca = c
+            .builder
+            .build_alloca(field_llvm_ty, &format!("tp{i}_tmp"))
+            .unwrap();
+        c.builder.build_store(field_alloca, field_val).unwrap();
+
+        let sub_result = compile_pattern(c, sub_pat, field_alloca, field_type, function)?;
+        result = c
+            .builder
+            .build_and(result, sub_result, &format!("tp{i}_and"))
+            .unwrap();
+    }
+    Ok(result)
+}
+
+fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<String, String> {
+    if !type_path.is_empty() {
+        Ok(type_path.join("."))
+    } else if let Type::Enum(name) = subject_type {
+        Ok(name.clone())
     } else {
-        Type::Unknown
+        Err("cannot determine enum name for pattern".to_string())
+    }
+}
+
+fn find_constructor_enum<'ctx>(
+    c: &Compiler<'ctx>,
+    variant_name: &str,
+    subject_type: &Type,
+) -> Result<String, String> {
+    if let Type::Enum(name) = subject_type {
+        return Ok(name.clone());
+    }
+    for (enum_name, info) in &c.type_ctx.enums {
+        if info.variants.iter().any(|v| v.name == variant_name) {
+            return Ok(enum_name.clone());
+        }
+    }
+    Err(format!("no enum found with variant `{variant_name}`"))
+}
+
+fn get_payload_ptr<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject_ptr: PointerValue<'ctx>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<(inkwell::types::StructType<'ctx>, PointerValue<'ctx>), String> {
+    let payload_type = c
+        .get_variant_payload_type(enum_name, variant)
+        .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
+    let enum_type = *c
+        .struct_types
+        .get(enum_name)
+        .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
+    let payload_ptr = c
+        .builder
+        .build_struct_gep(enum_type, subject_ptr, 1, "payload_ptr")
+        .unwrap();
+    Ok((payload_type, payload_ptr))
+}
+
+fn get_struct_variant_fields(
+    c: &Compiler<'_>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<Vec<(String, Type)>, String> {
+    let vi = c
+        .type_ctx
+        .enums
+        .get(enum_name)
+        .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
+        .ok_or_else(|| format!("variant not found: {enum_name}.{variant}"))?;
+    match &vi.data {
+        VariantData::Struct(fields) => Ok(fields.clone()),
+        _ => Err(format!("{enum_name}.{variant} is not a struct variant")),
+    }
+}
+
+fn get_tuple_variant_types(
+    c: &Compiler<'_>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<Vec<Type>, String> {
+    let vi = c
+        .type_ctx
+        .enums
+        .get(enum_name)
+        .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
+        .ok_or_else(|| format!("variant not found: {enum_name}.{variant}"))?;
+    match &vi.data {
+        VariantData::Tuple(types) => Ok(types.clone()),
+        _ => Err(format!("{enum_name}.{variant} is not a tuple variant")),
+    }
+}
+
+fn match_values<'ctx>(
+    c: &Compiler<'ctx>,
+    subject: &BasicValueEnum<'ctx>,
+    lit: &BasicValueEnum<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    if subject.is_int_value() && lit.is_int_value() {
+        Ok(c.builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                subject.into_int_value(),
+                lit.into_int_value(),
+                "lit_eq",
+            )
+            .unwrap())
+    } else if subject.is_float_value() && lit.is_float_value() {
+        Ok(c.builder
+            .build_float_compare(
+                FloatPredicate::OEQ,
+                subject.into_float_value(),
+                lit.into_float_value(),
+                "lit_feq",
+            )
+            .unwrap())
+    } else {
+        Err("unsupported literal pattern comparison".to_string())
     }
 }

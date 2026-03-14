@@ -13,6 +13,8 @@ use crate::ops::{compile_binary, compile_unary};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
 
+/// Top-level expression dispatch. Matches each AST expression variant and
+/// delegates to the appropriate specialized compiler function.
 pub fn compile_expr<'ctx>(
     c: &mut Compiler<'ctx>,
     expr: &Expr,
@@ -136,22 +138,7 @@ fn compile_literal<'ctx>(
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     match lit {
         Literal::Int(s) => {
-            let clean: String = s.chars().filter(|c| *c != '_').collect();
-            let val: i64 = if let Some(hex) = clean
-                .strip_prefix("0x")
-                .or_else(|| clean.strip_prefix("0X"))
-            {
-                i64::from_str_radix(hex, 16).map_err(|_| format!("invalid hex integer: {s}"))?
-            } else if let Some(bin) = clean
-                .strip_prefix("0b")
-                .or_else(|| clean.strip_prefix("0B"))
-            {
-                i64::from_str_radix(bin, 2).map_err(|_| format!("invalid binary integer: {s}"))?
-            } else {
-                clean
-                    .parse()
-                    .map_err(|_| format!("integer literals cannot exceed {}", i64::MAX))?
-            };
+            let val = crate::util::parse_int_literal(s)?;
             Ok(Some(
                 c.context.i32_type().const_int(val as u64, true).into(),
             ))
@@ -211,21 +198,8 @@ fn compile_string<'ctx>(
                 let val = compile_expr(c, expr, function)?
                     .ok_or("interpolated expression produced no value")?;
 
-                if val.is_int_value() {
-                    let width = val.into_int_value().get_type().get_bit_width();
-                    let spec = match width {
-                        1 => "%d",
-                        32 => "%d",
-                        64 => "%lld",
-                        _ => "%d",
-                    };
+                if let Ok(spec) = crate::util::printf_format_spec(&val) {
                     fmt_string.push_str(spec);
-                    interp_values.push(val);
-                } else if val.is_float_value() {
-                    fmt_string.push_str("%f");
-                    interp_values.push(val);
-                } else if val.is_pointer_value() {
-                    fmt_string.push_str("%s");
                     interp_values.push(val);
                 } else if val.is_struct_value() {
                     let str_ptr = enum_value_to_string(c, val, function)?;
@@ -283,6 +257,9 @@ fn compile_string<'ctx>(
     Ok(Some(buf.into()))
 }
 
+/// Converts an enum value to a string pointer for interpolation. Calls
+/// `to_string` if the enum defines one, otherwise looks up the variant
+/// name from the enum's global name table.
 fn enum_value_to_string<'ctx>(
     c: &mut Compiler<'ctx>,
     val: BasicValueEnum<'ctx>,
@@ -301,13 +278,12 @@ fn enum_value_to_string<'ctx>(
         ));
     }
 
-    if let Some(sig) = c
-        .type_ctx
+    if c.type_ctx
         .enums
         .get(enum_name)
         .and_then(|ei| ei.methods.get("to_string"))
+        .is_some()
     {
-        let _ = sig;
         let mangled = format!("{enum_name}_to_string");
         if let Some(to_string_fn) = c.functions.get(&mangled) {
             let result = c
@@ -387,6 +363,9 @@ fn resolve_closure_params<'ctx>(
         .collect()
 }
 
+/// Compiles a block closure (`fn (params) -> type ... end`) into an anonymous
+/// LLVM function and returns a function pointer. Non-capturing: the closure
+/// body runs in a fresh variable scope.
 fn compile_closure<'ctx>(
     c: &mut Compiler<'ctx>,
     params: &[ClosureParam],
@@ -436,31 +415,12 @@ fn compile_closure<'ctx>(
         }
     }
 
-    let body_len = body.len();
-    for (i, stmt) in body.iter().enumerate() {
-        if c.current_block_terminated() {
-            break;
-        }
-        let is_last = i == body_len - 1;
-        if is_last && let Statement::Expr(expr) = stmt {
-            let val = compile_expr(c, expr, closure_fn)?;
-            if !c.current_block_terminated() {
-                match val {
-                    Some(v) => {
-                        c.builder.build_return(Some(&v)).unwrap();
-                    }
-                    None => {
-                        c.builder.build_return(None).unwrap();
-                    }
-                }
-            }
-            continue;
-        }
-        crate::stmt::compile_statement(c, stmt, closure_fn)?;
-    }
-
+    let last_val = crate::control::compile_body_as_value(c, body, closure_fn)?;
     if !c.current_block_terminated() {
-        c.builder.build_return(None).unwrap();
+        match last_val {
+            Some(v) => c.builder.build_return(Some(&v)).unwrap(),
+            None => c.builder.build_return(None).unwrap(),
+        };
     }
 
     c.variables = saved_vars;

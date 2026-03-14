@@ -4,6 +4,9 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 
+/// Compiles an enum variant construction (`EnumName.Variant(...)` or
+/// `EnumName.Variant { ... }`). Sets the tag byte and populates the payload
+/// for tuple and struct variants.
 pub fn compile_enum_construction<'ctx>(
     c: &mut Compiler<'ctx>,
     type_path: &[String],

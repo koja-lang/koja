@@ -4,6 +4,8 @@ use expo_typecheck::types::{Primitive, Type};
 use inkwell::context::Context;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
 
+/// Converts an Expo type to an LLVM basic type. Returns `None` for `Unit`
+/// and other types without an LLVM representation.
 pub fn to_llvm_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
@@ -18,6 +20,8 @@ pub fn to_llvm_type<'ctx>(
     }
 }
 
+/// Wraps [`to_llvm_type`] to return a `BasicMetadataTypeEnum` for use in
+/// function signatures.
 pub fn to_llvm_metadata_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
@@ -26,6 +30,7 @@ pub fn to_llvm_metadata_type<'ctx>(
     to_llvm_type(ty, context, struct_types).map(|t| t.into())
 }
 
+/// Maps an Expo primitive type to its corresponding LLVM type.
 pub fn primitive_to_llvm<'ctx>(p: &Primitive, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
     match p {
         Primitive::Bool => context.bool_type().into(),

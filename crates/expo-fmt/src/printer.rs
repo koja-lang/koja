@@ -672,11 +672,8 @@ impl<'a> Printer<'a> {
                 span,
             } => {
                 let params_doc: Vec<Doc> = params.iter().map(closure_param_to_doc).collect();
-                let mut sig_parts = vec![
-                    text("fn ("),
-                    intersperse(params_doc, text(", ")),
-                    text(")"),
-                ];
+                let mut sig_parts =
+                    vec![text("fn ("), intersperse(params_doc, text(", ")), text(")")];
                 if let Some(rt) = return_type {
                     sig_parts.push(text(" -> "));
                     sig_parts.push(type_expr_to_doc(rt));
