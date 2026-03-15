@@ -3,6 +3,7 @@ mod compiler;
 mod control;
 mod enums;
 mod expr;
+mod generics;
 mod ops;
 mod stmt;
 mod structs;

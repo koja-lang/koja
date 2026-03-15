@@ -1,3 +1,6 @@
+//! Operator compilation: arithmetic, comparison, logical, and unary operators
+//! with dispatch based on operand types (integer vs. floating-point).
+
 use expo_ast::ast::{BinOp, Expr, UnaryOp};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, IntPredicate};

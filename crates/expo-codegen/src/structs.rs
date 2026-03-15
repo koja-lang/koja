@@ -1,3 +1,6 @@
+//! Struct compilation: field access, struct construction (both regular and
+//! generic), and method calls on struct instances.
+
 use expo_ast::ast::Expr;
 use expo_typecheck::types::Type;
 use inkwell::values::{BasicValueEnum, FunctionValue};
@@ -160,16 +163,16 @@ pub fn compile_struct_construction<'ctx>(
         .ok_or("empty type path in struct construction")?;
 
     // For generic structs, compile field values first, infer type args, and monomorphize
-    if let Some(info) = c.type_ctx.structs.get(struct_name) {
-        if !info.type_params.is_empty() {
-            return compile_generic_struct_construction(
-                c,
-                struct_name,
-                info.clone(),
-                fields,
-                function,
-            );
-        }
+    if let Some(info) = c.type_ctx.structs.get(struct_name)
+        && !info.type_params.is_empty()
+    {
+        return compile_generic_struct_construction(
+            c,
+            struct_name,
+            info.clone(),
+            fields,
+            function,
+        );
     }
 
     let struct_type = *c
@@ -237,7 +240,11 @@ fn compile_generic_struct_construction<'ctx>(
     for (field_init_name, field_val) in &compiled_fields {
         if let Some((_, field_ty)) = info.fields.iter().find(|(n, _)| n == field_init_name) {
             let concrete = infer_type_from_llvm(c, field_val);
-            expo_typecheck::types::unify(field_ty, &concrete, &mut subst);
+            if !expo_typecheck::types::unify(field_ty, &concrete, &mut subst) {
+                return Err(format!(
+                    "type mismatch for field `{field_init_name}` in generic struct `{struct_name}`"
+                ));
+            }
         }
     }
 
@@ -268,10 +275,13 @@ fn compile_generic_struct_construction<'ctx>(
         .build_alloca(struct_type, &format!("{mangled}_tmp"))
         .unwrap();
 
-    for (idx, (field_name, field_val)) in compiled_fields.iter().enumerate() {
+    for (field_name, field_val) in &compiled_fields {
+        let field_idx = c
+            .get_field_index(&mangled, field_name)
+            .ok_or_else(|| format!("unknown field `{field_name}` in struct `{struct_name}`"))?;
         let field_ptr = c
             .builder
-            .build_struct_gep(struct_type, alloca, idx as u32, field_name)
+            .build_struct_gep(struct_type, alloca, field_idx, field_name)
             .unwrap();
         c.builder.build_store(field_ptr, *field_val).unwrap();
     }

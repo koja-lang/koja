@@ -1,3 +1,6 @@
+//! Enum variant construction: compiles `EnumName.Variant(...)` expressions
+//! into tagged unions with optional tuple or struct payloads.
+
 use expo_ast::ast::EnumConstructionData;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 

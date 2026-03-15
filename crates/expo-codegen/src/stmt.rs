@@ -1,3 +1,6 @@
+//! Statement compilation: let bindings, assignments, compound assignments,
+//! return, break, and expression statements.
+
 use expo_ast::ast::{AssignTarget, ClosureParam, Expr, Statement};
 use expo_typecheck::types::Type;
 use inkwell::values::{BasicValueEnum, FunctionValue};

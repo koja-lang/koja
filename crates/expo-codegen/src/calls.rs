@@ -1,3 +1,6 @@
+//! Function call compilation: regular calls, method calls, and generic call
+//! dispatch including type inference and monomorphization triggers.
+
 use expo_ast::ast::Arg;
 use expo_typecheck::types::{Type, mangle_name};
 use inkwell::types::BasicType;
@@ -116,7 +119,12 @@ fn compile_generic_call<'ctx>(
 
     let mut subst = std::collections::HashMap::new();
     for (param, arg_ty) in sig.params.iter().zip(arg_types.iter()) {
-        expo_typecheck::types::unify(&param.ty, arg_ty, &mut subst);
+        if !expo_typecheck::types::unify(&param.ty, arg_ty, &mut subst) {
+            return Err(format!(
+                "type mismatch for argument `{}` in generic call to `{name}`",
+                param.name
+            ));
+        }
     }
 
     let type_args: Vec<Type> = sig

@@ -1,3 +1,6 @@
+//! Shared utilities: integer literal parsing and printf format-specifier
+//! selection for LLVM codegen.
+
 use inkwell::values::BasicValueEnum;
 
 /// Parses an integer literal string, handling `0x`/`0b` prefixes and `_`

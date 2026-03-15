@@ -1,3 +1,6 @@
+//! Expression compilation: translates Expo expressions (literals, variables,
+//! binary/unary ops, calls, closures, string interpolation, etc.) into LLVM IR.
+
 use expo_ast::ast::{Arg, BinOp, ClosureParam, Expr, Literal, Statement, StringPart};
 use expo_ast::span::Span;
 use inkwell::types::BasicType;

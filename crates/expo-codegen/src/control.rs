@@ -1,3 +1,6 @@
+//! Control flow compilation: if/else, cond, match, ternary, while loops,
+//! and infinite loops with break support.
+
 use expo_ast::ast::{CondArm, Expr, FieldPattern, Literal, MatchArm, Pattern, Statement};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::Type;

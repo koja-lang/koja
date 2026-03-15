@@ -125,6 +125,25 @@ impl Primitive {
             Primitive::U64 => "u64",
         }
     }
+
+    /// Parses a primitive type name string back into a [`Primitive`].
+    pub fn from_name(s: &str) -> Option<Primitive> {
+        match s {
+            "bool" => Some(Primitive::Bool),
+            "f32" => Some(Primitive::F32),
+            "f64" => Some(Primitive::F64),
+            "i8" => Some(Primitive::I8),
+            "i16" => Some(Primitive::I16),
+            "i32" => Some(Primitive::I32),
+            "i64" => Some(Primitive::I64),
+            "string" => Some(Primitive::String),
+            "u8" => Some(Primitive::U8),
+            "u16" => Some(Primitive::U16),
+            "u32" => Some(Primitive::U32),
+            "u64" => Some(Primitive::U64),
+            _ => None,
+        }
+    }
 }
 
 /// Converts an AST type expression into a resolved [`Type`], looking up user-defined
@@ -162,7 +181,7 @@ pub fn resolve_type_expr_with_params(
                         )
                     })
                     .collect();
-                let has_type_vars = resolved_args.iter().any(|t| contains_type_var(t));
+                let has_type_vars = resolved_args.iter().any(contains_type_var);
                 let kind = if known_structs.contains(&path[0].as_str()) {
                     GenericKind::Struct
                 } else {
@@ -313,7 +332,7 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
             type_args,
         } => {
             let substituted: Vec<Type> = type_args.iter().map(|t| substitute(t, subst)).collect();
-            if substituted.iter().any(|t| contains_type_var(t)) {
+            if substituted.iter().any(contains_type_var) {
                 Type::GenericInstance {
                     base: base.clone(),
                     kind: kind.clone(),
@@ -332,24 +351,37 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
     }
 }
 
-/// Produces a mangled name for a monomorphized generic, e.g. `identity__i32` or
-/// `Pair__i32__string`.
+/// Produces a mangled name for a monomorphized generic using a nesting-safe
+/// scheme: `Pair<i32, string>` becomes `Pair_$i32.string$` and
+/// `List<Pair<i32, i32>>` becomes `List_$Pair_$i32.i32$$`.
 pub fn mangle_name(base: &str, type_args: &[Type]) -> String {
     if type_args.is_empty() {
         return base.to_string();
     }
-    let suffix: Vec<String> = type_args
+    let args: Vec<String> = type_args.iter().map(mangle_type).collect();
+    format!("{}_${}$", base, args.join("."))
+}
+
+fn mangle_type(ty: &Type) -> String {
+    match ty {
+        Type::Primitive(p) => p.display().to_string(),
+        Type::Struct(n) | Type::Enum(n) => n.clone(),
+        Type::TypeVar(n) => n.clone(),
+        Type::Unit => "unit".to_string(),
+        Type::GenericInstance {
+            base, type_args, ..
+        } => mangle_name(base, type_args),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Builds a substitution map from type parameter names to concrete type arguments.
+pub fn build_substitution(type_params: &[String], type_args: &[Type]) -> HashMap<String, Type> {
+    type_params
         .iter()
-        .map(|t| match t {
-            Type::Primitive(p) => p.display().to_string(),
-            Type::Struct(n) => n.clone(),
-            Type::Enum(n) => n.clone(),
-            Type::TypeVar(n) => n.clone(),
-            Type::Unit => "unit".to_string(),
-            _ => "unknown".to_string(),
-        })
-        .collect();
-    format!("{}__{}", base, suffix.join("__"))
+        .zip(type_args.iter())
+        .map(|(tp, ta)| (tp.clone(), ta.clone()))
+        .collect()
 }
 
 /// Returns true if the type or any nested type contains a [`Type::TypeVar`].

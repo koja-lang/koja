@@ -1,3 +1,6 @@
+//! Type mapping: converts Expo types to their LLVM representations (basic
+//! types, metadata types, and struct type lookups).
+
 use std::collections::HashMap;
 
 use expo_typecheck::types::{Primitive, Type};
