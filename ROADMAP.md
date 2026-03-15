@@ -344,6 +344,15 @@ Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use th
 - Multi-module resolution (cross-file diagnostics)
 - **Done when**: editing `.expo` files in Cursor shows real-time errors and supports go-to-definition
 
+### Interactive shell (REPL)
+
+- `expo shell` -- evaluate expressions and statements interactively, one at a time
+- `expo shell -S .` -- load a project so you can call your functions, inspect types, and explore live
+- Inline documentation: `h module.function` pulls from `@doc` annotations
+- Tab completion for module names, functions, and variables in scope
+- Backend: LLVM JIT (via inkwell `ExecutionEngine`) initially; Cranelift JIT long-term for faster response
+- **Done when**: `expo shell -S .` loads a multi-module project and you can call functions, pipe results, and read docs interactively
+
 ---
 
 ## Phase 6: Self-hosting
@@ -454,26 +463,27 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Tooling   | `expo run` (compile + execute)                                                           | Done   |
 | Tooling   | VSCode extension (syntax highlighting)                                                   | Done   |
 | Tooling   | LSP -- diagnostics, formatting, hover, go-to-definition                                  | Done   |
-| Tooling   | Documentation generator (`expo doc`) -- HTML output, sidebar nav, brand theme             | Done   |
+| Tooling   | Documentation generator (`expo doc`) -- HTML output, sidebar nav, brand theme            | Done   |
 
 ### Remaining
 
-| Phase       | Milestone                                                   |
-| ----------- | ----------------------------------------------------------- |
-| Core        | Generics + monomorphization (the gate to Phase 2)           |
-| Core        | Ownership + borrow checker + tasks (structured concurrency) |
-| Core        | Collections, closures, arena, `ua_parser.expo` compiles     |
-| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)  |
-| Reliability | Preemption/priority, supervision, `shared_map`              |
-| Stdlib      | Core types, I/O, time, `config.expo` compiles               |
-| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)          |
-| Tooling     | Package manager, test runner                                |
-| Tooling     | Documentation generator (doctests, search, prose pages)     |
-| Tooling     | LSP -- autocomplete, inline type hints, multi-module        |
-| Self-host   | Lexer + parser in Expo                                      |
-| Self-host   | Full compiler in Expo                                       |
-| Self-host   | Retire Rust bootstrap                                       |
-| Validation  | auth-manager-expo runs for real                             |
+| Phase       | Milestone                                                     |
+| ----------- | ------------------------------------------------------------- |
+| Core        | Generics + monomorphization (the gate to Phase 2)             |
+| Core        | Ownership + borrow checker + tasks (structured concurrency)   |
+| Core        | Collections, closures, arena, `ua_parser.expo` compiles       |
+| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)    |
+| Reliability | Preemption/priority, supervision, `shared_map`                |
+| Stdlib      | Core types, I/O, time, `config.expo` compiles                 |
+| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)            |
+| Tooling     | Package manager, test runner                                  |
+| Tooling     | Documentation generator (doctests, search, prose pages)       |
+| Tooling     | LSP -- autocomplete, inline type hints, multi-module          |
+| Tooling     | Interactive shell (`expo shell`) -- REPL with project loading |
+| Self-host   | Lexer + parser in Expo                                        |
+| Self-host   | Full compiler in Expo                                         |
+| Self-host   | Retire Rust bootstrap                                         |
+| Validation  | auth-manager-expo runs for real                               |
 
 ---
 

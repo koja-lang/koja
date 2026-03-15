@@ -223,10 +223,16 @@ impl LanguageServer for Backend {
                         .map(|p| format!("{}: {}", p.name, p.ty.display()))
                         .collect();
                     let vis = if sig.is_private { "priv fn" } else { "fn" };
+                    let tp = if sig.type_params.is_empty() {
+                        String::new()
+                    } else {
+                        format!("<{}>", sig.type_params.join(", "))
+                    };
                     let signature = format!(
-                        "{} {}({}) -> {}",
+                        "{} {}{}({}) -> {}",
                         vis,
                         name,
+                        tp,
                         params_str.join(", "),
                         sig.return_type.display()
                     );
@@ -247,7 +253,12 @@ impl LanguageServer for Backend {
                         .iter()
                         .map(|(n, t)| format!("  {}: {}", n, t.display()))
                         .collect();
-                    let signature = format!("struct {}\n{}\nend", name, fields.join("\n"));
+                    let tp = if info.type_params.is_empty() {
+                        String::new()
+                    } else {
+                        format!("<{}>", info.type_params.join(", "))
+                    };
+                    let signature = format!("struct {}{}\n{}\nend", name, tp, fields.join("\n"));
                     let doc = if let Some(origin_uri) = state.imported_origins.get(name) {
                         find_doc_from_uri(origin_uri, name)
                     } else {
@@ -310,10 +321,16 @@ impl LanguageServer for Backend {
                         .iter()
                         .map(|p| format!("{}: {}", p.name, p.ty.display()))
                         .collect();
+                    let tp = if sig.type_params.is_empty() {
+                        String::new()
+                    } else {
+                        format!("<{}>", sig.type_params.join(", "))
+                    };
                     let signature = format!(
-                        "fn {}.{}({}) -> {}",
+                        "fn {}.{}{}({}) -> {}",
                         module,
                         name,
+                        tp,
                         params_str.join(", "),
                         sig.return_type.display()
                     );

@@ -214,6 +214,7 @@ fn build(args: &[String], quiet: bool, color: bool) {
                             .collect(),
                         return_type: sig.return_type.clone(),
                         span: sig.span,
+                        type_params: sig.type_params.clone(),
                     },
                 );
             }
@@ -237,6 +238,20 @@ fn build(args: &[String], quiet: bool, color: bool) {
                 merged_ctx
                     .imported_modules
                     .insert(mod_name.clone(), clone_type_context_for_merge(mod_ctx));
+            }
+        }
+        for (name, ast) in &ctx.generic_function_asts {
+            if !merged_ctx.generic_function_asts.contains_key(name) {
+                merged_ctx
+                    .generic_function_asts
+                    .insert(name.clone(), ast.clone());
+            }
+        }
+        for (name, ast) in &ctx.generic_struct_asts {
+            if !merged_ctx.generic_struct_asts.contains_key(name) {
+                merged_ctx
+                    .generic_struct_asts
+                    .insert(name.clone(), ast.clone());
             }
         }
     }
@@ -316,6 +331,7 @@ fn clone_struct_info_for_merge(
             .map(|(k, v)| (k.clone(), clone_fn_sig(v)))
             .collect(),
         span: info.span,
+        type_params: info.type_params.clone(),
     }
 }
 
@@ -355,6 +371,7 @@ fn clone_fn_sig(
             .collect(),
         return_type: sig.return_type.clone(),
         span: sig.span,
+        type_params: sig.type_params.clone(),
     }
 }
 

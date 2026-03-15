@@ -1,0 +1,21 @@
+struct Pair<A, B>
+  first: A
+  second: B
+end
+
+fn identity<T>(x: T) -> T
+  x
+end
+
+fn make_pair<A, B>(a: A, b: B) -> Pair<A, B>
+  Pair { first: a, second: b }
+end
+
+fn main
+  print(identity(42))
+  print(identity("hello"))
+
+  p = make_pair(10, 20)
+  print(p.first)
+  print(p.second)
+end

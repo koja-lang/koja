@@ -36,6 +36,9 @@ pub struct Compiler<'ctx> {
     pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
     pub type_ctx: &'ctx TypeContext,
     pub closure_counter: usize,
+    pub generic_fn_asts: HashMap<String, Function>,
+    pub generic_struct_asts: HashMap<String, expo_ast::ast::StructDecl>,
+    pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -56,6 +59,9 @@ impl<'ctx> Compiler<'ctx> {
             loop_exit_stack: Vec::new(),
             type_ctx,
             closure_counter: 0,
+            generic_fn_asts: HashMap::new(),
+            generic_struct_asts: HashMap::new(),
+            mono_struct_info: HashMap::new(),
         }
     }
 
@@ -95,6 +101,12 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Returns the LLVM struct field index for the given struct and field name.
     pub fn get_field_index(&self, struct_name: &str, field_name: &str) -> Option<u32> {
+        if let Some(fields) = self.mono_struct_info.get(struct_name) {
+            return fields
+                .iter()
+                .position(|(name, _)| name == field_name)
+                .map(|i| i as u32);
+        }
         self.type_ctx.structs.get(struct_name).and_then(|info| {
             info.fields
                 .iter()
@@ -105,6 +117,12 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Returns the Expo type of a struct field.
     pub fn get_field_type(&self, struct_name: &str, field_name: &str) -> Option<Type> {
+        if let Some(fields) = self.mono_struct_info.get(struct_name) {
+            return fields
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, ty)| ty.clone());
+        }
         self.type_ctx.structs.get(struct_name).and_then(|info| {
             info.fields
                 .iter()
@@ -257,6 +275,10 @@ impl<'ctx> Compiler<'ctx> {
         for item in &module.items {
             match item {
                 Item::Function(func) => {
+                    if !func.type_params.is_empty() {
+                        self.generic_fn_asts.insert(func.name.clone(), func.clone());
+                        continue;
+                    }
                     let fn_value = self.declare_function(func, None)?;
                     self.functions.insert(func.name.clone(), fn_value);
                 }
@@ -379,6 +401,9 @@ impl<'ctx> Compiler<'ctx> {
         for item in &module.items {
             match item {
                 Item::Function(func) => {
+                    if !func.type_params.is_empty() {
+                        continue;
+                    }
                     self.define_function(func, None)?;
                 }
                 Item::Impl(impl_block) => {
@@ -397,12 +422,203 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
+    /// Generates a monomorphized (specialized) version of a generic function for
+    /// the given concrete type arguments. Declares the LLVM function, compiles its
+    /// body with type variables substituted, and registers it under the mangled name.
+    pub fn monomorphize_function(&mut self, name: &str, type_args: &[Type]) -> Result<(), String> {
+        let func_ast = self
+            .generic_fn_asts
+            .get(name)
+            .ok_or_else(|| format!("no generic function `{name}` to monomorphize"))?
+            .clone();
+
+        let mangled = expo_typecheck::types::mangle_name(name, type_args);
+        if self.functions.contains_key(&mangled) {
+            return Ok(());
+        }
+
+        let sig = self
+            .type_ctx
+            .functions
+            .get(name)
+            .ok_or_else(|| format!("no signature for generic function `{name}`"))?;
+
+        let mut subst = HashMap::new();
+        for (tp, ta) in sig.type_params.iter().zip(type_args.iter()) {
+            subst.insert(tp.clone(), ta.clone());
+        }
+
+        let return_type = expo_typecheck::types::substitute(&sig.return_type, &subst);
+
+        let param_types: Vec<Type> = sig
+            .params
+            .iter()
+            .map(|p| expo_typecheck::types::substitute(&p.ty, &subst))
+            .collect();
+
+        // Pre-monomorphize any generic struct types used in the signature
+        self.ensure_struct_types_exist(&return_type)?;
+        for pt in &param_types {
+            self.ensure_struct_types_exist(pt)?;
+        }
+
+        let llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = param_types
+            .iter()
+            .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
+            .map(|t| t.into())
+            .collect();
+
+        let fn_type = match to_llvm_type(&return_type, self.context, &self.struct_types) {
+            Some(ret) => ret.fn_type(&llvm_param_types, false),
+            None => self.context.void_type().fn_type(&llvm_param_types, false),
+        };
+
+        let fn_value = self.module.add_function(&mangled, fn_type, None);
+        self.functions.insert(mangled.clone(), fn_value);
+
+        let entry = self.context.append_basic_block(fn_value, "entry");
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_block = self.builder.get_insert_block();
+
+        self.builder.position_at_end(entry);
+
+        for (i, param) in func_ast.params.iter().enumerate() {
+            if let Param::Regular { name: pname, .. } = param {
+                let ty = &param_types[i];
+                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.struct_types) {
+                    let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
+                    let param_val = fn_value.get_nth_param(i as u32).unwrap();
+                    self.builder.build_store(alloca, param_val).unwrap();
+                    self.variables.insert(pname.clone(), (alloca, ty.clone()));
+                }
+            }
+        }
+
+        let body = &func_ast.body;
+        let last_idx = body.len().saturating_sub(1);
+        for (idx, stmt) in body.iter().enumerate() {
+            if idx == last_idx && !matches!(return_type, Type::Unit) {
+                if let expo_ast::ast::Statement::Expr(expr) = stmt {
+                    let val = compile_expr(self, expr, fn_value)?;
+                    if !self.current_block_terminated() {
+                        if let Some(v) = val {
+                            self.builder.build_return(Some(&v)).unwrap();
+                        } else {
+                            self.builder.build_return(None).unwrap();
+                        }
+                    }
+                    continue;
+                }
+            }
+            compile_statement(self, stmt, fn_value)?;
+        }
+
+        if !self.current_block_terminated() {
+            match to_llvm_type(&return_type, self.context, &self.struct_types) {
+                Some(_) => {
+                    self.builder.build_return(None).unwrap();
+                }
+                None => {
+                    self.builder.build_return(None).unwrap();
+                }
+            }
+        }
+
+        self.variables = saved_vars;
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+
+        Ok(())
+    }
+
+    /// Ensures that all struct types referenced by `ty` exist in `struct_types`.
+    /// For mangled generic struct names, triggers monomorphization if needed.
+    fn ensure_struct_types_exist(&mut self, ty: &Type) -> Result<(), String> {
+        match ty {
+            Type::Struct(name) => {
+                if !self.struct_types.contains_key(name) {
+                    if let Some((base, type_args)) = parse_mangled_struct(name, self) {
+                        self.monomorphize_struct(&base, &type_args)?;
+                    }
+                }
+            }
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                for p in params {
+                    self.ensure_struct_types_exist(p)?;
+                }
+                self.ensure_struct_types_exist(return_type)?;
+            }
+            Type::Tuple(elems) => {
+                for e in elems {
+                    self.ensure_struct_types_exist(e)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Generates a monomorphized (specialized) version of a generic struct for
+    /// the given concrete type arguments. Creates the LLVM struct type with
+    /// concrete field types and registers it under the mangled name.
+    pub fn monomorphize_struct(&mut self, name: &str, type_args: &[Type]) -> Result<(), String> {
+        let mangled = expo_typecheck::types::mangle_name(name, type_args);
+        if self.struct_types.contains_key(&mangled) {
+            return Ok(());
+        }
+
+        let info = self
+            .type_ctx
+            .structs
+            .get(name)
+            .ok_or_else(|| format!("no struct info for generic struct `{name}`"))?;
+
+        let mut subst = HashMap::new();
+        for (tp, ta) in info.type_params.iter().zip(type_args.iter()) {
+            subst.insert(tp.clone(), ta.clone());
+        }
+
+        let concrete_fields: Vec<(String, Type)> = info
+            .fields
+            .iter()
+            .map(|(fname, fty)| {
+                (
+                    fname.clone(),
+                    expo_typecheck::types::substitute(fty, &subst),
+                )
+            })
+            .collect();
+
+        let st = self.context.opaque_struct_type(&mangled);
+        let field_llvm_types: Vec<_> = concrete_fields
+            .iter()
+            .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
+            .collect();
+        st.set_body(&field_llvm_types, false);
+        self.struct_types.insert(mangled.clone(), st);
+        self.mono_struct_info.insert(mangled, concrete_fields);
+
+        Ok(())
+    }
+
     /// Translates Expo type-checked structs and enums into LLVM struct types.
     /// Uses a two-pass approach (opaque types first, then bodies) so
     /// cross-referencing types resolve correctly.
     fn register_types(&mut self) {
+        // Store generic struct ASTs for later monomorphization
+        for (name, ast) in &self.type_ctx.generic_struct_asts {
+            self.generic_struct_asts.insert(name.clone(), ast.clone());
+        }
+
         // Pass 1: create opaque types so cross-references resolve
-        for name in self.type_ctx.structs.keys() {
+        for (name, info) in &self.type_ctx.structs {
+            if !info.type_params.is_empty() {
+                continue;
+            }
             let st = self.context.opaque_struct_type(name);
             self.struct_types.insert(name.clone(), st);
         }
@@ -411,8 +627,11 @@ impl<'ctx> Compiler<'ctx> {
             self.struct_types.insert(name.clone(), et);
         }
 
-        // Pass 2: set struct bodies
+        // Pass 2: set struct bodies (skip generic templates)
         for (name, info) in &self.type_ctx.structs {
+            if !info.type_params.is_empty() {
+                continue;
+            }
             let struct_type = *self.struct_types.get(name).unwrap();
             let field_types: Vec<_> = info
                 .fields
@@ -612,4 +831,40 @@ fn type_byte_size(ty: &Type) -> u32 {
         },
         _ => 8,
     }
+}
+
+/// Attempts to recover the base struct name and concrete type args from a mangled
+/// name like `Pair__i32__string`. Returns `None` if the name doesn't match a known
+/// generic struct template.
+fn parse_mangled_struct(mangled: &str, c: &Compiler) -> Option<(String, Vec<Type>)> {
+    if let Some(sep_pos) = mangled.find("__") {
+        let base = &mangled[..sep_pos];
+        if c.generic_struct_asts.contains_key(base)
+            || c.type_ctx.generic_struct_asts.contains_key(base)
+        {
+            let args_str = &mangled[sep_pos + 2..];
+            let parts: Vec<&str> = args_str.split("__").collect();
+            let type_args: Vec<Type> = parts
+                .iter()
+                .map(|s| match *s {
+                    "bool" => Type::Primitive(expo_typecheck::types::Primitive::Bool),
+                    "f32" => Type::Primitive(expo_typecheck::types::Primitive::F32),
+                    "f64" => Type::Primitive(expo_typecheck::types::Primitive::F64),
+                    "i8" => Type::Primitive(expo_typecheck::types::Primitive::I8),
+                    "i16" => Type::Primitive(expo_typecheck::types::Primitive::I16),
+                    "i32" => Type::Primitive(expo_typecheck::types::Primitive::I32),
+                    "i64" => Type::Primitive(expo_typecheck::types::Primitive::I64),
+                    "string" => Type::Primitive(expo_typecheck::types::Primitive::String),
+                    "u8" => Type::Primitive(expo_typecheck::types::Primitive::U8),
+                    "u16" => Type::Primitive(expo_typecheck::types::Primitive::U16),
+                    "u32" => Type::Primitive(expo_typecheck::types::Primitive::U32),
+                    "u64" => Type::Primitive(expo_typecheck::types::Primitive::U64),
+                    "unit" => Type::Unit,
+                    other => Type::Struct(other.to_string()),
+                })
+                .collect();
+            return Some((base.to_string(), type_args));
+        }
+    }
+    None
 }

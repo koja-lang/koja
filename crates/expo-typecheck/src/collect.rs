@@ -8,7 +8,7 @@ use expo_ast::span::Span;
 use crate::context::{
     EnumInfo, FunctionSig, ParamInfo, StructInfo, TypeContext, VariantData, VariantInfo,
 };
-use crate::types::{Type, resolve_type_expr};
+use crate::types::{Type, resolve_type_expr, resolve_type_expr_with_params};
 
 /// Walks all top-level items in a module and builds a [`TypeContext`] containing
 /// function signatures, struct definitions, and enum definitions.
@@ -90,6 +90,9 @@ pub fn collect(module: &Module) -> TypeContext {
             }
             Item::Function(f) => {
                 if let Some(sig) = build_function_sig(f, &struct_names, &enum_names) {
+                    if !f.type_params.is_empty() {
+                        ctx.generic_function_asts.insert(f.name.clone(), f.clone());
+                    }
                     ctx.functions.insert(f.name.clone(), sig);
                 }
             }
@@ -172,23 +175,30 @@ pub fn collect(module: &Module) -> TypeContext {
                 }
             }
             Item::Struct(s) => {
-                if !s.type_params.is_empty() {
-                    continue;
-                }
+                let tp_refs: Vec<&str> = s.type_params.iter().map(|s| s.as_str()).collect();
                 let fields: Vec<(String, Type)> = s
                     .fields
                     .iter()
                     .map(|f| {
-                        let ty = resolve_type_expr(&f.type_expr, &struct_names, &enum_names);
+                        let ty = resolve_type_expr_with_params(
+                            &f.type_expr,
+                            &struct_names,
+                            &enum_names,
+                            &tp_refs,
+                        );
                         (f.name.clone(), ty)
                     })
                     .collect();
+                if !s.type_params.is_empty() {
+                    ctx.generic_struct_asts.insert(s.name.clone(), s.clone());
+                }
                 ctx.structs.insert(
                     s.name.clone(),
                     StructInfo {
                         fields,
                         methods: HashMap::new(),
                         span: s.span,
+                        type_params: s.type_params.clone(),
                     },
                 );
             }
@@ -206,6 +216,7 @@ pub fn collect(module: &Module) -> TypeContext {
             }],
             return_type: Type::Unit,
             span: Span::zero(),
+            type_params: Vec::new(),
         },
     );
 
@@ -318,9 +329,7 @@ fn build_function_sig(
     known_structs: &[&str],
     known_enums: &[&str],
 ) -> Option<FunctionSig> {
-    if !f.type_params.is_empty() {
-        return None;
-    }
+    let tp_refs: Vec<&str> = f.type_params.iter().map(|s| s.as_str()).collect();
 
     let params: Vec<ParamInfo> = f
         .params
@@ -330,7 +339,7 @@ fn build_function_sig(
                 name, type_expr, ..
             } => Some(ParamInfo {
                 name: name.clone(),
-                ty: resolve_type_expr(type_expr, known_structs, known_enums),
+                ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &tp_refs),
             }),
             Param::Self_ { .. } => None,
         })
@@ -339,7 +348,7 @@ fn build_function_sig(
     let return_type = f
         .return_type
         .as_ref()
-        .map(|t| resolve_type_expr(t, known_structs, known_enums))
+        .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &tp_refs))
         .unwrap_or(Type::Unit);
 
     Some(FunctionSig {
@@ -347,6 +356,7 @@ fn build_function_sig(
         params,
         return_type,
         span: f.span,
+        type_params: f.type_params.clone(),
     })
 }
 

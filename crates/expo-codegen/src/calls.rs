@@ -1,10 +1,11 @@
 use expo_ast::ast::Arg;
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Type, mangle_name};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
+use crate::stmt::infer_type_from_llvm;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
 
@@ -83,11 +84,67 @@ pub fn compile_call<'ctx>(
                     .unwrap();
 
                 Ok(call_val.try_as_basic_value().left())
+            } else if c.generic_fn_asts.contains_key(name) {
+                compile_generic_call(c, name, args, function)
             } else {
                 Err(format!("undefined function: {name}"))
             }
         }
     }
+}
+
+fn compile_generic_call<'ctx>(
+    c: &mut Compiler<'ctx>,
+    name: &str,
+    args: &[Arg],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let mut compiled_args = Vec::new();
+    let mut arg_types = Vec::new();
+    for arg in args {
+        let val = compile_expr(c, &arg.value, function)?
+            .ok_or_else(|| format!("argument to {name} produced no value"))?;
+        arg_types.push(infer_type_from_llvm(c, &val));
+        compiled_args.push(val);
+    }
+
+    let sig = c
+        .type_ctx
+        .functions
+        .get(name)
+        .ok_or_else(|| format!("no signature for generic function `{name}`"))?;
+
+    let mut subst = std::collections::HashMap::new();
+    for (param, arg_ty) in sig.params.iter().zip(arg_types.iter()) {
+        expo_typecheck::types::unify(&param.ty, arg_ty, &mut subst);
+    }
+
+    let type_args: Vec<Type> = sig
+        .type_params
+        .iter()
+        .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Unknown))
+        .collect();
+
+    let mangled = mangle_name(name, &type_args);
+
+    if !c.functions.contains_key(&mangled) {
+        c.monomorphize_function(name, &type_args)?;
+    }
+
+    let callee = *c
+        .functions
+        .get(&mangled)
+        .ok_or_else(|| format!("monomorphized function `{mangled}` not found"))?;
+
+    let call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+        compiled_args.iter().map(|v| (*v).into()).collect();
+
+    let result = c
+        .builder
+        .build_call(callee, &call_args, &format!("call_{mangled}"))
+        .unwrap();
+
+    Ok(result.try_as_basic_value().left())
 }
 
 fn compile_call_as_struct<'ctx>(

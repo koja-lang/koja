@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
-use crate::context::{ParamInfo, TypeContext, VariantData};
+use crate::context::{FunctionSig, ParamInfo, TypeContext, VariantData};
 use crate::types::{Primitive, Type, resolve_type_expr};
 
 /// Per-function environment used during type checking, tracking local variable
@@ -683,7 +683,10 @@ fn infer_call(
     ce: &mut CheckEnv,
 ) -> Type {
     if let Expr::Ident { name, .. } = callee {
-        if let Some(sig) = ctx.functions.get(name) {
+        if let Some(sig) = ctx.functions.get(name).cloned() {
+            if !sig.type_params.is_empty() {
+                return infer_generic_call(name, &sig, args, span, ctx, ce);
+            }
             let return_type = sig.return_type.clone();
             let params = sig.params.clone();
             check_call_args(name, &params, args, "", span, ctx, ce);
@@ -710,6 +713,61 @@ fn infer_call(
         }
         Type::Unknown
     }
+}
+
+fn infer_generic_call(
+    name: &str,
+    sig: &FunctionSig,
+    args: &[Arg],
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    use crate::types::{substitute, unify};
+
+    if sig.params.len() != args.len() {
+        ctx.error(
+            format!(
+                "`{name}` expects {} argument(s), got {}",
+                sig.params.len(),
+                args.len()
+            ),
+            span,
+        );
+        for arg in args {
+            infer_expr(&arg.value, ctx, ce);
+        }
+        return Type::Error;
+    }
+
+    let mut subst = std::collections::HashMap::new();
+    for (i, arg) in args.iter().enumerate() {
+        let arg_ty = infer_expr(&arg.value, ctx, ce);
+        let param_ty = &sig.params[i].ty;
+        if arg_ty.is_known() && !unify(param_ty, &arg_ty, &mut subst) {
+            ctx.error(
+                format!(
+                    "argument `{}`: type `{}` conflicts with previous binding for type parameter",
+                    sig.params[i].name,
+                    arg_ty.display(),
+                ),
+                arg.span,
+            );
+            return Type::Error;
+        }
+    }
+
+    for tp in &sig.type_params {
+        if !subst.contains_key(tp) {
+            ctx.error(
+                format!("cannot infer type parameter `{tp}` for `{name}`"),
+                span,
+            );
+            return Type::Error;
+        }
+    }
+
+    substitute(&sig.return_type, &subst)
 }
 
 /// Type-checks an enum variant construction, validating variant existence and data shape.

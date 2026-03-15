@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use expo_ast::ast::{Diagnostic, Severity};
+use expo_ast::ast::{Diagnostic, Function, Severity, StructDecl};
 use expo_ast::span::Span;
 
 use crate::types::Type;
@@ -11,6 +11,8 @@ pub struct TypeContext {
     pub diagnostics: Vec<Diagnostic>,
     pub enums: HashMap<String, EnumInfo>,
     pub functions: HashMap<String, FunctionSig>,
+    pub generic_function_asts: HashMap<String, Function>,
+    pub generic_struct_asts: HashMap<String, StructDecl>,
     pub imported_modules: HashMap<String, TypeContext>,
     pub structs: HashMap<String, StructInfo>,
 }
@@ -32,6 +34,7 @@ pub struct FunctionSig {
     pub return_type: Type,
     #[allow(dead_code)]
     pub span: Span,
+    pub type_params: Vec<String>,
 }
 
 /// A single parameter's name and resolved type.
@@ -48,6 +51,7 @@ pub struct StructInfo {
     pub methods: HashMap<String, FunctionSig>,
     #[allow(dead_code)]
     pub span: Span,
+    pub type_params: Vec<String>,
 }
 
 /// A single variant within an enum.
@@ -99,6 +103,8 @@ impl TypeContext {
             diagnostics: Vec::new(),
             enums: HashMap::new(),
             functions: HashMap::new(),
+            generic_function_asts: HashMap::new(),
+            generic_struct_asts: HashMap::new(),
             imported_modules: HashMap::new(),
             structs: HashMap::new(),
         }

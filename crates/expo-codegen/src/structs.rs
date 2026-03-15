@@ -159,6 +159,19 @@ pub fn compile_struct_construction<'ctx>(
         .first()
         .ok_or("empty type path in struct construction")?;
 
+    // For generic structs, compile field values first, infer type args, and monomorphize
+    if let Some(info) = c.type_ctx.structs.get(struct_name) {
+        if !info.type_params.is_empty() {
+            return compile_generic_struct_construction(
+                c,
+                struct_name,
+                info.clone(),
+                fields,
+                function,
+            );
+        }
+    }
+
     let struct_type = *c
         .struct_types
         .get(struct_name)
@@ -201,6 +214,69 @@ pub fn compile_struct_construction<'ctx>(
         .builder
         .build_load(struct_type, alloca, struct_name)
         .unwrap();
+    Ok(Some(struct_val))
+}
+
+fn compile_generic_struct_construction<'ctx>(
+    c: &mut Compiler<'ctx>,
+    struct_name: &str,
+    info: expo_typecheck::context::StructInfo,
+    fields: &[expo_ast::ast::FieldInit],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    use crate::stmt::infer_type_from_llvm;
+
+    let mut compiled_fields: Vec<(String, BasicValueEnum<'ctx>)> = Vec::new();
+    for field_init in fields {
+        let val = compile_expr(c, &field_init.value, function)?
+            .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
+        compiled_fields.push((field_init.name.clone(), val));
+    }
+
+    let mut subst = std::collections::HashMap::new();
+    for (field_init_name, field_val) in &compiled_fields {
+        if let Some((_, field_ty)) = info.fields.iter().find(|(n, _)| n == field_init_name) {
+            let concrete = infer_type_from_llvm(c, field_val);
+            expo_typecheck::types::unify(field_ty, &concrete, &mut subst);
+        }
+    }
+
+    let type_args: Vec<expo_typecheck::types::Type> = info
+        .type_params
+        .iter()
+        .map(|tp| {
+            subst
+                .get(tp)
+                .cloned()
+                .unwrap_or(expo_typecheck::types::Type::Unknown)
+        })
+        .collect();
+
+    let mangled = expo_typecheck::types::mangle_name(struct_name, &type_args);
+
+    if !c.struct_types.contains_key(&mangled) {
+        c.monomorphize_struct(struct_name, &type_args)?;
+    }
+
+    let struct_type = *c
+        .struct_types
+        .get(&mangled)
+        .ok_or_else(|| format!("monomorphized struct `{mangled}` not found"))?;
+
+    let alloca = c
+        .builder
+        .build_alloca(struct_type, &format!("{mangled}_tmp"))
+        .unwrap();
+
+    for (idx, (field_name, field_val)) in compiled_fields.iter().enumerate() {
+        let field_ptr = c
+            .builder
+            .build_struct_gep(struct_type, alloca, idx as u32, field_name)
+            .unwrap();
+        c.builder.build_store(field_ptr, *field_val).unwrap();
+    }
+
+    let struct_val = c.builder.build_load(struct_type, alloca, &mangled).unwrap();
     Ok(Some(struct_val))
 }
 

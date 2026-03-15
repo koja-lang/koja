@@ -20,6 +20,7 @@ pub struct DocModule {
 #[derive(Debug)]
 pub struct DocFunction {
     pub name: String,
+    pub type_params: Vec<String>,
     pub params: Vec<DocParam>,
     pub return_type: Option<String>,
     pub doc: Option<String>,
@@ -36,6 +37,7 @@ pub struct DocParam {
 #[derive(Debug)]
 pub struct DocStruct {
     pub name: String,
+    pub type_params: Vec<String>,
     pub fields: Vec<DocField>,
     pub doc: Option<String>,
     pub functions: Vec<DocFunction>,
@@ -171,6 +173,7 @@ fn extract_function(f: &Function) -> Option<DocFunction> {
 
     Some(DocFunction {
         name: f.name.clone(),
+        type_params: f.type_params.clone(),
         params,
         return_type: f.return_type.as_ref().map(type_expr_to_string),
         doc: annotation_string(&f.annotation),
@@ -193,6 +196,7 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
 
     Some(DocStruct {
         name: s.name.clone(),
+        type_params: s.type_params.clone(),
         fields,
         doc: annotation_string(&s.annotation),
         functions: Vec::new(),

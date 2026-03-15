@@ -229,7 +229,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
 
 /// Reconstructs an Expo type from an LLVM value by inspecting bit widths and
 /// struct names. Used when assigning to a new variable without a type annotation.
-fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) -> Type {
+pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) -> Type {
     use expo_typecheck::types::Primitive;
 
     if val.is_int_value() {
@@ -251,7 +251,9 @@ fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) ->
         if let Some(name) = st.get_name()
             && let Ok(name_str) = name.to_str()
         {
-            if c.type_ctx.structs.contains_key(name_str) {
+            if c.type_ctx.structs.contains_key(name_str)
+                || c.mono_struct_info.contains_key(name_str)
+            {
                 return Type::Struct(name_str.to_string());
             }
             if c.type_ctx.enums.contains_key(name_str) {

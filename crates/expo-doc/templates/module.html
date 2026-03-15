@@ -35,7 +35,7 @@
   {% for s in structs %}
   <div class="detail" id="struct-{{ s.name }}">
     <div class="detail-signature">
-      <a class="anchor" href="#struct-{{ s.name }}">#</a>struct {{ s.name }}
+      <a class="anchor" href="#struct-{{ s.name }}">#</a>struct {{ s.name }}{% if !s.type_params.is_empty() %}&lt;{{ s.type_params.join(", ") }}&gt;{% endif %}
     </div>
 
     {% if let Some(doc) = s.doc %}
