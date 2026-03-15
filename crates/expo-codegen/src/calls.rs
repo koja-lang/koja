@@ -27,7 +27,7 @@ pub fn compile_call<'ctx>(
 
     match name {
         "print" => compile_print(c, args, function),
-        "print_i32" | "print_i64" | "print_bool" | "print_f64" | "print_string" => {
+        "print_Int32" | "print_Int" | "print_Bool" | "print_Float" | "print_String" => {
             compile_print_builtin(c, name, args, function)
         }
         _ => {
@@ -239,7 +239,7 @@ fn compile_print_builtin<'ctx>(
 
     let printf = *c.functions.get("printf").ok_or("printf not declared")?;
 
-    if name == "print_bool" {
+    if name == "print_Bool" {
         let str_ptr = crate::util::bool_to_string_ptr(c, val.into_int_value());
         let fmt = c
             .builder
@@ -256,10 +256,10 @@ fn compile_print_builtin<'ctx>(
     }
 
     let fmt_str = match name {
-        "print_i32" => "%d\n",
-        "print_i64" => "%lld\n",
-        "print_f64" => "%f\n",
-        "print_string" => "%s\n",
+        "print_Int32" => "%d\n",
+        "print_Int" => "%lld\n",
+        "print_Float" => "%f\n",
+        "print_String" => "%s\n",
         _ => return Err(format!("unknown print builtin: {name}")),
     };
 

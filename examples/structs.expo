@@ -1,10 +1,10 @@
 struct Point
-  x: i32
-  y: i32
+  x: Int32
+  y: Int32
 end
 
 impl Point
-  fn distance_squared(self) -> i32
+  fn distance_squared(self) -> Int32
     self.x * self.x + self.y * self.y
   end
 end

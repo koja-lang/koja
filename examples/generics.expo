@@ -65,7 +65,7 @@ fn main
   y = Option.Some("hello")
   print(unwrap_or(y, "default"))
 
-  z: Option<i32> = Option.None
+  z: Option<Int32> = Option.None
   print(unwrap_or(z, 99))
 
   # Test generic impl method on enum

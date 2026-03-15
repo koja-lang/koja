@@ -20,7 +20,7 @@ fn opposite(dir: Direction) -> Direction
   end
 end
 
-fn describe(value: i32) -> string
+fn describe(value: Int32) -> String
   cond
     value > 100 -> "big"
     value > 10 -> "medium"

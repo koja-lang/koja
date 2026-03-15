@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Generics -- generic functions (`fn identity<T>(x: T) -> T`), generic structs (`struct Pair<A, B>`), and generic enums (`enum Option<T>`) now compile to native code via monomorphization. Type arguments are inferred at call sites.
-- Variable type annotations -- `x: i32 = 42`, `z: Option<i32> = Option.None`. Annotations are optional and support all types including generics. Enables explicit typing for generic enum unit variants where the type can't be inferred.
+- Variable type annotations -- `x: Int32 = 42`, `z: Option<Int32> = Option.None`. Annotations are optional and support all types including generics. Enables explicit typing for generic enum unit variants where the type can't be inferred.
 
 ### Changed
 
-- Numeric literals coerce to any same-category type annotation (`x: u8 = 4`, `y: i64 = 10`, `f: f32 = 3.14`). Cross-category assignments (int to float or vice versa) remain errors.
+- **Breaking**: All primitive types renamed to PascalCase. `i32` -> `Int32`, `i64` -> `Int`, `f32` -> `Float32`, `f64` -> `Float`, `bool` -> `Bool`, `string` -> `String`. Unsigned types: `u8` -> `UInt8`, `u16` -> `UInt16`, `u32` -> `UInt32`, `u64` -> `UInt64`. Primitives and user-defined types are now visually uniform.
+- **Breaking**: `ref<T>` syntax changed to `ref T` (no angle brackets). `ref` is now a keyword modifier like `const`, `priv`, and `move`.
+- Numeric literals coerce to any same-category type annotation (`x: UInt8 = 4`, `y: Int = 10`, `f: Float32 = 3.14`). Cross-category assignments (int to float or vice versa) remain errors.
 
 ### Fixed
 
@@ -24,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Non-capturing block closures -- `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax with required parens and explicit types. Closures compile to function pointers and can be called through variables.
+- Non-capturing block closures -- `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax with required parens and explicit types. Closures compile to function pointers and can be called through variables.
 - `Type::Function` in the type system -- closures are typed as `(params) -> return_type`.
 - Pipe operator (`|>`) -- desugars `a |> f(b)` to `f(a, b)`. Formatter keeps short chains on one line, breaks with consistent indentation when long.
 - `const` keyword for module-level constants (`const MAX_SIZE = 100`). Constants are compile-time inlined literal values (int, float, string, bool). Replaces the previous `SCREAMING_SNAKE` naming convention with an explicit keyword. Fully wired through type checker and codegen.
@@ -78,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Primitive types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`.
+- Primitive types: `Int`, `Int32`, `Float`, `Float32`, `Bool`, `String` (and sized integer types).
 - Functions with typed parameters and return types.
 - Type inference for local variables.
 - Structs with named fields.

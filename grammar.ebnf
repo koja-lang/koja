@@ -102,7 +102,7 @@ param = [ "move" ] , IDENT , ":" , type_expr , [ "=" , expr ]
 (* 6. Type expressions                                                        *)
 (* ========================================================================== *)
 
-type_expr = "ref" , "<" , type_expr , ">"                            (* reference *)
+type_expr = "ref" , type_expr                                        (* reference *)
           | named_type , "<" , type_expr , { "," , type_expr } , ">"  (* generic *)
           | named_type                                               (* simple *)
           | "(" , type_expr , "," , type_expr , { "," , type_expr } , ")"  (* tuple *)
@@ -110,9 +110,9 @@ type_expr = "ref" , "<" , type_expr , ">"                            (* referenc
 
 named_type = TYPE_IDENT , { "." , TYPE_IDENT } ;
 
-(* Primitive types are just named types: u8, u16, u32, u64, i8, i16, i32, i64,
-   f32, f64, bool, string, bytes. Option, Result, Vec, HashMap are generic
-   named types. No special grammar rules needed. *)
+(* Primitive types are just named types: UInt8, UInt16, UInt32, UInt64, Int8,
+   Int16, Int32, Int, Float32, Float, Bool, String. Option, Result, Vec,
+   HashMap are generic named types. No special grammar rules needed. *)
 
 
 (* ========================================================================== *)

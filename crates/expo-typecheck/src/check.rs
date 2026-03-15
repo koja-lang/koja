@@ -553,7 +553,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
                                 "negation requires numeric type, found `{}`",
                                 operand_ty.display()
                             ),
-                            "expected i32, i64, f32, or f64".into(),
+                            "expected Int, Int32, Float, or Float32".into(),
                             *span,
                         );
                         Type::Error
@@ -663,7 +663,7 @@ fn infer_binary(
                         "arithmetic requires numeric type, found `{}`",
                         left_ty.display()
                     ),
-                    "expected i32, i64, f32, or f64".into(),
+                    "expected Int, Int32, Float, or Float32".into(),
                     span,
                 );
                 return Type::Error;

@@ -1302,9 +1302,7 @@ fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
                 text(">"),
             ])
         }
-        TypeExpr::Ref { inner, .. } => {
-            concat(vec![text("ref<"), type_expr_to_doc(inner), text(">")])
-        }
+        TypeExpr::Ref { inner, .. } => concat(vec![text("ref "), type_expr_to_doc(inner)]),
         TypeExpr::Tuple { elements, .. } => {
             let elems: Vec<Doc> = elements.iter().map(type_expr_to_doc).collect();
             concat(vec![text("("), intersperse(elems, text(", ")), text(")")])
@@ -1585,7 +1583,7 @@ fn type_expr_text_len(ty: &TypeExpr) -> usize {
                 + args.len().saturating_sub(1) * 2;
             path_len + 1 + args_len + 1
         }
-        TypeExpr::Ref { inner, .. } => 4 + type_expr_text_len(inner) + 1,
+        TypeExpr::Ref { inner, .. } => 4 + type_expr_text_len(inner),
         TypeExpr::Tuple { elements, .. } => {
             let inner: usize = elements.iter().map(type_expr_text_len).sum::<usize>()
                 + elements.len().saturating_sub(1) * 2;

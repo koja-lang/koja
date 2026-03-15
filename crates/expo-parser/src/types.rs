@@ -9,7 +9,7 @@ impl Parser {
             TokenKind::Ref => self.parse_ref_type(),
             TokenKind::LParen => self.parse_paren_type(),
             TokenKind::TypeIdent(_) => self.parse_named_type(),
-            TokenKind::Ident(ref name) if is_primitive(name) => self.parse_primitive_type(),
+            TokenKind::Ident(ref name) if is_legacy_primitive(name) => self.parse_primitive_type(),
             TokenKind::Ident(_) if self.is_module_type_path() => self.parse_module_qualified_type(),
             _ => {
                 let span = self.current_span();
@@ -34,9 +34,7 @@ impl Parser {
     fn parse_ref_type(&mut self) -> TypeExpr {
         let start = self.current_span();
         self.advance(); // ref
-        self.expect(&TokenKind::Lt);
         let inner = self.parse_type_expr();
-        self.expect(&TokenKind::Gt);
         TypeExpr::Ref {
             inner: Box::new(inner),
             span: self.span_from(start),
@@ -152,7 +150,10 @@ impl Parser {
     }
 }
 
-fn is_primitive(name: &str) -> bool {
+/// Recognizes old lowercase primitive names for backward compatibility during
+/// the transition period. New code should use PascalCase (Int, String, Bool, etc.)
+/// which lex as TypeIdent and flow through parse_named_type automatically.
+fn is_legacy_primitive(name: &str) -> bool {
     matches!(
         name,
         "bool"

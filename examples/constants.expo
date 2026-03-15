@@ -3,7 +3,7 @@ const PI = 3.14159
 const GREETING = "hello"
 const DEBUG = false
 
-fn circumference(radius: f64) -> f64
+fn circumference(radius: Float) -> Float
   2.0 * PI * radius
 end
 

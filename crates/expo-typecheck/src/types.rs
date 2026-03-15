@@ -111,18 +111,18 @@ impl Primitive {
     /// Returns the Expo source-level name of this primitive type.
     pub fn display(&self) -> &'static str {
         match self {
-            Primitive::Bool => "bool",
-            Primitive::F32 => "f32",
-            Primitive::F64 => "f64",
-            Primitive::I8 => "i8",
-            Primitive::I16 => "i16",
-            Primitive::I32 => "i32",
-            Primitive::I64 => "i64",
-            Primitive::String => "string",
-            Primitive::U8 => "u8",
-            Primitive::U16 => "u16",
-            Primitive::U32 => "u32",
-            Primitive::U64 => "u64",
+            Primitive::Bool => "Bool",
+            Primitive::F32 => "Float32",
+            Primitive::F64 => "Float",
+            Primitive::I8 => "Int8",
+            Primitive::I16 => "Int16",
+            Primitive::I32 => "Int32",
+            Primitive::I64 => "Int",
+            Primitive::String => "String",
+            Primitive::U8 => "UInt8",
+            Primitive::U16 => "UInt16",
+            Primitive::U32 => "UInt32",
+            Primitive::U64 => "UInt64",
         }
     }
 
@@ -147,18 +147,18 @@ impl Primitive {
     /// Parses a primitive type name string back into a [`Primitive`].
     pub fn from_name(s: &str) -> Option<Primitive> {
         match s {
-            "bool" => Some(Primitive::Bool),
-            "f32" => Some(Primitive::F32),
-            "f64" => Some(Primitive::F64),
-            "i8" => Some(Primitive::I8),
-            "i16" => Some(Primitive::I16),
-            "i32" => Some(Primitive::I32),
-            "i64" => Some(Primitive::I64),
-            "string" => Some(Primitive::String),
-            "u8" => Some(Primitive::U8),
-            "u16" => Some(Primitive::U16),
-            "u32" => Some(Primitive::U32),
-            "u64" => Some(Primitive::U64),
+            "Bool" => Some(Primitive::Bool),
+            "Float32" => Some(Primitive::F32),
+            "Float" => Some(Primitive::F64),
+            "Int8" => Some(Primitive::I8),
+            "Int16" => Some(Primitive::I16),
+            "Int32" => Some(Primitive::I32),
+            "Int" => Some(Primitive::I64),
+            "String" => Some(Primitive::String),
+            "UInt8" => Some(Primitive::U8),
+            "UInt16" => Some(Primitive::U16),
+            "UInt32" => Some(Primitive::U32),
+            "UInt64" => Some(Primitive::U64),
             _ => None,
         }
     }
@@ -221,18 +221,18 @@ pub fn resolve_type_expr_with_params(
                     return Type::TypeVar(name.to_string());
                 }
                 match name {
-                    "string" => Type::Primitive(Primitive::String),
-                    "bool" => Type::Primitive(Primitive::Bool),
-                    "f32" => Type::Primitive(Primitive::F32),
-                    "f64" => Type::Primitive(Primitive::F64),
-                    "i8" => Type::Primitive(Primitive::I8),
-                    "i16" => Type::Primitive(Primitive::I16),
-                    "i32" => Type::Primitive(Primitive::I32),
-                    "i64" => Type::Primitive(Primitive::I64),
-                    "u8" => Type::Primitive(Primitive::U8),
-                    "u16" => Type::Primitive(Primitive::U16),
-                    "u32" => Type::Primitive(Primitive::U32),
-                    "u64" => Type::Primitive(Primitive::U64),
+                    "String" => Type::Primitive(Primitive::String),
+                    "Bool" => Type::Primitive(Primitive::Bool),
+                    "Float32" => Type::Primitive(Primitive::F32),
+                    "Float" => Type::Primitive(Primitive::F64),
+                    "Int8" => Type::Primitive(Primitive::I8),
+                    "Int16" => Type::Primitive(Primitive::I16),
+                    "Int32" => Type::Primitive(Primitive::I32),
+                    "Int" => Type::Primitive(Primitive::I64),
+                    "UInt8" => Type::Primitive(Primitive::U8),
+                    "UInt16" => Type::Primitive(Primitive::U16),
+                    "UInt32" => Type::Primitive(Primitive::U32),
+                    "UInt64" => Type::Primitive(Primitive::U64),
                     name => {
                         if known_structs.contains(&name) {
                             Type::Struct(name.to_string())

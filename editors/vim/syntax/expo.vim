@@ -24,7 +24,7 @@ syn match expoAnnotation    /@\w\+/
 
 " --- Types (PascalCase identifiers) -----------------------------------------
 
-syn keyword expoPrimitiveType bool f32 f64 i8 i16 i32 i64 string u8 u16 u32 u64
+syn keyword expoPrimitiveType Bool Float32 Float Int8 Int16 Int32 Int String UInt8 UInt16 UInt32 UInt64
 syn match expoType          /\<[A-Z][A-Za-z0-9]*\>/
 
 " --- Constants (ALL_CAPS identifiers) ---------------------------------------

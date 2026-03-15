@@ -35,8 +35,8 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Generic functions with monomorphization
 - Generic structs with monomorphization
 - Generic enums with monomorphization
-- Variable type annotations (`x: i32 = 42`, `z: Option<i32> = Option.None`)
-- Numeric type coercion for annotated variables (`x: u8 = 4` casts at compile time)
+- Variable type annotations (`x: Int32 = 42`, `z: Option<Int32> = Option.None`)
+- Numeric type coercion for annotated variables (`x: UInt8 = 4` casts at compile time)
 - `if`/`else`
 - `while`
 - `loop` and `break`
@@ -49,7 +49,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - String interpolation
 - Closures (non-capturing, block form)
 - `print` builtin
-- Primitives: `i32`, `i64`, `f32`, `f64`, `bool`, `string`
+- Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 
 ### Parsed and type-checked but NOT yet in codegen
 
@@ -57,7 +57,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `arena` blocks
 - `await`/`receive`/`spawn`
 - Try operator (`?`)
-- `ref<T>`
+- `ref T`
 - Lists
 - Methods on generic types, trait bounds
 
@@ -67,14 +67,16 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
 - **Closures (Phase 1)**: Block closures only with explicit types and parens: `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax. Inline closures (`x -> expr`) are parsed but not compiled -- they land in Phase 2 with type inference and generics.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
-- **Planned: PascalCase primitives and type simplification**: Primitives will be renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. This makes user-defined types (`Pair`, `User`) and language types (`Int`, `String`) visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction. Rename should happen before `Option<T>`/`Result<T,E>`/`Pair<A,B>` land in the stdlib.
+- **PascalCase primitives and type simplification** (done): Primitives renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. User-defined types (`Pair`, `User`) and language types (`Int`, `String`) are now visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction.
+- **`ref T` syntax** (done): Reference types use `ref T` (space, no angle brackets) instead of `ref<T>`. `ref` is a lowercase keyword modifier, consistent with the modifier pattern (`const`, `priv`, `move`, `ref`): lowercase keywords modify the thing that follows them, PascalCase names are always types.
+- **Planned: Byte/bitstring literals**: Erlang-style `<<>>` binary syntax for binary protocol work, crypto, and low-level data manipulation. Design TBD.
 - **Planned: Irrefutable struct destructuring**: `Config{name, port} = load_config()` as syntactic sugar for pulling struct fields into local variables. Compile-time verified exhaustive -- only works for structs (single shape), not enums. Enum destructuring uses `match`.
 
 ### Known gaps
 
 - **Generics**: impl blocks on generic types not monomorphized (blocks methods like `Pair<A,B>.first()`) -- in progress
-- **Generic enum unit variants**: `Option.None` cannot infer `T` without usage context -- workaround: variable type annotations (`z: Option<i32> = Option.None`)
-- **Type checker**: `ref<T>` unresolved (Phase 2)
+- **Generic enum unit variants**: `Option.None` cannot infer `T` without usage context -- workaround: variable type annotations (`z: Option<Int32> = Option.None`)
+- **Type checker**: `ref T` unresolved (Phase 2)
 - **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
 
 ### Design artifacts
@@ -120,7 +122,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 - ~~Import conflict detection, qualified imports (`math.add()`)~~
 - ~~**Deliverable**: `expo check file.expo` reports type errors with clear messages~~
 
-Remaining work (generics, `ref<T>`, trait impls) is Phase 2 scope.
+Remaining work (generics, `ref T`, trait impls) is Phase 2 scope.
 
 ### Month 3 -- LLVM codegen (complete)
 
@@ -148,7 +150,7 @@ Remaining work (inline closures, for loops, try `?`, closure capture analysis) i
 
 Make the compiler powerful enough to compile non-trivial programs with Expo's generics, ownership model, and structured concurrency.
 
-**Note**: The parser and AST already handle all Phase 2 constructs (for, closures, arena, spawn/await, generics). The work here is wiring up type checking and codegen, not design or parsing. Generics are the gate to Phase 2 -- `Option<T>`, `Result<T,E>`, collections, `Pair<A,B>`, try (`?`), and `ref<T>` all depend on them.
+**Note**: The parser and AST already handle all Phase 2 constructs (for, closures, arena, spawn/await, generics). The work here is wiring up type checking and codegen, not design or parsing. Generics are the gate to Phase 2 -- `Option<T>`, `Result<T,E>`, collections, `Pair<A,B>`, try (`?`), and `ref T` all depend on them.
 
 **Implementation order**: Generics first (the shared gate -- unlocks everything). After generics, two independent tracks can proceed in parallel:
 
@@ -164,8 +166,8 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - ~~Type variable unification across call sites~~
 - ~~Generic structs and functions~~
 - ~~Generic enums (required for `Option<T>` and `Result<T,E>`)~~
-- ~~Variable type annotations (`x: i32 = 42`, `z: Option<i32> = Option.None`) -- unblocks generic enum unit variants and general type safety~~
-- ~~Numeric type coercion for annotated variables (same-category casting: `x: u8 = 4`)~~
+- ~~Variable type annotations (`x: Int32 = 42`, `z: Option<Int32> = Option.None`) -- unblocks generic enum unit variants and general type safety~~
+- ~~Numeric type coercion for annotated variables (same-category casting: `x: UInt8 = 4`)~~
 - Monomorphization of impl blocks on generic types (required for methods like `.first()`, `.map()`) -- **in progress**
 - `Option<T>` and `Result<T,E>` as built-in enum types with `Some`/`None`/`Ok`/`Err`
 - `Pair<A, B>` stdlib struct (with `.first` / `.second`)
@@ -178,12 +180,12 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - Borrow-by-default: function parameters are read-only borrows unless marked `move`
 - Borrows are always read-only -- no `&mut T`, ever (see `MEMORY.md`)
 - `move` keyword on parameters for explicit ownership transfer
-- `ref<T>` syntax for reference types in return positions and generics
+- `ref T` syntax for reference types in return positions and generics
 - For loops iterate by reference by default (no annotation needed)
 - No lifetime annotations -- borrows are scoped to the function call
 - Implement `clone()` as the explicit escape hatch
 - Drop insertion at scope boundaries (deterministic destruction)
-- The `&` symbol does not exist in Expo -- borrowing is implicit, references use `ref<T>`
+- The `&` symbol does not exist in Expo -- borrowing is implicit, references use `ref T`
 - **Done when**: programs that move, borrow, and clone compile correctly, and use-after-move is caught
 
 ### Collections, closures, and iteration
@@ -533,6 +535,7 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Tooling   | Documentation generator (`expo doc`) -- HTML output, sidebar nav, brand theme            | Done   |
 | Core      | Generics -- monomorphization of generic functions and structs, type unification          | Done   |
 | Core      | Generic enums, variable type annotations, numeric type coercion                          | Done   |
+| Core      | PascalCase primitive rename (`Int`, `String`, `Bool`, etc.), `ref T` syntax              | Done   |
 
 ### Remaining
 
