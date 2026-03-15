@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Generics -- generic functions (`fn identity<T>(x: T) -> T`) and generic structs (`struct Pair<A, B>`) now compile to native code via monomorphization. Type arguments are inferred at call sites.
+- Generics -- generic functions (`fn identity<T>(x: T) -> T`), generic structs (`struct Pair<A, B>`), and generic enums (`enum Option<T>`) now compile to native code via monomorphization. Type arguments are inferred at call sites.
+- Variable type annotations -- `x: i32 = 42`, `z: Option<i32> = Option.None`. Annotations are optional and support all types including generics. Enables explicit typing for generic enum unit variants where the type can't be inferred.
+
+### Changed
+
+- Numeric literals coerce to any same-category type annotation (`x: u8 = 4`, `y: i64 = 10`, `f: f32 = 3.14`). Cross-category assignments (int to float or vice versa) remain errors.
 
 ### Fixed
 

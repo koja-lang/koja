@@ -126,6 +126,24 @@ impl Primitive {
         }
     }
 
+    pub fn is_integer(&self) -> bool {
+        matches!(
+            self,
+            Primitive::I8
+                | Primitive::I16
+                | Primitive::I32
+                | Primitive::I64
+                | Primitive::U8
+                | Primitive::U16
+                | Primitive::U32
+                | Primitive::U64
+        )
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Primitive::F32 | Primitive::F64)
+    }
+
     /// Parses a primitive type name string back into a [`Primitive`].
     pub fn from_name(s: &str) -> Option<Primitive> {
         match s {
@@ -181,24 +199,15 @@ pub fn resolve_type_expr_with_params(
                         )
                     })
                     .collect();
-                let has_type_vars = resolved_args.iter().any(contains_type_var);
                 let kind = if known_structs.contains(&path[0].as_str()) {
                     GenericKind::Struct
                 } else {
                     GenericKind::Enum
                 };
-                if has_type_vars {
-                    Type::GenericInstance {
-                        base: path[0].clone(),
-                        kind,
-                        type_args: resolved_args,
-                    }
-                } else {
-                    let mangled = mangle_name(&path[0], &resolved_args);
-                    match kind {
-                        GenericKind::Struct => Type::Struct(mangled),
-                        GenericKind::Enum => Type::Enum(mangled),
-                    }
+                Type::GenericInstance {
+                    base: path[0].clone(),
+                    kind,
+                    type_args: resolved_args,
                 }
             } else {
                 Type::Unknown

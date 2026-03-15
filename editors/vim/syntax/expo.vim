@@ -50,6 +50,11 @@ syn region expoInterpolation matchgroup=expoInterpDelim start=/#{/ end=/}/ conta
 syn match expoModulePath      /\(\<import\s\+\)\@<=\l\w*\(\.\l\w*\)*/
 syn match expoModuleQualifier /\<\l\w*\ze\.\l\w*\s*(/
 
+" --- Typed assignments (x: Type = value) ------------------------------------
+
+syn match expoTypeSep         /:/ contained
+syn match expoTypedAssign     /\<\l\w*\s*:/ contains=expoTypeSep
+
 " --- Operators --------------------------------------------------------------
 
 syn match expoOperator      /|>/
@@ -84,6 +89,7 @@ hi def link expoInterpDelim   Special
 hi def link expoModulePath     Include
 hi def link expoModuleQualifier Include
 hi def link expoOperator      Operator
+hi def link expoTypeSep       Operator
 hi def link expoAnnotation    PreProc
 hi def link expoComment       Comment
 hi def link expoTodo          Todo

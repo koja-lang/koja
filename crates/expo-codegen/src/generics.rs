@@ -297,7 +297,7 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Ensures that all concrete types referenced by `ty` have been registered.
     /// For mangled generic names, triggers monomorphization if needed.
-    fn ensure_types_exist(&mut self, ty: &Type) -> Result<(), String> {
+    pub(crate) fn ensure_types_exist(&mut self, ty: &Type) -> Result<(), String> {
         match ty {
             Type::Struct(name) => {
                 if !self.struct_types.contains_key(name)

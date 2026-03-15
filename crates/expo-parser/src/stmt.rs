@@ -55,6 +55,29 @@ impl Parser {
         let start_span = expr_span(&expr);
 
         match self.peek() {
+            TokenKind::Colon if matches!(&expr, Expr::Ident { .. }) => {
+                self.advance();
+                let type_annotation = self.parse_type_expr();
+                self.expect(&TokenKind::Eq);
+                let value = self.parse_expr();
+                let span = self.span_from(start_span);
+
+                let name = if let Expr::Ident { name, .. } = &expr {
+                    name.clone()
+                } else {
+                    unreachable!()
+                };
+
+                Statement::Assignment {
+                    target: AssignTarget::LValue(LValue {
+                        segments: vec![name],
+                        span: start_span,
+                    }),
+                    type_annotation: Some(type_annotation),
+                    value,
+                    span,
+                }
+            }
             TokenKind::Eq => {
                 self.advance();
                 let value = self.parse_expr();
@@ -78,6 +101,7 @@ impl Parser {
 
                 Statement::Assignment {
                     target,
+                    type_annotation: None,
                     value,
                     span,
                 }

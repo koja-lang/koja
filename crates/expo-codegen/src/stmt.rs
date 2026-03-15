@@ -2,7 +2,7 @@
 //! return, break, and expression statements.
 
 use expo_ast::ast::{AssignTarget, ClosureParam, Expr, Statement};
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
@@ -22,21 +22,36 @@ pub fn compile_statement<'ctx>(
             Ok(None)
         }
 
-        Statement::Assignment { target, value, .. } => {
-            let val =
+        Statement::Assignment {
+            target,
+            type_annotation,
+            value,
+            ..
+        } => {
+            let raw_val =
                 compile_expr(c, value, function)?.ok_or("assignment value produced no value")?;
 
-            let ty =
-                infer_type_from_expr(c, value).unwrap_or_else(|| infer_type_from_llvm(c, &val));
+            let ty = if let Some(te) = type_annotation {
+                let annotated = c.resolve_type_expr(te);
+                let _ = c.ensure_types_exist(&annotated);
+                annotated
+            } else {
+                infer_type_from_expr(c, value).unwrap_or_else(|| infer_type_from_llvm(c, &raw_val))
+            };
+
+            let val = coerce_numeric(c, raw_val, &ty);
 
             match target {
                 AssignTarget::LValue(lvalue) => {
                     if lvalue.segments.len() == 1 {
                         let name = &lvalue.segments[0];
-                        if let Some((ptr, _)) = c.variables.get(name) {
-                            c.builder.build_store(*ptr, val).unwrap();
+                        if let Some((ptr, var_ty)) = c.variables.get(name).cloned() {
+                            let store_val = coerce_numeric(c, val, &var_ty);
+                            c.builder.build_store(ptr, store_val).unwrap();
                         } else {
-                            let alloca = c.builder.build_alloca(val.get_type(), name).unwrap();
+                            let alloca_ty = to_llvm_type(&ty, c.context, &c.struct_types)
+                                .unwrap_or(val.get_type());
+                            let alloca = c.builder.build_alloca(alloca_ty, name).unwrap();
                             c.builder.build_store(alloca, val).unwrap();
                             c.variables.insert(name.clone(), (alloca, ty));
                         }
@@ -51,7 +66,9 @@ pub fn compile_statement<'ctx>(
                         );
                     };
 
-                    let alloca = c.builder.build_alloca(val.get_type(), name).unwrap();
+                    let alloca_ty =
+                        to_llvm_type(&ty, c.context, &c.struct_types).unwrap_or(val.get_type());
+                    let alloca = c.builder.build_alloca(alloca_ty, name).unwrap();
                     c.builder.build_store(alloca, val).unwrap();
                     c.variables.insert(name.clone(), (alloca, ty));
                 }
@@ -161,6 +178,11 @@ fn compile_field_assignment<'ctx>(
     for field_name in &segments[1..] {
         let struct_name = match &current_type {
             Type::Struct(n) => n.clone(),
+            Type::GenericInstance {
+                base,
+                type_args,
+                kind: GenericKind::Struct,
+            } => mangle_name(base, type_args),
             _ => {
                 return Err(format!(
                     "cannot access field `{field_name}` on non-struct type"
@@ -305,5 +327,76 @@ pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>
         Type::Unknown
     } else {
         Type::Unknown
+    }
+}
+
+fn coerce_numeric<'ctx>(
+    c: &Compiler<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    target: &Type,
+) -> BasicValueEnum<'ctx> {
+    let Type::Primitive(target_prim) = target else {
+        return val;
+    };
+
+    if val.is_int_value() && target_prim.is_integer() {
+        let iv = val.into_int_value();
+        let src_bits = iv.get_type().get_bit_width();
+        let dst_bits = int_bit_width(target_prim);
+        if src_bits == dst_bits {
+            return iv.into();
+        }
+        let dst_type = c.context.custom_width_int_type(dst_bits);
+        if dst_bits < src_bits {
+            return c
+                .builder
+                .build_int_truncate(iv, dst_type, "trunc")
+                .unwrap()
+                .into();
+        }
+        let signed = matches!(
+            target_prim,
+            Primitive::I8 | Primitive::I16 | Primitive::I32 | Primitive::I64
+        );
+        if signed {
+            c.builder
+                .build_int_s_extend(iv, dst_type, "sext")
+                .unwrap()
+                .into()
+        } else {
+            c.builder
+                .build_int_z_extend(iv, dst_type, "zext")
+                .unwrap()
+                .into()
+        }
+    } else if val.is_float_value() && target_prim.is_float() {
+        let fv = val.into_float_value();
+        let dst_is_f64 = *target_prim == Primitive::F64;
+        if (fv.get_type() == c.context.f64_type()) == dst_is_f64 {
+            return fv.into();
+        }
+        if dst_is_f64 {
+            c.builder
+                .build_float_ext(fv, c.context.f64_type(), "fpext")
+                .unwrap()
+                .into()
+        } else {
+            c.builder
+                .build_float_trunc(fv, c.context.f32_type(), "fptrunc")
+                .unwrap()
+                .into()
+        }
+    } else {
+        val
+    }
+}
+
+fn int_bit_width(p: &Primitive) -> u32 {
+    match p {
+        Primitive::I8 | Primitive::U8 => 8,
+        Primitive::I16 | Primitive::U16 => 16,
+        Primitive::I32 | Primitive::U32 => 32,
+        Primitive::I64 | Primitive::U64 => 64,
+        _ => 0,
     }
 }

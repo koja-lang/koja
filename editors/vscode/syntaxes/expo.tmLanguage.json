@@ -15,6 +15,7 @@
     { "include": "#module-qualified-call" },
     { "include": "#import-path" },
     { "include": "#function-call" },
+    { "include": "#typed-assignment" },
     { "include": "#identifiers" }
   ],
   "repository": {
@@ -236,6 +237,17 @@
           "match": "\\b([a-z_][a-z0-9_]*)\\s*(?=\\()",
           "captures": {
             "1": { "name": "entity.name.function.expo" }
+          }
+        }
+      ]
+    },
+    "typed-assignment": {
+      "patterns": [
+        {
+          "match": "\\b([a-z_][a-zA-Z0-9_]*)\\s*(:)\\s*",
+          "captures": {
+            "1": { "name": "variable.other.expo" },
+            "2": { "name": "punctuation.separator.type.expo" }
           }
         }
       ]

@@ -156,8 +156,35 @@ fn check_body(stmts: &[Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) {
 
 fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
     match stmt {
-        Statement::Assignment { target, value, .. } => {
+        Statement::Assignment {
+            target,
+            type_annotation,
+            value,
+            span,
+        } => {
             let value_type = infer_expr(value, ctx, ce);
+
+            let effective_type = if let Some(te) = type_annotation {
+                let annotated = resolve_type_expr(te, ce.struct_names, ce.enum_names);
+                if value_type.is_known()
+                    && annotated.is_known()
+                    && !types_compatible(&value_type, &annotated)
+                {
+                    ctx.error_with_hint(
+                        format!(
+                            "type mismatch: annotation is `{}` but value has type `{}`",
+                            annotated.display(),
+                            value_type.display()
+                        ),
+                        "ensure the annotation matches the expression type".into(),
+                        *span,
+                    );
+                }
+                annotated
+            } else {
+                value_type
+            };
+
             match target {
                 AssignTarget::LValue(lv) => {
                     if lv.segments.len() == 1 {
@@ -172,15 +199,15 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                         }
                         if let Some(existing) = ce.env.get(name) {
                             if existing.is_known()
-                                && value_type.is_known()
-                                && *existing != value_type
+                                && effective_type.is_known()
+                                && !types_compatible(existing, &effective_type)
                             {
                                 ctx.error_with_hint(
                                     format!(
                                         "type mismatch: `{}` has type `{}`, cannot assign `{}`",
                                         name,
                                         existing.display(),
-                                        value_type.display()
+                                        effective_type.display()
                                     ),
                                     format!(
                                         "variable was first assigned as `{}`",
@@ -190,7 +217,7 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                                 );
                             }
                         } else {
-                            ce.env.insert(name.clone(), value_type);
+                            ce.env.insert(name.clone(), effective_type);
                         }
                     }
                 }
@@ -943,33 +970,48 @@ fn infer_field_access(
     ce: &mut CheckEnv,
 ) -> Type {
     let recv_ty = infer_expr(receiver, ctx, ce);
-    match &recv_ty {
-        Type::Struct(name) => {
-            if let Some(struct_info) = ctx.structs.get(name) {
-                if let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) {
-                    field_ty.clone()
-                } else {
-                    let available: Vec<&str> =
-                        struct_info.fields.iter().map(|(n, _)| n.as_str()).collect();
-                    ctx.error_with_hint(
-                        format!("struct `{}` has no field `{}`", name, field),
-                        format!("available fields: {}", available.join(", ")),
-                        span,
-                    );
-                    Type::Error
-                }
-            } else {
-                Type::Unknown
-            }
-        }
-        Type::Unknown | Type::Error => recv_ty,
+
+    let (struct_name, generic_args) = match &recv_ty {
+        Type::Struct(name) => (name.as_str(), None),
+        Type::GenericInstance {
+            base,
+            type_args,
+            kind: GenericKind::Struct,
+        } => (base.as_str(), Some(type_args)),
+        Type::Unknown | Type::Error => return recv_ty,
         _ => {
             ctx.error(
                 format!("field access on non-struct type `{}`", recv_ty.display()),
                 span,
             );
-            Type::Error
+            return Type::Error;
         }
+    };
+
+    let Some(struct_info) = ctx.structs.get(struct_name) else {
+        return Type::Unknown;
+    };
+
+    let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) else {
+        let available: Vec<&str> = struct_info.fields.iter().map(|(n, _)| n.as_str()).collect();
+        ctx.error_with_hint(
+            format!("struct `{}` has no field `{}`", struct_name, field),
+            format!("available fields: {}", available.join(", ")),
+            span,
+        );
+        return Type::Error;
+    };
+
+    if let Some(type_args) = generic_args {
+        let subst_map: HashMap<String, Type> = struct_info
+            .type_params
+            .iter()
+            .zip(type_args.iter())
+            .map(|(p, a)| (p.clone(), a.clone()))
+            .collect();
+        substitute(field_ty, &subst_map)
+    } else {
+        field_ty.clone()
     }
 }
 
@@ -1612,4 +1654,39 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
         }
         Pattern::Wildcard { .. } | Pattern::Literal { .. } | Pattern::EnumUnit { .. } => {}
     }
+}
+
+fn numeric_compatible(a: &Type, b: &Type) -> bool {
+    if let (Type::Primitive(pa), Type::Primitive(pb)) = (a, b) {
+        (pa.is_integer() && pb.is_integer()) || (pa.is_float() && pb.is_float())
+    } else {
+        false
+    }
+}
+
+fn types_compatible(a: &Type, b: &Type) -> bool {
+    if a == b || numeric_compatible(a, b) {
+        return true;
+    }
+    if let (
+        Type::GenericInstance {
+            base: ba,
+            type_args: ta,
+            ..
+        },
+        Type::GenericInstance {
+            base: bb,
+            type_args: tb,
+            ..
+        },
+    ) = (a, b)
+    {
+        return ba == bb
+            && ta.len() == tb.len()
+            && ta
+                .iter()
+                .zip(tb.iter())
+                .all(|(x, y)| !x.is_known() || !y.is_known() || x == y);
+    }
+    false
 }

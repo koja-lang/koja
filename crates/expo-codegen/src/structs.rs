@@ -2,7 +2,7 @@
 //! generic), and method calls on struct instances.
 
 use expo_ast::ast::Expr;
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{GenericKind, Type, mangle_name};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
@@ -26,14 +26,8 @@ pub fn compile_field_access<'ctx>(
             .ok_or_else(|| format!("undefined variable: {name}"))?
             .clone();
 
-        let struct_name = match &ty {
-            Type::Struct(n) => n.clone(),
-            _ => {
-                return Err(format!(
-                    "cannot access field on non-struct variable: {name}"
-                ));
-            }
-        };
+        let struct_name = struct_name_from_type(&ty)
+            .ok_or_else(|| format!("cannot access field on non-struct variable: {name}"))?;
 
         let struct_type = *c
             .struct_types
@@ -291,9 +285,9 @@ fn resolve_struct_name<'ctx>(
 ) -> Result<String, String> {
     if let Expr::Ident { name, .. } = receiver
         && let Some((_, ty)) = c.variables.get(name)
-        && let Type::Struct(n) = ty
+        && let Some(sn) = struct_name_from_type(ty)
     {
-        return Ok(n.clone());
+        return Ok(sn);
     }
 
     if recv_val.is_struct_value() {
@@ -307,4 +301,16 @@ fn resolve_struct_name<'ctx>(
     }
 
     Err("cannot determine struct type for method call".to_string())
+}
+
+fn struct_name_from_type(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Struct(n) => Some(n.clone()),
+        Type::GenericInstance {
+            base,
+            type_args,
+            kind: GenericKind::Struct,
+        } => Some(mangle_name(base, type_args)),
+        _ => None,
+    }
 }

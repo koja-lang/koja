@@ -127,7 +127,8 @@ statement = expr
 
 lvalue = IDENT , { "." , IDENT } ;
 
-assignment = lvalue , "=" , expr
+assignment = IDENT , ":" , type_expr , "=" , expr
+           | lvalue , "=" , expr
            | pattern , "=" , expr ;
 
 return_stmt = "return" , [ expr ] ;

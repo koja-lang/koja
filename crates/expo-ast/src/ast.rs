@@ -268,9 +268,10 @@ pub struct LValue {
 pub enum Statement {
     /// A bare expression evaluated for its side effects.
     Expr(Expr),
-    /// A variable or pattern assignment: `x = expr`, `(a, b) = expr`.
+    /// A variable or pattern assignment: `x = expr`, `x: Type = expr`, `(a, b) = expr`.
     Assignment {
         target: AssignTarget,
+        type_annotation: Option<TypeExpr>,
         value: Expr,
         span: Span,
     },

@@ -993,15 +993,25 @@ impl<'a> Printer<'a> {
     fn statement_to_doc(&mut self, stmt: &Statement) -> Doc {
         match stmt {
             Statement::Expr(expr) => self.expr_to_doc(expr),
-            Statement::Assignment { target, value, .. } => {
+            Statement::Assignment {
+                target,
+                type_annotation,
+                value,
+                ..
+            } => {
                 let target_doc = match target {
                     AssignTarget::LValue(lv) => text(lv.segments.join(".")),
                     AssignTarget::Pattern(pat) => pattern_to_doc(pat),
                 };
+                let lhs = if let Some(te) = type_annotation {
+                    concat(vec![target_doc, text(": "), type_expr_to_doc(te)])
+                } else {
+                    target_doc
+                };
                 let value_doc = self.expr_to_doc(value);
                 if expr_contains_block(value) {
                     concat(vec![
-                        target_doc,
+                        lhs,
                         text(" ="),
                         indent(2, concat(vec![hardline(), value_doc])),
                     ])
@@ -1013,12 +1023,12 @@ impl<'a> Printer<'a> {
                     }
                 ) {
                     group(concat(vec![
-                        target_doc,
+                        lhs,
                         text(" ="),
                         indent(2, concat(vec![line(), value_doc])),
                     ]))
                 } else {
-                    group(concat(vec![target_doc, text(" = "), value_doc]))
+                    group(concat(vec![lhs, text(" = "), value_doc]))
                 }
             }
             Statement::CompoundAssign {
