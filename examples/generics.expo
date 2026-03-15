@@ -23,6 +23,25 @@ fn unwrap_or<T>(opt: Option<T>, default: T) -> T
   end
 end
 
+impl Pair<A, B>
+  fn get_first(self) -> A
+    self.first
+  end
+
+  fn get_second(self) -> B
+    self.second
+  end
+end
+
+impl Option<T>
+  fn unwrap_or_method(self, default: T) -> T
+    match self
+      Option.Some(val) -> val
+      Option.None -> default
+    end
+  end
+end
+
 fn main
   print(identity(42))
   print(identity("hello"))
@@ -30,6 +49,15 @@ fn main
   p = make_pair(10, 20)
   print(p.first)
   print(p.second)
+
+  # Test generic impl methods on struct
+  print(p.get_first())
+  print(p.get_second())
+
+  # Test with different type args
+  p2 = Pair{first: "foo", second: 100}
+  print(p2.get_first())
+  print(p2.get_second())
 
   x = Option.Some(42)
   print(unwrap_or(x, 0))
@@ -39,4 +67,8 @@ fn main
 
   z: Option<i32> = Option.None
   print(unwrap_or(z, 99))
+
+  # Test generic impl method on enum
+  a = Option.Some(77)
+  print(a.unwrap_or_method(0))
 end

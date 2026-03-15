@@ -418,6 +418,11 @@ fn infer_subject_type<'ctx>(
     {
         return ty.clone();
     }
+    if matches!(subject, Expr::Self_ { .. })
+        && let Some((_, ty)) = c.variables.get("self")
+    {
+        return ty.clone();
+    }
     if val.is_int_value() {
         match val.into_int_value().get_type().get_bit_width() {
             1 => Type::Primitive(expo_typecheck::types::Primitive::Bool),

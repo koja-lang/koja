@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use expo_ast::ast::{Diagnostic, EnumDecl, Function, Severity, StructDecl};
+use expo_ast::ast::{Diagnostic, EnumDecl, Function, ImplBlock, Severity, StructDecl};
 use expo_ast::span::Span;
 
 use crate::types::Type;
@@ -13,6 +13,7 @@ pub struct TypeContext {
     pub functions: HashMap<String, FunctionSig>,
     pub generic_enum_asts: HashMap<String, EnumDecl>,
     pub generic_function_asts: HashMap<String, Function>,
+    pub generic_impl_asts: HashMap<String, Vec<ImplBlock>>,
     pub generic_struct_asts: HashMap<String, StructDecl>,
     pub imported_modules: HashMap<String, TypeContext>,
     pub structs: HashMap<String, StructInfo>,
@@ -107,6 +108,7 @@ impl TypeContext {
             functions: HashMap::new(),
             generic_enum_asts: HashMap::new(),
             generic_function_asts: HashMap::new(),
+            generic_impl_asts: HashMap::new(),
             generic_struct_asts: HashMap::new(),
             imported_modules: HashMap::new(),
             structs: HashMap::new(),

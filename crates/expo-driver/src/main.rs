@@ -261,6 +261,13 @@ fn build(args: &[String], quiet: bool, color: bool) {
                     .insert(name.clone(), ast.clone());
             }
         }
+        for (name, blocks) in &ctx.generic_impl_asts {
+            merged_ctx
+                .generic_impl_asts
+                .entry(name.clone())
+                .or_default()
+                .extend(blocks.iter().cloned());
+        }
     }
 
     let modules_ast: Vec<&expo_ast::ast::Module> = graph

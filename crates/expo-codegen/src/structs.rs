@@ -2,7 +2,7 @@
 //! generic), and method calls on struct instances.
 
 use expo_ast::ast::Expr;
-use expo_typecheck::types::{GenericKind, Type, mangle_name};
+use expo_typecheck::types::{Type, mangle_name};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
@@ -123,6 +123,11 @@ pub fn compile_method_call<'ctx>(
     let struct_name = resolve_struct_name(c, receiver, &recv_val)?;
 
     let mangled = format!("{}_{}", struct_name, method);
+    if !c.functions.contains_key(&mangled)
+        && let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&struct_name, c)
+    {
+        c.monomorphize_impl_method(&base, method, &type_args)?;
+    }
     let callee = *c
         .functions
         .get(&mangled)
@@ -305,11 +310,9 @@ fn resolve_struct_name<'ctx>(
 
 fn struct_name_from_type(ty: &Type) -> Option<String> {
     match ty {
-        Type::Struct(n) => Some(n.clone()),
+        Type::Struct(n) | Type::Enum(n) => Some(n.clone()),
         Type::GenericInstance {
-            base,
-            type_args,
-            kind: GenericKind::Struct,
+            base, type_args, ..
         } => Some(mangle_name(base, type_args)),
         _ => None,
     }

@@ -34,6 +34,9 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Impl blocks and methods (`self`)
 - Generic functions with monomorphization
 - Generic structs with monomorphization
+- Generic enums with monomorphization
+- Variable type annotations (`x: i32 = 42`, `z: Option<i32> = Option.None`)
+- Numeric type coercion for annotated variables (`x: u8 = 4` casts at compile time)
 - `if`/`else`
 - `while`
 - `loop` and `break`
@@ -56,7 +59,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Try operator (`?`)
 - `ref<T>`
 - Lists
-- Generic enums, methods on generic types, trait bounds
+- Methods on generic types, trait bounds
 
 ### Design notes
 
@@ -65,12 +68,12 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **Closures (Phase 1)**: Block closures only with explicit types and parens: `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax. Inline closures (`x -> expr`) are parsed but not compiled -- they land in Phase 2 with type inference and generics.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 - **Planned: PascalCase primitives and type simplification**: Primitives will be renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. This makes user-defined types (`Pair`, `User`) and language types (`Int`, `String`) visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction. Rename should happen before `Option<T>`/`Result<T,E>`/`Pair<A,B>` land in the stdlib.
+- **Planned: Irrefutable struct destructuring**: `Config{name, port} = load_config()` as syntactic sugar for pulling struct fields into local variables. Compile-time verified exhaustive -- only works for structs (single shape), not enums. Enum destructuring uses `match`.
 
 ### Known gaps
 
-- **Generics**: impl blocks on generic types not monomorphized (blocks methods like `Pair<A,B>.first()`)
-- **Generic enum unit variants**: `Option.None` cannot infer `T` without usage context -- requires variable type annotations (`z: Option<i32> = Option.None`) which are not yet implemented
-- **Variable type annotations**: `x: i32 = 42` syntax not yet supported -- needed for generic enum unit variants and general type safety
+- **Generics**: impl blocks on generic types not monomorphized (blocks methods like `Pair<A,B>.first()`) -- in progress
+- **Generic enum unit variants**: `Option.None` cannot infer `T` without usage context -- workaround: variable type annotations (`z: Option<i32> = Option.None`)
 - **Type checker**: `ref<T>` unresolved (Phase 2)
 - **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
 
@@ -161,8 +164,9 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - ~~Type variable unification across call sites~~
 - ~~Generic structs and functions~~
 - ~~Generic enums (required for `Option<T>` and `Result<T,E>`)~~
-- Variable type annotations (`x: i32 = 42`, `z: Option<i32> = Option.None`) -- unblocks generic enum unit variants and general type safety
-- Monomorphization of impl blocks on generic types (required for methods like `.first()`, `.map()`)
+- ~~Variable type annotations (`x: i32 = 42`, `z: Option<i32> = Option.None`) -- unblocks generic enum unit variants and general type safety~~
+- ~~Numeric type coercion for annotated variables (same-category casting: `x: u8 = 4`)~~
+- Monomorphization of impl blocks on generic types (required for methods like `.first()`, `.map()`) -- **in progress**
 - `Option<T>` and `Result<T,E>` as built-in enum types with `Some`/`None`/`Ok`/`Err`
 - `Pair<A, B>` stdlib struct (with `.first` / `.second`)
 - The `?` operator for error propagation (desugars to early `return Err(...)`)
@@ -481,6 +485,36 @@ Syntax undecided -- candidates include `~"""`, `'''`, or something else entirely
 
 ---
 
+## Design exploration (v0.5+)
+
+Active design discussions about the type system, code organization, and functional programming patterns. These inform future work but are not committed changes.
+
+### `impl` and protocols
+
+- **Leaning**: `impl` should ultimately mean "implementing a protocol/contract" only -- not bare method attachment. Strong direction, not yet committed.
+- **Leaning**: free functions as the primary code organization mechanism, with `impl Protocol for Type` reserved for shared behavioral contracts.
+- **Open**: whether bare `impl Type` survives, gets replaced by inline functions in type bodies, or both.
+- **Open**: protocol syntax, semantics, and dispatch strategy (monomorphized static dispatch vs vtable dynamic dispatch).
+- **Rationale for building generic impl now (Path C)**: the monomorphization work (type substitution, name mangling, LLVM specialization) is identical regardless of whether methods come from bare `impl` blocks, inline type functions, or protocol implementations. The codegen transfers to any final design.
+
+### Type system philosophy
+
+- **Leaning**: enums and structs should have equal capabilities -- fractal design where the same features available to `Option<T>` (a built-in enum) are available to any user-defined enum. No two-tier type system.
+- **Leaning**: if types get inline functions, both structs and enums support them. An enum is semantically a one-field struct with a tagged union type -- the distinction is surface syntax, not fundamental.
+- **Open**: whether inline functions in type bodies are restricted to `self`-taking functions only (instance methods), or also allow non-`self` functions (static/factory -- which makes the type act as a namespace).
+
+### FP and pipes vs `?` operator
+
+- **Decided**: the `?` operator is higher priority than pipes for production code. Pure pipe chains break down when operations are fallible (the common case in real applications). `?` handles the error path cleanly without boilerplate -- it solves the same problem Elixir's `with` statement addresses, but more concisely.
+- Pipes remain valuable for pure data transformation (parsing, formatting, filtering) where nothing fails, but they are a nice-to-have, not a core paradigm.
+- **Open**: whether dot syntax (`.method()`) desugars to pipes, or remains a separate dispatch mechanism.
+
+### Struct destructuring assignment
+
+- **Planned**: irrefutable struct destructuring on assignment -- `Config{name, port} = load_config()`. Compile-time verified exhaustive (structs have a single shape). Syntactic sugar for pulling fields into local variables. Enum destructuring would require `match`.
+
+---
+
 ## Summary timeline
 
 Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18-month estimate assumed a slower pace. The timeline below reflects actual velocity for scaffolding while staying conservative on genuinely hard problems (borrow checker, async runtime, self-hosting).
@@ -498,26 +532,27 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Tooling   | LSP -- diagnostics, formatting, hover, go-to-definition                                  | Done   |
 | Tooling   | Documentation generator (`expo doc`) -- HTML output, sidebar nav, brand theme            | Done   |
 | Core      | Generics -- monomorphization of generic functions and structs, type unification          | Done   |
+| Core      | Generic enums, variable type annotations, numeric type coercion                          | Done   |
 
 ### Remaining
 
-| Phase       | Milestone                                                     |
-| ----------- | ------------------------------------------------------------- |
-| Core        | Generics -- variable type annotations, impl monomorphization, `Option<T>`, `Result<T,E>`, `?` operator |
-| Core        | Ownership + borrow checker + tasks (structured concurrency)   |
-| Core        | Collections, closures, arena, `ua_parser.expo` compiles       |
-| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)    |
-| Reliability | Preemption/priority, supervision, `shared_map`                |
-| Stdlib      | Core types, I/O, time, `config.expo` compiles                 |
-| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)            |
-| Tooling     | Package manager, test runner                                  |
-| Tooling     | Documentation generator (doctests, search, prose pages)       |
-| Tooling     | LSP -- autocomplete, inline type hints, multi-module          |
-| Tooling     | Interactive shell (`expo shell`) -- REPL with project loading |
-| Self-host   | Lexer + parser in Expo                                        |
-| Self-host   | Full compiler in Expo                                         |
-| Self-host   | Retire Rust bootstrap                                         |
-| Validation  | auth-manager-expo runs for real                               |
+| Phase       | Milestone                                                                   |
+| ----------- | --------------------------------------------------------------------------- |
+| Core        | Generics -- impl monomorphization, `Option<T>`, `Result<T,E>`, `?` operator |
+| Core        | Ownership + borrow checker + tasks (structured concurrency)                 |
+| Core        | Collections, closures, arena, `ua_parser.expo` compiles                     |
+| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)                  |
+| Reliability | Preemption/priority, supervision, `shared_map`                              |
+| Stdlib      | Core types, I/O, time, `config.expo` compiles                               |
+| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)                          |
+| Tooling     | Package manager, test runner                                                |
+| Tooling     | Documentation generator (doctests, search, prose pages)                     |
+| Tooling     | LSP -- autocomplete, inline type hints, multi-module                        |
+| Tooling     | Interactive shell (`expo shell`) -- REPL with project loading               |
+| Self-host   | Lexer + parser in Expo                                                      |
+| Self-host   | Full compiler in Expo                                                       |
+| Self-host   | Retire Rust bootstrap                                                       |
+| Validation  | auth-manager-expo runs for real                                             |
 
 ---
 

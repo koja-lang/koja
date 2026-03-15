@@ -110,14 +110,39 @@ pub fn collect(module: &Module) -> TypeContext {
                 if impl_block.trait_expr.is_some() {
                     continue;
                 }
-                let target_name = match &impl_block.target {
-                    TypeExpr::Named { path, .. } if path.len() == 1 => path[0].clone(),
+                let (target_name, impl_type_params) = match &impl_block.target {
+                    TypeExpr::Named { path, .. } if path.len() == 1 => {
+                        (path[0].clone(), Vec::new())
+                    }
+                    TypeExpr::Generic { path, args, .. } if path.len() == 1 => {
+                        let tp_names: Vec<String> = args
+                            .iter()
+                            .filter_map(|a| {
+                                if let TypeExpr::Named { path, .. } = a
+                                    && path.len() == 1
+                                {
+                                    return Some(path[0].clone());
+                                }
+                                None
+                            })
+                            .collect();
+                        (path[0].clone(), tp_names)
+                    }
                     _ => continue,
                 };
+                let is_generic_impl = !impl_type_params.is_empty();
+                if is_generic_impl {
+                    ctx.generic_impl_asts
+                        .entry(target_name.clone())
+                        .or_default()
+                        .push(impl_block.clone());
+                }
+                let tp_refs: Vec<&str> = impl_type_params.iter().map(|s| s.as_str()).collect();
                 for member in &impl_block.members {
-                    if let ImplMember::Function(f) = member
-                        && let Some(sig) = build_function_sig(f, &struct_names, &enum_names)
-                    {
+                    if let ImplMember::Function(f) = member {
+                        let sig =
+                            build_function_sig_with_params(f, &struct_names, &enum_names, &tp_refs);
+                        let Some(sig) = sig else { continue };
                         let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
                             Some(&mut si.methods)
                         } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
@@ -339,7 +364,17 @@ fn build_function_sig(
     known_structs: &[&str],
     known_enums: &[&str],
 ) -> Option<FunctionSig> {
-    let tp_refs: Vec<&str> = f.type_params.iter().map(|s| s.as_str()).collect();
+    build_function_sig_with_params(f, known_structs, known_enums, &[])
+}
+
+fn build_function_sig_with_params(
+    f: &expo_ast::ast::Function,
+    known_structs: &[&str],
+    known_enums: &[&str],
+    extra_type_params: &[&str],
+) -> Option<FunctionSig> {
+    let mut all_tp: Vec<&str> = f.type_params.iter().map(|s| s.as_str()).collect();
+    all_tp.extend_from_slice(extra_type_params);
 
     let params: Vec<ParamInfo> = f
         .params
@@ -349,7 +384,7 @@ fn build_function_sig(
                 name, type_expr, ..
             } => Some(ParamInfo {
                 name: name.clone(),
-                ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &tp_refs),
+                ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
             }),
             Param::Self_ { .. } => None,
         })
@@ -358,7 +393,7 @@ fn build_function_sig(
     let return_type = f
         .return_type
         .as_ref()
-        .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &tp_refs))
+        .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
         .unwrap_or(Type::Unit);
 
     Some(FunctionSig {
