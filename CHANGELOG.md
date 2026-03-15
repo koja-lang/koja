@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Generics -- generic functions (`fn identity<T>(x: T) -> T`) and generic structs (`struct Pair<A, B>`) now compile to native code via monomorphization. Type arguments are inferred at call sites.
+
+### Fixed
+
+- `print(true)` now outputs `true` instead of `1`. Booleans print correctly in `print()`, `print_bool()`, and string interpolation (`"#{some_bool}"`).
+
 ## [0.3.0] - 2026-03-14
 
 ### Added

@@ -608,4 +608,3 @@ fn type_byte_size(ty: &Type) -> u32 {
         _ => 8,
     }
 }
-

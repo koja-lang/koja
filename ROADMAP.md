@@ -26,11 +26,37 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 ### What compiles to native binaries today
 
-Multi-module programs with imports (including qualified calls like `math.add()`). Functions (`fn`/`priv fn`), constants (`const`), structs, enums, impl blocks, methods (`self`), if/else, while, loop, break, return, match, cond, ternary, pipe (`|>`), compound assignment (`+=`, `-=`, `*=`, `/=`), string interpolation, closures (non-capturing, inline and block forms), `print` builtin, i32/i64/f32/f64/bool/String primitives.
+- Multi-module imports (including qualified calls like `math.add()`)
+- Functions (`fn`/`priv fn`)
+- Constants (`const`)
+- Structs
+- Enums
+- Impl blocks and methods (`self`)
+- Generic functions with monomorphization
+- Generic structs with monomorphization
+- `if`/`else`
+- `while`
+- `loop` and `break`
+- `return`
+- `match`
+- `cond`
+- Ternary (`? :`)
+- Pipe operator (`|>`)
+- Compound assignment (`+=`, `-=`, `*=`, `/=`)
+- String interpolation
+- Closures (non-capturing, block form)
+- `print` builtin
+- Primitives: `i32`, `i64`, `f32`, `f64`, `bool`, `string`
 
 ### Parsed and type-checked but NOT yet in codegen
 
-For, arena, await/receive/spawn, try (`?`), generics, `ref<T>`, lists.
+- `for` loops
+- `arena` blocks
+- `await`/`receive`/`spawn`
+- Try operator (`?`)
+- `ref<T>`
+- Lists
+- Generic enums, methods on generic types, trait bounds
 
 ### Design notes
 
@@ -38,10 +64,12 @@ For, arena, await/receive/spawn, try (`?`), generics, `ref<T>`, lists.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
 - **Closures (Phase 1)**: Block closures only with explicit types and parens: `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax. Inline closures (`x -> expr`) are parsed but not compiled -- they land in Phase 2 with type inference and generics.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
+- **Planned: PascalCase primitives and type simplification**: Primitives will be renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. This makes user-defined types (`Pair`, `User`) and language types (`Int`, `String`) visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction. Rename should happen before `Option<T>`/`Result<T,E>`/`Pair<A,B>` land in the stdlib.
 
 ### Known gaps
 
-- **Type checker**: generics resolve to `Unknown`, `ref<T>` unresolved (both Phase 2)
+- **Generics**: generic enums not yet monomorphized (blocks `Option<T>`, `Result<T,E>`), impl blocks on generic types not monomorphized (blocks methods like `Pair<A,B>.first()`)
+- **Type checker**: `ref<T>` unresolved (Phase 2)
 - **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
 
 ### Design artifacts
@@ -126,10 +154,12 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 
 ### Generics and monomorphization
 
-- Type parameter syntax already parsed: `struct Pair<A, B>`, `fn identity<T>(x: T) -> T`
-- Monomorphization: generate specialized LLVM IR for each concrete instantiation
-- Type variable unification across call sites
-- Generic structs, enums, and functions
+- ~~Type parameter syntax already parsed: `struct Pair<A, B>`, `fn identity<T>(x: T) -> T`~~
+- ~~Monomorphization: generate specialized LLVM IR for each concrete instantiation~~
+- ~~Type variable unification across call sites~~
+- ~~Generic structs and functions~~
+- Generic enums (required for `Option<T>` and `Result<T,E>`)
+- Monomorphization of impl blocks on generic types (required for methods like `.first()`, `.map()`)
 - `Option<T>` and `Result<T,E>` as built-in enum types with `Some`/`None`/`Ok`/`Err`
 - `Pair<A, B>` stdlib struct (with `.first` / `.second`)
 - The `?` operator for error propagation (desugars to early `return Err(...)`)
@@ -464,12 +494,13 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Tooling   | VSCode extension (syntax highlighting)                                                   | Done   |
 | Tooling   | LSP -- diagnostics, formatting, hover, go-to-definition                                  | Done   |
 | Tooling   | Documentation generator (`expo doc`) -- HTML output, sidebar nav, brand theme            | Done   |
+| Core      | Generics -- monomorphization of generic functions and structs, type unification          | Done   |
 
 ### Remaining
 
 | Phase       | Milestone                                                     |
 | ----------- | ------------------------------------------------------------- |
-| Core        | Generics + monomorphization (the gate to Phase 2)             |
+| Core        | Generics -- generic enums, impl monomorphization, `Option<T>`, `Result<T,E>`, `?` operator |
 | Core        | Ownership + borrow checker + tasks (structured concurrency)   |
 | Core        | Collections, closures, arena, `ua_parser.expo` compiles       |
 | Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)    |

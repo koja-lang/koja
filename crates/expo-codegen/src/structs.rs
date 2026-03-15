@@ -166,13 +166,7 @@ pub fn compile_struct_construction<'ctx>(
     if let Some(info) = c.type_ctx.structs.get(struct_name)
         && !info.type_params.is_empty()
     {
-        return compile_generic_struct_construction(
-            c,
-            struct_name,
-            info.clone(),
-            fields,
-            function,
-        );
+        return compile_generic_struct_construction(c, struct_name, info.clone(), fields, function);
     }
 
     let struct_type = *c

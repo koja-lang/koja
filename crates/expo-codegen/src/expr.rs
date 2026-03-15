@@ -203,7 +203,11 @@ fn compile_string<'ctx>(
                 let val = compile_expr(c, expr, function)?
                     .ok_or("interpolated expression produced no value")?;
 
-                if let Ok(spec) = crate::util::printf_format_spec(&val) {
+                if val.is_int_value() && val.into_int_value().get_type().get_bit_width() == 1 {
+                    let str_ptr = crate::util::bool_to_string_ptr(c, val.into_int_value());
+                    fmt_string.push_str("%s");
+                    interp_values.push(str_ptr.into());
+                } else if let Ok(spec) = crate::util::printf_format_spec(&val) {
                     fmt_string.push_str(spec);
                     interp_values.push(val);
                 } else if val.is_struct_value() {

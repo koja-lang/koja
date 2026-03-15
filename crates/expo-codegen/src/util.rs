@@ -1,7 +1,9 @@
 //! Shared utilities: integer literal parsing and printf format-specifier
 //! selection for LLVM codegen.
 
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
+
+use crate::compiler::Compiler;
 
 /// Parses an integer literal string, handling `0x`/`0b` prefixes and `_`
 /// separators.
@@ -30,7 +32,7 @@ pub fn printf_format_spec(val: &BasicValueEnum<'_>) -> Result<&'static str, Stri
     if val.is_int_value() {
         let width = val.into_int_value().get_type().get_bit_width();
         Ok(match width {
-            1 | 32 => "%d",
+            32 => "%d",
             64 => "%lld",
             _ => "%d",
         })
@@ -41,4 +43,26 @@ pub fn printf_format_spec(val: &BasicValueEnum<'_>) -> Result<&'static str, Stri
     } else {
         Err("unsupported type for printf format".to_string())
     }
+}
+
+/// Emits an LLVM `select` that picks the global string `"true"` or `"false"`
+/// based on an `i1` value, returning the chosen pointer.
+pub fn bool_to_string_ptr<'ctx>(c: &mut Compiler<'ctx>, val: IntValue<'ctx>) -> PointerValue<'ctx> {
+    let true_str = c
+        .builder
+        .build_global_string_ptr("true", "bool_true")
+        .unwrap();
+    let false_str = c
+        .builder
+        .build_global_string_ptr("false", "bool_false")
+        .unwrap();
+    c.builder
+        .build_select(
+            val,
+            true_str.as_pointer_value(),
+            false_str.as_pointer_value(),
+            "bool_str",
+        )
+        .unwrap()
+        .into_pointer_value()
 }

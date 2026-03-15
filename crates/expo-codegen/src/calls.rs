@@ -190,21 +190,36 @@ fn compile_print<'ctx>(
 
     let printf = *c.functions.get("printf").ok_or("printf not declared")?;
 
-    let spec = crate::util::printf_format_spec(&val)?;
-    let fmt_str = &format!("{spec}\n");
+    let is_bool = val.is_int_value() && val.into_int_value().get_type().get_bit_width() == 1;
 
-    let fmt = c
-        .builder
-        .build_global_string_ptr(fmt_str, "fmt_print")
-        .unwrap();
-
-    c.builder
-        .build_call(
-            printf,
-            &[fmt.as_pointer_value().into(), val.into()],
-            "printf_call",
-        )
-        .unwrap();
+    if is_bool {
+        let str_ptr = crate::util::bool_to_string_ptr(c, val.into_int_value());
+        let fmt = c
+            .builder
+            .build_global_string_ptr("%s\n", "fmt_print_bool")
+            .unwrap();
+        c.builder
+            .build_call(
+                printf,
+                &[fmt.as_pointer_value().into(), str_ptr.into()],
+                "printf_call",
+            )
+            .unwrap();
+    } else {
+        let spec = crate::util::printf_format_spec(&val)?;
+        let fmt_str = &format!("{spec}\n");
+        let fmt = c
+            .builder
+            .build_global_string_ptr(fmt_str, "fmt_print")
+            .unwrap();
+        c.builder
+            .build_call(
+                printf,
+                &[fmt.as_pointer_value().into(), val.into()],
+                "printf_call",
+            )
+            .unwrap();
+    }
 
     Ok(None)
 }
@@ -224,11 +239,26 @@ fn compile_print_builtin<'ctx>(
 
     let printf = *c.functions.get("printf").ok_or("printf not declared")?;
 
+    if name == "print_bool" {
+        let str_ptr = crate::util::bool_to_string_ptr(c, val.into_int_value());
+        let fmt = c
+            .builder
+            .build_global_string_ptr("%s\n", "fmt_print_bool")
+            .unwrap();
+        c.builder
+            .build_call(
+                printf,
+                &[fmt.as_pointer_value().into(), str_ptr.into()],
+                "printf_call",
+            )
+            .unwrap();
+        return Ok(None);
+    }
+
     let fmt_str = match name {
         "print_i32" => "%d\n",
         "print_i64" => "%lld\n",
         "print_f64" => "%f\n",
-        "print_bool" => "%d\n",
         "print_string" => "%s\n",
         _ => return Err(format!("unknown print builtin: {name}")),
     };
