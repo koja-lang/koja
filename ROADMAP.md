@@ -68,7 +68,9 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 ### Known gaps
 
-- **Generics**: generic enums not yet monomorphized (blocks `Option<T>`, `Result<T,E>`), impl blocks on generic types not monomorphized (blocks methods like `Pair<A,B>.first()`)
+- **Generics**: impl blocks on generic types not monomorphized (blocks methods like `Pair<A,B>.first()`)
+- **Generic enum unit variants**: `Option.None` cannot infer `T` without usage context -- requires variable type annotations (`z: Option<i32> = Option.None`) which are not yet implemented
+- **Variable type annotations**: `x: i32 = 42` syntax not yet supported -- needed for generic enum unit variants and general type safety
 - **Type checker**: `ref<T>` unresolved (Phase 2)
 - **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
 
@@ -158,7 +160,8 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - ~~Monomorphization: generate specialized LLVM IR for each concrete instantiation~~
 - ~~Type variable unification across call sites~~
 - ~~Generic structs and functions~~
-- Generic enums (required for `Option<T>` and `Result<T,E>`)
+- ~~Generic enums (required for `Option<T>` and `Result<T,E>`)~~
+- Variable type annotations (`x: i32 = 42`, `z: Option<i32> = Option.None`) -- unblocks generic enum unit variants and general type safety
 - Monomorphization of impl blocks on generic types (required for methods like `.first()`, `.map()`)
 - `Option<T>` and `Result<T,E>` as built-in enum types with `Some`/`None`/`Ok`/`Err`
 - `Pair<A, B>` stdlib struct (with `.first` / `.second`)
@@ -500,7 +503,7 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 
 | Phase       | Milestone                                                     |
 | ----------- | ------------------------------------------------------------- |
-| Core        | Generics -- generic enums, impl monomorphization, `Option<T>`, `Result<T,E>`, `?` operator |
+| Core        | Generics -- variable type annotations, impl monomorphization, `Option<T>`, `Result<T,E>`, `?` operator |
 | Core        | Ownership + borrow checker + tasks (structured concurrency)   |
 | Core        | Collections, closures, arena, `ua_parser.expo` compiles       |
 | Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)    |

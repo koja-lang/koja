@@ -8,7 +8,7 @@ use expo_ast::span::Span;
 use crate::context::{
     EnumInfo, FunctionSig, ParamInfo, StructInfo, TypeContext, VariantData, VariantInfo,
 };
-use crate::types::{Type, resolve_type_expr, resolve_type_expr_with_params};
+use crate::types::{Type, resolve_type_expr_with_params};
 
 /// Walks all top-level items in a module and builds a [`TypeContext`] containing
 /// function signatures, struct definitions, and enum definitions.
@@ -42,9 +42,7 @@ pub fn collect(module: &Module) -> TypeContext {
     for item in &module.items {
         match item {
             Item::Enum(e) => {
-                if !e.type_params.is_empty() {
-                    continue;
-                }
+                let tp_refs: Vec<&str> = e.type_params.iter().map(|s| s.as_str()).collect();
                 let variants: Vec<VariantInfo> = e
                     .variants
                     .iter()
@@ -54,10 +52,11 @@ pub fn collect(module: &Module) -> TypeContext {
                                 let resolved: Vec<(String, Type)> = fields
                                     .iter()
                                     .map(|f| {
-                                        let ty = resolve_type_expr(
+                                        let ty = resolve_type_expr_with_params(
                                             &f.type_expr,
                                             &struct_names,
                                             &enum_names,
+                                            &tp_refs,
                                         );
                                         (f.name.clone(), ty)
                                     })
@@ -67,7 +66,14 @@ pub fn collect(module: &Module) -> TypeContext {
                             EnumVariantData::Tuple(types) => {
                                 let resolved: Vec<Type> = types
                                     .iter()
-                                    .map(|t| resolve_type_expr(t, &struct_names, &enum_names))
+                                    .map(|t| {
+                                        resolve_type_expr_with_params(
+                                            t,
+                                            &struct_names,
+                                            &enum_names,
+                                            &tp_refs,
+                                        )
+                                    })
                                     .collect();
                                 VariantData::Tuple(resolved)
                             }
@@ -79,11 +85,15 @@ pub fn collect(module: &Module) -> TypeContext {
                         }
                     })
                     .collect();
+                if !e.type_params.is_empty() {
+                    ctx.generic_enum_asts.insert(e.name.clone(), e.clone());
+                }
                 ctx.enums.insert(
                     e.name.clone(),
                     EnumInfo {
                         methods: HashMap::new(),
                         span: e.span,
+                        type_params: e.type_params.clone(),
                         variants,
                     },
                 );

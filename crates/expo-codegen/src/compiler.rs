@@ -39,6 +39,7 @@ pub struct Compiler<'ctx> {
     pub closure_counter: usize,
     pub generic_fn_asts: HashMap<String, Function>,
     pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
+    pub mono_enum_variants: HashMap<String, Vec<(String, VariantData)>>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -61,6 +62,7 @@ impl<'ctx> Compiler<'ctx> {
             closure_counter: 0,
             generic_fn_asts: HashMap::new(),
             mono_struct_info: HashMap::new(),
+            mono_enum_variants: HashMap::new(),
         }
     }
 
@@ -398,7 +400,10 @@ impl<'ctx> Compiler<'ctx> {
             let st = self.context.opaque_struct_type(name);
             self.struct_types.insert(name.clone(), st);
         }
-        for name in self.type_ctx.enums.keys() {
+        for (name, info) in &self.type_ctx.enums {
+            if !info.type_params.is_empty() {
+                continue;
+            }
             let et = self.context.opaque_struct_type(name);
             self.struct_types.insert(name.clone(), et);
         }
@@ -417,8 +422,11 @@ impl<'ctx> Compiler<'ctx> {
             struct_type.set_body(&field_types, false);
         }
 
-        // Pass 3: set enum bodies
+        // Pass 3: set enum bodies (skip generic templates)
         for (name, info) in &self.type_ctx.enums {
+            if !info.type_params.is_empty() {
+                continue;
+            }
             let mut variant_payloads = Vec::new();
             let mut max_payload_size: u32 = 0;
 
@@ -596,7 +604,7 @@ pub fn compile_modules(
     })
 }
 
-fn type_byte_size(ty: &Type) -> u32 {
+pub(crate) fn type_byte_size(ty: &Type) -> u32 {
     use expo_typecheck::types::Primitive;
     match ty {
         Type::Primitive(p) => match p {

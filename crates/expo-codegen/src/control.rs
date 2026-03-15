@@ -698,12 +698,16 @@ fn compile_tuple_elements<'ctx>(
 }
 
 fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<String, String> {
-    if !type_path.is_empty() {
-        Ok(type_path.join("."))
-    } else if let Type::Enum(name) = subject_type {
-        Ok(name.clone())
-    } else {
-        Err("cannot determine enum name for pattern".to_string())
+    match subject_type {
+        Type::GenericInstance {
+            base,
+            type_args,
+            kind: expo_typecheck::types::GenericKind::Enum,
+            ..
+        } => Ok(expo_typecheck::types::mangle_name(base, type_args)),
+        Type::Enum(name) => Ok(name.clone()),
+        _ if !type_path.is_empty() => Ok(type_path.join(".")),
+        _ => Err("cannot determine enum name for pattern".to_string()),
     }
 }
 
@@ -712,6 +716,15 @@ fn find_constructor_enum<'ctx>(
     variant_name: &str,
     subject_type: &Type,
 ) -> Result<String, String> {
+    if let Type::GenericInstance {
+        base,
+        type_args,
+        kind: expo_typecheck::types::GenericKind::Enum,
+        ..
+    } = subject_type
+    {
+        return Ok(expo_typecheck::types::mangle_name(base, type_args));
+    }
     if let Type::Enum(name) = subject_type {
         return Ok(name.clone());
     }
@@ -748,14 +761,9 @@ fn get_struct_variant_fields(
     enum_name: &str,
     variant: &str,
 ) -> Result<Vec<(String, Type)>, String> {
-    let vi = c
-        .type_ctx
-        .enums
-        .get(enum_name)
-        .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
-        .ok_or_else(|| format!("variant not found: {enum_name}.{variant}"))?;
-    match &vi.data {
-        VariantData::Struct(fields) => Ok(fields.clone()),
+    let data = lookup_variant_data(c, enum_name, variant)?;
+    match data {
+        VariantData::Struct(fields) => Ok(fields),
         _ => Err(format!("{enum_name}.{variant} is not a struct variant")),
     }
 }
@@ -765,16 +773,29 @@ fn get_tuple_variant_types(
     enum_name: &str,
     variant: &str,
 ) -> Result<Vec<Type>, String> {
-    let vi = c
-        .type_ctx
-        .enums
-        .get(enum_name)
-        .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
-        .ok_or_else(|| format!("variant not found: {enum_name}.{variant}"))?;
-    match &vi.data {
-        VariantData::Tuple(types) => Ok(types.clone()),
+    let data = lookup_variant_data(c, enum_name, variant)?;
+    match data {
+        VariantData::Tuple(types) => Ok(types),
         _ => Err(format!("{enum_name}.{variant} is not a tuple variant")),
     }
+}
+
+fn lookup_variant_data(
+    c: &Compiler<'_>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<VariantData, String> {
+    if let Some(ei) = c.type_ctx.enums.get(enum_name)
+        && let Some(vi) = ei.variants.iter().find(|v| v.name == variant)
+    {
+        return Ok(vi.data.clone());
+    }
+    if let Some(variants) = c.mono_enum_variants.get(enum_name)
+        && let Some((_, data)) = variants.iter().find(|(n, _)| n == variant)
+    {
+        return Ok(data.clone());
+    }
+    Err(format!("variant not found: {enum_name}.{variant}"))
 }
 
 fn match_values<'ctx>(

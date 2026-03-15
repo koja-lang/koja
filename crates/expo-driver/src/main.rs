@@ -254,6 +254,13 @@ fn build(args: &[String], quiet: bool, color: bool) {
                     .insert(name.clone(), ast.clone());
             }
         }
+        for (name, ast) in &ctx.generic_enum_asts {
+            if !merged_ctx.generic_enum_asts.contains_key(name) {
+                merged_ctx
+                    .generic_enum_asts
+                    .insert(name.clone(), ast.clone());
+            }
+        }
     }
 
     let modules_ast: Vec<&expo_ast::ast::Module> = graph
@@ -345,6 +352,7 @@ fn clone_enum_info_for_merge(
             .map(|(k, v)| (k.clone(), clone_fn_sig(v)))
             .collect(),
         span: info.span,
+        type_params: info.type_params.clone(),
         variants: info
             .variants
             .iter()

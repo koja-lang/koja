@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use expo_typecheck::types::{Primitive, Type};
+use expo_typecheck::types::{Primitive, Type, mangle_name};
 use inkwell::context::Context;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
 
@@ -17,6 +17,12 @@ pub fn to_llvm_type<'ctx>(
     match ty {
         Type::Primitive(p) => Some(primitive_to_llvm(p, context)),
         Type::Struct(name) | Type::Enum(name) => struct_types.get(name).map(|st| (*st).into()),
+        Type::GenericInstance {
+            base, type_args, ..
+        } => {
+            let mangled = mangle_name(base, type_args);
+            struct_types.get(&mangled).map(|st| (*st).into())
+        }
         Type::Function { .. } => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
         Type::Unit => None,
         _ => None,

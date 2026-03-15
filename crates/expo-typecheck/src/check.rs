@@ -4,7 +4,7 @@ use expo_ast::ast::*;
 use expo_ast::span::Span;
 
 use crate::context::{FunctionSig, ParamInfo, TypeContext, VariantData};
-use crate::types::{Primitive, Type, resolve_type_expr};
+use crate::types::{GenericKind, Primitive, Type, resolve_type_expr, substitute, unify};
 
 /// Per-function environment used during type checking, tracking local variable
 /// types, the expected return type, and loop nesting depth.
@@ -771,6 +771,7 @@ fn infer_generic_call(
 }
 
 /// Type-checks an enum variant construction, validating variant existence and data shape.
+/// For generic enums, infers type arguments from constructor values via unification.
 fn infer_enum_construction(
     type_path: &[String],
     variant: &str,
@@ -780,8 +781,10 @@ fn infer_enum_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let enum_name = type_path.join(".");
-    if let Some(enum_info) = ctx.enums.get(&enum_name) {
+    if let Some(enum_info) = ctx.enums.get(&enum_name).cloned() {
         if let Some(vi) = enum_info.variants.iter().find(|v| v.name == *variant) {
+            let is_generic = !enum_info.type_params.is_empty();
+            let mut subst: HashMap<String, Type> = HashMap::new();
             let variant_data = vi.data.clone();
             match (data, &variant_data) {
                 (EnumConstructionData::Unit, VariantData::Unit) => {}
@@ -801,7 +804,11 @@ fn infer_enum_construction(
                         for (i, arg_expr) in args.iter().enumerate() {
                             let arg_ty = infer_expr(arg_expr, ctx, ce);
                             let expected_ty = &expected[i];
-                            if expected_ty.is_known() && arg_ty.is_known() && *expected_ty != arg_ty
+                            if is_generic {
+                                unify(expected_ty, &arg_ty, &mut subst);
+                            } else if expected_ty.is_known()
+                                && arg_ty.is_known()
+                                && *expected_ty != arg_ty
                             {
                                 ctx.error(
                                     format!(
@@ -824,7 +831,12 @@ fn infer_enum_construction(
                         if let Some((_, field_ty)) =
                             expected_fields.iter().find(|(n, _)| *n == fi.name)
                         {
-                            if field_ty.is_known() && value_ty.is_known() && *field_ty != value_ty {
+                            if is_generic {
+                                unify(field_ty, &value_ty, &mut subst);
+                            } else if field_ty.is_known()
+                                && value_ty.is_known()
+                                && *field_ty != value_ty
+                            {
                                 ctx.error(
                                     format!(
                                         "variant `{}.{}` field `{}`: expected `{}`, found `{}`",
@@ -879,7 +891,20 @@ fn infer_enum_construction(
                     );
                 }
             }
-            Type::Enum(enum_name)
+            if is_generic {
+                let type_args: Vec<Type> = enum_info
+                    .type_params
+                    .iter()
+                    .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Unknown))
+                    .collect();
+                Type::GenericInstance {
+                    base: enum_name,
+                    type_args,
+                    kind: GenericKind::Enum,
+                }
+            } else {
+                Type::Enum(enum_name)
+            }
         } else {
             ctx.error(
                 format!("enum `{}` has no variant `{}`", enum_name, variant),
@@ -1160,6 +1185,46 @@ fn check_match_exhaustiveness(
     }
 }
 
+/// Resolves the variant data for a pattern, applying type substitution for
+/// generic enums when the subject type is a `GenericInstance`.
+fn resolve_variant_data(
+    enum_name: &str,
+    variant: &str,
+    subject_type: &Type,
+    ctx: &TypeContext,
+) -> Option<VariantData> {
+    let enum_info = ctx.enums.get(enum_name)?;
+    let vi = enum_info.variants.iter().find(|v| v.name == *variant)?;
+    let data = vi.data.clone();
+
+    if let Type::GenericInstance {
+        type_args,
+        kind: GenericKind::Enum,
+        ..
+    } = subject_type
+        && !enum_info.type_params.is_empty()
+    {
+        let subst = crate::types::build_substitution(&enum_info.type_params, type_args);
+        return Some(substitute_variant_data(&data, &subst));
+    }
+    Some(data)
+}
+
+fn substitute_variant_data(data: &VariantData, subst: &HashMap<String, Type>) -> VariantData {
+    match data {
+        VariantData::Unit => VariantData::Unit,
+        VariantData::Tuple(types) => {
+            VariantData::Tuple(types.iter().map(|t| substitute(t, subst)).collect())
+        }
+        VariantData::Struct(fields) => VariantData::Struct(
+            fields
+                .iter()
+                .map(|(n, t)| (n.clone(), substitute(t, subst)))
+                .collect(),
+        ),
+    }
+}
+
 /// Recursively validates a match pattern against the expected subject type,
 /// binding pattern variables into the environment.
 fn check_pattern(
@@ -1188,11 +1253,7 @@ fn check_pattern(
             span,
         } => {
             let enum_name = type_path.join(".");
-            let variant_data = ctx
-                .enums
-                .get(&enum_name)
-                .and_then(|ei| ei.variants.iter().find(|v| v.name == *variant))
-                .map(|vi| vi.data.clone());
+            let variant_data = resolve_variant_data(&enum_name, variant, subject_type, ctx);
 
             match variant_data {
                 Some(VariantData::Struct(expected_fields)) => {
@@ -1249,11 +1310,7 @@ fn check_pattern(
             span,
         } => {
             let enum_name = type_path.join(".");
-            let variant_data = ctx
-                .enums
-                .get(&enum_name)
-                .and_then(|ei| ei.variants.iter().find(|v| v.name == *variant))
-                .map(|vi| vi.data.clone());
+            let variant_data = resolve_variant_data(&enum_name, variant, subject_type, ctx);
 
             match variant_data {
                 Some(VariantData::Tuple(expected_types)) => {

@@ -230,6 +230,39 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
     None
 }
 
+/// Parses a mangled enum name like `Option_$i32$` and reconstructs a
+/// `GenericInstance` type so unification works in generic function calls.
+fn parse_mangled_enum_type(mangled: &str, c: &Compiler) -> Option<Type> {
+    use expo_typecheck::types::{GenericKind, Primitive};
+
+    let sep = mangled.find("_$")?;
+    let base = &mangled[..sep];
+    if !c.type_ctx.generic_enum_asts.contains_key(base) {
+        return None;
+    }
+    if !mangled.ends_with('$') {
+        return None;
+    }
+    let inner = &mangled[sep + 2..mangled.len() - 1];
+    let type_args: Vec<Type> = inner
+        .split('.')
+        .map(|s| {
+            if s == "unit" {
+                Type::Unit
+            } else if let Some(p) = Primitive::from_name(s) {
+                Type::Primitive(p)
+            } else {
+                Type::Struct(s.to_string())
+            }
+        })
+        .collect();
+    Some(Type::GenericInstance {
+        base: base.to_string(),
+        type_args,
+        kind: GenericKind::Enum,
+    })
+}
+
 /// Reconstructs an Expo type from an LLVM value by inspecting bit widths and
 /// struct names. Used when assigning to a new variable without a type annotation.
 pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) -> Type {
@@ -260,6 +293,12 @@ pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>
                 return Type::Struct(name_str.to_string());
             }
             if c.type_ctx.enums.contains_key(name_str) {
+                return Type::Enum(name_str.to_string());
+            }
+            if c.mono_enum_variants.contains_key(name_str) {
+                if let Some(gi) = parse_mangled_enum_type(name_str, c) {
+                    return gi;
+                }
                 return Type::Enum(name_str.to_string());
             }
         }

@@ -11,6 +11,18 @@ fn make_pair<A, B>(a: A, b: B) -> Pair<A, B>
   Pair { first: a, second: b }
 end
 
+enum Option<T>
+  Some(T)
+  None
+end
+
+fn unwrap_or<T>(opt: Option<T>, default: T) -> T
+  match opt
+    Option.Some(val) -> val
+    Option.None -> default
+  end
+end
+
 fn main
   print(identity(42))
   print(identity("hello"))
@@ -18,4 +30,10 @@ fn main
   p = make_pair(10, 20)
   print(p.first)
   print(p.second)
+
+  x = Option.Some(42)
+  print(unwrap_or(x, 0))
+
+  y = Option.Some("hello")
+  print(unwrap_or(y, "default"))
 end
