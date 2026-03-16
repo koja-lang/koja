@@ -24,10 +24,17 @@ struct DocumentState {
     module_uris: HashMap<String, String>,
 }
 
-#[derive(Debug)]
 pub struct Backend {
     client: Client,
     documents: Arc<RwLock<HashMap<String, DocumentState>>>,
+    stdlib_ctx: TypeContext,
+    stdlib_module: Module,
+}
+
+impl std::fmt::Debug for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Backend").finish()
+    }
 }
 
 impl std::fmt::Debug for DocumentState {
@@ -38,9 +45,13 @@ impl std::fmt::Debug for DocumentState {
 
 impl Backend {
     pub fn new(client: Client) -> Self {
+        let parsed = expo_parser::parse(expo_typecheck::KERNEL_SOURCE);
+        let ctx = expo_typecheck::collect_module(&parsed.module);
         Self {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
+            stdlib_ctx: ctx,
+            stdlib_module: parsed.module,
         }
     }
 
@@ -102,6 +113,8 @@ impl Backend {
             }
 
             let mut ctx = expo_typecheck::collect_module(&parse_result.module);
+            expo_typecheck::merge_stdlib(&self.stdlib_ctx, &mut ctx);
+            expo_typecheck::re_resolve_generics(&mut ctx);
             expo_typecheck::resolve_imports(&parse_result.module, &mut ctx, &module_contexts);
             expo_typecheck::check_module(&parse_result.module, &mut ctx);
             all_diags.extend(ctx.diagnostics.clone());
@@ -240,6 +253,7 @@ impl LanguageServer for Backend {
                         find_doc_from_uri(origin_uri, name)
                     } else {
                         lookup::find_doc_for(&state.module, name)
+                            .or_else(|| lookup::find_doc_for(&self.stdlib_module, name))
                     };
                     format_hover(&signature, doc.as_deref())
                 } else {
@@ -263,6 +277,7 @@ impl LanguageServer for Backend {
                         find_doc_from_uri(origin_uri, name)
                     } else {
                         lookup::find_doc_for(&state.module, name)
+                            .or_else(|| lookup::find_doc_for(&self.stdlib_module, name))
                     };
                     format_hover(&signature, doc.as_deref())
                 } else {
@@ -303,6 +318,7 @@ impl LanguageServer for Backend {
                         find_doc_from_uri(origin_uri, name)
                     } else {
                         lookup::find_doc_for(&state.module, name)
+                            .or_else(|| lookup::find_doc_for(&self.stdlib_module, name))
                     };
                     format_hover(&signature, doc.as_deref())
                 } else {

@@ -7,57 +7,17 @@ use std::process;
 
 use expo_ast::ast::{Diagnostic, Module, Severity};
 
-const KERNEL_SOURCE: &str = include_str!("../std/kernel.expo");
-
 struct Stdlib {
     ctx: expo_typecheck::context::TypeContext,
     module: Module,
 }
 
 fn parse_stdlib() -> Stdlib {
-    let parse_result = expo_parser::parse(KERNEL_SOURCE);
+    let parse_result = expo_parser::parse(expo_typecheck::KERNEL_SOURCE);
     let ctx = expo_typecheck::collect_module(&parse_result.module);
     Stdlib {
         ctx,
         module: parse_result.module,
-    }
-}
-
-fn merge_stdlib(
-    stdlib: &expo_typecheck::context::TypeContext,
-    target: &mut expo_typecheck::context::TypeContext,
-) {
-    for (name, info) in &stdlib.structs {
-        if !target.structs.contains_key(name) {
-            target.structs.insert(name.clone(), info.clone());
-        }
-    }
-    for (name, info) in &stdlib.enums {
-        if !target.enums.contains_key(name) {
-            target.enums.insert(name.clone(), info.clone());
-        }
-    }
-    for (name, sig) in &stdlib.functions {
-        if !target.functions.contains_key(name) {
-            target.functions.insert(name.clone(), sig.clone());
-        }
-    }
-    for (name, ast) in &stdlib.generic_struct_asts {
-        if !target.generic_struct_asts.contains_key(name) {
-            target.generic_struct_asts.insert(name.clone(), ast.clone());
-        }
-    }
-    for (name, ast) in &stdlib.generic_enum_asts {
-        if !target.generic_enum_asts.contains_key(name) {
-            target.generic_enum_asts.insert(name.clone(), ast.clone());
-        }
-    }
-    for (name, blocks) in &stdlib.generic_impl_asts {
-        target
-            .generic_impl_asts
-            .entry(name.clone())
-            .or_default()
-            .extend(blocks.iter().cloned());
     }
 }
 
@@ -224,7 +184,7 @@ fn build(args: &[String], quiet: bool, color: bool) {
     for name in &graph.order {
         let rm = &graph.modules[name];
         let mut ctx = expo_typecheck::collect_module(&rm.module);
-        merge_stdlib(&stdlib.ctx, &mut ctx);
+        expo_typecheck::merge_stdlib(&stdlib.ctx, &mut ctx);
         expo_typecheck::re_resolve_generics(&mut ctx);
         expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
         expo_typecheck::check_module(&rm.module, &mut ctx);
@@ -255,7 +215,7 @@ fn build(args: &[String], quiet: bool, color: bool) {
     }
 
     let mut merged_ctx = expo_typecheck::context::TypeContext::new();
-    merge_stdlib(&stdlib.ctx, &mut merged_ctx);
+    expo_typecheck::merge_stdlib(&stdlib.ctx, &mut merged_ctx);
     for ctx in module_contexts.values() {
         for (name, sig) in &ctx.functions {
             if !merged_ctx.functions.contains_key(name) {
@@ -529,7 +489,7 @@ fn cmd_check(args: &[String], color: bool) {
         for name in &graph.order {
             let rm = &graph.modules[name];
             let mut ctx = expo_typecheck::collect_module(&rm.module);
-            merge_stdlib(&stdlib.ctx, &mut ctx);
+            expo_typecheck::merge_stdlib(&stdlib.ctx, &mut ctx);
             expo_typecheck::re_resolve_generics(&mut ctx);
             expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
             expo_typecheck::check_module(&rm.module, &mut ctx);

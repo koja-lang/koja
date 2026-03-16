@@ -9,6 +9,47 @@ use context::{FunctionSig, ParamInfo, TypeContext};
 use expo_ast::ast::{Module, Param};
 use types::resolve_type_expr_with_params;
 
+/// The source of `std.kernel`, embedded at compile time. Callers parse this
+/// with `expo_parser::parse` and pass the resulting context to [`merge_stdlib`].
+pub const KERNEL_SOURCE: &str = include_str!("../std/kernel.expo");
+
+/// Merges a stdlib [`TypeContext`] into `target`, adding any types, functions,
+/// and generic ASTs that aren't already defined in the target module.
+pub fn merge_stdlib(stdlib: &TypeContext, target: &mut TypeContext) {
+    for (name, info) in &stdlib.structs {
+        if !target.structs.contains_key(name) {
+            target.structs.insert(name.clone(), info.clone());
+        }
+    }
+    for (name, info) in &stdlib.enums {
+        if !target.enums.contains_key(name) {
+            target.enums.insert(name.clone(), info.clone());
+        }
+    }
+    for (name, sig) in &stdlib.functions {
+        if !target.functions.contains_key(name) {
+            target.functions.insert(name.clone(), sig.clone());
+        }
+    }
+    for (name, ast) in &stdlib.generic_struct_asts {
+        if !target.generic_struct_asts.contains_key(name) {
+            target.generic_struct_asts.insert(name.clone(), ast.clone());
+        }
+    }
+    for (name, ast) in &stdlib.generic_enum_asts {
+        if !target.generic_enum_asts.contains_key(name) {
+            target.generic_enum_asts.insert(name.clone(), ast.clone());
+        }
+    }
+    for (name, blocks) in &stdlib.generic_impl_asts {
+        target
+            .generic_impl_asts
+            .entry(name.clone())
+            .or_default()
+            .extend(blocks.iter().cloned());
+    }
+}
+
 /// Runs collection and type-checking in one step, returning a populated context.
 pub fn check(module: &Module) -> TypeContext {
     let mut ctx = collect::collect(module);
