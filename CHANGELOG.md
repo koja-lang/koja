@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `print(true)` now outputs `true` instead of `1`. Booleans print correctly in `print()`, `print_bool()`, and string interpolation (`"#{some_bool}"`).
+- Formatter now preserves exactly one blank line between comments and code (in either direction) and between consecutive comments, instead of swallowing the gap entirely.
+- Formatter no longer inserts spurious `()` on unit enum variant patterns in match arms (e.g. `Red()` → `Red`).
+- Formatter now correctly places comments inside enum and struct bodies instead of losing them or misplacing them outside the block.
 
 ## [0.3.0] - 2026-03-14
 

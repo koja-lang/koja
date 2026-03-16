@@ -139,7 +139,7 @@ enum CounterMsg
 end
 
 actor Counter
-  state count: i32 = 0
+  state count: Int32 = 0
 
   receive Increment ->
     @count += 1

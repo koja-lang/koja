@@ -41,7 +41,7 @@ impl<'a> Printer<'a> {
                 && let Some(md) = &module.moduledoc
                 && moduledoc_line.is_some_and(|ml| ml < next_item_line)
             {
-                let comment_docs = self.comments.drain_before(md.span.start.line);
+                let (comment_docs, _) = self.comments.drain_before(md.span.start.line);
                 for c in comment_docs {
                     parts.push(c);
                 }
@@ -68,7 +68,7 @@ impl<'a> Printer<'a> {
                 }
 
                 let block_end = imports.last().unwrap().span.end.line + 1;
-                self.comments.drain_before(block_end);
+                let _ = self.comments.drain_before(block_end);
 
                 imports.sort_by_key(|imp| import_sort_key(imp));
 
@@ -85,7 +85,7 @@ impl<'a> Printer<'a> {
             } else {
                 let item = &module.items[i];
                 let span = item_span(item);
-                let comment_docs = self.comments.drain_before(span.start.line);
+                let (comment_docs, _) = self.comments.drain_before(span.start.line);
                 for c in comment_docs {
                     parts.push(c);
                 }
@@ -153,7 +153,19 @@ impl<'a> Printer<'a> {
         let mut body = Vec::new();
         for field in &s.fields {
             body.push(hardline());
+            let (cdocs, _) = self.comments.drain_before(field.span.start.line);
+            for c in cdocs {
+                body.push(c);
+            }
             body.push(self.struct_field_to_doc(field));
+        }
+        let (mut trailing, _) = self.comments.drain_before(s.span.end.line);
+        if !trailing.is_empty() {
+            trailing.pop();
+            body.push(hardline());
+            for c in trailing {
+                body.push(c);
+            }
         }
         parts.push(indent(2, concat(body)));
         parts.push(hardline());
@@ -197,7 +209,19 @@ impl<'a> Printer<'a> {
         let mut body = Vec::new();
         for variant in &e.variants {
             body.push(hardline());
+            let (cdocs, _) = self.comments.drain_before(variant.span.start.line);
+            for c in cdocs {
+                body.push(c);
+            }
             body.push(self.enum_variant_to_doc(variant));
+        }
+        let (mut trailing, _) = self.comments.drain_before(e.span.end.line);
+        if !trailing.is_empty() {
+            trailing.pop();
+            body.push(hardline());
+            for c in trailing {
+                body.push(c);
+            }
         }
         parts.push(indent(2, concat(body)));
         parts.push(hardline());
@@ -1073,7 +1097,7 @@ impl<'a> Printer<'a> {
         for (i, stmt) in stmts.iter().enumerate() {
             let stmt_line = stmt_start_line(stmt);
             let next_line = self.comments.peek_before(stmt_line).unwrap_or(stmt_line);
-            let comment_docs = self.comments.drain_before(stmt_line);
+            let (comment_docs, last_comment_line) = self.comments.drain_before(stmt_line);
 
             if i > 0 {
                 parts.push(hardline());
@@ -1086,6 +1110,12 @@ impl<'a> Printer<'a> {
                 parts.push(c);
             }
 
+            if let Some(lcl) = last_comment_line {
+                if stmt_line > lcl + 1 {
+                    parts.push(hardline());
+                }
+            }
+
             parts.push(self.statement_to_doc(stmt));
             let end_line = stmt_end_line(stmt);
             if let Some(tc) = self.comments.drain_trailing(end_line) {
@@ -1094,9 +1124,16 @@ impl<'a> Printer<'a> {
             prev_end = end_line;
         }
 
-        let trailing = self.comments.drain_before(block_end);
+        let next_trailing_line = self.comments.peek_before(block_end);
+        let (mut trailing, _) = self.comments.drain_before(block_end);
         if !trailing.is_empty() {
+            trailing.pop(); // drop the final hardline; the block's own newline before `end` provides it
             parts.push(hardline());
+            if let Some(cl) = next_trailing_line {
+                if cl > prev_end + 1 {
+                    parts.push(hardline());
+                }
+            }
             for c in trailing {
                 parts.push(c);
             }
@@ -1108,7 +1145,7 @@ impl<'a> Printer<'a> {
     fn body_to_doc(&mut self, stmts: &[Statement], block_end: u32) -> Doc {
         if stmts.is_empty() {
             // Still drain any comments inside the empty body
-            let trailing = self.comments.drain_before(block_end);
+            let (trailing, _) = self.comments.drain_before(block_end);
             if trailing.is_empty() {
                 nil()
             } else {
@@ -1142,15 +1179,25 @@ impl<'a> CommentCursor<'a> {
         Self { comments, pos: 0 }
     }
 
-    fn drain_before(&mut self, line: u32) -> Vec<Doc> {
+    /// Drain comments before `line`. Returns the docs and the line of the
+    /// last comment drained (so callers can detect a gap to the next statement).
+    /// Inserts a blank line between consecutive comments when the source had one.
+    fn drain_before(&mut self, line: u32) -> (Vec<Doc>, Option<u32>) {
         let mut docs = Vec::new();
+        let mut last_line: Option<u32> = None;
         while self.pos < self.comments.len() && self.comments[self.pos].span.start.line < line {
             let c = &self.comments[self.pos];
+            if let Some(ll) = last_line {
+                if c.span.start.line > ll + 1 {
+                    docs.push(hardline());
+                }
+            }
             docs.push(comment_doc(&c.text));
             docs.push(hardline());
+            last_line = Some(c.span.start.line);
             self.pos += 1;
         }
-        docs
+        (docs, last_line)
     }
 
     /// Peek at the line of the next unconsumed comment, if it's before `line`.
@@ -1336,13 +1383,17 @@ fn pattern_to_doc(pat: &Pattern) -> Doc {
             } else {
                 format!("{}.{}", type_path.join("."), variant)
             };
-            let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
-            concat(vec![
-                text(prefix),
-                text("("),
-                intersperse(elems, text(", ")),
-                text(")"),
-            ])
+            if elements.is_empty() {
+                text(prefix)
+            } else {
+                let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
+                concat(vec![
+                    text(prefix),
+                    text("("),
+                    intersperse(elems, text(", ")),
+                    text(")"),
+                ])
+            }
         }
         Pattern::EnumStruct {
             type_path,
@@ -1371,13 +1422,17 @@ fn pattern_to_doc(pat: &Pattern) -> Doc {
             ]))
         }
         Pattern::Constructor { name, elements, .. } => {
-            let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
-            concat(vec![
-                text(name.clone()),
-                text("("),
-                intersperse(elems, text(", ")),
-                text(")"),
-            ])
+            if elements.is_empty() {
+                text(name.clone())
+            } else {
+                let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
+                concat(vec![
+                    text(name.clone()),
+                    text("("),
+                    intersperse(elems, text(", ")),
+                    text(")"),
+                ])
+            }
         }
         Pattern::Tuple { elements, .. } => {
             let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
