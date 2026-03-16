@@ -1,6 +1,10 @@
 mod check;
 mod collect;
 pub mod context;
+mod env;
+mod expr;
+mod pattern;
+mod stmt;
 pub mod types;
 
 use std::collections::HashMap;
