@@ -401,12 +401,12 @@ send(worker, move large_payload)   # ownership transfers, zero-copy
 
 ### What this replaces
 
-| Pattern                         | Rust               | Go                | Erlang         | Expo            |
-| ------------------------------- | ------------------ | ----------------- | -------------- | --------------- |
-| Concurrent read access          | `Arc<RwLock<T>>`   | mutex + goroutine | copy per process | task borrow     |
-| Hand off data to worker         | `move` + `'static` | channel send      | copy (message) | actor move      |
-| Fan-out over large dataset      | rayon (clone/ref)  | goroutine + mutex | copy per process | task borrow     |
-| Shared state across threads     | `Arc<Mutex<T>>`    | `sync.Mutex`      | ETS / agent    | cache table      |
+| Pattern                     | Rust               | Go                | Erlang           | Expo        |
+| --------------------------- | ------------------ | ----------------- | ---------------- | ----------- |
+| Concurrent read access      | `Arc<RwLock<T>>`   | mutex + goroutine | copy per process | task borrow |
+| Hand off data to worker     | `move` + `'static` | channel send      | copy (message)   | actor move  |
+| Fan-out over large dataset  | rayon (clone/ref)  | goroutine + mutex | copy per process | task borrow |
+| Shared state across threads | `Arc<Mutex<T>>`    | `sync.Mutex`      | ETS / agent      | cache table |
 
 The "task borrow" row is the key differentiator. Rust can't do it because
 spawned tasks require `'static`. Erlang can't do it because processes are
@@ -532,14 +532,14 @@ annotation for the vast majority of actors.
 The separation between tasks and actors directly impacts memory consumption at
 scale.
 
-| | BEAM (Elixir) | Go | Rust + tokio | Expo (projected) |
-| -------------------- | ------------- | --------- | ------------ | ---------------- |
-| Bare binary RSS | 40-60 MB | 3-5 MB | 1-3 MB | 2-5 MB |
-| Small service | 50-150 MB | 10-30 MB | 5-15 MB | 5-20 MB |
-| Per-task overhead | ~2.5 KB | 2 KB | ~64 bytes | ~64-256 bytes |
-| Per-actor overhead | (same) | (same) | N/A | ~4-8 KB |
-| 10K concurrent tasks | ~25 MB | ~20 MB | ~640 KB | ~1-2 MB |
-| 10K actors | ~25 MB | ~20 MB | N/A | ~40-80 MB |
+|                      | BEAM (Elixir) | Go       | Rust + tokio | Expo (projected) |
+| -------------------- | ------------- | -------- | ------------ | ---------------- |
+| Bare binary RSS      | 40-60 MB      | 3-5 MB   | 1-3 MB       | 2-5 MB           |
+| Small service        | 50-150 MB     | 10-30 MB | 5-15 MB      | 5-20 MB          |
+| Per-task overhead    | ~2.5 KB       | 2 KB     | ~64 bytes    | ~64-256 bytes    |
+| Per-actor overhead   | (same)        | (same)   | N/A          | ~4-8 KB          |
+| 10K concurrent tasks | ~25 MB        | ~20 MB   | ~640 KB      | ~1-2 MB          |
+| 10K actors           | ~25 MB        | ~20 MB   | N/A          | ~40-80 MB        |
 
 BEAM's overhead comes from the VM infrastructure (interpreter, per-process GC,
 atom table, code server, distribution protocol), not from the actor model
@@ -563,7 +563,7 @@ creates a pattern where concurrency feels bolted on:
 
 - **Rust** designed ownership and borrowing in isolation, then layered
   concurrency on top. The result is correct but hostile: `Send + Sync +
-  'static` bounds, `Arc<Mutex<T>>`, `Pin<Box<dyn Future<...>>>`, and async
+'static` bounds, `Arc<Mutex<T>>`, `Pin<Box<dyn Future<...>>>`, and async
   function coloring.
 - **Zig** designed allocators first. `async/await` was added and then removed
   in 0.11. The concurrency story remains unresolved.

@@ -103,6 +103,38 @@ clear "collect then process" boundary. Framework code (like an HTTP server)
 might offer implicit per-request arenas, but that's a framework concern, not a
 language concern.
 
+## Why this isn't FP (and why that matters)
+
+Expo's ownership model looks superficially like functional programming:
+immutable borrows, no `&mut`, values flow through functions. But the key
+difference is that **owners can mutate in place**. When you own a struct, you
+can write to its fields directly -- no copying, no path-copying, no
+persistent data structures.
+
+This avoids the deep-nested-update pain that plagues pure FP languages like
+Elixir/Erlang. In Elixir, updating a field 5 levels deep means copying every
+intermediate map/struct on the path. In Expo, you move ownership to a helper,
+mutate directly, and return the owned value:
+
+```
+fn update_deep_config(move config: AppConfig) -> AppConfig
+  config.database.pool.max_connections = 50
+  config
+end
+
+config = update_deep_config(config)  # moved in, mutated, moved back
+```
+
+No copies. No lenses. No `put_in(config, [:database, :pool, :max_connections], 50)`.
+The compiler tracks ownership so this is safe -- nobody else can read `config`
+while the function holds it.
+
+**Concurrent mutation of shared structures** is handled through actors. An
+actor owns the data structure and processes mutations sequentially through its
+mailbox -- effectively a mutex with better ergonomics and crash isolation. This
+is the Erlang/OTP pattern, but with zero-copy message passing (ownership
+transfer) instead of deep-copy serialization.
+
 ## What this means in practice
 
 Most Expo code uses plain ownership + borrow. You write normal code, pass

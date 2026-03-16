@@ -68,7 +68,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 - **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `FromPair<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
-- **Closures (Phase 1)**: Block closures only with explicit types and parens: `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax. Inline closures (`x -> expr`) are parsed but not compiled -- they land in Phase 2 with type inference and generics.
+- **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Used by `map`/`then` on `Option` and `Result`. Inline closures (`x -> expr`) are parsed but deferred to v0.5+.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 - **PascalCase primitives and type simplification** (done): Primitives renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. User-defined types (`Pair`, `User`) and language types (`Int`, `String`) are now visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction.
 - **`ref T` syntax** (done): Reference types use `ref T` (space, no angle brackets) instead of `ref<T>`. `ref` is a lowercase keyword modifier, consistent with the modifier pattern (`const`, `priv`, `move`, `ref`): lowercase keywords modify the thing that follows them, PascalCase names are always types.
@@ -77,14 +77,14 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 ### Known gaps
 
-- **Generic enum unit variants**: `Option.None` cannot infer `T` without usage context -- workaround: variable type annotations (`z: Option<Int32> = Option.None`)
+- **Generic enum unit variants in top-level code**: `Option.None` cannot infer `T` without usage context in bare declarations -- workaround: variable type annotations (`z: Option<Int32> = Option.None`). Inside monomorphized method bodies and closures with return type annotations, generic enum construction resolves all type parameters automatically.
 - **Type checker**: `ref T` unresolved (Phase 2)
 - **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
 
 ### Design artifacts
 
 - **Language design** -- syntax decisions, memory model, async model, module system, all finalized through iterative design sessions
-- **EBNF grammar** -- `grammar.ebnf`, 426 lines covering all syntax constructs
+- **EBNF grammar** -- `grammar.ebnf`, 436 lines covering all syntax constructs
 - **Example codebase** -- 17 `.expo` files porting `auth-manager` (a real Rust microservice) into Expo pseudocode, validating the language feels right
 - **Memory strategy** -- documented in `MEMORY.md` (stack, ownership+move, explicit arena)
 - **Concurrency model** -- documented in `CONCURRENCY.md` (tasks, actors, native runtime, supervision)
@@ -136,7 +136,7 @@ Remaining work (generics, `ref T`, trait impls) is Phase 2 scope.
 - ~~Multi-module compilation to a single native binary~~
 - ~~**Deliverable**: `expo build hello.expo` produces a native binary that runs~~
 
-Remaining work (inline closures, for loops, try `?`, closure capture analysis) is Phase 2 scope.
+Remaining work (for loops, try `?`, closure capture analysis) is Phase 2 scope.
 
 ### Key decisions
 
@@ -152,12 +152,12 @@ Remaining work (inline closures, for loops, try `?`, closure capture analysis) i
 
 Make the compiler powerful enough to compile non-trivial programs with Expo's generics, ownership model, and structured concurrency.
 
-**Note**: The parser and AST already handle all Phase 2 constructs (for, closures, arena, spawn/await, generics). The work here is wiring up type checking and codegen, not design or parsing. Generics are the gate to Phase 2 -- `Option<T>`, `Result<T,E>`, collections, `Pair<A,B>`, try (`?`), and `ref T` all depend on them.
+**Note**: The parser and AST already handle all Phase 2 constructs (for, closures, arena, spawn/await, generics). The work here is wiring up type checking and codegen, not design or parsing. Generics are the gate to Phase 2 -- `Option<T>`, `Result<T,E>`, collections, `Pair<A,B>`, and `ref T` all depend on them.
 
 **Implementation order**: Generics first (the shared gate -- unlocks everything). After generics, two independent tracks can proceed in parallel:
 
 - **Track A -- Ownership/borrowing**: move semantics, borrow checking, drop insertion (pure compile-time flow analysis, no dependency on collections)
-- **Track B -- Collections/closures**: `List<T>`, `Map<K,V>`, inline closure codegen, iterators, `for` loops (no dependency on ownership)
+- **Track B -- Collections**: `List<T>`, `Map<K,V>`, iterators, `for` loops (no dependency on ownership)
 
 Tasks require both tracks to converge (borrow safety across spawn boundaries + practical collection passing). Closure capture analysis also sits at the intersection (move vs. borrow into closures).
 
@@ -170,11 +170,11 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - ~~Generic enums (required for `Option<T>` and `Result<T,E>`)~~
 - ~~Variable type annotations (`x: Int32 = 42`, `z: Option<Int32> = Option.None`) -- unblocks generic enum unit variants and general type safety~~
 - ~~Numeric type coercion for annotated variables (same-category casting: `x: UInt8 = 4`)~~
-- ~~Monomorphization of impl blocks on generic types (methods like `.first()`, `.unwrap()`, `.or()`)~~
+- ~~Monomorphization of impl blocks on generic types (methods like `.first()`, `.unwrap()`, `.or()`, `.map()`, `.then()`)~~
+- ~~Generic method monomorphization -- methods with their own type params (`map<U>`, `then<U>`) on generic types (`Option<T>`, `Result<T, E>`) fully compile with correct type substitution for both impl-level and method-level generics~~
 - ~~`Option<T>` and `Result<T,E>` as stdlib enum types with `Some`/`None`/`Ok`/`Err` (auto-imported from `std.kernel`)~~
 - ~~`Pair<A, B>` stdlib struct (with `.first` / `.second`)~~
 - ~~`panic(message)` builtin for fatal errors (prints to stderr, calls `abort`)~~
-- The `?` operator for error propagation -- design reconsidered, see "FP and pipes" in Design exploration
 - **Done when**: ~~`Option<T>`, `Result<T,E>`, and `Pair<A,B>` compile and work in match expressions~~
 
 ### Ownership and borrowing
@@ -191,11 +191,10 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - The `&` symbol does not exist in Expo -- borrowing is implicit, references use `ref T`
 - **Done when**: programs that move, borrow, and clone compile correctly, and use-after-move is caught
 
-### Collections, closures, and iteration
+### Collections and iteration
 
 - `List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations
 - Closure capture analysis (move vs. borrow) -- non-capturing block closures (`fn (params) -> type ... end`) land in Phase 1, capturing closures need ownership semantics from this phase
-- Inline closure codegen (`x -> expr`) -- requires type inference and generics to compile without explicit annotations
 - Bare function names as references (no sigil -- `foo` references, `foo()` calls)
 - Iterator methods: `.map()`, `.filter()`, `.any?()`, `.all?()`, `.retain()`, `.iter()`
 - Ownership splitting for concurrent mutation patterns (tasks receive owned, non-overlapping chunks -- specific API designed during stdlib phase)
@@ -494,6 +493,12 @@ Syntax undecided -- candidates include `~"""`, `'''`, or something else entirely
 
 Active design discussions about the type system, code organization, and functional programming patterns. These inform future work but are not committed changes.
 
+### Inline closures
+
+- Inline closure syntax (`x -> expr`) is parsed but not compiled. Block closures (`fn (x: Int32) -> Int32 ... end`) cover all current use cases including `map`/`then`.
+- Requires closure-specific type inference -- the parameter type must be inferred from the calling context (e.g. `option.map(x -> x + 1)` infers `x: Int32` from `Option<Int32>`).
+- Not needed for v0.4 or core language features. Ergonomic sugar for later.
+
 ### `impl` and protocols
 
 - **Leaning**: `impl` should ultimately mean "implementing a protocol/contract" only -- not bare method attachment. Strong direction, not yet committed.
@@ -516,7 +521,7 @@ Active design discussions about the type system, code organization, and function
 - `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
 - Compiler guidance when `map` is used where `then` is needed (or vice versa).
 - Pipes remain for pure data transformation where nothing fails.
-- `map`/`then` now ship in the stdlib using block closures with explicit types. Inline closures (`x -> expr`) remain deferred but are not needed for core API usage.
+- `map`/`then` ship in the stdlib using block closures with explicit types. Inline closures (`x -> expr`) are deferred to v0.5+ but are not needed for core API usage.
 
 ### Struct destructuring assignment
 
@@ -573,23 +578,22 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 
 ### Remaining
 
-| Phase       | Milestone                                                                   |
-| ----------- | --------------------------------------------------------------------------- |
-| Core        | Inline closures (`x -> expr`) with type inference                            |
-| Core        | Ownership + borrow checker + tasks (structured concurrency)                 |
-| Core        | Collections, closures, arena, `ua_parser.expo` compiles                     |
-| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)                  |
-| Reliability | Preemption/priority, supervision, `shared_map`                              |
-| Stdlib      | Core types, I/O, time, `config.expo` compiles                               |
-| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)                          |
-| Tooling     | Package manager, test runner                                                |
-| Tooling     | Documentation generator (doctests, search, prose pages)                     |
-| Tooling     | LSP -- autocomplete, inline type hints, multi-module                        |
-| Tooling     | Interactive shell (`expo shell`) -- REPL with project loading               |
-| Self-host   | Lexer + parser in Expo                                                      |
-| Self-host   | Full compiler in Expo                                                       |
-| Self-host   | Retire Rust bootstrap                                                       |
-| Validation  | auth-manager-expo runs for real                                             |
+| Phase       | Milestone                                                     |
+| ----------- | ------------------------------------------------------------- |
+| Core        | Ownership + borrow checker + tasks (structured concurrency)   |
+| Core        | Collections, arena, `ua_parser.expo` compiles                 |
+| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)    |
+| Reliability | Preemption/priority, supervision, `shared_map`                |
+| Stdlib      | Core types, I/O, time, `config.expo` compiles                 |
+| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)            |
+| Tooling     | Package manager, test runner                                  |
+| Tooling     | Documentation generator (doctests, search, prose pages)       |
+| Tooling     | LSP -- autocomplete, inline type hints, multi-module          |
+| Tooling     | Interactive shell (`expo shell`) -- REPL with project loading |
+| Self-host   | Lexer + parser in Expo                                        |
+| Self-host   | Full compiler in Expo                                         |
+| Self-host   | Retire Rust bootstrap                                         |
+| Validation  | auth-manager-expo runs for real                               |
 
 ---
 
