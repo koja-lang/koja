@@ -128,8 +128,8 @@ pub fn compile_expr<'ctx>(
             params,
             return_type,
             body,
-            ..
-        } => compile_closure(c, params, return_type, body, function),
+            span,
+        } => compile_closure(c, params, return_type, body, function, *span),
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
@@ -374,24 +374,26 @@ fn resolve_closure_params<'ctx>(
 }
 
 /// Compiles a block closure (`fn (params) -> type ... end`) into an anonymous
-/// LLVM function and returns a function pointer. Non-capturing: the closure
-/// body runs in a fresh variable scope.
+/// LLVM function and returns a fat pointer `{ fn_ptr, env_ptr }`. Every closure
+/// function receives an implicit `env_ptr: ptr` as its first parameter.
 fn compile_closure<'ctx>(
     c: &mut Compiler<'ctx>,
     params: &[ClosureParam],
     return_type: &Option<expo_ast::ast::TypeExpr>,
     body: &[Statement],
     _parent_fn: FunctionValue<'ctx>,
+    span: expo_ast::span::Span,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     let param_types = resolve_closure_params(c, params);
 
-    let llvm_param_types: Vec<_> = param_types
-        .iter()
-        .filter_map(|ty| to_llvm_type(ty, c.context, &c.struct_types))
-        .collect();
+    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
 
-    let llvm_meta_params: Vec<inkwell::types::BasicMetadataTypeEnum> =
-        llvm_param_types.iter().map(|t| (*t).into()).collect();
+    let mut llvm_meta_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()]; // env_ptr is always the first param
+    for ty in &param_types {
+        if let Some(lt) = to_llvm_type(ty, c.context, &c.struct_types) {
+            llvm_meta_params.push(lt.into());
+        }
+    }
 
     let ret_type = match return_type {
         Some(te) => c.resolve_type_expr(te),
@@ -404,6 +406,23 @@ fn compile_closure<'ctx>(
 
     let closure_name = format!("__closure_{}", c.closure_counter);
     c.closure_counter += 1;
+
+    let captures = c.type_ctx.closure_captures.get(&span).cloned();
+
+    // Read captured values from parent scope before saving variables
+    let captured_values: Vec<(String, inkwell::values::BasicValueEnum<'ctx>, Type)> =
+        if let Some(ref caps) = captures {
+            caps.iter()
+                .filter_map(|cap| {
+                    let (ptr, ty) = c.variables.get(&cap.name)?;
+                    let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)?;
+                    let val = c.builder.build_load(llvm_ty, *ptr, &cap.name).unwrap();
+                    Some((cap.name.clone(), val, ty.clone()))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
     let closure_fn = c.module.add_function(&closure_name, fn_type, None);
     let entry = c.context.append_basic_block(closure_fn, "entry");
@@ -444,13 +463,40 @@ fn compile_closure<'ctx>(
 
     c.builder.position_at_end(entry);
 
+    // Bind user params (offset by 1 for the env_ptr param)
     for (i, param) in params.iter().enumerate() {
         if let ClosureParam::Name { name, .. } = param {
             let ty = &param_types[i];
             if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.struct_types) {
                 let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
-                let param_val = closure_fn.get_nth_param(i as u32).unwrap();
+                let param_val = closure_fn.get_nth_param((i + 1) as u32).unwrap();
                 c.builder.build_store(alloca, param_val).unwrap();
+                c.variables.insert(name.clone(), (alloca, ty.clone()));
+            }
+        }
+    }
+
+    // Load captured variables from the env struct into local allocas
+    if !captured_values.is_empty() {
+        let env_ptr = closure_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let env_field_types: Vec<inkwell::types::BasicTypeEnum> = captured_values
+            .iter()
+            .filter_map(|(_, _, ty)| to_llvm_type(ty, c.context, &c.struct_types))
+            .collect();
+        let env_struct_ty = c.context.struct_type(&env_field_types, false);
+
+        for (i, (name, _, ty)) in captured_values.iter().enumerate() {
+            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.struct_types) {
+                let field_ptr = c
+                    .builder
+                    .build_struct_gep(env_struct_ty, env_ptr, i as u32, &format!("cap_{name}"))
+                    .unwrap();
+                let val = c
+                    .builder
+                    .build_load(llvm_ty, field_ptr, &format!("load_{name}"))
+                    .unwrap();
+                let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
+                c.builder.build_store(alloca, val).unwrap();
                 c.variables.insert(name.clone(), (alloca, ty.clone()));
             }
         }
@@ -472,7 +518,59 @@ fn compile_closure<'ctx>(
         c.builder.position_at_end(bb);
     }
 
-    Ok(Some(closure_fn.as_global_value().as_pointer_value().into()))
+    // Build the env_ptr: malloc + store captures, or null for non-capturing
+    let env_ptr_val = if !captured_values.is_empty() {
+        let env_field_types: Vec<inkwell::types::BasicTypeEnum> = captured_values
+            .iter()
+            .filter_map(|(_, _, ty)| to_llvm_type(ty, c.context, &c.struct_types))
+            .collect();
+        let env_struct_ty = c.context.struct_type(&env_field_types, false);
+        let env_size = env_struct_ty.size_of().unwrap();
+
+        let malloc = *c
+            .functions
+            .get("malloc")
+            .expect("malloc not declared in builtins");
+        let raw_ptr = c
+            .builder
+            .build_call(malloc, &[env_size.into()], "env_alloc")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_pointer_value();
+
+        for (i, (name, val, _)) in captured_values.iter().enumerate() {
+            let field_ptr = c
+                .builder
+                .build_struct_gep(env_struct_ty, raw_ptr, i as u32, &format!("env_{name}"))
+                .unwrap();
+            c.builder.build_store(field_ptr, *val).unwrap();
+        }
+
+        raw_ptr
+    } else {
+        ptr_ty.const_null()
+    };
+
+    // Build the fat pointer struct { fn_ptr, env_ptr }
+    let closure_struct_ty = c
+        .context
+        .struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
+    let fn_ptr = closure_fn.as_global_value().as_pointer_value();
+    let mut fat_ptr = closure_struct_ty.get_undef();
+    fat_ptr = c
+        .builder
+        .build_insert_value(fat_ptr, fn_ptr, 0, "insert_fn")
+        .unwrap()
+        .into_struct_value();
+    fat_ptr = c
+        .builder
+        .build_insert_value(fat_ptr, env_ptr_val, 1, "insert_env")
+        .unwrap()
+        .into_struct_value();
+
+    Ok(Some(fat_ptr.into()))
 }
 
 fn compile_pipe<'ctx>(

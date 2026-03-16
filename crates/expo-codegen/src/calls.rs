@@ -47,35 +47,49 @@ pub fn compile_call<'ctx>(
 
                 Ok(result.try_as_basic_value().left())
             } else if let Some((
-                ptr,
+                var_ptr,
                 Type::Function {
                     params,
                     return_type,
                 },
             )) = c.variables.get(name).cloned()
             {
-                let llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = params
-                    .iter()
-                    .filter_map(|ty| to_llvm_type(ty, c.context, &c.struct_types))
-                    .map(|t| t.into())
-                    .collect();
+                let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+                let closure_struct_ty = c
+                    .context
+                    .struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
 
-                let fn_type = match to_llvm_type(&return_type, c.context, &c.struct_types) {
-                    Some(ret) => ret.fn_type(&llvm_param_types, false),
-                    None => c.context.void_type().fn_type(&llvm_param_types, false),
-                };
+                let fat_ptr = c
+                    .builder
+                    .build_load(closure_struct_ty, var_ptr, &format!("{name}_closure"))
+                    .unwrap()
+                    .into_struct_value();
 
                 let fn_ptr = c
                     .builder
-                    .build_load(
-                        c.context.ptr_type(inkwell::AddressSpace::default()),
-                        ptr,
-                        &format!("{name}_ptr"),
-                    )
+                    .build_extract_value(fat_ptr, 0, "fn_ptr")
                     .unwrap()
                     .into_pointer_value();
+                let env_ptr = c
+                    .builder
+                    .build_extract_value(fat_ptr, 1, "env_ptr")
+                    .unwrap();
 
-                let mut compiled_args = Vec::new();
+                // Build fn type with env_ptr as first param
+                let mut llvm_call_params: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                    vec![ptr_ty.into()];
+                for ty in &params {
+                    if let Some(lt) = to_llvm_type(ty, c.context, &c.struct_types) {
+                        llvm_call_params.push(lt.into());
+                    }
+                }
+                let fn_type = match to_llvm_type(&return_type, c.context, &c.struct_types) {
+                    Some(ret) => ret.fn_type(&llvm_call_params, false),
+                    None => c.context.void_type().fn_type(&llvm_call_params, false),
+                };
+
+                let mut compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    vec![env_ptr.into()];
                 for arg in args {
                     let val = compile_expr(c, &arg.value, function)?
                         .ok_or_else(|| format!("argument to {name} produced no value"))?;

@@ -7,7 +7,7 @@
 use expo_ast::ast::*;
 
 use crate::check::types_compatible;
-use crate::context::TypeContext;
+use crate::context::{PassMode, TypeContext};
 use crate::env::{CheckEnv, VarState};
 use crate::expr::infer_expr;
 use crate::types::{Type, resolve_type_expr};
@@ -60,7 +60,10 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
 
             match target {
                 AssignTarget::LValue(lv) => {
-                    if lv.segments.len() > 1 && lv.segments[0] == "self" && !ce.self_is_move {
+                    if lv.segments.len() > 1
+                        && lv.segments[0] == "self"
+                        && ce.self_mode != PassMode::Move
+                    {
                         ctx.error_with_hint(
                             format!(
                                 "cannot mutate `{}` -- `self` is borrowed (read-only)",

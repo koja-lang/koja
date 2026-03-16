@@ -23,7 +23,14 @@ pub fn to_llvm_type<'ctx>(
             let mangled = mangle_name(base, type_args);
             struct_types.get(&mangled).map(|st| (*st).into())
         }
-        Type::Function { .. } => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
+        Type::Function { .. } => {
+            let ptr_ty = context.ptr_type(inkwell::AddressSpace::default());
+            Some(
+                context
+                    .struct_type(&[ptr_ty.into(), ptr_ty.into()], false)
+                    .into(),
+            )
+        }
         Type::Unit => None,
         _ => None,
     }

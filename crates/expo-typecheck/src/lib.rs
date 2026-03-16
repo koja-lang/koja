@@ -9,7 +9,7 @@ pub mod types;
 
 use std::collections::HashMap;
 
-use context::{FunctionSig, ParamInfo, TypeContext};
+use context::{FunctionSig, ParamInfo, PassMode, TypeContext};
 use expo_ast::ast::{Module, Param};
 use types::resolve_type_expr_with_params;
 
@@ -70,6 +70,9 @@ pub fn merge_stdlib(stdlib: &TypeContext, target: &mut TypeContext) {
             .entry(type_name.clone())
             .or_default()
             .extend(protos.iter().cloned());
+    }
+    for (span, captures) in &stdlib.closure_captures {
+        target.closure_captures.insert(*span, captures.clone());
     }
 }
 
@@ -143,7 +146,11 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
                     type_expr,
                     ..
                 } => Some(ParamInfo {
-                    is_move: *is_move,
+                    mode: if *is_move {
+                        PassMode::Move
+                    } else {
+                        PassMode::Borrow
+                    },
                     name: name.clone(),
                     ty: resolve_type_expr_with_params(
                         type_expr,
@@ -167,7 +174,7 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
                 is_private: sig.is_private,
                 params,
                 return_type,
-                self_is_move: sig.self_is_move,
+                self_mode: sig.self_mode.clone(),
                 span: sig.span,
                 type_params: sig.type_params.clone(),
             };

@@ -11,7 +11,7 @@ use expo_ast::ast::*;
 use expo_ast::span::Span;
 
 use crate::check::{check_call_args, check_type, try_parse_mangled_generic};
-use crate::context::{FunctionSig, ParamInfo, TypeContext, VariantData};
+use crate::context::{CaptureInfo, FunctionSig, ParamInfo, PassMode, TypeContext, VariantData};
 use crate::env::{CheckEnv, VarInfo};
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
 use crate::stmt::check_body;
@@ -44,16 +44,30 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         Expr::Closure {
             params, body, span, ..
         } => {
+            let parent_var_names: HashSet<String> = ce.env.keys().cloned().collect();
+
             let mut closure_env = CheckEnv {
-                env: HashMap::<String, VarInfo>::new(),
+                env: ce.env.clone(),
                 used_vars: HashSet::new(),
                 loop_depth: 0,
                 return_type: Type::Unknown,
-                self_is_move: false,
+                self_mode: PassMode::Borrow,
                 struct_names: ce.struct_names,
                 enum_names: ce.enum_names,
             };
             let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
+
+            let param_names: HashSet<String> = params
+                .iter()
+                .filter_map(|p| {
+                    if let ClosureParam::Name { name, .. } = p {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
             check_body(body, ctx, &mut closure_env);
             let return_type = body
                 .last()
@@ -62,6 +76,29 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                     _ => None,
                 })
                 .unwrap_or(Type::Unit);
+
+            let capture_candidates: Vec<(String, Type)> = closure_env
+                .used_vars
+                .iter()
+                .filter(|name| parent_var_names.contains(*name) && !param_names.contains(*name))
+                .filter_map(|name| ce.env.get(name).map(|info| (name.clone(), info.ty.clone())))
+                .collect();
+
+            let mut captured = Vec::new();
+            for (name, ty) in capture_candidates {
+                let mode = if ty.is_copy() {
+                    PassMode::Copy
+                } else {
+                    ce.mark_moved(&name, *span);
+                    PassMode::Move
+                };
+                captured.push(CaptureInfo { name, ty, mode });
+            }
+
+            if !captured.is_empty() {
+                ctx.closure_captures.insert(*span, captured);
+            }
+
             Type::Function {
                 params: param_types,
                 return_type: Box::new(return_type),
@@ -211,7 +248,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 used_vars: HashSet::new(),
                 loop_depth: 0,
                 return_type: Type::Unknown,
-                self_is_move: false,
+                self_mode: PassMode::Borrow,
                 struct_names: ce.struct_names,
                 enum_names: ce.enum_names,
             };
@@ -886,7 +923,7 @@ fn infer_method_call(
                 .params
                 .iter()
                 .map(|p| ParamInfo {
-                    is_move: p.is_move,
+                    mode: p.mode.clone(),
                     name: p.name.clone(),
                     ty: substitute(&p.ty, s),
                 })
@@ -896,7 +933,7 @@ fn infer_method_call(
             (sig.return_type.clone(), sig.params.clone())
         };
 
-        if sig.self_is_move
+        if sig.self_mode == PassMode::Move
             && !recv_ty.is_copy()
             && let Expr::Ident { name, .. } = receiver
         {
@@ -908,7 +945,7 @@ fn infer_method_call(
                 is_private: sig.is_private,
                 params,
                 return_type,
-                self_is_move: sig.self_is_move,
+                self_mode: sig.self_mode.clone(),
                 span: sig.span,
                 type_params: sig.type_params.clone(),
             };

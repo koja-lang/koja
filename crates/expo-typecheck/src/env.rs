@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use expo_ast::span::Span;
 
-use crate::context::TypeContext;
+use crate::context::{PassMode, TypeContext};
 use crate::types::Type;
 
 /// Ownership state of a local variable during type checking.
@@ -33,7 +33,7 @@ pub(crate) struct CheckEnv<'a> {
     pub used_vars: HashSet<String>,
     pub loop_depth: usize,
     pub return_type: Type,
-    pub self_is_move: bool,
+    pub self_mode: PassMode,
     pub struct_names: &'a [&'a str],
     pub enum_names: &'a [&'a str],
 }
@@ -47,7 +47,7 @@ impl<'a> CheckEnv<'a> {
             used_vars: HashSet::new(),
             loop_depth: self.loop_depth,
             return_type,
-            self_is_move: self.self_is_move,
+            self_mode: self.self_mode.clone(),
             struct_names: self.struct_names,
             enum_names: self.enum_names,
         }

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
-use crate::context::{ParamInfo, TypeContext};
+use crate::context::{ParamInfo, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr};
 use crate::stmt::check_body;
@@ -110,17 +110,22 @@ fn check_function(
         return;
     }
 
-    let self_is_move = f
+    let self_mode = if f
         .params
         .iter()
-        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }));
+        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }))
+    {
+        PassMode::Move
+    } else {
+        PassMode::Borrow
+    };
 
     let mut ce = CheckEnv {
         env,
         used_vars: HashSet::new(),
         loop_depth: 0,
         return_type: declared_return.clone(),
-        self_is_move,
+        self_mode,
         struct_names,
         enum_names,
     };
@@ -198,7 +203,7 @@ pub(crate) fn check_call_args(
                     arg.span,
                 );
             }
-            if param.is_move
+            if param.mode == PassMode::Move
                 && !arg_ty.is_copy()
                 && let Expr::Ident { name, .. } = &arg.value
             {

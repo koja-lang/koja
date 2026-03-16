@@ -7,7 +7,7 @@ use expo_ast::ast::{
 use expo_ast::span::Span;
 
 use crate::context::{
-    EnumInfo, FunctionSig, ParamInfo, ProtocolInfo, StructInfo, TypeContext, VariantData,
+    EnumInfo, FunctionSig, ParamInfo, PassMode, ProtocolInfo, StructInfo, TypeContext, VariantData,
     VariantInfo,
 };
 use crate::types::{Type, resolve_type_expr_with_params};
@@ -324,12 +324,12 @@ pub fn collect(module: &Module) -> TypeContext {
         FunctionSig {
             is_private: false,
             params: vec![ParamInfo {
-                is_move: false,
+                mode: PassMode::Borrow,
                 name: "value".to_string(),
                 ty: Type::Unknown,
             }],
             return_type: Type::Unit,
-            self_is_move: false,
+            self_mode: PassMode::Borrow,
             span: Span::zero(),
             type_params: Vec::new(),
         },
@@ -340,12 +340,12 @@ pub fn collect(module: &Module) -> TypeContext {
         FunctionSig {
             is_private: false,
             params: vec![ParamInfo {
-                is_move: false,
+                mode: PassMode::Borrow,
                 name: "message".to_string(),
                 ty: Type::Primitive(crate::types::Primitive::String),
             }],
             return_type: Type::Unit,
-            self_is_move: false,
+            self_mode: PassMode::Borrow,
             span: Span::zero(),
             type_params: Vec::new(),
         },
@@ -482,7 +482,11 @@ fn build_function_sig_with_params(
                 type_expr,
                 ..
             } => Some(ParamInfo {
-                is_move: *is_move,
+                mode: if *is_move {
+                    PassMode::Move
+                } else {
+                    PassMode::Borrow
+                },
                 name: name.clone(),
                 ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
             }),
@@ -496,16 +500,21 @@ fn build_function_sig_with_params(
         .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
         .unwrap_or(Type::Unit);
 
-    let self_is_move = f
+    let self_mode = if f
         .params
         .iter()
-        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }));
+        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }))
+    {
+        PassMode::Move
+    } else {
+        PassMode::Borrow
+    };
 
     Some(FunctionSig {
         is_private: f.is_private,
         params,
         return_type,
-        self_is_move,
+        self_mode,
         span: f.span,
         type_params: f.type_params.clone(),
     })
@@ -530,7 +539,11 @@ fn build_protocol_method_sig(
                 type_expr,
                 ..
             } => Some(ParamInfo {
-                is_move: *is_move,
+                mode: if *is_move {
+                    PassMode::Move
+                } else {
+                    PassMode::Borrow
+                },
                 name: name.clone(),
                 ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
             }),
@@ -544,16 +557,21 @@ fn build_protocol_method_sig(
         .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
         .unwrap_or(Type::Unit);
 
-    let self_is_move = m
+    let self_mode = if m
         .params
         .iter()
-        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }));
+        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }))
+    {
+        PassMode::Move
+    } else {
+        PassMode::Borrow
+    };
 
     Some(FunctionSig {
         is_private: false,
         params,
         return_type,
-        self_is_move,
+        self_mode,
         span: m.span,
         type_params: m.type_params.clone(),
     })

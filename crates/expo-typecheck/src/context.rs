@@ -9,6 +9,7 @@ use crate::types::Type;
 
 /// Holds all type information gathered during collection and checking for a single module.
 pub struct TypeContext {
+    pub closure_captures: HashMap<Span, Vec<CaptureInfo>>,
     pub constants: HashMap<String, Type>,
     pub diagnostics: Vec<Diagnostic>,
     pub enums: HashMap<String, EnumInfo>,
@@ -40,17 +41,17 @@ pub struct FunctionSig {
     pub is_private: bool,
     pub params: Vec<ParamInfo>,
     pub return_type: Type,
-    /// Whether this method takes `move self` (ownership transfer of receiver).
-    pub self_is_move: bool,
+    /// How the receiver (`self`) is passed: `Move` for `move self`, `Borrow` otherwise.
+    pub self_mode: PassMode,
     #[allow(dead_code)]
     pub span: Span,
     pub type_params: Vec<String>,
 }
 
-/// A single parameter's name, resolved type, and whether it takes ownership.
+/// A single parameter's name, resolved type, and how ownership is transferred.
 #[derive(Clone)]
 pub struct ParamInfo {
-    pub is_move: bool,
+    pub mode: PassMode,
     pub name: String,
     pub ty: Type,
 }
@@ -89,6 +90,26 @@ pub enum VariantData {
     Unit,
 }
 
+/// How a value crosses a boundary: parameter passing, closure capture, or
+/// message send. Unifies the ownership semantics across the language.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PassMode {
+    /// Value is duplicated. The original stays live.
+    Copy,
+    /// Ownership transfers. The original is consumed.
+    Move,
+    /// Read-only reference. The original stays live and accessible.
+    Borrow,
+}
+
+/// A single variable captured by a closure.
+#[derive(Debug, Clone)]
+pub struct CaptureInfo {
+    pub name: String,
+    pub ty: Type,
+    pub mode: PassMode,
+}
+
 impl Default for TypeContext {
     fn default() -> Self {
         Self::new()
@@ -119,6 +140,7 @@ impl TypeContext {
     /// Creates an empty context with no registered types or diagnostics.
     pub fn new() -> Self {
         Self {
+            closure_captures: HashMap::new(),
             constants: HashMap::new(),
             diagnostics: Vec::new(),
             enums: HashMap::new(),

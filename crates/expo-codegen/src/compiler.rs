@@ -201,6 +201,23 @@ impl<'ctx> Compiler<'ctx> {
         let fdopen_type = i8_ptr_type.fn_type(&[i32_type.into(), i8_ptr_type.into()], false);
         let fdopen = self.module.add_function("fdopen", fdopen_type, None);
         self.functions.insert("fdopen".to_string(), fdopen);
+
+        let i64_type = self.context.i64_type();
+
+        let malloc_type = i8_ptr_type.fn_type(&[i64_type.into()], false);
+        let malloc = self.module.add_function("malloc", malloc_type, None);
+        self.functions.insert("malloc".to_string(), malloc);
+
+        let realloc_type = i8_ptr_type.fn_type(&[i8_ptr_type.into(), i64_type.into()], false);
+        let realloc = self.module.add_function("realloc", realloc_type, None);
+        self.functions.insert("realloc".to_string(), realloc);
+
+        let free_type = self
+            .context
+            .void_type()
+            .fn_type(&[i8_ptr_type.into()], false);
+        let free = self.module.add_function("free", free_type, None);
+        self.functions.insert("free".to_string(), free);
     }
 
     fn declare_function(
@@ -629,6 +646,7 @@ pub(crate) fn type_byte_size(ty: &Type) -> u32 {
             Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
             Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::String => 8,
         },
+        Type::Function { .. } => 16,
         _ => 8,
     }
 }

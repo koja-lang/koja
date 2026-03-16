@@ -1,5 +1,5 @@
 /// A byte offset with line and column numbers within a source file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Position {
     pub offset: u32,
     pub line: u32,
@@ -7,7 +7,7 @@ pub struct Position {
 }
 
 /// A source range defined by a start and end position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: Position,
     pub end: Position,
