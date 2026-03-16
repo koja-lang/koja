@@ -24,11 +24,19 @@ struct Pair<A, B>
 end
 
 impl Option<T>
-  @doc "Returns the contained value. Panics if the option is `None`."
-  fn unwrap(self) -> T
+  @doc "Applies `f` to the contained value if `Some`, returns `None` otherwise."
+  fn map<U>(self, f: fn(T) -> U) -> Option<U>
     match self
-      Option.Some(val) -> val
-      Option.None -> panic("called unwrap on None")
+      Option.Some(val) -> Option.Some(f(val))
+      Option.None -> Option.None
+    end
+  end
+
+  @doc "Returns `true` if the option is `None`."
+  fn none?(self) -> Bool
+    match self
+      Option.Some(_) -> false
+      Option.None -> true
     end
   end
 
@@ -48,29 +56,37 @@ impl Option<T>
     end
   end
 
-  @doc "Returns `true` if the option is `None`."
-  fn none?(self) -> Bool
+  @doc "Applies `f` to the contained value if `Some` (where `f` returns an `Option`), returns `None` otherwise. Also known as flat_map."
+  fn then<U>(self, f: fn(T) -> Option<U>) -> Option<U>
     match self
-      Option.Some(_) -> false
-      Option.None -> true
+      Option.Some(val) -> f(val)
+      Option.None -> Option.None
+    end
+  end
+
+  @doc "Returns the contained value. Panics if the option is `None`."
+  fn unwrap(self) -> T
+    match self
+      Option.Some(val) -> val
+      Option.None -> panic("called unwrap on None")
     end
   end
 end
 
 impl Result<T, E>
-  @doc "Returns the `Ok` value. Panics if the result is `Err`."
-  fn unwrap(self) -> T
+  @doc "Returns `true` if the result is `Err`."
+  fn err?(self) -> Bool
     match self
-      Result.Ok(val) -> val
-      Result.Err(_) -> panic("called unwrap on Err")
+      Result.Ok(_) -> false
+      Result.Err(_) -> true
     end
   end
 
-  @doc "Returns the `Ok` value if present, otherwise returns `default`."
-  fn or(self, default: T) -> T
+  @doc "Applies `f` to the `Ok` value if present, returns `Err` unchanged."
+  fn map<U>(self, f: fn(T) -> U) -> Result<U, E>
     match self
-      Result.Ok(val) -> val
-      Result.Err(_) -> default
+      Result.Ok(val) -> Result.Ok(f(val))
+      Result.Err(e) -> Result.Err(e)
     end
   end
 
@@ -82,11 +98,27 @@ impl Result<T, E>
     end
   end
 
-  @doc "Returns `true` if the result is `Err`."
-  fn err?(self) -> Bool
+  @doc "Returns the `Ok` value if present, otherwise returns `default`."
+  fn or(self, default: T) -> T
     match self
-      Result.Ok(_) -> false
-      Result.Err(_) -> true
+      Result.Ok(val) -> val
+      Result.Err(_) -> default
+    end
+  end
+
+  @doc "Applies `f` to the `Ok` value (where `f` returns a `Result`), returns `Err` unchanged. Also known as flat_map."
+  fn then<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E>
+    match self
+      Result.Ok(val) -> f(val)
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  @doc "Returns the `Ok` value. Panics if the result is `Err`."
+  fn unwrap(self) -> T
+    match self
+      Result.Ok(val) -> val
+      Result.Err(_) -> panic("called unwrap on Err")
     end
   end
 end

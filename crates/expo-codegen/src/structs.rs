@@ -1,7 +1,7 @@
 //! Struct compilation: field access, struct construction (both regular and
 //! generic), and method calls on struct instances.
 
-use expo_ast::ast::Expr;
+use expo_ast::ast::{ClosureParam, Expr};
 use expo_typecheck::types::{Type, mangle_name};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
@@ -122,12 +122,24 @@ pub fn compile_method_call<'ctx>(
 
     let struct_name = resolve_struct_name(c, receiver, &recv_val)?;
 
-    let mangled = format!("{}_{}", struct_name, method);
-    if !c.functions.contains_key(&mangled)
-        && let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&struct_name, c)
-    {
-        c.monomorphize_impl_method(&base, method, &type_args)?;
+    let mut mangled = format!("{}_{}", struct_name, method);
+
+    if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&struct_name, c) {
+        let method_type_params = lookup_method_type_params(c, &base, method);
+
+        if !method_type_params.is_empty() {
+            let method_type_args = infer_method_type_args(c, &base, method, &type_args, args)?;
+            let method_suffix = mangle_name(method, &method_type_args);
+            mangled = format!("{}_{}", struct_name, method_suffix);
+
+            if !c.functions.contains_key(&mangled) {
+                c.monomorphize_impl_method_generic(&base, method, &type_args, &method_type_args)?;
+            }
+        } else if !c.functions.contains_key(&mangled) {
+            c.monomorphize_impl_method(&base, method, &type_args)?;
+        }
     }
+
     let callee = *c
         .functions
         .get(&mangled)
@@ -148,6 +160,109 @@ pub fn compile_method_call<'ctx>(
         .unwrap();
 
     Ok(result.try_as_basic_value().left())
+}
+
+fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<String> {
+    let methods = c
+        .type_ctx
+        .structs
+        .get(base_type)
+        .map(|si| &si.methods)
+        .or_else(|| c.type_ctx.enums.get(base_type).map(|ei| &ei.methods));
+    if let Some(methods) = methods
+        && let Some(sig) = methods.get(method)
+    {
+        return sig.type_params.clone();
+    }
+    Vec::new()
+}
+
+fn infer_method_type_args(
+    c: &Compiler,
+    base_type: &str,
+    method: &str,
+    struct_type_args: &[Type],
+    args: &[expo_ast::ast::Arg],
+) -> Result<Vec<Type>, String> {
+    let (methods, type_params) = c
+        .type_ctx
+        .structs
+        .get(base_type)
+        .map(|si| (&si.methods, &si.type_params))
+        .or_else(|| {
+            c.type_ctx
+                .enums
+                .get(base_type)
+                .map(|ei| (&ei.methods, &ei.type_params))
+        })
+        .ok_or_else(|| format!("no type info for `{base_type}`"))?;
+
+    let sig = methods
+        .get(method)
+        .ok_or_else(|| format!("no method `{method}` on `{base_type}`"))?;
+
+    let struct_subst = expo_typecheck::types::build_substitution(type_params, struct_type_args);
+    let substituted_params: Vec<_> = sig
+        .params
+        .iter()
+        .map(|p| expo_typecheck::types::substitute(&p.ty, &struct_subst))
+        .collect();
+
+    let mut method_subst = std::collections::HashMap::new();
+    for (i, arg) in args.iter().enumerate() {
+        if i >= substituted_params.len() {
+            break;
+        }
+        let arg_type = infer_arg_expo_type(c, &arg.value);
+        if arg_type != Type::Unknown {
+            expo_typecheck::types::unify(&substituted_params[i], &arg_type, &mut method_subst);
+        }
+    }
+
+    Ok(sig
+        .type_params
+        .iter()
+        .map(|tp| method_subst.get(tp).cloned().unwrap_or(Type::Unknown))
+        .collect())
+}
+
+fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
+    match expr {
+        Expr::Ident { name, .. } => c
+            .variables
+            .get(name)
+            .map(|(_, ty)| ty.clone())
+            .unwrap_or(Type::Unknown),
+        Expr::Closure {
+            params,
+            return_type,
+            ..
+        } => {
+            let param_types: Vec<Type> = params
+                .iter()
+                .filter_map(|p| {
+                    if let ClosureParam::Name {
+                        type_expr: Some(te),
+                        ..
+                    } = p
+                    {
+                        Some(c.resolve_type_expr(te))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let ret = match return_type {
+                Some(te) => c.resolve_type_expr(te),
+                None => Type::Unit,
+            };
+            Type::Function {
+                params: param_types,
+                return_type: Box::new(ret),
+            }
+        }
+        _ => Type::Unknown,
+    }
 }
 
 /// Compiles a struct literal (`StructName { field: value, ... }`).

@@ -48,6 +48,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Compound assignment (`+=`, `-=`, `*=`, `/=`)
 - String interpolation
 - Closures (non-capturing, block form)
+- Function type syntax (`fn(T) -> U`) for closure-accepting parameters
 - `print` builtin
 - `panic` builtin (prints to stderr, aborts)
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
@@ -61,7 +62,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Try operator (`?`) -- design reconsidered, may not ship
 - `ref T`
 - Lists
-- Methods on generic types, trait bounds
+- Trait bounds on generic type parameters
 
 ### Design notes
 
@@ -316,7 +317,7 @@ Concurrency primitives (tasks, actors, `shared_map`, supervisors) already ship i
 
 - `String` with UTF-8 internals, interpolation (`#{}` with format specs), `.trim()`, `.split()`, `.starts_with?()`, `.empty?()`, `.contains?()`
 - `List<T>`, `Map<K,V>`, and `Set<T>` with full method sets
-- `Option<T>` and `Result<T,E>` methods -- `unwrap`, `or`, `some?`/`none?`, `ok?`/`err?` done in `std.kernel`; `map`, `then` pending inline closures
+- `Option<T>` and `Result<T,E>` methods -- `unwrap`, `or`, `some?`/`none?`, `ok?`/`err?`, `map`, `then` done in `std.kernel`
 - File I/O: `file.read()`, `file.write()`, `file.exists?()`
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
 - Serialization trait/interface that packages can implement
@@ -515,7 +516,7 @@ Active design discussions about the type system, code organization, and function
 - `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
 - Compiler guidance when `map` is used where `then` is needed (or vice versa).
 - Pipes remain for pure data transformation where nothing fails.
-- `then`/`map` are deferred until inline closures compile. Current stdlib ships `unwrap`, `or`, `some?`/`none?`, `ok?`/`err?`.
+- `map`/`then` now ship in the stdlib using block closures with explicit types. Inline closures (`x -> expr`) remain deferred but are not needed for core API usage.
 
 ### Struct destructuring assignment
 
@@ -525,7 +526,7 @@ Active design discussions about the type system, code organization, and function
 
 - **Done**: `std.kernel` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. Embedded in the compiler via `include_str!`, parsed at startup, types merged into every module's context before type checking.
 - Rule: "stdlib = always available, packages = explicit import." All `std.*` modules are auto-imported. As the stdlib grows, types split into separate modules (`std.option`, `std.string`, `std.list`) for documentation and organization, but all remain auto-imported.
-- Option/Result API: `unwrap` (panics on failure), `or` (lazy fallback), `some?`/`none?` (Option), `ok?`/`err?` (Result). `map` and `then` deferred until inline closures compile.
+- Option/Result API: `unwrap` (panics on failure), `or` (lazy fallback), `some?`/`none?` (Option), `ok?`/`err?` (Result), `map` (transform inner value), `then` (flat map / chain fallible operations).
 - No `map_err` yet. No `or_else` -- `or` is implicitly lazy.
 - Monomorphization ensures zero binary bloat for unused stdlib types. Only instantiations that are actually called get compiled.
 
@@ -568,12 +569,13 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Core      | Generic enums, variable type annotations, numeric type coercion                          | Done   |
 | Core      | PascalCase primitive rename (`Int`, `String`, `Bool`, etc.), `ref T` syntax              | Done   |
 | Core      | Generic impl monomorphization, stdlib (`Option<T>`, `Result<T,E>`, `Pair<A,B>`), `panic` | Done   |
+| Core      | Function type syntax (`fn(T) -> U`), `map`/`then` for Option and Result                  | Done   |
 
 ### Remaining
 
 | Phase       | Milestone                                                                   |
 | ----------- | --------------------------------------------------------------------------- |
-| Core        | Inline closures, `then`/`map` for Option/Result                             |
+| Core        | Inline closures (`x -> expr`) with type inference                            |
 | Core        | Ownership + borrow checker + tasks (structured concurrency)                 |
 | Core        | Collections, closures, arena, `ua_parser.expo` compiles                     |
 | Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)                  |

@@ -3,6 +3,7 @@
 
 use expo_ast::ast::{Arg, BinOp, ClosureParam, Expr, Literal, Statement, StringPart};
 use expo_ast::span::Span;
+use expo_typecheck::types::Type;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
@@ -409,6 +410,37 @@ fn compile_closure<'ctx>(
 
     let saved_vars = std::mem::take(&mut c.variables);
     let saved_block = c.builder.get_insert_block();
+    let saved_subst = {
+        let mut extra = std::collections::HashMap::<String, Type>::new();
+        if let Type::GenericInstance {
+            base, type_args, ..
+        } = &ret_type
+        {
+            let type_params = c
+                .type_ctx
+                .enums
+                .get(base.as_str())
+                .map(|ei| &ei.type_params)
+                .or_else(|| {
+                    c.type_ctx
+                        .structs
+                        .get(base.as_str())
+                        .map(|si| &si.type_params)
+                });
+            if let Some(tps) = type_params {
+                for (tp, ta) in tps.iter().zip(type_args.iter()) {
+                    extra.insert(tp.clone(), ta.clone());
+                }
+            }
+        }
+        if extra.is_empty() {
+            None
+        } else {
+            let mut merged = c.type_subst.clone();
+            merged.extend(extra);
+            Some(std::mem::replace(&mut c.type_subst, merged))
+        }
+    };
 
     c.builder.position_at_end(entry);
 
@@ -433,6 +465,9 @@ fn compile_closure<'ctx>(
     }
 
     c.variables = saved_vars;
+    if let Some(old) = saved_subst {
+        c.type_subst = old;
+    }
     if let Some(bb) = saved_block {
         c.builder.position_at_end(bb);
     }

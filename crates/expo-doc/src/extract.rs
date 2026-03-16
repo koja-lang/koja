@@ -262,5 +262,17 @@ fn type_expr_to_string(ty: &TypeExpr) -> String {
             format!("({})", elems.join(", "))
         }
         TypeExpr::Unit { .. } => "()".to_string(),
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            let ps: Vec<String> = params.iter().map(type_expr_to_string).collect();
+            format!(
+                "fn({}) -> {}",
+                ps.join(", "),
+                type_expr_to_string(return_type)
+            )
+        }
     }
 }

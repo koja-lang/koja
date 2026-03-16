@@ -234,6 +234,12 @@ pub enum TypeExpr {
     Tuple { elements: Vec<TypeExpr>, span: Span },
     /// The unit type: `()`.
     Unit { span: Span },
+    /// A function type: `fn(Int32, String) -> Bool`.
+    Function {
+        params: Vec<TypeExpr>,
+        return_type: Box<TypeExpr>,
+        span: Span,
+    },
 }
 
 // Statements

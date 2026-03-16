@@ -7,6 +7,7 @@ impl Parser {
     pub(crate) fn parse_type_expr(&mut self) -> TypeExpr {
         match self.peek().clone() {
             TokenKind::Ref => self.parse_ref_type(),
+            TokenKind::Fn => self.parse_function_type(),
             TokenKind::LParen => self.parse_paren_type(),
             TokenKind::TypeIdent(_) => self.parse_named_type(),
             TokenKind::Ident(ref name) if is_legacy_primitive(name) => self.parse_primitive_type(),
@@ -29,6 +30,32 @@ impl Parser {
     /// Lookahead check: is this `ident.` followed eventually by a TypeIdent?
     fn is_module_type_path(&self) -> bool {
         matches!(self.peek_nth(1), TokenKind::Dot)
+    }
+
+    fn parse_function_type(&mut self) -> TypeExpr {
+        let start = self.current_span();
+        self.advance(); // fn
+        self.expect(&TokenKind::LParen);
+
+        let mut params = Vec::new();
+        if !self.at(&TokenKind::RParen) {
+            params.push(self.parse_type_expr());
+            while self.eat(&TokenKind::Comma).is_some() {
+                if self.at(&TokenKind::RParen) {
+                    break;
+                }
+                params.push(self.parse_type_expr());
+            }
+        }
+        self.expect(&TokenKind::RParen);
+        self.expect(&TokenKind::Arrow);
+        let return_type = self.parse_type_expr();
+
+        TypeExpr::Function {
+            params,
+            return_type: Box::new(return_type),
+            span: self.span_from(start),
+        }
     }
 
     fn parse_ref_type(&mut self) -> TypeExpr {

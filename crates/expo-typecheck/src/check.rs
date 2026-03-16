@@ -1158,6 +1158,18 @@ fn infer_method_call(
         } else {
             (sig.return_type.clone(), sig.params.clone())
         };
+
+        if !sig.type_params.is_empty() {
+            let method_sig_for_infer = FunctionSig {
+                is_private: sig.is_private,
+                params,
+                return_type,
+                span: sig.span,
+                type_params: sig.type_params.clone(),
+            };
+            return infer_generic_call(method, &method_sig_for_infer, args, span, ctx, ce);
+        }
+
         check_call_args(method, &params, args, "self, ", span, ctx, ce);
         return_type
     } else {

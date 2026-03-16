@@ -116,6 +116,7 @@ impl<'ctx> Compiler<'ctx> {
         let entry = self.context.append_basic_block(fn_value, "entry");
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_block = self.builder.get_insert_block();
+        let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
 
         self.builder.position_at_end(entry);
 
@@ -134,6 +135,7 @@ impl<'ctx> Compiler<'ctx> {
         self.compile_function_body(&func_ast.body, &return_type, fn_value, false)?;
 
         self.variables = saved_vars;
+        self.type_subst = saved_subst;
         if let Some(bb) = saved_block {
             self.builder.position_at_end(bb);
         }
@@ -431,6 +433,7 @@ impl<'ctx> Compiler<'ctx> {
         let entry = self.context.append_basic_block(fn_value, "entry");
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_block = self.builder.get_insert_block();
+        let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
 
         self.builder.position_at_end(entry);
 
@@ -467,6 +470,174 @@ impl<'ctx> Compiler<'ctx> {
         self.compile_function_body(&func_ast.body, &return_type, fn_value, false)?;
 
         self.variables = saved_vars;
+        self.type_subst = saved_subst;
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+
+        Ok(())
+    }
+
+    /// Like `monomorphize_impl_method`, but also substitutes method-level type
+    /// params (e.g. `U` in `map<U>`). The `method_type_args` correspond to the
+    /// method's own `type_params`.
+    pub fn monomorphize_impl_method_generic(
+        &mut self,
+        base_type: &str,
+        method_name: &str,
+        struct_type_args: &[Type],
+        method_type_args: &[Type],
+    ) -> Result<(), String> {
+        let mangled_type = expo_typecheck::types::mangle_name(base_type, struct_type_args);
+        let mangled_method = expo_typecheck::types::mangle_name(method_name, method_type_args);
+        let mangled_fn = format!("{}_{}", mangled_type, mangled_method);
+        if self.functions.contains_key(&mangled_fn) {
+            return Ok(());
+        }
+
+        let impl_blocks = self
+            .type_ctx
+            .generic_impl_asts
+            .get(base_type)
+            .ok_or_else(|| format!("no generic impl for `{base_type}`"))?
+            .clone();
+
+        let mut method_ast = None;
+        let mut impl_type_params = Vec::new();
+        for block in &impl_blocks {
+            if let expo_ast::ast::TypeExpr::Generic { args, .. } = &block.target {
+                let tp_names: Vec<String> = args
+                    .iter()
+                    .filter_map(|a| {
+                        if let expo_ast::ast::TypeExpr::Named { path, .. } = a
+                            && path.len() == 1
+                        {
+                            return Some(path[0].clone());
+                        }
+                        None
+                    })
+                    .collect();
+                for member in &block.members {
+                    if let expo_ast::ast::ImplMember::Function(f) = member
+                        && f.name == method_name
+                    {
+                        method_ast = Some(f.clone());
+                        impl_type_params = tp_names;
+                        break;
+                    }
+                }
+                if method_ast.is_some() {
+                    break;
+                }
+            }
+        }
+
+        let func_ast = method_ast
+            .ok_or_else(|| format!("method `{method_name}` not found in impl for `{base_type}`"))?;
+
+        let mut subst =
+            expo_typecheck::types::build_substitution(&impl_type_params, struct_type_args);
+        for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
+            subst.insert(tp.clone(), ta.clone());
+        }
+
+        let info = self
+            .type_ctx
+            .structs
+            .get(base_type)
+            .map(|si| (&si.methods, &si.type_params))
+            .or_else(|| {
+                self.type_ctx
+                    .enums
+                    .get(base_type)
+                    .map(|ei| (&ei.methods, &ei.type_params))
+            });
+
+        let (return_type, param_types) = if let Some((methods, _)) = info {
+            if let Some(sig) = methods.get(method_name) {
+                let ret = expo_typecheck::types::substitute(&sig.return_type, &subst);
+                let pts: Vec<Type> = sig
+                    .params
+                    .iter()
+                    .map(|p| expo_typecheck::types::substitute(&p.ty, &subst))
+                    .collect();
+                (ret, pts)
+            } else {
+                return Err(format!(
+                    "no signature for method `{method_name}` on `{base_type}`"
+                ));
+            }
+        } else {
+            return Err(format!("no type info for `{base_type}`"));
+        };
+
+        self.ensure_types_exist(&return_type)?;
+        for pt in &param_types {
+            self.ensure_types_exist(pt)?;
+        }
+
+        let self_llvm_type = *self
+            .struct_types
+            .get(&mangled_type)
+            .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
+
+        let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
+            vec![self_llvm_type.into()];
+        for ty in &param_types {
+            if let Some(lt) = to_llvm_type(ty, self.context, &self.struct_types) {
+                llvm_param_types.push(lt.into());
+            }
+        }
+
+        let fn_type = match to_llvm_type(&return_type, self.context, &self.struct_types) {
+            Some(ret) => ret.fn_type(&llvm_param_types, false),
+            None => self.context.void_type().fn_type(&llvm_param_types, false),
+        };
+
+        let fn_value = self.module.add_function(&mangled_fn, fn_type, None);
+        self.functions.insert(mangled_fn.clone(), fn_value);
+
+        let entry = self.context.append_basic_block(fn_value, "entry");
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_block = self.builder.get_insert_block();
+        let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
+
+        self.builder.position_at_end(entry);
+
+        let self_alloca = self.builder.build_alloca(self_llvm_type, "self").unwrap();
+        self.builder
+            .build_store(self_alloca, fn_value.get_nth_param(0).unwrap())
+            .unwrap();
+
+        let is_enum = self.type_ctx.enums.contains_key(base_type);
+        let self_type = if is_enum {
+            Type::Enum(mangled_type.clone())
+        } else {
+            Type::Struct(mangled_type.clone())
+        };
+        self.variables
+            .insert("self".to_string(), (self_alloca, self_type));
+
+        let mut param_idx = 1u32;
+        let mut type_idx = 0usize;
+        for param in func_ast.params.iter() {
+            if let Param::Regular { name: pname, .. } = param {
+                let ty = &param_types[type_idx];
+                type_idx += 1;
+                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.struct_types) {
+                    let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
+                    let param_val = fn_value.get_nth_param(param_idx).unwrap();
+                    self.builder.build_store(alloca, param_val).unwrap();
+                    self.variables.insert(pname.clone(), (alloca, ty.clone()));
+                    param_idx += 1;
+                }
+            }
+        }
+
+        self.compile_function_body(&func_ast.body, &return_type, fn_value, false)?;
+
+        self.variables = saved_vars;
+        self.type_subst = saved_subst;
         if let Some(bb) = saved_block {
             self.builder.position_at_end(bb);
         }

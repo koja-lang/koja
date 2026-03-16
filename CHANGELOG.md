@@ -5,13 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.4.0] - 2026-03-15
 
 ### Added
 
 - Generics -- generic functions (`fn identity<T>(x: T) -> T`), generic structs (`struct Pair<A, B>`), and generic enums (`enum Option<T>`) now compile to native code via monomorphization. Type arguments are inferred at call sites.
-- Variable type annotations -- `x: Int32 = 42`, `z: Option<Int32> = Option.None`. Annotations are optional and support all types including generics. Enables explicit typing for generic enum unit variants where the type can't be inferred.
-- Stdlib types via `std.kernel` -- `Option<T>`, `Result<T, E>`, and `Pair<A, B>` are auto-imported into every module. No `import` needed. Methods: `unwrap`, `or`, `some?`/`none?` (Option), `ok?`/`err?` (Result).
+- Stdlib types via `std.kernel` -- `Option<T>`, `Result<T, E>`, and `Pair<A, B>` are auto-imported into every module. Methods: `unwrap`, `or`, `some?`/`none?` (Option), `ok?`/`err?` (Result), `map`, `then` (both).
+- Function type syntax and higher-order methods -- `fn(Int32) -> String` as a type expression enables declaring parameters that accept closures. `map` transforms the contained value; `then` (flat map) chains operations returning `Option`/`Result`.
+- Variable type annotations -- `x: Int32 = 42`, `z: Option<Int32> = Option.None`. Optional, supports all types including generics.
 - `panic(message)` builtin -- prints the message to stderr and aborts the process. Used by `unwrap` for fatal failures.
 - `or` and `and` keywords are now valid as method and field names after `.` (e.g. `x.or(default)`).
 
@@ -24,9 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `print(true)` now outputs `true` instead of `1`. Booleans print correctly in `print()`, `print_bool()`, and string interpolation (`"#{some_bool}"`).
-- Formatter now preserves exactly one blank line between comments and code (in either direction) and between consecutive comments, instead of swallowing the gap entirely.
-- Formatter no longer inserts spurious `()` on unit enum variant patterns in match arms (e.g. `Red()` → `Red`).
-- Formatter now correctly places comments inside enum and struct bodies instead of losing them or misplacing them outside the block.
+- Formatter: preserves blank lines between comments and code, no longer inserts spurious `()` on unit enum variant patterns, and correctly places comments inside enum/struct bodies.
 
 ## [0.3.0] - 2026-03-14
 

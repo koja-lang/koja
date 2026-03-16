@@ -59,7 +59,7 @@ impl Type {
                 return_type,
             } => {
                 let p: Vec<String> = params.iter().map(|t| t.display()).collect();
-                format!("({}) -> {}", p.join(", "), return_type.display())
+                format!("fn({}) -> {}", p.join(", "), return_type.display())
             }
             Type::GenericInstance {
                 base, type_args, ..
@@ -257,6 +257,28 @@ pub fn resolve_type_expr_with_params(
             Type::Tuple(types)
         }
         TypeExpr::Unit { .. } => Type::Unit,
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            let param_types = params
+                .iter()
+                .map(|p| {
+                    resolve_type_expr_with_params(p, known_structs, known_enums, known_type_params)
+                })
+                .collect();
+            let ret = resolve_type_expr_with_params(
+                return_type,
+                known_structs,
+                known_enums,
+                known_type_params,
+            );
+            Type::Function {
+                params: param_types,
+                return_type: Box::new(ret),
+            }
+        }
     }
 }
 
@@ -380,6 +402,13 @@ fn mangle_type(ty: &Type) -> String {
         Type::GenericInstance {
             base, type_args, ..
         } => mangle_name(base, type_args),
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            let p: Vec<String> = params.iter().map(mangle_type).collect();
+            format!("fn_{}__{}", p.join("_"), mangle_type(return_type))
+        }
         _ => "unknown".to_string(),
     }
 }

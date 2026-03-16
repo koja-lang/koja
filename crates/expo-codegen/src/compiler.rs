@@ -40,6 +40,9 @@ pub struct Compiler<'ctx> {
     pub generic_fn_asts: HashMap<String, Function>,
     pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
     pub mono_enum_variants: HashMap<String, Vec<(String, VariantData)>>,
+    /// Active type substitution during monomorphized body compilation.
+    /// Maps type parameter names (e.g. "T", "U") to concrete types.
+    pub type_subst: HashMap<String, Type>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -63,6 +66,7 @@ impl<'ctx> Compiler<'ctx> {
             generic_fn_asts: HashMap::new(),
             mono_struct_info: HashMap::new(),
             mono_enum_variants: HashMap::new(),
+            type_subst: HashMap::new(),
         }
     }
 

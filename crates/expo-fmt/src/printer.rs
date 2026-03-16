@@ -1110,10 +1110,10 @@ impl<'a> Printer<'a> {
                 parts.push(c);
             }
 
-            if let Some(lcl) = last_comment_line {
-                if stmt_line > lcl + 1 {
-                    parts.push(hardline());
-                }
+            if let Some(lcl) = last_comment_line
+                && stmt_line > lcl + 1
+            {
+                parts.push(hardline());
             }
 
             parts.push(self.statement_to_doc(stmt));
@@ -1129,10 +1129,10 @@ impl<'a> Printer<'a> {
         if !trailing.is_empty() {
             trailing.pop(); // drop the final hardline; the block's own newline before `end` provides it
             parts.push(hardline());
-            if let Some(cl) = next_trailing_line {
-                if cl > prev_end + 1 {
-                    parts.push(hardline());
-                }
+            if let Some(cl) = next_trailing_line
+                && cl > prev_end + 1
+            {
+                parts.push(hardline());
             }
             for c in trailing {
                 parts.push(c);
@@ -1187,10 +1187,10 @@ impl<'a> CommentCursor<'a> {
         let mut last_line: Option<u32> = None;
         while self.pos < self.comments.len() && self.comments[self.pos].span.start.line < line {
             let c = &self.comments[self.pos];
-            if let Some(ll) = last_line {
-                if c.span.start.line > ll + 1 {
-                    docs.push(hardline());
-                }
+            if let Some(ll) = last_line
+                && c.span.start.line > ll + 1
+            {
+                docs.push(hardline());
             }
             docs.push(comment_doc(&c.text));
             docs.push(hardline());
@@ -1355,6 +1355,19 @@ fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
             concat(vec![text("("), intersperse(elems, text(", ")), text(")")])
         }
         TypeExpr::Unit { .. } => text("()"),
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            let params_doc: Vec<Doc> = params.iter().map(type_expr_to_doc).collect();
+            concat(vec![
+                text("fn("),
+                intersperse(params_doc, text(", ")),
+                text(") -> "),
+                type_expr_to_doc(return_type),
+            ])
+        }
     }
 }
 
@@ -1645,6 +1658,16 @@ fn type_expr_text_len(ty: &TypeExpr) -> usize {
             1 + inner + 1
         }
         TypeExpr::Unit { .. } => 2,
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            let params_len: usize = params.iter().map(type_expr_text_len).sum::<usize>()
+                + params.len().saturating_sub(1) * 2;
+            // "fn(" + params + ") -> " + return_type
+            3 + params_len + 5 + type_expr_text_len(return_type)
+        }
     }
 }
 

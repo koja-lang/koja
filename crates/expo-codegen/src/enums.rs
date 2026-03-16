@@ -186,7 +186,13 @@ fn compile_generic_enum_construction<'ctx>(
     let type_args: Vec<Type> = enum_info
         .type_params
         .iter()
-        .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Unknown))
+        .map(|tp| {
+            subst
+                .get(tp)
+                .cloned()
+                .or_else(|| c.type_subst.get(tp).cloned())
+                .unwrap_or(Type::Unknown)
+        })
         .collect();
 
     let mangled = expo_typecheck::types::mangle_name(enum_name, &type_args);
