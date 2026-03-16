@@ -52,6 +52,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if !self.current_block_terminated() {
+            crate::drop::drop_live_variables(self);
             if is_main {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();

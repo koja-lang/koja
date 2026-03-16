@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Ownership and borrowing** -- move semantics for non-copy types (structs, enums, `String`). Assignment moves by default; using a moved value is a compile error. Copy types (all numeric primitives, `Bool`, `()`, function pointers) are implicitly duplicated. Variable state tracking (`Live`, `Moved`, `MaybeMoved`) catches use-after-move and inconsistent moves across branches.
+- **Borrow-by-default parameters** -- function parameters borrow by default (read-only). Use `move` to take ownership. `move self` for mutating impl functions that return the modified value (`list = list.push(42)`). `move` only appears in signatures, never at call sites.
+- **`fn (move T) -> U` function types** -- `move` on parameters in function type syntax. `fn (T) -> U` borrows, `fn (move T) -> U` takes ownership. Functions and closures follow identical rules.
+- **`clone()` built-in method** -- available on all types. Produces a new owned value without moving the original. For primitives, identity (they're copy). For structs/enums, value copy (deep copy once heap allocation lands).
+- **Drop insertion** -- infrastructure for deterministic cleanup at scope boundaries. Currently a no-op (everything is stack-allocated); will emit `free()` calls when heap allocation is added.
+
 ## [0.4.0] - 2026-03-15
 
 ### Added

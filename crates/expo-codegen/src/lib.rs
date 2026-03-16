@@ -1,6 +1,7 @@
 mod calls;
 mod compiler;
 mod control;
+mod drop;
 mod enums;
 mod expr;
 mod generics;

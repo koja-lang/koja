@@ -77,6 +77,7 @@ pub fn compile_statement<'ctx>(
         }
 
         Statement::Return { value, .. } => {
+            crate::drop::drop_live_variables(c);
             if let Some(expr) = value {
                 let val = compile_expr(c, expr, function)?;
                 if let Some(v) = val {

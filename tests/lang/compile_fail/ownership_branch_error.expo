@@ -1,0 +1,19 @@
+struct Point
+  x: Int32
+  y: Int32
+end
+
+fn consume(move p: Point) -> Int32
+  p.x
+end
+
+fn main
+  p = Point{x: 1, y: 2}
+  flag = true
+  if flag
+    q = p
+  else
+    print(42)
+  end
+  print(p.x)
+end

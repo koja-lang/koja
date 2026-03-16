@@ -60,7 +60,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `arena` blocks
 - `await`/`receive`/`spawn`
 - Try operator (`?`) -- design reconsidered, may not ship
-- `ref T`
+- `ref T` (deferred -- see design notes)
 - Lists
 - Trait bounds on generic type parameters
 
@@ -71,14 +71,14 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Used by `map`/`then` on `Option` and `Result`. Inline closures (`x -> expr`) are parsed but deferred to v0.5+.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 - **PascalCase primitives and type simplification** (done): Primitives renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. User-defined types (`Pair`, `User`) and language types (`Int`, `String`) are now visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction.
-- **`ref T` syntax** (done): Reference types use `ref T` (space, no angle brackets) instead of `ref<T>`. `ref` is a lowercase keyword modifier, consistent with the modifier pattern (`const`, `priv`, `move`, `ref`): lowercase keywords modify the thing that follows them, PascalCase names are always types.
+- **`ref T` syntax** (parsed, deferred): Reference types use `ref T` (space, no angle brackets) instead of `ref<T>`. `ref` is a lowercase keyword modifier, consistent with the modifier pattern (`const`, `priv`, `move`, `ref`): lowercase keywords modify the thing that follows them, PascalCase names are always types. However, `ref T` is redundant in parameter position (borrow-by-default) and unsafe in return position without lifetime tracking. Deferred until a concrete use case emerges.
 - **Planned: Byte/bitstring literals**: Erlang-style `<<>>` binary syntax for binary protocol work, crypto, and low-level data manipulation. Design TBD.
 - **Planned: Irrefutable struct destructuring**: `Config{name, port} = load_config()` as syntactic sugar for pulling struct fields into local variables. Compile-time verified exhaustive -- only works for structs (single shape), not enums. Enum destructuring uses `match`.
 
 ### Known gaps
 
 - **Generic enum unit variants in top-level code**: `Option.None` cannot infer `T` without usage context in bare declarations -- workaround: variable type annotations (`z: Option<Int32> = Option.None`). Inside monomorphized method bodies and closures with return type annotations, generic enum construction resolves all type parameters automatically.
-- **Type checker**: `ref T` unresolved (Phase 2)
+- **Type checker**: `ref T` parsed but deferred (redundant with borrow-by-default, revisit if a concrete use case emerges)
 - **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
 
 ### Design artifacts
@@ -152,7 +152,7 @@ Remaining work (for loops, try `?`, closure capture analysis) is Phase 2 scope.
 
 Make the compiler powerful enough to compile non-trivial programs with Expo's generics, ownership model, and structured concurrency.
 
-**Note**: The parser and AST already handle all Phase 2 constructs (for, closures, arena, spawn/await, generics). The work here is wiring up type checking and codegen, not design or parsing. Generics are the gate to Phase 2 -- `Option<T>`, `Result<T,E>`, collections, `Pair<A,B>`, and `ref T` all depend on them.
+**Note**: The parser and AST already handle all Phase 2 constructs (for, closures, arena, spawn/await, generics). The work here is wiring up type checking and codegen, not design or parsing. Generics are the gate to Phase 2 -- `Option<T>`, `Result<T,E>`, collections, and `Pair<A,B>` all depend on them.
 
 **Implementation order**: Generics first (the shared gate -- unlocks everything). After generics, two independent tracks can proceed in parallel:
 
@@ -179,17 +179,19 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 
 ### Ownership and borrowing
 
-- Implement move semantics: assignment moves, use-after-move is a compile error
-- Borrow-by-default: function parameters are read-only borrows unless marked `move`
-- Borrows are always read-only -- no `&mut T`, ever (see `MEMORY.md`)
-- `move` keyword on parameters for explicit ownership transfer
-- `ref T` syntax for reference types in return positions and generics
-- For loops iterate by reference by default (no annotation needed)
-- No lifetime annotations -- borrows are scoped to the function call
-- Implement `clone()` as the explicit escape hatch
-- Drop insertion at scope boundaries (deterministic destruction)
-- The `&` symbol does not exist in Expo -- borrowing is implicit, references use `ref T`
-- **Done when**: programs that move, borrow, and clone compile correctly, and use-after-move is caught
+- ~~`Type::is_copy()` to distinguish copy types (primitives, `()`, function pointers) from move types (`String`, structs, enums)~~
+- ~~Variable state tracking: `Live`, `Moved`, `MaybeMoved` -- use-after-move is a compile error~~
+- ~~Borrow-by-default: function parameters are read-only borrows unless marked `move`~~
+- ~~`move self` for mutating impl functions -- same rules as any other param, returns modified value (`list = list.push(42)`)~~
+- ~~`move` only appears in the function/closure signature, never at the call site~~
+- ~~Functions and closures follow identical rules: `fn (T) -> U` borrows, `fn (move T) -> U` takes ownership~~
+- ~~Borrows are always read-only -- no `&mut T`, ever (see `MEMORY.md`)~~
+- ~~No lifetime annotations -- borrows are scoped to the function call~~
+- ~~`clone()` as the explicit escape hatch (auto-generated for all types)~~
+- ~~Drop insertion at scope boundaries (deterministic destruction)~~
+- ~~The `&` symbol does not exist in Expo -- borrowing is implicit~~
+- `ref T` syntax is parsed but deferred -- redundant with borrow-by-default params, unsafe in return position without lifetime tracking
+- **Done when**: ~~programs that move, borrow, and clone compile correctly, and use-after-move is caught~~
 
 ### Collections and iteration
 
@@ -493,6 +495,13 @@ Syntax undecided -- candidates include `~"""`, `'''`, or something else entirely
 
 Active design discussions about the type system, code organization, and functional programming patterns. These inform future work but are not committed changes.
 
+### Ownership design decisions (decided)
+
+- **`move self`**: `self` follows the same rules as any other parameter -- borrows by default (read-only), `move self` for ownership transfer. Mutating impl functions take `move self` and return the modified value: `list = list.push(42).push(37)`. No special "method" semantics -- impl functions with `self` are just functions with dot-call syntax.
+- **Signature-only `move`**: `move` only appears in the function/closure signature, never at the call site. The compiler infers moves from the callee's signature. Consistent with "no magic" -- the function's type signature is the contract, and the compiler fully enforces use-after-move.
+- **Functions = closures**: identical ownership rules. `fn (T) -> U` borrows T (default), `fn (move T) -> U` takes ownership. `map`/`then` use `fn (move T) -> U` since the closure receives the unwrapped owned value.
+- **`ref T` deferred**: `ref T` syntax is parsed but resolves to `Type::Unknown`. Redundant with borrow-by-default params, unsafe in return position without lifetime tracking. Revisit if a concrete use case emerges (possibly with protocols or collections).
+
 ### Inline closures
 
 - Inline closure syntax (`x -> expr`) is parsed but not compiled. Block closures (`fn (x: Int32) -> Int32 ... end`) cover all current use cases including `map`/`then`.
@@ -575,12 +584,13 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Core      | PascalCase primitive rename (`Int`, `String`, `Bool`, etc.), `ref T` syntax              | Done   |
 | Core      | Generic impl monomorphization, stdlib (`Option<T>`, `Result<T,E>`, `Pair<A,B>`), `panic` | Done   |
 | Core      | Function type syntax (`fn(T) -> U`), `map`/`then` for Option and Result                  | Done   |
+| Core      | Ownership + borrowing -- move semantics, use-after-move, `move self`, `clone()`, drop     | Done   |
 
 ### Remaining
 
 | Phase       | Milestone                                                     |
 | ----------- | ------------------------------------------------------------- |
-| Core        | Ownership + borrow checker + tasks (structured concurrency)   |
+| Core        | Tasks (structured concurrency)                                |
 | Core        | Collections, arena, `ua_parser.expo` compiles                 |
 | Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)    |
 | Reliability | Preemption/priority, supervision, `shared_map`                |

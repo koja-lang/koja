@@ -171,6 +171,10 @@ fn try_expr_to_lvalue(expr: &Expr) -> Option<LValue> {
             segments: vec![name.clone()],
             span: *span,
         }),
+        Expr::Self_ { span } => Some(LValue {
+            segments: vec!["self".to_string()],
+            span: *span,
+        }),
         Expr::FieldAccess {
             receiver,
             field,

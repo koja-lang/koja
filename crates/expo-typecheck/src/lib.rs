@@ -115,8 +115,12 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
             .iter()
             .filter_map(|p| match p {
                 Param::Regular {
-                    name, type_expr, ..
+                    is_move,
+                    name,
+                    type_expr,
+                    ..
                 } => Some(ParamInfo {
+                    is_move: *is_move,
                     name: name.clone(),
                     ty: resolve_type_expr_with_params(
                         type_expr,
@@ -140,6 +144,7 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
                 is_private: sig.is_private,
                 params,
                 return_type,
+                self_is_move: sig.self_is_move,
                 span: sig.span,
                 type_params: sig.type_params.clone(),
             };

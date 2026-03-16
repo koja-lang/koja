@@ -227,11 +227,13 @@ fn build(args: &[String], quiet: bool, color: bool) {
                             .params
                             .iter()
                             .map(|p| expo_typecheck::context::ParamInfo {
+                                is_move: p.is_move,
                                 name: p.name.clone(),
                                 ty: p.ty.clone(),
                             })
                             .collect(),
                         return_type: sig.return_type.clone(),
+                        self_is_move: sig.self_is_move,
                         span: sig.span,
                         type_params: sig.type_params.clone(),
                     },
@@ -396,11 +398,13 @@ fn clone_fn_sig(
             .params
             .iter()
             .map(|p| expo_typecheck::context::ParamInfo {
+                is_move: p.is_move,
                 name: p.name.clone(),
                 ty: p.ty.clone(),
             })
             .collect(),
         return_type: sig.return_type.clone(),
+        self_is_move: sig.self_is_move,
         span: sig.span,
         type_params: sig.type_params.clone(),
     }

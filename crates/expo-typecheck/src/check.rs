@@ -8,13 +8,29 @@ use crate::types::{
     GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute, unify,
 };
 
+/// Ownership state of a local variable during type checking.
+#[derive(Debug, Clone)]
+enum VarState {
+    Live,
+    Moved(Span),
+    MaybeMoved(Span),
+}
+
+/// Type and ownership state for a local variable.
+#[derive(Debug, Clone)]
+struct VarInfo {
+    ty: Type,
+    state: VarState,
+}
+
 /// Per-function environment used during type checking, tracking local variable
-/// types, the expected return type, and loop nesting depth.
+/// types, ownership states, the expected return type, and loop nesting depth.
 struct CheckEnv<'a> {
-    env: HashMap<String, Type>,
+    env: HashMap<String, VarInfo>,
     used_vars: HashSet<String>,
     loop_depth: usize,
     return_type: Type,
+    self_is_move: bool,
     struct_names: &'a [&'a str],
     enum_names: &'a [&'a str],
 }
@@ -26,8 +42,90 @@ impl<'a> CheckEnv<'a> {
             used_vars: HashSet::new(),
             loop_depth: self.loop_depth,
             return_type,
+            self_is_move: self.self_is_move,
             struct_names: self.struct_names,
             enum_names: self.enum_names,
+        }
+    }
+
+    fn insert_var(&mut self, name: String, ty: Type) {
+        self.env.insert(
+            name,
+            VarInfo {
+                ty,
+                state: VarState::Live,
+            },
+        );
+    }
+
+    fn get_type(&self, name: &str) -> Option<&Type> {
+        self.env.get(name).map(|v| &v.ty)
+    }
+
+    fn mark_moved(&mut self, name: &str, span: Span) {
+        if let Some(info) = self.env.get_mut(name) {
+            info.state = VarState::Moved(span);
+        }
+    }
+
+    fn check_not_moved(&self, name: &str, use_span: Span, ctx: &mut TypeContext) -> bool {
+        if let Some(info) = self.env.get(name) {
+            match &info.state {
+                VarState::Moved(_) => {
+                    ctx.error_with_hint(
+                        format!("use of moved value `{}`", name),
+                        "value was moved earlier in this scope; consider using clone()".into(),
+                        use_span,
+                    );
+                    return false;
+                }
+                VarState::MaybeMoved(_) => {
+                    ctx.error_with_hint(
+                        format!("value `{}` may have been moved", name),
+                        "value was moved in one branch but not another; ensure consistent ownership across branches".into(),
+                        use_span,
+                    );
+                    return false;
+                }
+                VarState::Live => {}
+            }
+        }
+        true
+    }
+
+    fn merge_branches(&mut self, branches: &[HashMap<String, VarInfo>]) {
+        if branches.is_empty() {
+            return;
+        }
+        for (name, info) in &mut self.env {
+            let branch_states: Vec<Option<&VarState>> = branches
+                .iter()
+                .map(|b| b.get(name).map(|v| &v.state))
+                .collect();
+
+            if branch_states.iter().all(|s| s.is_none()) {
+                continue;
+            }
+
+            let any_moved = branch_states
+                .iter()
+                .any(|s| matches!(s, Some(VarState::Moved(_)) | Some(VarState::MaybeMoved(_))));
+            let all_moved = branch_states
+                .iter()
+                .all(|s| matches!(s, Some(VarState::Moved(_)) | Some(VarState::MaybeMoved(_))));
+
+            let moved_span = branch_states.iter().find_map(|s| match s {
+                Some(VarState::Moved(span) | VarState::MaybeMoved(span)) => Some(*span),
+                _ => None,
+            });
+
+            if let Some(span) = moved_span {
+                if all_moved {
+                    info.state = VarState::Moved(span);
+                } else if any_moved {
+                    info.state = VarState::MaybeMoved(span);
+                }
+            }
         }
     }
 }
@@ -92,10 +190,16 @@ fn check_function(
     struct_names: &[&str],
     enum_names: &[&str],
 ) {
-    let mut env: HashMap<String, Type> = HashMap::new();
+    let mut env: HashMap<String, VarInfo> = HashMap::new();
 
     if let Some(ty) = self_type {
-        env.insert("self".to_string(), ty.clone());
+        env.insert(
+            "self".to_string(),
+            VarInfo {
+                ty: ty.clone(),
+                state: VarState::Live,
+            },
+        );
     }
 
     for param in &f.params {
@@ -104,7 +208,13 @@ fn check_function(
         } = param
         {
             let ty = resolve_type_expr(type_expr, struct_names, enum_names);
-            env.insert(name.clone(), ty);
+            env.insert(
+                name.clone(),
+                VarInfo {
+                    ty,
+                    state: VarState::Live,
+                },
+            );
         }
     }
 
@@ -118,11 +228,17 @@ fn check_function(
         return;
     }
 
+    let self_is_move = f
+        .params
+        .iter()
+        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }));
+
     let mut ce = CheckEnv {
         env,
         used_vars: HashSet::new(),
         loop_depth: 0,
         return_type: declared_return.clone(),
+        self_is_move,
         struct_names,
         enum_names,
     };
@@ -191,8 +307,26 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                 value_type
             };
 
+            if let Expr::Ident { name: src_name, .. } = value
+                && let Some(src_info) = ce.env.get(src_name)
+                && !src_info.ty.is_copy()
+            {
+                ce.mark_moved(src_name, *span);
+            }
+
             match target {
                 AssignTarget::LValue(lv) => {
+                    if lv.segments.len() > 1 && lv.segments[0] == "self" && !ce.self_is_move {
+                        ctx.error_with_hint(
+                            format!(
+                                "cannot mutate `{}` -- `self` is borrowed (read-only)",
+                                lv.segments.join(".")
+                            ),
+                            "use `move self` and return the modified value to mutate".into(),
+                            lv.span,
+                        );
+                        return;
+                    }
                     if lv.segments.len() == 1 {
                         let name = &lv.segments[0];
                         if ctx.constants.contains_key(name) {
@@ -203,10 +337,11 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                             );
                             return;
                         }
-                        if let Some(existing) = ce.env.get(name) {
+                        if let Some(existing) = ce.get_type(name) {
+                            let existing = existing.clone();
                             if existing.is_known()
                                 && effective_type.is_known()
-                                && !types_compatible(existing, &effective_type)
+                                && !types_compatible(&existing, &effective_type)
                             {
                                 ctx.error_with_hint(
                                     format!(
@@ -222,8 +357,11 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                                     lv.span,
                                 );
                             }
+                            if let Some(info) = ce.env.get_mut(name) {
+                                info.state = VarState::Live;
+                            }
                         } else {
-                            ce.env.insert(name.clone(), effective_type);
+                            ce.insert_var(name.clone(), effective_type);
                         }
                     }
                 }
@@ -254,7 +392,7 @@ fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
                 );
                 return;
             }
-            let target_type = ce.env.get(target_name).cloned().unwrap_or_else(|| {
+            let target_type = ce.get_type(target_name).cloned().unwrap_or_else(|| {
                 ctx.error_with_hint(
                     format!("unknown variable `{}`", target_name),
                     "check the spelling or make sure it is defined before this line".into(),
@@ -325,10 +463,11 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             params, body, span, ..
         } => {
             let mut closure_env = CheckEnv {
-                env: HashMap::new(),
+                env: HashMap::<String, VarInfo>::new(),
                 used_vars: HashSet::new(),
                 loop_depth: 0,
                 return_type: Type::Unknown,
+                self_is_move: false,
                 struct_names: ce.struct_names,
                 enum_names: ce.enum_names,
             };
@@ -386,9 +525,10 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
         Expr::Group { expr: inner, .. } => infer_expr(inner, ctx, ce),
 
         Expr::Ident { name, span } => {
-            if let Some(ty) = ce.env.get(name) {
+            if let Some(info) = ce.env.get(name) {
+                ce.check_not_moved(name, *span, ctx);
                 ce.used_vars.insert(name.clone());
-                ty.clone()
+                info.ty.clone()
             } else if let Some(ty) = ctx.constants.get(name) {
                 ty.clone()
             } else if ctx.functions.contains_key(name) {
@@ -421,6 +561,9 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             if let Some(else_stmts) = else_body {
                 let mut else_ce = ce.child(Type::Unknown);
                 check_body(else_stmts, ctx, &mut else_ce);
+                ce.merge_branches(&[then_ce.env, else_ce.env]);
+            } else {
+                ce.merge_branches(&[then_ce.env]);
             }
             Type::Unknown
         }
@@ -482,10 +625,11 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
 
         Expr::ShortClosure { params, body, span } => {
             let mut closure_env = CheckEnv {
-                env: HashMap::new(),
+                env: HashMap::<String, VarInfo>::new(),
                 used_vars: HashSet::new(),
                 loop_depth: 0,
                 return_type: Type::Unknown,
+                self_is_move: false,
                 struct_names: ce.struct_names,
                 enum_names: ce.enum_names,
             };
@@ -502,7 +646,14 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
             Type::Unknown
         }
 
-        Expr::String { .. } => Type::Primitive(Primitive::String),
+        Expr::String { parts, .. } => {
+            for part in parts {
+                if let StringPart::Interpolation { expr, .. } = part {
+                    infer_expr(expr, ctx, ce);
+                }
+            }
+            Type::Primitive(Primitive::String)
+        }
 
         Expr::StructConstruction {
             type_path,
@@ -600,7 +751,7 @@ fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
         }
 
         Expr::Self_ { span } => {
-            if let Some(ty) = ce.env.get("self") {
+            if let Some(ty) = ce.get_type("self") {
                 ty.clone()
             } else {
                 ctx.error_with_hint(
@@ -1071,6 +1222,10 @@ fn infer_method_call(
 
     let recv_ty = infer_expr(receiver, ctx, ce);
 
+    if method == "clone" && args.is_empty() {
+        return recv_ty;
+    }
+
     let (method_sig, subst) = match &recv_ty {
         Type::Struct(name) => {
             let direct = ctx
@@ -1150,6 +1305,7 @@ fn infer_method_call(
                 .params
                 .iter()
                 .map(|p| ParamInfo {
+                    is_move: p.is_move,
                     name: p.name.clone(),
                     ty: substitute(&p.ty, s),
                 })
@@ -1159,11 +1315,19 @@ fn infer_method_call(
             (sig.return_type.clone(), sig.params.clone())
         };
 
+        if sig.self_is_move
+            && !recv_ty.is_copy()
+            && let Expr::Ident { name, .. } = receiver
+        {
+            ce.mark_moved(name, span);
+        }
+
         if !sig.type_params.is_empty() {
             let method_sig_for_infer = FunctionSig {
                 is_private: sig.is_private,
                 params,
                 return_type,
+                self_is_move: sig.self_is_move,
                 span: sig.span,
                 type_params: sig.type_params.clone(),
             };
@@ -1393,11 +1557,17 @@ fn check_pattern(
     pat: &Pattern,
     subject_type: &Type,
     ctx: &mut TypeContext,
-    env: &mut HashMap<String, Type>,
+    env: &mut HashMap<String, VarInfo>,
 ) {
     match pat {
         Pattern::Binding { name, .. } => {
-            env.insert(name.clone(), subject_type.clone());
+            env.insert(
+                name.clone(),
+                VarInfo {
+                    ty: subject_type.clone(),
+                    state: VarState::Live,
+                },
+            );
         }
 
         Pattern::Constructor {
@@ -1426,7 +1596,13 @@ fn check_pattern(
                             if let Some(sub_pat) = &fp.pattern {
                                 check_pattern(sub_pat, field_ty, ctx, env);
                             } else {
-                                env.insert(fp.name.clone(), field_ty.clone());
+                                env.insert(
+                                    fp.name.clone(),
+                                    VarInfo {
+                                        ty: field_ty.clone(),
+                                        state: VarState::Live,
+                                    },
+                                );
                             }
                         } else {
                             ctx.error(
@@ -1651,6 +1827,12 @@ fn check_call_args(
                     arg.span,
                 );
             }
+            if param.is_move
+                && !arg_ty.is_copy()
+                && let Expr::Ident { name, .. } = &arg.value
+            {
+                ce.mark_moved(name, arg.span);
+            }
         }
     }
 }
@@ -1688,7 +1870,7 @@ fn bind_closure_params(
                 } else {
                     Type::Unknown
                 };
-                ce.env.insert(name.clone(), ty.clone());
+                ce.insert_var(name.clone(), ty.clone());
                 types.push(ty);
             }
             ClosureParam::Destructured { names, span, .. } => {
@@ -1698,7 +1880,7 @@ fn bind_closure_params(
                     *span,
                 );
                 for name in names {
-                    ce.env.insert(name.clone(), Type::Unknown);
+                    ce.insert_var(name.clone(), Type::Unknown);
                     types.push(Type::Unknown);
                 }
             }

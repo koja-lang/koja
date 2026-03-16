@@ -1,0 +1,21 @@
+struct Config
+  name: String
+end
+
+fn consume(move c: Config) -> String
+  c.name
+end
+
+fn borrow(c: Config) -> String
+  c.name
+end
+
+fn main
+  c1 = Config{name: "test"}
+  borrow(c1)
+  print(c1.name)
+
+  c2 = Config{name: "test2"}
+  consume(c2)
+  print("done")
+end

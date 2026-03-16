@@ -246,10 +246,12 @@ pub fn collect(module: &Module) -> TypeContext {
         FunctionSig {
             is_private: false,
             params: vec![ParamInfo {
+                is_move: false,
                 name: "value".to_string(),
                 ty: Type::Unknown,
             }],
             return_type: Type::Unit,
+            self_is_move: false,
             span: Span::zero(),
             type_params: Vec::new(),
         },
@@ -260,10 +262,12 @@ pub fn collect(module: &Module) -> TypeContext {
         FunctionSig {
             is_private: false,
             params: vec![ParamInfo {
+                is_move: false,
                 name: "message".to_string(),
                 ty: Type::Primitive(crate::types::Primitive::String),
             }],
             return_type: Type::Unit,
+            self_is_move: false,
             span: Span::zero(),
             type_params: Vec::new(),
         },
@@ -395,8 +399,12 @@ fn build_function_sig_with_params(
         .iter()
         .filter_map(|p| match p {
             Param::Regular {
-                name, type_expr, ..
+                is_move,
+                name,
+                type_expr,
+                ..
             } => Some(ParamInfo {
+                is_move: *is_move,
                 name: name.clone(),
                 ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
             }),
@@ -410,10 +418,16 @@ fn build_function_sig_with_params(
         .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
         .unwrap_or(Type::Unit);
 
+    let self_is_move = f
+        .params
+        .iter()
+        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }));
+
     Some(FunctionSig {
         is_private: f.is_private,
         params,
         return_type,
+        self_is_move,
         span: f.span,
         type_params: f.type_params.clone(),
     })

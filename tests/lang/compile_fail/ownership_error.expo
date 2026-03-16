@@ -1,0 +1,10 @@
+struct Point
+  x: Int32
+  y: Int32
+end
+
+fn main
+  p1 = Point{x: 1, y: 2}
+  p2 = p1
+  print(p1.x)
+end

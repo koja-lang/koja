@@ -31,6 +31,44 @@ scope, the value is dropped (memory freed, file handles closed, etc).
 - No `Box`, `Rc`, `Arc` in user code. The compiler handles heap placement.
 - No `mut` keyword: if you own a value, you can mutate it.
 
+**`self` in impl functions:**
+
+`self` follows the same rules as any other parameter -- borrows by default
+(read-only), `move self` for ownership transfer. Mutating impl functions
+take `move self` and return the modified value:
+
+```
+impl List<T>
+  fn push(move self, item: T) -> List<T>
+    # owns self, can mutate
+    self
+  end
+
+  fn len(self) -> Int32
+    # borrows self, read-only
+  end
+end
+
+list = list.push(42).push(37)  # chained: each push moves in, returns modified
+print(list.len())              # len borrows, list is still live
+```
+
+There are no special "method" semantics -- impl functions with `self` are
+just functions with dot-call syntax.
+
+**`move` in function types:**
+
+Functions and closures follow identical rules. `move` appears in the
+signature, never at the call site:
+
+```
+fn (T) -> U           # closure borrows T (default)
+fn (move T) -> U      # closure takes ownership of T
+
+# map takes ownership of self and passes owned value to closure:
+fn map<U>(move self, f: fn (move T) -> U) -> Option<U>
+```
+
 **Typical patterns:**
 
 ```
@@ -141,9 +179,9 @@ Most Expo code uses plain ownership + borrow. You write normal code, pass
 values to functions (borrowed by default), clone when you need a copy. The
 compiler tells you when something needs to be cloned.
 
-When a type needs to express "this contains a reference, not an owned value,"
-use `ref T` syntax. This appears in return types (`-> ref Database`) and
-inside generics (`Option<ref String>`).
+`ref T` syntax is parsed but deferred. Without lifetime annotations, `ref T`
+is redundant in parameter position (borrow-by-default) and unsafe in return
+position. It will be revisited if a concrete use case emerges.
 
 Function references use bare names without any sigil. The compiler
 distinguishes calls from references by the presence of parentheses: `foo()`

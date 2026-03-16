@@ -35,14 +35,17 @@ pub struct FunctionSig {
     pub is_private: bool,
     pub params: Vec<ParamInfo>,
     pub return_type: Type,
+    /// Whether this method takes `move self` (ownership transfer of receiver).
+    pub self_is_move: bool,
     #[allow(dead_code)]
     pub span: Span,
     pub type_params: Vec<String>,
 }
 
-/// A single parameter's name and resolved type.
+/// A single parameter's name, resolved type, and whether it takes ownership.
 #[derive(Clone)]
 pub struct ParamInfo {
+    pub is_move: bool,
     pub name: String,
     pub ty: Type,
 }

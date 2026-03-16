@@ -1,0 +1,14 @@
+struct Config
+  enabled: Bool
+end
+
+impl Config
+  fn toggle(self)
+    self.enabled = not self.enabled
+  end
+end
+
+fn main
+  c = Config{enabled: true}
+  print(c.enabled)
+end

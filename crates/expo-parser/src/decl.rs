@@ -406,13 +406,16 @@ impl Parser {
     fn parse_param(&mut self) -> Param {
         let start = self.current_span();
 
+        let is_move = self.eat(&TokenKind::Move).is_some();
+
         if self.eat(&TokenKind::Self_).is_some() {
             return Param::Self_ {
+                is_move,
                 span: self.span_from(start),
             };
         }
 
-        let is_move = self.eat(&TokenKind::Move).is_some();
+        let is_move = is_move || self.eat(&TokenKind::Move).is_some();
         let name = self.expect_ident();
         self.expect(&TokenKind::Colon);
         let type_expr = self.parse_type_expr();

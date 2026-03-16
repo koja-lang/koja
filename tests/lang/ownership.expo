@@ -1,0 +1,29 @@
+struct Point
+  x: Int32
+  y: Int32
+end
+
+fn main
+  # Copy types: no ownership issues
+  a = 42
+  b = a
+  print(a)
+  print(b)
+
+  # Move type (struct): assignment moves
+  p1 = Point{x: 1, y: 2}
+  p2 = p1
+  # p1 is now moved -- using it would be a compile error
+
+  # Reassignment brings variable back to live
+  p1 = Point{x: 3, y: 4}
+  print(p1.x)
+
+  # Copy types in branches: no issues
+  n = 10
+  if true
+    m = n
+    print(m)
+  end
+  print(n)
+end

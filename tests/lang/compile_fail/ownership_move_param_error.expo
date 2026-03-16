@@ -1,0 +1,13 @@
+struct Config
+  name: String
+end
+
+fn consume(move c: Config) -> String
+  c.name
+end
+
+fn main
+  c = Config{name: "test"}
+  consume(c)
+  print(c.name)
+end

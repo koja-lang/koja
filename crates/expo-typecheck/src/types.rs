@@ -79,6 +79,23 @@ impl Type {
         }
     }
 
+    /// Copy types are implicitly duplicated on assignment and never trigger
+    /// use-after-move. Move types transfer ownership on assignment.
+    ///
+    /// Copy: all numeric primitives, Bool, Unit, function pointers.
+    /// Move: String, structs, enums (including generic instances like Option<T>).
+    pub fn is_copy(&self) -> bool {
+        match self {
+            Type::Primitive(Primitive::String) => false,
+            Type::Primitive(_) => true,
+            Type::Unit => true,
+            Type::Function { .. } => true,
+            Type::Struct(_) | Type::Enum(_) | Type::GenericInstance { .. } => false,
+            Type::Tuple(elems) => elems.iter().all(|e| e.is_copy()),
+            Type::TypeVar(_) | Type::Unknown | Type::Error => true,
+        }
+    }
+
     /// Returns true if this type is a concrete, resolved type (not `Unknown`, `Error`, or `TypeVar`).
     pub fn is_known(&self) -> bool {
         !matches!(

@@ -343,7 +343,13 @@ impl<'a> Printer<'a> {
 
     fn param_to_doc(&mut self, p: &Param) -> Doc {
         match p {
-            Param::Self_ { .. } => text("self"),
+            Param::Self_ { is_move, .. } => {
+                if *is_move {
+                    text("move self")
+                } else {
+                    text("self")
+                }
+            }
             Param::Regular {
                 is_move,
                 name,
@@ -1357,10 +1363,22 @@ fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
         TypeExpr::Unit { .. } => text("()"),
         TypeExpr::Function {
             params,
+            param_is_move,
             return_type,
             ..
         } => {
-            let params_doc: Vec<Doc> = params.iter().map(type_expr_to_doc).collect();
+            let params_doc: Vec<Doc> = params
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let is_move = param_is_move.get(i).copied().unwrap_or(false);
+                    if is_move {
+                        concat(vec![text("move "), type_expr_to_doc(p)])
+                    } else {
+                        type_expr_to_doc(p)
+                    }
+                })
+                .collect();
             concat(vec![
                 text("fn("),
                 intersperse(params_doc, text(", ")),
@@ -1615,7 +1633,13 @@ fn sig_will_break(f: &Function) -> bool {
 
 fn param_text_len(p: &Param) -> usize {
     match p {
-        Param::Self_ { .. } => 4,
+        Param::Self_ { is_move, .. } => {
+            if *is_move {
+                9
+            } else {
+                4
+            }
+        }
         Param::Regular {
             is_move,
             name,

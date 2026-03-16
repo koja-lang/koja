@@ -169,7 +169,7 @@ pub enum ImplMember {
 #[allow(clippy::large_enum_variant)]
 pub enum Param {
     /// The `self` receiver in a method.
-    Self_ { span: Span },
+    Self_ { is_move: bool, span: Span },
     /// A regular named parameter with an optional default value.
     Regular {
         is_move: bool,
@@ -234,9 +234,11 @@ pub enum TypeExpr {
     Tuple { elements: Vec<TypeExpr>, span: Span },
     /// The unit type: `()`.
     Unit { span: Span },
-    /// A function type: `fn(Int32, String) -> Bool`.
+    /// A function type: `fn (Int32, String) -> Bool`.
+    /// `param_is_move` tracks which parameters are `move` (e.g. `fn (move T) -> U`).
     Function {
         params: Vec<TypeExpr>,
+        param_is_move: Vec<bool>,
         return_type: Box<TypeExpr>,
         span: Span,
     },

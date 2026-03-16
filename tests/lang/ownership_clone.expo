@@ -1,0 +1,20 @@
+struct Point
+  x: Int32
+  y: Int32
+end
+
+fn consume(move p: Point) -> Int32
+  p.x
+end
+
+fn main
+  p = Point{x: 10, y: 20}
+  q = p.clone()
+  print(consume(q))
+  print(p.x)
+
+  n = 42
+  m = n.clone()
+  print(m)
+  print(n)
+end

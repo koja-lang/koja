@@ -120,6 +120,10 @@ pub fn compile_method_call<'ctx>(
     let recv_val = compile_expr(c, receiver, function)?
         .ok_or("method call on expression that produced no value")?;
 
+    if method == "clone" && args.is_empty() {
+        return Ok(Some(recv_val));
+    }
+
     let struct_name = resolve_struct_name(c, receiver, &recv_val)?;
 
     let mut mangled = format!("{}_{}", struct_name, method);
