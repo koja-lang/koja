@@ -230,6 +230,8 @@ pub fn compile_match<'ctx>(
     let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
         Vec::new();
 
+    let mut reachable_arm_count = 0usize;
+
     for (i, arm) in arms.iter().enumerate() {
         let body_bb = c
             .context
@@ -261,8 +263,10 @@ pub fn compile_match<'ctx>(
 
         c.builder.position_at_end(body_bb);
         let arm_val = compile_body_as_value(c, &arm.body, function)?;
-        if !c.current_block_terminated() {
+        let arm_terminated = c.current_block_terminated();
+        if !arm_terminated {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
+            reachable_arm_count += 1;
         }
         let arm_end_bb = c.builder.get_insert_block().unwrap();
         if let Some(val) = arm_val {
@@ -278,7 +282,7 @@ pub fn compile_match<'ctx>(
 
     c.builder.position_at_end(merge_bb);
 
-    if !incoming.is_empty() && incoming.len() == arms.len() {
+    if !incoming.is_empty() && incoming.len() == reachable_arm_count {
         let first_ty = incoming[0].0.get_type();
         if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
             let undef = first_ty.const_zero();

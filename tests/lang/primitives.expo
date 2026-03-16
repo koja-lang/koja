@@ -1,0 +1,28 @@
+fn main
+  print(42)
+  print(0)
+  print(-1)
+  print(1_000)
+
+  x: Int8 = 127
+  print(x)
+
+  y: Int16 = 32000
+  print(y)
+
+  z: Int32 = 42
+  print(z)
+
+  w: Int = 100
+  print(w)
+
+  print(3.14)
+  print(0.0)
+  print(-2.5)
+
+  print(true)
+  print(false)
+
+  print("hello")
+  print("")
+end

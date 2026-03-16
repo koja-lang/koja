@@ -1,0 +1,15 @@
+fn main
+  i = 0
+  while i < 5
+    print(i)
+    i += 1
+  end
+
+  sum = 0
+  n = 1
+  while n <= 10
+    sum += n
+    n += 1
+  end
+  print(sum)
+end

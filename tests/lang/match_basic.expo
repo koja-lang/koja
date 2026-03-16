@@ -1,0 +1,23 @@
+fn main
+  x = 3
+  result = match x
+    1 -> "one"
+    2 -> "two"
+    3 -> "three"
+    _ -> "other"
+  end
+  print(result)
+
+  y = 99
+  match y
+    1 -> print("one")
+    _ -> print("wildcard")
+  end
+
+  z = 42
+  msg = match z
+    0 -> "zero"
+    val -> "got #{val}"
+  end
+  print(msg)
+end

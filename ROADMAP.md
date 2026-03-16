@@ -49,21 +49,23 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - String interpolation
 - Closures (non-capturing, block form)
 - `print` builtin
+- `panic` builtin (prints to stderr, aborts)
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
+- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>` (auto-imported from `std.kernel`)
 
 ### Parsed and type-checked but NOT yet in codegen
 
 - `for` loops
 - `arena` blocks
 - `await`/`receive`/`spawn`
-- Try operator (`?`)
+- Try operator (`?`) -- design reconsidered, may not ship
 - `ref T`
 - Lists
 - Methods on generic types, trait bounds
 
 ### Design notes
 
-- **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. After generics land, `Pair<A, B>` (with `.first` / `.second`) will be available in the stdlib for lightweight two-value cases. 3+ values should always be a struct.
+- **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `FromPair<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
 - **Closures (Phase 1)**: Block closures only with explicit types and parens: `fn (a: i32, b: i32) -> i32 ... end`. Mirrors function signature syntax. Inline closures (`x -> expr`) are parsed but not compiled -- they land in Phase 2 with type inference and generics.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
@@ -74,7 +76,6 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 ### Known gaps
 
-- **Generics**: impl blocks on generic types not monomorphized (blocks methods like `Pair<A,B>.first()`) -- in progress
 - **Generic enum unit variants**: `Option.None` cannot infer `T` without usage context -- workaround: variable type annotations (`z: Option<Int32> = Option.None`)
 - **Type checker**: `ref T` unresolved (Phase 2)
 - **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
@@ -168,11 +169,12 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - ~~Generic enums (required for `Option<T>` and `Result<T,E>`)~~
 - ~~Variable type annotations (`x: Int32 = 42`, `z: Option<Int32> = Option.None`) -- unblocks generic enum unit variants and general type safety~~
 - ~~Numeric type coercion for annotated variables (same-category casting: `x: UInt8 = 4`)~~
-- Monomorphization of impl blocks on generic types (required for methods like `.first()`, `.map()`) -- **in progress**
-- `Option<T>` and `Result<T,E>` as built-in enum types with `Some`/`None`/`Ok`/`Err`
-- `Pair<A, B>` stdlib struct (with `.first` / `.second`)
-- The `?` operator for error propagation (desugars to early `return Err(...)`)
-- **Done when**: `Option<T>`, `Result<T,E>`, and `Pair<A,B>` compile and work in match expressions
+- ~~Monomorphization of impl blocks on generic types (methods like `.first()`, `.unwrap()`, `.or()`)~~
+- ~~`Option<T>` and `Result<T,E>` as stdlib enum types with `Some`/`None`/`Ok`/`Err` (auto-imported from `std.kernel`)~~
+- ~~`Pair<A, B>` stdlib struct (with `.first` / `.second`)~~
+- ~~`panic(message)` builtin for fatal errors (prints to stderr, calls `abort`)~~
+- The `?` operator for error propagation -- design reconsidered, see "FP and pipes" in Design exploration
+- **Done when**: ~~`Option<T>`, `Result<T,E>`, and `Pair<A,B>` compile and work in match expressions~~
 
 ### Ownership and borrowing
 
@@ -314,7 +316,7 @@ Concurrency primitives (tasks, actors, `shared_map`, supervisors) already ship i
 
 - `String` with UTF-8 internals, interpolation (`#{}` with format specs), `.trim()`, `.split()`, `.starts_with?()`, `.empty?()`, `.contains?()`
 - `List<T>`, `Map<K,V>`, and `Set<T>` with full method sets
-- `Option<T>` and `Result<T,E>` methods (`.map()`, `.unwrap_or()`, `.ok?()`)
+- `Option<T>` and `Result<T,E>` methods -- `unwrap`, `or`, `some?`/`none?`, `ok?`/`err?` done in `std.kernel`; `map`, `then` pending inline closures
 - File I/O: `file.read()`, `file.write()`, `file.exists?()`
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
 - Serialization trait/interface that packages can implement
@@ -507,13 +509,42 @@ Active design discussions about the type system, code organization, and function
 
 ### FP and pipes vs `?` operator
 
-- **Decided**: the `?` operator is higher priority than pipes for production code. Pure pipe chains break down when operations are fallible (the common case in real applications). `?` handles the error path cleanly without boilerplate -- it solves the same problem Elixir's `with` statement addresses, but more concisely.
-- Pipes remain valuable for pure data transformation (parsing, formatting, filtering) where nothing fails, but they are a nice-to-have, not a core paradigm.
-- **Open**: whether dot syntax (`.method()`) desugars to pipes, or remains a separate dispatch mechanism.
+- **Decided**: no `?` operator. Hidden control flow violates the "no magic" principle -- the reader can't see that a function might return early without inspecting every line for `?`. Error handling uses explicit functions instead.
+- **Decided**: no `?.` optional chaining (Swift-style). Would make `Option` a privileged type, breaking fractal design -- user-defined sum types wouldn't get the same syntax.
+- **Decided**: `map`, `then`, `or` as the chaining API for `Option` and `Result`. `map` transforms the inner value (closure returns plain value). `then` chains fallible operations (closure returns `Option`/`Result`). `or` provides a lazy fallback. Approachable naming -- plain English, no `and_then`/`flat_map`/`unwrap_or`.
+- `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
+- Compiler guidance when `map` is used where `then` is needed (or vice versa).
+- Pipes remain for pure data transformation where nothing fails.
+- `then`/`map` are deferred until inline closures compile. Current stdlib ships `unwrap`, `or`, `some?`/`none?`, `ok?`/`err?`.
 
 ### Struct destructuring assignment
 
 - **Planned**: irrefutable struct destructuring on assignment -- `Config{name, port} = load_config()`. Compile-time verified exhaustive (structs have a single shape). Syntactic sugar for pulling fields into local variables. Enum destructuring would require `match`.
+
+### Stdlib design
+
+- **Done**: `std.kernel` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. Embedded in the compiler via `include_str!`, parsed at startup, types merged into every module's context before type checking.
+- Rule: "stdlib = always available, packages = explicit import." All `std.*` modules are auto-imported. As the stdlib grows, types split into separate modules (`std.option`, `std.string`, `std.list`) for documentation and organization, but all remain auto-imported.
+- Option/Result API: `unwrap` (panics on failure), `or` (lazy fallback), `some?`/`none?` (Option), `ok?`/`err?` (Result). `map` and `then` deferred until inline closures compile.
+- No `map_err` yet. No `or_else` -- `or` is implicitly lazy.
+- Monomorphization ensures zero binary bloat for unused stdlib types. Only instantiations that are actually called get compiled.
+
+### `Display` protocol and `print`
+
+- **Planned**: a `Display` protocol that types implement to provide a string representation. `print()` dispatches through `Display` rather than hardcoding printf format specifiers per LLVM type.
+- **Auto-derived**: all structs and enums get a default `impl Display` generated by the compiler. Enums print as `VariantName` (unit) or `VariantName(value)` (tuple payload). Structs print as `TypeName{field: value, ...}`. Users can override with their own `impl Display for MyType`.
+- **Requires**: protocol system to be implemented first.
+- **Current limitation**: `print()` only supports primitives (`Int`, `Float`, `Bool`, `String`). Printing a struct or enum value is a compile error. Workaround: match on enum variants and print primitive values, or use string interpolation with primitive fields.
+
+### Literal protocols
+
+- **Concept**: all literal syntax (`42`, `"hello"`, `[...]`, `{k:v}`, `(a,b)`) backed by protocols, not special-cased types. Any type can opt into literal construction by implementing the protocol.
+- **Protocol family**: `FromInt`, `FromFloat`, `FromString`, `FromList<T>`, `FromEntries<K,V>`, `FromPair<A,B>`.
+- **Default types**: `Int`, `Float`, `String`, `List<T>`, `Map<K,V>`, `Pair<A,B>` when no type annotation is present.
+- **Infallible**: literal protocols return `Self`, not `Result`. Fallible parsing (e.g. from untrusted input) uses regular functions that return `Result`.
+- **Pair syntax**: `(a, b)` may return via `FromPair<A, B>` -- only pairs (arity 2). 3+ values use named structs.
+- **Requires**: protocol system to be implemented first.
+- **Fractal design**: user-defined types and built-in types have identical access to literal syntax. No two-tier system.
 
 ---
 
@@ -536,12 +567,13 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Core      | Generics -- monomorphization of generic functions and structs, type unification          | Done   |
 | Core      | Generic enums, variable type annotations, numeric type coercion                          | Done   |
 | Core      | PascalCase primitive rename (`Int`, `String`, `Bool`, etc.), `ref T` syntax              | Done   |
+| Core      | Generic impl monomorphization, stdlib (`Option<T>`, `Result<T,E>`, `Pair<A,B>`), `panic` | Done   |
 
 ### Remaining
 
 | Phase       | Milestone                                                                   |
 | ----------- | --------------------------------------------------------------------------- |
-| Core        | Generics -- impl monomorphization, `Option<T>`, `Result<T,E>`, `?` operator |
+| Core        | Inline closures, `then`/`map` for Option/Result                             |
 | Core        | Ownership + borrow checker + tasks (structured concurrency)                 |
 | Core        | Collections, closures, arena, `ua_parser.expo` compiles                     |
 | Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)                  |

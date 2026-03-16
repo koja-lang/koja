@@ -1,0 +1,16 @@
+fn main
+  x = Option.Some(42)
+  print(x.unwrap())
+  print(x.or(0))
+  print(x.some?())
+  print(x.none?())
+
+  y: Option<Int32> = Option.None
+  print(y.or(99))
+  print(y.some?())
+  print(y.none?())
+
+  s = Option.Some("hello")
+  print(s.unwrap())
+  print(s.or("default"))
+end

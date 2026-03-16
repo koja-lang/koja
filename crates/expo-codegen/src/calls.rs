@@ -27,6 +27,7 @@ pub fn compile_call<'ctx>(
 
     match name {
         "print" => compile_print(c, args, function),
+        "panic" => compile_panic(c, args, function),
         "print_Int32" | "print_Int" | "print_Bool" | "print_Float" | "print_String" => {
             compile_print_builtin(c, name, args, function)
         }
@@ -220,6 +221,57 @@ fn compile_print<'ctx>(
             )
             .unwrap();
     }
+
+    Ok(None)
+}
+
+fn compile_panic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    args: &[Arg],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    if args.len() != 1 {
+        return Err("panic expects exactly 1 argument".to_string());
+    }
+
+    let val =
+        compile_expr(c, &args[0].value, function)?.ok_or("argument to panic produced no value")?;
+
+    let fdopen = *c.functions.get("fdopen").ok_or("fdopen not declared")?;
+    let fprintf = *c.functions.get("fprintf").ok_or("fprintf not declared")?;
+    let abort = *c.functions.get("abort").ok_or("abort not declared")?;
+
+    let fd_val = c.context.i32_type().const_int(2, false);
+    let mode = c
+        .builder
+        .build_global_string_ptr("w", "stderr_mode")
+        .unwrap();
+    let stderr = c
+        .builder
+        .build_call(
+            fdopen,
+            &[fd_val.into(), mode.as_pointer_value().into()],
+            "stderr",
+        )
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .ok_or("fdopen returned no value")?;
+
+    let fmt = c
+        .builder
+        .build_global_string_ptr("panic: %s\n", "fmt_panic")
+        .unwrap();
+    c.builder
+        .build_call(
+            fprintf,
+            &[stderr.into(), fmt.as_pointer_value().into(), val.into()],
+            "fprintf_panic",
+        )
+        .unwrap();
+
+    c.builder.build_call(abort, &[], "abort_call").unwrap();
+    c.builder.build_unreachable().unwrap();
 
     Ok(None)
 }

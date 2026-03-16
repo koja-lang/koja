@@ -255,6 +255,20 @@ pub fn collect(module: &Module) -> TypeContext {
         },
     );
 
+    ctx.functions.insert(
+        "panic".to_string(),
+        FunctionSig {
+            is_private: false,
+            params: vec![ParamInfo {
+                name: "message".to_string(),
+                ty: Type::Primitive(crate::types::Primitive::String),
+            }],
+            return_type: Type::Unit,
+            span: Span::zero(),
+            type_params: Vec::new(),
+        },
+    );
+
     ctx
 }
 

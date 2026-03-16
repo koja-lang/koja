@@ -170,12 +170,16 @@ impl<'ctx> Compiler<'ctx> {
             .collect();
 
         let st = self.context.opaque_struct_type(&mangled);
+        self.struct_types.insert(mangled.clone(), st);
+
+        for (_, fty) in &concrete_fields {
+            self.ensure_types_exist(fty)?;
+        }
         let field_llvm_types: Vec<_> = concrete_fields
             .iter()
             .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
             .collect();
         st.set_body(&field_llvm_types, false);
-        self.struct_types.insert(mangled.clone(), st);
         self.mono_struct_info.insert(mangled, concrete_fields);
 
         Ok(())
@@ -221,6 +225,25 @@ impl<'ctx> Compiler<'ctx> {
             })
             .collect();
 
+        let enum_type = self.context.opaque_struct_type(&mangled);
+        self.struct_types.insert(mangled.clone(), enum_type);
+
+        for (_, vdata) in &concrete_variants {
+            match vdata {
+                VariantData::Unit => {}
+                VariantData::Tuple(types) => {
+                    for ty in types {
+                        self.ensure_types_exist(ty)?;
+                    }
+                }
+                VariantData::Struct(fields) => {
+                    for (_, ty) in fields {
+                        self.ensure_types_exist(ty)?;
+                    }
+                }
+            }
+        }
+
         let mut variant_payloads = Vec::new();
         let mut max_payload_size: u32 = 0;
 
@@ -251,8 +274,6 @@ impl<'ctx> Compiler<'ctx> {
                 }
             }
         }
-
-        let enum_type = self.context.opaque_struct_type(&mangled);
         let i8_type = self.context.i8_type();
         if max_payload_size > 0 {
             let payload_array = i8_type.array_type(max_payload_size);
@@ -260,7 +281,6 @@ impl<'ctx> Compiler<'ctx> {
         } else {
             enum_type.set_body(&[i8_type.into()], false);
         }
-        self.struct_types.insert(mangled.clone(), enum_type);
         self.enum_variant_payloads
             .insert(mangled.clone(), variant_payloads);
 

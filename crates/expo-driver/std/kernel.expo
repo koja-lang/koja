@@ -1,0 +1,81 @@
+@moduledoc """
+Core types available in every Expo module without an explicit import.
+
+Provides `Option<T>` for nullable values, `Result<T, E>` for fallible
+operations, and `Pair<A, B>` for lightweight two-value grouping.
+"""
+
+enum Option<T>
+  Some(T)
+  None
+end
+
+enum Result<T, E>
+  Ok(T)
+  Err(E)
+end
+
+struct Pair<A, B>
+  first: A
+  second: B
+end
+
+impl Option<T>
+  fn unwrap(self) -> T
+    match self
+      Option.Some(val) -> val
+      Option.None -> panic("called unwrap on None")
+    end
+  end
+
+  fn or(self, default: T) -> T
+    match self
+      Option.Some(val) -> val
+      Option.None -> default
+    end
+  end
+
+  fn some?(self) -> Bool
+    match self
+      Option.Some(_) -> true
+      Option.None -> false
+    end
+  end
+
+  fn none?(self) -> Bool
+    match self
+      Option.Some(_) -> false
+      Option.None -> true
+    end
+  end
+end
+
+impl Result<T, E>
+  fn unwrap(self) -> T
+    match self
+      Result.Ok(val) -> val
+      Result.Err(_) -> panic("called unwrap on Err")
+    end
+  end
+
+  fn or(self, default: T) -> T
+    match self
+      Result.Ok(val) -> val
+      Result.Err(_) -> default
+    end
+  end
+
+  fn ok?(self) -> Bool
+    match self
+      Result.Ok(_) -> true
+      Result.Err(_) -> false
+    end
+  end
+
+  fn err?(self) -> Bool
+    match self
+      Result.Ok(_) -> false
+      Result.Err(_) -> true
+    end
+  end
+end

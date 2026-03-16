@@ -12,4 +12,5 @@ editors/vscode/out
 # Misc
 install.sh
 lsp-install.sh
+test.sh
 .DS_Store

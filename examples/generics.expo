@@ -1,45 +1,9 @@
-struct Pair<A, B>
-  first: A
-  second: B
-end
-
 fn identity<T>(x: T) -> T
   x
 end
 
 fn make_pair<A, B>(a: A, b: B) -> Pair<A, B>
   Pair { first: a, second: b }
-end
-
-enum Option<T>
-  Some(T)
-  None
-end
-
-fn unwrap_or<T>(opt: Option<T>, default: T) -> T
-  match opt
-    Option.Some(val) -> val
-    Option.None -> default
-  end
-end
-
-impl Pair<A, B>
-  fn get_first(self) -> A
-    self.first
-  end
-
-  fn get_second(self) -> B
-    self.second
-  end
-end
-
-impl Option<T>
-  fn unwrap_or_method(self, default: T) -> T
-    match self
-      Option.Some(val) -> val
-      Option.None -> default
-    end
-  end
 end
 
 fn main
@@ -50,25 +14,22 @@ fn main
   print(p.first)
   print(p.second)
 
-  # Test generic impl methods on struct
-  print(p.get_first())
-  print(p.get_second())
-
-  # Test with different type args
   p2 = Pair{first: "foo", second: 100}
-  print(p2.get_first())
-  print(p2.get_second())
+  print(p2.first)
+  print(p2.second)
 
   x = Option.Some(42)
-  print(unwrap_or(x, 0))
+  print(x.unwrap())
+  print(x.or(0))
+  print(x.some?())
 
   y = Option.Some("hello")
-  print(unwrap_or(y, "default"))
+  print(y.unwrap())
 
   z: Option<Int32> = Option.None
-  print(unwrap_or(z, 99))
+  print(z.or(99))
+  print(z.none?())
 
-  # Test generic impl method on enum
   a = Option.Some(77)
-  print(a.unwrap_or_method(0))
+  print(a.or(0))
 end

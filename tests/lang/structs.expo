@@ -1,0 +1,15 @@
+struct Point
+  x: Int32
+  y: Int32
+end
+
+fn main
+  p = Point{x: 3, y: 4}
+  print(p.x)
+  print(p.y)
+
+  p.x = 10
+  print(p.x)
+
+  print("(#{p.x}, #{p.y})")
+end

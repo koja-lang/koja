@@ -185,6 +185,18 @@ impl<'ctx> Compiler<'ctx> {
         );
         let snprintf = self.module.add_function("snprintf", snprintf_type, None);
         self.functions.insert("snprintf".to_string(), snprintf);
+
+        let fprintf_type = i32_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into()], true);
+        let fprintf = self.module.add_function("fprintf", fprintf_type, None);
+        self.functions.insert("fprintf".to_string(), fprintf);
+
+        let abort_type = self.context.void_type().fn_type(&[], false);
+        let abort = self.module.add_function("abort", abort_type, None);
+        self.functions.insert("abort".to_string(), abort);
+
+        let fdopen_type = i8_ptr_type.fn_type(&[i32_type.into(), i8_ptr_type.into()], false);
+        let fdopen = self.module.add_function("fdopen", fdopen_type, None);
+        self.functions.insert("fdopen".to_string(), fdopen);
     }
 
     fn declare_function(

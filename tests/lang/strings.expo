@@ -1,0 +1,16 @@
+fn main
+  print("hello world")
+  print("tab:\there")
+  print("quote: \"yes\"")
+  print("backslash: \\")
+
+  name = "expo"
+  print("hello #{name}")
+  print("1 + 2 = #{1 + 2}")
+
+  msg = """
+  first line
+  second line
+  """
+  print(msg)
+end

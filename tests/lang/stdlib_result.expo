@@ -1,0 +1,12 @@
+fn main
+  ok: Result<Int32, Int32> = Result.Ok(42)
+  print(ok.unwrap())
+  print(ok.or(0))
+  print(ok.ok?())
+  print(ok.err?())
+
+  err: Result<Int32, Int32> = Result.Err(1)
+  print(err.or(99))
+  print(err.ok?())
+  print(err.err?())
+end

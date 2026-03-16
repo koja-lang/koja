@@ -1,0 +1,20 @@
+struct Config<T>
+  name: String
+  enabled: Bool
+  detail: Option<T>
+end
+
+fn main
+  c = Config{name: "test", enabled: true, detail: Option.Some(42)}
+  print(c.name)
+  print(c.enabled)
+  print(c.detail.unwrap())
+
+  c2 = Config{name: "other", enabled: false, detail: Option.Some("hello")}
+  print(c2.name)
+  print(c2.detail.unwrap())
+
+  c3: Config<Int32> = Config{name: "empty", enabled: true, detail: Option.None}
+  print(c3.name)
+  print(c3.detail.or(99))
+end

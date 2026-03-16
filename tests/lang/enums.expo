@@ -1,0 +1,35 @@
+enum Direction
+  North
+  South
+  East
+  West
+end
+
+enum Value
+  Integer(Int32)
+  Text(String)
+end
+
+fn opposite(dir: Direction) -> String
+  match dir
+    North -> "south"
+    South -> "north"
+    East -> "west"
+    West -> "east"
+  end
+end
+
+fn describe(v: Value) -> Int32
+  match v
+    Value.Integer(n) -> n
+    Value.Text(_) -> 0
+  end
+end
+
+fn main
+  print(opposite(Direction.North))
+  print(opposite(Direction.East))
+
+  print(describe(Value.Integer(42)))
+  print(describe(Value.Text("hello")))
+end

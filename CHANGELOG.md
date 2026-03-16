@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generics -- generic functions (`fn identity<T>(x: T) -> T`), generic structs (`struct Pair<A, B>`), and generic enums (`enum Option<T>`) now compile to native code via monomorphization. Type arguments are inferred at call sites.
 - Variable type annotations -- `x: Int32 = 42`, `z: Option<Int32> = Option.None`. Annotations are optional and support all types including generics. Enables explicit typing for generic enum unit variants where the type can't be inferred.
+- Stdlib types via `std.kernel` -- `Option<T>`, `Result<T, E>`, and `Pair<A, B>` are auto-imported into every module. No `import` needed. Methods: `unwrap`, `or`, `some?`/`none?` (Option), `ok?`/`err?` (Result).
+- `panic(message)` builtin -- prints the message to stderr and aborts the process. Used by `unwrap` for fatal failures.
+- `or` and `and` keywords are now valid as method and field names after `.` (e.g. `x.or(default)`).
 
 ### Changed
 

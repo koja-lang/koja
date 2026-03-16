@@ -1,0 +1,15 @@
+fn double(x: Int32) -> Int32
+  x * 2
+end
+
+fn add_ten(x: Int32) -> Int32
+  x + 10
+end
+
+fn main
+  result = 5 |> double
+  print(result)
+
+  result2 = 3 |> double |> add_ten
+  print(result2)
+end

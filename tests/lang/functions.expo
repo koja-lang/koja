@@ -1,0 +1,25 @@
+fn add(a: Int32, b: Int32) -> Int32
+  a + b
+end
+
+fn fib(n: Int32) -> Int32
+  if n <= 1
+    n
+  else
+    fib(n - 1) + fib(n - 2)
+  end
+end
+
+fn early_return(x: Int32) -> String
+  if x > 10
+    return "big"
+  end
+  "small"
+end
+
+fn main
+  print(add(3, 4))
+  print(fib(10))
+  print(early_return(20))
+  print(early_return(5))
+end

@@ -1,0 +1,15 @@
+fn main
+  print(2 + 3)
+  print(10 - 4)
+  print(6 * 7)
+  print(20 / 4)
+  print(17 % 5)
+
+  print(-3 + 10)
+  print(0 * 100)
+
+  print(1.5 + 2.5)
+  print(10.0 - 3.5)
+  print(2.0 * 3.0)
+  print(7.0 / 2.0)
+end

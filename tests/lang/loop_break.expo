@@ -1,0 +1,11 @@
+fn main
+  i = 0
+  loop
+    if i >= 3
+      break
+    end
+    print(i)
+    i += 1
+  end
+  print("done")
+end

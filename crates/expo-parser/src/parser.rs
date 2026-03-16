@@ -94,6 +94,14 @@ impl Parser {
                 self.advance();
                 name
             }
+            TokenKind::Or => {
+                self.advance();
+                "or".to_string()
+            }
+            TokenKind::And => {
+                self.advance();
+                "and".to_string()
+            }
             _ => {
                 let span = self.current_span();
                 self.error(
