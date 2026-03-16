@@ -222,18 +222,18 @@ fn build(args: &[String], quiet: bool, color: bool) {
                 merged_ctx.functions.insert(
                     name.clone(),
                     expo_typecheck::context::FunctionSig {
-                        is_private: sig.is_private,
+                        visibility: sig.visibility,
                         params: sig
                             .params
                             .iter()
                             .map(|p| expo_typecheck::context::ParamInfo {
-                                mode: p.mode.clone(),
+                                mode: p.mode,
                                 name: p.name.clone(),
                                 ty: p.ty.clone(),
                             })
                             .collect(),
                         return_type: sig.return_type.clone(),
-                        self_mode: sig.self_mode.clone(),
+                        self_mode: sig.self_mode,
                         span: sig.span,
                         type_params: sig.type_params.clone(),
                     },
@@ -415,18 +415,18 @@ fn clone_fn_sig(
     sig: &expo_typecheck::context::FunctionSig,
 ) -> expo_typecheck::context::FunctionSig {
     expo_typecheck::context::FunctionSig {
-        is_private: sig.is_private,
+        visibility: sig.visibility,
         params: sig
             .params
             .iter()
             .map(|p| expo_typecheck::context::ParamInfo {
-                mode: p.mode.clone(),
+                mode: p.mode,
                 name: p.name.clone(),
                 ty: p.ty.clone(),
             })
             .collect(),
         return_type: sig.return_type.clone(),
-        self_mode: sig.self_mode.clone(),
+        self_mode: sig.self_mode,
         span: sig.span,
         type_params: sig.type_params.clone(),
     }

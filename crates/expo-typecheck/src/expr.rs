@@ -923,7 +923,7 @@ fn infer_method_call(
                 .params
                 .iter()
                 .map(|p| ParamInfo {
-                    mode: p.mode.clone(),
+                    mode: p.mode,
                     name: p.name.clone(),
                     ty: substitute(&p.ty, s),
                 })
@@ -942,10 +942,10 @@ fn infer_method_call(
 
         if !sig.type_params.is_empty() {
             let method_sig_for_infer = FunctionSig {
-                is_private: sig.is_private,
+                visibility: sig.visibility,
                 params,
                 return_type,
-                self_mode: sig.self_mode.clone(),
+                self_mode: sig.self_mode,
                 span: sig.span,
                 type_params: sig.type_params.clone(),
             };

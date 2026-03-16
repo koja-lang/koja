@@ -8,7 +8,7 @@ use expo_ast::span::Span;
 
 use crate::context::{
     EnumInfo, FunctionSig, ParamInfo, PassMode, ProtocolInfo, StructInfo, TypeContext, VariantData,
-    VariantInfo,
+    VariantInfo, Visibility,
 };
 use crate::types::{Type, resolve_type_expr_with_params};
 
@@ -159,7 +159,7 @@ pub fn collect(module: &Module) -> TypeContext {
                         let Some(sig) = sig else { continue };
 
                         if let Some(ref proto) = protocol_name
-                            && !f.is_private
+                            && f.visibility == Visibility::Public
                         {
                             impl_method_names.insert(f.name.clone());
                             if let Some(pi) = ctx.protocols.get(proto)
@@ -322,7 +322,7 @@ pub fn collect(module: &Module) -> TypeContext {
     ctx.functions.insert(
         "print".to_string(),
         FunctionSig {
-            is_private: false,
+            visibility: Visibility::Public,
             params: vec![ParamInfo {
                 mode: PassMode::Borrow,
                 name: "value".to_string(),
@@ -338,7 +338,7 @@ pub fn collect(module: &Module) -> TypeContext {
     ctx.functions.insert(
         "panic".to_string(),
         FunctionSig {
-            is_private: false,
+            visibility: Visibility::Public,
             params: vec![ParamInfo {
                 mode: PassMode::Borrow,
                 name: "message".to_string(),
@@ -477,16 +477,12 @@ fn build_function_sig_with_params(
         .iter()
         .filter_map(|p| match p {
             Param::Regular {
-                is_move,
+                mode,
                 name,
                 type_expr,
                 ..
             } => Some(ParamInfo {
-                mode: if *is_move {
-                    PassMode::Move
-                } else {
-                    PassMode::Borrow
-                },
+                mode: *mode,
                 name: name.clone(),
                 ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
             }),
@@ -500,18 +496,17 @@ fn build_function_sig_with_params(
         .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
         .unwrap_or(Type::Unit);
 
-    let self_mode = if f
+    let self_mode = f
         .params
         .iter()
-        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }))
-    {
-        PassMode::Move
-    } else {
-        PassMode::Borrow
-    };
+        .find_map(|p| match p {
+            Param::Self_ { mode, .. } => Some(*mode),
+            _ => None,
+        })
+        .unwrap_or(PassMode::Borrow);
 
     Some(FunctionSig {
-        is_private: f.is_private,
+        visibility: f.visibility,
         params,
         return_type,
         self_mode,
@@ -534,16 +529,12 @@ fn build_protocol_method_sig(
         .iter()
         .filter_map(|p| match p {
             Param::Regular {
-                is_move,
+                mode,
                 name,
                 type_expr,
                 ..
             } => Some(ParamInfo {
-                mode: if *is_move {
-                    PassMode::Move
-                } else {
-                    PassMode::Borrow
-                },
+                mode: *mode,
                 name: name.clone(),
                 ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
             }),
@@ -557,18 +548,17 @@ fn build_protocol_method_sig(
         .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
         .unwrap_or(Type::Unit);
 
-    let self_mode = if m
+    let self_mode = m
         .params
         .iter()
-        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }))
-    {
-        PassMode::Move
-    } else {
-        PassMode::Borrow
-    };
+        .find_map(|p| match p {
+            Param::Self_ { mode, .. } => Some(*mode),
+            _ => None,
+        })
+        .unwrap_or(PassMode::Borrow);
 
     Some(FunctionSig {
-        is_private: false,
+        visibility: Visibility::Public,
         params,
         return_type,
         self_mode,
@@ -581,9 +571,9 @@ fn build_protocol_method_sig(
 fn clone_public_context(source: &TypeContext) -> TypeContext {
     let mut ctx = TypeContext::new();
     for (name, sig) in &source.functions {
-        if !sig.is_private {
+        if sig.visibility == Visibility::Public {
             let mut cloned = sig.clone();
-            cloned.is_private = false;
+            cloned.visibility = Visibility::Public;
             ctx.functions.insert(name.clone(), cloned);
         }
     }
@@ -622,7 +612,7 @@ fn merge_all_public(
     imported_names: &mut HashSet<String>,
 ) {
     for (name, sig) in &source.functions {
-        if sig.is_private {
+        if sig.visibility == Visibility::Private {
             continue;
         }
         if imported_names.contains(name) {
@@ -633,7 +623,7 @@ fn merge_all_public(
         } else if !ctx.functions.contains_key(name) {
             imported_names.insert(name.clone());
             let mut cloned = sig.clone();
-            cloned.is_private = false;
+            cloned.visibility = Visibility::Public;
             ctx.functions.insert(name.clone(), cloned);
         }
     }
@@ -672,7 +662,7 @@ fn merge_named(
     imported_names: &mut HashSet<String>,
 ) {
     if let Some(sig) = source.functions.get(name) {
-        if sig.is_private {
+        if sig.visibility == Visibility::Private {
             ctx.error(
                 format!("function `{name}` is private to module `{module_path}`"),
                 span,
@@ -685,7 +675,7 @@ fn merge_named(
         } else if !ctx.functions.contains_key(name) {
             imported_names.insert(name.to_string());
             let mut cloned = sig.clone();
-            cloned.is_private = false;
+            cloned.visibility = Visibility::Public;
             ctx.functions.insert(name.to_string(), cloned);
         }
         return;

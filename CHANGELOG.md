@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`fn (move T) -> U` function types** -- `move` on parameters in function type syntax. `fn (T) -> U` borrows, `fn (move T) -> U` takes ownership. Functions and closures follow identical rules.
 - **`clone()` built-in method** -- available on all types. Produces a new owned value without moving the original. For primitives, identity (they're copy). For structs/enums, value copy (deep copy once heap allocation lands).
 - **Drop insertion** -- infrastructure for deterministic cleanup at scope boundaries. Currently a no-op (everything is stack-allocated); will emit `free()` calls when heap allocation is added.
+- **Protocols** -- `protocol` keyword for defining function contracts. `impl Protocol for Type` for conformance. Protocol functions are validated for completeness and signature compatibility. `priv fn` helpers allowed in impl blocks. `@doc` annotations supported on protocol declarations.
+- **Closure captures** -- closures can now capture variables from their enclosing scope. Copy types (primitives) are duplicated; non-copy types (structs, enums) are moved, making the original variable unusable after capture. Captured closures use heap-allocated environment structs that are automatically freed when the closure goes out of scope.
 
 ## [0.4.0] - 2026-03-15
 

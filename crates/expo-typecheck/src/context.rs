@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, Severity, StructDecl,
 };
@@ -38,7 +39,7 @@ pub struct EnumInfo {
 /// Resolved type signature for a function or method.
 #[derive(Clone)]
 pub struct FunctionSig {
-    pub is_private: bool,
+    pub visibility: Visibility,
     pub params: Vec<ParamInfo>,
     pub return_type: Type,
     /// How the receiver (`self`) is passed: `Move` for `move self`, `Borrow` otherwise.
@@ -88,18 +89,6 @@ pub enum VariantData {
     Struct(Vec<(String, Type)>),
     Tuple(Vec<Type>),
     Unit,
-}
-
-/// How a value crosses a boundary: parameter passing, closure capture, or
-/// message send. Unifies the ownership semantics across the language.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PassMode {
-    /// Value is duplicated. The original stays live.
-    Copy,
-    /// Ownership transfers. The original is consumed.
-    Move,
-    /// Read-only reference. The original stays live and accessible.
-    Borrow,
 }
 
 /// A single variable captured by a closure.

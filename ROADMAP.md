@@ -47,7 +47,8 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Pipe operator (`|>`)
 - Compound assignment (`+=`, `-=`, `*=`, `/=`)
 - String interpolation
-- Closures (non-capturing, block form)
+- Protocols (`protocol` keyword, `impl Protocol for Type` conformance)
+- Closures (block form, with variable capture -- copy for primitives, move for structs/enums)
 - Function type syntax (`fn(T) -> U`) for closure-accepting parameters
 - `print` builtin
 - `panic` builtin (prints to stderr, aborts)
@@ -63,6 +64,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `ref T` (deferred -- see design notes)
 - Lists
 - Trait bounds on generic type parameters
+- Inline closures (`x -> expr`)
 
 ### Design notes
 
@@ -79,7 +81,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 - **Generic enum unit variants in top-level code**: `Option.None` cannot infer `T` without usage context in bare declarations -- workaround: variable type annotations (`z: Option<Int32> = Option.None`). Inside monomorphized method bodies and closures with return type annotations, generic enum construction resolves all type parameters automatically.
 - **Type checker**: `ref T` parsed but deferred (redundant with borrow-by-default, revisit if a concrete use case emerges)
-- **Codegen**: closures compile as function pointers (non-capturing only; capture analysis is Phase 2)
+- **Codegen**: inline closures (`x -> expr`) are parsed but not yet compiled
 
 ### Design artifacts
 
@@ -136,7 +138,7 @@ Remaining work (generics, `ref T`, trait impls) is Phase 2 scope.
 - ~~Multi-module compilation to a single native binary~~
 - ~~**Deliverable**: `expo build hello.expo` produces a native binary that runs~~
 
-Remaining work (for loops, try `?`, closure capture analysis) is Phase 2 scope.
+Remaining work (for loops, try `?`) is Phase 2 scope. Closure capture analysis is complete.
 
 ### Key decisions
 
@@ -159,7 +161,7 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ge
 - **Track A -- Ownership/borrowing**: move semantics, borrow checking, drop insertion (pure compile-time flow analysis, no dependency on collections)
 - **Track B -- Collections**: `List<T>`, `Map<K,V>`, iterators, `for` loops (no dependency on ownership)
 
-Tasks require both tracks to converge (borrow safety across spawn boundaries + practical collection passing). Closure capture analysis also sits at the intersection (move vs. borrow into closures).
+Tasks require both tracks to converge (borrow safety across spawn boundaries + practical collection passing). Closure capture analysis is complete (move vs. copy into closures with heap-allocated environments).
 
 ### Generics and monomorphization
 
@@ -196,7 +198,7 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 ### Collections and iteration
 
 - `List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations
-- Closure capture analysis (move vs. borrow) -- non-capturing block closures (`fn (params) -> type ... end`) land in Phase 1, capturing closures need ownership semantics from this phase
+- ~~Closure capture analysis (move vs. borrow) -- copy for primitives, move for structs/enums, heap-allocated environment with automatic drop~~
 - Bare function names as references (no sigil -- `foo` references, `foo()` calls)
 - Iterator methods: `.map()`, `.filter()`, `.any?()`, `.all?()`, `.retain()`, `.iter()`
 - Ownership splitting for concurrent mutation patterns (tasks receive owned, non-overlapping chunks -- specific API designed during stdlib phase)
@@ -500,21 +502,22 @@ Active design discussions about the type system, code organization, and function
 - **`move self`**: `self` follows the same rules as any other parameter -- borrows by default (read-only), `move self` for ownership transfer. Mutating impl functions take `move self` and return the modified value: `list = list.push(42).push(37)`. No special "method" semantics -- impl functions with `self` are just functions with dot-call syntax.
 - **Signature-only `move`**: `move` only appears in the function/closure signature, never at the call site. The compiler infers moves from the callee's signature. Consistent with "no magic" -- the function's type signature is the contract, and the compiler fully enforces use-after-move.
 - **Functions = closures**: identical ownership rules. `fn (T) -> U` borrows T (default), `fn (move T) -> U` takes ownership. `map`/`then` use `fn (move T) -> U` since the closure receives the unwrapped owned value.
+- **Closure captures**: closures capture variables from the enclosing scope. Copy types (primitives) are duplicated; non-copy types (structs, enums) are moved, making the original unusable. Captured closures use a `{fn_ptr, env_ptr}` fat pointer ABI with heap-allocated environment structs that are automatically freed when the closure goes out of scope.
 - **`ref T` deferred**: `ref T` syntax is parsed but resolves to `Type::Unknown`. Redundant with borrow-by-default params, unsafe in return position without lifetime tracking. Revisit if a concrete use case emerges (possibly with protocols or collections).
 
 ### Inline closures
 
-- Inline closure syntax (`x -> expr`) is parsed but not compiled. Block closures (`fn (x: Int32) -> Int32 ... end`) cover all current use cases including `map`/`then`.
+- Inline closure syntax (`x -> expr`) is parsed but not compiled. Block closures (`fn (x: Int32) -> Int32 ... end`) cover all current use cases including `map`/`then` and now support variable capture.
 - Requires closure-specific type inference -- the parameter type must be inferred from the calling context (e.g. `option.map(x -> x + 1)` infers `x: Int32` from `Option<Int32>`).
 - Not needed for v0.4 or core language features. Ergonomic sugar for later.
 
-### `impl` and protocols
+### `impl` and protocols (decided, partially implemented)
 
-- **Leaning**: `impl` should ultimately mean "implementing a protocol/contract" only -- not bare method attachment. Strong direction, not yet committed.
-- **Leaning**: free functions as the primary code organization mechanism, with `impl Protocol for Type` reserved for shared behavioral contracts.
-- **Open**: whether bare `impl Type` survives, gets replaced by inline functions in type bodies, or both.
-- **Open**: protocol syntax, semantics, and dispatch strategy (monomorphized static dispatch vs vtable dynamic dispatch).
-- **Rationale for building generic impl now (Path C)**: the monomorphization work (type substitution, name mangling, LLVM specialization) is identical regardless of whether methods come from bare `impl` blocks, inline type functions, or protocol implementations. The codegen transfers to any final design.
+- **Decided**: `protocol` keyword defines behavioral contracts. `impl Protocol for Type` for conformance. Bare `impl Type` survives for direct method attachment.
+- **Implemented**: protocol declarations with function signatures, `impl Protocol for Type` blocks with completeness and signature validation, `priv fn` helpers in impl blocks, `@doc` on protocol declarations.
+- **Decided**: static dispatch via monomorphization -- no vtables, no dynamic dispatch. Consistent with the existing generic compilation model.
+- **Open**: trait bounds on generic type parameters (`fn foo<T: Display>(x: T)`) -- requires protocols, now unblocked.
+- **Open**: whether bare `impl Type` eventually migrates to inline functions in type bodies, or both coexist permanently.
 
 ### Type system philosophy
 
@@ -548,7 +551,7 @@ Active design discussions about the type system, code organization, and function
 
 - **Planned**: a `Display` protocol that types implement to provide a string representation. `print()` dispatches through `Display` rather than hardcoding printf format specifiers per LLVM type.
 - **Auto-derived**: all structs and enums get a default `impl Display` generated by the compiler. Enums print as `VariantName` (unit) or `VariantName(value)` (tuple payload). Structs print as `TypeName{field: value, ...}`. Users can override with their own `impl Display for MyType`.
-- **Requires**: protocol system to be implemented first.
+- **Unblocked**: protocol system is now implemented -- `Display` can be built.
 - **Current limitation**: `print()` only supports primitives (`Int`, `Float`, `Bool`, `String`). Printing a struct or enum value is a compile error. Workaround: match on enum variants and print primitive values, or use string interpolation with primitive fields.
 
 ### Literal protocols
@@ -558,7 +561,7 @@ Active design discussions about the type system, code organization, and function
 - **Default types**: `Int`, `Float`, `String`, `List<T>`, `Map<K,V>`, `Pair<A,B>` when no type annotation is present.
 - **Infallible**: literal protocols return `Self`, not `Result`. Fallible parsing (e.g. from untrusted input) uses regular functions that return `Result`.
 - **Pair syntax**: `(a, b)` may return via `FromPair<A, B>` -- only pairs (arity 2). 3+ values use named structs.
-- **Requires**: protocol system to be implemented first.
+- **Unblocked**: protocol system is now implemented -- literal protocols can be built.
 - **Fractal design**: user-defined types and built-in types have identical access to literal syntax. No two-tier system.
 
 ---
@@ -584,7 +587,9 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Core      | PascalCase primitive rename (`Int`, `String`, `Bool`, etc.), `ref T` syntax              | Done   |
 | Core      | Generic impl monomorphization, stdlib (`Option<T>`, `Result<T,E>`, `Pair<A,B>`), `panic` | Done   |
 | Core      | Function type syntax (`fn(T) -> U`), `map`/`then` for Option and Result                  | Done   |
-| Core      | Ownership + borrowing -- move semantics, use-after-move, `move self`, `clone()`, drop     | Done   |
+| Core      | Ownership + borrowing -- move semantics, use-after-move, `move self`, `clone()`, drop    | Done   |
+| Core      | Protocols -- `protocol` keyword, `impl Protocol for Type`, completeness validation       | Done   |
+| Core      | Closure captures -- copy/move semantics, heap-allocated environments, automatic drop     | Done   |
 
 ### Remaining
 

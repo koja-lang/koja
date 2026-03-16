@@ -8,6 +8,54 @@
 
 use crate::span::Span;
 
+// Semantic enums
+
+/// How a value crosses a scope boundary: parameter passing, closure capture,
+/// or message send.
+///
+/// In the parser, `Move` is produced when the `move` keyword is present;
+/// `Borrow` is the default for all other parameters and receivers.
+/// `Copy` is resolved during type checking for closure captures of copy types.
+///
+/// ```expo
+/// fn update(move self, name: String) -> User  # self is Move, name is Borrow
+///   ...
+/// end
+///
+/// multiplier = 3
+/// triple = fn (x: Int32) -> Int32
+///   x * multiplier                             # multiplier captured as Copy
+/// end
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassMode {
+    /// Value is duplicated; the original stays live.
+    Copy,
+    /// Ownership transfers; the original is consumed.
+    Move,
+    /// Read-only reference; the original stays live and accessible.
+    Borrow,
+}
+
+/// Access control for functions: public by default, `priv` for module-private.
+///
+/// ```expo
+/// fn public_function         # Visibility::Public (the default)
+///   ...
+/// end
+///
+/// priv fn internal_helper    # Visibility::Private
+///   ...
+/// end
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    /// Accessible from other modules.
+    Public,
+    /// Accessible only within the declaring module.
+    Private,
+}
+
 // Top level
 
 /// The value attached to an annotation.
@@ -140,7 +188,7 @@ pub enum EnumVariantData {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub annotation: Option<Annotation>,
-    pub is_private: bool,
+    pub visibility: Visibility,
     pub name: String,
     pub type_params: Vec<String>,
     pub params: Vec<Param>,
@@ -186,15 +234,18 @@ pub struct ProtocolMethod {
     pub span: Span,
 }
 
-/// A function parameter.
+/// A function parameter: either a `self` receiver or a named parameter.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Param {
-    /// The `self` receiver in a method.
-    Self_ { is_move: bool, span: Span },
+    /// The `self` receiver: `self` ([`PassMode::Borrow`]) or `move self`
+    /// ([`PassMode::Move`]).
+    Self_ { mode: PassMode, span: Span },
     /// A regular named parameter with an optional default value.
+    /// `move name: Type` uses [`PassMode::Move`]; plain `name: Type` uses
+    /// [`PassMode::Borrow`].
     Regular {
-        is_move: bool,
+        mode: PassMode,
         name: String,
         type_expr: TypeExpr,
         default: Option<Expr>,
@@ -257,10 +308,11 @@ pub enum TypeExpr {
     /// The unit type: `()`.
     Unit { span: Span },
     /// A function type: `fn (Int32, String) -> Bool`.
-    /// `param_is_move` tracks which parameters are `move` (e.g. `fn (move T) -> U`).
+    /// `param_modes` tracks the [`PassMode`] per parameter position
+    /// (e.g. `fn (move T) -> U` produces `[PassMode::Move]`).
     Function {
         params: Vec<TypeExpr>,
-        param_is_move: Vec<bool>,
+        param_modes: Vec<PassMode>,
         return_type: Box<TypeExpr>,
         span: Span,
     },

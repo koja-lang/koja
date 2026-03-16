@@ -110,15 +110,14 @@ fn check_function(
         return;
     }
 
-    let self_mode = if f
+    let self_mode = f
         .params
         .iter()
-        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }))
-    {
-        PassMode::Move
-    } else {
-        PassMode::Borrow
-    };
+        .find_map(|p| match p {
+            Param::Self_ { mode, .. } => Some(*mode),
+            _ => None,
+        })
+        .unwrap_or(PassMode::Borrow);
 
     let mut ce = CheckEnv {
         env,

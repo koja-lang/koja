@@ -290,7 +290,7 @@ impl<'a> Printer<'a> {
 
     fn function_sig_to_doc(&mut self, f: &Function) -> Doc {
         let mut prefix = String::new();
-        if f.is_private {
+        if f.visibility == Visibility::Private {
             prefix.push_str("priv ");
         }
         prefix.push_str("fn ");
@@ -344,22 +344,22 @@ impl<'a> Printer<'a> {
 
     fn param_to_doc(&mut self, p: &Param) -> Doc {
         match p {
-            Param::Self_ { is_move, .. } => {
-                if *is_move {
+            Param::Self_ { mode, .. } => {
+                if *mode == PassMode::Move {
                     text("move self")
                 } else {
                     text("self")
                 }
             }
             Param::Regular {
-                is_move,
+                mode,
                 name,
                 type_expr,
                 default,
                 ..
             } => {
                 let mut parts = Vec::new();
-                if *is_move {
+                if *mode == PassMode::Move {
                     parts.push(text("move "));
                 }
                 parts.push(text(name.clone()));
@@ -1440,7 +1440,7 @@ fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
         TypeExpr::Unit { .. } => text("()"),
         TypeExpr::Function {
             params,
-            param_is_move,
+            param_modes,
             return_type,
             ..
         } => {
@@ -1448,7 +1448,9 @@ fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
                 .iter()
                 .enumerate()
                 .map(|(i, p)| {
-                    let is_move = param_is_move.get(i).copied().unwrap_or(false);
+                    let is_move = param_modes
+                        .get(i)
+                        .is_some_and(|m| *m == PassMode::Move);
                     if is_move {
                         concat(vec![text("move "), type_expr_to_doc(p)])
                     } else {
@@ -1681,7 +1683,7 @@ fn is_unit_type(ty: &TypeExpr) -> bool {
 
 fn sig_will_break(f: &Function) -> bool {
     let mut len: usize = 0;
-    if f.is_private {
+    if f.visibility == Visibility::Private {
         len += 5;
     }
     len += 3;
@@ -1710,22 +1712,22 @@ fn sig_will_break(f: &Function) -> bool {
 
 fn param_text_len(p: &Param) -> usize {
     match p {
-        Param::Self_ { is_move, .. } => {
-            if *is_move {
+        Param::Self_ { mode, .. } => {
+            if *mode == PassMode::Move {
                 9
             } else {
                 4
             }
         }
         Param::Regular {
-            is_move,
+            mode,
             name,
             type_expr,
             default,
             ..
         } => {
             let mut n = 0;
-            if *is_move {
+            if *mode == PassMode::Move {
                 n += 5;
             }
             n += name.len();

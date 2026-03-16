@@ -47,7 +47,7 @@ impl<'a> CheckEnv<'a> {
             used_vars: HashSet::new(),
             loop_depth: self.loop_depth,
             return_type,
-            self_mode: self.self_mode.clone(),
+            self_mode: self.self_mode,
             struct_names: self.struct_names,
             enum_names: self.enum_names,
         }

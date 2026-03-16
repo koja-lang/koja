@@ -356,12 +356,12 @@ impl Parser {
             }
             match self.peek().clone() {
                 TokenKind::Fn => {
-                    let func = self.parse_function_decl(None, false);
+                    let func = self.parse_function_decl(None, Visibility::Public);
                     members.push(ImplMember::Function(func));
                 }
                 TokenKind::Priv => {
                     self.advance();
-                    let func = self.parse_function_decl(None, true);
+                    let func = self.parse_function_decl(None, Visibility::Private);
                     members.push(ImplMember::Function(func));
                 }
                 TokenKind::At => {
@@ -369,12 +369,14 @@ impl Parser {
                     self.skip_newlines();
                     match self.peek() {
                         TokenKind::Fn => {
-                            let func = self.parse_function_decl(Some(annotation), false);
+                            let func =
+                                self.parse_function_decl(Some(annotation), Visibility::Public);
                             members.push(ImplMember::Function(func));
                         }
                         TokenKind::Priv => {
                             self.advance();
-                            let func = self.parse_function_decl(Some(annotation), true);
+                            let func =
+                                self.parse_function_decl(Some(annotation), Visibility::Private);
                             members.push(ImplMember::Function(func));
                         }
                         _ => {
@@ -435,15 +437,15 @@ impl Parser {
     pub(crate) fn parse_function_item(
         &mut self,
         annotation: Option<Annotation>,
-        is_private: bool,
+        visibility: Visibility,
     ) -> Item {
-        Item::Function(self.parse_function_decl(annotation, is_private))
+        Item::Function(self.parse_function_decl(annotation, visibility))
     }
 
     pub(crate) fn parse_function_decl(
         &mut self,
         annotation: Option<Annotation>,
-        is_private: bool,
+        visibility: Visibility,
     ) -> Function {
         let start = self.current_span();
         self.advance(); // fn
@@ -476,7 +478,7 @@ impl Parser {
 
         Function {
             annotation,
-            is_private,
+            visibility,
             name,
             type_params,
             params,
@@ -504,16 +506,20 @@ impl Parser {
     fn parse_param(&mut self) -> Param {
         let start = self.current_span();
 
-        let is_move = self.eat(&TokenKind::Move).is_some();
+        let has_move = self.eat(&TokenKind::Move).is_some();
 
         if self.eat(&TokenKind::Self_).is_some() {
             return Param::Self_ {
-                is_move,
+                mode: if has_move { PassMode::Move } else { PassMode::Borrow },
                 span: self.span_from(start),
             };
         }
 
-        let is_move = is_move || self.eat(&TokenKind::Move).is_some();
+        let mode = if has_move || self.eat(&TokenKind::Move).is_some() {
+            PassMode::Move
+        } else {
+            PassMode::Borrow
+        };
         let name = self.expect_ident();
         self.expect(&TokenKind::Colon);
         let type_expr = self.parse_type_expr();
@@ -524,7 +530,7 @@ impl Parser {
         };
 
         Param::Regular {
-            is_move,
+            mode,
             name,
             type_expr,
             default,

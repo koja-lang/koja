@@ -2,7 +2,7 @@
 
 use expo_ast::ast::{
     AnnotationValue, EnumDecl, Function, ImplBlock, ImplMember, Item, Module, Param, StructDecl,
-    TypeExpr,
+    TypeExpr, Visibility,
 };
 
 /// Documentation for an entire module (source file).
@@ -89,7 +89,7 @@ pub fn extract_module(name: &str, module: &Module) -> Option<DocModule> {
     for item in &module.items {
         match item {
             Item::Function(f) => {
-                if !f.is_private
+                if f.visibility == Visibility::Public
                     && let Some(df) = extract_function(f)
                 {
                     functions.push(df);
@@ -236,7 +236,7 @@ fn attach_impl_functions(imp: &ImplBlock, structs: &mut [DocStruct]) {
 
     for member in &imp.members {
         if let ImplMember::Function(f) = member {
-            if f.is_private {
+            if f.visibility == Visibility::Private {
                 continue;
             }
             if let Some(df) = extract_function(f)

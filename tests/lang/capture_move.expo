@@ -1,0 +1,17 @@
+struct Config
+  scale: Int32
+  offset: Int32
+end
+
+fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
+  f(x)
+end
+
+fn main
+  c = Config{scale: 3, offset: 100}
+  transform = fn (x: Int32) -> Int32
+    x * c.scale + c.offset
+  end
+  print(transform(5))
+  print(apply(10, transform))
+end

@@ -1,4 +1,4 @@
-use expo_ast::ast::TypeExpr;
+use expo_ast::ast::{PassMode, TypeExpr};
 use expo_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -38,15 +38,23 @@ impl Parser {
         self.expect(&TokenKind::LParen);
 
         let mut params = Vec::new();
-        let mut param_is_move = Vec::new();
+        let mut param_modes = Vec::new();
         if !self.at(&TokenKind::RParen) {
-            param_is_move.push(self.eat(&TokenKind::Move).is_some());
+            param_modes.push(if self.eat(&TokenKind::Move).is_some() {
+                PassMode::Move
+            } else {
+                PassMode::Borrow
+            });
             params.push(self.parse_type_expr());
             while self.eat(&TokenKind::Comma).is_some() {
                 if self.at(&TokenKind::RParen) {
                     break;
                 }
-                param_is_move.push(self.eat(&TokenKind::Move).is_some());
+                param_modes.push(if self.eat(&TokenKind::Move).is_some() {
+                    PassMode::Move
+                } else {
+                    PassMode::Borrow
+                });
                 params.push(self.parse_type_expr());
             }
         }
@@ -56,7 +64,7 @@ impl Parser {
 
         TypeExpr::Function {
             params,
-            param_is_move,
+            param_modes,
             return_type: Box::new(return_type),
             span: self.span_from(start),
         }

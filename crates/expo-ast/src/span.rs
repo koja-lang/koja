@@ -1,3 +1,9 @@
+//! Source location tracking for diagnostics, IDE features, and AST annotation.
+//!
+//! Every AST node carries a [`Span`] that records where it appeared in the
+//! source file. Spans are defined by a start and end [`Position`], each
+//! storing byte offset, line, and column.
+
 /// A byte offset with line and column numbers within a source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Position {

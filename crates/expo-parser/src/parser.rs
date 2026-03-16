@@ -1,4 +1,4 @@
-use expo_ast::ast::{Annotation, Comment, Diagnostic, Item, Module, Severity};
+use expo_ast::ast::{Annotation, Comment, Diagnostic, Item, Module, Severity, Visibility};
 use expo_ast::span::{Position, Span};
 use expo_ast::token::{Token, TokenKind};
 use expo_lexer::{LexResult, lex};
@@ -276,10 +276,10 @@ impl Parser {
             TokenKind::Enum => Some(self.parse_enum_item()),
             TokenKind::Protocol => Some(self.parse_protocol_item(None)),
             TokenKind::Impl => Some(self.parse_impl_item()),
-            TokenKind::Fn => Some(self.parse_function_item(None, false)),
+            TokenKind::Fn => Some(self.parse_function_item(None, Visibility::Public)),
             TokenKind::Priv => {
                 self.advance();
-                Some(self.parse_function_item(None, true))
+                Some(self.parse_function_item(None, Visibility::Private))
             }
             TokenKind::At => {
                 let annotation = self.parse_annotation();
@@ -294,10 +294,12 @@ impl Parser {
                     }
                     TokenKind::Enum => Some(self.parse_enum_item_with_annotation(Some(annotation))),
                     TokenKind::Protocol => Some(self.parse_protocol_item(Some(annotation))),
-                    TokenKind::Fn => Some(self.parse_function_item(Some(annotation), false)),
+                    TokenKind::Fn => {
+                        Some(self.parse_function_item(Some(annotation), Visibility::Public))
+                    }
                     TokenKind::Priv => {
                         self.advance();
-                        Some(self.parse_function_item(Some(annotation), true))
+                        Some(self.parse_function_item(Some(annotation), Visibility::Private))
                     }
                     TokenKind::Const => Some(self.parse_constant_item(Some(annotation))),
                     _ => {

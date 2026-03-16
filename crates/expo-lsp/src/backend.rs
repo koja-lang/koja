@@ -92,7 +92,7 @@ impl Backend {
                         let dep_uri = format!("file://{}", dep_path.display());
 
                         for (name, sig) in &dep_ctx.functions {
-                            if !sig.is_private {
+                            if sig.visibility == expo_ast::ast::Visibility::Public {
                                 origins.insert(name.clone(), dep_uri.clone());
                             }
                         }
@@ -235,7 +235,11 @@ impl LanguageServer for Backend {
                         .iter()
                         .map(|p| format!("{}: {}", p.name, p.ty.display()))
                         .collect();
-                    let vis = if sig.is_private { "priv fn" } else { "fn" };
+                    let vis = if sig.visibility == expo_ast::ast::Visibility::Private {
+                        "priv fn"
+                    } else {
+                        "fn"
+                    };
                     let tp = if sig.type_params.is_empty() {
                         String::new()
                     } else {

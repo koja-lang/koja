@@ -9,7 +9,7 @@ pub mod types;
 
 use std::collections::HashMap;
 
-use context::{FunctionSig, ParamInfo, PassMode, TypeContext};
+use context::{FunctionSig, ParamInfo, TypeContext};
 use expo_ast::ast::{Module, Param};
 use types::resolve_type_expr_with_params;
 
@@ -141,16 +141,12 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
             .iter()
             .filter_map(|p| match p {
                 Param::Regular {
-                    is_move,
+                    mode,
                     name,
                     type_expr,
                     ..
                 } => Some(ParamInfo {
-                    mode: if *is_move {
-                        PassMode::Move
-                    } else {
-                        PassMode::Borrow
-                    },
+                    mode: *mode,
                     name: name.clone(),
                     ty: resolve_type_expr_with_params(
                         type_expr,
@@ -171,10 +167,10 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
 
         if let Some(sig) = ctx.functions.get_mut(&name.to_string()) {
             *sig = FunctionSig {
-                is_private: sig.is_private,
+                visibility: sig.visibility,
                 params,
                 return_type,
-                self_mode: sig.self_mode.clone(),
+                self_mode: sig.self_mode,
                 span: sig.span,
                 type_params: sig.type_params.clone(),
             };
