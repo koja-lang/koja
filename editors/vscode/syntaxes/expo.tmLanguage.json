@@ -129,7 +129,7 @@
         },
         {
           "name": "storage.type.expo",
-          "match": "\\b(struct|enum|arena)\\b"
+          "match": "\\b(struct|enum|protocol|arena)\\b"
         },
         {
           "name": "keyword.operator.logical.expo",

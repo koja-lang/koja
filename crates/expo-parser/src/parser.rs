@@ -157,6 +157,7 @@ impl Parser {
             TokenKind::Not => "not",
             TokenKind::Or => "or",
             TokenKind::Priv => "priv",
+            TokenKind::Protocol => "protocol",
             TokenKind::Receive => "receive",
             TokenKind::Ref => "ref",
             TokenKind::Return => "return",
@@ -273,6 +274,7 @@ impl Parser {
             TokenKind::Import => Some(self.parse_import_item()),
             TokenKind::Struct => Some(self.parse_struct_item()),
             TokenKind::Enum => Some(self.parse_enum_item()),
+            TokenKind::Protocol => Some(self.parse_protocol_item(None)),
             TokenKind::Impl => Some(self.parse_impl_item()),
             TokenKind::Fn => Some(self.parse_function_item(None, false)),
             TokenKind::Priv => {
@@ -291,6 +293,7 @@ impl Parser {
                         Some(self.parse_struct_item_with_annotation(Some(annotation)))
                     }
                     TokenKind::Enum => Some(self.parse_enum_item_with_annotation(Some(annotation))),
+                    TokenKind::Protocol => Some(self.parse_protocol_item(Some(annotation))),
                     TokenKind::Fn => Some(self.parse_function_item(Some(annotation), false)),
                     TokenKind::Priv => {
                         self.advance();

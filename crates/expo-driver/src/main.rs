@@ -289,6 +289,25 @@ fn build(args: &[String], quiet: bool, color: bool) {
                 .or_default()
                 .extend(blocks.iter().cloned());
         }
+        for (name, ast) in &ctx.generic_protocol_asts {
+            if !merged_ctx.generic_protocol_asts.contains_key(name) {
+                merged_ctx
+                    .generic_protocol_asts
+                    .insert(name.clone(), ast.clone());
+            }
+        }
+        for (name, info) in &ctx.protocols {
+            if !merged_ctx.protocols.contains_key(name) {
+                merged_ctx.protocols.insert(name.clone(), info.clone());
+            }
+        }
+        for (type_name, protos) in &ctx.protocol_impls {
+            merged_ctx
+                .protocol_impls
+                .entry(type_name.clone())
+                .or_default()
+                .extend(protos.iter().cloned());
+        }
     }
 
     let mut modules_ast: Vec<&expo_ast::ast::Module> = vec![&stdlib.module];

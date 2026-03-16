@@ -50,6 +50,7 @@ pub enum TokenKind {
     Not,
     Or,
     Priv,
+    Protocol,
     Receive,
     Ref,
     Return,
@@ -129,6 +130,7 @@ impl TokenKind {
                 | TokenKind::Not
                 | TokenKind::Or
                 | TokenKind::Priv
+                | TokenKind::Protocol
                 | TokenKind::Receive
                 | TokenKind::Ref
                 | TokenKind::Return

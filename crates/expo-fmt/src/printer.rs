@@ -127,6 +127,7 @@ impl<'a> Printer<'a> {
             Item::Enum(e) => self.enum_to_doc(e),
             Item::Function(f) => self.function_to_doc(f),
             Item::Impl(i) => self.impl_to_doc(i),
+            Item::Protocol(p) => self.protocol_to_doc(p),
             Item::Constant(c) => self.constant_to_doc(c),
             Item::Shared(s) => shared_to_doc(s),
         }
@@ -371,6 +372,81 @@ impl<'a> Printer<'a> {
                 concat(parts)
             }
         }
+    }
+
+    // =====================================================================
+    // Protocol
+    // =====================================================================
+
+    fn protocol_to_doc(&mut self, p: &ProtocolDecl) -> Doc {
+        let mut parts = Vec::new();
+        if let Some(ann) = &p.annotation {
+            parts.push(annotation_to_doc(ann));
+            parts.push(hardline());
+        }
+        let mut header = format!("protocol {}", p.name);
+        if !p.type_params.is_empty() {
+            header.push('<');
+            header.push_str(&p.type_params.join(", "));
+            header.push('>');
+        }
+        parts.push(text(header));
+
+        let mut body = Vec::new();
+        for (i, method) in p.methods.iter().enumerate() {
+            if i > 0 {
+                body.push(hardline());
+            }
+            body.push(hardline());
+            body.push(self.protocol_method_to_doc(method));
+        }
+        parts.push(indent(2, concat(body)));
+        parts.push(hardline());
+        parts.push(text("end"));
+        concat(parts)
+    }
+
+    fn protocol_method_to_doc(&mut self, m: &ProtocolMethod) -> Doc {
+        let mut parts = Vec::new();
+        if let Some(ann) = &m.annotation {
+            parts.push(annotation_to_doc(ann));
+            parts.push(hardline());
+        }
+
+        let mut prefix = String::from("fn ");
+        prefix.push_str(&m.name);
+        if !m.type_params.is_empty() {
+            prefix.push('<');
+            prefix.push_str(&m.type_params.join(", "));
+            prefix.push('>');
+        }
+
+        let params_doc: Vec<Doc> = m.params.iter().map(|p| self.param_to_doc(p)).collect();
+        let has_return = m.return_type.as_ref().is_some_and(|rt| !is_unit_type(rt));
+
+        let return_doc = if has_return {
+            Some(concat(vec![
+                text("-> "),
+                type_expr_to_doc(m.return_type.as_ref().unwrap()),
+            ]))
+        } else {
+            None
+        };
+
+        if params_doc.is_empty() {
+            parts.push(text(prefix));
+        } else {
+            parts.push(text(format!("{prefix}(")));
+            parts.push(intersperse(params_doc, text(", ")));
+            parts.push(text(")"));
+        }
+
+        if let Some(ret) = return_doc {
+            parts.push(text(" "));
+            parts.push(ret);
+        }
+
+        concat(parts)
     }
 
     // =====================================================================
@@ -1266,6 +1342,7 @@ fn item_span(item: &Item) -> &expo_ast::span::Span {
         Item::Function(f) => &f.span,
         Item::Impl(i) => &i.span,
         Item::Import(i) => &i.span,
+        Item::Protocol(p) => &p.span,
         Item::Shared(s) => &s.span,
         Item::Struct(s) => &s.span,
     }

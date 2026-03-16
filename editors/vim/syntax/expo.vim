@@ -13,7 +13,7 @@ syn keyword expoKeyword     impl for type shared import in
 syn keyword expoConditional if else unless match cond when
 syn keyword expoRepeat      for loop while
 syn keyword expoOperatorKw  and or not
-syn keyword expoStructure   struct enum arena receive
+syn keyword expoStructure   struct enum protocol arena receive
 syn keyword expoBoolean     true false
 syn keyword expoConstant    none
 syn keyword expoSelf        self

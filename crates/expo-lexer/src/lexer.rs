@@ -234,6 +234,7 @@ impl Lexer {
             "not" => TokenKind::Not,
             "or" => TokenKind::Or,
             "priv" => TokenKind::Priv,
+            "protocol" => TokenKind::Protocol,
             "receive" => TokenKind::Receive,
             "ref" => TokenKind::Ref,
             "return" => TokenKind::Return,

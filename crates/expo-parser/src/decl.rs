@@ -233,6 +233,104 @@ impl Parser {
     }
 
     // =========================================================================
+    // Protocol
+    // =========================================================================
+
+    pub(crate) fn parse_protocol_item(&mut self, annotation: Option<Annotation>) -> Item {
+        let start = self.current_span();
+        self.advance(); // protocol
+
+        let name = self.expect_type_ident();
+        let type_params = self.parse_optional_type_params();
+
+        self.skip_newlines();
+        let mut methods = Vec::new();
+        while !self.at(&TokenKind::End) && !self.at_eof() {
+            self.skip_newlines();
+            if self.at(&TokenKind::End) {
+                break;
+            }
+            match self.peek().clone() {
+                TokenKind::Fn => {
+                    methods.push(self.parse_protocol_method(None));
+                }
+                TokenKind::At => {
+                    let ann = self.parse_annotation();
+                    self.skip_newlines();
+                    if self.at(&TokenKind::Fn) {
+                        methods.push(self.parse_protocol_method(Some(ann)));
+                    } else {
+                        let span = self.current_span();
+                        self.error(
+                            "annotation in protocol must be followed by a function signature"
+                                .to_string(),
+                            span,
+                        );
+                    }
+                }
+                _ => {
+                    let span = self.current_span();
+                    self.error(
+                        format!(
+                            "expected function signature in protocol, found {:?}",
+                            self.peek()
+                        ),
+                        span,
+                    );
+                    self.advance();
+                }
+            }
+            self.skip_newlines();
+        }
+        self.expect(&TokenKind::End);
+
+        Item::Protocol(ProtocolDecl {
+            annotation,
+            name,
+            type_params,
+            methods,
+            span: self.span_from(start),
+        })
+    }
+
+    fn parse_protocol_method(&mut self, annotation: Option<Annotation>) -> ProtocolMethod {
+        let start = self.current_span();
+        self.advance(); // fn
+
+        let name = self.expect_ident();
+        let type_params = self.parse_optional_type_params();
+
+        let params = if self.at(&TokenKind::LParen) {
+            self.advance();
+            let params = if self.at(&TokenKind::RParen) {
+                Vec::new()
+            } else {
+                self.parse_param_list()
+            };
+            self.expect(&TokenKind::RParen);
+            params
+        } else {
+            Vec::new()
+        };
+
+        self.skip_newlines();
+        let return_type = if self.eat(&TokenKind::Arrow).is_some() {
+            Some(self.parse_type_expr())
+        } else {
+            None
+        };
+
+        ProtocolMethod {
+            annotation,
+            name,
+            type_params,
+            params,
+            return_type,
+            span: self.span_from(start),
+        }
+    }
+
+    // =========================================================================
     // Impl
     // =========================================================================
 

@@ -1,12 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use expo_ast::ast::{
-    EnumVariantData, Expr, ImplMember, ImportTarget, Item, Literal, Module, Param, TypeExpr,
+    EnumVariantData, Expr, ImplMember, ImportTarget, Item, Literal, Module, Param, ProtocolMethod,
+    TypeExpr,
 };
 use expo_ast::span::Span;
 
 use crate::context::{
-    EnumInfo, FunctionSig, ParamInfo, StructInfo, TypeContext, VariantData, VariantInfo,
+    EnumInfo, FunctionSig, ParamInfo, ProtocolInfo, StructInfo, TypeContext, VariantData,
+    VariantInfo,
 };
 use crate::types::{Type, resolve_type_expr_with_params};
 
@@ -107,9 +109,6 @@ pub fn collect(module: &Module) -> TypeContext {
                 }
             }
             Item::Impl(impl_block) => {
-                if impl_block.trait_expr.is_some() {
-                    continue;
-                }
                 let (target_name, impl_type_params) = match &impl_block.target {
                     TypeExpr::Named { path, .. } if path.len() == 1 => {
                         (path[0].clone(), Vec::new())
@@ -137,12 +136,45 @@ pub fn collect(module: &Module) -> TypeContext {
                         .or_default()
                         .push(impl_block.clone());
                 }
+
+                let protocol_name = impl_block.trait_expr.as_ref().and_then(|te| match te {
+                    TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].clone()),
+                    TypeExpr::Generic { path, .. } if path.len() == 1 => Some(path[0].clone()),
+                    _ => None,
+                });
+
+                if let Some(ref proto) = protocol_name
+                    && !ctx.protocols.contains_key(proto)
+                {
+                    ctx.error(format!("unknown protocol `{proto}`"), impl_block.span);
+                }
+
                 let tp_refs: Vec<&str> = impl_type_params.iter().map(|s| s.as_str()).collect();
+                let mut impl_method_names: HashSet<String> = HashSet::new();
+
                 for member in &impl_block.members {
                     if let ImplMember::Function(f) = member {
                         let sig =
                             build_function_sig_with_params(f, &struct_names, &enum_names, &tp_refs);
                         let Some(sig) = sig else { continue };
+
+                        if let Some(ref proto) = protocol_name
+                            && !f.is_private
+                        {
+                            impl_method_names.insert(f.name.clone());
+                            if let Some(pi) = ctx.protocols.get(proto)
+                                && !pi.methods.contains_key(&f.name)
+                            {
+                                ctx.error(
+                                    format!(
+                                        "method `{}` is not defined in protocol `{proto}`",
+                                        f.name
+                                    ),
+                                    f.span,
+                                );
+                            }
+                        }
+
                         let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
                             Some(&mut si.methods)
                         } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
@@ -164,6 +196,30 @@ pub fn collect(module: &Module) -> TypeContext {
                             }
                         }
                     }
+                }
+
+                if let Some(ref proto) = protocol_name {
+                    let missing: Vec<String> = ctx
+                        .protocols
+                        .get(proto)
+                        .map(|pi| {
+                            pi.methods
+                                .keys()
+                                .filter(|name| !impl_method_names.contains(*name))
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for name in &missing {
+                        ctx.error(
+                            format!("missing method `{name}` required by protocol `{proto}`"),
+                            impl_block.span,
+                        );
+                    }
+                    ctx.protocol_impls
+                        .entry(target_name.clone())
+                        .or_default()
+                        .push(proto.clone());
                 }
             }
             Item::Constant(c) => {
@@ -208,6 +264,28 @@ pub fn collect(module: &Module) -> TypeContext {
                 } else {
                     ctx.constants.insert(c.name.clone(), ty);
                 }
+            }
+            Item::Protocol(p) => {
+                let tp_refs: Vec<&str> = p.type_params.iter().map(|s| s.as_str()).collect();
+                let mut methods: HashMap<String, FunctionSig> = HashMap::new();
+                for m in &p.methods {
+                    if let Some(sig) =
+                        build_protocol_method_sig(m, &struct_names, &enum_names, &tp_refs)
+                    {
+                        methods.insert(m.name.clone(), sig);
+                    }
+                }
+                if !p.type_params.is_empty() {
+                    ctx.generic_protocol_asts.insert(p.name.clone(), p.clone());
+                }
+                ctx.protocols.insert(
+                    p.name.clone(),
+                    ProtocolInfo {
+                        methods,
+                        span: p.span,
+                        type_params: p.type_params.clone(),
+                    },
+                );
             }
             Item::Struct(s) => {
                 let tp_refs: Vec<&str> = s.type_params.iter().map(|s| s.as_str()).collect();
@@ -430,6 +508,54 @@ fn build_function_sig_with_params(
         self_is_move,
         span: f.span,
         type_params: f.type_params.clone(),
+    })
+}
+
+fn build_protocol_method_sig(
+    m: &ProtocolMethod,
+    known_structs: &[&str],
+    known_enums: &[&str],
+    extra_type_params: &[&str],
+) -> Option<FunctionSig> {
+    let mut all_tp: Vec<&str> = m.type_params.iter().map(|s| s.as_str()).collect();
+    all_tp.extend_from_slice(extra_type_params);
+
+    let params: Vec<ParamInfo> = m
+        .params
+        .iter()
+        .filter_map(|p| match p {
+            Param::Regular {
+                is_move,
+                name,
+                type_expr,
+                ..
+            } => Some(ParamInfo {
+                is_move: *is_move,
+                name: name.clone(),
+                ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
+            }),
+            Param::Self_ { .. } => None,
+        })
+        .collect();
+
+    let return_type = m
+        .return_type
+        .as_ref()
+        .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
+        .unwrap_or(Type::Unit);
+
+    let self_is_move = m
+        .params
+        .iter()
+        .any(|p| matches!(p, Param::Self_ { is_move: true, .. }));
+
+    Some(FunctionSig {
+        is_private: false,
+        params,
+        return_type,
+        self_is_move,
+        span: m.span,
+        type_params: m.type_params.clone(),
     })
 }
 

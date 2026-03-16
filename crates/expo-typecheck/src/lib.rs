@@ -52,6 +52,25 @@ pub fn merge_stdlib(stdlib: &TypeContext, target: &mut TypeContext) {
             .or_default()
             .extend(blocks.iter().cloned());
     }
+    for (name, ast) in &stdlib.generic_protocol_asts {
+        if !target.generic_protocol_asts.contains_key(name) {
+            target
+                .generic_protocol_asts
+                .insert(name.clone(), ast.clone());
+        }
+    }
+    for (name, info) in &stdlib.protocols {
+        if !target.protocols.contains_key(name) {
+            target.protocols.insert(name.clone(), info.clone());
+        }
+    }
+    for (type_name, protos) in &stdlib.protocol_impls {
+        target
+            .protocol_impls
+            .entry(type_name.clone())
+            .or_default()
+            .extend(protos.iter().cloned());
+    }
 }
 
 /// Runs collection and type-checking in one step, returning a populated context.

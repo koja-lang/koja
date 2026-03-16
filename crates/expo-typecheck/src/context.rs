@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use expo_ast::ast::{Diagnostic, EnumDecl, Function, ImplBlock, Severity, StructDecl};
+use expo_ast::ast::{
+    Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, Severity, StructDecl,
+};
 use expo_ast::span::Span;
 
 use crate::types::Type;
@@ -14,8 +16,11 @@ pub struct TypeContext {
     pub generic_enum_asts: HashMap<String, EnumDecl>,
     pub generic_function_asts: HashMap<String, Function>,
     pub generic_impl_asts: HashMap<String, Vec<ImplBlock>>,
+    pub generic_protocol_asts: HashMap<String, ProtocolDecl>,
     pub generic_struct_asts: HashMap<String, StructDecl>,
     pub imported_modules: HashMap<String, TypeContext>,
+    pub protocol_impls: HashMap<String, Vec<String>>,
+    pub protocols: HashMap<String, ProtocolInfo>,
     pub structs: HashMap<String, StructInfo>,
 }
 
@@ -48,6 +53,15 @@ pub struct ParamInfo {
     pub is_move: bool,
     pub name: String,
     pub ty: Type,
+}
+
+/// Collected metadata for a protocol declaration.
+#[derive(Clone)]
+pub struct ProtocolInfo {
+    pub methods: HashMap<String, FunctionSig>,
+    #[allow(dead_code)]
+    pub span: Span,
+    pub type_params: Vec<String>,
 }
 
 /// Collected metadata for a struct declaration.
@@ -112,8 +126,11 @@ impl TypeContext {
             generic_enum_asts: HashMap::new(),
             generic_function_asts: HashMap::new(),
             generic_impl_asts: HashMap::new(),
+            generic_protocol_asts: HashMap::new(),
             generic_struct_asts: HashMap::new(),
             imported_modules: HashMap::new(),
+            protocol_impls: HashMap::new(),
+            protocols: HashMap::new(),
             structs: HashMap::new(),
         }
     }

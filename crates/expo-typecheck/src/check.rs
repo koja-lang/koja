@@ -31,9 +31,6 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 }
             }
             Item::Impl(impl_block) => {
-                if impl_block.trait_expr.is_some() {
-                    continue;
-                }
                 let (target_name, is_generic_impl) = match &impl_block.target {
                     TypeExpr::Named { path, .. } if path.len() == 1 => (&path[0], false),
                     TypeExpr::Generic { path, .. } if path.len() == 1 => (&path[0], true),

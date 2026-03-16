@@ -25,6 +25,7 @@ program = { top_level_decl } ;
 top_level_decl = import_decl
                | struct_decl
                | enum_decl
+               | protocol_decl
                | impl_block
                | function_decl
                | constant_decl
@@ -70,7 +71,19 @@ type_params = "<" , TYPE_IDENT , { "," , TYPE_IDENT } , ">" ;
 
 
 (* ========================================================================== *)
-(* 4. Impl blocks                                                             *)
+(* 4. Protocols                                                               *)
+(* ========================================================================== *)
+
+protocol_decl = [ annotation ] , "protocol" , TYPE_IDENT , [ type_params ] ,
+                { protocol_method } ,
+                "end" ;
+
+protocol_method = [ annotation ] , "fn" , IDENT , [ type_params ] ,
+                  [ "(" , [ param_list ] , ")" ] , [ "->" , type_expr ] ;
+
+
+(* ========================================================================== *)
+(* 5. Impl blocks                                                            *)
 (* ========================================================================== *)
 
 impl_block = "impl" , type_expr , [ "for" , type_expr ] ,
@@ -84,7 +97,7 @@ type_alias = "type" , TYPE_IDENT , "=" , type_expr ;
 
 
 (* ========================================================================== *)
-(* 5. Functions                                                               *)
+(* 6. Functions                                                               *)
 (* ========================================================================== *)
 
 function_decl = [ annotation ] , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
@@ -99,7 +112,7 @@ param = [ "move" ] , IDENT , ":" , type_expr , [ "=" , expr ]
 
 
 (* ========================================================================== *)
-(* 6. Type expressions                                                        *)
+(* 7. Type expressions                                                        *)
 (* ========================================================================== *)
 
 type_expr = "ref" , type_expr                                        (* reference *)
@@ -120,7 +133,7 @@ named_type = TYPE_IDENT , { "." , TYPE_IDENT } ;
 
 
 (* ========================================================================== *)
-(* 7. Expressions                                                             *)
+(* 8. Expressions                                                             *)
 (* ========================================================================== *)
 
 statement = expr
@@ -213,7 +226,7 @@ tuple_expr = "(" , expr , "," , expr , { "," , expr } , ")" ;
 
 
 (* ========================================================================== *)
-(* 8. Closures                                                                *)
+(* 9. Closures                                                                *)
 (* ========================================================================== *)
 
 (* Full closure: fn args -> body end *)
@@ -241,7 +254,7 @@ closure_param_short = IDENT
 
 
 (* ========================================================================== *)
-(* 9. Control flow                                                            *)
+(* 10. Control flow                                                           *)
 (* ========================================================================== *)
 
 if_expr = "if" , expr ,
@@ -278,7 +291,7 @@ loop_expr = "loop" ,
 
 
 (* ========================================================================== *)
-(* 10. Arena                                                                  *)
+(* 11. Arena                                                                  *)
 (* ========================================================================== *)
 
 arena_expr = "arena" ,
@@ -287,7 +300,7 @@ arena_expr = "arena" ,
 
 
 (* ========================================================================== *)
-(* 11. Async                                                                  *)
+(* 12. Async                                                                  *)
 (* ========================================================================== *)
 
 (* spawn is a regular function call that takes a closure *)
@@ -305,7 +318,7 @@ receive_arm = pattern , "=" , expr , "->" , match_body ;
 
 
 (* ========================================================================== *)
-(* 12. Pattern matching                                                       *)
+(* 13. Pattern matching                                                       *)
 (* ========================================================================== *)
 
 pattern = "_"                                                       (* wildcard *)
@@ -325,7 +338,7 @@ field_pattern = IDENT , [ ":" , pattern ] ;
 
 
 (* ========================================================================== *)
-(* 13. Literals                                                               *)
+(* 14. Literals                                                               *)
 (* ========================================================================== *)
 
 literal = integer_lit
@@ -367,7 +380,7 @@ list_lit = "[" , [ expr , { "," , expr } , [ "," ] ] , "]" ;
 
 
 (* ========================================================================== *)
-(* 14. Operators                                                              *)
+(* 15. Operators                                                              *)
 (* ========================================================================== *)
 
 (* Precedence (lowest to highest):                                            *)
@@ -387,7 +400,7 @@ compound_assign = lvalue , ( "+=" | "-=" | "*=" | "/=" ) , expr ;
 
 
 (* ========================================================================== *)
-(* 15. Annotations                                                            *)
+(* 16. Annotations                                                            *)
 (* ========================================================================== *)
 
 annotation = "@" , IDENT , [ annotation_value ] ;
@@ -397,7 +410,7 @@ annotation_value = string_lit
 
 
 (* ========================================================================== *)
-(* 16. Comments                                                               *)
+(* 17. Comments                                                               *)
 (* ========================================================================== *)
 
 (* Line comments begin with # and extend to end of line.
@@ -407,7 +420,7 @@ comment = "#" , { any_char_except_newline } ;
 
 
 (* ========================================================================== *)
-(* 17. Other top-level declarations                                           *)
+(* 18. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
 constant_decl = "const" , IDENT , "=" , expr ;
@@ -416,7 +429,7 @@ shared_decl = "shared" , IDENT , ":" , type_expr ;
 
 
 (* ========================================================================== *)
-(* 18. Lexical elements                                                       *)
+(* 19. Lexical elements                                                       *)
 (* ========================================================================== *)
 
 IDENT       = LOWER , { LOWER | UPPER | DIGIT | "_" | "?" } ;
@@ -434,5 +447,5 @@ BIN_DIGIT = "0" | "1" ;
 (* ========================================================================== *)
 
 (* and, arena, await, break, cond, const, else, end, enum, false, fn, for,    *)
-(* if, impl, import, in, loop, match, move, none, not, or, priv, receive,     *)
-(* ref, return, self, shared, spawn, struct, true, type, unless, when          *)
+(* if, impl, import, in, loop, match, move, none, not, or, priv, protocol,    *)
+(* receive, ref, return, self, shared, spawn, struct, true, type, unless, when *)

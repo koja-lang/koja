@@ -51,6 +51,7 @@ pub enum Item {
     Function(Function),
     Impl(ImplBlock),
     Import(Import),
+    Protocol(ProtocolDecl),
     Shared(SharedDecl),
     Struct(StructDecl),
 }
@@ -162,6 +163,27 @@ pub struct ImplBlock {
 pub enum ImplMember {
     Function(Function),
     TypeAlias(TypeAlias),
+}
+
+/// A protocol declaration: `protocol Display ... end`.
+#[derive(Debug, Clone)]
+pub struct ProtocolDecl {
+    pub annotation: Option<Annotation>,
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub methods: Vec<ProtocolMethod>,
+    pub span: Span,
+}
+
+/// A method signature within a protocol declaration (no body).
+#[derive(Debug, Clone)]
+pub struct ProtocolMethod {
+    pub annotation: Option<Annotation>,
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeExpr>,
+    pub span: Span,
 }
 
 /// A function parameter.
