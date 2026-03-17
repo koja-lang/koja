@@ -5,22 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.5.0] - 2026-03-17
 
 ### Added
 
-- `List<T>` -- dynamically-sized, heap-backed collection. Create with `List.new()`, add elements with `list = list.push(value)`, access with `list.get(index)`, query with `list.length()` and `list.empty?()`. Push uses move semantics and returns the updated list. Backing memory is automatically freed when the list goes out of scope.
-- `for` loops -- `for item in list ... end` iterates over any type that implements the `Enumerable<T>` protocol. Currently supported on `List<T>`.
-- `Enumerable<T>` protocol -- defines `length(self) -> Int32` and `get(self, index: Int32) -> T`. Implement this protocol on a type to make it work with `for` loops.
+- Ownership and borrowing -- move semantics for non-copy types (structs, enums, `String`). Assignment moves by default; using a moved value is a compile error. Copy types (primitives, `Bool`, `()`, function pointers) are implicitly duplicated. Function parameters borrow by default (read-only); use `move` to take ownership. `move self` enables mutating impl functions that return the modified value (`list = list.push(42)`). `fn (move T) -> U` function type syntax distinguishes borrowing from owning signatures. Variable state tracking (`Live`, `Moved`, `MaybeMoved`) catches use-after-move across branches.
+- `List<T>`, `for` loops, and `Enumerable<T>` protocol -- dynamically-sized, heap-backed collection with `List.new()`, `push`, `get`, `length`, and `empty?`. `for item in list ... end` iterates over any type implementing `Enumerable<T>` (defines `length` and `get`). Push uses move semantics and returns the updated list.
+- Protocols -- `protocol` keyword for defining function contracts. `impl Protocol for Type` for conformance. Protocol functions are validated for completeness and signature compatibility. `priv fn` helpers allowed in impl blocks. `@doc` annotations supported on protocol declarations.
+- Closure captures -- closures can now capture variables from their enclosing scope. Copy types are duplicated; non-copy types are moved, making the original unusable after capture. Captured closures use heap-allocated environment structs that are automatically freed when the closure goes out of scope.
+- `clone()` and drop insertion -- `clone()` produces a new owned value without moving the original. Drop insertion provides deterministic cleanup at scope boundaries: `List<T>` backing buffers and captured closure environments are freed automatically.
 - Static functions on `impl` blocks -- functions without a `self` parameter are called on the type directly (`List.new()`, `Option.None`). No special syntax needed; just omit `self`.
 - Annotation-driven type inference for generics -- `list: List<Int32> = List.new()` infers `T = Int32` from the variable's type annotation.
-- Ownership and borrowing -- move semantics for non-copy types (structs, enums, `String`). Assignment moves by default; using a moved value is a compile error. Copy types (all numeric primitives, `Bool`, `()`, function pointers) are implicitly duplicated. Variable state tracking (`Live`, `Moved`, `MaybeMoved`) catches use-after-move and inconsistent moves across branches.
-- Borrow-by-default parameters -- function parameters borrow by default (read-only). Use `move` to take ownership. `move self` for mutating impl functions that return the modified value (`list = list.push(42)`). `move` only appears in signatures, never at call sites.
-- `fn (move T) -> U` function types -- `move` on parameters in function type syntax. `fn (T) -> U` borrows, `fn (move T) -> U` takes ownership. Functions and closures follow identical rules.
-- `clone()` built-in method -- available on all types. Produces a new owned value without moving the original. For primitives, identity (they're copy). For structs/enums, value copy (deep copy once heap allocation lands).
-- Drop insertion -- deterministic cleanup at scope boundaries. `List<T>` backing buffers are freed automatically. Captured closure environments are also freed when the closure goes out of scope.
-- Protocols -- `protocol` keyword for defining function contracts. `impl Protocol for Type` for conformance. Protocol functions are validated for completeness and signature compatibility. `priv fn` helpers allowed in impl blocks. `@doc` annotations supported on protocol declarations.
-- Closure captures -- closures can now capture variables from their enclosing scope. Copy types (primitives) are duplicated; non-copy types (structs, enums) are moved, making the original variable unusable after capture. Captured closures use heap-allocated environment structs that are automatically freed when the closure goes out of scope.
 - VS Code extension: syntax highlighting for ` ```expo ` fenced code blocks in Markdown files.
 
 ### Fixed
@@ -31,9 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Pipe operator (`|>`). Dot-call chaining with `move self` functions covers the same use case. The planned `command` construct will handle complex sequential data flow.
 - Try operator (`?`). Hidden control flow violates the "no magic" principle. Error handling uses explicit `map`/`then`/`or` chaining instead.
-- `ref T` type syntax. Redundant with borrow-by-default parameters.
-- Turbofish syntax (`::<T>`). Type arguments are inferred from arguments and annotations.
-- Bare `none` keyword. Use `Option.None` instead for proper type checking.
+- `ref T` type syntax, turbofish (`::<T>`), and bare `none` keyword. `ref T` is redundant with borrow-by-default; type arguments are inferred from arguments and annotations; `Option.None` replaces bare `none` for proper type checking.
 
 ## [0.4.0] - 2026-03-15
 
