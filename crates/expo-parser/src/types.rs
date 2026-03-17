@@ -8,6 +8,13 @@ impl Parser {
         match self.peek().clone() {
             TokenKind::Fn => self.parse_function_type(),
             TokenKind::LParen => self.parse_paren_type(),
+            TokenKind::TypeIdent(ref name) if name == "Self" => {
+                let span = self.current_span();
+                self.advance();
+                TypeExpr::Self_ {
+                    span: self.span_from(span),
+                }
+            }
             TokenKind::TypeIdent(_) => self.parse_named_type(),
             TokenKind::Ident(ref name) if is_legacy_primitive(name) => self.parse_primitive_type(),
             TokenKind::Ident(_) if self.is_module_type_path() => self.parse_module_qualified_type(),

@@ -43,9 +43,9 @@ impl<'a> Printer<'a> {
                 concat(vec![text("("), self.expr_to_doc(inner), text(")")])
             }
 
-            Expr::Call {
-                callee, args, ..
-            } => concat(vec![self.expr_to_doc(callee), self.call_args_to_doc(args)]),
+            Expr::Call { callee, args, .. } => {
+                concat(vec![self.expr_to_doc(callee), self.call_args_to_doc(args)])
+            }
 
             Expr::MethodCall {
                 receiver,

@@ -314,6 +314,9 @@ pub enum TypeExpr {
         return_type: Box<TypeExpr>,
         span: Span,
     },
+    /// The `Self` type: resolves to the implementing type inside `impl` and
+    /// `protocol` blocks.
+    Self_ { span: Span },
 }
 
 // Statements

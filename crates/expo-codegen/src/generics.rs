@@ -487,6 +487,23 @@ impl<'ctx> Compiler<'ctx> {
                 }
             }
 
+            "from_list" => {
+                let fn_type = list_struct.fn_type(&[list_struct.into()], false);
+                let fn_val = self.module.add_function(mangled_fn, fn_type, None);
+                self.functions.insert(mangled_fn.to_string(), fn_val);
+
+                let entry = self.context.append_basic_block(fn_val, "entry");
+                let saved_block = self.builder.get_insert_block();
+                self.builder.position_at_end(entry);
+
+                let self_val = fn_val.get_nth_param(0).unwrap();
+                self.builder.build_return(Some(&self_val)).unwrap();
+
+                if let Some(bb) = saved_block {
+                    self.builder.position_at_end(bb);
+                }
+            }
+
             "empty?" => {
                 let fn_type = i1_ty.fn_type(&[list_struct.into()], false);
                 let fn_val = self.module.add_function(mangled_fn, fn_type, None);

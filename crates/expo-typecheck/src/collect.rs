@@ -152,11 +152,19 @@ pub fn collect(module: &Module) -> TypeContext {
                 let tp_refs: Vec<&str> = impl_type_params.iter().map(|s| s.as_str()).collect();
                 let mut impl_method_names: HashSet<String> = HashSet::new();
 
+                let self_type = resolve_type_expr_with_params(
+                    &impl_block.target,
+                    &struct_names,
+                    &enum_names,
+                    &tp_refs,
+                );
+
                 for member in &impl_block.members {
                     if let ImplMember::Function(f) = member {
                         let sig =
                             build_function_sig_with_params(f, &struct_names, &enum_names, &tp_refs);
                         let Some(sig) = sig else { continue };
+                        let sig = substitute_self_type(sig, &self_type);
 
                         if let Some(ref proto) = protocol_name
                             && f.visibility == Visibility::Public
@@ -471,6 +479,9 @@ fn build_function_sig_with_params(
 ) -> Option<FunctionSig> {
     let mut all_tp: Vec<&str> = f.type_params.iter().map(|s| s.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
+    if !all_tp.contains(&"Self") {
+        all_tp.push("Self");
+    }
 
     let params: Vec<ParamInfo> = f
         .params
@@ -523,6 +534,9 @@ fn build_protocol_method_sig(
 ) -> Option<FunctionSig> {
     let mut all_tp: Vec<&str> = m.type_params.iter().map(|s| s.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
+    if !all_tp.contains(&"Self") {
+        all_tp.push("Self");
+    }
 
     let params: Vec<ParamInfo> = m
         .params
@@ -708,4 +722,18 @@ fn merge_named(
         format!("`{name}` not found in module `{module_path}`"),
         span,
     );
+}
+
+/// Replaces `Type::TypeVar("Self")` with the concrete impl target type in a
+/// method signature's params and return type.
+fn substitute_self_type(mut sig: FunctionSig, self_type: &Type) -> FunctionSig {
+    if matches!(self_type, Type::Unknown) {
+        return sig;
+    }
+    let subst = HashMap::from([("Self".to_string(), self_type.clone())]);
+    sig.return_type = crate::types::substitute(&sig.return_type, &subst);
+    for p in &mut sig.params {
+        p.ty = crate::types::substitute(&p.ty, &subst);
+    }
+    sig
 }

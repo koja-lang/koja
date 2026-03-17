@@ -118,6 +118,7 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
             concat(vec![text("("), intersperse(elems, text(", ")), text(")")])
         }
         TypeExpr::Unit { .. } => text("()"),
+        TypeExpr::Self_ { .. } => text("Self"),
         TypeExpr::Function {
             params,
             param_modes,
@@ -441,6 +442,7 @@ pub(super) fn type_expr_text_len(ty: &TypeExpr) -> usize {
             1 + inner + 1
         }
         TypeExpr::Unit { .. } => 2,
+        TypeExpr::Self_ { .. } => 4,
         TypeExpr::Function {
             params,
             return_type,

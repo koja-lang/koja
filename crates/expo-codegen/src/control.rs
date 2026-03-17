@@ -170,6 +170,41 @@ pub fn compile_if<'ctx>(
     Ok(None)
 }
 
+/// Compiles an `unless` guard: `unless cond ... end`. Negates the condition
+/// and delegates to `compile_if` with no else branch.
+pub fn compile_unless<'ctx>(
+    c: &mut Compiler<'ctx>,
+    condition: &Expr,
+    body: &[Statement],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let cond_val =
+        compile_expr(c, condition, function)?.ok_or("unless condition produced no value")?;
+    let cond_int = coerce_to_bool(c, cond_val, "unless condition")?;
+    let negated = c.builder.build_not(cond_int, "unless_neg").unwrap();
+
+    let then_bb = c.context.append_basic_block(function, "unless_body");
+    let merge_bb = c.context.append_basic_block(function, "unless_end");
+
+    c.builder
+        .build_conditional_branch(negated, then_bb, merge_bb)
+        .unwrap();
+
+    c.builder.position_at_end(then_bb);
+    for stmt in body {
+        if c.current_block_terminated() {
+            break;
+        }
+        compile_statement(c, stmt, function)?;
+    }
+    if !c.current_block_terminated() {
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+
+    c.builder.position_at_end(merge_bb);
+    Ok(None)
+}
+
 /// Compiles an infinite `loop` block. Only exits via `break`.
 pub fn compile_loop<'ctx>(
     c: &mut Compiler<'ctx>,

@@ -1,0 +1,18 @@
+fn main
+  unless false
+    print("ran because false")
+  end
+
+  unless true
+    print("should not print")
+  end
+
+  x = 10
+  unless x > 20
+    print("x is not greater than 20")
+  end
+
+  unless x < 5
+    print("x is not less than 5")
+  end
+end

@@ -213,3 +213,22 @@ impl List<T>
     panic("intrinsic")
   end
 end
+
+@doc """
+A protocol for types that can be constructed from a list literal `[a, b, c]`.
+The compiler builds a `List<T>` from the literal elements and passes it to
+`from_list`. Implement this protocol to enable list literal syntax for
+custom collection types.
+"""
+protocol ListLiteral<T>
+  fn from_list(move list: List<T>) -> Self
+end
+
+impl ListLiteral<T> for List<T>
+  @doc """
+  Returns the list unchanged. `List<T>` is the default type for list literals.
+  """
+  fn from_list(move list: List<T>) -> Self
+    panic("intrinsic")
+  end
+end

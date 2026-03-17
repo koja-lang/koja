@@ -146,6 +146,10 @@
         {
           "name": "variable.language.self.expo",
           "match": "\\bself\\b"
+        },
+        {
+          "name": "variable.language.self-type.expo",
+          "match": "\\bSelf\\b"
         }
       ]
     },

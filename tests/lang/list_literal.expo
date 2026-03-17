@@ -1,0 +1,19 @@
+fn main
+  nums = [10, 20, 30]
+  print(nums.length())
+  print(nums.get(0))
+  print(nums.get(1))
+  print(nums.get(2))
+
+  empty: List<Int32> = []
+  print(empty.length())
+  print(empty.empty?())
+
+  words = ["hello", "world"]
+  print(words.get(0))
+  print(words.get(1))
+
+  single = [42]
+  print(single.length())
+  print(single.get(0))
+end

@@ -1,0 +1,7 @@
+fn main
+  yeah: List<Int> = [1, 2, 3, 4]
+
+  for i in yeah
+    print(i)
+  end
+end

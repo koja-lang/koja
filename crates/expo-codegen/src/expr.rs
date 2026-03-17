@@ -3,7 +3,7 @@
 
 use expo_ast::ast::{ClosureParam, Expr, Literal, Statement, StringPart};
 
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Type, mangle_name};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
@@ -11,10 +11,11 @@ use crate::calls::compile_call;
 use crate::compiler::Compiler;
 use crate::control::{
     compile_cond, compile_for, compile_if, compile_loop, compile_match, compile_ternary,
-    compile_while,
+    compile_unless, compile_while,
 };
 use crate::enums::compile_enum_construction;
 use crate::ops::{compile_binary, compile_unary};
+use crate::stmt::{coerce_numeric, infer_type_from_llvm};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
 
@@ -131,6 +132,12 @@ pub fn compile_expr<'ctx>(
             body,
             ..
         } => compile_for(c, pattern, iterable, body, function),
+
+        Expr::Unless {
+            condition, body, ..
+        } => compile_unless(c, condition, body, function),
+
+        Expr::List { elements, .. } => compile_list_literal(c, elements, function),
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
@@ -571,4 +578,68 @@ fn compile_closure<'ctx>(
         .into_struct_value();
 
     Ok(Some(fat_ptr.into()))
+}
+
+fn compile_list_literal<'ctx>(
+    c: &mut Compiler<'ctx>,
+    elements: &[Expr],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let compiled: Vec<BasicValueEnum<'ctx>> = elements
+        .iter()
+        .map(|e| {
+            compile_expr(c, e, function)
+                .and_then(|v| v.ok_or("list element produced no value".into()))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let elem_type = if let Some(subst) = c.type_subst.get("T") {
+        subst.clone()
+    } else if let Some(first) = compiled.first() {
+        infer_type_from_llvm(c, first)
+    } else {
+        Type::Primitive(expo_typecheck::types::Primitive::I32)
+    };
+    let type_args = vec![elem_type.clone()];
+    let mangled_type = mangle_name("List", &type_args);
+
+    if !c.struct_types.contains_key(&mangled_type) {
+        c.monomorphize_struct("List", &type_args)?;
+    }
+
+    let new_fn_name = format!("{mangled_type}_new");
+    if !c.functions.contains_key(&new_fn_name) {
+        c.monomorphize_impl_method("List", "new", &type_args)?;
+    }
+    let push_fn_name = format!("{mangled_type}_push");
+    if !c.functions.contains_key(&push_fn_name) {
+        c.monomorphize_impl_method("List", "push", &type_args)?;
+    }
+
+    let new_fn = *c.functions.get(&new_fn_name).ok_or("List.new not found")?;
+    let push_fn = *c
+        .functions
+        .get(&push_fn_name)
+        .ok_or("List.push not found")?;
+
+    let mut list_val = c
+        .builder
+        .build_call(new_fn, &[], "list_new")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .ok_or("List.new returned void")?;
+
+    for elem in &compiled {
+        let coerced = coerce_numeric(c, *elem, &elem_type);
+        list_val = c
+            .builder
+            .build_call(push_fn, &[list_val.into(), coerced.into()], "list_push")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .ok_or("List.push returned void")?;
+    }
+
+    Ok(Some(list_val))
 }

@@ -362,7 +362,7 @@ pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>
     }
 }
 
-fn coerce_numeric<'ctx>(
+pub(crate) fn coerce_numeric<'ctx>(
     c: &Compiler<'ctx>,
     val: BasicValueEnum<'ctx>,
     target: &Type,

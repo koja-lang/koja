@@ -261,6 +261,7 @@ fn type_expr_to_string(ty: &TypeExpr) -> String {
             format!("({})", elems.join(", "))
         }
         TypeExpr::Unit { .. } => "()".to_string(),
+        TypeExpr::Self_ { .. } => "Self".to_string(),
         TypeExpr::Function {
             params,
             return_type,

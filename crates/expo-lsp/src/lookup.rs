@@ -373,6 +373,31 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 return find_in_expr(body, line, col, ctx);
             }
         }
+        Expr::Unless {
+            condition,
+            body,
+            span,
+        } => {
+            if span_contains(span, line, col) {
+                if let Some(info) = find_in_expr(condition, line, col, ctx) {
+                    return Some(info);
+                }
+                for stmt in body {
+                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
+        Expr::List { elements, span } => {
+            if span_contains(span, line, col) {
+                for e in elements {
+                    if let Some(info) = find_in_expr(e, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
         _ => {}
     }
     None

@@ -272,6 +272,13 @@ pub fn resolve_type_expr_with_params(
                 .collect();
             Type::Tuple(types)
         }
+        TypeExpr::Self_ { .. } => {
+            if known_type_params.contains(&"Self") {
+                Type::TypeVar("Self".to_string())
+            } else {
+                Type::Unknown
+            }
+        }
         TypeExpr::Unit { .. } => Type::Unit,
         TypeExpr::Function {
             params,

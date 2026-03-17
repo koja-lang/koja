@@ -38,6 +38,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Variable type annotations (`x: Int32 = 42`, `z: Option<Int32> = Option.None`)
 - Numeric type coercion for annotated variables (`x: UInt8 = 4` casts at compile time)
 - `if`/`else`
+- `unless`
 - `while`
 - `loop` and `break`
 - `return`
@@ -52,22 +53,24 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `print` builtin
 - `panic` builtin (prints to stderr, aborts)
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
+- List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
+- `Self` type expression in `protocol` and `impl` blocks
 - Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>` (auto-imported from `std.kernel`)
 
 ### Parsed and type-checked but NOT yet in codegen
 
-- `for` loops
 - `arena` blocks
 - `await`/`receive`/`spawn`
 - ~~Try operator (`?`) -- removed~~
 - ~~`ref T` -- removed~~
-- Lists
+- ~~`for` loops -- done~~
+- ~~Lists -- done~~
 - Trait bounds on generic type parameters
 - Inline closures (`x -> expr`)
 
 ### Design notes
 
-- **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `FromPair<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
+- **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `PairLiteral<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
 - **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Used by `map`/`then` on `Option` and `Result`. Inline closures (`x -> expr`) are parsed but deferred to v0.5+.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
@@ -198,12 +201,14 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 
 - `List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations
 - ~~Closure capture analysis (move vs. borrow) -- copy for primitives, move for structs/enums, heap-allocated environment with automatic drop~~
+- ~~List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol -- any type can implement `ListLiteral<T>` to be constructible from `[...]` syntax~~
+- ~~`Self` type expression -- resolves to the implementing type inside `protocol` and `impl` blocks~~
+- ~~`unless` expression -- negated `if` for guard clauses (`unless condition ... end`)~~
+- ~~`for` loops over iterables~~
 - Bare function names as references (no sigil -- `foo` references, `foo()` calls)
 - Iterator methods: `.map()`, `.filter()`, `.any?()`, `.all?()`, `.retain()`, `.iter()`
 - Ownership splitting for concurrent mutation patterns (tasks receive owned, non-overlapping chunks -- specific API designed during stdlib phase)
-- `for` loops over iterables
 - `arena...end` blocks with bulk-free semantics
-- `unless` expression -- negated `if` for guard clauses (`unless condition ... end`)
 - **Done when**: `ua_parser.expo` compiles -- it exercises structs, enums, match, closures, method chaining, and returns
 
 ### Tasks and structured concurrency
@@ -511,6 +516,14 @@ Active design discussions about the type system, code organization, and function
 - Requires closure-specific type inference -- the parameter type must be inferred from the calling context (e.g. `option.map(x -> x + 1)` infers `x: Int32` from `Option<Int32>`).
 - Not needed for v0.4 or core language features. Ergonomic sugar for later.
 
+### `Self` type expression (implemented)
+
+- **`Self`** resolves to the concrete implementing type inside `protocol` declarations and `impl` blocks.
+- In protocol declarations, `Self` is abstract -- it becomes a type variable that the compiler substitutes with the concrete type when checking `impl` blocks.
+- In `impl` blocks, `Self` resolves to the target type (e.g., `impl ListLiteral<T> for List<T>` → `Self` = `List<T>`).
+- Works with generics and monomorphization. Modeled after Rust's `Self` and Swift's `Self`.
+- Syntax highlighting and formatter support included.
+
 ### `impl` and protocols (decided, partially implemented)
 
 - **Decided**: `protocol` keyword defines behavioral contracts. `impl Protocol for Type` for conformance. Bare `impl Type` survives for direct method attachment.
@@ -557,11 +570,12 @@ Active design discussions about the type system, code organization, and function
 ### Literal protocols
 
 - **Concept**: all literal syntax (`42`, `"hello"`, `[...]`, `{k:v}`, `(a,b)`) backed by protocols, not special-cased types. Any type can opt into literal construction by implementing the protocol.
-- **Protocol family**: `FromInt`, `FromFloat`, `FromString`, `FromList<T>`, `FromEntries<K,V>`, `FromPair<A,B>`.
+- **Protocol family**: `IntLiteral`, `FloatLiteral`, `StringLiteral`, `ListLiteral<T>`, `MapLiteral<K,V>`, `PairLiteral<A,B>`.
 - **Default types**: `Int`, `Float`, `String`, `List<T>`, `Map<K,V>`, `Pair<A,B>` when no type annotation is present.
 - **Infallible**: literal protocols return `Self`, not `Result`. Fallible parsing (e.g. from untrusted input) uses regular functions that return `Result`.
-- **Pair syntax**: `(a, b)` may return via `FromPair<A, B>` -- only pairs (arity 2). 3+ values use named structs.
-- **Unblocked**: protocol system is now implemented -- literal protocols can be built.
+- **Pair syntax**: `(a, b)` may return via `PairLiteral<A, B>` -- only pairs (arity 2). 3+ values use named structs.
+- **Implemented**: `ListLiteral<T>` with `from_list(move list: List<T>) -> Self` -- `List<T>` implements it as identity. Defined in `std.kernel`.
+- **Planned**: `IntLiteral`, `FloatLiteral` (enables custom `Decimal` type from float literals), `StringLiteral`, `MapLiteral<K,V>`, `PairLiteral<A,B>`.
 - **Fractal design**: user-defined types and built-in types have identical access to literal syntax. No two-tier system.
 
 ---
@@ -590,6 +604,7 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Core      | Ownership + borrowing -- move semantics, use-after-move, `move self`, `clone()`, drop    | Done   |
 | Core      | Protocols -- `protocol` keyword, `impl Protocol for Type`, completeness validation       | Done   |
 | Core      | Closure captures -- copy/move semantics, heap-allocated environments, automatic drop     | Done   |
+| Core      | `unless` expression, `Self` type, list literals (`[1,2,3]`), `ListLiteral<T>` protocol  | Done   |
 
 ### Remaining
 
