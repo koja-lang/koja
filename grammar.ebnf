@@ -128,8 +128,8 @@ fn_type_param = [ "move" ] , type_expr ;
 named_type = TYPE_IDENT , { "." , TYPE_IDENT } ;
 
 (* Primitive types are just named types: UInt8, UInt16, UInt32, UInt64, Int8,
-   Int16, Int32, Int, Float32, Float, Bool, String. Option, Result, Vec,
-   HashMap are generic named types. No special grammar rules needed. *)
+   Int16, Int32, Int, Float32, Float, Bool, String. Option, Result, List,
+   Map, Pair are generic named types. No special grammar rules needed. *)
 
 
 (* ========================================================================== *)

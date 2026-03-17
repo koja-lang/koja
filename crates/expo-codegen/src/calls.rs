@@ -251,41 +251,7 @@ fn compile_panic<'ctx>(
     let val =
         compile_expr(c, &args[0].value, function)?.ok_or("argument to panic produced no value")?;
 
-    let fdopen = *c.functions.get("fdopen").ok_or("fdopen not declared")?;
-    let fprintf = *c.functions.get("fprintf").ok_or("fprintf not declared")?;
-    let abort = *c.functions.get("abort").ok_or("abort not declared")?;
-
-    let fd_val = c.context.i32_type().const_int(2, false);
-    let mode = c
-        .builder
-        .build_global_string_ptr("w", "stderr_mode")
-        .unwrap();
-    let stderr = c
-        .builder
-        .build_call(
-            fdopen,
-            &[fd_val.into(), mode.as_pointer_value().into()],
-            "stderr",
-        )
-        .unwrap()
-        .try_as_basic_value()
-        .left()
-        .ok_or("fdopen returned no value")?;
-
-    let fmt = c
-        .builder
-        .build_global_string_ptr("panic: %s\n", "fmt_panic")
-        .unwrap();
-    c.builder
-        .build_call(
-            fprintf,
-            &[stderr.into(), fmt.as_pointer_value().into(), val.into()],
-            "fprintf_panic",
-        )
-        .unwrap();
-
-    c.builder.build_call(abort, &[], "abort_call").unwrap();
-    c.builder.build_unreachable().unwrap();
+    c.emit_panic("panic: %s\n", &[val]);
 
     Ok(None)
 }

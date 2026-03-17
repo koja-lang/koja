@@ -559,6 +559,52 @@ impl<'ctx> Compiler<'ctx> {
         }
         None
     }
+
+    /// Emits a panic sequence: writes a formatted message to stderr via
+    /// `fdopen(2,"w")` + `fprintf`, then calls `abort` and marks the
+    /// insertion point as unreachable.
+    ///
+    /// `fmt` is a printf-style format string (e.g. `"panic: %s\n"`).
+    /// `args` are the values to interpolate into the format string.
+    pub fn emit_panic(&self, fmt: &str, args: &[BasicValueEnum<'ctx>]) {
+        let fdopen = *self.functions.get("fdopen").expect("fdopen not declared");
+        let fprintf = *self.functions.get("fprintf").expect("fprintf not declared");
+        let abort = *self.functions.get("abort").expect("abort not declared");
+
+        let fd_val = self.context.i32_type().const_int(2, false);
+        let mode = self
+            .builder
+            .build_global_string_ptr("w", "panic_mode")
+            .unwrap();
+        let stderr = self
+            .builder
+            .build_call(
+                fdopen,
+                &[fd_val.into(), mode.as_pointer_value().into()],
+                "panic_stderr",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .expect("fdopen returned no value");
+
+        let fmt_ptr = self
+            .builder
+            .build_global_string_ptr(fmt, "panic_fmt")
+            .unwrap();
+
+        let mut fprintf_args: Vec<inkwell::values::BasicMetadataValueEnum> =
+            vec![stderr.into(), fmt_ptr.as_pointer_value().into()];
+        for arg in args {
+            fprintf_args.push((*arg).into());
+        }
+        self.builder
+            .build_call(fprintf, &fprintf_args, "panic_fprintf")
+            .unwrap();
+
+        self.builder.build_call(abort, &[], "panic_abort").unwrap();
+        self.builder.build_unreachable().unwrap();
+    }
 }
 
 /// Compiles a single Expo module to a native object file.

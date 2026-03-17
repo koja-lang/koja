@@ -254,8 +254,9 @@ pub(crate) fn try_parse_mangled_generic(
         return None;
     }
     let inner = &name[sep_pos + 2..name.len() - 1];
-    let type_args: Vec<Type> = inner
-        .split('.')
+    let parts = split_mangled_args(inner);
+    let type_args: Vec<Type> = parts
+        .iter()
         .map(|s| {
             if let Some(p) = Primitive::from_name(s) {
                 Type::Primitive(p)
@@ -267,6 +268,37 @@ pub(crate) fn try_parse_mangled_generic(
         })
         .collect();
     Some((base.to_string(), type_args))
+}
+
+/// Splits a mangled args string on `.` at depth 0, respecting nested `_$...$`.
+fn split_mangled_args(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut current = String::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'_' && bytes[i + 1] == b'$' {
+            depth += 1;
+            current.push('_');
+            current.push('$');
+            i += 2;
+        } else if bytes[i] == b'$' {
+            depth -= 1;
+            current.push('$');
+            i += 1;
+        } else if bytes[i] == b'.' && depth == 0 {
+            parts.push(std::mem::take(&mut current));
+            i += 1;
+        } else {
+            current.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
 }
 
 /// Checks if two types are compatible, accounting for numeric coercion and

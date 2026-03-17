@@ -407,8 +407,8 @@ pub fn compile_for<'ctx>(
     c.variables
         .insert("__for_iter".to_string(), (iter_alloca, iter_ty.clone()));
 
-    let (mangled_type, elem_llvm_ty, base, type_args) = resolve_list_info(c, &iter_ty)?;
-    let elem_expo_ty = type_args.first().cloned().unwrap_or(Type::Unknown);
+    let (mangled_type, elem_llvm_ty, elem_expo_ty, base, type_args) =
+        resolve_enumerable_info(c, &iter_ty)?;
 
     c.monomorphize_impl_method(&base, "length", &type_args)?;
     c.monomorphize_impl_method(&base, "get", &type_args)?;
@@ -516,41 +516,72 @@ pub fn compile_for<'ctx>(
     Ok(None)
 }
 
-fn resolve_list_info<'ctx>(
+/// Resolves the mangled name, element LLVM type, element Expo type, base name,
+/// and type args for any type that implements the `Enumerable` protocol.
+fn resolve_enumerable_info<'ctx>(
     c: &Compiler<'ctx>,
     ty: &Type,
 ) -> Result<
     (
         String,
         inkwell::types::BasicTypeEnum<'ctx>,
+        Type,
         String,
         Vec<Type>,
     ),
     String,
 > {
-    match ty {
+    let (base, type_args) = match ty {
         Type::GenericInstance {
             base, type_args, ..
-        } if base == "List" && !type_args.is_empty() => {
-            let mangled = expo_typecheck::types::mangle_name(base, type_args);
-            let elem_llvm = to_llvm_type(&type_args[0], c.context, &c.struct_types)
-                .ok_or("cannot resolve element LLVM type")?;
-            Ok((mangled, elem_llvm, base.clone(), type_args.clone()))
-        }
-        Type::Struct(name) if name.starts_with("List_$") => {
+        } => (base.clone(), type_args.clone()),
+        Type::Struct(name) => {
             if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(name, c) {
-                let elem_llvm = to_llvm_type(&type_args[0], c.context, &c.struct_types)
-                    .ok_or("cannot resolve element LLVM type for mangled List")?;
-                Ok((name.clone(), elem_llvm, base, type_args))
+                (base, type_args)
             } else {
-                Err(format!("cannot parse mangled List type `{name}`"))
+                return Err(format!(
+                    "`for` requires an Enumerable type, found `{}`",
+                    ty.display()
+                ));
             }
         }
-        _ => Err(format!(
-            "`for` iteration only supports List types, found `{}`",
-            ty.display()
-        )),
+        _ => {
+            return Err(format!(
+                "`for` requires an Enumerable type, found `{}`",
+                ty.display()
+            ));
+        }
+    };
+
+    let protos = c
+        .type_ctx
+        .protocol_impls
+        .get(&base)
+        .ok_or_else(|| format!("`{}` does not implement the Enumerable protocol", base))?;
+    if !protos.iter().any(|p| p == "Enumerable") {
+        return Err(format!(
+            "`{}` does not implement the Enumerable protocol",
+            base
+        ));
     }
+
+    let struct_info = c
+        .type_ctx
+        .structs
+        .get(&base)
+        .ok_or_else(|| format!("no struct info for `{base}`"))?;
+    let get_sig = struct_info
+        .methods
+        .get("get")
+        .ok_or_else(|| format!("`{base}` implements Enumerable but has no `get` method"))?;
+    let subst = expo_typecheck::types::build_substitution(&struct_info.type_params, &type_args);
+    let elem_expo_ty = expo_typecheck::types::substitute(&get_sig.return_type, &subst);
+
+    let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.struct_types)
+        .ok_or("cannot resolve element LLVM type")?;
+    let mangled = expo_typecheck::types::mangle_name(&base, &type_args);
+
+    Ok((mangled, elem_llvm, elem_expo_ty, base, type_args))
 }
 
 /// Converts an integer value to a 1-bit bool. Already-boolean values pass

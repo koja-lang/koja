@@ -4,7 +4,7 @@
 
 use expo_ast::ast::{Param, Statement};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{GenericKind, Type};
+use expo_typecheck::types::{GenericKind, Primitive, Type};
 use inkwell::types::BasicType;
 use inkwell::values::FunctionValue;
 
@@ -192,19 +192,30 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
-    /// List<T> layout: { ptr (i8*), i64 (length), i64 (capacity) }
+    /// List<T> is a compiler intrinsic because it manages heap-allocated memory
+    /// via C's malloc/realloc/free, which requires emitting raw pointer
+    /// arithmetic and GEPs that cannot be expressed in Expo source code.
+    ///
+    /// Layout: { ptr (i8*), length (i64), capacity (i64) }
     fn monomorphize_list_struct(&mut self, mangled: &str) -> Result<(), String> {
         let st = self.context.opaque_struct_type(mangled);
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
         let i64_type = self.context.i64_type();
         st.set_body(&[ptr_type.into(), i64_type.into(), i64_type.into()], false);
         self.struct_types.insert(mangled.to_string(), st);
-        self.mono_struct_info.insert(mangled.to_string(), vec![]);
+        self.mono_struct_info.insert(
+            mangled.to_string(),
+            vec![
+                ("ptr".to_string(), Type::Primitive(Primitive::String)),
+                ("length".to_string(), Type::Primitive(Primitive::I64)),
+                ("capacity".to_string(), Type::Primitive(Primitive::I64)),
+            ],
+        );
         Ok(())
     }
 
     /// Emits native LLVM IR for a List<T> method instead of compiling the
-    /// intrinsic placeholder body.
+    /// `panic("intrinsic")` placeholder body from kernel.expo.
     fn emit_list_method(
         &mut self,
         mangled_type: &str,
@@ -424,40 +435,8 @@ impl<'ctx> Compiler<'ctx> {
                     .build_conditional_branch(in_bounds, ok_bb, panic_bb)
                     .unwrap();
 
-                // panic block — mirrors compile_panic: fdopen(2,"w") → fprintf → abort
                 self.builder.position_at_end(panic_bb);
-                let fdopen = *self.functions.get("fdopen").expect("fdopen not declared");
-                let fprintf = *self.functions.get("fprintf").expect("fprintf not declared");
-                let abort = *self.functions.get("abort").expect("abort not declared");
-                let fd_val = self.context.i32_type().const_int(2, false);
-                let mode = self
-                    .builder
-                    .build_global_string_ptr("w", "oob_mode")
-                    .unwrap();
-                let stderr = self
-                    .builder
-                    .build_call(
-                        fdopen,
-                        &[fd_val.into(), mode.as_pointer_value().into()],
-                        "oob_stderr",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap();
-                let fmt = self
-                    .builder
-                    .build_global_string_ptr("panic: index out of bounds\n", "oob_fmt")
-                    .unwrap();
-                self.builder
-                    .build_call(
-                        fprintf,
-                        &[stderr.into(), fmt.as_pointer_value().into()],
-                        "oob_print",
-                    )
-                    .unwrap();
-                self.builder.build_call(abort, &[], "oob_abort").unwrap();
-                self.builder.build_unreachable().unwrap();
+                self.emit_panic("panic: index out of bounds\n", &[]);
 
                 // ok block
                 self.builder.position_at_end(ok_bb);

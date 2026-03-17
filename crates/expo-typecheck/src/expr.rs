@@ -143,34 +143,18 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             span,
         } => {
             let iter_ty = infer_expr(iterable, ctx, ce);
-            let elem_ty = match &iter_ty {
-                Type::GenericInstance {
-                    base, type_args, ..
-                } if base == "List" && !type_args.is_empty() => type_args[0].clone(),
-                Type::Struct(name) => {
-                    if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
-                        if base == "List" && !type_args.is_empty() {
-                            type_args[0].clone()
-                        } else {
-                            Type::Unknown
-                        }
-                    } else {
-                        Type::Unknown
-                    }
+            let elem_ty = resolve_enumerable_element_type(&iter_ty, ctx).unwrap_or_else(|| {
+                if iter_ty.is_known() {
+                    ctx.error(
+                        format!(
+                            "`for` requires an Enumerable type, found `{}`",
+                            iter_ty.display()
+                        ),
+                        *span,
+                    );
                 }
-                _ => {
-                    if iter_ty.is_known() {
-                        ctx.error(
-                            format!(
-                                "`for` requires an Enumerable type, found `{}`",
-                                iter_ty.display()
-                            ),
-                            *span,
-                        );
-                    }
-                    Type::Unknown
-                }
-            };
+                Type::Unknown
+            });
             let mut child = ce.child(Type::Unknown);
             child.loop_depth += 1;
             let bindings = collect_pattern_bindings(pattern);
@@ -1256,4 +1240,32 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
         | Expr::Unless { span, .. }
         | Expr::While { span, .. } => *span,
     }
+}
+
+/// Resolves the element type for any type that implements the `Enumerable<T>`
+/// protocol by looking up the `get` method and substituting concrete type args.
+fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type> {
+    let (base, type_args) = match ty {
+        Type::GenericInstance {
+            base, type_args, ..
+        } => (base.clone(), type_args.clone()),
+        Type::Struct(name) => {
+            if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
+                (base, type_args)
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+
+    let protos = ctx.protocol_impls.get(&base)?;
+    if !protos.iter().any(|p| p == "Enumerable") {
+        return None;
+    }
+
+    let struct_info = ctx.structs.get(&base)?;
+    let get_sig = struct_info.methods.get("get")?;
+    let subst = build_substitution(&struct_info.type_params, &type_args);
+    Some(substitute(&get_sig.return_type, &subst))
 }
