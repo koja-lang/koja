@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use expo_ast::span::Span;
 
-use crate::context::{PassMode, TypeContext};
+use crate::context::{FunctionKind, TypeContext};
 use crate::types::Type;
 
 /// Ownership state of a local variable during type checking.
@@ -33,9 +33,12 @@ pub(crate) struct CheckEnv<'a> {
     pub used_vars: HashSet<String>,
     pub loop_depth: usize,
     pub return_type: Type,
-    pub self_mode: PassMode,
+    pub kind: FunctionKind,
     pub struct_names: &'a [&'a str],
     pub enum_names: &'a [&'a str],
+    /// Expected type from a variable's type annotation, used to resolve
+    /// unresolved type parameters in generic static calls like `List.new()`.
+    pub type_hint: Option<Type>,
 }
 
 impl<'a> CheckEnv<'a> {
@@ -47,9 +50,10 @@ impl<'a> CheckEnv<'a> {
             used_vars: HashSet::new(),
             loop_depth: self.loop_depth,
             return_type,
-            self_mode: self.self_mode,
+            kind: self.kind,
             struct_names: self.struct_names,
             enum_names: self.enum_names,
+            type_hint: None,
         }
     }
 

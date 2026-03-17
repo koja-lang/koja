@@ -1,0 +1,10 @@
+fn main
+  list: List<Int32> = List.new()
+  list = list.push(1)
+  list = list.push(2)
+  list = list.push(3)
+
+  for item in list
+    print(item)
+  end
+end

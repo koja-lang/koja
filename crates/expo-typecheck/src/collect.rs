@@ -7,8 +7,8 @@ use expo_ast::ast::{
 use expo_ast::span::Span;
 
 use crate::context::{
-    EnumInfo, FunctionSig, ParamInfo, PassMode, ProtocolInfo, StructInfo, TypeContext, VariantData,
-    VariantInfo, Visibility,
+    EnumInfo, FunctionKind, FunctionSig, ParamInfo, PassMode, ProtocolInfo, StructInfo,
+    TypeContext, VariantData, VariantInfo, Visibility,
 };
 use crate::types::{Type, resolve_type_expr_with_params};
 
@@ -329,7 +329,7 @@ pub fn collect(module: &Module) -> TypeContext {
                 ty: Type::Unknown,
             }],
             return_type: Type::Unit,
-            self_mode: PassMode::Borrow,
+            kind: FunctionKind::Static,
             span: Span::zero(),
             type_params: Vec::new(),
         },
@@ -345,7 +345,7 @@ pub fn collect(module: &Module) -> TypeContext {
                 ty: Type::Primitive(crate::types::Primitive::String),
             }],
             return_type: Type::Unit,
-            self_mode: PassMode::Borrow,
+            kind: FunctionKind::Static,
             span: Span::zero(),
             type_params: Vec::new(),
         },
@@ -496,20 +496,20 @@ fn build_function_sig_with_params(
         .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
         .unwrap_or(Type::Unit);
 
-    let self_mode = f
+    let kind = f
         .params
         .iter()
         .find_map(|p| match p {
-            Param::Self_ { mode, .. } => Some(*mode),
+            Param::Self_ { mode, .. } => Some(FunctionKind::Instance(*mode)),
             _ => None,
         })
-        .unwrap_or(PassMode::Borrow);
+        .unwrap_or(FunctionKind::Static);
 
     Some(FunctionSig {
         visibility: f.visibility,
         params,
         return_type,
-        self_mode,
+        kind,
         span: f.span,
         type_params: f.type_params.clone(),
     })
@@ -548,20 +548,20 @@ fn build_protocol_method_sig(
         .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
         .unwrap_or(Type::Unit);
 
-    let self_mode = m
+    let kind = m
         .params
         .iter()
         .find_map(|p| match p {
-            Param::Self_ { mode, .. } => Some(*mode),
+            Param::Self_ { mode, .. } => Some(FunctionKind::Instance(*mode)),
             _ => None,
         })
-        .unwrap_or(PassMode::Borrow);
+        .unwrap_or(FunctionKind::Static);
 
     Some(FunctionSig {
         visibility: Visibility::Public,
         params,
         return_type,
-        self_mode,
+        kind,
         span: m.span,
         type_params: m.type_params.clone(),
     })

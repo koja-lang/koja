@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, Severity, StructDecl,
 };
+pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::span::Span;
 
 use crate::types::Type;
@@ -36,14 +36,23 @@ pub struct EnumInfo {
     pub variants: Vec<VariantInfo>,
 }
 
+/// Whether a function in an impl block takes a `self` receiver or is static.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FunctionKind {
+    /// An instance function that takes `self`. The [`PassMode`] indicates
+    /// whether `self` is borrowed (read-only) or moved (owned).
+    Instance(PassMode),
+    /// A static function with no `self` receiver, called as `Type.function()`.
+    Static,
+}
+
 /// Resolved type signature for a function or method.
 #[derive(Clone)]
 pub struct FunctionSig {
     pub visibility: Visibility,
     pub params: Vec<ParamInfo>,
     pub return_type: Type,
-    /// How the receiver (`self`) is passed: `Move` for `move self`, `Borrow` otherwise.
-    pub self_mode: PassMode,
+    pub kind: FunctionKind,
     #[allow(dead_code)]
     pub span: Span,
     pub type_params: Vec<String>,

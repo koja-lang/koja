@@ -2,7 +2,9 @@
 Core types available in every Expo module without an explicit import.
 
 Provides `Option<T>` for nullable values, `Result<T, E>` for fallible
-operations, and `Pair<A, B>` for lightweight two-value grouping.
+operations, `Pair<A, B>` for lightweight two-value grouping,
+`List<T>` for dynamically-sized collections, and `Enumerable<T>`
+for protocol-backed iteration.
 """
 
 @doc """
@@ -154,5 +156,60 @@ impl Result<T, E>
       Result.Ok(val) -> val
       Result.Err(_) -> panic("called unwrap on Err")
     end
+  end
+end
+
+@doc """
+A protocol for types that can be iterated with `for`.
+Requires indexed access via `length` and `get`.
+"""
+protocol Enumerable<T>
+  fn length(self) -> Int32
+  fn get(self, index: Int32) -> T
+end
+
+@doc """
+A dynamically-sized, heap-backed list. Owns its elements and follows
+move semantics for mutations.
+"""
+struct List<T>
+end
+
+impl Enumerable<T> for List<T>
+  @doc """
+  Returns the number of elements in the list.
+  """
+  fn length(self) -> Int32
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the element at the given index. Panics if the index is out of bounds.
+  """
+  fn get(self, index: Int32) -> T
+    panic("intrinsic")
+  end
+end
+
+impl List<T>
+  @doc """
+  Creates a new empty list.
+  """
+  fn new() -> List<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Appends an element to the end of the list and returns the updated list.
+  """
+  fn push(move self, item: T) -> List<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `true` if the list contains no elements.
+  """
+  fn empty?(self) -> Bool
+    panic("intrinsic")
   end
 end

@@ -170,7 +170,7 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
                 visibility: sig.visibility,
                 params,
                 return_type,
-                self_mode: sig.self_mode,
+                kind: sig.kind,
                 span: sig.span,
                 type_params: sig.type_params.clone(),
             };

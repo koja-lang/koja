@@ -28,8 +28,39 @@ pub fn compile_statement<'ctx>(
             value,
             ..
         } => {
+            let mut saved_subst = None;
+            if let Some(te) = type_annotation {
+                let annotated = c.resolve_type_expr(te);
+                if let Type::GenericInstance {
+                    base, type_args, ..
+                } = &annotated
+                {
+                    let type_params = c
+                        .type_ctx
+                        .structs
+                        .get(base.as_str())
+                        .map(|si| si.type_params.clone())
+                        .or_else(|| {
+                            c.type_ctx
+                                .enums
+                                .get(base.as_str())
+                                .map(|ei| ei.type_params.clone())
+                        });
+                    if let Some(tp) = type_params {
+                        saved_subst = Some(c.type_subst.clone());
+                        for (param, arg) in tp.iter().zip(type_args.iter()) {
+                            c.type_subst.insert(param.clone(), arg.clone());
+                        }
+                    }
+                }
+            }
+
             let raw_val =
                 compile_expr(c, value, function)?.ok_or("assignment value produced no value")?;
+
+            if let Some(saved) = saved_subst {
+                c.type_subst = saved;
+            }
 
             let ty = if let Some(te) = type_annotation {
                 let annotated = c.resolve_type_expr(te);

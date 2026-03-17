@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
-use crate::context::{ParamInfo, PassMode, TypeContext};
+use crate::context::{FunctionKind, ParamInfo, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr};
 use crate::stmt::check_body;
@@ -110,23 +110,24 @@ fn check_function(
         return;
     }
 
-    let self_mode = f
+    let kind = f
         .params
         .iter()
         .find_map(|p| match p {
-            Param::Self_ { mode, .. } => Some(*mode),
+            Param::Self_ { mode, .. } => Some(FunctionKind::Instance(*mode)),
             _ => None,
         })
-        .unwrap_or(PassMode::Borrow);
+        .unwrap_or(FunctionKind::Static);
 
     let mut ce = CheckEnv {
         env,
         used_vars: HashSet::new(),
         loop_depth: 0,
         return_type: declared_return.clone(),
-        self_mode,
+        kind,
         struct_names,
         enum_names,
+        type_hint: None,
     };
 
     let check_implicit_return = declared_return != Type::Unit && declared_return != Type::Unknown;

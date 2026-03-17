@@ -1448,9 +1448,7 @@ fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
                 .iter()
                 .enumerate()
                 .map(|(i, p)| {
-                    let is_move = param_modes
-                        .get(i)
-                        .is_some_and(|m| *m == PassMode::Move);
+                    let is_move = param_modes.get(i).is_some_and(|m| *m == PassMode::Move);
                     if is_move {
                         concat(vec![text("move "), type_expr_to_doc(p)])
                     } else {

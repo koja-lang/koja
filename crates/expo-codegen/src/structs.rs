@@ -117,6 +117,14 @@ pub fn compile_method_call<'ctx>(
         return compile_call(c, method, args, function);
     }
 
+    if let Expr::Ident { name, .. } = receiver {
+        let is_type_name =
+            c.type_ctx.structs.contains_key(name) || c.type_ctx.enums.contains_key(name);
+        if is_type_name {
+            return compile_static_call(c, name, method, args, function);
+        }
+    }
+
     let recv_val = compile_expr(c, receiver, function)?
         .ok_or("method call on expression that produced no value")?;
 
@@ -435,4 +443,74 @@ fn struct_name_from_type(ty: &Type) -> Option<String> {
         } => Some(mangle_name(base, type_args)),
         _ => None,
     }
+}
+
+fn compile_static_call<'ctx>(
+    c: &mut Compiler<'ctx>,
+    type_name: &str,
+    method: &str,
+    args: &[expo_ast::ast::Arg],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let type_params = c
+        .type_ctx
+        .structs
+        .get(type_name)
+        .map(|si| &si.type_params)
+        .or_else(|| c.type_ctx.enums.get(type_name).map(|ei| &ei.type_params));
+
+    let type_args: Vec<Type> = if let Some(tp) = type_params
+        && !tp.is_empty()
+    {
+        tp.iter()
+            .filter_map(|name| c.type_subst.get(name).cloned())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let mangled_type = if type_args.is_empty() {
+        type_name.to_string()
+    } else {
+        let m = mangle_name(type_name, &type_args);
+        if !c.struct_types.contains_key(&m) {
+            if c.type_ctx.structs.contains_key(type_name) {
+                c.monomorphize_struct(type_name, &type_args)?;
+            } else {
+                c.monomorphize_enum(type_name, &type_args)?;
+            }
+        }
+        m
+    };
+
+    let mangled_fn = format!("{}_{}", mangled_type, method);
+
+    if !c.functions.contains_key(&mangled_fn) {
+        if !type_args.is_empty() {
+            c.monomorphize_impl_method(type_name, method, &type_args)?;
+        } else {
+            return Err(format!(
+                "undefined static function `{method}` on `{type_name}`"
+            ));
+        }
+    }
+
+    let callee = *c
+        .functions
+        .get(&mangled_fn)
+        .ok_or_else(|| format!("undefined static function `{method}` on `{mangled_type}`"))?;
+
+    let mut llvm_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+    for arg in args {
+        let val = compile_expr(c, &arg.value, function)?
+            .ok_or_else(|| "static call argument produced no value".to_string())?;
+        llvm_args.push(val.into());
+    }
+
+    let result = c
+        .builder
+        .build_call(callee, &llvm_args, &format!("{mangled_fn}_ret"))
+        .unwrap();
+
+    Ok(result.try_as_basic_value().left())
 }

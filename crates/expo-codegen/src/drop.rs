@@ -29,13 +29,26 @@ pub fn drop_live_variables(c: &mut Compiler) {
     }
 }
 
+fn is_list_type(ty: &Type) -> bool {
+    match ty {
+        Type::GenericInstance { base, .. } if base == "List" => true,
+        Type::Struct(name) if name.starts_with("List_$") => true,
+        _ => false,
+    }
+}
+
 /// Returns true if a type requires heap deallocation at scope exit.
-fn needs_heap_drop(_ty: &Type) -> bool {
-    false
+fn needs_heap_drop(ty: &Type) -> bool {
+    is_list_type(ty)
 }
 
 fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
     if !needs_heap_drop(ty) {
+        return;
+    }
+
+    if is_list_type(ty) {
+        emit_drop_list(c, ptr, ty);
         return;
     }
 
@@ -53,6 +66,38 @@ fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
         .unwrap();
     c.builder
         .build_call(free, &[val.into()], "drop_free")
+        .unwrap();
+}
+
+/// Drops a List value: extracts the data pointer (field 0) and frees it.
+fn emit_drop_list(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
+    let mangled = match ty {
+        Type::GenericInstance {
+            base, type_args, ..
+        } => expo_typecheck::types::mangle_name(base, type_args),
+        Type::Struct(name) => name.clone(),
+        _ => return,
+    };
+    let Some(list_struct) = c.struct_types.get(&mangled).copied() else {
+        return;
+    };
+
+    let list_val = c
+        .builder
+        .build_load(list_struct, alloca, "drop_list_load")
+        .unwrap()
+        .into_struct_value();
+    let data_ptr = c
+        .builder
+        .build_extract_value(list_val, 0, "drop_list_ptr")
+        .unwrap();
+
+    let free = *c
+        .functions
+        .get("free")
+        .expect("free not declared in builtins");
+    c.builder
+        .build_call(free, &[data_ptr.into()], "drop_list_free")
         .unwrap();
 }
 

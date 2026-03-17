@@ -10,8 +10,10 @@ use std::collections::{HashMap, HashSet};
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
-use crate::check::{check_call_args, check_type, try_parse_mangled_generic};
-use crate::context::{CaptureInfo, FunctionSig, ParamInfo, PassMode, TypeContext, VariantData};
+use crate::check::{check_call_args, check_type, try_parse_mangled_generic, types_compatible};
+use crate::context::{
+    CaptureInfo, FunctionKind, FunctionSig, ParamInfo, PassMode, TypeContext, VariantData,
+};
 use crate::env::{CheckEnv, VarInfo};
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
 use crate::stmt::check_body;
@@ -51,9 +53,10 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 used_vars: HashSet::new(),
                 loop_depth: 0,
                 return_type: Type::Unknown,
-                self_mode: PassMode::Borrow,
+                kind: FunctionKind::Static,
                 struct_names: ce.struct_names,
                 enum_names: ce.enum_names,
+                type_hint: None,
             };
             let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
 
@@ -133,10 +136,47 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             span,
         } => infer_field_access(receiver, field, *span, ctx, ce),
 
-        Expr::For { iterable, body, .. } => {
-            infer_expr(iterable, ctx, ce);
+        Expr::For {
+            pattern,
+            iterable,
+            body,
+            span,
+        } => {
+            let iter_ty = infer_expr(iterable, ctx, ce);
+            let elem_ty = match &iter_ty {
+                Type::GenericInstance {
+                    base, type_args, ..
+                } if base == "List" && !type_args.is_empty() => type_args[0].clone(),
+                Type::Struct(name) => {
+                    if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
+                        if base == "List" && !type_args.is_empty() {
+                            type_args[0].clone()
+                        } else {
+                            Type::Unknown
+                        }
+                    } else {
+                        Type::Unknown
+                    }
+                }
+                _ => {
+                    if iter_ty.is_known() {
+                        ctx.error(
+                            format!(
+                                "`for` requires an Enumerable type, found `{}`",
+                                iter_ty.display()
+                            ),
+                            *span,
+                        );
+                    }
+                    Type::Unknown
+                }
+            };
             let mut child = ce.child(Type::Unknown);
             child.loop_depth += 1;
+            let bindings = collect_pattern_bindings(pattern);
+            for (name, _) in &bindings {
+                child.insert_var(name.clone(), elem_ty.clone());
+            }
             check_body(body, ctx, &mut child);
             Type::Unit
         }
@@ -187,11 +227,29 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             Type::Unknown
         }
 
-        Expr::List { elements, .. } => {
+        Expr::List { elements, span } => {
+            let mut elem_type = Type::Unknown;
             for e in elements {
-                infer_expr(e, ctx, ce);
+                let t = infer_expr(e, ctx, ce);
+                if elem_type == Type::Unknown {
+                    elem_type = t;
+                } else if t.is_known() && elem_type.is_known() && !types_compatible(&elem_type, &t)
+                {
+                    ctx.error(
+                        format!(
+                            "list element type mismatch: expected `{}`, found `{}`",
+                            elem_type.display(),
+                            t.display()
+                        ),
+                        *span,
+                    );
+                }
             }
-            Type::Unknown
+            Type::GenericInstance {
+                base: "List".to_string(),
+                type_args: vec![elem_type],
+                kind: GenericKind::Struct,
+            }
         }
 
         Expr::Literal { value, .. } => match value {
@@ -248,9 +306,10 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 used_vars: HashSet::new(),
                 loop_depth: 0,
                 return_type: Type::Unknown,
-                self_mode: PassMode::Borrow,
+                kind: FunctionKind::Static,
                 struct_names: ce.struct_names,
                 enum_names: ce.enum_names,
+                type_hint: None,
             };
             let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
             let return_type = infer_expr(body, ctx, &mut closure_env);
@@ -559,6 +618,12 @@ fn infer_generic_call(
         }
     }
 
+    if sig.type_params.iter().any(|tp| !subst.contains_key(tp))
+        && let Some(hint) = &ce.type_hint
+    {
+        unify(&sig.return_type, hint, &mut subst);
+    }
+
     for tp in &sig.type_params {
         if !subst.contains_key(tp) {
             ctx.error(
@@ -838,6 +903,52 @@ fn infer_method_call(
         }
     }
 
+    if let Expr::Ident {
+        name: type_name, ..
+    } = receiver
+    {
+        let static_sig_info = ctx
+            .structs
+            .get(type_name)
+            .map(|si| (&si.methods, &si.type_params))
+            .or_else(|| {
+                ctx.enums
+                    .get(type_name)
+                    .map(|ei| (&ei.methods, &ei.type_params))
+            })
+            .and_then(|(methods, type_params)| {
+                methods.get(method).and_then(|sig| {
+                    if sig.kind == FunctionKind::Static {
+                        Some((sig.clone(), type_params.clone()))
+                    } else {
+                        None
+                    }
+                })
+            });
+
+        if let Some((sig, type_params)) = static_sig_info {
+            if !sig.type_params.is_empty() || !type_params.is_empty() {
+                let static_sig = FunctionSig {
+                    visibility: sig.visibility,
+                    params: sig.params.clone(),
+                    return_type: sig.return_type.clone(),
+                    kind: sig.kind,
+                    span: sig.span,
+                    type_params: if !type_params.is_empty() {
+                        type_params
+                    } else {
+                        sig.type_params.clone()
+                    },
+                };
+                let display = format!("{}.{}", type_name, method);
+                return infer_generic_call(&display, &static_sig, args, span, ctx, ce);
+            }
+            let display = format!("{}.{}", type_name, method);
+            check_call_args(&display, &sig.params, args, "", span, ctx, ce);
+            return sig.return_type.clone();
+        }
+    }
+
     let recv_ty = infer_expr(receiver, ctx, ce);
 
     if method == "clone" && args.is_empty() {
@@ -933,7 +1044,7 @@ fn infer_method_call(
             (sig.return_type.clone(), sig.params.clone())
         };
 
-        if sig.self_mode == PassMode::Move
+        if sig.kind == FunctionKind::Instance(PassMode::Move)
             && !recv_ty.is_copy()
             && let Expr::Ident { name, .. } = receiver
         {
@@ -945,7 +1056,7 @@ fn infer_method_call(
                 visibility: sig.visibility,
                 params,
                 return_type,
-                self_mode: sig.self_mode,
+                kind: sig.kind,
                 span: sig.span,
                 type_params: sig.type_params.clone(),
             };

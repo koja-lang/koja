@@ -7,7 +7,7 @@
 use expo_ast::ast::*;
 
 use crate::check::types_compatible;
-use crate::context::{PassMode, TypeContext};
+use crate::context::{FunctionKind, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarState};
 use crate::expr::infer_expr;
 use crate::types::{Type, resolve_type_expr};
@@ -28,7 +28,15 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
             value,
             span,
         } => {
+            if let Some(te) = type_annotation {
+                let hint = resolve_type_expr(te, ce.struct_names, ce.enum_names);
+                ce.type_hint = Some(hint);
+            } else {
+                ce.type_hint = None;
+            }
+
             let value_type = infer_expr(value, ctx, ce);
+            ce.type_hint = None;
 
             let effective_type = if let Some(te) = type_annotation {
                 let annotated = resolve_type_expr(te, ce.struct_names, ce.enum_names);
@@ -62,7 +70,7 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
                 AssignTarget::LValue(lv) => {
                     if lv.segments.len() > 1
                         && lv.segments[0] == "self"
-                        && ce.self_mode != PassMode::Move
+                        && ce.kind != FunctionKind::Instance(PassMode::Move)
                     {
                         ctx.error_with_hint(
                             format!(

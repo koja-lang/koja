@@ -510,7 +510,11 @@ impl Parser {
 
         if self.eat(&TokenKind::Self_).is_some() {
             return Param::Self_ {
-                mode: if has_move { PassMode::Move } else { PassMode::Borrow },
+                mode: if has_move {
+                    PassMode::Move
+                } else {
+                    PassMode::Borrow
+                },
                 span: self.span_from(start),
             };
         }

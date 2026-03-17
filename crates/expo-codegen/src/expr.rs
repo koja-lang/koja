@@ -10,7 +10,8 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 use crate::calls::compile_call;
 use crate::compiler::Compiler;
 use crate::control::{
-    compile_cond, compile_if, compile_loop, compile_match, compile_ternary, compile_while,
+    compile_cond, compile_for, compile_if, compile_loop, compile_match, compile_ternary,
+    compile_while,
 };
 use crate::enums::compile_enum_construction;
 use crate::ops::{compile_binary, compile_unary};
@@ -130,6 +131,13 @@ pub fn compile_expr<'ctx>(
             body,
             span,
         } => compile_closure(c, params, return_type, body, function, *span),
+
+        Expr::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => compile_for(c, pattern, iterable, body, function),
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",

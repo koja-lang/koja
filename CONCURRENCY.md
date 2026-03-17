@@ -621,3 +621,407 @@ The roadmap path is:
 
 The performance of Rust's concurrency. The ergonomics of Erlang's actor model.
 A zero-copy task primitive that neither of them can offer.
+
+---
+
+## Open design: task ownership semantics
+
+The interaction between ownership and `spawn` is an unsolved design problem.
+Every approach explored has exactly one cost, and every hybrid that tries to
+avoid the cost adds complexity worse than the cost itself. This section
+documents the design exploration so far.
+
+### The core tension
+
+Within a single thread, Expo's ownership model is clean: borrow by default,
+`move` for ownership transfer, `clone()` when both sides need a copy. But
+`spawn` crosses a thread boundary, which introduces a question that doesn't
+exist for regular function calls: **what happens to the data in the parent
+scope while the task is running?**
+
+A regular function call borrows its arguments and returns. The borrow is
+short-lived and scoped to the call. A spawned task borrows its arguments
+and runs concurrently -- the borrow is long-lived and its duration depends
+on when (or whether) the task completes.
+
+### Three honest models
+
+Each model fully solves the problem, with one cost:
+
+**Clone at spawn (Erlang model).** Data is copied across the boundary. The
+task owns its copy, the parent keeps its original. No lifetime concerns, no
+borrow tracking, fire-and-forget works naturally.
+
+```
+config = load_config()
+spawn(fn () ->
+  generate_report(config)  # config is cloned automatically
+end)
+print(config.name)  # still yours
+```
+
+- Pro: simplest mental model, Elixir-level ergonomics
+- Pro: `move` as a zero-copy optimization Erlang can never offer
+- Con: inconsistent with borrow-by-default for normal function calls
+- Con: hidden performance cost (implicit clones)
+- Con: large shared data requires a separate mechanism (shared_map / ETS)
+
+**Borrow at spawn (structured concurrency).** Same rules as function calls.
+Arguments are borrowed for the duration of the task. Structured concurrency
+guarantees the parent outlives the task, so borrows are always valid without
+lifetime annotations.
+
+```
+h = spawn generate_report(order, config)  # borrows, like a function call
+# order and config can't be moved until await
+result = await h
+# borrows released
+```
+
+- Pro: consistent with borrow-by-default -- no new rules
+- Pro: zero-copy reads across tasks
+- Con: must-await enforcement -- compiler error if handle isn't awaited
+- Con: can't fire-and-forget with borrowed data
+- Con: "spawn = slow call" breaks when developers expect fire-and-forget
+
+**Move at spawn (Rust model).** Data is moved into the task. The parent
+loses access. Clone before spawn if the parent needs to keep a copy.
+
+```
+order_copy = order.clone()
+spawn(fn () ->
+  generate_report(order_copy)  # moved in, task owns it
+end)
+# order_copy is consumed, order is still live
+```
+
+- Pro: simple ownership -- task owns its data, parent owns its data
+- Pro: fire-and-forget works naturally
+- Con: clone tax -- manual cloning before every spawn when data is shared
+- Con: verbose for the common case of multiple tasks reading the same data
+
+### Hybrids explored and rejected
+
+**`move fn` modifier.** `move fn` moves all captures, plain `fn` borrows.
+Problem: too blunt -- moves everything, developer accidentally consumes
+variables they didn't intend to.
+
+**Capture lists (`fn [move x, y] () -> T`).** Per-capture control with
+bracket syntax. Problem: adds syntax complexity, and mixed capture lists
+(some move, some borrow) still require must-await for the borrows.
+
+**Implicit joins at scope exit.** Borrow-capturing tasks are silently
+awaited when the scope exits. Problem: violates "no magic" -- developer
+writes `spawn` thinking "fire and forget" but the function secretly blocks.
+
+**Clone inside borrow closure.** Closure borrows data, immediately clones
+it inside the body, so the borrow is only needed briefly. Problem: race
+condition -- the task runs on another thread, and the parent can return
+before the task even starts executing the clone. Unsafe.
+
+### Key insights from the exploration
+
+**Closures and functions are conceptually identical.** Closure captures
+should behave like function parameters, not as a separate concept with
+separate rules. `move` belongs in the parameter position (function
+signature), not as a standalone expression in the body or a whole-closure
+modifier.
+
+**`spawn` is a function call that hasn't returned yet.** The ideal mental
+model is that spawning a task is like calling a function, except the "call"
+doesn't "return" until `await`. Existing borrow/move rules should apply.
+No new task-specific ownership concepts.
+
+**Structured concurrency can replace lifetimes.** Because a structured task
+cannot outlive its spawning scope, borrows from parent to task are always
+valid by construction. No lifetime annotations needed. The `spawn`/`await`
+structure IS the lifetime. But the must-await enforcement this requires has
+ergonomic friction that hasn't been resolved.
+
+**Implicit behavior at spawn boundaries violates "no magic."** Whether it's
+implicit clones (Erlang model) or implicit joins (structured borrow model),
+hidden behavior at the spawn boundary is surprising. The developer should
+always be able to tell what happens to their data by reading the code.
+
+**`move` is Expo's unique advantage over Erlang.** Erlang's only option at
+process boundaries is copy. Expo can offer zero-copy ownership transfer
+via `move`, which is strictly better -- same ergonomic default (clone), with
+an optimization path Erlang physically cannot offer.
+
+**ARC / COW is deferred, not rejected.** Automatic reference counting or
+copy-on-write semantics at the spawn boundary would solve the shared-read
+problem elegantly (multiple tasks reading the same data, zero copies). This
+is a philosophical shift from single-owner semantics but could be introduced
+as a compiler-internal optimization invisible to the user. Revisit if
+real-world usage reveals that clone-at-spawn is a genuine bottleneck.
+
+### Why this is hard
+
+This is the same problem every language faces, and every language that got
+concurrency right committed fully to one model early:
+
+- **Erlang**: committed to copy-everything from day one. Simple, correct,
+  works at scale. The cost (ETS for large shared data) is well-understood
+  and accepted.
+- **Rust**: committed to move + `'static` bounds. Safe, zero-cost, but
+  verbose (`Arc<Mutex<T>>`, lifetime annotations, `Send + Sync` bounds).
+- **Swift**: committed to ARC everywhere. Ergonomic, zero-copy reads, but
+  reference counting overhead and retain cycle risks.
+- **Go**: committed to shared memory + GC. Easy to write, but data races
+  are possible and the GC has latency costs.
+
+Languages that deferred the concurrency/ownership decision (Python, Java,
+C++) have concurrency models that feel permanently bolted on. Expo is
+exploring this design space before building the runtime specifically to
+avoid that outcome.
+
+### The fractal nature of ownership across scales
+
+The task ownership problem is not unique to threads. It is the same
+fundamental problem that appears at every level of concurrent and
+distributed systems: **how do multiple independent execution contexts
+safely share or transfer data?**
+
+At the thread level, it's ownership semantics. At the process level, it's
+actor isolation and message passing. At the network level, it's distributed
+consensus. The three models map directly:
+
+- **Clone** = replicate data to every node (Raft log replication)
+- **Borrow** = read from a single authority (leader reads, distributed locks)
+- **Move** = transfer ownership (leadership transfer, old leader steps down)
+- **Shared mutable state (ETS)** = shared database (breaks service isolation)
+- **ARC / refcount** = multiple replicas with quorum reads
+- **Must-await / structured** = two-phase commit (wait for all participants)
+
+The CAP theorem captures the same constraint: you cannot have consistency
+(safety), availability (fire-and-forget), and partition tolerance
+(independent execution) all at once. Pick two.
+
+This is why distributed consensus is hard -- it's the same design tension,
+just at network scale. And it suggests a design principle: whatever Expo
+picks for task ownership should rhyme with how data works at the actor level
+and the distributed level. If the patterns are consistent across scales,
+the developer's intuition transfers up -- from threads to actors to
+clusters.
+
+### Proposed solution: spawn as a function call
+
+After exploring all three models and their hybrids, a design emerged that
+introduces zero new ownership concepts. The core idea: **`spawn` takes a
+function call, not a closure.** The function's existing signature controls
+everything.
+
+**The model:**
+
+1. `spawn(function_call)` -- spawn takes a complete function call expression.
+   Arguments are evaluated in the parent scope using the callee's existing
+   borrow/move/copy rules. The function body runs on another thread.
+
+2. The function's parameter declarations control ownership at the spawn
+   boundary. `move` params transfer ownership. Regular params borrow. Copy
+   types are copied. No new annotations, no new rules.
+
+3. Closures inside `spawn` are isolated -- they don't see the parent scope.
+   A reference to an outer variable is the same "unknown variable" error as
+   in any other function. Data must be passed as explicit parameters.
+
+4. `await handle` returns the function's return value. Functions that take
+   `move` params can return the data back, enabling the "move in, get back"
+   pattern already established by `move self`.
+
+**Example:**
+
+```
+fn send_email(move config: Config, port: Int) -> Config
+  # Do stuff with config (owns it), port (borrowed copy)
+  config  # return config to the caller
+end
+
+fn log_startup(config: Config, port: Int)
+  print("Initializing #{config} on port #{port}")
+end
+
+fn main
+  config: Config = load_config()
+  port = 4040
+
+  pid1 = spawn(log_startup(config, port))
+  # config is borrowed by log_startup -- still usable
+  print(config)
+
+  pid2 = spawn(send_email(config, port))
+  # config is moved by send_email -- consumed
+  # print(config)  # compile error: config was moved
+  print(port)      # fine: Int is a copy type
+
+  config = await pid2
+  # send_email returned Config -- "move in, get back"
+  print(config)  # fine: config is back
+
+  # Closures at spawn are isolated -- no implicit captures
+  spawn(fn () ->
+    # print(config)  # compile error: unknown variable `config`
+    print("hello")   # fine: no outer variables referenced
+  end)
+
+  # The fix is always: pass data as explicit parameters
+  spawn(fn (config: Config) ->
+    print(config)
+  end(config))
+end
+```
+
+**Why this works:**
+
+- **Zero new concepts.** Borrow, move, copy, function scoping, and `await`
+  returning a value are all existing language features. The developer who
+  has never seen `spawn` can read the code and understand it.
+
+- **"Move in, get back" pattern.** `send_email` takes `move config` and
+  returns `Config`. The parent loses config at spawn, gets it back at await.
+  This is the same pattern as `list = list.push(42)` -- FP-style value flow
+  applied to tasks.
+
+- **Existing borrow rules enforce structured concurrency.** If a task
+  borrows data, the parent can't return until the borrow is released (via
+  `await`). This isn't a task rule -- it's the existing rule that you can't
+  drop a variable while it's borrowed. The error message is familiar:
+  "cannot return while `config` is borrowed."
+
+- **Fire-and-forget falls out naturally.** If a function takes all `move`
+  or copy-type params, no borrows exist. The parent can return without
+  awaiting. No special annotation needed -- it's determined by the function
+  signature.
+
+- **No closure capture problem.** Closures at spawn are scoped like any
+  function -- they don't see outer variables. All data crosses the thread
+  boundary as explicit function arguments. The error for referencing an
+  outer variable is the familiar "unknown variable," not a new concept
+  about captures or lifetimes.
+
+**Inline closures for spawn:**
+
+Inline closures with explicit params work (`spawn(fn (x: T) -> ... end(x))`)
+but the syntax is verbose compared to named functions. The two-step pattern
+(define the function, then spawn it) is cleaner:
+
+```
+email_task = fn (move config: Config, port: Int) -> Config
+  send_email(config)
+  config
+end
+
+pid = spawn email_task(config, port)
+```
+
+This reads identically to spawning a named function. The anonymous function
+is callable without a dot (unlike Elixir), so `spawn task(args)` works
+whether `task` is a named function or a local variable holding a closure.
+
+**Open questions:**
+
+- The relationship between this model and actor message passing. Actors
+  receive messages (moved data) through a mailbox. Tasks receive arguments
+  (borrowed or moved) through function params. These should feel consistent.
+
+### Exploration: `.async()` and pipeline concurrency
+
+The `spawn function(args)` model works well for one-off tasks, but the
+most common concurrency pattern in backend services is processing a stream
+of data -- chained `map`/`filter`/`then` operations that need to run
+concurrently. These pipelines rely on implicit closure capture for
+ergonomics, and listing every captured variable as an explicit param on
+every closure in a chain would be unusable.
+
+Two distinct concurrent operations emerge:
+
+**A: `.async()` -- run work on another thread.**
+
+`.async()` as a terminal operation that ships the preceding expression to a
+worker thread and returns a handle. The developer writes `.async()` to
+signal "I know data is crossing a thread boundary."
+
+```
+config = load_config()
+
+# Synchronous -- config borrowed by closure, normal rules
+results = orders.map(fn (order: Order) -> Invoice
+  generate_invoice(order, config)
+end)
+
+# Async -- whole pipeline runs on another thread
+pid = orders.map(fn (order: Order) -> Invoice
+  generate_invoice(order, config)
+end).async()
+
+result = await pid
+print(config)  # still yours
+```
+
+`.async()` would be a compiler-known transformation, not a regular method.
+The compiler wraps the preceding expression in a spawn and clones captured
+variables at the boundary. The clone is opt-in and visible -- the developer
+wrote `.async()`, so they know data is being copied. This resolves the
+"clone at spawn is inconsistent with borrow-by-default" concern: the clone
+is triggered by an explicit `.async()` call, not by the `spawn` keyword.
+
+**B: `.async_map()` -- fan-out parallelism.**
+
+Concurrent versions of collection operations where each element is
+processed by its own task. The operation is structured -- it spawns tasks,
+collects all results, and returns. The caller's scope outlives every task.
+
+```
+config = load_config()
+
+results = orders.async_map(fn (order: Order) -> Invoice
+  generate_invoice(order, config)
+end)
+# each order processed concurrently, results collected
+```
+
+Because `async_map` is structured (completes before returning), closures
+with captured variables are safe. The library handles the concurrency
+internally -- whether by cloning captures per task, sharing read-only
+references, or another mechanism. The developer writes a normal closure
+and `async_map` runs it concurrently.
+
+**A + B compose:**
+
+```
+# Fan-out within a pipeline, running in the background
+pid = orders
+  .async_map(fn (order: Order) -> Invoice
+    generate_invoice(order, config)
+  end)
+  .filter(fn (invoice: Invoice) -> Bool
+    invoice.total > threshold
+  end)
+  .async()  # the whole thing runs on another thread
+
+result = await pid
+```
+
+**Relationship to `spawn`:**
+
+- `spawn function(args)` -- low-level primitive. Explicit params, no
+  captures, developer manages the handle. For one-off tasks.
+- `.async()` -- high-level sugar. Clones captures at the boundary,
+  returns a handle. For backgrounding expressions and pipelines.
+- `.async_map()` / `.async_filter()` -- structured concurrent collection
+  operations. Closures capture normally, library handles concurrency.
+  For data processing fan-out.
+
+Three levels of abstraction, each appropriate for different use cases.
+The developer reaches for `async_map` most often (data processing),
+`.async()` occasionally (background work), and `spawn` rarely (full
+control).
+
+### Status
+
+Proposed solution for `spawn` identified (spawn as function call with
+explicit params). Pipeline concurrency (`.async()`, `async_map`) is an
+additional exploration layer that needs further design. The runtime and
+task implementation can proceed with the `spawn` model. Other Phase 2
+work (collections, trait bounds, Display protocol) can also proceed
+independently.

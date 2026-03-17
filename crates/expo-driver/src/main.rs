@@ -233,7 +233,7 @@ fn build(args: &[String], quiet: bool, color: bool) {
                             })
                             .collect(),
                         return_type: sig.return_type.clone(),
-                        self_mode: sig.self_mode,
+                        kind: sig.kind,
                         span: sig.span,
                         type_params: sig.type_params.clone(),
                     },
@@ -426,7 +426,7 @@ fn clone_fn_sig(
             })
             .collect(),
         return_type: sig.return_type.clone(),
-        self_mode: sig.self_mode,
+        kind: sig.kind,
         span: sig.span,
         type_params: sig.type_params.clone(),
     }
