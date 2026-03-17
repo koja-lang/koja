@@ -39,15 +39,14 @@ Precedence from lowest to highest:
 
 | Precedence | Operators                   |
 | ---------- | --------------------------- |
-| 1          | `\|>` (pipe)                |
-| 2          | `or`                        |
-| 3          | `and`                       |
-| 4          | `not` (prefix)              |
-| 5          | `==` `!=` `<` `>` `<=` `>=` |
-| 6          | `+` `-`                     |
-| 7          | `*` `/` `%`                 |
-| 8          | `-` (unary negation)        |
-| 9          | `.field` `.fn()` `()` `?`   |
+| 1          | `or`                        |
+| 2          | `and`                       |
+| 3          | `not` (prefix)              |
+| 4          | `==` `!=` `<` `>` `<=` `>=` |
+| 5          | `+` `-`                     |
+| 6          | `*` `/` `%`                 |
+| 7          | `-` (unary negation)        |
+| 8          | `.field` `.fn()` `()` `?`   |
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 
@@ -606,30 +605,6 @@ print(apply(5, fn (n: Int32) -> Int32 n * 2 end))
 
 ```expo
 fn map<U>(move self, f: fn(move T) -> U) -> Option<U>
-```
-
----
-
-## Pipe Operator
-
-The pipe operator `|>` passes the left-hand value as the first argument to the right-hand function:
-
-```expo
-fn double(x: Int32) -> Int32
-  x * 2
-end
-
-fn add_ten(x: Int32) -> Int32
-  x + 10
-end
-
-result = 3 |> double |> add_ten  # add_ten(double(3)) = 16
-```
-
-Pipes chain naturally with `move self` functions:
-
-```expo
-list = list.push(1).push(2).push(3)
 ```
 
 ---

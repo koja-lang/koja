@@ -533,18 +533,6 @@ impl<'a> Printer<'a> {
                         text(" ="),
                         indent(2, concat(vec![hardline(), value_doc])),
                     ])
-                } else if matches!(
-                    value,
-                    Expr::Binary {
-                        op: BinOp::Pipe,
-                        ..
-                    }
-                ) {
-                    group(concat(vec![
-                        lhs,
-                        text(" ="),
-                        indent(2, concat(vec![line(), value_doc])),
-                    ]))
                 } else {
                     group(concat(vec![lhs, text(" = "), value_doc]))
                 }

@@ -1,8 +1,8 @@
 //! Expression compilation: translates Expo expressions (literals, variables,
 //! binary/unary ops, calls, closures, string interpolation, etc.) into LLVM IR.
 
-use expo_ast::ast::{Arg, BinOp, ClosureParam, Expr, Literal, Statement, StringPart};
-use expo_ast::span::Span;
+use expo_ast::ast::{ClosureParam, Expr, Literal, Statement, StringPart};
+
 use expo_typecheck::types::Type;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
@@ -42,13 +42,6 @@ pub fn compile_expr<'ctx>(
         }
 
         Expr::Group { expr, .. } => compile_expr(c, expr, function),
-
-        Expr::Binary {
-            op: BinOp::Pipe,
-            left,
-            right,
-            ..
-        } => compile_pipe(c, left, right, function),
 
         Expr::Binary {
             op, left, right, ..
@@ -579,31 +572,4 @@ fn compile_closure<'ctx>(
         .into_struct_value();
 
     Ok(Some(fat_ptr.into()))
-}
-
-fn compile_pipe<'ctx>(
-    c: &mut Compiler<'ctx>,
-    left: &Expr,
-    right: &Expr,
-    function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let pipe_arg = Arg {
-        name: None,
-        value: left.clone(),
-        span: Span::default(),
-    };
-
-    match right {
-        Expr::Ident { name, .. } => compile_call(c, name, &[pipe_arg], function),
-        Expr::Call { callee, args, .. } => {
-            if let Expr::Ident { name, .. } = callee.as_ref() {
-                let mut new_args = vec![pipe_arg];
-                new_args.extend(args.iter().cloned());
-                compile_call(c, name, &new_args, function)
-            } else {
-                Err("pipe right-hand side must be a named function call".to_string())
-            }
-        }
-        _ => Err("pipe right-hand side must be a function or function call".to_string()),
-    }
 }

@@ -1,8 +1,8 @@
 //! Expression and arm formatting for the pretty-printer.
 //!
 //! Contains the large `expr_to_doc` dispatch and all supporting methods that
-//! format sub-expression forms (calls, strings, match/cond/receive arms, pipe
-//! chains, etc.).
+//! format sub-expression forms (calls, strings, match/cond/receive arms,
+//! etc.).
 
 use crate::doc::*;
 use expo_ast::ast::*;
@@ -22,26 +22,13 @@ impl<'a> Printer<'a> {
                 op, left, right, ..
             } => {
                 let op_str = binop_str(op);
-                if matches!(op, BinOp::Pipe) {
-                    let mut segments = Vec::new();
-                    self.collect_pipe_chain(left, &mut segments);
-                    self.collect_pipe_chain(right, &mut segments);
-                    let mut parts = vec![segments[0].clone()];
-                    for seg in &segments[1..] {
-                        parts.push(line());
-                        parts.push(text("|> "));
-                        parts.push(seg.clone());
-                    }
-                    group(concat(parts))
-                } else {
-                    group(concat(vec![
-                        self.expr_to_doc(left),
-                        text(" "),
-                        text(op_str),
-                        line(),
-                        self.expr_to_doc(right),
-                    ]))
-                }
+                group(concat(vec![
+                    self.expr_to_doc(left),
+                    text(" "),
+                    text(op_str),
+                    line(),
+                    self.expr_to_doc(right),
+                ]))
             }
 
             Expr::Unary { op, operand, .. } => {
@@ -565,23 +552,6 @@ impl<'a> Printer<'a> {
     ) -> Doc {
         let head = text("else ->");
         self.arm_body_to_doc(head, body, force_break, block_end)
-    }
-
-    /// Recursively flattens nested pipe (`|>`) expressions into a flat
-    /// list of segments so they can be formatted with one `|>` per line.
-    fn collect_pipe_chain(&mut self, expr: &Expr, segments: &mut Vec<Doc>) {
-        if let Expr::Binary {
-            op: BinOp::Pipe,
-            left,
-            right,
-            ..
-        } = expr
-        {
-            self.collect_pipe_chain(left, segments);
-            self.collect_pipe_chain(right, segments);
-        } else {
-            segments.push(self.expr_to_doc(expr));
-        }
     }
 
     /// Formats a `receive` arm: `pattern = source -> body`.

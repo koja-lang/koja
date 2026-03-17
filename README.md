@@ -152,23 +152,6 @@ fn main
 end
 ```
 
-### Pipes
-
-```expo
-fn double(x: Int32) -> Int32
-  x * 2
-end
-
-fn add_ten(x: Int32) -> Int32
-  x + 10
-end
-
-fn main
-  result = 3 |> double |> add_ten
-  print(result)
-end
-```
-
 ### Collections and Iteration
 
 ```expo

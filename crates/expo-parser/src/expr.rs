@@ -10,8 +10,6 @@ use crate::parser::Parser;
 
 pub(crate) const BP_ARROW: u8 = 1;
 pub(crate) const BP_TERNARY: u8 = 3;
-pub(crate) const BP_PIPE_L: u8 = 4;
-pub(crate) const BP_PIPE_R: u8 = 5;
 pub(crate) const BP_OR_L: u8 = 6;
 pub(crate) const BP_OR_R: u8 = 7;
 pub(crate) const BP_AND_L: u8 = 8;
@@ -28,7 +26,6 @@ pub(crate) const BP_POSTFIX: u8 = 18;
 
 fn infix_bp(kind: &TokenKind) -> Option<(u8, u8)> {
     match kind {
-        TokenKind::PipeRight => Some((BP_PIPE_L, BP_PIPE_R)),
         TokenKind::Or => Some((BP_OR_L, BP_OR_R)),
         TokenKind::And => Some((BP_AND_L, BP_AND_R)),
         TokenKind::EqEq
@@ -58,7 +55,6 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
         TokenKind::GtEq => BinOp::GtEq,
         TokenKind::And => BinOp::And,
         TokenKind::Or => BinOp::Or,
-        TokenKind::PipeRight => BinOp::Pipe,
         _ => unreachable!("not a binary operator: {:?}", kind),
     }
 }

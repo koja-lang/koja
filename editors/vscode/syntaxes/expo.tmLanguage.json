@@ -156,10 +156,6 @@
     "operators": {
       "patterns": [
         {
-          "name": "keyword.operator.pipe.expo",
-          "match": "\\|>"
-        },
-        {
           "name": "keyword.operator.arrow.expo",
           "match": "->"
         },

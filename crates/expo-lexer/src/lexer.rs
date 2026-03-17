@@ -139,18 +139,6 @@ impl Lexer {
                     Some('=') => self.double(TokenKind::GtEq),
                     _ => self.single(TokenKind::Gt),
                 },
-                '|' => match self.peek_next() {
-                    Some('>') => self.double(TokenKind::PipeRight),
-                    _ => {
-                        self.errors.push(Diagnostic {
-                            severity: Severity::Error,
-                            message: "unexpected character '|'".into(),
-                            hint: Some("use '|>' for the pipe operator".into()),
-                            span: Span::new(start, start),
-                        });
-                        self.advance();
-                    }
-                },
                 ':' => match self.peek_next() {
                     Some(':') => self.double(TokenKind::ColonColon),
                     _ => self.single(TokenKind::Colon),
@@ -443,7 +431,6 @@ impl Lexer {
                     | TokenKind::Star
                     | TokenKind::Slash
                     | TokenKind::Percent
-                    | TokenKind::PipeRight
                     | TokenKind::And
                     | TokenKind::Or
                     | TokenKind::Not

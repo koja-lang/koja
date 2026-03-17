@@ -80,7 +80,6 @@ pub enum TokenKind {
     MinusEq,
     StarEq,
     SlashEq,
-    PipeRight,
     Arrow,
     ColonColon,
     Question,

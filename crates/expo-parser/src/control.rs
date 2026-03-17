@@ -1,7 +1,7 @@
 use expo_ast::ast::*;
 use expo_ast::token::TokenKind;
 
-use crate::expr::BP_PIPE_L;
+use crate::expr::BP_TERNARY;
 use crate::parser::Parser;
 
 impl Parser {
@@ -72,7 +72,7 @@ impl Parser {
         let pattern = self.parse_pattern();
 
         let guard = if self.eat(&TokenKind::When).is_some() {
-            Some(self.parse_expr_bp(BP_PIPE_L))
+            Some(self.parse_expr_bp(BP_TERNARY + 1))
         } else {
             None
         };
@@ -246,7 +246,7 @@ impl Parser {
             let arm_start = self.current_span();
             let pattern = self.parse_pattern();
             self.expect(&TokenKind::Eq);
-            let source = self.parse_expr_bp(BP_PIPE_L);
+            let source = self.parse_expr_bp(BP_TERNARY + 1);
             self.expect(&TokenKind::Arrow);
             let body = self.parse_match_body();
             arms.push(ReceiveArm {

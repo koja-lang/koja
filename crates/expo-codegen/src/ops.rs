@@ -110,7 +110,6 @@ pub fn compile_binary<'ctx>(
             BinOp::And | BinOp::Or => {
                 return Err("logical operators require bool operands".to_string());
             }
-            BinOp::Pipe => return Err("pipe operator not yet supported in compilation".to_string()),
         };
         Ok(Some(result))
     } else {

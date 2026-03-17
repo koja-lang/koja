@@ -352,7 +352,6 @@ pub(super) fn binop_str(op: &BinOp) -> &'static str {
         BinOp::Mul => "*",
         BinOp::NotEq => "!=",
         BinOp::Or => "or",
-        BinOp::Pipe => "|>",
         BinOp::Sub => "-",
     }
 }

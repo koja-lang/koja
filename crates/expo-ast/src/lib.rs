@@ -8,7 +8,6 @@
 //! - `fn` / `priv fn` visibility model
 //! - Pattern matching with exhaustive `match` / `when` guards
 //! - String interpolation via `#{expr}`
-//! - Pipe operator `|>` for left-to-right composition
 //! - Ownership-based memory without lifetimes or GC
 //!
 //! See the project-root design documents for full details:

@@ -44,7 +44,6 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `match`
 - `cond`
 - Ternary (`? :`)
-- Pipe operator (`|>`)
 - Compound assignment (`+=`, `-=`, `*=`, `/=`)
 - String interpolation
 - Protocols (`protocol` keyword, `impl Protocol for Type` conformance)
@@ -131,7 +130,7 @@ Remaining work (generics, `ref T`, trait impls) is Phase 2 scope.
 ### Month 3 -- LLVM codegen (complete)
 
 - ~~Integrate LLVM via `inkwell` (Rust LLVM bindings)~~
-- ~~Code generation for: functions, structs, enums, impl methods, if/else, while, loop, break, return, compound assignment, cond, match, string interpolation, closures (non-capturing block form), pipe operator~~
+- ~~Code generation for: functions, structs, enums, impl functions, if/else, while, loop, break, return, compound assignment, cond, match, string interpolation, closures (non-capturing block form)~~
 - ~~Stack allocation for primitives and small structs~~
 - ~~Link against libc for `main` entry point and basic I/O~~
 - ~~Enums as tagged unions, full pattern matching (wildcard, literal, binding, nested, `when` guards)~~
@@ -396,7 +395,7 @@ Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use th
 - Inline documentation: `h module.function` pulls from `@doc` annotations
 - Tab completion for module names, functions, and variables in scope
 - Backend: LLVM JIT (via inkwell `ExecutionEngine`) initially; Cranelift JIT long-term for faster response
-- **Done when**: `expo shell -S .` loads a multi-module project and you can call functions, pipe results, and read docs interactively
+- **Done when**: `expo shell -S .` loads a multi-module project and you can call functions, inspect results, and read docs interactively
 
 ---
 
@@ -525,14 +524,14 @@ Active design discussions about the type system, code organization, and function
 - **Leaning**: if types get inline functions, both structs and enums support them. An enum is semantically a one-field struct with a tagged union type -- the distinction is surface syntax, not fundamental.
 - **Open**: whether inline functions in type bodies are restricted to `self`-taking functions only (instance methods), or also allow non-`self` functions (static/factory -- which makes the type act as a namespace).
 
-### FP and pipes vs `?` operator
+### FP and chaining vs `?` operator
 
 - **Decided**: no `?` operator. Hidden control flow violates the "no magic" principle -- the reader can't see that a function might return early without inspecting every line for `?`. Error handling uses explicit functions instead.
 - **Decided**: no `?.` optional chaining (Swift-style). Would make `Option` a privileged type, breaking fractal design -- user-defined sum types wouldn't get the same syntax.
 - **Decided**: `map`, `then`, `or` as the chaining API for `Option` and `Result`. `map` transforms the inner value (closure returns plain value). `then` chains fallible operations (closure returns `Option`/`Result`). `or` provides a lazy fallback. Approachable naming -- plain English, no `and_then`/`flat_map`/`unwrap_or`.
 - `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
 - Compiler guidance when `map` is used where `then` is needed (or vice versa).
-- Pipes remain for pure data transformation where nothing fails.
+- **Decided**: no pipe operator (`|>`). Dot-call chaining with `move self` functions covers the same use case. The `command` construct (post-v1) will handle complex sequential data flow with stronger guarantees.
 - `map`/`then` ship in the stdlib using block closures with explicit types. Inline closures (`x -> expr`) are deferred to v0.5+ but are not needed for core API usage.
 
 ### Struct destructuring assignment

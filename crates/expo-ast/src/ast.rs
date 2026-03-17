@@ -395,7 +395,6 @@ pub enum BinOp {
     Mul,
     NotEq,
     Or,
-    Pipe,
     Sub,
 }
 
