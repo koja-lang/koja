@@ -113,7 +113,6 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
                 text(">"),
             ])
         }
-        TypeExpr::Ref { inner, .. } => concat(vec![text("ref "), type_expr_to_doc(inner)]),
         TypeExpr::Tuple { elements, .. } => {
             let elems: Vec<Doc> = elements.iter().map(type_expr_to_doc).collect();
             concat(vec![text("("), intersperse(elems, text(", ")), text(")")])
@@ -250,7 +249,6 @@ pub(super) fn literal_to_doc(lit: &Literal) -> Doc {
         Literal::Bool(false) => text("false"),
         Literal::Float(s) => text(s.clone()),
         Literal::Int(s) => text(s.clone()),
-        Literal::None => text("none"),
         Literal::Unit => text("()"),
     }
 }
@@ -295,7 +293,6 @@ pub(super) fn expr_contains_block(expr: &Expr) -> bool {
             expr_contains_block(receiver) || args.iter().any(|a| expr_contains_block(&a.value))
         }
         Expr::Binary { right, .. } => expr_contains_block(right),
-        Expr::Try { expr, .. } => expr_contains_block(expr),
         Expr::Await { expr, .. } => expr_contains_block(expr),
         Expr::Ternary {
             condition,
@@ -438,7 +435,6 @@ pub(super) fn type_expr_text_len(ty: &TypeExpr) -> usize {
                 + args.len().saturating_sub(1) * 2;
             path_len + 1 + args_len + 1
         }
-        TypeExpr::Ref { inner, .. } => 4 + type_expr_text_len(inner),
         TypeExpr::Tuple { elements, .. } => {
             let inner: usize = elements.iter().map(type_expr_text_len).sum::<usize>()
                 + elements.len().saturating_sub(1) * 2;
@@ -485,7 +481,6 @@ fn expr_span(expr: &Expr) -> &Span {
         | String { span, .. }
         | StructConstruction { span, .. }
         | Ternary { span, .. }
-        | Try { span, .. }
         | Tuple { span, .. }
         | Unary { span, .. }
         | Unless { span, .. }

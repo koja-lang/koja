@@ -146,7 +146,6 @@ impl Parser {
             };
             Expr::Call {
                 callee: Box::new(callee),
-                type_args: None,
                 args,
                 span: self.span_from(start),
             }

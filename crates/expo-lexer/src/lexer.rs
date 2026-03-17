@@ -139,10 +139,7 @@ impl Lexer {
                     Some('=') => self.double(TokenKind::GtEq),
                     _ => self.single(TokenKind::Gt),
                 },
-                ':' => match self.peek_next() {
-                    Some(':') => self.double(TokenKind::ColonColon),
-                    _ => self.single(TokenKind::Colon),
-                },
+                ':' => self.single(TokenKind::Colon),
                 'a'..='z' | '_' => self.lex_ident(),
                 'A'..='Z' => self.lex_upper_ident(),
                 '0'..='9' => self.lex_number(),
@@ -224,7 +221,6 @@ impl Lexer {
             "priv" => TokenKind::Priv,
             "protocol" => TokenKind::Protocol,
             "receive" => TokenKind::Receive,
-            "ref" => TokenKind::Ref,
             "return" => TokenKind::Return,
             "self" => TokenKind::Self_,
             "shared" => TokenKind::Shared,
@@ -235,7 +231,6 @@ impl Lexer {
             "unless" => TokenKind::Unless,
             "when" => TokenKind::When,
             "while" => TokenKind::While,
-            "none" => TokenKind::None_,
             _ => TokenKind::Ident(name),
         }
     }
@@ -451,7 +446,6 @@ impl Lexer {
                     | TokenKind::Comma
                     | TokenKind::Dot
                     | TokenKind::Colon
-                    | TokenKind::ColonColon
                     | TokenKind::At
                     // Opening delimiters
                     | TokenKind::LParen

@@ -256,7 +256,6 @@ fn type_expr_to_string(ty: &TypeExpr) -> String {
             let args_str: Vec<String> = args.iter().map(type_expr_to_string).collect();
             format!("{}<{}>", path.join("."), args_str.join(", "))
         }
-        TypeExpr::Ref { inner, .. } => format!("ref {}", type_expr_to_string(inner)),
         TypeExpr::Tuple { elements, .. } => {
             let elems: Vec<String> = elements.iter().map(type_expr_to_string).collect();
             format!("({})", elems.join(", "))

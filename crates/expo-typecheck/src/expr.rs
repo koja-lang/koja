@@ -240,7 +240,6 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             Literal::Bool(_) => Type::Primitive(Primitive::Bool),
             Literal::Float(_) => Type::Primitive(Primitive::F64),
             Literal::Int(_) => Type::Primitive(Primitive::I32),
-            Literal::None => Type::Unknown,
             Literal::Unit => Type::Unit,
         },
 
@@ -344,11 +343,6 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 );
             }
             if then_ty.is_known() { then_ty } else { else_ty }
-        }
-
-        Expr::Try { expr: inner, .. } => {
-            infer_expr(inner, ctx, ce);
-            Type::Unknown
         }
 
         Expr::Tuple { elements, .. } => {
@@ -1206,7 +1200,6 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
         | Expr::String { span, .. }
         | Expr::StructConstruction { span, .. }
         | Expr::Ternary { span, .. }
-        | Expr::Try { span, .. }
         | Expr::Tuple { span, .. }
         | Expr::Unary { span, .. }
         | Expr::Unless { span, .. }

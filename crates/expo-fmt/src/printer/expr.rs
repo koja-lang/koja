@@ -44,41 +44,20 @@ impl<'a> Printer<'a> {
             }
 
             Expr::Call {
-                callee,
-                type_args,
-                args,
-                ..
-            } => {
-                let mut parts = vec![self.expr_to_doc(callee)];
-                if let Some(ta) = type_args {
-                    parts.push(text("::<"));
-                    let type_docs: Vec<Doc> = ta.iter().map(type_expr_to_doc).collect();
-                    parts.push(intersperse(type_docs, text(", ")));
-                    parts.push(text(">"));
-                }
-                parts.push(self.call_args_to_doc(args));
-                concat(parts)
-            }
+                callee, args, ..
+            } => concat(vec![self.expr_to_doc(callee), self.call_args_to_doc(args)]),
 
             Expr::MethodCall {
                 receiver,
                 method,
-                type_args,
                 args,
                 ..
-            } => {
-                let mut chain = vec![self.expr_to_doc(receiver)];
-                chain.push(text("."));
-                chain.push(text(method.clone()));
-                if let Some(ta) = type_args {
-                    chain.push(text("::<"));
-                    let type_docs: Vec<Doc> = ta.iter().map(type_expr_to_doc).collect();
-                    chain.push(intersperse(type_docs, text(", ")));
-                    chain.push(text(">"));
-                }
-                chain.push(self.call_args_to_doc(args));
-                concat(chain)
-            }
+            } => concat(vec![
+                self.expr_to_doc(receiver),
+                text("."),
+                text(method.clone()),
+                self.call_args_to_doc(args),
+            ]),
 
             Expr::FieldAccess {
                 receiver, field, ..
@@ -345,8 +324,6 @@ impl<'a> Printer<'a> {
                     ),
                 ]))
             }
-
-            Expr::Try { expr: inner, .. } => concat(vec![self.expr_to_doc(inner), text("?")]),
 
             Expr::StructConstruction {
                 type_path, fields, ..

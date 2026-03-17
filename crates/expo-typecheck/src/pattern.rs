@@ -289,7 +289,6 @@ pub(crate) fn check_pattern(
                 Literal::Bool(_) => Type::Primitive(Primitive::Bool),
                 Literal::Float(_) => Type::Primitive(Primitive::F64),
                 Literal::Int(_) => Type::Primitive(Primitive::I32),
-                Literal::None => Type::Unknown,
                 Literal::Unit => Type::Unit,
             };
             if lit_type.is_known() && subject_type.is_known() && lit_type != *subject_type {

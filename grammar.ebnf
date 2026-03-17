@@ -115,13 +115,12 @@ param = [ "move" ] , IDENT , ":" , type_expr , [ "=" , expr ]
 (* 7. Type expressions                                                        *)
 (* ========================================================================== *)
 
-type_expr = "ref" , type_expr                                        (* reference *)
-          | "fn" , "(" , [ fn_type_param , { "," , fn_type_param } ] , ")" ,
-            "->" , type_expr                                         (* function *)
-          | named_type , "<" , type_expr , { "," , type_expr } , ">"  (* generic *)
-          | named_type                                               (* simple *)
+type_expr = "fn" , "(" , [ fn_type_param , { "," , fn_type_param } ] , ")" ,
+            "->" , type_expr                                               (* function *)
+          | named_type , "<" , type_expr , { "," , type_expr } , ">"       (* generic *)
+          | named_type                                                     (* simple *)
           | "(" , type_expr , "," , type_expr , { "," , type_expr } , ")"  (* tuple *)
-          | "(" , ")" ;                                              (* unit *)
+          | "(" , ")" ;                                                    (* unit *)
 
 fn_type_param = [ "move" ] , type_expr ;
 
@@ -179,9 +178,7 @@ postfix = primary , { postfix_op } ;
 
 postfix_op = "." , IDENT , "(" , [ arg_list ] , ")"        (* method call *)
            | "." , IDENT                                    (* field access *)
-           | "(" , [ arg_list ] , ")"                       (* function call *)
-           | "?"                                            (* error propagation *)
-           | "::" , "<" , type_expr , { "," , type_expr } , ">"  (* turbofish *) ;
+           | "(" , [ arg_list ] , ")"  ;                     (* function call *)
 
 arg_list = arg , { "," , arg } ;
 
@@ -345,7 +342,6 @@ literal = integer_lit
         | multiline_string_lit
         | bool_lit
         | list_lit
-        | "None"
         | "()" ;                                                    (* unit *)
 
 integer_lit = DECIMAL_INT | HEX_INT | BIN_INT ;
@@ -389,7 +385,7 @@ list_lit = "[" , [ expr , { "," , expr } , [ "," ] ] , "]" ;
 (*   5. +  -                                                                  *)
 (*   6. *  /  %                                                               *)
 (*   7. unary -                                                               *)
-(*   8. postfix: .fn()  .field  ()  ?  ::<>                                   *)
+(*   8. postfix: .fn()  .field  ()                                            *)
 (*                                                                            *)
 (* Assignment operators: =  +=  -=  *=  /=                                    *)
 
@@ -444,5 +440,5 @@ BIN_DIGIT = "0" | "1" ;
 (* ========================================================================== *)
 
 (* and, arena, await, break, cond, const, else, end, enum, false, fn, for,    *)
-(* if, impl, import, in, loop, match, move, none, not, or, priv, protocol,    *)
-(* receive, ref, return, self, shared, spawn, struct, true, type, unless, when *)
+(* if, impl, import, in, loop, match, move, not, or, priv, protocol,          *)
+(* receive, return, self, shared, spawn, struct, true, type, unless, when      *)

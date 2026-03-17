@@ -26,7 +26,6 @@ pub enum TokenKind {
     MultilineStringEnd,
     True,
     False,
-    None_,
 
     // Keywords
     And,
@@ -52,7 +51,6 @@ pub enum TokenKind {
     Priv,
     Protocol,
     Receive,
-    Ref,
     Return,
     Self_,
     Shared,
@@ -81,7 +79,6 @@ pub enum TokenKind {
     StarEq,
     SlashEq,
     Arrow,
-    ColonColon,
     Question,
     At,
     Dot,
@@ -125,13 +122,11 @@ impl TokenKind {
                 | TokenKind::Loop
                 | TokenKind::Match
                 | TokenKind::Move
-                | TokenKind::None_
                 | TokenKind::Not
                 | TokenKind::Or
                 | TokenKind::Priv
                 | TokenKind::Protocol
                 | TokenKind::Receive
-                | TokenKind::Ref
                 | TokenKind::Return
                 | TokenKind::Self_
                 | TokenKind::Shared

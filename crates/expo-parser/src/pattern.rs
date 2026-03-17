@@ -60,14 +60,6 @@ impl Parser {
                     span: self.span_from(start),
                 }
             }
-            TokenKind::None_ => {
-                let start = self.current_span();
-                self.advance();
-                Pattern::Literal {
-                    value: Literal::None,
-                    span: self.span_from(start),
-                }
-            }
             TokenKind::StringStart => {
                 let start = self.current_span();
                 self.advance(); // StringStart

@@ -28,7 +28,7 @@ x = 42  # inline comment
 ```
 and, arena, await, break, cond, const, else, end, enum, false, fn, for,
 if, impl, import, in, loop, match, move, not, or, priv, protocol,
-receive, ref, return, self, shared, spawn, struct, true, when
+receive, return, self, shared, spawn, struct, true, unless, when
 ```
 
 `or` and `and` are valid as function and field names after `.` (e.g. `x.or(default)`).
@@ -46,7 +46,7 @@ Precedence from lowest to highest:
 | 5          | `+` `-`                     |
 | 6          | `*` `/` `%`                 |
 | 7          | `-` (unary negation)        |
-| 8          | `.field` `.fn()` `()` `?`   |
+| 8          | `.field` `.fn()` `()`       |
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 
@@ -484,7 +484,7 @@ print(identity(42))
 print(identity("hello"))
 ```
 
-Type arguments are inferred at call sites. No turbofish syntax needed.
+Type arguments are inferred at call sites from arguments and type annotations.
 
 ### Generic Structs
 

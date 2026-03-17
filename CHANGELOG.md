@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `for` loops -- `for item in list ... end` iterates over any type that implements the `Enumerable<T>` protocol. Currently supported on `List<T>`.
 - `Enumerable<T>` protocol -- defines `length(self) -> Int32` and `get(self, index: Int32) -> T`. Implement this protocol on a type to make it work with `for` loops.
 - Static functions on `impl` blocks -- functions without a `self` parameter are called on the type directly (`List.new()`, `Option.None`). No special syntax needed; just omit `self`.
-- Annotation-driven type inference for generics -- `list: List<Int32> = List.new()` infers `T = Int32` from the variable's type annotation, no turbofish syntax needed.
+- Annotation-driven type inference for generics -- `list: List<Int32> = List.new()` infers `T = Int32` from the variable's type annotation.
 - Ownership and borrowing -- move semantics for non-copy types (structs, enums, `String`). Assignment moves by default; using a moved value is a compile error. Copy types (all numeric primitives, `Bool`, `()`, function pointers) are implicitly duplicated. Variable state tracking (`Live`, `Moved`, `MaybeMoved`) catches use-after-move and inconsistent moves across branches.
 - Borrow-by-default parameters -- function parameters borrow by default (read-only). Use `move` to take ownership. `move self` for mutating impl functions that return the modified value (`list = list.push(42)`). `move` only appears in signatures, never at call sites.
 - `fn (move T) -> U` function types -- `move` on parameters in function type syntax. `fn (T) -> U` borrows, `fn (move T) -> U` takes ownership. Functions and closures follow identical rules.
@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Pipe operator (`|>`). Dot-call chaining with `move self` functions covers the same use case. The planned `command` construct will handle complex sequential data flow.
+- Try operator (`?`). Hidden control flow violates the "no magic" principle. Error handling uses explicit `map`/`then`/`or` chaining instead.
+- `ref T` type syntax. Redundant with borrow-by-default parameters.
+- Turbofish syntax (`::<T>`). Type arguments are inferred from arguments and annotations.
+- Bare `none` keyword. Use `Option.None` instead for proper type checking.
 
 ## [0.4.0] - 2026-03-15
 

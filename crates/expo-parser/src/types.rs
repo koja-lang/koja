@@ -6,7 +6,6 @@ use crate::parser::Parser;
 impl Parser {
     pub(crate) fn parse_type_expr(&mut self) -> TypeExpr {
         match self.peek().clone() {
-            TokenKind::Ref => self.parse_ref_type(),
             TokenKind::Fn => self.parse_function_type(),
             TokenKind::LParen => self.parse_paren_type(),
             TokenKind::TypeIdent(_) => self.parse_named_type(),
@@ -66,16 +65,6 @@ impl Parser {
             params,
             param_modes,
             return_type: Box::new(return_type),
-            span: self.span_from(start),
-        }
-    }
-
-    fn parse_ref_type(&mut self) -> TypeExpr {
-        let start = self.current_span();
-        self.advance(); // ref
-        let inner = self.parse_type_expr();
-        TypeExpr::Ref {
-            inner: Box::new(inner),
             span: self.span_from(start),
         }
     }

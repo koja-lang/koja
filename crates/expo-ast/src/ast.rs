@@ -290,7 +290,7 @@ pub struct TypeAlias {
 
 // Type expressions
 
-/// A type annotation in source code (e.g., `i32`, `List<String>`, `ref<T>`).
+/// A type annotation in source code (e.g., `i32`, `List<String>`).
 #[derive(Debug, Clone)]
 pub enum TypeExpr {
     /// A simple named type: `i32`, `String`, `MyStruct`.
@@ -301,8 +301,6 @@ pub enum TypeExpr {
         args: Vec<TypeExpr>,
         span: Span,
     },
-    /// A reference type: `ref<T>`.
-    Ref { inner: Box<TypeExpr>, span: Span },
     /// A tuple type: `(i32, String)`.
     Tuple { elements: Vec<TypeExpr>, span: Span },
     /// The unit type: `()`.
@@ -441,7 +439,6 @@ pub enum Expr {
     /// A function call: `f(args)`.
     Call {
         callee: Box<Expr>,
-        type_args: Option<Vec<TypeExpr>>,
         args: Vec<Arg>,
         span: Span,
     },
@@ -505,7 +502,6 @@ pub enum Expr {
     MethodCall {
         receiver: Box<Expr>,
         method: String,
-        type_args: Option<Vec<TypeExpr>>,
         args: Vec<Arg>,
         span: Span,
     },
@@ -540,8 +536,6 @@ pub enum Expr {
         else_expr: Box<Expr>,
         span: Span,
     },
-    /// A try expression for error propagation: `try expr`.
-    Try { expr: Box<Expr>, span: Span },
     /// A tuple literal: `(1, "hello")`.
     Tuple { elements: Vec<Expr>, span: Span },
     /// A unary operation: `-x`, `not flag`.
@@ -578,7 +572,6 @@ pub enum Literal {
     Bool(bool),
     Float(String),
     Int(String),
-    None,
     Unit,
 }
 

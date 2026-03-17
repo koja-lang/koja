@@ -59,8 +59,8 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `for` loops
 - `arena` blocks
 - `await`/`receive`/`spawn`
-- Try operator (`?`) -- design reconsidered, may not ship
-- `ref T` (deferred -- see design notes)
+- ~~Try operator (`?`) -- removed~~
+- ~~`ref T` -- removed~~
 - Lists
 - Trait bounds on generic type parameters
 - Inline closures (`x -> expr`)
@@ -125,7 +125,7 @@ Build a minimal Expo compiler in Rust that can compile trivial programs to nativ
 - ~~Import conflict detection, qualified imports (`math.add()`)~~
 - ~~**Deliverable**: `expo check file.expo` reports type errors with clear messages~~
 
-Remaining work (generics, `ref T`, trait impls) is Phase 2 scope.
+Remaining work (generics, trait impls) is Phase 2 scope.
 
 ### Month 3 -- LLVM codegen (complete)
 
@@ -137,7 +137,7 @@ Remaining work (generics, `ref T`, trait impls) is Phase 2 scope.
 - ~~Multi-module compilation to a single native binary~~
 - ~~**Deliverable**: `expo build hello.expo` produces a native binary that runs~~
 
-Remaining work (for loops, try `?`) is Phase 2 scope. Closure capture analysis is complete.
+Remaining work (for loops) is Phase 2 scope. Closure capture analysis is complete.
 
 ### Key decisions
 
@@ -191,7 +191,7 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - ~~`clone()` as the explicit escape hatch (auto-generated for all types)~~
 - ~~Drop insertion at scope boundaries (deterministic destruction)~~
 - ~~The `&` symbol does not exist in Expo -- borrowing is implicit~~
-- `ref T` syntax is parsed but deferred -- redundant with borrow-by-default params, unsafe in return position without lifetime tracking
+- ~~`ref T` removed -- redundant with borrow-by-default params, unsafe in return position without lifetime tracking. Can be re-added if a concrete use case emerges.~~
 - **Done when**: ~~programs that move, borrow, and clone compile correctly, and use-after-move is caught~~
 
 ### Collections and iteration
@@ -203,6 +203,7 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - Ownership splitting for concurrent mutation patterns (tasks receive owned, non-overlapping chunks -- specific API designed during stdlib phase)
 - `for` loops over iterables
 - `arena...end` blocks with bulk-free semantics
+- `unless` expression -- negated `if` for guard clauses (`unless condition ... end`)
 - **Done when**: `ua_parser.expo` compiles -- it exercises structs, enums, match, closures, method chaining, and returns
 
 ### Tasks and structured concurrency
@@ -502,7 +503,7 @@ Active design discussions about the type system, code organization, and function
 - **Signature-only `move`**: `move` only appears in the function/closure signature, never at the call site. The compiler infers moves from the callee's signature. Consistent with "no magic" -- the function's type signature is the contract, and the compiler fully enforces use-after-move.
 - **Functions = closures**: identical ownership rules. `fn (T) -> U` borrows T (default), `fn (move T) -> U` takes ownership. `map`/`then` use `fn (move T) -> U` since the closure receives the unwrapped owned value.
 - **Closure captures**: closures capture variables from the enclosing scope. Copy types (primitives) are duplicated; non-copy types (structs, enums) are moved, making the original unusable. Captured closures use a `{fn_ptr, env_ptr}` fat pointer ABI with heap-allocated environment structs that are automatically freed when the closure goes out of scope.
-- **`ref T` deferred**: `ref T` syntax is parsed but resolves to `Type::Unknown`. Redundant with borrow-by-default params, unsafe in return position without lifetime tracking. Revisit if a concrete use case emerges (possibly with protocols or collections).
+- **`ref T` removed**: removed from the toolchain. Redundant with borrow-by-default params, unsafe in return position without lifetime tracking. Can be re-added if a concrete use case emerges.
 
 ### Inline closures
 
@@ -526,7 +527,7 @@ Active design discussions about the type system, code organization, and function
 
 ### FP and chaining vs `?` operator
 
-- **Decided**: no `?` operator. Hidden control flow violates the "no magic" principle -- the reader can't see that a function might return early without inspecting every line for `?`. Error handling uses explicit functions instead.
+- **Decided**: no `?` operator -- removed from the toolchain. Hidden control flow violates the "no magic" principle -- the reader can't see that a function might return early without inspecting every line for `?`. Error handling uses explicit functions instead.
 - **Decided**: no `?.` optional chaining (Swift-style). Would make `Option` a privileged type, breaking fractal design -- user-defined sum types wouldn't get the same syntax.
 - **Decided**: `map`, `then`, `or` as the chaining API for `Option` and `Result`. `map` transforms the inner value (closure returns plain value). `then` chains fallible operations (closure returns `Option`/`Result`). `or` provides a lazy fallback. Approachable naming -- plain English, no `and_then`/`flat_map`/`unwrap_or`.
 - `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
@@ -583,7 +584,7 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Tooling   | Documentation generator (`expo doc`) -- HTML output, sidebar nav, brand theme            | Done   |
 | Core      | Generics -- monomorphization of generic functions and structs, type unification          | Done   |
 | Core      | Generic enums, variable type annotations, numeric type coercion                          | Done   |
-| Core      | PascalCase primitive rename (`Int`, `String`, `Bool`, etc.), `ref T` syntax              | Done   |
+| Core      | PascalCase primitive rename (`Int`, `String`, `Bool`, etc.)                              | Done   |
 | Core      | Generic impl monomorphization, stdlib (`Option<T>`, `Result<T,E>`, `Pair<A,B>`), `panic` | Done   |
 | Core      | Function type syntax (`fn(T) -> U`), `map`/`then` for Option and Result                  | Done   |
 | Core      | Ownership + borrowing -- move semantics, use-after-move, `move self`, `clone()`, drop    | Done   |

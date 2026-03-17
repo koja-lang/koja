@@ -159,7 +159,6 @@ impl Parser {
             TokenKind::Priv => "priv",
             TokenKind::Protocol => "protocol",
             TokenKind::Receive => "receive",
-            TokenKind::Ref => "ref",
             TokenKind::Return => "return",
             TokenKind::Self_ => "self",
             TokenKind::Shared => "shared",

@@ -230,7 +230,6 @@ pub fn resolve_type_expr_with_params(
                 Type::Unknown
             }
         }
-        TypeExpr::Ref { .. } => Type::Unknown,
         TypeExpr::Named { path, .. } => {
             if path.len() == 1 {
                 let name = path[0].as_str();

@@ -108,7 +108,6 @@ impl Parser {
                                     lhs = Expr::MethodCall {
                                         receiver: Box::new(lhs),
                                         method: name,
-                                        type_args: None,
                                         args,
                                         span,
                                     };
@@ -132,7 +131,6 @@ impl Parser {
                                     lhs = Expr::MethodCall {
                                         receiver: Box::new(lhs),
                                         method: name,
-                                        type_args: None,
                                         args,
                                         span,
                                     };
@@ -175,90 +173,45 @@ impl Parser {
                         let span = Span::new(expr_span(&lhs).start, self.prev_end());
                         lhs = Expr::Call {
                             callee: Box::new(lhs),
-                            type_args: None,
                             args,
                             span,
                         };
                         continue;
                     }
-                    TokenKind::Question => {
-                        let adjacent =
-                            self.current_span().start.offset == expr_span(&lhs).end.offset;
-                        if adjacent {
-                            let span = Span::new(expr_span(&lhs).start, self.current_span().end);
-                            self.advance(); // ?
-                            lhs = Expr::Try {
-                                expr: Box::new(lhs),
-                                span,
-                            };
-                            continue;
-                        } else if BP_TERNARY >= min_bp {
-                            if matches!(lhs, Expr::Ternary { .. }) {
-                                let espan = self.current_span();
-                                self.error(
-                                    "nested ternary not allowed, use `cond` instead".into(),
-                                    espan,
-                                );
-                            }
-                            self.advance(); // ?
-                            self.skip_newlines();
-                            let then_expr = self.parse_expr_bp(0);
-                            if matches!(then_expr, Expr::Ternary { .. }) {
-                                self.error(
-                                    "nested ternary not allowed, use `cond` instead".into(),
-                                    expr_span(&then_expr),
-                                );
-                            }
-                            self.skip_newlines();
-                            self.expect(&TokenKind::Colon);
-                            let else_expr = self.parse_expr_bp(BP_TERNARY + 1);
-                            if matches!(else_expr, Expr::Ternary { .. }) {
-                                self.error(
-                                    "nested ternary not allowed, use `cond` instead".into(),
-                                    expr_span(&else_expr),
-                                );
-                            }
-                            let span = Span::new(expr_span(&lhs).start, expr_span(&else_expr).end);
-                            lhs = Expr::Ternary {
-                                condition: Box::new(lhs),
-                                then_expr: Box::new(then_expr),
-                                else_expr: Box::new(else_expr),
-                                span,
-                            };
-                            continue;
+                    TokenKind::Question if BP_TERNARY >= min_bp => {
+                        if matches!(lhs, Expr::Ternary { .. }) {
+                            let espan = self.current_span();
+                            self.error(
+                                "nested ternary not allowed, use `cond` instead".into(),
+                                espan,
+                            );
                         }
-                    }
-                    TokenKind::ColonColon => {
-                        if matches!(self.peek_nth(1), TokenKind::Lt) {
-                            self.advance(); // ::
-                            self.advance(); // <
-                            let mut type_args = vec![self.parse_type_expr()];
-                            while self.eat(&TokenKind::Comma).is_some() {
-                                type_args.push(self.parse_type_expr());
-                            }
-                            self.expect(&TokenKind::Gt);
-
-                            if self.eat(&TokenKind::LParen).is_some() {
-                                let args = self.parse_arg_list();
-                                self.expect(&TokenKind::RParen);
-                                let span = Span::new(expr_span(&lhs).start, self.prev_end());
-                                lhs = Expr::Call {
-                                    callee: Box::new(lhs),
-                                    type_args: Some(type_args),
-                                    args,
-                                    span,
-                                };
-                            } else {
-                                let span = Span::new(expr_span(&lhs).start, self.prev_end());
-                                lhs = Expr::Call {
-                                    callee: Box::new(lhs),
-                                    type_args: Some(type_args),
-                                    args: Vec::new(),
-                                    span,
-                                };
-                            }
-                            continue;
+                        self.advance(); // ?
+                        self.skip_newlines();
+                        let then_expr = self.parse_expr_bp(0);
+                        if matches!(then_expr, Expr::Ternary { .. }) {
+                            self.error(
+                                "nested ternary not allowed, use `cond` instead".into(),
+                                expr_span(&then_expr),
+                            );
                         }
+                        self.skip_newlines();
+                        self.expect(&TokenKind::Colon);
+                        let else_expr = self.parse_expr_bp(BP_TERNARY + 1);
+                        if matches!(else_expr, Expr::Ternary { .. }) {
+                            self.error(
+                                "nested ternary not allowed, use `cond` instead".into(),
+                                expr_span(&else_expr),
+                            );
+                        }
+                        let span = Span::new(expr_span(&lhs).start, expr_span(&else_expr).end);
+                        lhs = Expr::Ternary {
+                            condition: Box::new(lhs),
+                            then_expr: Box::new(then_expr),
+                            else_expr: Box::new(else_expr),
+                            span,
+                        };
+                        continue;
                     }
                     _ => {}
                 }
@@ -269,10 +222,7 @@ impl Parser {
                 let saved = self.save_pos();
                 self.skip_newlines();
                 if matches!(self.peek(), TokenKind::Question) {
-                    let adjacent = self.current_span().start.offset == expr_span(&lhs).end.offset;
-                    if !adjacent {
-                        continue;
-                    }
+                    continue;
                 }
                 self.restore_pos(saved);
             }
@@ -339,15 +289,6 @@ impl Parser {
                     span: self.span_from(start),
                 }
             }
-            TokenKind::None_ => {
-                let start = self.current_span();
-                self.advance();
-                Expr::Literal {
-                    value: Literal::None,
-                    span: self.span_from(start),
-                }
-            }
-
             TokenKind::StringStart => self.parse_string_expr(false),
             TokenKind::MultilineStringStart => self.parse_string_expr(true),
 
@@ -518,16 +459,12 @@ impl Parser {
                 self.advance();
                 Literal::Bool(false)
             }
-            TokenKind::None_ => {
-                self.advance();
-                Literal::None
-            }
             _ => {
                 self.error(
                     format!("expected literal, found {:?}", self.peek()),
                     self.current_span(),
                 );
-                Literal::None
+                Literal::Unit
             }
         }
     }
@@ -563,7 +500,6 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
         | Expr::String { span, .. }
         | Expr::StructConstruction { span, .. }
         | Expr::Ternary { span, .. }
-        | Expr::Try { span, .. }
         | Expr::Tuple { span, .. }
         | Expr::Unary { span, .. }
         | Expr::Unless { span, .. }

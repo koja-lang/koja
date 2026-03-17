@@ -161,7 +161,6 @@ fn compile_literal<'ctx>(
                 .into(),
         )),
         Literal::Unit => Ok(None),
-        Literal::None => Ok(None),
     }
 }
 
