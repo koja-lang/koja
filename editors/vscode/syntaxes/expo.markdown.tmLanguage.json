@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "scopeName": "markdown.expo.codeblock",
+  "injectionSelector": "L:text.html.markdown",
+  "patterns": [
+    {
+      "begin": "(^|\\G)(\\s*)(```|~~~)\\s*(?i:(expo))\\s*$",
+      "beginCaptures": {
+        "3": { "name": "punctuation.definition.markdown" },
+        "4": { "name": "fenced_code.block.language.markdown" }
+      },
+      "end": "(^|\\G)(\\2)(\\3)\\s*$",
+      "endCaptures": {
+        "3": { "name": "punctuation.definition.markdown" }
+      },
+      "name": "markup.fenced_code.block.markdown",
+      "contentName": "meta.embedded.block.expo",
+      "patterns": [
+        { "include": "source.expo" }
+      ]
+    }
+  ]
+}

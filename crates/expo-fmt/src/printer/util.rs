@@ -290,10 +290,6 @@ pub(super) fn expr_contains_block(expr: &Expr) -> bool {
         | Expr::Closure { .. }
         | Expr::Receive { .. }
         | Expr::Arena { .. } => true,
-        Expr::StructConstruction { fields, .. } => !fields.is_empty(),
-        Expr::EnumConstruction { data, .. } => {
-            matches!(data, EnumConstructionData::Struct(f) if !f.is_empty())
-        }
         Expr::Call { args, .. } => args.iter().any(|a| expr_contains_block(&a.value)),
         Expr::MethodCall { receiver, args, .. } => {
             expr_contains_block(receiver) || args.iter().any(|a| expr_contains_block(&a.value))

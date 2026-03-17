@@ -368,24 +368,25 @@ impl<'a> Printer<'a> {
                 if fields.is_empty() {
                     text(format!("{}{{}}", path_str))
                 } else {
-                    let mut body = Vec::new();
-                    for (i, fi) in fields.iter().enumerate() {
-                        if i > 0 {
-                            body.push(hardline());
-                        }
-                        body.push(self.field_init_to_doc(fi));
-                        body.push(text(","));
-                        if let Some(tc) = self.comments.drain_trailing(fi.span.end.line) {
-                            body.push(tc);
-                        }
+                    let field_docs: Vec<Doc> =
+                        fields.iter().map(|fi| self.field_init_to_doc(fi)).collect();
+                    for fi in fields {
+                        self.comments.drain_trailing(fi.span.end.line);
                     }
-                    concat(vec![
+                    group(concat(vec![
                         text(path_str),
                         text("{"),
-                        indent(2, concat(vec![hardline(), concat(body)])),
-                        hardline(),
+                        indent(
+                            2,
+                            concat(vec![
+                                softline(),
+                                intersperse(field_docs, concat(vec![text(","), line()])),
+                                trailing_comma(),
+                            ]),
+                        ),
+                        softline(),
                         text("}"),
-                    ])
+                    ]))
                 }
             }
 
@@ -412,26 +413,25 @@ impl<'a> Printer<'a> {
                         ])
                     }
                     EnumConstructionData::Struct(fields) => {
-                        let mut body = Vec::new();
-                        for (i, fi) in fields.iter().enumerate() {
-                            if i > 0 {
-                                body.push(hardline());
-                            }
-                            body.push(self.field_init_to_doc(fi));
-                            if i < fields.len() - 1 {
-                                body.push(text(","));
-                            }
-                            if let Some(tc) = self.comments.drain_trailing(fi.span.end.line) {
-                                body.push(tc);
-                            }
+                        let field_docs: Vec<Doc> =
+                            fields.iter().map(|fi| self.field_init_to_doc(fi)).collect();
+                        for fi in fields {
+                            self.comments.drain_trailing(fi.span.end.line);
                         }
-                        concat(vec![
+                        group(concat(vec![
                             text(prefix),
                             text("{"),
-                            indent(2, concat(vec![hardline(), concat(body)])),
-                            hardline(),
+                            indent(
+                                2,
+                                concat(vec![
+                                    softline(),
+                                    intersperse(field_docs, concat(vec![text(","), line()])),
+                                    trailing_comma(),
+                                ]),
+                            ),
+                            softline(),
                             text("}"),
-                        ])
+                        ]))
                     }
                 }
             }

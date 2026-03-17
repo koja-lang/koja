@@ -7,15 +7,24 @@
   "engines": {
     "vscode": "^1.75.0"
   },
-  "categories": ["Programming Languages"],
+  "categories": [
+    "Programming Languages"
+  ],
   "main": "./out/extension.js",
-  "activationEvents": ["onLanguage:expo"],
+  "activationEvents": [
+    "onLanguage:expo"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "expo",
-        "aliases": ["Expo", "expo"],
-        "extensions": [".expo"],
+        "aliases": [
+          "Expo",
+          "expo"
+        ],
+        "extensions": [
+          ".expo"
+        ],
         "configuration": "./language-configuration.json",
         "icon": {
           "light": "./icons/expo-light.svg",
@@ -28,6 +37,16 @@
         "language": "expo",
         "scopeName": "source.expo",
         "path": "./syntaxes/expo.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.expo.codeblock",
+        "path": "./syntaxes/expo.markdown.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.expo": "expo"
+        }
       }
     ],
     "commands": [
