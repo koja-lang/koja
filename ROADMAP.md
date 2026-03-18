@@ -233,6 +233,8 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 
 See `CONCURRENCY.md` "Tasks" section and `MEMORY.md` "At concurrency boundaries" for full design details.
 
+**Important**: Tasks, actors (Phase 3), and the scheduler runtime must be co-designed. The scheduler protocol (see Phase 3 "Runtime") must be defined during task implementation so that actors slot into the same interface later. Designing tasks in isolation risks baking in assumptions that don't generalize to the actor scheduler or alternative runtime backends.
+
 ### Risks
 
 - **Generic monomorphization**: generics like `Patch<T>` need to be monomorphized at compile time. This is well-understood (Rust, C++ do it) but adds compiler complexity. Start with concrete types, then generalize.
@@ -261,28 +263,33 @@ Expo has two concurrency primitives (tasks in Phase 2, actors here) because in n
 
 ### Runtime
 
-- Work-stealing scheduler (M:N -- many actors/tasks on few OS threads)
+- **Scheduler protocol** -- the runtime is defined as a protocol interface (`spawn_actor`, `send_message`, `yield`, `park`/`wake`, `poll_io`), not a monolithic scheduler. The native runtime is one implementation; others (WASM, testing, embedded, debug) implement the same interface. This must be designed before the native scheduler is built -- define the interface first, implement against it. The protocol approach means third-party developers can write custom runtimes for specialized platforms.
+- Work-stealing scheduler (M:N -- many actors/tasks on few OS threads) as the default native backend
 - I/O reactor (epoll on Linux, kqueue on macOS) -- the user sees blocking calls, the runtime suspends transparently
 - Timer wheel for timeouts, intervals, and `call` deadlines
 - Actor lifecycle manager (start, stop, crash detection)
 - All functions can suspend; the runtime handles it -- no function coloring
+- **WASM portability** -- the protocol-based scheduler enables WASM targets: full M:N on Wasmtime/Wasmer (wasi-threads), fixed thread pool in browsers (Web Workers + SharedArrayBuffer), single-threaded cooperative scheduling on edge platforms (Cloudflare Workers, Fastly). Same actor code, different scheduler backend. The compiler picks the backend via `--target`, not the developer.
 - **Done when**: 10,000 actors run concurrently with correct scheduling
 
 ### Key decisions
 
-| Decision         | Recommendation                                                                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Two primitives   | Tasks (stackless, structured, short-lived) and actors (stacked, isolated, long-lived). Different costs, different guarantees, both first-class.    |
-| Native runtime   | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with actor lifecycle management.     |
-| Scheduler model  | Work-stealing, similar to Tokio/Go. M:N threading. Start with a simple round-robin scheduler, upgrade to work-stealing once correctness is proven. |
-| I/O model        | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the actor/task.                                   |
-| Actor stack size | Real stacks for actors (4-8KB). Tasks are stackless state machines (zero stack overhead).                                                          |
-| Typed mailboxes  | Each actor declares a message enum. `send` and `receive` are type-checked at compile time. Exhaustiveness checking catches unhandled messages.     |
+| Decision           | Recommendation                                                                                                                                                                                                                                     |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Two primitives     | Tasks (stackless, structured, short-lived) and actors (stacked, isolated, long-lived). Different costs, different guarantees, both first-class.                                                                                                    |
+| Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code. |
+| Co-design          | Tasks (Phase 2), actors (Phase 3), and the scheduler protocol are designed together as one system, even though implementation is phased. Designing tasks in isolation risks assumptions that break when actors and alternative backends arrive.    |
+| Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with actor lifecycle management.                                                                                                     |
+| Scheduler model    | Work-stealing, similar to Tokio/Go. M:N threading. Start with a simple round-robin scheduler, upgrade to work-stealing once correctness is proven.                                                                                                 |
+| I/O model          | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the actor/task.                                                                                                                                   |
+| Actor stack size   | Real stacks for actors (4-8KB). Tasks are stackless state machines (zero stack overhead).                                                                                                                                                          |
+| Typed mailboxes    | Each actor declares a message enum. `send` and `receive` are type-checked at compile time. Exhaustiveness checking catches unhandled messages.                                                                                                     |
 
 ### Risks
 
 - **Runtime complexity**: building a work-stealing scheduler with I/O integration is substantial engineering. Start with round-robin and single-threaded I/O, then scale up.
 - **Typed mailbox ergonomics**: forcing every actor to declare a message enum adds boilerplate. Monitor whether this feels natural or burdensome in practice.
+- **Scheduler protocol scope**: the protocol must be minimal enough that a single-threaded WASM backend can implement it, but expressive enough that the native M:N scheduler isn't constrained. Err on the side of too-minimal -- operations can be added later, but removing them breaks all backends.
 
 ---
 
@@ -423,6 +430,15 @@ Rewrite the Expo compiler in Expo.
 - This is the first real stress test of the language for non-trivial code
 - Expect to discover language shortcomings -- feed them back into design
 - **Done when**: the Expo-written parser can parse all `.expo` files identically to the Rust parser
+
+### Introduce ExpoIR and the codegen backend protocol
+
+- Split `expo-codegen` into two stages: lowering (TypedAST → ExpoIR) and emission (ExpoIR → target output)
+- ExpoIR is a flat, lowered representation -- monomorphized, closures desugared, drops inserted. Simple enough that writing a new backend is a tractable project.
+- Define `CodeEmitter` as an Expo protocol. The LLVM backend is `impl CodeEmitter for LlvmEmitter`. Cranelift, WASM, and C backends implement the same interface.
+- Publish `expo-ir` and the backend protocol as packages so third parties can build custom backends.
+- See "ExpoIR and codegen backend protocol" in the design exploration section for full rationale.
+- **Done when**: the LLVM backend works through ExpoIR with no regressions, and a second backend (Cranelift for the REPL) compiles a non-trivial program.
 
 ### Port type checking and codegen
 
@@ -575,6 +591,16 @@ Active design discussions about the type system, code organization, and function
 - **Unblocked**: protocol system is now implemented -- `Display` can be built.
 - **Current limitation**: `print()` only supports primitives (`Int`, `Float`, `Bool`, `String`). Printing a struct or enum value is a compile error. Workaround: match on enum variants and print primitive values, or use string interpolation with primitive fields.
 
+### ExpoIR and codegen backend protocol
+
+- **Planned**: introduce an intermediate representation (`expo-ir`) between the type checker and codegen. The IR is a lowered, flat representation -- no generics (already monomorphized), no closures (already desugared to structs + function pointers), no high-level control flow (already lowered to branches). Just functions, calls, loads, stores, branches.
+- **Motivation**: the current `expo-codegen` crate mixes two concerns -- lowering (closure desugaring, monomorphization, drop insertion) and emission (inkwell LLVM calls). Separating them creates a clean interface for multiple codegen backends.
+- **Backend protocol**: codegen backends implement a `CodeEmitter` protocol against ExpoIR. The LLVM backend (current) is the first implementation, not a special case. Other backends become possible: Cranelift (fast compilation for the REPL), direct WASM emission (smaller output for edge), C emission (maximum portability), or an interpreter (scripting, hot-reload).
+- **Compiler pipeline**: `Source → AST → TypedAST → ExpoIR → [CodeEmitter backend] → output`. Lowering happens once; backends only handle "emit a function call" and "emit a branch," not "figure out how closures capture variables."
+- **Public API**: ExpoIR and the backend protocol would be published as packages after self-hosting, enabling third-party codegen backends. During bootstrap, they're Rust crates wrapping inkwell.
+- **Build-time selection**: `project.expo` or `expo build --backend cranelift` selects the backend. One backend per binary. The compiler monomorphizes all emitter calls against the selected implementation -- no vtable overhead.
+- **Timing**: the IR split is Phase 6 (self-hosting) work. The current crate boundaries (codegen depends on ast + typecheck, clean downward dependencies) already support this separation. Keeping `expo-codegen` internals organized now avoids a painful refactor later.
+
 ### Literal protocols
 
 - **Concept**: all literal syntax (`42`, `"hello"`, `[...]`, `[k:v]`, `(a,b)`) backed by protocols, not special-cased types. Any type can opt into literal construction by implementing the protocol.
@@ -613,7 +639,7 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Core      | Ownership + borrowing -- move semantics, use-after-move, `move self`, `clone()`, drop    | Done   |
 | Core      | Protocols -- `protocol` keyword, `impl Protocol for Type`, completeness validation       | Done   |
 | Core      | Closure captures -- copy/move semantics, heap-allocated environments, automatic drop     | Done   |
-| Core      | `unless` expression, `Self` type, list literals (`[1,2,3]`), `ListLiteral<T>` protocol  | Done   |
+| Core      | `unless` expression, `Self` type, list literals (`[1,2,3]`), `ListLiteral<T>` protocol   | Done   |
 
 ### Remaining
 
@@ -630,6 +656,7 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Tooling     | LSP -- autocomplete, inline type hints, multi-module          |
 | Tooling     | Interactive shell (`expo shell`) -- REPL with project loading |
 | Self-host   | Lexer + parser in Expo                                        |
+| Self-host   | ExpoIR + codegen backend protocol (`CodeEmitter`)             |
 | Self-host   | Full compiler in Expo                                         |
 | Self-host   | Retire Rust bootstrap                                         |
 | Validation  | auth-manager-expo runs for real                               |

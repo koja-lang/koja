@@ -626,6 +626,11 @@ A zero-copy task primitive that neither of them can offer.
 
 ## Open design: task ownership semantics
 
+> **Note:** This section documents the original exploration. The design has since
+> evolved — task borrows were dropped in favor of uniform move/clone at all
+> concurrent boundaries, and a `copy` keyword was introduced. See
+> [CONCURRENCY_2.md](CONCURRENCY_2.md) for the current thinking.
+
 The interaction between ownership and `spawn` is an unsolved design problem.
 Every approach explored has exactly one cost, and every hybrid that tries to
 avoid the cost adds complexity worse than the cost itself. This section
