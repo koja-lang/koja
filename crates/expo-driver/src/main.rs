@@ -330,9 +330,24 @@ fn build(args: &[String], quiet: bool, color: bool) {
         process::exit(1);
     }
 
+    let runtime_lib_bytes: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
+    let tmp_dir = env::temp_dir();
+    let tmp_lib = tmp_dir.join("libexpo_runtime.a");
+    fs::write(&tmp_lib, runtime_lib_bytes).expect("failed to write embedded runtime library");
+    let tmp_dir_str = tmp_dir.to_string_lossy();
+
     let status = process::Command::new("cc")
-        .args([&obj_path, "-o", &output])
+        .args([
+            &obj_path,
+            "-lexpo_runtime",
+            "-L",
+            &tmp_dir_str,
+            "-o",
+            &output,
+        ])
         .status();
+
+    let _ = fs::remove_file(&tmp_lib);
 
     match status {
         Ok(s) if s.success() => {

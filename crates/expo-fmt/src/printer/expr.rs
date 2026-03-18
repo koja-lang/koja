@@ -226,19 +226,7 @@ impl<'a> Printer<'a> {
                 concat(parts)
             }
 
-            Expr::Receive { arms, span, .. } => {
-                let any_multiline = arms.iter().any(|a| arm_is_multiline(&a.body));
-                let mut parts = vec![text("receive")];
-                let mut arm_docs = Vec::new();
-                for arm in arms {
-                    arm_docs.push(hardline());
-                    arm_docs.push(self.receive_arm_to_doc(arm, any_multiline, span.end.line));
-                }
-                parts.push(indent(2, concat(arm_docs)));
-                parts.push(hardline());
-                parts.push(text("end"));
-                concat(parts)
-            }
+            Expr::Receive { .. } => text("receive"),
 
             Expr::For {
                 pattern,
@@ -324,7 +312,7 @@ impl<'a> Printer<'a> {
             }
 
             Expr::Spawn { expr: inner, .. } => {
-                concat(vec![text("spawn("), self.expr_to_doc(inner), text(")")])
+                concat(vec![text("spawn "), self.expr_to_doc(inner)])
             }
 
             Expr::Await { expr: inner, .. } => {
@@ -562,23 +550,7 @@ impl<'a> Printer<'a> {
         self.arm_body_to_doc(head, body, force_break, block_end)
     }
 
-    /// Formats a `receive` arm: `pattern = source -> body`.
-    pub(super) fn receive_arm_to_doc(
-        &mut self,
-        arm: &ReceiveArm,
-        force_break: bool,
-        block_end: u32,
-    ) -> Doc {
-        let head = concat(vec![
-            pattern_to_doc(&arm.pattern),
-            text(" = "),
-            self.expr_to_doc(&arm.source),
-            text(" ->"),
-        ]);
-        self.arm_body_to_doc(head, &arm.body, force_break, block_end)
-    }
-
-    /// Shared formatting for all arm types (match, cond, receive).
+    /// Shared formatting for all arm types (match, cond).
     ///
     /// When `force_break` is true (because at least one sibling arm is
     /// multi-line), every arm body is indented on a new line for visual

@@ -112,6 +112,34 @@ pub fn compile_binary<'ctx>(
             }
         };
         Ok(Some(result))
+    } else if lhs.is_pointer_value() && rhs.is_pointer_value() {
+        let l = lhs.into_pointer_value();
+        let r = rhs.into_pointer_value();
+        match op {
+            BinOp::Eq | BinOp::NotEq => {
+                let strcmp = *c.functions.get("strcmp").ok_or("strcmp not declared")?;
+                let cmp_result = c
+                    .builder
+                    .build_call(strcmp, &[l.into(), r.into()], "strcmp_result")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or("strcmp did not return a value")?
+                    .into_int_value();
+                let zero = c.context.i32_type().const_int(0, false);
+                let pred = if matches!(op, BinOp::Eq) {
+                    IntPredicate::EQ
+                } else {
+                    IntPredicate::NE
+                };
+                let result = c
+                    .builder
+                    .build_int_compare(pred, cmp_result, zero, "str_cmp")
+                    .unwrap();
+                Ok(Some(result.into()))
+            }
+            _ => Err(format!("unsupported string binary op: {:?}", op)),
+        }
     } else {
         Err("mismatched types in binary operation".to_string())
     }

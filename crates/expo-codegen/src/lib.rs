@@ -9,6 +9,7 @@ mod hashtable;
 mod list;
 mod map;
 mod ops;
+mod process;
 mod set;
 mod stmt;
 mod structs;

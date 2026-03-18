@@ -341,9 +341,7 @@ impl Parser {
     pub(crate) fn parse_spawn_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.advance(); // spawn
-        self.expect(&TokenKind::LParen);
         let expr = self.parse_expr();
-        self.expect(&TokenKind::RParen);
 
         Expr::Spawn {
             expr: Box::new(expr),

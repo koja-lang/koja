@@ -1,0 +1,16 @@
+fn receiver()
+  msg = receive
+  if msg == "stop"
+    print("Stopping process.")
+  else
+    print("Received message: #{msg}")
+    receiver()
+  end
+end
+
+fn main
+  pid: Process<String> = spawn receiver
+  pid.send("World")
+  pid.send("Elixir")
+  pid.send("stop")
+end

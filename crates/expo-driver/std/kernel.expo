@@ -569,3 +569,20 @@ impl ListLiteral<T> for Set<T>
     panic("intrinsic")
   end
 end
+
+@doc """
+A handle to a lightweight process. The type parameter `M` is the
+message type accepted by this process.
+"""
+struct Process<M>
+end
+
+impl Process<M>
+  @doc """
+  Sends a message to this process. The message is copied into the
+  process mailbox.
+  """
+  fn send(self, msg: M)
+    panic("intrinsic")
+  end
+end

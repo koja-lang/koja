@@ -347,6 +347,8 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             Type::Unknown
         }
 
+        Expr::Receive { .. } => Type::Primitive(Primitive::String),
+
         Expr::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {

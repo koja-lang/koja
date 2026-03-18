@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `spawn` keyword -- creates a lightweight process running the given function (`pid = spawn receiver`). Returns a `Process<M>` handle typed by the process's message type.
+- `Process<M>` built-in generic type -- handle to a spawned process. Defined in `std.kernel` alongside `List<T>` and `Map<K,V>`. Method: `send(msg: M)` copies the message into the target process's mailbox.
+- `receive` expression -- blocks the current process and returns the next message from its mailbox. Composes with `match` for pattern matching (`match receive ... end`). Returns `String` in the current implementation.
+- `expo-runtime` crate -- Rust static library (`libexpo_runtime.a`) providing a single-threaded cooperative process scheduler. Manages process table, per-process mailboxes, and sequential process execution after `main` completes. Exposes C ABI functions linked by the compiler.
+- String equality (`==`, `!=`) -- implemented via `strcmp` intrinsic in codegen. Enables comparisons like `msg == "stop"` on `String` values.
 - `Map<K, V>` -- generic hash map with open addressing and linear probing. Methods: `new`, `put`, `get`, `has?`, `remove`, `length`, `empty?`. Keys must implement `Hashable` and `Equatable`. Automatic resizing at 75% load factor. `get` returns `Option<V>`.
 - `Set<T>` -- generic hash set using the same hash table infrastructure as `Map`. Methods: `new`, `insert`, `has?`, `remove`, `length`, `empty?`. Implements `ListLiteral<T>`, so `s: Set<Int32> = [1, 2, 3]` works with automatic deduplication.
 - Map literal syntax -- `["key": value, ...]` for populated maps and `[:]` for empty maps. Parser disambiguates from list literals by peeking for `:` after the first expression.

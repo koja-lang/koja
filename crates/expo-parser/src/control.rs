@@ -238,32 +238,8 @@ impl Parser {
     pub(crate) fn parse_receive_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.advance(); // receive
-        self.skip_newlines();
-
-        let mut arms = Vec::new();
-        while !self.at(&TokenKind::End) && !self.at_eof() {
-            let before = self.pos;
-            let arm_start = self.current_span();
-            let pattern = self.parse_pattern();
-            self.expect(&TokenKind::Eq);
-            let source = self.parse_expr_bp(BP_TERNARY + 1);
-            self.expect(&TokenKind::Arrow);
-            let body = self.parse_match_body();
-            arms.push(ReceiveArm {
-                pattern,
-                source,
-                body,
-                span: self.span_from(arm_start),
-            });
-            if self.pos == before {
-                self.advance();
-            }
-            self.skip_newlines();
-        }
-        self.expect(&TokenKind::End);
 
         Expr::Receive {
-            arms,
             span: self.span_from(start),
         }
     }

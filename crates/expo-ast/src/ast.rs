@@ -513,8 +513,8 @@ pub enum Expr {
         args: Vec<Arg>,
         span: Span,
     },
-    /// An actor receive block: `receive ... end`.
-    Receive { arms: Vec<ReceiveArm>, span: Span },
+    /// A bare receive expression: `receive`.
+    Receive { span: Span },
     /// A self reference: `self`.
     Self_ { span: Span },
     /// An inline closure: `x -> x * 2`.
@@ -618,15 +618,6 @@ pub struct CondArm {
 pub struct MatchArm {
     pub pattern: Pattern,
     pub guard: Option<Expr>,
-    pub body: Vec<Statement>,
-    pub span: Span,
-}
-
-/// A single branch in a `receive` block matching a message pattern.
-#[derive(Debug, Clone)]
-pub struct ReceiveArm {
-    pub pattern: Pattern,
-    pub source: Expr,
     pub body: Vec<Statement>,
     pub span: Span,
 }

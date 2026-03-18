@@ -54,6 +54,9 @@ impl<'ctx> Compiler<'ctx> {
         if !self.current_block_terminated() {
             crate::drop::drop_live_variables(self);
             if is_main {
+                if let Some(main_done) = self.functions.get("expo_rt_main_done") {
+                    self.builder.build_call(*main_done, &[], "").unwrap();
+                }
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();
             } else {
@@ -158,6 +161,9 @@ impl<'ctx> Compiler<'ctx> {
         }
         if name == "Map" || name == "Set" {
             return crate::hashtable::monomorphize_hashtable_struct(self, &mangled);
+        }
+        if name == "Process" {
+            return crate::process::monomorphize_process_struct(self, &mangled);
         }
 
         let info = self
@@ -360,6 +366,15 @@ impl<'ctx> Compiler<'ctx> {
         }
         if base_type == "Set" {
             return crate::set::emit_set_method(
+                self,
+                &mangled_type,
+                &mangled_fn,
+                method_name,
+                type_args,
+            );
+        }
+        if base_type == "Process" {
+            return crate::process::emit_process_method(
                 self,
                 &mangled_type,
                 &mangled_fn,

@@ -240,6 +240,31 @@ impl<'ctx> Compiler<'ctx> {
         );
         let memcpy = self.module.add_function("memcpy", memcpy_type, None);
         self.functions.insert("memcpy".to_string(), memcpy);
+
+        let spawn_type = i64_type.fn_type(&[i8_ptr_type.into()], false);
+        let spawn = self.module.add_function("expo_rt_spawn", spawn_type, None);
+        self.functions.insert("expo_rt_spawn".to_string(), spawn);
+
+        let send_type = self.context.void_type().fn_type(
+            &[i64_type.into(), i8_ptr_type.into(), i64_type.into()],
+            false,
+        );
+        let send = self.module.add_function("expo_rt_send", send_type, None);
+        self.functions.insert("expo_rt_send".to_string(), send);
+
+        let receive_type = i8_ptr_type.fn_type(&[], false);
+        let receive = self
+            .module
+            .add_function("expo_rt_receive", receive_type, None);
+        self.functions
+            .insert("expo_rt_receive".to_string(), receive);
+
+        let main_done_type = self.context.void_type().fn_type(&[], false);
+        let main_done = self
+            .module
+            .add_function("expo_rt_main_done", main_done_type, None);
+        self.functions
+            .insert("expo_rt_main_done".to_string(), main_done);
     }
 
     fn declare_function(

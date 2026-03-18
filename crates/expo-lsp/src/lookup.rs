@@ -410,6 +410,12 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
+        Expr::Spawn { expr, span, .. } => {
+            if span_contains(span, line, col) {
+                return find_in_expr(expr, line, col, ctx);
+            }
+        }
+        Expr::Receive { .. } => {}
         _ => {}
     }
     None

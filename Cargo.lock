@@ -210,6 +210,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "expo-runtime"
+version = "0.5.0"
+
+[[package]]
 name = "expo-typecheck"
 version = "0.5.0"
 dependencies = [

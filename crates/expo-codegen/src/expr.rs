@@ -141,6 +141,10 @@ pub fn compile_expr<'ctx>(
 
         Expr::Map { entries, .. } => compile_map_literal(c, entries, function),
 
+        Expr::Spawn { expr, .. } => compile_spawn(c, expr, function),
+
+        Expr::Receive { .. } => compile_receive(c),
+
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
             std::mem::discriminant(expr)
@@ -707,4 +711,81 @@ fn compile_map_literal<'ctx>(
     }
 
     Ok(Some(map_val))
+}
+
+fn compile_spawn<'ctx>(
+    c: &mut Compiler<'ctx>,
+    expr: &Expr,
+    _function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let fn_name = match expr {
+        Expr::Ident { name, .. } => name.clone(),
+        _ => return Err("spawn requires a function name".to_string()),
+    };
+
+    let fn_value = c
+        .module
+        .get_function(&fn_name)
+        .ok_or_else(|| format!("undefined function in spawn: {fn_name}"))?;
+
+    let fn_ptr = fn_value.as_global_value().as_pointer_value();
+
+    let spawn_fn = *c
+        .functions
+        .get("expo_rt_spawn")
+        .ok_or("expo_rt_spawn not declared")?;
+
+    let pid = c
+        .builder
+        .build_call(spawn_fn, &[fn_ptr.into()], "spawn_pid")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .ok_or("expo_rt_spawn did not return a value")?
+        .into_int_value();
+
+    let mangled = expo_typecheck::types::mangle_name(
+        "Process",
+        &[expo_typecheck::types::Type::Primitive(
+            expo_typecheck::types::Primitive::String,
+        )],
+    );
+    if !c.struct_types.contains_key(&mangled) {
+        c.monomorphize_struct(
+            "Process",
+            &[expo_typecheck::types::Type::Primitive(
+                expo_typecheck::types::Primitive::String,
+            )],
+        )?;
+    }
+    let process_struct = *c
+        .struct_types
+        .get(&mangled)
+        .ok_or("Process struct type not found")?;
+
+    let mut sv = process_struct.get_undef();
+    sv = c
+        .builder
+        .build_insert_value(sv, pid, 0, "wrap_pid")
+        .unwrap()
+        .into_struct_value();
+
+    Ok(Some(sv.into()))
+}
+
+fn compile_receive<'ctx>(c: &mut Compiler<'ctx>) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let receive_fn = *c
+        .functions
+        .get("expo_rt_receive")
+        .ok_or("expo_rt_receive not declared")?;
+
+    let msg_ptr = c
+        .builder
+        .build_call(receive_fn, &[], "receive_msg")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .ok_or("expo_rt_receive did not return a value")?;
+
+    Ok(Some(msg_ptr))
 }

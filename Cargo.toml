@@ -9,6 +9,7 @@ members = [
     "crates/expo-lexer",
     "crates/expo-lsp",
     "crates/expo-parser",
+    "crates/expo-runtime",
     "crates/expo-typecheck",
 ]
 
