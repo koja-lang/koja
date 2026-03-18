@@ -96,6 +96,37 @@ impl<'a> Printer<'a> {
                 }
             }
 
+            Expr::Map { entries, .. } => {
+                if entries.is_empty() {
+                    text("[:]")
+                } else {
+                    let items: Vec<Doc> = entries
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (k, v))| {
+                            let pair =
+                                concat(vec![self.expr_to_doc(k), text(": "), self.expr_to_doc(v)]);
+                            if i < entries.len() - 1 {
+                                concat(vec![pair, text(",")])
+                            } else {
+                                pair
+                            }
+                        })
+                        .collect();
+                    let fill_items: Vec<Doc> = items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, d)| if i > 0 { concat(vec![text(" "), d]) } else { d })
+                        .collect();
+                    group(concat(vec![
+                        text("["),
+                        indent(2, concat(vec![softline(), fill(fill_items)])),
+                        softline(),
+                        text("]"),
+                    ]))
+                }
+            }
+
             Expr::Tuple { elements, .. } => {
                 let elems: Vec<Doc> = elements.iter().map(|e| self.expr_to_doc(e)).collect();
                 group(concat(vec![

@@ -236,6 +236,46 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             }
         }
 
+        Expr::Map { entries, span } => {
+            let mut key_type = Type::Unknown;
+            let mut val_type = Type::Unknown;
+            for (k, v) in entries {
+                let kt = infer_expr(k, ctx, ce);
+                let vt = infer_expr(v, ctx, ce);
+                if key_type == Type::Unknown {
+                    key_type = kt;
+                } else if kt.is_known() && key_type.is_known() && !types_compatible(&key_type, &kt)
+                {
+                    ctx.error(
+                        format!(
+                            "map key type mismatch: expected `{}`, found `{}`",
+                            key_type.display(),
+                            kt.display()
+                        ),
+                        *span,
+                    );
+                }
+                if val_type == Type::Unknown {
+                    val_type = vt;
+                } else if vt.is_known() && val_type.is_known() && !types_compatible(&val_type, &vt)
+                {
+                    ctx.error(
+                        format!(
+                            "map value type mismatch: expected `{}`, found `{}`",
+                            val_type.display(),
+                            vt.display()
+                        ),
+                        *span,
+                    );
+                }
+            }
+            Type::GenericInstance {
+                base: "Map".to_string(),
+                type_args: vec![key_type, val_type],
+                kind: GenericKind::Struct,
+            }
+        }
+
         Expr::Literal { value, .. } => match value {
             Literal::Bool(_) => Type::Primitive(Primitive::Bool),
             Literal::Float(_) => Type::Primitive(Primitive::F64),
@@ -1189,6 +1229,7 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
         | Expr::Ident { span, .. }
         | Expr::If { span, .. }
         | Expr::List { span, .. }
+        | Expr::Map { span, .. }
         | Expr::Literal { span, .. }
         | Expr::Loop { span, .. }
         | Expr::Match { span, .. }

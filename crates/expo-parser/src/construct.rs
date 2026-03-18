@@ -263,17 +263,60 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // [
 
-        let mut elements = Vec::new();
         self.skip_newlines();
-        if !self.at(&TokenKind::RBracket) {
-            elements.push(self.parse_expr());
+
+        // Empty map literal: [:]
+        if self.at(&TokenKind::Colon) && self.peek_nth(1) == &TokenKind::RBracket {
+            self.advance(); // :
+            self.advance(); // ]
+            return Expr::Map {
+                entries: Vec::new(),
+                span: self.span_from(start),
+            };
+        }
+
+        if self.at(&TokenKind::RBracket) {
+            self.advance(); // ]
+            return Expr::List {
+                elements: Vec::new(),
+                span: self.span_from(start),
+            };
+        }
+
+        let first = self.parse_expr();
+
+        // If followed by `:`, this is a map literal
+        if self.eat(&TokenKind::Colon).is_some() {
+            self.skip_newlines();
+            let first_val = self.parse_expr();
+            let mut entries = vec![(first, first_val)];
             while self.eat(&TokenKind::Comma).is_some() {
                 self.skip_newlines();
                 if self.at(&TokenKind::RBracket) {
                     break;
                 }
-                elements.push(self.parse_expr());
+                let key = self.parse_expr();
+                self.expect(&TokenKind::Colon);
+                self.skip_newlines();
+                let val = self.parse_expr();
+                entries.push((key, val));
             }
+            self.skip_newlines();
+            self.expect(&TokenKind::RBracket);
+            return Expr::Map {
+                entries,
+                span: self.span_from(start),
+            };
+        }
+
+        // Otherwise it's a list literal
+        let mut elements = vec![first];
+        while self.eat(&TokenKind::Comma).is_some() {
+            self.skip_newlines();
+            if self.at(&TokenKind::RBracket) {
+                break;
+            }
+            elements.push(self.parse_expr());
         }
         self.skip_newlines();
         self.expect(&TokenKind::RBracket);

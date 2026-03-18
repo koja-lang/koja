@@ -343,6 +343,7 @@ literal = integer_lit
         | multiline_string_lit
         | bool_lit
         | list_lit
+        | map_lit
         | "()" ;                                                    (* unit *)
 
 integer_lit = DECIMAL_INT | HEX_INT | BIN_INT ;
@@ -372,6 +373,9 @@ FORMAT_SPEC = { DIGIT | LOWER | UPPER | "." | "<" | ">" | "^" | "+" | "-" | "0" 
 bool_lit = "true" | "false" ;
 
 list_lit = "[" , [ expr , { "," , expr } , [ "," ] ] , "]" ;
+
+map_lit  = "[" , ":" , "]"                                          (* empty map *)
+         | "[" , expr , ":" , expr , { "," , expr , ":" , expr } , [ "," ] , "]" ;
 
 
 (* ========================================================================== *)

@@ -46,6 +46,26 @@ pub fn to_llvm_metadata_type<'ctx>(
     to_llvm_type(ty, context, struct_types).map(|t| t.into())
 }
 
+/// Converts a type name like `"Int32"` or `"String"` to its Expo `Type`.
+/// Falls back to `Type::Struct` for unrecognised names.
+pub fn primitive_name_to_type(name: &str) -> Type {
+    match name {
+        "Bool" => Type::Primitive(Primitive::Bool),
+        "Int" => Type::Primitive(Primitive::I64),
+        "Int8" => Type::Primitive(Primitive::I8),
+        "Int16" => Type::Primitive(Primitive::I16),
+        "Int32" => Type::Primitive(Primitive::I32),
+        "UInt8" => Type::Primitive(Primitive::U8),
+        "UInt16" => Type::Primitive(Primitive::U16),
+        "UInt32" => Type::Primitive(Primitive::U32),
+        "UInt64" => Type::Primitive(Primitive::U64),
+        "String" => Type::Primitive(Primitive::String),
+        "Float" => Type::Primitive(Primitive::F64),
+        "Float32" => Type::Primitive(Primitive::F32),
+        _ => Type::Struct(name.to_string()),
+    }
+}
+
 /// Maps an Expo primitive type to its corresponding LLVM type.
 pub fn primitive_to_llvm<'ctx>(p: &Primitive, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
     match p {

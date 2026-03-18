@@ -398,6 +398,18 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
+        Expr::Map { entries, span } => {
+            if span_contains(span, line, col) {
+                for (k, v) in entries {
+                    if let Some(info) = find_in_expr(k, line, col, ctx) {
+                        return Some(info);
+                    }
+                    if let Some(info) = find_in_expr(v, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
         _ => {}
     }
     None

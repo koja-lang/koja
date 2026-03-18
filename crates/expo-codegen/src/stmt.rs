@@ -70,6 +70,12 @@ pub fn compile_statement<'ctx>(
                 infer_type_from_expr(c, value).unwrap_or_else(|| infer_type_from_llvm(c, &raw_val))
             };
 
+            let raw_val = if matches!(value, expo_ast::ast::Expr::List { .. }) {
+                convert_list_literal_if_needed(c, raw_val, &ty)?
+            } else {
+                raw_val
+            };
+
             let val = coerce_numeric(c, raw_val, &ty);
 
             match target {
@@ -431,4 +437,39 @@ fn int_bit_width(p: &Primitive) -> u32 {
         Primitive::I64 | Primitive::U64 => 64,
         _ => 0,
     }
+}
+
+/// When a list literal `[a, b, c]` is assigned to a non-List type that
+/// implements `ListLiteral<T>` (e.g. `Set<T>`), calls `from_list` to convert.
+fn convert_list_literal_if_needed<'ctx>(
+    c: &mut Compiler<'ctx>,
+    list_val: BasicValueEnum<'ctx>,
+    target_type: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let (base, type_args) = match target_type {
+        Type::GenericInstance {
+            base, type_args, ..
+        } if base != "List" => (base.as_str(), type_args),
+        _ => return Ok(list_val),
+    };
+
+    let target_mangled = mangle_name(base, type_args);
+    let from_list_fn_name = format!("{target_mangled}_from_list");
+    if !c.functions.contains_key(&from_list_fn_name) {
+        c.monomorphize_impl_method(base, "from_list", type_args)?;
+    }
+    let from_list_fn = *c
+        .functions
+        .get(&from_list_fn_name)
+        .ok_or_else(|| format!("{base} does not implement ListLiteral (no from_list)"))?;
+
+    let result = c
+        .builder
+        .build_call(from_list_fn, &[list_val.into()], "from_list")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .ok_or("from_list returned void")?;
+
+    Ok(result)
 }

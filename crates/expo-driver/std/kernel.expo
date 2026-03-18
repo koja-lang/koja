@@ -215,6 +215,201 @@ impl List<T>
 end
 
 @doc """
+A protocol for types that support equality comparison.
+"""
+protocol Equatable
+  fn eq(self, other: Self) -> Bool
+end
+
+impl Equatable for Bool
+  @doc """
+  Returns `true` if both boolean values are the same.
+  """
+  fn eq(self, other: Bool) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for Int
+  @doc """
+  Returns `true` if both 64-bit integers are equal.
+  """
+  fn eq(self, other: Int) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for Int8
+  @doc """
+  Returns `true` if both 8-bit integers are equal.
+  """
+  fn eq(self, other: Int8) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for Int16
+  @doc """
+  Returns `true` if both 16-bit integers are equal.
+  """
+  fn eq(self, other: Int16) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for Int32
+  @doc """
+  Returns `true` if both 32-bit integers are equal.
+  """
+  fn eq(self, other: Int32) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for String
+  @doc """
+  Returns `true` if both strings have the same content.
+  """
+  fn eq(self, other: String) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for UInt8
+  @doc """
+  Returns `true` if both 8-bit unsigned integers are equal.
+  """
+  fn eq(self, other: UInt8) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for UInt16
+  @doc """
+  Returns `true` if both 16-bit unsigned integers are equal.
+  """
+  fn eq(self, other: UInt16) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for UInt32
+  @doc """
+  Returns `true` if both 32-bit unsigned integers are equal.
+  """
+  fn eq(self, other: UInt32) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Equatable for UInt64
+  @doc """
+  Returns `true` if both 64-bit unsigned integers are equal.
+  """
+  fn eq(self, other: UInt64) -> Bool
+    panic("intrinsic")
+  end
+end
+
+@doc """
+A protocol for types that can produce a hash value for use in
+hash-based collections like `Map<K, V>` and `Set<T>`.
+"""
+protocol Hashable
+  fn hash(self) -> Int
+end
+
+impl Hashable for Bool
+  @doc """
+  Returns `0` for `false` and `1` for `true`.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for Int
+  @doc """
+  Returns a hash of this 64-bit integer using SplitMix64.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for Int8
+  @doc """
+  Returns a hash of this 8-bit integer using SplitMix64.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for Int16
+  @doc """
+  Returns a hash of this 16-bit integer using SplitMix64.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for Int32
+  @doc """
+  Returns a hash of this 32-bit integer using SplitMix64.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for String
+  @doc """
+  Returns a hash of the string content using FNV-1a.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for UInt8
+  @doc """
+  Returns a hash of this 8-bit unsigned integer using SplitMix64.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for UInt16
+  @doc """
+  Returns a hash of this 16-bit unsigned integer using SplitMix64.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for UInt32
+  @doc """
+  Returns a hash of this 32-bit unsigned integer using SplitMix64.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Hashable for UInt64
+  @doc """
+  Returns a hash of this 64-bit unsigned integer using SplitMix64.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+@doc """
 A protocol for types that can be constructed from a list literal `[a, b, c]`.
 The compiler builds a `List<T>` from the literal elements and passes it to
 `from_list`. Implement this protocol to enable list literal syntax for
@@ -227,6 +422,148 @@ end
 impl ListLiteral<T> for List<T>
   @doc """
   Returns the list unchanged. `List<T>` is the default type for list literals.
+  """
+  fn from_list(move list: List<T>) -> Self
+    panic("intrinsic")
+  end
+end
+
+@doc """
+A generic hash map from keys of type `K` to values of type `V`.
+Keys must implement `Hashable` and `Equatable`. Uses open addressing
+with linear probing.
+"""
+struct Map<K, V>
+end
+
+impl Map<K, V>
+  @doc """
+  Returns `true` if the map contains no entries.
+  """
+  fn empty?(self) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `Option.Some(value)` if the key exists, or `Option.None` otherwise.
+  """
+  fn get(self, key: K) -> Option<V>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `true` if the map contains the given key.
+  """
+  fn has?(self, key: K) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the number of entries in the map.
+  """
+  fn length(self) -> Int32
+    panic("intrinsic")
+  end
+
+  @doc """
+  Creates a new empty map with an initial capacity of 8.
+  """
+  fn new() -> Map<K, V>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Inserts or updates the given key-value pair and returns the updated map.
+  """
+  fn put(move self, key: K, value: V) -> Map<K, V>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Removes the entry for the given key and returns the updated map.
+  If the key is not present, the map is returned unchanged.
+  """
+  fn remove(move self, key: K) -> Map<K, V>
+    panic("intrinsic")
+  end
+end
+
+@doc """
+A protocol for types that can be constructed from a map literal
+`[key: value, ...]`. The compiler builds a `Map<K, V>` and passes it
+to `from_map`.
+"""
+protocol MapLiteral<K, V>
+  fn from_map(move map: Map<K, V>) -> Self
+end
+
+impl MapLiteral<K, V> for Map<K, V>
+  @doc """
+  Returns the map unchanged. `Map<K, V>` is the default type for map literals.
+  """
+  fn from_map(move map: Map<K, V>) -> Self
+    panic("intrinsic")
+  end
+end
+
+@doc """
+A generic hash set of unique elements of type `T`.
+Elements must implement `Hashable` and `Equatable`. Uses open addressing
+with linear probing.
+"""
+struct Set<T>
+end
+
+impl Set<T>
+  @doc """
+  Returns `true` if the set contains no elements.
+  """
+  fn empty?(self) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `true` if the set contains the given item.
+  """
+  fn has?(self, item: T) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Adds the given item to the set and returns the updated set.
+  If the item is already present, the set is returned unchanged.
+  """
+  fn insert(move self, item: T) -> Set<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the number of elements in the set.
+  """
+  fn length(self) -> Int32
+    panic("intrinsic")
+  end
+
+  @doc """
+  Creates a new empty set with an initial capacity of 8.
+  """
+  fn new() -> Set<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Removes the given item from the set and returns the updated set.
+  If the item is not present, the set is returned unchanged.
+  """
+  fn remove(move self, item: T) -> Set<T>
+    panic("intrinsic")
+  end
+end
+
+impl ListLiteral<T> for Set<T>
+  @doc """
+  Constructs a set from a list literal by inserting each element,
+  naturally deduplicating.
   """
   fn from_list(move list: List<T>) -> Self
     panic("intrinsic")

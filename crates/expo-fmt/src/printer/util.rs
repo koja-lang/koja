@@ -472,6 +472,7 @@ fn expr_span(expr: &Expr) -> &Span {
         | Ident { span, .. }
         | If { span, .. }
         | List { span, .. }
+        | Map { span, .. }
         | Literal { span, .. }
         | Loop { span, .. }
         | Match { span, .. }

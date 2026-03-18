@@ -1,0 +1,48 @@
+struct Point
+  x: Int32
+  y: Int32
+end
+
+impl Point
+  fn distance_squared(self) -> Int32
+    self.x * self.x + self.y * self.y
+  end
+end
+
+enum Shape
+  Circle(Int32)
+  Rect(Int32, Int32)
+end
+
+fn area(s: Shape) -> Int32
+  match s
+    Shape.Circle(r) -> r * r * 3
+    Shape.Rect(w, h) -> w * h
+  end
+end
+
+fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
+  f(x)
+end
+
+fn main
+  p = Point{x: 3, y: 4}
+  print("distance²: #{p.distance_squared()}")
+  print("circle area: #{area(Shape.Circle(5))}")
+
+  for name in ["Alice", "Bob", "Charlie"]
+    print("Hello, #{name}!")
+  end
+
+  scores: Map<String, Int32> = ["Alice": 95, "Bob": 87]
+  print("has Alice? #{scores.has?("Alice")}")
+
+  score = Option.Some(42)
+  print("doubled: #{score.map(fn (n: Int32) -> Int32 n * 2 end).or(0)}")
+
+  threshold = 80
+  passing =
+    fn (s: Int32) -> Bool s >= threshold end
+  print("87 passing? #{passing(87)}")
+  print("applied: #{apply(5, fn (n: Int32) -> Int32 n * n end)}")
+end

@@ -1,0 +1,6 @@
+length: 3
+has 1: true
+has 4: false
+after resize length: 10
+has 1 after resize: true
+has 10 after resize: true

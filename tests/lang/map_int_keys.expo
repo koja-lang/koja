@@ -1,0 +1,19 @@
+fn main()
+  m: Map<Int32, String> = [1: "one", 2: "two", 3: "three"]
+
+  print("length: #{m.length()}")
+  print("has 1: #{m.has?(1)}")
+  print("has 4: #{m.has?(4)}")
+
+  m = m.put(4, "four")
+  m = m.put(5, "five")
+  m = m.put(6, "six")
+  m = m.put(7, "seven")
+  m = m.put(8, "eight")
+  m = m.put(9, "nine")
+  m = m.put(10, "ten")
+
+  print("after resize length: #{m.length()}")
+  print("has 1 after resize: #{m.has?(1)}")
+  print("has 10 after resize: #{m.has?(10)}")
+end

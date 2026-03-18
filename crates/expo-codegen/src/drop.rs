@@ -37,9 +37,25 @@ fn is_list_type(ty: &Type) -> bool {
     }
 }
 
+fn is_map_type(ty: &Type) -> bool {
+    match ty {
+        Type::GenericInstance { base, .. } if base == "Map" => true,
+        Type::Struct(name) if name.starts_with("Map_$") => true,
+        _ => false,
+    }
+}
+
+fn is_set_type(ty: &Type) -> bool {
+    match ty {
+        Type::GenericInstance { base, .. } if base == "Set" => true,
+        Type::Struct(name) if name.starts_with("Set_$") => true,
+        _ => false,
+    }
+}
+
 /// Returns true if a type requires heap deallocation at scope exit.
 fn needs_heap_drop(ty: &Type) -> bool {
-    is_list_type(ty)
+    is_list_type(ty) || is_map_type(ty) || is_set_type(ty)
 }
 
 fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
@@ -49,6 +65,11 @@ fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
 
     if is_list_type(ty) {
         emit_drop_list(c, ptr, ty);
+        return;
+    }
+
+    if is_map_type(ty) || is_set_type(ty) {
+        emit_drop_hash_collection(c, ptr, ty);
         return;
     }
 
@@ -98,6 +119,45 @@ fn emit_drop_list(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
         .expect("free not declared in builtins");
     c.builder
         .build_call(free, &[data_ptr.into()], "drop_list_free")
+        .unwrap();
+}
+
+/// Drops a Map or Set value: frees entries_ptr (field 0) and states_ptr (field 1).
+fn emit_drop_hash_collection(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
+    let mangled = match ty {
+        Type::GenericInstance {
+            base, type_args, ..
+        } => expo_typecheck::types::mangle_name(base, type_args),
+        Type::Struct(name) => name.clone(),
+        _ => return,
+    };
+    let Some(coll_struct) = c.struct_types.get(&mangled).copied() else {
+        return;
+    };
+
+    let coll_val = c
+        .builder
+        .build_load(coll_struct, alloca, "drop_coll_load")
+        .unwrap()
+        .into_struct_value();
+    let entries_ptr = c
+        .builder
+        .build_extract_value(coll_val, 0, "drop_entries_ptr")
+        .unwrap();
+    let states_ptr = c
+        .builder
+        .build_extract_value(coll_val, 1, "drop_states_ptr")
+        .unwrap();
+
+    let free = *c
+        .functions
+        .get("free")
+        .expect("free not declared in builtins");
+    c.builder
+        .build_call(free, &[entries_ptr.into()], "drop_free_entries")
+        .unwrap();
+    c.builder
+        .build_call(free, &[states_ptr.into()], "drop_free_states")
         .unwrap();
 }
 

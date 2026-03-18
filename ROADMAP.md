@@ -54,8 +54,10 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `panic` builtin (prints to stderr, aborts)
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
+- Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
 - `Self` type expression in `protocol` and `impl` blocks
-- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>` (auto-imported from `std.kernel`)
+- `Hashable` and `Equatable` protocols with intrinsic implementations for all primitives
+- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`)
 
 ### Parsed and type-checked but NOT yet in codegen
 
@@ -76,6 +78,8 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 - **PascalCase primitives and type simplification** (done): Primitives renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. User-defined types (`Pair`, `User`) and language types (`Int`, `String`) are now visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction.
 - **`ref T` syntax** (parsed, deferred): Reference types use `ref T` (space, no angle brackets) instead of `ref<T>`. `ref` is a lowercase keyword modifier, consistent with the modifier pattern (`const`, `priv`, `move`, `ref`): lowercase keywords modify the thing that follows them, PascalCase names are always types. However, `ref T` is redundant in parameter position (borrow-by-default) and unsafe in return position without lifetime tracking. Deferred until a concrete use case emerges.
+- **Map literal syntax** (decided): `[key: value, key: value]` with `[:]` for empty maps. Maps are collections (like `List<T>`), not struct-like, so they share the bracket family rather than curly braces. The parser disambiguates list vs. map by peeking for `:` after the first expression. Curly braces remain exclusive to struct construction (`Config{name: "yo"}`).
+- **Subscript syntax** (deferred): `map["key"]` / `list[0]` as sugar for `.get()`. Would be backed by a protocol (e.g., `Subscript<K, V>`). Not needed for v0.5 -- method access (`map.get(key)`, `list.get(0)`) works. Can be added later without grammar conflicts since `[` after an expression is a different parse context than `[` at expression start.
 - **Planned: Byte/bitstring literals**: Erlang-style `<<>>` binary syntax for binary protocol work, crypto, and low-level data manipulation. Design TBD.
 - **Planned: Irrefutable struct destructuring**: `Config{name, port} = load_config()` as syntactic sugar for pulling struct fields into local variables. Compile-time verified exhaustive -- only works for structs (single shape), not enums. Enum destructuring uses `match`.
 
@@ -199,7 +203,12 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 
 ### Collections and iteration
 
-- `List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations
+- ~~`List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations~~
+- ~~`Map<K,V>` -- open-addressing hash map with linear probing, 75% load factor resize, SplitMix64/FNV-1a hashing~~
+- ~~`Set<T>` -- hash set reusing `Map` infrastructure, implements `ListLiteral<T>` for `s: Set<Int32> = [1, 2, 3]` syntax~~
+- ~~Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol~~
+- ~~`Hashable` and `Equatable` protocols with compiler-provided intrinsic implementations for all primitives~~
+- ~~Drop support for `Map` and `Set` (entries and states buffers freed at scope exit)~~
 - ~~Closure capture analysis (move vs. borrow) -- copy for primitives, move for structs/enums, heap-allocated environment with automatic drop~~
 - ~~List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol -- any type can implement `ListLiteral<T>` to be constructible from `[...]` syntax~~
 - ~~`Self` type expression -- resolves to the implementing type inside `protocol` and `impl` blocks~~
@@ -328,7 +337,6 @@ Concurrency primitives (tasks, actors, `shared_map`, supervisors) already ship i
 - `Option<T>` and `Result<T,E>` methods -- `unwrap`, `or`, `some?`/`none?`, `ok?`/`err?`, `map`, `then` done in `std.kernel`
 - File I/O: `file.read()`, `file.write()`, `file.exists?()`
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
-- Serialization trait/interface that packages can implement
 - **Done when**: `config.expo` compiles (exercises strings, file reading, option handling, duration)
 
 ### First-party packages (maintained by the Expo team, versioned independently)
@@ -336,7 +344,7 @@ Concurrency primitives (tasks, actors, `shared_map`, supervisors) already ship i
 These need the package manager (Phase 5) to exist first. They are high-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline.
 
 - HTTP server and client
-- JSON serialization/deserialization
+- JSON -- `JsonValue` enum, parser, serializer, convenience methods (`as_string()`, `as_int()`, etc.). No auto-derive or compiler magic; users write `from_json`/`to_json` functions in impl blocks. Decoder combinator API for API input boundaries with error accumulation (all field errors collected, not just the first).
 - TLS (thin wrapper over system TLS library)
 - Crypto: hashing, random bytes (thin wrapper over libsodium or similar)
 - Structured logging
@@ -346,7 +354,7 @@ These need the package manager (Phase 5) to exist first. They are high-quality, 
 
 ### Approach
 
-Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use thin C FFI only for security-critical crypto and performance-critical parsing. The stdlib provides traits/interfaces (e.g., serialization) that first-party packages implement, so formats can be added or replaced without touching the compiler.
+Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use thin C FFI only for security-critical crypto and performance-critical parsing.
 
 ---
 
@@ -569,13 +577,14 @@ Active design discussions about the type system, code organization, and function
 
 ### Literal protocols
 
-- **Concept**: all literal syntax (`42`, `"hello"`, `[...]`, `{k:v}`, `(a,b)`) backed by protocols, not special-cased types. Any type can opt into literal construction by implementing the protocol.
+- **Concept**: all literal syntax (`42`, `"hello"`, `[...]`, `[k:v]`, `(a,b)`) backed by protocols, not special-cased types. Any type can opt into literal construction by implementing the protocol.
 - **Protocol family**: `IntLiteral`, `FloatLiteral`, `StringLiteral`, `ListLiteral<T>`, `MapLiteral<K,V>`, `PairLiteral<A,B>`.
 - **Default types**: `Int`, `Float`, `String`, `List<T>`, `Map<K,V>`, `Pair<A,B>` when no type annotation is present.
 - **Infallible**: literal protocols return `Self`, not `Result`. Fallible parsing (e.g. from untrusted input) uses regular functions that return `Result`.
 - **Pair syntax**: `(a, b)` may return via `PairLiteral<A, B>` -- only pairs (arity 2). 3+ values use named structs.
-- **Implemented**: `ListLiteral<T>` with `from_list(move list: List<T>) -> Self` -- `List<T>` implements it as identity. Defined in `std.kernel`.
-- **Planned**: `IntLiteral`, `FloatLiteral` (enables custom `Decimal` type from float literals), `StringLiteral`, `MapLiteral<K,V>`, `PairLiteral<A,B>`.
+- **Implemented**: `ListLiteral<T>` with `from_list(move list: List<T>) -> Self` -- `List<T>` and `Set<T>` implement it. Defined in `std.kernel`.
+- **Implemented**: `MapLiteral<K, V>` with `from_map(move map: Map<K, V>) -> Self` -- `Map<K, V>` implements it as identity. `[key: value]` syntax and `[:]` for empty maps.
+- **Planned**: `IntLiteral`, `FloatLiteral` (enables custom `Decimal` type from float literals), `StringLiteral`, `PairLiteral<A,B>`.
 - **Fractal design**: user-defined types and built-in types have identical access to literal syntax. No two-tier system.
 
 ---

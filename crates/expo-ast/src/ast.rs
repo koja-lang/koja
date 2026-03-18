@@ -491,6 +491,11 @@ pub enum Expr {
     },
     /// A list literal: `[1, 2, 3]`.
     List { elements: Vec<Expr>, span: Span },
+    /// A map literal: `["key": value, ...]` or `[:]` for an empty map.
+    Map {
+        entries: Vec<(Expr, Expr)>,
+        span: Span,
+    },
     /// A literal value: `42`, `true`, `"hello"`.
     Literal { value: Literal, span: Span },
     /// An infinite loop: `loop ... end`.

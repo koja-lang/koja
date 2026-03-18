@@ -218,6 +218,28 @@ impl<'ctx> Compiler<'ctx> {
             .fn_type(&[i8_ptr_type.into()], false);
         let free = self.module.add_function("free", free_type, None);
         self.functions.insert("free".to_string(), free);
+
+        let strcmp_type = i32_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into()], false);
+        let strcmp = self.module.add_function("strcmp", strcmp_type, None);
+        self.functions.insert("strcmp".to_string(), strcmp);
+
+        let strlen_type = i64_type.fn_type(&[i8_ptr_type.into()], false);
+        let strlen = self.module.add_function("strlen", strlen_type, None);
+        self.functions.insert("strlen".to_string(), strlen);
+
+        let memset_type = i8_ptr_type.fn_type(
+            &[i8_ptr_type.into(), i32_type.into(), i64_type.into()],
+            false,
+        );
+        let memset = self.module.add_function("memset", memset_type, None);
+        self.functions.insert("memset".to_string(), memset);
+
+        let memcpy_type = i8_ptr_type.fn_type(
+            &[i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into()],
+            false,
+        );
+        let memcpy = self.module.add_function("memcpy", memcpy_type, None);
+        self.functions.insert("memcpy".to_string(), memcpy);
     }
 
     fn declare_function(
@@ -233,9 +255,15 @@ impl<'ctx> Compiler<'ctx> {
                 .params
                 .first()
                 .is_some_and(|p| matches!(p, Param::Self_ { .. }))
-            && let Some(st) = self.struct_types.get(name)
         {
-            param_types.push((*st).into());
+            if let Some(st) = self.struct_types.get(name) {
+                param_types.push((*st).into());
+            } else {
+                let prim_ty = crate::types::primitive_name_to_type(name);
+                if let Some(llvm_ty) = to_llvm_type(&prim_ty, self.context, &self.struct_types) {
+                    param_types.push(llvm_ty.into());
+                }
+            }
         }
 
         param_types.extend(self.resolve_param_types(&func.params)?);
@@ -346,6 +374,10 @@ impl<'ctx> Compiler<'ctx> {
             Some(tn) => format!("{}_{}", tn, func.name),
             None => func.name.clone(),
         };
+
+        if crate::hashtable::is_primitive_intrinsic(&mangled) {
+            return crate::hashtable::emit_primitive_intrinsic(self, &mangled);
+        }
 
         let fn_value = *self
             .functions

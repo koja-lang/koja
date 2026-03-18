@@ -489,6 +489,7 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
         | Expr::Ident { span, .. }
         | Expr::If { span, .. }
         | Expr::List { span, .. }
+        | Expr::Map { span, .. }
         | Expr::Literal { span, .. }
         | Expr::Loop { span, .. }
         | Expr::Match { span, .. }

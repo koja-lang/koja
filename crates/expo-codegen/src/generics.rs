@@ -4,7 +4,7 @@
 
 use expo_ast::ast::{Param, Statement};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{GenericKind, Primitive, Type};
+use expo_typecheck::types::{GenericKind, Type};
 use inkwell::types::BasicType;
 use inkwell::values::FunctionValue;
 
@@ -154,7 +154,10 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if name == "List" {
-            return self.monomorphize_list_struct(&mangled);
+            return crate::list::monomorphize_list_struct(self, &mangled);
+        }
+        if name == "Map" || name == "Set" {
+            return crate::hashtable::monomorphize_hashtable_struct(self, &mangled);
         }
 
         let info = self
@@ -188,357 +191,6 @@ impl<'ctx> Compiler<'ctx> {
             .collect();
         st.set_body(&field_llvm_types, false);
         self.mono_struct_info.insert(mangled, concrete_fields);
-
-        Ok(())
-    }
-
-    /// List<T> is a compiler intrinsic because it manages heap-allocated memory
-    /// via C's malloc/realloc/free, which requires emitting raw pointer
-    /// arithmetic and GEPs that cannot be expressed in Expo source code.
-    ///
-    /// Layout: { ptr (i8*), length (i64), capacity (i64) }
-    fn monomorphize_list_struct(&mut self, mangled: &str) -> Result<(), String> {
-        let st = self.context.opaque_struct_type(mangled);
-        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-        let i64_type = self.context.i64_type();
-        st.set_body(&[ptr_type.into(), i64_type.into(), i64_type.into()], false);
-        self.struct_types.insert(mangled.to_string(), st);
-        self.mono_struct_info.insert(
-            mangled.to_string(),
-            vec![
-                ("ptr".to_string(), Type::Primitive(Primitive::String)),
-                ("length".to_string(), Type::Primitive(Primitive::I64)),
-                ("capacity".to_string(), Type::Primitive(Primitive::I64)),
-            ],
-        );
-        Ok(())
-    }
-
-    /// Emits native LLVM IR for a List<T> method instead of compiling the
-    /// `panic("intrinsic")` placeholder body from kernel.expo.
-    fn emit_list_method(
-        &mut self,
-        mangled_type: &str,
-        mangled_fn: &str,
-        method_name: &str,
-        type_args: &[Type],
-    ) -> Result<(), String> {
-        let list_struct = *self
-            .struct_types
-            .get(mangled_type)
-            .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
-
-        let elem_ty = &type_args[0];
-        let elem_llvm = to_llvm_type(elem_ty, self.context, &self.struct_types)
-            .ok_or_else(|| format!("cannot map element type `{}` to LLVM", elem_ty.display()))?;
-        let elem_size = type_byte_size(elem_ty) as u64;
-
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let i64_ty = self.context.i64_type();
-        let i1_ty = self.context.bool_type();
-
-        match method_name {
-            "new" => {
-                let fn_type = list_struct.fn_type(&[], false);
-                let fn_val = self.module.add_function(mangled_fn, fn_type, None);
-                self.functions.insert(mangled_fn.to_string(), fn_val);
-
-                let entry = self.context.append_basic_block(fn_val, "entry");
-                let saved_block = self.builder.get_insert_block();
-                self.builder.position_at_end(entry);
-
-                let initial_cap = i64_ty.const_int(8, false);
-                let alloc_size = self
-                    .builder
-                    .build_int_mul(initial_cap, i64_ty.const_int(elem_size, false), "alloc_sz")
-                    .unwrap();
-                let malloc = *self.functions.get("malloc").expect("malloc not declared");
-                let raw_ptr = self
-                    .builder
-                    .build_call(malloc, &[alloc_size.into()], "buf")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap();
-
-                let result = list_struct.get_undef();
-                let result = self
-                    .builder
-                    .build_insert_value(result, raw_ptr, 0, "with_ptr")
-                    .unwrap()
-                    .into_struct_value();
-                let result = self
-                    .builder
-                    .build_insert_value(result, i64_ty.const_int(0, false), 1, "with_len")
-                    .unwrap()
-                    .into_struct_value();
-                let result = self
-                    .builder
-                    .build_insert_value(result, initial_cap, 2, "with_cap")
-                    .unwrap()
-                    .into_struct_value();
-
-                self.builder.build_return(Some(&result)).unwrap();
-                if let Some(bb) = saved_block {
-                    self.builder.position_at_end(bb);
-                }
-            }
-
-            "push" => {
-                let fn_type = list_struct.fn_type(&[list_struct.into(), elem_llvm.into()], false);
-                let fn_val = self.module.add_function(mangled_fn, fn_type, None);
-                self.functions.insert(mangled_fn.to_string(), fn_val);
-
-                let entry = self.context.append_basic_block(fn_val, "entry");
-                let grow_bb = self.context.append_basic_block(fn_val, "grow");
-                let store_bb = self.context.append_basic_block(fn_val, "store");
-
-                let saved_block = self.builder.get_insert_block();
-                self.builder.position_at_end(entry);
-
-                let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-                let item_val = fn_val.get_nth_param(1).unwrap();
-
-                let buf_ptr = self
-                    .builder
-                    .build_extract_value(self_val, 0, "buf_ptr")
-                    .unwrap();
-                let len = self
-                    .builder
-                    .build_extract_value(self_val, 1, "len")
-                    .unwrap()
-                    .into_int_value();
-                let cap = self
-                    .builder
-                    .build_extract_value(self_val, 2, "cap")
-                    .unwrap()
-                    .into_int_value();
-
-                let needs_grow = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::EQ, len, cap, "needs_grow")
-                    .unwrap();
-                self.builder
-                    .build_conditional_branch(needs_grow, grow_bb, store_bb)
-                    .unwrap();
-
-                // grow block: double capacity, realloc
-                self.builder.position_at_end(grow_bb);
-                let new_cap = self
-                    .builder
-                    .build_int_mul(cap, i64_ty.const_int(2, false), "new_cap")
-                    .unwrap();
-                let new_size = self
-                    .builder
-                    .build_int_mul(new_cap, i64_ty.const_int(elem_size, false), "new_size")
-                    .unwrap();
-                let realloc = *self.functions.get("realloc").expect("realloc not declared");
-                let new_ptr = self
-                    .builder
-                    .build_call(realloc, &[buf_ptr.into(), new_size.into()], "new_buf")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap();
-                self.builder.build_unconditional_branch(store_bb).unwrap();
-
-                // store block: phi for ptr/cap, store element, return
-                self.builder.position_at_end(store_bb);
-                let phi_ptr = self.builder.build_phi(ptr_ty, "ptr_phi").unwrap();
-                phi_ptr.add_incoming(&[(&buf_ptr, entry), (&new_ptr, grow_bb)]);
-                let phi_cap = self.builder.build_phi(i64_ty, "cap_phi").unwrap();
-                phi_cap.add_incoming(&[(&cap, entry), (&new_cap, grow_bb)]);
-
-                let final_ptr = phi_ptr.as_basic_value().into_pointer_value();
-                let final_cap = phi_cap.as_basic_value().into_int_value();
-
-                let byte_offset = self
-                    .builder
-                    .build_int_mul(len, i64_ty.const_int(elem_size, false), "byte_off")
-                    .unwrap();
-                let elem_ptr = unsafe {
-                    self.builder
-                        .build_gep(
-                            self.context.i8_type(),
-                            final_ptr,
-                            &[byte_offset],
-                            "elem_ptr",
-                        )
-                        .unwrap()
-                };
-                self.builder.build_store(elem_ptr, item_val).unwrap();
-
-                let new_len = self
-                    .builder
-                    .build_int_add(len, i64_ty.const_int(1, false), "new_len")
-                    .unwrap();
-
-                let result = list_struct.get_undef();
-                let result = self
-                    .builder
-                    .build_insert_value(result, final_ptr, 0, "r_ptr")
-                    .unwrap()
-                    .into_struct_value();
-                let result = self
-                    .builder
-                    .build_insert_value(result, new_len, 1, "r_len")
-                    .unwrap()
-                    .into_struct_value();
-                let result = self
-                    .builder
-                    .build_insert_value(result, final_cap, 2, "r_cap")
-                    .unwrap()
-                    .into_struct_value();
-
-                self.builder.build_return(Some(&result)).unwrap();
-                if let Some(bb) = saved_block {
-                    self.builder.position_at_end(bb);
-                }
-            }
-
-            "get" => {
-                let i32_ty = self.context.i32_type();
-                let fn_type = elem_llvm.fn_type(&[list_struct.into(), i32_ty.into()], false);
-                let fn_val = self.module.add_function(mangled_fn, fn_type, None);
-                self.functions.insert(mangled_fn.to_string(), fn_val);
-
-                let entry = self.context.append_basic_block(fn_val, "entry");
-                let ok_bb = self.context.append_basic_block(fn_val, "ok");
-                let panic_bb = self.context.append_basic_block(fn_val, "panic");
-
-                let saved_block = self.builder.get_insert_block();
-                self.builder.position_at_end(entry);
-
-                let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-                let index_i32 = fn_val.get_nth_param(1).unwrap().into_int_value();
-                let index = self
-                    .builder
-                    .build_int_z_extend(index_i32, i64_ty, "idx_ext")
-                    .unwrap();
-
-                let buf_ptr = self
-                    .builder
-                    .build_extract_value(self_val, 0, "buf_ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_extract_value(self_val, 1, "len")
-                    .unwrap()
-                    .into_int_value();
-
-                let in_bounds = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::ULT, index, len, "in_bounds")
-                    .unwrap();
-                self.builder
-                    .build_conditional_branch(in_bounds, ok_bb, panic_bb)
-                    .unwrap();
-
-                self.builder.position_at_end(panic_bb);
-                self.emit_panic("panic: index out of bounds\n", &[]);
-
-                // ok block
-                self.builder.position_at_end(ok_bb);
-                let byte_offset = self
-                    .builder
-                    .build_int_mul(index, i64_ty.const_int(elem_size, false), "byte_off")
-                    .unwrap();
-                let elem_ptr = unsafe {
-                    self.builder
-                        .build_gep(self.context.i8_type(), buf_ptr, &[byte_offset], "elem_ptr")
-                        .unwrap()
-                };
-                let val = self
-                    .builder
-                    .build_load(elem_llvm, elem_ptr, "elem_val")
-                    .unwrap();
-                self.builder.build_return(Some(&val)).unwrap();
-
-                if let Some(bb) = saved_block {
-                    self.builder.position_at_end(bb);
-                }
-            }
-
-            "length" => {
-                let i32_ty = self.context.i32_type();
-                let fn_type = i32_ty.fn_type(&[list_struct.into()], false);
-                let fn_val = self.module.add_function(mangled_fn, fn_type, None);
-                self.functions.insert(mangled_fn.to_string(), fn_val);
-
-                let entry = self.context.append_basic_block(fn_val, "entry");
-                let saved_block = self.builder.get_insert_block();
-                self.builder.position_at_end(entry);
-
-                let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-                let len_i64 = self
-                    .builder
-                    .build_extract_value(self_val, 1, "len")
-                    .unwrap()
-                    .into_int_value();
-                let len_i32 = self
-                    .builder
-                    .build_int_truncate(len_i64, i32_ty, "len_i32")
-                    .unwrap();
-                self.builder.build_return(Some(&len_i32)).unwrap();
-
-                if let Some(bb) = saved_block {
-                    self.builder.position_at_end(bb);
-                }
-            }
-
-            "from_list" => {
-                let fn_type = list_struct.fn_type(&[list_struct.into()], false);
-                let fn_val = self.module.add_function(mangled_fn, fn_type, None);
-                self.functions.insert(mangled_fn.to_string(), fn_val);
-
-                let entry = self.context.append_basic_block(fn_val, "entry");
-                let saved_block = self.builder.get_insert_block();
-                self.builder.position_at_end(entry);
-
-                let self_val = fn_val.get_nth_param(0).unwrap();
-                self.builder.build_return(Some(&self_val)).unwrap();
-
-                if let Some(bb) = saved_block {
-                    self.builder.position_at_end(bb);
-                }
-            }
-
-            "empty?" => {
-                let fn_type = i1_ty.fn_type(&[list_struct.into()], false);
-                let fn_val = self.module.add_function(mangled_fn, fn_type, None);
-                self.functions.insert(mangled_fn.to_string(), fn_val);
-
-                let entry = self.context.append_basic_block(fn_val, "entry");
-                let saved_block = self.builder.get_insert_block();
-                self.builder.position_at_end(entry);
-
-                let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-                let len = self
-                    .builder
-                    .build_extract_value(self_val, 1, "len")
-                    .unwrap()
-                    .into_int_value();
-                let is_empty = self
-                    .builder
-                    .build_int_compare(
-                        inkwell::IntPredicate::EQ,
-                        len,
-                        i64_ty.const_int(0, false),
-                        "is_empty",
-                    )
-                    .unwrap();
-                self.builder.build_return(Some(&is_empty)).unwrap();
-
-                if let Some(bb) = saved_block {
-                    self.builder.position_at_end(bb);
-                }
-            }
-
-            _ => {
-                return Err(format!("unknown intrinsic List method `{method_name}`"));
-            }
-        }
 
         Ok(())
     }
@@ -689,7 +341,31 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if base_type == "List" {
-            return self.emit_list_method(&mangled_type, &mangled_fn, method_name, type_args);
+            return crate::list::emit_list_method(
+                self,
+                &mangled_type,
+                &mangled_fn,
+                method_name,
+                type_args,
+            );
+        }
+        if base_type == "Map" {
+            return crate::map::emit_map_method(
+                self,
+                &mangled_type,
+                &mangled_fn,
+                method_name,
+                type_args,
+            );
+        }
+        if base_type == "Set" {
+            return crate::set::emit_set_method(
+                self,
+                &mangled_type,
+                &mangled_fn,
+                method_name,
+                type_args,
+            );
         }
 
         let impl_blocks = self

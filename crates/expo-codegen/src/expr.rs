@@ -139,6 +139,8 @@ pub fn compile_expr<'ctx>(
 
         Expr::List { elements, .. } => compile_list_literal(c, elements, function),
 
+        Expr::Map { entries, .. } => compile_map_literal(c, entries, function),
+
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
             std::mem::discriminant(expr)
@@ -642,4 +644,67 @@ fn compile_list_literal<'ctx>(
     }
 
     Ok(Some(list_val))
+}
+
+fn compile_map_literal<'ctx>(
+    c: &mut Compiler<'ctx>,
+    entries: &[(Expr, Expr)],
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let (key_type, val_type) =
+        if let (Some(k_subst), Some(v_subst)) = (c.type_subst.get("K"), c.type_subst.get("V")) {
+            (k_subst.clone(), v_subst.clone())
+        } else if let Some((first_k, first_v)) = entries.first() {
+            let k_val = compile_expr(c, first_k, function)?.ok_or("map key produced no value")?;
+            let v_val = compile_expr(c, first_v, function)?.ok_or("map value produced no value")?;
+            (
+                infer_type_from_llvm(c, &k_val),
+                infer_type_from_llvm(c, &v_val),
+            )
+        } else {
+            return Err("empty map literal requires a type annotation".to_string());
+        };
+
+    let type_args = vec![key_type.clone(), val_type.clone()];
+    let mangled_type = mangle_name("Map", &type_args);
+
+    if !c.struct_types.contains_key(&mangled_type) {
+        c.monomorphize_struct("Map", &type_args)?;
+    }
+
+    let new_fn_name = format!("{mangled_type}_new");
+    if !c.functions.contains_key(&new_fn_name) {
+        c.monomorphize_impl_method("Map", "new", &type_args)?;
+    }
+    let put_fn_name = format!("{mangled_type}_put");
+    if !c.functions.contains_key(&put_fn_name) {
+        c.monomorphize_impl_method("Map", "put", &type_args)?;
+    }
+
+    let new_fn = *c.functions.get(&new_fn_name).ok_or("Map.new not found")?;
+    let put_fn = *c.functions.get(&put_fn_name).ok_or("Map.put not found")?;
+
+    let mut map_val = c
+        .builder
+        .build_call(new_fn, &[], "map_new")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .ok_or("Map.new returned void")?;
+
+    for (key_expr, val_expr) in entries {
+        let key = compile_expr(c, key_expr, function)?.ok_or("map key produced no value")?;
+        let val = compile_expr(c, val_expr, function)?.ok_or("map value produced no value")?;
+        let key = coerce_numeric(c, key, &key_type);
+        let val = coerce_numeric(c, val, &val_type);
+        map_val = c
+            .builder
+            .build_call(put_fn, &[map_val.into(), key.into(), val.into()], "map_put")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .ok_or("Map.put returned void")?;
+    }
+
+    Ok(Some(map_val))
 }

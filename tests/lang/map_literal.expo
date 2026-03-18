@@ -1,0 +1,12 @@
+fn main()
+  m: Map<String, Int32> = ["hello": 10, "world": 20]
+
+  print("length: #{m.length()}")
+  print("has hello: #{m.has?("hello")}")
+  print("has world: #{m.has?("world")}")
+  print("has missing: #{m.has?("missing")}")
+
+  empty: Map<String, Int32> = [:]
+  print("empty length: #{empty.length()}")
+  print("empty empty?: #{empty.empty?()}")
+end
