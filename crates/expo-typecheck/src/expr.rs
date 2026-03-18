@@ -57,6 +57,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 struct_names: ce.struct_names,
                 enum_names: ce.enum_names,
                 type_hint: None,
+                process_msg_type: ce.process_msg_type.clone(),
             };
             let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
 
@@ -333,6 +334,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 struct_names: ce.struct_names,
                 enum_names: ce.enum_names,
                 type_hint: None,
+                process_msg_type: ce.process_msg_type.clone(),
             };
             let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
             let return_type = infer_expr(body, ctx, &mut closure_env);
@@ -344,10 +346,17 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
 
         Expr::Spawn { expr: inner, .. } => {
             infer_expr(inner, ctx, ce);
-            Type::Unknown
+            if let Some(hint) = &ce.type_hint {
+                hint.clone()
+            } else {
+                Type::Unknown
+            }
         }
 
-        Expr::Receive { .. } => Type::Primitive(Primitive::String),
+        Expr::Receive { .. } => ce
+            .process_msg_type
+            .clone()
+            .unwrap_or(Type::Primitive(Primitive::String)),
 
         Expr::String { parts, .. } => {
             for part in parts {

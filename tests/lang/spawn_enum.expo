@@ -1,0 +1,25 @@
+enum Msg
+  Greet(String)
+  Add(Int32, Int32)
+  Stop
+end
+
+fn worker()
+  match receive
+    Msg.Greet(name) ->
+      print("Hello, #{name}!")
+      worker()
+    Msg.Add(a, b) ->
+      result = a + b
+      print("Sum: #{result}")
+      worker()
+    Msg.Stop -> print("Worker stopped.")
+  end
+end
+
+fn main
+  pid: Process<Msg> = spawn worker
+  pid.send(Msg.Greet("Expo"))
+  pid.send(Msg.Add(10, 32))
+  pid.send(Msg.Stop)
+end

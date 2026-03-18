@@ -571,16 +571,22 @@ impl ListLiteral<T> for Set<T>
 end
 
 @doc """
-A handle to a lightweight process. The type parameter `M` is the
-message type accepted by this process.
+A handle to a lightweight process, parameterised by its message type `M`.
+
+`M` can be any type: a primitive (`String`, `Int32`, `Bool`), a struct,
+or an enum. The message is shallow-copied into the process mailbox on
+`send` and materialised as a value of type `M` by `receive` inside the
+process function.
 """
 struct Process<M>
 end
 
 impl Process<M>
   @doc """
-  Sends a message to this process. The message is copied into the
-  process mailbox.
+  Sends a message to this process. 
+  
+  The message is shallow-copied into the process mailbox. `M` can be any 
+  type — strings, primitives, structs, or enums.
   """
   fn send(self, msg: M)
     panic("intrinsic")

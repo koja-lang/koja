@@ -1,5 +1,5 @@
 //! Expo process runtime: single-threaded cooperative scheduler with
-//! string-typed mailboxes. Processes run after `main` returns.
+//! typed mailboxes. Processes run after `main` returns.
 
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
@@ -77,10 +77,9 @@ pub unsafe extern "C" fn expo_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
 
     let len = msg_len as usize;
     unsafe {
-        let layout = std::alloc::Layout::from_size_align(len + 1, 1).unwrap();
+        let layout = std::alloc::Layout::from_size_align(len, 1).unwrap();
         let ptr = std::alloc::alloc(layout);
         std::ptr::copy_nonoverlapping(msg_ptr, ptr, len);
-        *ptr.add(len) = 0;
         s.processes[idx].mailbox.push_back(ptr);
     }
 }

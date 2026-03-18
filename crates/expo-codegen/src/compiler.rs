@@ -43,6 +43,10 @@ pub struct Compiler<'ctx> {
     /// Active type substitution during monomorphized body compilation.
     /// Maps type parameter names (e.g. "T", "U") to concrete types.
     pub type_subst: HashMap<String, Type>,
+    /// Maps process function names to their message type, populated from
+    /// `TypeContext::process_fn_msg_types` so `receive` codegen can determine
+    /// the LLVM type to load from the mailbox pointer.
+    pub process_msg_type: Option<Type>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -67,6 +71,7 @@ impl<'ctx> Compiler<'ctx> {
             mono_struct_info: HashMap::new(),
             mono_enum_variants: HashMap::new(),
             type_subst: HashMap::new(),
+            process_msg_type: None,
         }
     }
 
@@ -448,9 +453,17 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
+        let saved_process_msg = self.process_msg_type.take();
+        if self_type_name.is_none() {
+            self.process_msg_type = self.type_ctx.process_fn_msg_types.get(&func.name).cloned();
+        }
+
         let return_type = self.resolve_return_type(&func.return_type);
         let is_main = func.name == "main" && self_type_name.is_none();
-        self.compile_function_body(&func.body, &return_type, fn_value, is_main)
+        let result = self.compile_function_body(&func.body, &return_type, fn_value, is_main);
+
+        self.process_msg_type = saved_process_msg;
+        result
     }
 
     fn define_functions(&mut self, module: &Module) -> Result<(), String> {

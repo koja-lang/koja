@@ -287,6 +287,9 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             return_type: Box::new(ret),
         });
     }
+    if matches!(expr, Expr::Receive { .. }) {
+        return c.process_msg_type.clone();
+    }
     None
 }
 

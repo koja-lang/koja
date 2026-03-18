@@ -3,7 +3,7 @@
 
 use expo_ast::ast::{ClosureParam, Expr, Literal, Statement, StringPart};
 
-use expo_typecheck::types::{Type, mangle_name};
+use expo_typecheck::types::{Primitive, Type, mangle_name};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
@@ -744,19 +744,17 @@ fn compile_spawn<'ctx>(
         .ok_or("expo_rt_spawn did not return a value")?
         .into_int_value();
 
-    let mangled = expo_typecheck::types::mangle_name(
-        "Process",
-        &[expo_typecheck::types::Type::Primitive(
-            expo_typecheck::types::Primitive::String,
-        )],
-    );
-    if !c.struct_types.contains_key(&mangled) {
-        c.monomorphize_struct(
-            "Process",
-            &[expo_typecheck::types::Type::Primitive(
+    let msg_type =
+        c.type_subst
+            .get("M")
+            .cloned()
+            .unwrap_or(expo_typecheck::types::Type::Primitive(
                 expo_typecheck::types::Primitive::String,
-            )],
-        )?;
+            ));
+
+    let mangled = expo_typecheck::types::mangle_name("Process", std::slice::from_ref(&msg_type));
+    if !c.struct_types.contains_key(&mangled) {
+        c.monomorphize_struct("Process", &[msg_type])?;
     }
     let process_struct = *c
         .struct_types
@@ -779,7 +777,7 @@ fn compile_receive<'ctx>(c: &mut Compiler<'ctx>) -> Result<Option<BasicValueEnum
         .get("expo_rt_receive")
         .ok_or("expo_rt_receive not declared")?;
 
-    let msg_ptr = c
+    let raw_ptr = c
         .builder
         .build_call(receive_fn, &[], "receive_msg")
         .unwrap()
@@ -787,5 +785,23 @@ fn compile_receive<'ctx>(c: &mut Compiler<'ctx>) -> Result<Option<BasicValueEnum
         .left()
         .ok_or("expo_rt_receive did not return a value")?;
 
-    Ok(Some(msg_ptr))
+    let msg_type = c.process_msg_type.clone();
+    let is_string = msg_type
+        .as_ref()
+        .is_none_or(|t| matches!(t, Type::Primitive(Primitive::String)));
+
+    if is_string {
+        Ok(Some(raw_ptr))
+    } else {
+        let msg_ty = msg_type.unwrap();
+        let llvm_ty = crate::types::to_llvm_type(&msg_ty, c.context, &c.struct_types)
+            .ok_or_else(|| format!("no LLVM type for receive message `{msg_ty:?}`"))?;
+        let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+        let typed_ptr = c
+            .builder
+            .build_pointer_cast(raw_ptr.into_pointer_value(), ptr_ty, "msg_typed_ptr")
+            .unwrap();
+        let loaded = c.builder.build_load(llvm_ty, typed_ptr, "msg_val").unwrap();
+        Ok(Some(loaded))
+    }
 }

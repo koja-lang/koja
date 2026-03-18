@@ -39,6 +39,9 @@ pub(crate) struct CheckEnv<'a> {
     /// Expected type from a variable's type annotation, used to resolve
     /// unresolved type parameters in generic static calls like `List.new()`.
     pub type_hint: Option<Type>,
+    /// The message type `M` when the current function is a process function
+    /// (spawned as `Process<M>`). Used by `receive` to infer its return type.
+    pub process_msg_type: Option<Type>,
 }
 
 impl<'a> CheckEnv<'a> {
@@ -54,6 +57,7 @@ impl<'a> CheckEnv<'a> {
             struct_names: self.struct_names,
             enum_names: self.enum_names,
             type_hint: None,
+            process_msg_type: self.process_msg_type.clone(),
         }
     }
 

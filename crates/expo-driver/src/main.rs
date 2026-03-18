@@ -311,6 +311,12 @@ fn build(args: &[String], quiet: bool, color: bool) {
         for (span, captures) in &ctx.closure_captures {
             merged_ctx.closure_captures.insert(*span, captures.clone());
         }
+        for (name, ty) in &ctx.process_fn_msg_types {
+            merged_ctx
+                .process_fn_msg_types
+                .entry(name.clone())
+                .or_insert_with(|| ty.clone());
+        }
     }
 
     let mut modules_ast: Vec<&expo_ast::ast::Module> = vec![&stdlib.module];

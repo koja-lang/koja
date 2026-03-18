@@ -23,6 +23,8 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
     let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
     let enum_name_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
 
+    collect_process_msg_types(module, ctx, &struct_name_refs, &enum_name_refs);
+
     for item in &module.items {
         match item {
             Item::Function(f) => {
@@ -61,6 +63,39 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// Pre-pass: scan all function bodies for `pid: Process<M> = spawn fn_name`
+/// assignments and record the mapping `fn_name -> M` so that `receive` inside
+/// those functions can infer the correct message type.
+fn collect_process_msg_types(
+    module: &Module,
+    ctx: &mut TypeContext,
+    struct_names: &[&str],
+    enum_names: &[&str],
+) {
+    for item in &module.items {
+        let stmts = match item {
+            Item::Function(f) => &f.body,
+            _ => continue,
+        };
+        for stmt in stmts {
+            if let Statement::Assignment {
+                type_annotation: Some(TypeExpr::Generic { path, args, .. }),
+                value,
+                ..
+            } = stmt
+                && path.len() == 1
+                && path[0] == "Process"
+                && args.len() == 1
+                && let Expr::Spawn { expr, .. } = value
+                && let Expr::Ident { name, .. } = expr.as_ref()
+            {
+                let msg_type = resolve_type_expr(&args[0], struct_names, enum_names);
+                ctx.process_fn_msg_types.insert(name.clone(), msg_type);
+            }
         }
     }
 }
@@ -119,6 +154,8 @@ fn check_function(
         })
         .unwrap_or(FunctionKind::Static);
 
+    let process_msg_type = ctx.process_fn_msg_types.get(&f.name).cloned();
+
     let mut ce = CheckEnv {
         env,
         used_vars: HashSet::new(),
@@ -128,6 +165,7 @@ fn check_function(
         struct_names,
         enum_names,
         type_hint: None,
+        process_msg_type,
     };
 
     let check_implicit_return = declared_return != Type::Unit && declared_return != Type::Unknown;
