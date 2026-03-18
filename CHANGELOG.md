@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- VS Code extension: function names with `?` suffixes (`empty?`, `any?`) and generic parameters (`map<U>`) now highlight consistently as function names.
 - Interpolated strings are now heap-allocated (`malloc`) instead of stack-allocated (`alloca`). Stack-allocated interpolated strings produced dangling pointers when returned from a function or stored beyond the enclosing scope.
 - Owned strings (interpolated, received from mailbox) are now freed at scope exit via drop insertion. An `Ownership` enum (`Owned`/`Unowned`) tracks whether each string variable is responsible for its backing memory. Static string literals remain unowned and are never freed.
 

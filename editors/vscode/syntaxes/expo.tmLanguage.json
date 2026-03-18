@@ -7,14 +7,15 @@
     { "include": "#strings" },
     { "include": "#numbers" },
     { "include": "#annotations" },
+    { "include": "#function-definition" },
+    { "include": "#module-qualified-call" },
+    { "include": "#function-call" },
     { "include": "#keywords" },
     { "include": "#operators" },
     { "include": "#primitive-types" },
     { "include": "#types" },
     { "include": "#module-constants" },
-    { "include": "#module-qualified-call" },
     { "include": "#import-path" },
-    { "include": "#function-call" },
     { "include": "#typed-assignment" },
     { "include": "#identifiers" }
   ],
@@ -215,10 +216,21 @@
         }
       ]
     },
+    "function-definition": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+([a-z_][a-z0-9_]*\\??)",
+          "captures": {
+            "1": { "name": "keyword.other.fn.expo" },
+            "2": { "name": "entity.name.function.expo" }
+          }
+        }
+      ]
+    },
     "module-qualified-call": {
       "patterns": [
         {
-          "match": "\\b([a-z_][a-z0-9_]*)\\.([a-z_][a-z0-9_]*)\\s*(?=\\()",
+          "match": "\\b([a-z_][a-z0-9_]*)\\.([a-z_][a-z0-9_]*\\??)\\s*(?:<[^>]*>)?\\s*(?=\\()",
           "captures": {
             "1": { "name": "entity.name.namespace.expo" },
             "2": { "name": "entity.name.function.expo" }
@@ -230,7 +242,7 @@
       "patterns": [
         {
           "name": "meta.function-call.expo",
-          "match": "\\b([a-z_][a-z0-9_]*)\\s*(?=\\()",
+          "match": "\\b([a-z_][a-z0-9_]*\\??)\\s*(?:<[^>]*>)?\\s*(?=\\()",
           "captures": {
             "1": { "name": "entity.name.function.expo" }
           }

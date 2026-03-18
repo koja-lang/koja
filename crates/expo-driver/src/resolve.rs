@@ -1,9 +1,16 @@
+//! Module graph resolution and import handling.
+//!
+//! Starting from an entry file, builds a [`ModuleGraph`] by recursively
+//! following `import` statements. The graph is topologically sorted so
+//! that dependencies are type-checked before their dependents.
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use expo_ast::ast::{ImportTarget, Item, Module};
 
+/// A single resolved module: its source text, parsed AST, and any parse errors.
 pub struct ResolvedModule {
     pub name: String,
     pub path: PathBuf,
@@ -12,12 +19,16 @@ pub struct ResolvedModule {
     pub errors: Vec<expo_ast::ast::Diagnostic>,
 }
 
+/// The complete set of modules reachable from an entry file, in topological order.
 pub struct ModuleGraph {
     pub entry: String,
     pub modules: HashMap<String, ResolvedModule>,
+    /// Module names in dependency order (leaves first).
     pub order: Vec<String>,
 }
 
+/// Builds a [`ModuleGraph`] by recursively resolving imports from the entry file.
+/// Returns an error if a circular import is detected or a module file cannot be found.
 pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
     let root_dir = entry_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let entry_name = entry_path
@@ -47,6 +58,8 @@ pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
     Ok(graph)
 }
 
+/// DFS traversal that resolves one module and all its transitive imports,
+/// detecting circular dependencies via the `visiting` stack.
 fn resolve_recursive(
     module_name: &str,
     module_path: &Path,
@@ -110,6 +123,8 @@ fn resolve_recursive(
     Ok(())
 }
 
+/// Maps a dotted module name to a file path, trying `<name>.expo` first
+/// then `<name>/mod.expo`.
 fn resolve_import_path(module_name: &str, root_dir: &Path) -> Result<PathBuf, String> {
     let relative = module_name.replace('.', "/");
 
@@ -128,6 +143,8 @@ fn resolve_import_path(module_name: &str, root_dir: &Path) -> Result<PathBuf, St
     ))
 }
 
+/// Extracts all import declarations from a parsed module, returning the
+/// module name to resolve and the import target kind.
 fn extract_imports(module: &Module, root_dir: &Path) -> Vec<(String, ImportTarget)> {
     module
         .items
@@ -160,6 +177,7 @@ fn extract_imports(module: &Module, root_dir: &Path) -> Vec<(String, ImportTarge
         .collect()
 }
 
+/// Returns true if the dotted module name corresponds to an existing file.
 fn can_resolve(module_name: &str, root_dir: &Path) -> bool {
     let relative = module_name.replace('.', "/");
     root_dir.join(format!("{relative}.expo")).exists()

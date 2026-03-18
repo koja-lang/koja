@@ -9,6 +9,7 @@ use expo_ast::span::Span;
 use crate::types::Type;
 
 /// Holds all type information gathered during collection and checking for a single module.
+#[derive(Clone)]
 pub struct TypeContext {
     pub closure_captures: HashMap<Span, Vec<CaptureInfo>>,
     pub constants: HashMap<String, Type>,
@@ -154,6 +155,78 @@ impl TypeContext {
             protocol_impls: HashMap::new(),
             protocols: HashMap::new(),
             structs: HashMap::new(),
+        }
+    }
+
+    /// Merges all type information from `other` into `self`. Entries already
+    /// present in `self` are kept (first-writer-wins), except for
+    /// `generic_impl_asts` and `protocol_impls` which accumulate across modules.
+    pub fn merge(&mut self, other: &TypeContext) {
+        for (name, sig) in &other.functions {
+            if !self.functions.contains_key(name) {
+                self.functions.insert(name.clone(), sig.clone());
+            }
+        }
+        for (name, info) in &other.structs {
+            if !self.structs.contains_key(name) {
+                self.structs.insert(name.clone(), info.clone());
+            }
+        }
+        for (name, info) in &other.enums {
+            if !self.enums.contains_key(name) {
+                self.enums.insert(name.clone(), info.clone());
+            }
+        }
+        for (mod_name, mod_ctx) in &other.imported_modules {
+            if !self.imported_modules.contains_key(mod_name) {
+                self.imported_modules
+                    .insert(mod_name.clone(), mod_ctx.clone());
+            }
+        }
+        for (name, ast) in &other.generic_function_asts {
+            if !self.generic_function_asts.contains_key(name) {
+                self.generic_function_asts.insert(name.clone(), ast.clone());
+            }
+        }
+        for (name, ast) in &other.generic_struct_asts {
+            if !self.generic_struct_asts.contains_key(name) {
+                self.generic_struct_asts.insert(name.clone(), ast.clone());
+            }
+        }
+        for (name, ast) in &other.generic_enum_asts {
+            if !self.generic_enum_asts.contains_key(name) {
+                self.generic_enum_asts.insert(name.clone(), ast.clone());
+            }
+        }
+        for (name, blocks) in &other.generic_impl_asts {
+            self.generic_impl_asts
+                .entry(name.clone())
+                .or_default()
+                .extend(blocks.iter().cloned());
+        }
+        for (name, ast) in &other.generic_protocol_asts {
+            if !self.generic_protocol_asts.contains_key(name) {
+                self.generic_protocol_asts.insert(name.clone(), ast.clone());
+            }
+        }
+        for (name, info) in &other.protocols {
+            if !self.protocols.contains_key(name) {
+                self.protocols.insert(name.clone(), info.clone());
+            }
+        }
+        for (type_name, protos) in &other.protocol_impls {
+            self.protocol_impls
+                .entry(type_name.clone())
+                .or_default()
+                .extend(protos.iter().cloned());
+        }
+        for (span, captures) in &other.closure_captures {
+            self.closure_captures.insert(*span, captures.clone());
+        }
+        for (name, ty) in &other.process_fn_msg_types {
+            self.process_fn_msg_types
+                .entry(name.clone())
+                .or_insert_with(|| ty.clone());
         }
     }
 
