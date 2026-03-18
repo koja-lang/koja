@@ -212,6 +212,58 @@ impl List<T>
   fn empty?(self) -> Bool
     panic("intrinsic")
   end
+
+  @doc """
+  Returns a new list with `f` applied to each element. The closure may
+  return a different type, producing a `List<U>` from a `List<T>`.
+  """
+  fn map<U>(self, f: fn(T) -> U) -> List<U>
+    result: List<U> = List.new()
+    for item in self
+      result = result.push(f(item))
+    end
+    result
+  end
+
+  @doc """
+  Returns a new list containing only the elements for which `f` returns `true`.
+  """
+  fn filter(self, f: fn(T) -> Bool) -> List<T>
+    result: List<T> = List.new()
+    for item in self
+      if f(item)
+        result = result.push(item)
+      end
+    end
+    result
+  end
+
+  @doc """
+  Returns `true` if `f` returns `true` for at least one element.
+  """
+  fn any?(self, f: fn(T) -> Bool) -> Bool
+    result = false
+    for item in self
+      if f(item)
+        result = true
+      end
+    end
+    result
+  end
+
+  @doc """
+  Returns `true` if `f` returns `true` for every element.
+  Returns `true` for an empty list.
+  """
+  fn all?(self, f: fn(T) -> Bool) -> Bool
+    result = true
+    for item in self
+      unless f(item)
+        result = false
+      end
+    end
+    result
+  end
 end
 
 @doc """

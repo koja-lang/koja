@@ -7,7 +7,7 @@ use expo_typecheck::types::{Primitive, Type};
 use inkwell::AddressSpace;
 use inkwell::types::BasicType;
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, EmitResult};
 use crate::types::to_llvm_type;
 
 pub fn monomorphize_process_struct<'ctx>(
@@ -31,7 +31,7 @@ pub fn emit_process_method<'ctx>(
     mangled_fn: &str,
     method_name: &str,
     type_args: &[Type],
-) -> Result<(), String> {
+) -> Result<EmitResult, String> {
     match method_name {
         "send" => {
             let process_struct = *c
@@ -117,8 +117,8 @@ pub fn emit_process_method<'ctx>(
                 c.builder.position_at_end(bb);
             }
 
-            Ok(())
+            Ok(EmitResult::Emitted)
         }
-        _ => Err(format!("unknown intrinsic Process method `{method_name}`")),
+        _ => Ok(EmitResult::NotIntrinsic),
     }
 }

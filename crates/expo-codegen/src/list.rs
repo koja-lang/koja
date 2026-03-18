@@ -6,7 +6,7 @@
 use expo_typecheck::types::{Primitive, Type};
 use inkwell::types::BasicType;
 
-use crate::compiler::{Compiler, type_byte_size};
+use crate::compiler::{Compiler, EmitResult, type_byte_size};
 use crate::types::to_llvm_type;
 
 pub fn monomorphize_list_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
@@ -32,7 +32,7 @@ pub fn emit_list_method<'ctx>(
     mangled_fn: &str,
     method_name: &str,
     type_args: &[Type],
-) -> Result<(), String> {
+) -> Result<EmitResult, String> {
     let list_struct = *c
         .struct_types
         .get(mangled_type)
@@ -337,10 +337,8 @@ pub fn emit_list_method<'ctx>(
             }
         }
 
-        _ => {
-            return Err(format!("unknown intrinsic List method `{method_name}`"));
-        }
+        _ => return Ok(EmitResult::NotIntrinsic),
     }
 
-    Ok(())
+    Ok(EmitResult::Emitted)
 }

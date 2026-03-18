@@ -348,41 +348,52 @@ impl<'ctx> Compiler<'ctx> {
             return Ok(());
         }
 
-        if base_type == "List" {
-            return crate::list::emit_list_method(
-                self,
-                &mangled_type,
-                &mangled_fn,
-                method_name,
-                type_args,
-            );
-        }
-        if base_type == "Map" {
-            return crate::map::emit_map_method(
-                self,
-                &mangled_type,
-                &mangled_fn,
-                method_name,
-                type_args,
-            );
-        }
-        if base_type == "Set" {
-            return crate::set::emit_set_method(
-                self,
-                &mangled_type,
-                &mangled_fn,
-                method_name,
-                type_args,
-            );
-        }
-        if base_type == "Process" {
-            return crate::process::emit_process_method(
-                self,
-                &mangled_type,
-                &mangled_fn,
-                method_name,
-                type_args,
-            );
+        match base_type {
+            "List" => {
+                if let crate::compiler::EmitResult::Emitted = crate::list::emit_list_method(
+                    self,
+                    &mangled_type,
+                    &mangled_fn,
+                    method_name,
+                    type_args,
+                )? {
+                    return Ok(());
+                }
+            }
+            "Map" => {
+                if let crate::compiler::EmitResult::Emitted = crate::map::emit_map_method(
+                    self,
+                    &mangled_type,
+                    &mangled_fn,
+                    method_name,
+                    type_args,
+                )? {
+                    return Ok(());
+                }
+            }
+            "Set" => {
+                if let crate::compiler::EmitResult::Emitted = crate::set::emit_set_method(
+                    self,
+                    &mangled_type,
+                    &mangled_fn,
+                    method_name,
+                    type_args,
+                )? {
+                    return Ok(());
+                }
+            }
+            "Process" => {
+                if let crate::compiler::EmitResult::Emitted = crate::process::emit_process_method(
+                    self,
+                    &mangled_type,
+                    &mangled_fn,
+                    method_name,
+                    type_args,
+                )? {
+                    return Ok(());
+                }
+            }
+            _ => {}
         }
 
         let impl_blocks = self

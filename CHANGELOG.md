@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ListLiteral<T>` protocol -- backing protocol for list literal syntax. Any type can implement `ListLiteral<T>` to be constructible from `[...]` syntax. `List<T>` implements it by default (identity). Defined in `std.kernel`.
 - `unless` expression -- negated `if` for guard clauses (`unless condition ... end`). Executes the body only when the condition is false. No `else` branch.
 - `Self` type expression -- resolves to the implementing type inside `protocol` and `impl` blocks. Enables protocols like `ListLiteral<T>` to return the concrete implementing type without naming it. Works with generics and monomorphization.
+- `List<T>` iterator functions: `map`, `filter`, `any?`, `all?`.
 
 ### Changed
 

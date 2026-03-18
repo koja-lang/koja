@@ -5,6 +5,14 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::drop::Ownership;
+
+/// Result of attempting to emit an intrinsic method for a built-in type.
+/// `NotIntrinsic` signals the caller to fall through to body compilation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmitResult {
+    Emitted,
+    NotIntrinsic,
+}
 use expo_ast::ast::{
     Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, TypeExpr,
 };
@@ -178,7 +186,13 @@ impl<'ctx> Compiler<'ctx> {
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Type {
         let struct_names: Vec<&str> = self.type_ctx.structs.keys().map(|s| s.as_str()).collect();
         let enum_names: Vec<&str> = self.type_ctx.enums.keys().map(|s| s.as_str()).collect();
-        expo_typecheck::types::resolve_type_expr(type_expr, &struct_names, &enum_names)
+        let type_params: Vec<&str> = self.type_subst.keys().map(|s| s.as_str()).collect();
+        expo_typecheck::types::resolve_type_expr_with_params(
+            type_expr,
+            &struct_names,
+            &enum_names,
+            &type_params,
+        )
     }
 
     fn declare_builtins(&mut self) {

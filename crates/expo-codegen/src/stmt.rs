@@ -50,7 +50,8 @@ pub fn compile_statement<'ctx>(
                     if let Some(tp) = type_params {
                         saved_subst = Some(c.type_subst.clone());
                         for (param, arg) in tp.iter().zip(type_args.iter()) {
-                            c.type_subst.insert(param.clone(), arg.clone());
+                            let concrete = expo_typecheck::types::substitute(arg, &c.type_subst);
+                            c.type_subst.insert(param.clone(), concrete);
                         }
                     }
                 }
@@ -65,6 +66,24 @@ pub fn compile_statement<'ctx>(
 
             let ty = if let Some(te) = type_annotation {
                 let annotated = c.resolve_type_expr(te);
+                let annotated = match annotated {
+                    Type::GenericInstance {
+                        base,
+                        kind,
+                        type_args,
+                    } => {
+                        let resolved_args: Vec<Type> = type_args
+                            .iter()
+                            .map(|t| expo_typecheck::types::substitute(t, &c.type_subst))
+                            .collect();
+                        Type::GenericInstance {
+                            base,
+                            kind,
+                            type_args: resolved_args,
+                        }
+                    }
+                    other => other,
+                };
                 let _ = c.ensure_types_exist(&annotated);
                 annotated
             } else {

@@ -6,7 +6,7 @@
 
 use expo_typecheck::types::Type;
 
-use crate::compiler::{Compiler, type_byte_size};
+use crate::compiler::{Compiler, EmitResult, type_byte_size};
 use crate::hashtable;
 use crate::types::to_llvm_type;
 
@@ -16,7 +16,7 @@ pub fn emit_set_method<'ctx>(
     mangled_fn: &str,
     method_name: &str,
     type_args: &[Type],
-) -> Result<(), String> {
+) -> Result<EmitResult, String> {
     let set_struct = *c
         .struct_types
         .get(mangled_type)
@@ -43,7 +43,8 @@ pub fn emit_set_method<'ctx>(
 
     match method_name {
         "new" => {
-            return hashtable::emit_hashtable_new(c, mangled_fn, set_struct, elem_size);
+            hashtable::emit_hashtable_new(c, mangled_fn, set_struct, elem_size)?;
+            return Ok(EmitResult::Emitted);
         }
 
         "insert" => {
@@ -795,11 +796,13 @@ pub fn emit_set_method<'ctx>(
         }
 
         "length" => {
-            return hashtable::emit_hashtable_length(c, mangled_fn, set_struct);
+            hashtable::emit_hashtable_length(c, mangled_fn, set_struct)?;
+            return Ok(EmitResult::Emitted);
         }
 
         "empty?" => {
-            return hashtable::emit_hashtable_empty(c, mangled_fn, set_struct);
+            hashtable::emit_hashtable_empty(c, mangled_fn, set_struct)?;
+            return Ok(EmitResult::Emitted);
         }
 
         "from_list" => {
@@ -835,7 +838,7 @@ pub fn emit_set_method<'ctx>(
                 .into_int_value();
 
             let new_fn_name = format!("{mangled_type}_new");
-            emit_set_method(c, mangled_type, &new_fn_name, "new", type_args)?;
+            let _ = emit_set_method(c, mangled_type, &new_fn_name, "new", type_args)?;
             let new_fn = *c.functions.get(&new_fn_name).unwrap();
             let init_set = c
                 .builder
@@ -877,7 +880,7 @@ pub fn emit_set_method<'ctx>(
             let elem_val = c.builder.build_load(elem_llvm, elem_ptr, "elem").unwrap();
 
             let insert_fn_name = format!("{mangled_type}_insert");
-            emit_set_method(c, mangled_type, &insert_fn_name, "insert", type_args)?;
+            let _ = emit_set_method(c, mangled_type, &insert_fn_name, "insert", type_args)?;
             let insert_fn = *c.functions.get(&insert_fn_name).unwrap();
 
             let current_set = c
@@ -912,10 +915,8 @@ pub fn emit_set_method<'ctx>(
             }
         }
 
-        _ => {
-            return Err(format!("unknown intrinsic Set method `{method_name}`"));
-        }
+        _ => return Ok(EmitResult::NotIntrinsic),
     }
 
-    Ok(())
+    Ok(EmitResult::Emitted)
 }

@@ -6,7 +6,7 @@
 
 use expo_typecheck::types::{GenericKind, Type};
 
-use crate::compiler::{Compiler, type_byte_size};
+use crate::compiler::{Compiler, EmitResult, type_byte_size};
 use crate::hashtable;
 use crate::types::to_llvm_type;
 
@@ -16,7 +16,7 @@ pub fn emit_map_method<'ctx>(
     mangled_fn: &str,
     method_name: &str,
     type_args: &[Type],
-) -> Result<(), String> {
+) -> Result<EmitResult, String> {
     let map_struct = *c
         .struct_types
         .get(mangled_type)
@@ -48,7 +48,8 @@ pub fn emit_map_method<'ctx>(
 
     match method_name {
         "new" => {
-            return hashtable::emit_hashtable_new(c, mangled_fn, map_struct, entry_size);
+            hashtable::emit_hashtable_new(c, mangled_fn, map_struct, entry_size)?;
+            return Ok(EmitResult::Emitted);
         }
 
         "put" => {
@@ -1059,11 +1060,13 @@ pub fn emit_map_method<'ctx>(
         }
 
         "length" => {
-            return hashtable::emit_hashtable_length(c, mangled_fn, map_struct);
+            hashtable::emit_hashtable_length(c, mangled_fn, map_struct)?;
+            return Ok(EmitResult::Emitted);
         }
 
         "empty?" => {
-            return hashtable::emit_hashtable_empty(c, mangled_fn, map_struct);
+            hashtable::emit_hashtable_empty(c, mangled_fn, map_struct)?;
+            return Ok(EmitResult::Emitted);
         }
 
         "from_map" => {
@@ -1083,10 +1086,8 @@ pub fn emit_map_method<'ctx>(
             }
         }
 
-        _ => {
-            return Err(format!("unknown intrinsic Map method `{method_name}`"));
-        }
+        _ => return Ok(EmitResult::NotIntrinsic),
     }
 
-    Ok(())
+    Ok(EmitResult::Emitted)
 }
