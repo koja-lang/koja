@@ -20,7 +20,7 @@ pub fn compile_field_access<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     if let Expr::Ident { name, .. } = receiver {
-        let (ptr, ty) = c
+        let (ptr, ty, _) = c
             .variables
             .get(name)
             .ok_or_else(|| format!("undefined variable: {name}"))?
@@ -243,7 +243,7 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
         Expr::Ident { name, .. } => c
             .variables
             .get(name)
-            .map(|(_, ty)| ty.clone())
+            .map(|(_, ty, _)| ty.clone())
             .unwrap_or(Type::Unknown),
         Expr::Closure {
             params,
@@ -416,7 +416,7 @@ fn resolve_struct_name<'ctx>(
     recv_val: &BasicValueEnum<'ctx>,
 ) -> Result<String, String> {
     if let Expr::Ident { name, .. } = receiver
-        && let Some((_, ty)) = c.variables.get(name)
+        && let Some((_, ty, _)) = c.variables.get(name)
         && let Some(sn) = struct_name_from_type(ty)
     {
         return Ok(sn);

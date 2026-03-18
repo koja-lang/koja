@@ -6,6 +6,7 @@ use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
+use crate::drop::Ownership;
 use crate::expr::compile_expr;
 use crate::types::to_llvm_type;
 
@@ -82,15 +83,16 @@ pub fn compile_statement<'ctx>(
                 AssignTarget::LValue(lvalue) => {
                     if lvalue.segments.len() == 1 {
                         let name = &lvalue.segments[0];
-                        if let Some((ptr, var_ty)) = c.variables.get(name).cloned() {
+                        if let Some((ptr, var_ty, _)) = c.variables.get(name).cloned() {
                             let store_val = coerce_numeric(c, val, &var_ty);
                             c.builder.build_store(ptr, store_val).unwrap();
                         } else {
+                            let ownership = ownership_for_expr(value, &ty);
                             let alloca_ty = to_llvm_type(&ty, c.context, &c.struct_types)
                                 .unwrap_or(val.get_type());
                             let alloca = c.builder.build_alloca(alloca_ty, name).unwrap();
                             c.builder.build_store(alloca, val).unwrap();
-                            c.variables.insert(name.clone(), (alloca, ty));
+                            c.variables.insert(name.clone(), (alloca, ty, ownership));
                         }
                     } else {
                         compile_field_assignment(c, &lvalue.segments, val)?;
@@ -103,11 +105,12 @@ pub fn compile_statement<'ctx>(
                         );
                     };
 
+                    let ownership = ownership_for_expr(value, &ty);
                     let alloca_ty =
                         to_llvm_type(&ty, c.context, &c.struct_types).unwrap_or(val.get_type());
                     let alloca = c.builder.build_alloca(alloca_ty, name).unwrap();
                     c.builder.build_store(alloca, val).unwrap();
-                    c.variables.insert(name.clone(), (alloca, ty));
+                    c.variables.insert(name.clone(), (alloca, ty, ownership));
                 }
             }
             Ok(None)
@@ -142,7 +145,7 @@ pub fn compile_statement<'ctx>(
             }
             let name = &target.segments[0];
 
-            let (ptr, var_ty) = c
+            let (ptr, var_ty, _) = c
                 .variables
                 .get(name)
                 .ok_or_else(|| format!("undefined variable: {name}"))?
@@ -205,7 +208,7 @@ fn compile_field_assignment<'ctx>(
     val: BasicValueEnum<'ctx>,
 ) -> Result<(), String> {
     let var_name = &segments[0];
-    let (mut ptr, ty) = c
+    let (mut ptr, ty, _) = c
         .variables
         .get(var_name)
         .ok_or_else(|| format!("undefined variable: {var_name}"))?
@@ -475,4 +478,24 @@ fn convert_list_literal_if_needed<'ctx>(
         .ok_or("from_list returned void")?;
 
     Ok(result)
+}
+
+fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
+    if !matches!(ty, Type::Primitive(Primitive::String)) {
+        return Ownership::Unowned;
+    }
+    match expr {
+        Expr::String { parts, .. } => {
+            let has_interpolation = parts
+                .iter()
+                .any(|p| matches!(p, expo_ast::ast::StringPart::Interpolation { .. }));
+            if has_interpolation {
+                Ownership::Owned
+            } else {
+                Ownership::Unowned
+            }
+        }
+        Expr::Receive { .. } => Ownership::Owned,
+        _ => Ownership::Unowned,
+    }
 }

@@ -1,6 +1,6 @@
 //! Hash table infrastructure shared by `Map<K,V>` and `Set<T>`.
 //!
-//! Provides intrinsic LLVM IR emission for the `Hashable` and `Equatable`
+//! Provides intrinsic LLVM IR emission for the `Hash` and `Equality`
 //! protocol methods on primitive types, plus shared helpers for probing,
 //! resizing, and calling hash/eq on arbitrary key types.
 
@@ -250,7 +250,7 @@ pub fn ensure_hash_fn<'ctx>(
         return Ok(*fv);
     }
     Err(format!(
-        "type `{type_name}` does not implement Hashable (no `{fn_name}` found)"
+        "type `{type_name}` does not implement Hash (no `{fn_name}` found)"
     ))
 }
 
@@ -264,7 +264,7 @@ pub fn ensure_eq_fn<'ctx>(
         return Ok(*fv);
     }
     Err(format!(
-        "type `{type_name}` does not implement Equatable (no `{fn_name}` found)"
+        "type `{type_name}` does not implement Equality (no `{fn_name}` found)"
     ))
 }
 

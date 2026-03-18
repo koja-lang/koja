@@ -13,6 +13,7 @@ use crate::control::{
     compile_cond, compile_for, compile_if, compile_loop, compile_match, compile_ternary,
     compile_unless, compile_while,
 };
+use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
 use crate::ops::{compile_binary, compile_unary};
 use crate::stmt::{coerce_numeric, infer_type_from_llvm};
@@ -30,7 +31,7 @@ pub fn compile_expr<'ctx>(
         Expr::Literal { value, .. } => compile_literal(c, value),
 
         Expr::Ident { name, .. } => {
-            if let Some((ptr, ty)) = c.variables.get(name) {
+            if let Some((ptr, ty, _)) = c.variables.get(name) {
                 let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)
                     .ok_or_else(|| format!("cannot load variable of unsupported type: {name}"))?;
                 let val = c.builder.build_load(llvm_ty, *ptr, name).unwrap();
@@ -89,7 +90,7 @@ pub fn compile_expr<'ctx>(
         } => compile_while(c, condition, body, function),
 
         Expr::Self_ { .. } => {
-            if let Some((ptr, ty)) = c.variables.get("self") {
+            if let Some((ptr, ty, _)) = c.variables.get("self") {
                 let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)
                     .ok_or("cannot load self of unsupported type")?;
                 let val = c.builder.build_load(llvm_ty, *ptr, "self").unwrap();
@@ -263,11 +264,19 @@ fn compile_string<'ctx>(
     let one = i32_type.const_int(1, false);
     let buf_size = c.builder.build_int_add(needed, one, "buf_size").unwrap();
 
-    let i8_type = c.context.i8_type();
+    let malloc_fn = *c.functions.get("malloc").ok_or("malloc not declared")?;
+    let buf_size_i64 = c
+        .builder
+        .build_int_z_extend(buf_size, c.context.i64_type(), "buf_size_i64")
+        .unwrap();
     let buf = c
         .builder
-        .build_array_alloca(i8_type, buf_size, "interp_buf")
-        .unwrap();
+        .build_call(malloc_fn, &[buf_size_i64.into()], "interp_buf")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .ok_or("malloc did not return a value")?
+        .into_pointer_value();
 
     let mut write_args: Vec<BasicValueEnum> = vec![buf.into(), buf_size.into(), fmt_ptr.into()];
     write_args.extend_from_slice(&interp_values);
@@ -427,7 +436,7 @@ fn compile_closure<'ctx>(
         if let Some(ref caps) = captures {
             caps.iter()
                 .filter_map(|cap| {
-                    let (ptr, ty) = c.variables.get(&cap.name)?;
+                    let (ptr, ty, _) = c.variables.get(&cap.name)?;
                     let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)?;
                     let val = c.builder.build_load(llvm_ty, *ptr, &cap.name).unwrap();
                     Some((cap.name.clone(), val, ty.clone()))
@@ -484,7 +493,8 @@ fn compile_closure<'ctx>(
                 let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
                 let param_val = closure_fn.get_nth_param((i + 1) as u32).unwrap();
                 c.builder.build_store(alloca, param_val).unwrap();
-                c.variables.insert(name.clone(), (alloca, ty.clone()));
+                c.variables
+                    .insert(name.clone(), (alloca, ty.clone(), Ownership::Unowned));
             }
         }
     }
@@ -510,7 +520,8 @@ fn compile_closure<'ctx>(
                     .unwrap();
                 let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
                 c.builder.build_store(alloca, val).unwrap();
-                c.variables.insert(name.clone(), (alloca, ty.clone()));
+                c.variables
+                    .insert(name.clone(), (alloca, ty.clone(), Ownership::Unowned));
             }
         }
     }

@@ -3,7 +3,7 @@ Core types available in every Expo module without an explicit import.
 
 Provides `Option<T>` for nullable values, `Result<T, E>` for fallible
 operations, `Pair<A, B>` for lightweight two-value grouping,
-`List<T>` for dynamically-sized collections, and `Enumerable<T>`
+`List<T>` for dynamically-sized collections, and `Enumeration<T>`
 for protocol-backed iteration.
 """
 
@@ -163,7 +163,7 @@ end
 A protocol for types that can be iterated with `for`.
 Requires indexed access via `length` and `get`.
 """
-protocol Enumerable<T>
+protocol Enumeration<T>
   fn length(self) -> Int32
   fn get(self, index: Int32) -> T
 end
@@ -175,7 +175,7 @@ move semantics for mutations.
 struct List<T>
 end
 
-impl Enumerable<T> for List<T>
+impl Enumeration<T> for List<T>
   @doc """
   Returns the number of elements in the list.
   """
@@ -217,11 +217,11 @@ end
 @doc """
 A protocol for types that support equality comparison.
 """
-protocol Equatable
+protocol Equality
   fn eq(self, other: Self) -> Bool
 end
 
-impl Equatable for Bool
+impl Equality for Bool
   @doc """
   Returns `true` if both boolean values are the same.
   """
@@ -230,7 +230,7 @@ impl Equatable for Bool
   end
 end
 
-impl Equatable for Int
+impl Equality for Int
   @doc """
   Returns `true` if both 64-bit integers are equal.
   """
@@ -239,7 +239,7 @@ impl Equatable for Int
   end
 end
 
-impl Equatable for Int8
+impl Equality for Int8
   @doc """
   Returns `true` if both 8-bit integers are equal.
   """
@@ -248,7 +248,7 @@ impl Equatable for Int8
   end
 end
 
-impl Equatable for Int16
+impl Equality for Int16
   @doc """
   Returns `true` if both 16-bit integers are equal.
   """
@@ -257,7 +257,7 @@ impl Equatable for Int16
   end
 end
 
-impl Equatable for Int32
+impl Equality for Int32
   @doc """
   Returns `true` if both 32-bit integers are equal.
   """
@@ -266,7 +266,7 @@ impl Equatable for Int32
   end
 end
 
-impl Equatable for String
+impl Equality for String
   @doc """
   Returns `true` if both strings have the same content.
   """
@@ -275,7 +275,7 @@ impl Equatable for String
   end
 end
 
-impl Equatable for UInt8
+impl Equality for UInt8
   @doc """
   Returns `true` if both 8-bit unsigned integers are equal.
   """
@@ -284,7 +284,7 @@ impl Equatable for UInt8
   end
 end
 
-impl Equatable for UInt16
+impl Equality for UInt16
   @doc """
   Returns `true` if both 16-bit unsigned integers are equal.
   """
@@ -293,7 +293,7 @@ impl Equatable for UInt16
   end
 end
 
-impl Equatable for UInt32
+impl Equality for UInt32
   @doc """
   Returns `true` if both 32-bit unsigned integers are equal.
   """
@@ -302,7 +302,7 @@ impl Equatable for UInt32
   end
 end
 
-impl Equatable for UInt64
+impl Equality for UInt64
   @doc """
   Returns `true` if both 64-bit unsigned integers are equal.
   """
@@ -315,11 +315,11 @@ end
 A protocol for types that can produce a hash value for use in
 hash-based collections like `Map<K, V>` and `Set<T>`.
 """
-protocol Hashable
+protocol Hash
   fn hash(self) -> Int
 end
 
-impl Hashable for Bool
+impl Hash for Bool
   @doc """
   Returns `0` for `false` and `1` for `true`.
   """
@@ -328,7 +328,7 @@ impl Hashable for Bool
   end
 end
 
-impl Hashable for Int
+impl Hash for Int
   @doc """
   Returns a hash of this 64-bit integer using SplitMix64.
   """
@@ -337,7 +337,7 @@ impl Hashable for Int
   end
 end
 
-impl Hashable for Int8
+impl Hash for Int8
   @doc """
   Returns a hash of this 8-bit integer using SplitMix64.
   """
@@ -346,7 +346,7 @@ impl Hashable for Int8
   end
 end
 
-impl Hashable for Int16
+impl Hash for Int16
   @doc """
   Returns a hash of this 16-bit integer using SplitMix64.
   """
@@ -355,7 +355,7 @@ impl Hashable for Int16
   end
 end
 
-impl Hashable for Int32
+impl Hash for Int32
   @doc """
   Returns a hash of this 32-bit integer using SplitMix64.
   """
@@ -364,7 +364,7 @@ impl Hashable for Int32
   end
 end
 
-impl Hashable for String
+impl Hash for String
   @doc """
   Returns a hash of the string content using FNV-1a.
   """
@@ -373,7 +373,7 @@ impl Hashable for String
   end
 end
 
-impl Hashable for UInt8
+impl Hash for UInt8
   @doc """
   Returns a hash of this 8-bit unsigned integer using SplitMix64.
   """
@@ -382,7 +382,7 @@ impl Hashable for UInt8
   end
 end
 
-impl Hashable for UInt16
+impl Hash for UInt16
   @doc """
   Returns a hash of this 16-bit unsigned integer using SplitMix64.
   """
@@ -391,7 +391,7 @@ impl Hashable for UInt16
   end
 end
 
-impl Hashable for UInt32
+impl Hash for UInt32
   @doc """
   Returns a hash of this 32-bit unsigned integer using SplitMix64.
   """
@@ -400,7 +400,7 @@ impl Hashable for UInt32
   end
 end
 
-impl Hashable for UInt64
+impl Hash for UInt64
   @doc """
   Returns a hash of this 64-bit unsigned integer using SplitMix64.
   """
@@ -430,7 +430,7 @@ end
 
 @doc """
 A generic hash map from keys of type `K` to values of type `V`.
-Keys must implement `Hashable` and `Equatable`. Uses open addressing
+Keys must implement `Hash` and `Equality`. Uses open addressing
 with linear probing.
 """
 struct Map<K, V>
@@ -508,7 +508,7 @@ end
 
 @doc """
 A generic hash set of unique elements of type `T`.
-Elements must implement `Hashable` and `Equatable`. Uses open addressing
+Elements must implement `Hash` and `Equality`. Uses open addressing
 with linear probing.
 """
 struct Set<T>

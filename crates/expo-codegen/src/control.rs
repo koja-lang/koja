@@ -1,6 +1,7 @@
 //! Control flow compilation: if/else, cond, match, ternary, while loops,
 //! and infinite loops with break support.
 
+use crate::drop::Ownership;
 use expo_ast::ast::{CondArm, Expr, FieldPattern, Literal, MatchArm, Pattern, Statement};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::Type;
@@ -439,8 +440,10 @@ pub fn compile_for<'ctx>(
 
     let iter_alloca = c.builder.build_alloca(iter_llvm_ty, "for_iter").unwrap();
     c.builder.build_store(iter_alloca, iter_val).unwrap();
-    c.variables
-        .insert("__for_iter".to_string(), (iter_alloca, iter_ty.clone()));
+    c.variables.insert(
+        "__for_iter".to_string(),
+        (iter_alloca, iter_ty.clone(), Ownership::Unowned),
+    );
 
     let (mangled_type, elem_llvm_ty, elem_expo_ty, base, type_args) =
         resolve_enumerable_info(c, &iter_ty)?;
@@ -519,8 +522,10 @@ pub fn compile_for<'ctx>(
     if let expo_ast::ast::Pattern::Binding { name, .. } = pattern {
         let alloca = c.builder.build_alloca(elem_llvm_ty, name).unwrap();
         c.builder.build_store(alloca, elem_val).unwrap();
-        c.variables
-            .insert(name.clone(), (alloca, elem_expo_ty.clone()));
+        c.variables.insert(
+            name.clone(),
+            (alloca, elem_expo_ty.clone(), Ownership::Unowned),
+        );
     }
 
     for stmt in body {
@@ -552,7 +557,7 @@ pub fn compile_for<'ctx>(
 }
 
 /// Resolves the mangled name, element LLVM type, element Expo type, base name,
-/// and type args for any type that implements the `Enumerable` protocol.
+/// and type args for any type that implements the `Enumeration` protocol.
 fn resolve_enumerable_info<'ctx>(
     c: &Compiler<'ctx>,
     ty: &Type,
@@ -575,14 +580,14 @@ fn resolve_enumerable_info<'ctx>(
                 (base, type_args)
             } else {
                 return Err(format!(
-                    "`for` requires an Enumerable type, found `{}`",
+                    "`for` requires an Enumeration type, found `{}`",
                     ty.display()
                 ));
             }
         }
         _ => {
             return Err(format!(
-                "`for` requires an Enumerable type, found `{}`",
+                "`for` requires an Enumeration type, found `{}`",
                 ty.display()
             ));
         }
@@ -592,10 +597,10 @@ fn resolve_enumerable_info<'ctx>(
         .type_ctx
         .protocol_impls
         .get(&base)
-        .ok_or_else(|| format!("`{}` does not implement the Enumerable protocol", base))?;
-    if !protos.iter().any(|p| p == "Enumerable") {
+        .ok_or_else(|| format!("`{}` does not implement the Enumeration protocol", base))?;
+    if !protos.iter().any(|p| p == "Enumeration") {
         return Err(format!(
-            "`{}` does not implement the Enumerable protocol",
+            "`{}` does not implement the Enumeration protocol",
             base
         ));
     }
@@ -608,7 +613,7 @@ fn resolve_enumerable_info<'ctx>(
     let get_sig = struct_info
         .methods
         .get("get")
-        .ok_or_else(|| format!("`{base}` implements Enumerable but has no `get` method"))?;
+        .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
     let subst = expo_typecheck::types::build_substitution(&struct_info.type_params, &type_args);
     let elem_expo_ty = expo_typecheck::types::substitute(&get_sig.return_type, &subst);
 
@@ -649,12 +654,12 @@ fn infer_subject_type<'ctx>(
     val: &BasicValueEnum<'ctx>,
 ) -> Type {
     if let Expr::Ident { name, .. } = subject
-        && let Some((_, ty)) = c.variables.get(name)
+        && let Some((_, ty, _)) = c.variables.get(name)
     {
         return ty.clone();
     }
     if matches!(subject, Expr::Self_ { .. })
-        && let Some((_, ty)) = c.variables.get("self")
+        && let Some((_, ty, _)) = c.variables.get("self")
     {
         return ty.clone();
     }
@@ -702,8 +707,10 @@ fn compile_pattern<'ctx>(
             let val = c.builder.build_load(llvm_ty, subject_ptr, name).unwrap();
             let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
             c.builder.build_store(alloca, val).unwrap();
-            c.variables
-                .insert(name.clone(), (alloca, subject_type.clone()));
+            c.variables.insert(
+                name.clone(),
+                (alloca, subject_type.clone(), Ownership::Unowned),
+            );
             Ok(true_val)
         }
 
@@ -844,8 +851,10 @@ fn compile_field_pattern<'ctx>(
             .build_and(result, sub_result, &format!("{}_and", fp.name))
             .unwrap();
     } else {
-        c.variables
-            .insert(fp.name.clone(), (field_alloca, field_type.clone()));
+        c.variables.insert(
+            fp.name.clone(),
+            (field_alloca, field_type.clone(), Ownership::Unowned),
+        );
     }
 
     Ok(result)

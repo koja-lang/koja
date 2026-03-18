@@ -52,6 +52,7 @@ pub fn compile_call<'ctx>(
                     params,
                     return_type,
                 },
+                _,
             )) = c.variables.get(name).cloned()
             {
                 let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());

@@ -148,7 +148,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 if iter_ty.is_known() {
                     ctx.error(
                         format!(
-                            "`for` requires an Enumerable type, found `{}`",
+                            "`for` requires an Enumeration type, found `{}`",
                             iter_ty.display()
                         ),
                         *span,
@@ -1259,7 +1259,7 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
     }
 }
 
-/// Resolves the element type for any type that implements the `Enumerable<T>`
+/// Resolves the element type for any type that implements the `Enumeration<T>`
 /// protocol by looking up the `get` method and substituting concrete type args.
 fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type> {
     let (base, type_args) = match ty {
@@ -1277,7 +1277,7 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
     };
 
     let protos = ctx.protocol_impls.get(&base)?;
-    if !protos.iter().any(|p| p == "Enumerable") {
+    if !protos.iter().any(|p| p == "Enumeration") {
         return None;
     }
 

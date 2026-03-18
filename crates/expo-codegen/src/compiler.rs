@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::drop::Ownership;
 use expo_ast::ast::{
     Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, TypeExpr,
 };
@@ -30,7 +31,7 @@ pub struct Compiler<'ctx> {
     pub builder: Builder<'ctx>,
     pub constants: HashMap<String, BasicValueEnum<'ctx>>,
     pub functions: HashMap<String, FunctionValue<'ctx>>,
-    pub variables: HashMap<String, (PointerValue<'ctx>, Type)>,
+    pub variables: HashMap<String, (PointerValue<'ctx>, Type, Ownership)>,
     pub struct_types: HashMap<String, StructType<'ctx>>,
     pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
     pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
@@ -432,7 +433,8 @@ impl<'ctx> Compiler<'ctx> {
                 let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
                 let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
                 self.builder.build_store(alloca, param_val).unwrap();
-                self.variables.insert("self".to_string(), (alloca, self_ty));
+                self.variables
+                    .insert("self".to_string(), (alloca, self_ty, Ownership::Unowned));
                 llvm_param_idx += 1;
             }
         }
@@ -447,7 +449,8 @@ impl<'ctx> Compiler<'ctx> {
                     let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
                     let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables.insert(name.clone(), (alloca, param_ty));
+                    self.variables
+                        .insert(name.clone(), (alloca, param_ty, Ownership::Unowned));
                     llvm_param_idx += 1;
                 }
             }

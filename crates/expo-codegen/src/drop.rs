@@ -4,25 +4,52 @@
 
 use inkwell::values::PointerValue;
 
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Primitive, Type};
 
 use crate::compiler::Compiler;
+
+/// Tracks whether a variable owns its backing memory and is responsible for
+/// freeing it. Used to distinguish heap-allocated strings (interpolated,
+/// received from mailbox) from static/global string pointers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ownership {
+    Owned,
+    Unowned,
+}
 
 /// Emits drop calls for all live move-type variables in reverse declaration
 /// order. Called before function returns and at scope exits.
 pub fn drop_live_variables(c: &mut Compiler) {
-    let vars: Vec<(PointerValue, Type)> = c
+    let vars: Vec<(PointerValue, Type, Ownership)> = c
         .variables
         .iter()
-        .map(|(_, (ptr, ty))| (*ptr, ty.clone()))
+        .map(|(_, (ptr, ty, own))| (*ptr, ty.clone(), *own))
         .collect();
 
-    for (ptr, ty) in vars.iter().rev() {
+    for (ptr, ty, ownership) in vars.iter().rev() {
         if matches!(ty, Type::Function { .. }) {
             emit_drop_closure(c, *ptr);
             continue;
         }
         if ty.is_copy() {
+            continue;
+        }
+        if matches!(ty, Type::Primitive(Primitive::String)) && *ownership == Ownership::Owned {
+            let free_fn = *c
+                .functions
+                .get("free")
+                .expect("free not declared in builtins");
+            let str_val = c
+                .builder
+                .build_load(
+                    c.context.ptr_type(inkwell::AddressSpace::default()),
+                    *ptr,
+                    "str_drop",
+                )
+                .unwrap();
+            c.builder
+                .build_call(free_fn, &[str_val.into()], "drop_free_str")
+                .unwrap();
             continue;
         }
         emit_drop(c, *ptr, ty);

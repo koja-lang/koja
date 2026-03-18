@@ -238,7 +238,7 @@ end
 
 ### `for` ... `in`
 
-Iterates over any type implementing the `Enumerable<T>` protocol:
+Iterates over any type implementing the `Enumeration<T>` protocol:
 
 ```expo
 list: List<Int32> = List.new()
@@ -251,7 +251,7 @@ for item in list
 end
 ```
 
-Desugars to an indexed `while` loop using `Enumerable`'s `length` and `get` functions.
+Desugars to an indexed `while` loop using `Enumeration`'s `length` and `get` functions.
 
 ### `match`
 
@@ -796,16 +796,16 @@ print(list.empty?())   # false
 
 `push` uses `move self` semantics -- it returns the updated list. Out-of-bounds `get` panics.
 
-### `Enumerable<T>` Protocol
+### `Enumeration<T>` Protocol
 
 ```expo
-protocol Enumerable<T>
+protocol Enumeration<T>
   fn length(self) -> Int32
   fn get(self, index: Int32) -> T
 end
 ```
 
-Any type implementing `Enumerable<T>` can be used with `for` loops. `List<T>` implements this protocol.
+Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` implements this protocol.
 
 ---
 
@@ -885,7 +885,7 @@ end
 
 ### `Map<K, V>` and `Set<T>`
 
-Built-in generic collection types backed by native implementations. Will implement `Enumerable` for use with `for` loops.
+Built-in generic collection types backed by native implementations. Will implement `Enumeration` for use with `for` loops.
 
 ### Inline Closures
 

@@ -2,6 +2,7 @@
 //! for concrete type arguments, and manages the mangled-name encoding used to
 //! distinguish each instantiation.
 
+use crate::drop::Ownership;
 use expo_ast::ast::{Param, Statement};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{GenericKind, Type};
@@ -131,7 +132,8 @@ impl<'ctx> Compiler<'ctx> {
                     let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
                     let param_val = fn_value.get_nth_param(i as u32).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables.insert(pname.clone(), (alloca, ty.clone()));
+                    self.variables
+                        .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
                 }
             }
         }
@@ -510,8 +512,10 @@ impl<'ctx> Compiler<'ctx> {
             } else {
                 Type::Struct(mangled_type.clone())
             };
-            self.variables
-                .insert("self".to_string(), (self_alloca, self_type));
+            self.variables.insert(
+                "self".to_string(),
+                (self_alloca, self_type, Ownership::Unowned),
+            );
             param_idx = 1;
         }
 
@@ -524,7 +528,8 @@ impl<'ctx> Compiler<'ctx> {
                     let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
                     let param_val = fn_value.get_nth_param(param_idx).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables.insert(pname.clone(), (alloca, ty.clone()));
+                    self.variables
+                        .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
                     param_idx += 1;
                 }
             }
@@ -689,8 +694,10 @@ impl<'ctx> Compiler<'ctx> {
             } else {
                 Type::Struct(mangled_type.clone())
             };
-            self.variables
-                .insert("self".to_string(), (self_alloca, self_type));
+            self.variables.insert(
+                "self".to_string(),
+                (self_alloca, self_type, Ownership::Unowned),
+            );
             param_idx = 1;
         }
 
@@ -703,7 +710,8 @@ impl<'ctx> Compiler<'ctx> {
                     let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
                     let param_val = fn_value.get_nth_param(param_idx).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables.insert(pname.clone(), (alloca, ty.clone()));
+                    self.variables
+                        .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
                     param_idx += 1;
                 }
             }

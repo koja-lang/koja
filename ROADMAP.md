@@ -8,7 +8,7 @@ Solo developer + AI assistance. Bootstrap in Rust, self-host in Expo.
 
 ### Compiler
 
-A 9-crate Rust workspace that compiles Expo source to native binaries via LLVM:
+A 10-crate Rust workspace that compiles Expo source to native binaries via LLVM:
 
 - `expo-ast` -- tokens, spans, AST node definitions
 - `expo-lexer` -- custom tokenizer
@@ -17,6 +17,7 @@ A 9-crate Rust workspace that compiles Expo source to native binaries via LLVM:
 - `expo-codegen` -- LLVM IR generation via `inkwell`
 - `expo-fmt` -- opinionated code formatter
 - `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
+- `expo-runtime` -- native process scheduler (C ABI static library linked into compiled binaries)
 - `expo-driver` -- CLI binary (`expo`)
 - `expo-lsp` -- language server (diagnostics, formatting, hover, go-to-definition)
 
@@ -52,17 +53,18 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Function type syntax (`fn(T) -> U`) for closure-accepting parameters
 - `print` builtin
 - `panic` builtin (prints to stderr, aborts)
+- Lightweight processes -- `spawn` creates a process, `receive` blocks for the next mailbox message, `Process<M>` is a typed handle with `send(msg: M)`. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime` cooperative scheduler.
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
 - `Self` type expression in `protocol` and `impl` blocks
-- `Hashable` and `Equatable` protocols with intrinsic implementations for all primitives
+- `Hash` and `Equality` protocols with intrinsic implementations for all primitives
 - Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`)
 
 ### Parsed and type-checked but NOT yet in codegen
 
 - `arena` blocks
-- `await`/`receive`/`spawn`
+- `await`
 - ~~Try operator (`?`) -- removed~~
 - ~~`ref T` -- removed~~
 - ~~`for` loops -- done~~
@@ -207,7 +209,7 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - ~~`Map<K,V>` -- open-addressing hash map with linear probing, 75% load factor resize, SplitMix64/FNV-1a hashing~~
 - ~~`Set<T>` -- hash set reusing `Map` infrastructure, implements `ListLiteral<T>` for `s: Set<Int32> = [1, 2, 3]` syntax~~
 - ~~Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol~~
-- ~~`Hashable` and `Equatable` protocols with compiler-provided intrinsic implementations for all primitives~~
+- ~~`Hash` and `Equality` protocols with compiler-provided intrinsic implementations for all primitives~~
 - ~~Drop support for `Map` and `Set` (entries and states buffers freed at scope exit)~~
 - ~~Closure capture analysis (move vs. borrow) -- copy for primitives, move for structs/enums, heap-allocated environment with automatic drop~~
 - ~~List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol -- any type can implement `ListLiteral<T>` to be constructible from `[...]` syntax~~
@@ -220,20 +222,13 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - `arena...end` blocks with bulk-free semantics
 - **Done when**: `ua_parser.expo` compiles -- it exercises structs, enums, match, closures, method chaining, and returns
 
-### Tasks and structured concurrency
+### Processes (shipped) and tasks (deferred)
 
-- `spawn fn -> ... end` creates a stackless task (compiler transforms to a state machine), returns `Handle<T>`
-- `await handle` returns `Result<T, TaskError>`
-- Tasks can borrow (read-only) from the parent scope -- structured concurrency guarantees the parent outlives the task
-- `task.async_stream` for bounded concurrent enumeration with back-pressure
-- Cooperative yielding at `await` and I/O points
-- No preemption for tasks -- they're short-lived computations, not long-running entities
-- Tasks are cancelled if the parent returns or crashes (structured lifetime)
-- **Done when**: a program that spawns tasks, borrows parent data, and awaits results compiles correctly
+**Shipped**: lightweight processes via `spawn`/`receive`/`Process<M>`. A process runs a function on the cooperative scheduler, receives typed messages through a mailbox, and is identified by a `Process<M>` handle. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime`, a Rust static library providing a single-threaded cooperative scheduler with per-process mailboxes. String equality (`==`, `!=`) also shipped to support message matching.
 
-See `CONCURRENCY.md` "Tasks" section and `MEMORY.md` "At concurrency boundaries" for full design details.
+**Deferred**: the original "Tasks" model (stackless state machines, `Handle<T>`, `await`, structured concurrency). The process primitive combined with a future `await`-like mechanism for awaiting a reply from a spawned process covers both the task and actor use cases. The task model may be revisited if a clear need emerges for structured short-lived computations distinct from processes.
 
-**Important**: Tasks, actors (Phase 3), and the scheduler runtime must be co-designed. The scheduler protocol (see Phase 3 "Runtime") must be defined during task implementation so that actors slot into the same interface later. Designing tasks in isolation risks baking in assumptions that don't generalize to the actor scheduler or alternative runtime backends.
+See `CONCURRENCY.md` for full design details.
 
 ### Risks
 
@@ -640,12 +635,13 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Core      | Protocols -- `protocol` keyword, `impl Protocol for Type`, completeness validation       | Done   |
 | Core      | Closure captures -- copy/move semantics, heap-allocated environments, automatic drop     | Done   |
 | Core      | `unless` expression, `Self` type, list literals (`[1,2,3]`), `ListLiteral<T>` protocol   | Done   |
+| Core      | Processes -- `spawn`/`receive`/`Process<M>`, `expo-runtime` scheduler, string equality   | Done   |
 
 ### Remaining
 
 | Phase       | Milestone                                                     |
 | ----------- | ------------------------------------------------------------- |
-| Core        | Tasks (structured concurrency)                                |
+| Core        | Tasks (deferred -- process primitive shipped, `await` TBD)    |
 | Core        | Collections, arena, `ua_parser.expo` compiles                 |
 | Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)    |
 | Reliability | Preemption/priority, supervision, `shared_map`                |
