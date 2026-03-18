@@ -377,21 +377,17 @@ scheduler, memory overhead) is unchanged and still current.
 
 ## Open questions
 
-- **Task vs actor distinction.** With identical ownership rules (move/clone), is
-  the task/actor split still justified by the weight difference alone? Or does
-  structured lifetime (tasks auto-cancel when parent exits) provide enough
-  semantic value? Leaning yes — the structured lifetime guarantee is valuable for
-  "fire N requests, collect results" patterns where you want automatic cleanup.
+- **Tasks deferred post-v1.** The task/actor split is no longer planned for the
+  core language. `spawn`/`receive` processes are the only concurrency primitive.
+  GenServer-like actor patterns will be built on top of processes in the stdlib.
+  Tasks as stackless state machines may be revisited if process overhead proves
+  too high once the runtime matures, but the current direction is: one primitive,
+  compose everything from it.
 
 - **`copy` keyword timing.** Should `copy` ship with the initial ownership
   system, or be added later as sugar? It's not blocking — `.clone()` works
   today. But adding it early establishes the three-mode pattern before developers
   build habits around `.clone()` everywhere.
-
-- **Handle drop semantics.** When a `Handle<T>` is dropped without being
-  awaited, is the associated task cancelled? Leaning yes — structured
-  concurrency implies the task shouldn't outlive its handle. But this needs to
-  interact correctly with supervision for actor handles.
 
 - **`spawn` syntax for borrow params.** With the function-call model
   (`spawn f(x)`), the callee's signature determines whether `x` is borrowed,
@@ -399,3 +395,102 @@ scheduler, memory overhead) is unchanged and still current.
   the compiler error on `spawn f(x)` when `f` borrows `x`? Or auto-promote the
   borrow to a clone? Leaning error — explicit is better than implicit, and the
   developer should change the signature to `move` or `copy`.
+
+---
+
+## Open design: `fn main` as a process and mailbox typing
+
+`fn main` needs to be a process with a mailbox so it can `receive` replies from
+spawned children. The problem: `spawn` is currently where the mailbox type `M`
+gets declared (via `Process<M>`), but main isn't spawned by user code. Where does
+main's mailbox type come from?
+
+### Approaches explored
+
+**Union enum (single typed mailbox).** Main declares a message enum that unions
+all message types it expects. Standard OTP pattern — one enum per process.
+
+```
+enum MainMsg
+  WorkerResult(String)
+  HealthCheck
+  Shutdown
+end
+```
+
+Works, but breaks when a third-party library sends its own enum type back. The
+library sends `LibResult`, not `MainMsg.Lib(LibResult)`. The types don't align
+because the sender determines the message shape and the receiver determines the
+mailbox type. When they're written by different people, you get a mismatch. This
+is exactly why Erlang chose untyped mailboxes.
+
+**Typed subjects / channels (Gleam-style).** Separate the typed channel from the
+process. A process creates `Subject<T>` handles for specific conversations.
+Rejected — these are essentially Go channels by another name, and introduce
+channel lifecycle management complexity. Expo's philosophy is "the process IS the
+channel."
+
+**Turbofished `receive<T>()`.** The mailbox is heterogeneous. Each `receive` call
+declares the type it expects. No mailbox type on the process — typing lives at
+the receive site.
+
+```
+fn main()
+  child = spawn(worker)
+  child.send(DoWork(reply_to: self()))
+  result = receive<LibResult>()
+end
+```
+
+Solves main's typing problem and third-party interop cleanly. Tradeoffs: loses
+compile-time send safety (unless `Process<T>` is kept as an optional send-side
+annotation), requires runtime type tags for mailbox filtering, and unmatched
+messages accumulate silently.
+
+**Union types on `Process` (`Process<A | B>`).** Main declares its mailbox as a
+union of types. `self()` can be narrowed to `Process<A>` for handing to a
+consumer that only sends `A`.
+
+```
+fn main() : Process<ServerMsg | LibResult>
+  lib_handle: Process<LibResult> = self()
+  spawn(lib_worker(lib_handle))
+
+  match receive()
+    ServerMsg.Shutdown -> break
+    LibResult.Success(data) -> print(data)
+  end
+end
+```
+
+Narrowing works because `Process<T>` is contravariant — a process that accepts
+`A | B` can be used where `Process<A>` is expected (the sender sends less than
+the process accepts).
+
+### Leaning: union types as a general-purpose feature
+
+Union types solve the mailbox problem, but they're far more broadly useful:
+
+- **Heterogeneous collections**: `List<Post | Comment | Ad>` for API responses
+  returning mixed JSON object types.
+- **Error type composition**: `Result<User, ValidationError | DatabaseError>`
+  without manual wrapper enums.
+- **Function parameters**: `fn render(content: Text | Image | Video) -> Html`
+  for accepting related but distinct types.
+
+Implementation-wise, union types are anonymous enums — the same tagged union
+representation Expo already uses for named enums. `A | B` is an unnamed enum
+where the variants are the types themselves. Same codegen, same pattern matching,
+same exhaustiveness checking.
+
+Design questions that need answers before implementation:
+
+- Order-independent: `A | B` == `B | A` (almost certainly yes).
+- Flattened: `A | (B | C)` == `A | B | C` (probably yes).
+- Variant name collisions: resolved by qualifying (`ServerMsg.Error` vs
+  `LibResult.Error`) in match arms.
+- Protocol interaction: does `A | B` implement protocol `P` if both A and B do?
+
+This is not blocking current Phase 2 work. The existing `Process<M>` model with
+a single message type works for all current use cases. Union types and the main-
+as-process design will be revisited when concurrency work resumes.

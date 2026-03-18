@@ -309,6 +309,15 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             return_type: Box::new(ret),
         });
     }
+    if let Expr::Ident { name, .. } = expr
+        && let Some(sig) = c.type_ctx.functions.get(name)
+        && sig.type_params.is_empty()
+    {
+        return Some(Type::Function {
+            params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+            return_type: Box::new(sig.return_type.clone()),
+        });
+    }
     if matches!(expr, Expr::Receive { .. }) {
         return c.process_msg_type.clone();
     }

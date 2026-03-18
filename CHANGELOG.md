@@ -5,37 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-03-18
 
 ### Added
 
-- `spawn` keyword -- creates a lightweight process running the given function (`pid = spawn receiver`). Returns a `Process<M>` handle typed by the process's message type.
-- `Process<M>` built-in generic type -- handle to a spawned process. Defined in `std.kernel` alongside `List<T>` and `Map<K,V>`. `M` can be any type: primitives, structs, or enums. Method: `send(msg: M)` shallow-copies the message into the target process's mailbox.
-- `receive` expression -- blocks the current process and returns the next message (`M`) from its mailbox. The return type is inferred from the `Process<M>` annotation at the `spawn` site. Composes with `match` for pattern matching (`match receive ... end`).
-- `expo-runtime` crate -- Rust static library (`libexpo_runtime.a`) providing a single-threaded cooperative process scheduler. Manages process table, per-process mailboxes, and sequential process execution after `main` completes. Exposes C ABI functions linked by the compiler.
-- String equality (`==`, `!=`) -- implemented via `strcmp` intrinsic in codegen. Enables comparisons like `msg == "stop"` on `String` values.
-- `Map<K, V>` -- generic hash map with open addressing and linear probing. Methods: `new`, `put`, `get`, `has?`, `remove`, `length`, `empty?`. Keys must implement `Hash` and `Equality`. Automatic resizing at 75% load factor. `get` returns `Option<V>`.
-- `Set<T>` -- generic hash set using the same hash table infrastructure as `Map`. Methods: `new`, `insert`, `has?`, `remove`, `length`, `empty?`. Implements `ListLiteral<T>`, so `s: Set<Int32> = [1, 2, 3]` works with automatic deduplication.
-- Map literal syntax -- `["key": value, ...]` for populated maps and `[:]` for empty maps. Parser disambiguates from list literals by peeking for `:` after the first expression.
-- `MapLiteral<K, V>` protocol -- backing protocol for map literal syntax. Follows the same pattern as `ListLiteral<T>`.
-- `Hash` protocol -- `fn hash(self) -> Int`. Intrinsic implementations for all primitives using SplitMix64 (integers, bool) and FNV-1a (strings).
-- `Equality` protocol -- `fn eq(self, other: Self) -> Bool`. Intrinsic implementations for all primitives using `icmp eq` (integers, bool) and `strcmp` (strings).
-- Drop support for `Map` and `Set` -- entries and states buffers are freed automatically at scope exit.
-- List literal syntax -- `[1, 2, 3]` compiles to `List.new().push(1).push(2).push(3)`. Empty list literals supported with a type annotation (`empty: List<Int32> = []`). Element types are inferred from the first element and checked for consistency across all elements.
-- `ListLiteral<T>` protocol -- backing protocol for list literal syntax. Any type can implement `ListLiteral<T>` to be constructible from `[...]` syntax. `List<T>` implements it by default (identity). Defined in `std.kernel`.
-- `unless` expression -- negated `if` for guard clauses (`unless condition ... end`). Executes the body only when the condition is false. No `else` branch.
-- `Self` type expression -- resolves to the implementing type inside `protocol` and `impl` blocks. Enables protocols like `ListLiteral<T>` to return the concrete implementing type without naming it. Works with generics and monomorphization.
+- Lightweight processes -- `spawn` creates a process, `receive` blocks for messages, `Process<M>` is a typed handle with `send`. Message type can be any type (primitives, structs, enums).
+- `Map<K, V>` -- generic hash map. Methods: `new`, `put`, `get`, `has?`, `remove`, `length`, `empty?`. Keys must implement `Hash` and `Equality`.
+- `Set<T>` -- generic hash set. Methods: `new`, `insert`, `has?`, `remove`, `length`, `empty?`.
+- Map literal syntax -- `["key": value]` for populated maps, `[:]` for empty maps.
+- List literal syntax -- `[1, 2, 3]` backed by `ListLiteral<T>` protocol.
+- `Hash` and `Equality` protocols with built-in implementations for all primitives.
 - `List<T>` iterator functions: `map`, `filter`, `any?`, `all?`.
+- Bare function references -- `f = double`, `list.map(double)`.
+- String equality (`==`, `!=`).
+- `unless` expression -- negated `if` for guard clauses.
+- `Self` type expression in `protocol` and `impl` blocks.
 
 ### Changed
 
-- **Breaking**: `Enumerable<T>` protocol renamed to `Enumeration<T>`. Noun-style name replaces adjective-style name for consistency with `Equality` and `Hash`.
+- `Enumerable<T>` protocol renamed to `Enumeration<T>`.
 
 ### Fixed
 
-- VS Code extension: function names with `?` suffixes (`empty?`, `any?`) and generic parameters (`map<U>`) now highlight consistently as function names.
-- Interpolated strings are now heap-allocated (`malloc`) instead of stack-allocated (`alloca`). Stack-allocated interpolated strings produced dangling pointers when returned from a function or stored beyond the enclosing scope.
-- Owned strings (interpolated, received from mailbox) are now freed at scope exit via drop insertion. An `Ownership` enum (`Owned`/`Unowned`) tracks whether each string variable is responsible for its backing memory. Static string literals remain unowned and are never freed.
+- Interpolated strings no longer produce dangling pointers when returned from functions.
+- String memory is now freed at scope exit when owned.
+- VS Code: function names with `?` or generics now highlight correctly.
 
 ## [0.5.0] - 2026-03-17
 

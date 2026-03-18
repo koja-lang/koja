@@ -60,11 +60,13 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `Self` type expression in `protocol` and `impl` blocks
 - `Hash` and `Equality` protocols with intrinsic implementations for all primitives
 - Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`)
+- `List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) implemented as pure Expo code in `std.kernel`
+- Bare function names as references (`f = double; f(5)`, `list.map(double)`) -- top-level functions produce closure-compatible fat pointers via thunk wrappers
 
 ### Parsed and type-checked but NOT yet in codegen
 
-- `arena` blocks
-- `await`
+- `arena` blocks (deferred post-v1)
+- `await` (deferred -- covered by `receive` on processes)
 - ~~Try operator (`?`) -- removed~~
 - ~~`ref T` -- removed~~
 - ~~`for` loops -- done~~
@@ -97,7 +99,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **EBNF grammar** -- `grammar.ebnf`, 436 lines covering all syntax constructs
 - **Example codebase** -- 17 `.expo` files porting `auth-manager` (a real Rust microservice) into Expo pseudocode, validating the language feels right
 - **Memory strategy** -- documented in `MEMORY.md` (stack, ownership+move, explicit arena)
-- **Concurrency model** -- documented in `CONCURRENCY.md` (tasks, actors, native runtime, supervision)
+- **Concurrency model** -- documented in `CONCURRENCY.md` and `CONCURRENCY_2.md` (processes, native runtime, supervision)
 - **Project config format** -- `project.expo` replacing `Cargo.toml`
 
 ### Tooling (pulled forward)
@@ -158,7 +160,7 @@ Remaining work (for loops) is Phase 2 scope. Closure capture analysis is complet
 
 ---
 
-## Phase 2: Core language
+## Phase 2: Core language -- COMPLETE
 
 Make the compiler powerful enough to compile non-trivial programs with Expo's generics, ownership model, and structured concurrency.
 
@@ -169,7 +171,7 @@ Make the compiler powerful enough to compile non-trivial programs with Expo's ge
 - **Track A -- Ownership/borrowing**: move semantics, borrow checking, drop insertion (pure compile-time flow analysis, no dependency on collections)
 - **Track B -- Collections**: `List<T>`, `Map<K,V>`, iterators, `for` loops (no dependency on ownership)
 
-Tasks require both tracks to converge (borrow safety across spawn boundaries + practical collection passing). Closure capture analysis is complete (move vs. copy into closures with heap-allocated environments).
+Concurrency requires both tracks to converge (ownership safety across spawn boundaries + practical collection passing). Closure capture analysis is complete (move vs. copy into closures with heap-allocated environments).
 
 ### Generics and monomorphization
 
@@ -216,107 +218,118 @@ Tasks require both tracks to converge (borrow safety across spawn boundaries + p
 - ~~`Self` type expression -- resolves to the implementing type inside `protocol` and `impl` blocks~~
 - ~~`unless` expression -- negated `if` for guard clauses (`unless condition ... end`)~~
 - ~~`for` loops over iterables~~
-- Bare function names as references (no sigil -- `foo` references, `foo()` calls)
-- Iterator methods: `.map()`, `.filter()`, `.any?()`, `.all?()`, `.retain()`, `.iter()`
-- Ownership splitting for concurrent mutation patterns (tasks receive owned, non-overlapping chunks -- specific API designed during stdlib phase)
-- `arena...end` blocks with bulk-free semantics
-- **Done when**: `ua_parser.expo` compiles -- it exercises structs, enums, match, closures, method chaining, and returns
+- ~~`List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) -- implemented as pure Expo code in `std.kernel`, not intrinsics. Enabled by intrinsic dispatch fallthrough (`EmitResult` enum) and codegen fix for generic type resolution in method bodies.~~
+- ~~Bare function names as references (no sigil -- `foo` references, `foo()` calls)~~
+- ~~`arena...end` blocks -- deferred post-v1 (see "Future: Arena blocks"). The design depends on runtime maturity (per-process heaps, multi-threaded scheduler) and real-world allocation patterns.~~
 
-### Processes (shipped) and tasks (deferred)
+### Processes (shipped)
 
 **Shipped**: lightweight processes via `spawn`/`receive`/`Process<M>`. A process runs a function on the cooperative scheduler, receives typed messages through a mailbox, and is identified by a `Process<M>` handle. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime`, a Rust static library providing a single-threaded cooperative scheduler with per-process mailboxes. String equality (`==`, `!=`) also shipped to support message matching.
 
-**Deferred**: the original "Tasks" model (stackless state machines, `Handle<T>`, `await`, structured concurrency). The process primitive combined with a future `await`-like mechanism for awaiting a reply from a spawned process covers both the task and actor use cases. The task model may be revisited if a clear need emerges for structured short-lived computations distinct from processes.
+**Direction**: `spawn`/`receive` processes are the only concurrency primitive. GenServer-like actor patterns, supervision, and worker pools will be built on processes in the stdlib -- no separate `actor` keyword or task state machine. The `actor` keyword remains a design candidate but is deferred until processes are dogfooded enough to determine whether a dedicated keyword provides value beyond what stdlib patterns can offer.
 
-See `CONCURRENCY.md` for full design details.
+**Deferred post-v1**: the original "Tasks" model (stackless state machines, `Handle<T>`, `await`, structured concurrency). With task borrows dropped (see `CONCURRENCY_2.md`), tasks and processes have identical ownership rules (move/clone at all spawn boundaries). The only difference is overhead (state machine vs. real stack). Tasks may be revisited if process overhead proves too high once the runtime matures.
+
+**Open design**: `fn main` needs to be a process with a mailbox so it can `receive` replies from spawned children. Mailbox typing for main is an active design question -- union types (`Process<A | B>`) are the leading candidate. See `CONCURRENCY_2.md` for the full exploration.
+
+See `CONCURRENCY.md` and `CONCURRENCY_2.md` for full design details.
 
 ### Risks
 
 - **Generic monomorphization**: generics like `Patch<T>` need to be monomorphized at compile time. This is well-understood (Rust, C++ do it) but adds compiler complexity. Start with concrete types, then generalize.
 - **Borrow checker complexity**: Expo's model is simpler than Rust's (no lifetimes, no mutable borrows), but still requires flow analysis. Start with a conservative checker that rejects some valid programs rather than accepting invalid ones. Loosen over time.
-- **Task borrow safety**: structured concurrency simplifies this (parent outlives tasks by construction), but the compiler must still prove that borrowed data isn't moved while tasks hold references. Flow analysis required.
 
 ---
 
-## Phase 3: Actors and runtime
+## Phase 3: Runtime and process maturity
 
-Build the actor primitive and the native runtime that schedules actors and tasks. This phase gets actors running -- the raw construct and the infrastructure that supports them. Supervision, preemption, and priority come in Phase 3b.
+Mature the process primitive and the native runtime. The basic `spawn`/`receive`/`Process<M>` mechanism shipped in Phase 2. This phase makes it production-grade: multi-threaded scheduling, I/O integration, `fn main` as a process, and the `copy` keyword for ergonomic data sharing across spawn boundaries.
 
-Expo has two concurrency primitives (tasks in Phase 2, actors here) because in native compiled code without a VM, the cost difference between a short-lived computation and a long-lived stateful entity is significant. See `CONCURRENCY.md` for the full design rationale.
+### `fn main` as a process
 
-### Actors
+- `fn main` runs as a process with a mailbox so it can `receive` replies from spawned children
+- Mailbox typing for main is an open design question -- union types (`Process<A | B>`) are the leading candidate (see `CONCURRENCY_2.md`)
+- `self()` returns the current process handle, enabling request/reply patterns
+- **Done when**: `fn main` can spawn a child, pass `self()` as a reply handle, and `receive` the result
 
-- `actor` keyword defines a long-lived stateful entity with typed mailboxes
-- `receive` with compile-time exhaustiveness checking on message enum variants
-- Actor memory is fully isolated -- data crosses boundaries via `move` or `clone`
-- Fire-and-forget `send` for one-way messages
-- Request/reply `call` with default 5-second timeout, returns `Result<T, CallError>`
-- Explicit `reply(from, value)` with compiler warning for `call`-pattern messages that never reply
-- Starting actors: handle-based (anonymous) and named (string registration)
-- Stopping actors: graceful shutdown with deterministic cleanup via ownership
-- **Done when**: a counter actor with typed messages compiles and runs
+### Union types (open design)
+
+- Union types (`A | B`) as a general-purpose type system feature, not just for mailboxes
+- Use cases: process mailbox typing (`Process<ServerMsg | LibResult>`), heterogeneous collections (`List<Post | Comment | Ad>`), error type composition (`Result<User, ValidationError | DatabaseError>`)
+- Implementation: anonymous enums -- same tagged union representation as named enums
+- Design questions: order-independence, flattening, variant name collision resolution, protocol interaction
+- **Done when**: union types compile and work in match expressions, process mailboxes, and generic type parameters
+
+### `copy` keyword
+
+- Third parameter modifier alongside default borrow and `move`: `fn start(copy config: Config)`
+- Auto-clones at the call boundary -- the caller writes `start(config)`, the compiler inserts `.clone()`
+- Declared in the function signature (same pattern as `move` -- never at the call site)
+- Primary use case: sharing config/context across spawned processes without manual `.clone()` at every call site
+- See `CONCURRENCY_2.md` for full design
+
+### Actor keyword (deferred)
+
+The `actor` keyword (typed mailbox exhaustiveness, `@state`, named registration) remains a design candidate but is deferred. GenServer-like patterns will be built on processes first to validate whether a dedicated keyword provides value beyond what stdlib patterns can offer. The decision will be informed by dogfooding the process primitive.
 
 ### Runtime
 
-- **Scheduler protocol** -- the runtime is defined as a protocol interface (`spawn_actor`, `send_message`, `yield`, `park`/`wake`, `poll_io`), not a monolithic scheduler. The native runtime is one implementation; others (WASM, testing, embedded, debug) implement the same interface. This must be designed before the native scheduler is built -- define the interface first, implement against it. The protocol approach means third-party developers can write custom runtimes for specialized platforms.
-- Work-stealing scheduler (M:N -- many actors/tasks on few OS threads) as the default native backend
+- **Scheduler protocol** -- the runtime is defined as a protocol interface (`spawn_process`, `send_message`, `yield`, `park`/`wake`, `poll_io`), not a monolithic scheduler. The native runtime is one implementation; others (WASM, testing, embedded, debug) implement the same interface. Define the interface first, implement against it. Third-party developers can write custom runtimes for specialized platforms.
+- Work-stealing scheduler (M:N -- many processes on few OS threads) as the default native backend
 - I/O reactor (epoll on Linux, kqueue on macOS) -- the user sees blocking calls, the runtime suspends transparently
-- Timer wheel for timeouts, intervals, and `call` deadlines
-- Actor lifecycle manager (start, stop, crash detection)
+- Timer wheel for timeouts, intervals, and deadlines
+- Process lifecycle manager (start, stop, crash detection)
 - All functions can suspend; the runtime handles it -- no function coloring
-- **WASM portability** -- the protocol-based scheduler enables WASM targets: full M:N on Wasmtime/Wasmer (wasi-threads), fixed thread pool in browsers (Web Workers + SharedArrayBuffer), single-threaded cooperative scheduling on edge platforms (Cloudflare Workers, Fastly). Same actor code, different scheduler backend. The compiler picks the backend via `--target`, not the developer.
-- **Done when**: 10,000 actors run concurrently with correct scheduling
+- **WASM portability** -- the protocol-based scheduler enables WASM targets: full M:N on Wasmtime/Wasmer (wasi-threads), fixed thread pool in browsers (Web Workers + SharedArrayBuffer), single-threaded cooperative scheduling on edge platforms (Cloudflare Workers, Fastly). Same code, different scheduler backend. The compiler picks the backend via `--target`, not the developer.
+- **Done when**: 10,000 processes run concurrently with correct scheduling
 
 ### Key decisions
 
 | Decision           | Recommendation                                                                                                                                                                                                                                     |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Two primitives     | Tasks (stackless, structured, short-lived) and actors (stacked, isolated, long-lived). Different costs, different guarantees, both first-class.                                                                                                    |
+| One primitive      | Processes are the sole concurrency primitive. Tasks (stackless state machines) deferred post-v1. GenServer-like actor patterns built on processes in the stdlib.                                                                                   |
 | Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code. |
-| Co-design          | Tasks (Phase 2), actors (Phase 3), and the scheduler protocol are designed together as one system, even though implementation is phased. Designing tasks in isolation risks assumptions that break when actors and alternative backends arrive.    |
-| Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with actor lifecycle management.                                                                                                     |
+| Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with process lifecycle management.                                                                                                   |
 | Scheduler model    | Work-stealing, similar to Tokio/Go. M:N threading. Start with a simple round-robin scheduler, upgrade to work-stealing once correctness is proven.                                                                                                 |
-| I/O model          | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the actor/task.                                                                                                                                   |
-| Actor stack size   | Real stacks for actors (4-8KB). Tasks are stackless state machines (zero stack overhead).                                                                                                                                                          |
-| Typed mailboxes    | Each actor declares a message enum. `send` and `receive` are type-checked at compile time. Exhaustiveness checking catches unhandled messages.                                                                                                     |
+| I/O model          | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the process.                                                                                                                                      |
+| Typed mailboxes    | Processes declare a message type. `send` and `receive` are type-checked at compile time. Union types enable multi-source mailboxes without wrapper enums.                                                                                          |
 
 ### Risks
 
 - **Runtime complexity**: building a work-stealing scheduler with I/O integration is substantial engineering. Start with round-robin and single-threaded I/O, then scale up.
-- **Typed mailbox ergonomics**: forcing every actor to declare a message enum adds boilerplate. Monitor whether this feels natural or burdensome in practice.
+- **Union type complexity**: union types interact with generics, protocols, and pattern matching. Design carefully to avoid type system bloat.
 - **Scheduler protocol scope**: the protocol must be minimal enough that a single-threaded WASM backend can implement it, but expressive enough that the native M:N scheduler isn't constrained. Err on the side of too-minimal -- operations can be added later, but removing them breaks all backends.
 
 ---
 
 ## Phase 3b: Reliability
 
-Build on the working actor runtime with production-grade reliability features. These are layered on top -- actors must work before they can be supervised or prioritized.
+Build on the working process runtime with production-grade reliability features. These are layered on top -- processes must work before they can be supervised or prioritized.
 
 ### Preemption and priority
 
 - Compiler-inserted yield checks at function call preambles and loop back-edges
-- Priority levels (`Low`, `Normal`, `High`) control actor scheduling budget -- higher priority actors get more CPU time before yielding
-- Actors default to `Normal` priority; configurable at spawn time
-- Tasks are not preempted (they're short-lived and yield cooperatively at `await`)
-- **Done when**: a low-priority actor yields to high-priority actors under load
+- Priority levels (`Low`, `Normal`, `High`) control process scheduling budget -- higher priority processes get more CPU time before yielding
+- Processes default to `Normal` priority; configurable at spawn time
+- **Done when**: a low-priority process yields to high-priority processes under load
 
 ### Supervision
 
-- Supervisors are stdlib actors -- not a language primitive, but a standard library pattern
+- Supervisors are stdlib processes -- not a language primitive, but a standard library pattern built on `spawn`/`receive`
 - Restart strategies: `OneForOne`, `OneForAll`, `RestForOne`
 - Max-restarts-exceeded crashes the supervisor
-- Root supervisor crash exits the process (deterministic shutdown)
-- Ownership ensures deterministic cleanup on actor crash -- all owned memory is freed, no leaks
-- **Done when**: a supervised actor tree restarts crashed children correctly
+- Root supervisor crash exits the OS process (deterministic shutdown)
+- Ownership ensures deterministic cleanup on process crash -- all owned memory is freed, no leaks
+- **Done when**: a supervised process tree restarts crashed children correctly
 
 ### Shared data
 
-- `shared_map` (stdlib concurrent hash map, needs a proper name) for shared caches across actors
+- `shared_map` (stdlib concurrent hash map, needs a proper name) for shared caches across processes
 - `put` moves values in (ownership transfer, no races)
 - `get` borrows values out (zero-copy read access)
 - `delete` removes and drops values
 - Solves the two core problems of shared state: memory explosion from copying, and corruption from concurrent modification
-- **Done when**: multiple actors read/write a `shared_map` without corruption
+- **Done when**: multiple processes read/write a `shared_map` without corruption
 
 ### Risks
 
@@ -330,7 +343,7 @@ Build on the working actor runtime with production-grade reliability features. T
 
 Build the minimal stdlib -- only primitives that will still be relevant in 20 years. Everything else ships as first-party packages that version independently of the compiler.
 
-Concurrency primitives (tasks, actors, `shared_map`, supervisors) already ship in Phases 2, 3, and 3b.
+Concurrency primitives (processes, `shared_map`, supervisors) already ship in Phases 2, 3, and 3b.
 
 ### Stdlib (ships with the compiler, always available)
 
@@ -499,6 +512,29 @@ Commands live inside modules alongside `fn`, `struct`, and `enum` -- not a separ
 
 ---
 
+## Future: Arena blocks (post-v1)
+
+Bulk-allocation regions where many objects share a lifetime and are freed together at scope exit. Useful for request-scoped allocation in web servers, parsing large documents, and other workloads with many short-lived allocations.
+
+```expo
+arena
+  nodes = parse_document(input)
+  result = transform(nodes)
+  result.clone()
+end
+# everything allocated inside the arena is freed here
+```
+
+Deferred because the design depends on runtime decisions not yet made:
+
+- **Per-process heaps**: if each process gets its own allocator, process exit is already a bulk-free boundary -- arenas may be redundant for the most common case.
+- **Multi-threaded scheduler**: thread-local vs. shared arenas have very different implementation shapes.
+- **LLVM allocation patterns**: real-world profiling may reveal that LLVM's optimizer eliminates enough allocations to reduce the need for manual arena control.
+
+The `arena...end` syntax is already parsed and type-checked. Codegen is deferred until allocation pressure is observed in real Expo programs.
+
+---
+
 ## Future: Folded multiline strings (post-v1)
 
 A second multiline string type where newlines become spaces and blank lines become `\n` -- for long log messages, error messages, and other prose where source-level wrapping shouldn't produce newlines in the output.
@@ -636,26 +672,27 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 | Core      | Closure captures -- copy/move semantics, heap-allocated environments, automatic drop     | Done   |
 | Core      | `unless` expression, `Self` type, list literals (`[1,2,3]`), `ListLiteral<T>` protocol   | Done   |
 | Core      | Processes -- `spawn`/`receive`/`Process<M>`, `expo-runtime` scheduler, string equality   | Done   |
+| Core      | Collections -- `List<T>`, `Map<K,V>`, `Set<T>`, `for` loops, map/set literals            | Done   |
+| Core      | `List<T>` iterator functions -- `map`, `filter`, `any?`, `all?` (pure Expo)              | Done   |
+| Core      | Bare function references -- `f = double; f(5)`, `list.map(double)`                       | Done   |
 
 ### Remaining
 
-| Phase       | Milestone                                                     |
-| ----------- | ------------------------------------------------------------- |
-| Core        | Tasks (deferred -- process primitive shipped, `await` TBD)    |
-| Core        | Collections, arena, `ua_parser.expo` compiles                 |
-| Actors      | Actor primitive, typed mailboxes, runtime (scheduler, I/O)    |
-| Reliability | Preemption/priority, supervision, `shared_map`                |
-| Stdlib      | Core types, I/O, time, `config.expo` compiles                 |
-| Stdlib      | First-party packages (HTTP, JSON, crypto, logging)            |
-| Tooling     | Package manager, test runner                                  |
-| Tooling     | Documentation generator (doctests, search, prose pages)       |
-| Tooling     | LSP -- autocomplete, inline type hints, multi-module          |
-| Tooling     | Interactive shell (`expo shell`) -- REPL with project loading |
-| Self-host   | Lexer + parser in Expo                                        |
-| Self-host   | ExpoIR + codegen backend protocol (`CodeEmitter`)             |
-| Self-host   | Full compiler in Expo                                         |
-| Self-host   | Retire Rust bootstrap                                         |
-| Validation  | auth-manager-expo runs for real                               |
+| Phase      | Milestone                                                                        |
+| ---------- | -------------------------------------------------------------------------------- |
+| Runtime    | `fn main` as process, union types, `copy` keyword, multi-threaded scheduler, I/O |
+| Runtime    | Supervision, preemption/priority, `shared_map` (stdlib on processes)             |
+| Stdlib     | Core types, I/O, time, `config.expo` compiles                                    |
+| Stdlib     | First-party packages (HTTP, JSON, crypto, logging)                               |
+| Tooling    | Package manager, test runner                                                     |
+| Tooling    | Documentation generator (doctests, search, prose pages)                          |
+| Tooling    | LSP -- autocomplete, inline type hints, multi-module                             |
+| Tooling    | Interactive shell (`expo shell`) -- REPL with project loading                    |
+| Self-host  | Lexer + parser in Expo                                                           |
+| Self-host  | ExpoIR + codegen backend protocol (`CodeEmitter`)                                |
+| Self-host  | Full compiler in Expo                                                            |
+| Self-host  | Retire Rust bootstrap                                                            |
+| Validation | auth-manager-expo runs for real                                                  |
 
 ---
 
@@ -667,6 +704,6 @@ Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18
 - **AI writes, humans read.** The language is concise and readable because that's good design -- Ruby over Java, signal density over ceremony. Every line should carry meaning without boilerplate. AI-friendliness is a natural consequence of those values, not the driver.
 - **No magic.** Explicit is better than implicit. If a feature requires the reader to know something they can't see on screen, it's wrong for Expo.
 - **No macros.** Bake common patterns into the language as native constructs instead. Macros create invisible control flow, fragment the language per-codebase, and are hostile to AI tooling. Every Expo codebase should read the same way.
-- **Approachable by default.** A beginner should be able to write their first program without knowing about ownership, actors, or type annotations. Advanced features reveal themselves as you grow -- you learn `move` when you hit a performance problem, tasks when you need concurrency, actors when you build a stateful service. The language has a Ruby-shaped learning curve backed by Rust-grade safety.
+- **Approachable by default.** A beginner should be able to write their first program without knowing about ownership, processes, or type annotations. Advanced features reveal themselves as you grow -- you learn `move` when you hit a performance problem, processes when you need concurrency, supervision when you build a stateful service. The language has a Ruby-shaped learning curve backed by Rust-grade safety.
 - **Built to last.** Every design decision passes the decades test -- will this still make sense in 20 years? Features tied to today's trends are packages, not language constructs. The stdlib only contains primitives that are as fundamental as integers and files.
 - **Stable after 1.0.** The language spec locks at 1.0. Post-1.0 changes are additive only -- new features, never removals or breaking changes. No edition system. If something truly needs to break (hopefully a decade+ out), it's a clean 2.0 with migration tooling -- one decisive move, not death by a thousand editions.

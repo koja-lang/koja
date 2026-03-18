@@ -38,6 +38,26 @@ pub fn compile_expr<'ctx>(
                 Ok(Some(val))
             } else if let Some(val) = c.constants.get(name) {
                 Ok(Some(*val))
+            } else if c.module.get_function(name).is_some() {
+                let thunk = c.get_or_create_thunk(name)?;
+                let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+                let closure_struct_ty = c
+                    .context
+                    .struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
+                let thunk_ptr = thunk.as_global_value().as_pointer_value();
+                let null_env = ptr_ty.const_null();
+                let mut fat_ptr = closure_struct_ty.get_undef();
+                fat_ptr = c
+                    .builder
+                    .build_insert_value(fat_ptr, thunk_ptr, 0, "insert_fn")
+                    .unwrap()
+                    .into_struct_value();
+                fat_ptr = c
+                    .builder
+                    .build_insert_value(fat_ptr, null_env, 1, "insert_env")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(Some(fat_ptr.into()))
             } else {
                 Err(format!("undefined variable: {name}"))
             }

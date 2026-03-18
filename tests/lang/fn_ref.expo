@@ -1,0 +1,31 @@
+fn double(n: Int32) -> Int32
+  n * 2
+end
+
+fn greet(name: String) -> String
+  "hello #{name}"
+end
+
+fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
+  f(x)
+end
+
+fn main
+  # assign a function to a variable and call it
+  f = double
+  print(f(5))
+
+  # pass a bare function name as an argument
+  print(apply(10, double))
+
+  # bare function ref with list.map
+  nums: List<Int32> = [1, 2, 3]
+  doubled = nums.map(double)
+  for d in doubled
+    print(d)
+  end
+
+  # bare function ref returning String
+  g = greet
+  print(g("world"))
+end

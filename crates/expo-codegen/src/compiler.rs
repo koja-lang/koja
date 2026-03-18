@@ -56,6 +56,9 @@ pub struct Compiler<'ctx> {
     /// `TypeContext::process_fn_msg_types` so `receive` codegen can determine
     /// the LLVM type to load from the mailbox pointer.
     pub process_msg_type: Option<Type>,
+    /// Cache of generated thunk wrappers for bare function references.
+    /// Maps original function name to the thunk `FunctionValue`.
+    pub fn_ref_thunks: HashMap<String, FunctionValue<'ctx>>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -81,6 +84,7 @@ impl<'ctx> Compiler<'ctx> {
             mono_enum_variants: HashMap::new(),
             type_subst: HashMap::new(),
             process_msg_type: None,
+            fn_ref_thunks: HashMap::new(),
         }
     }
 
@@ -91,6 +95,60 @@ impl<'ctx> Compiler<'ctx> {
             .get_insert_block()
             .map(|bb| bb.get_terminator().is_some())
             .unwrap_or(true)
+    }
+
+    /// Returns (or generates) a thunk wrapper for a top-level function so it
+    /// can be used as a closure-compatible fat pointer. The thunk accepts a
+    /// leading `env_ptr` (ignored) then forwards remaining args to the real fn.
+    pub fn get_or_create_thunk(&mut self, fn_name: &str) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(thunk) = self.fn_ref_thunks.get(fn_name) {
+            return Ok(*thunk);
+        }
+
+        let target_fn = self.module.get_function(fn_name).ok_or_else(|| {
+            format!("cannot create thunk: function `{fn_name}` not found in module")
+        })?;
+
+        let target_ty = target_fn.get_type();
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+
+        let mut thunk_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
+        for i in 0..target_ty.count_param_types() {
+            thunk_params.push(target_ty.get_param_types()[i as usize].into());
+        }
+        let thunk_fn_type = match target_ty.get_return_type() {
+            Some(ret) => ret.fn_type(&thunk_params, false),
+            None => self.context.void_type().fn_type(&thunk_params, false),
+        };
+
+        let thunk_name = format!("{fn_name}__thunk");
+        let thunk_fn = self.module.add_function(&thunk_name, thunk_fn_type, None);
+        let entry = self.context.append_basic_block(thunk_fn, "entry");
+
+        let saved_block = self.builder.get_insert_block();
+        self.builder.position_at_end(entry);
+
+        let mut forward_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+        for i in 1..thunk_fn.count_params() {
+            forward_args.push(thunk_fn.get_nth_param(i).unwrap().into());
+        }
+
+        let call_val = self
+            .builder
+            .build_call(target_fn, &forward_args, "fwd")
+            .unwrap();
+
+        match call_val.try_as_basic_value().left() {
+            Some(ret) => self.builder.build_return(Some(&ret)).unwrap(),
+            None => self.builder.build_return(None).unwrap(),
+        };
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+
+        self.fn_ref_thunks.insert(fn_name.to_string(), thunk_fn);
+        Ok(thunk_fn)
     }
 
     /// Writes the compiled LLVM module to a native object file at `path`.

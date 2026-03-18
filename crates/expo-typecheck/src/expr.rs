@@ -175,8 +175,15 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 info.ty.clone()
             } else if let Some(ty) = ctx.constants.get(name) {
                 ty.clone()
-            } else if ctx.functions.contains_key(name) {
-                Type::Unknown
+            } else if let Some(sig) = ctx.functions.get(name) {
+                if sig.type_params.is_empty() {
+                    Type::Function {
+                        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                        return_type: Box::new(sig.return_type.clone()),
+                    }
+                } else {
+                    Type::Unknown
+                }
             } else {
                 ctx.error_with_hint(
                     format!("unknown variable `{}`", name),

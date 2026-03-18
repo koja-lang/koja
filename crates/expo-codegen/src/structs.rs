@@ -244,6 +244,17 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
             .variables
             .get(name)
             .map(|(_, ty, _)| ty.clone())
+            .or_else(|| {
+                let sig = c.type_ctx.functions.get(name)?;
+                if sig.type_params.is_empty() {
+                    Some(Type::Function {
+                        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                        return_type: Box::new(sig.return_type.clone()),
+                    })
+                } else {
+                    None
+                }
+            })
             .unwrap_or(Type::Unknown),
         Expr::Closure {
             params,
