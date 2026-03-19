@@ -147,11 +147,12 @@ pub enum ImportTarget {
 
 // Declarations
 
-/// A module-level constant: `const NAME = expr`.
+/// A module-level constant: `const NAME = expr` or `const NAME: Type = expr`.
 #[derive(Debug, Clone)]
 pub struct Constant {
     pub annotation: Option<Annotation>,
     pub name: String,
+    pub type_annotation: Option<TypeExpr>,
     pub value: Expr,
     pub span: Span,
 }

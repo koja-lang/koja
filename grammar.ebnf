@@ -324,6 +324,7 @@ receive_arm = pattern , "=" , expr , "->" , match_body ;
 
 pattern = "_"                                                       (* wildcard *)
         | literal                                                   (* literal *)
+        | IDENT , ":" , type_expr                                   (* typed binding *)
         | IDENT                                                     (* binding *)
         | named_type , "." , TYPE_IDENT                             (* enum unit *)
         | named_type , "." , TYPE_IDENT ,
@@ -426,7 +427,7 @@ comment = "#" , { any_char_except_newline } ;
 (* 18. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
-constant_decl = "const" , IDENT , "=" , expr ;
+constant_decl = "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
 
 shared_decl = "shared" , IDENT , ":" , type_expr ;
 

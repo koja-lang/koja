@@ -647,11 +647,18 @@ impl Parser {
                 String::from("<error>")
             }
         };
+        let type_annotation = if self.peek() == &TokenKind::Colon {
+            self.advance();
+            Some(self.parse_type_expr())
+        } else {
+            None
+        };
         self.expect(&TokenKind::Eq);
         let value = self.parse_expr();
         Item::Constant(Constant {
             annotation,
             name,
+            type_annotation,
             value,
             span: self.span_from(start),
         })

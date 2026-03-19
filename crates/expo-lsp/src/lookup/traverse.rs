@@ -62,7 +62,7 @@ fn find_in_body(body: &[Statement], line: u32, col: u32, ctx: &TypeContext) -> O
 
 /// Searches a type expression for a symbol at the cursor position,
 /// resolving named types and generic base types.
-fn find_in_type_expr(
+pub(crate) fn find_in_type_expr(
     type_expr: &TypeExpr,
     line: u32,
     col: u32,

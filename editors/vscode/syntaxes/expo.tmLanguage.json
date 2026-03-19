@@ -13,8 +13,8 @@
     { "include": "#keywords" },
     { "include": "#operators" },
     { "include": "#primitive-types" },
-    { "include": "#types" },
     { "include": "#module-constants" },
+    { "include": "#types" },
     { "include": "#import-path" },
     { "include": "#typed-assignment" },
     { "include": "#identifiers" }

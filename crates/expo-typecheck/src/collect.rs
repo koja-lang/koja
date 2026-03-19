@@ -267,29 +267,39 @@ pub fn collect(module: &Module) -> TypeContext {
                 }
             }
             Item::Constant(c) => {
-                let ty = match &c.value {
-                    Expr::Literal {
-                        value: Literal::Bool(_),
-                        ..
-                    } => Type::Primitive(crate::types::Primitive::Bool),
-                    Expr::Literal {
-                        value: Literal::Int(_),
-                        ..
-                    } => Type::Primitive(crate::types::Primitive::I64),
-                    Expr::Literal {
-                        value: Literal::Float(_),
-                        ..
-                    } => Type::Primitive(crate::types::Primitive::F64),
-                    Expr::String { .. } => Type::Primitive(crate::types::Primitive::String),
-                    _ => {
-                        ctx.error(
-                            format!(
-                                "constant `{}` must be a literal value (int, float, string, or bool)",
-                                c.name
-                            ),
-                            c.span,
-                        );
-                        Type::Error
+                let ty = if let Some(type_ann) = &c.type_annotation {
+                    resolve_type_expr_with_params(
+                        type_ann,
+                        &struct_names,
+                        &enum_names,
+                        &[],
+                        &ctx.type_aliases,
+                    )
+                } else {
+                    match &c.value {
+                        Expr::Literal {
+                            value: Literal::Bool(_),
+                            ..
+                        } => Type::Primitive(crate::types::Primitive::Bool),
+                        Expr::Literal {
+                            value: Literal::Int(_),
+                            ..
+                        } => Type::Primitive(crate::types::Primitive::I64),
+                        Expr::Literal {
+                            value: Literal::Float(_),
+                            ..
+                        } => Type::Primitive(crate::types::Primitive::F64),
+                        Expr::String { .. } => Type::Primitive(crate::types::Primitive::String),
+                        _ => {
+                            ctx.error(
+                                format!(
+                                    "constant `{}` must be a literal value (Int, Float, String, or Bool)",
+                                    c.name
+                                ),
+                                c.span,
+                            );
+                            Type::Error
+                        }
                     }
                 };
                 if ctx.constants.contains_key(&c.name) {

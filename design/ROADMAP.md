@@ -29,7 +29,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 - Multi-module imports (including qualified calls like `math.add()`)
 - Functions (`fn`/`priv fn`)
-- Constants (`const`)
+- Constants (`const`) with optional type annotations (`const NAME: Type = expr`)
 - Structs
 - Enums
 - Impl blocks and methods (`self`)
@@ -87,6 +87,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 ### Known gaps
 
 - **Generic enum unit variants in top-level code**: `Option.None` cannot infer `T` without usage context in bare declarations -- workaround: variable type annotations (`z: Option<Int32> = Option.None`). Inside monomorphized method bodies and closures with return type annotations, generic enum construction resolves all type parameters automatically.
+- **Struct/enum constants**: `const` currently only supports primitive literals (Int, Float, String, Bool). Enum unit variants (`const DEFAULT = Color.Red`) and struct constructions with all-literal fields (`const ORIGIN = Point{x: 0, y: 0}`) would be natural extensions without requiring a full const evaluator.
 - **Type checker**: `ref T` parsed but deferred (redundant with borrow-by-default, revisit if a concrete use case emerges)
 - **Codegen**: inline closures (`x -> expr`) are parsed but not yet compiled
 

@@ -11,7 +11,7 @@ use expo_ast::ast::*;
 use expo_typecheck::context::TypeContext;
 
 use span::{span_contains, span_contains_name};
-use traverse::{find_in_ident_at_name, find_in_statement};
+use traverse::{find_in_ident_at_name, find_in_statement, find_in_type_expr};
 
 /// Describes the kind and identity of a symbol found at a cursor position.
 #[derive(Debug)]
@@ -74,6 +74,20 @@ pub(crate) fn find_symbol_at(
                     return Some(SymbolInfo::Enum {
                         name: e.name.clone(),
                     });
+                }
+            }
+            Item::Constant(c) => {
+                if span_contains(&c.span, line, col) {
+                    if let Some(type_ann) = &c.type_annotation
+                        && let Some(info) = find_in_type_expr(type_ann, line, col, ctx)
+                    {
+                        return Some(info);
+                    }
+                    if span_contains_name(&c.name, &c.span, line, col) {
+                        return Some(SymbolInfo::Constant {
+                            name: c.name.clone(),
+                        });
+                    }
                 }
             }
             Item::Import(imp) => {

@@ -504,6 +504,10 @@ impl<'a> Printer<'a> {
         }
         parts.push(text("const "));
         parts.push(text(&c.name));
+        if let Some(type_ann) = &c.type_annotation {
+            parts.push(text(": "));
+            parts.push(type_expr_to_doc(type_ann));
+        }
         parts.push(text(" = "));
         parts.push(self.expr_to_doc(&c.value));
         concat(parts)
