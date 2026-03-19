@@ -670,6 +670,13 @@ pub enum Pattern {
         elements: Vec<Pattern>,
         span: Span,
     },
+    /// A typed binding: `p: Post` -- matches a union member by type
+    /// and binds the unwrapped value.
+    TypedBinding {
+        name: String,
+        type_expr: TypeExpr,
+        span: Span,
+    },
     /// A tuple pattern: `(a, b)`.
     Tuple { elements: Vec<Pattern>, span: Span },
     /// A list pattern: `[head, tail]`.

@@ -276,6 +276,13 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
             concat(vec![text("("), intersperse(elems, text(", ")), text(")")])
         }
+        Pattern::TypedBinding {
+            name, type_expr, ..
+        } => concat(vec![
+            text(name.clone()),
+            text(": "),
+            type_expr_to_doc(type_expr),
+        ]),
         Pattern::List { elements, .. } => {
             let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
             concat(vec![text("["), intersperse(elems, text(", ")), text("]")])

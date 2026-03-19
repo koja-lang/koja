@@ -60,6 +60,153 @@ fn find_in_body(body: &[Statement], line: u32, col: u32, ctx: &TypeContext) -> O
         .find_map(|stmt| find_in_statement(stmt, line, col, ctx))
 }
 
+/// Searches a type expression for a symbol at the cursor position,
+/// resolving named types and generic base types.
+fn find_in_type_expr(
+    type_expr: &TypeExpr,
+    line: u32,
+    col: u32,
+    ctx: &TypeContext,
+) -> Option<SymbolInfo> {
+    match type_expr {
+        TypeExpr::Named { path, span } => {
+            if span_contains(span, line, col) {
+                let name = path.last()?;
+                return classify_name(name, ctx);
+            }
+        }
+        TypeExpr::Generic { path, args, span } => {
+            if span_contains(span, line, col) {
+                for arg in args {
+                    if let Some(info) = find_in_type_expr(arg, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+                let name = path.last()?;
+                return classify_name(name, ctx);
+            }
+        }
+        TypeExpr::Union { types, span } => {
+            if span_contains(span, line, col) {
+                for t in types {
+                    if let Some(info) = find_in_type_expr(t, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
+        TypeExpr::Tuple { elements, span } => {
+            if span_contains(span, line, col) {
+                for e in elements {
+                    if let Some(info) = find_in_type_expr(e, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
+        TypeExpr::Function {
+            params,
+            return_type,
+            span,
+            ..
+        } => {
+            if span_contains(span, line, col) {
+                for p in params {
+                    if let Some(info) = find_in_type_expr(p, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+                if let Some(info) = find_in_type_expr(return_type, line, col, ctx) {
+                    return Some(info);
+                }
+            }
+        }
+        TypeExpr::Unit { .. } | TypeExpr::Self_ { .. } => {}
+    }
+    None
+}
+
+/// Recursively searches a match pattern for a symbol at the cursor
+/// position, resolving type names and enum paths.
+fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
+    match pat {
+        Pattern::TypedBinding {
+            type_expr, span, ..
+        } => {
+            if span_contains(span, line, col) {
+                return find_in_type_expr(type_expr, line, col, ctx);
+            }
+        }
+        Pattern::EnumUnit {
+            type_path, span, ..
+        } => {
+            if span_contains(span, line, col) {
+                let name = type_path.first()?;
+                return classify_name(name, ctx);
+            }
+        }
+        Pattern::EnumTuple {
+            type_path,
+            elements,
+            span,
+            ..
+        } => {
+            if span_contains(span, line, col) {
+                for sub in elements {
+                    if let Some(info) = find_in_pattern(sub, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+                let name = type_path.first()?;
+                return classify_name(name, ctx);
+            }
+        }
+        Pattern::EnumStruct {
+            type_path,
+            fields,
+            span,
+            ..
+        } => {
+            if span_contains(span, line, col) {
+                for fp in fields {
+                    if let Some(sub) = &fp.pattern
+                        && let Some(info) = find_in_pattern(sub, line, col, ctx)
+                    {
+                        return Some(info);
+                    }
+                }
+                let name = type_path.first()?;
+                return classify_name(name, ctx);
+            }
+        }
+        Pattern::Constructor {
+            name,
+            elements,
+            span,
+        } => {
+            if span_contains(span, line, col) {
+                for sub in elements {
+                    if let Some(info) = find_in_pattern(sub, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+                return classify_name(name, ctx);
+            }
+        }
+        Pattern::Tuple { elements, span } | Pattern::List { elements, span } => {
+            if span_contains(span, line, col) {
+                for sub in elements {
+                    if let Some(info) = find_in_pattern(sub, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
+        Pattern::Wildcard { .. } | Pattern::Literal { .. } | Pattern::Binding { .. } => {}
+    }
+    None
+}
+
 /// Recursively searches an expression tree for a symbol at the cursor
 /// position, descending into sub-expressions and statement bodies.
 fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
@@ -168,6 +315,14 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                     return Some(info);
                 }
                 for arm in arms {
+                    if let Some(info) = find_in_pattern(&arm.pattern, line, col, ctx) {
+                        return Some(info);
+                    }
+                    if let Some(guard) = &arm.guard
+                        && let Some(info) = find_in_expr(guard, line, col, ctx)
+                    {
+                        return Some(info);
+                    }
                     if let Some(info) = find_in_body(&arm.body, line, col, ctx) {
                         return Some(info);
                     }

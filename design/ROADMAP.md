@@ -19,7 +19,7 @@ A 10-crate Rust workspace that compiles Expo source to native binaries via LLVM:
 - `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
 - `expo-runtime` -- native process scheduler (C ABI static library linked into compiled binaries)
 - `expo-driver` -- CLI binary (`expo`)
-- `expo-lsp` -- language server (diagnostics, formatting, hover, go-to-definition)
+- `expo-lsp` -- language server (diagnostics, formatting, hover, go-to-definition, pattern symbol resolution)
 
 ### CLI
 
@@ -62,7 +62,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`)
 - `List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) implemented as pure Expo code in `std.kernel`
 - Bare function names as references (`f = double; f(5)`, `list.map(double)`) -- top-level functions produce closure-compatible fat pointers via thunk wrappers
-- Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support
+- Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support with typed binding patterns (`p: Post -> p.title`)
 - Named union aliases (`type FeedItem = Post | Comment | Ad`) -- `type` keyword declarations resolved in the type context
 
 ### Parsed and type-checked but NOT yet in codegen
@@ -177,7 +177,8 @@ The foundation for Expo's concurrency promise. B1-B3 form a dependency chain. B4
 - **Implemented**: parsing (`A | B | C` type expressions), `type Name = ...` declarations, `Type::Union` with canonical constructor (sorted, deduped, flattened), widening coercion (`Post` assignable to `Post | Comment | Ad`), exhaustiveness checking for match on union subjects, named union aliases with collision checking. All integrated into the formatter, LSP, and editor extensions.
 - **Implemented**: codegen -- tagged union representation (`{ i8 tag, [N x i8] payload }`) reusing enum infrastructure, widening coercion at assignment/call/return sites via coercion map, `match` with wildcard/binding patterns on union-typed values.
 - Use cases: process mailbox typing (`Process<ServerMsg | LibResult>`), heterogeneous collections (`List<Post | Comment | Ad>`), error type composition (`Result<User, ValidationError | DatabaseError>`)
-- **Remaining**: type-specific pattern matching (e.g. `match item` with `post: Post -> ...` arms) -- needs parser support for typed binding patterns. Variant name collision resolution, protocol interaction.
+- **Implemented**: typed binding patterns in match arms (`p: Post -> p.title`) -- matches a union member by type and binds the unwrapped value. Exhaustiveness checking counts typed bindings. LSP hover/go-to-definition works on type names in patterns.
+- **Remaining**: variant name collision resolution, protocol interaction, struct destructuring in match arms (deferred to irrefutable destructuring milestone).
 - **Numeric tower as first dogfood**: `Int` could be defined in Expo as `type Int = Int8 | Int16 | Int32 | Int64` rather than hardcoded as a compiler primitive. The compiler recognizes that all variants are same-category integers and optimizes to the widest representation (no tag, implicit widening) -- the same behavior as today, but derived from the union definition. Extends naturally to `Float = Float32 | Float64` and user-defined aliases like `type SmallInt = Int8 | Int16`. This validates that the union type implementation is correct and general enough to express the language's own numeric relationships.
 
 #### B2. `fn main` as a process

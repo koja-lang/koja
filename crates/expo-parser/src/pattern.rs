@@ -31,6 +31,17 @@ impl Parser {
                     let variant = type_path.pop().unwrap();
                     return self.finish_enum_pattern(type_path, variant, start);
                 }
+                // Typed binding: `name: Type` -- matches a union member by type
+                if self.at(&TokenKind::Colon) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_))
+                {
+                    self.advance(); // :
+                    let type_expr = self.parse_type_expr();
+                    return Pattern::TypedBinding {
+                        name,
+                        type_expr,
+                        span: self.span_from(start),
+                    };
+                }
                 Pattern::Binding {
                     name,
                     span: self.span_from(start),

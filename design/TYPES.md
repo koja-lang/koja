@@ -149,18 +149,40 @@ deduplicated set of constituent type IDs at the point of construction.
 
 ## Pattern matching and exhaustiveness
 
-Match arms are checked against the union's constituent types. Exhaustiveness
-uses the same logic as enum variant checking:
+### Typed binding patterns
+
+The `name: Type` syntax matches a union member by type and binds the unwrapped
+value. The `:` is consistent with its meaning everywhere else in Expo --
+"has type" -- in variable annotations (`x: Int`), function params (`n: Int`),
+and future binary segments (`<<len: Int(16)>>`).
 
 ```
 item: Post | Comment | Ad = get_item(id)
 
 match item
-  Post(p) -> render_post(p)
-  Comment(c) -> render_comment(c)
+  p: Post -> render_post(p)        # p has type Post
+  c: Comment -> render_comment(c)  # c has type Comment
+  a: Ad -> render_ad(a)            # a has type Ad
+end
+```
+
+Match arms are checked against the union's constituent types. Exhaustiveness
+uses the same logic as enum variant checking:
+
+```
+match item
+  p: Post -> render_post(p)
+  c: Comment -> render_comment(c)
   # Compile error: non-exhaustive match, missing Ad
 end
 ```
+
+Struct destructuring in match arms (`Post { title, body } -> ...`) is deferred.
+With static typing and LSP autocomplete, `p.title` is just as convenient as
+destructuring and more readable. Struct destructuring will arrive alongside
+irrefutable destructuring (`Config{name, port} = load_config()`).
+
+### Enum constituent unions
 
 When constituent types are enums with their own variants, qualify to
 disambiguate:

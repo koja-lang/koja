@@ -11,7 +11,9 @@ use expo_ast::span::Span;
 
 use crate::context::{TypeContext, VariantData};
 use crate::env::{VarInfo, VarState};
-use crate::types::{GenericKind, Primitive, Type, build_substitution, substitute};
+use crate::types::{
+    GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute,
+};
 
 /// Checks whether a match expression covers all variants of an enum subject,
 /// emitting a diagnostic if any variants are missing and no catch-all exists.
@@ -74,6 +76,12 @@ pub(crate) fn check_match_exhaustiveness(
         }
         Type::Union(members) => {
             let member_names: Vec<String> = members.iter().map(|m| m.display()).collect();
+
+            let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+            let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
+            let enum_name_keys: Vec<String> = ctx.enums.keys().cloned().collect();
+            let enum_refs: Vec<&str> = enum_name_keys.iter().map(|s| s.as_str()).collect();
+
             let matched: Vec<String> = arms
                 .iter()
                 .filter(|arm| arm.guard.is_none())
@@ -82,6 +90,10 @@ pub(crate) fn check_match_exhaustiveness(
                     Pattern::EnumTuple { type_path, .. } => Some(type_path.join(".")),
                     Pattern::EnumStruct { type_path, .. } => Some(type_path.join(".")),
                     Pattern::Constructor { name, .. } => Some(name.clone()),
+                    Pattern::TypedBinding { type_expr, .. } => {
+                        let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+                        Some(resolved.display())
+                    }
                     Pattern::Binding { .. } => None,
                     _ => None,
                 })
@@ -383,6 +395,47 @@ pub(crate) fn check_pattern(
             }
         },
 
+        Pattern::TypedBinding {
+            name,
+            type_expr,
+            span,
+        } => {
+            let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+            let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
+            let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
+            let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
+            let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+
+            if let Type::Union(members) = subject_type {
+                if !members.iter().any(|m| m.display() == resolved.display()) {
+                    ctx.error(
+                        format!(
+                            "type `{}` is not a member of union `{}`",
+                            resolved.display(),
+                            subject_type.display()
+                        ),
+                        *span,
+                    );
+                }
+            } else if subject_type.is_known() {
+                ctx.error(
+                    format!(
+                        "typed binding pattern on non-union type `{}`",
+                        subject_type.display()
+                    ),
+                    *span,
+                );
+            }
+
+            env.insert(
+                name.clone(),
+                VarInfo {
+                    ty: resolved,
+                    state: VarState::Live,
+                },
+            );
+        }
+
         Pattern::Wildcard { .. } => {}
     }
 }
@@ -415,6 +468,9 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
                     out.push((f.name.clone(), f.span));
                 }
             }
+        }
+        Pattern::TypedBinding { name, span, .. } => {
+            out.push((name.clone(), *span));
         }
         Pattern::Wildcard { .. } | Pattern::Literal { .. } | Pattern::EnumUnit { .. } => {}
     }

@@ -1,0 +1,42 @@
+# Typed binding patterns in union match arms
+struct Post
+  title: String
+end
+
+struct Comment
+  body: String
+end
+
+struct Ad
+  url: String
+end
+
+fn describe(item: Post | Comment | Ad) -> String
+  match item
+    p: Post -> p.title
+    c: Comment -> c.body
+    a: Ad -> a.url
+  end
+end
+
+type Content = Post | Comment
+
+fn summarize(c: Content) -> String
+  match c
+    p: Post -> p.title
+    c: Comment -> c.body
+  end
+end
+
+fn main
+  post = Post{title: "Hello World"}
+  comment = Comment{body: "Great post!"}
+  ad = Ad{url: "https://example.com"}
+
+  print(describe(post))
+  print(describe(comment))
+  print(describe(ad))
+
+  print(summarize(Post{title: "Summary"}))
+  print(summarize(Comment{body: "Nice"}))
+end

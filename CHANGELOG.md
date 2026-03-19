@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Recursive types -- structs and enums that reference themselves (e.g. linked lists, trees) are now supported without any special syntax. The compiler automatically detects cycles in the type graph, inserts heap-allocated indirection where needed, and frees the memory on drop. Works with generics and stdlib types like `Option<T>`.
-- Union types -- `Post | Comment | Ad` as anonymous unions, `type Pet = Cat | Dog | Fish` as named union aliases. Values of a member type widen automatically to the union type at assignment, call, and return sites. `match` works on union-typed values.
+- Union types -- `Post | Comment | Ad` as anonymous unions, `type Pet = Cat | Dog | Fish` as named union aliases. Values of a member type widen automatically to the union type at assignment, call, and return sites. `match` works on union-typed values with typed binding patterns (`p: Post -> p.title`) for matching by type and binding the unwrapped value.
+- LSP -- hover and go-to-definition on type names and enum variants inside match patterns (including typed bindings, constructors, and enum patterns).
 - LSP -- document symbols (outline view) for functions, structs, enums, constants, impl blocks, protocols, type aliases, and shared declarations.
 - LSP -- completion for keywords and known symbols (functions, structs, enums, constants, imported modules) from the current module and stdlib.
 - LSP -- signature help with parameter hints when typing function calls.

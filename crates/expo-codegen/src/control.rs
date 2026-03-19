@@ -4,7 +4,7 @@
 use crate::drop::Ownership;
 use expo_ast::ast::{CondArm, Expr, FieldPattern, Literal, MatchArm, Pattern, Statement};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{Type, mangle_type, unwrap_indirect};
+use expo_typecheck::types::{Type, mangle_type, resolve_type_expr, unwrap_indirect};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -814,6 +814,34 @@ fn compile_pattern<'ctx>(
                     function,
                 )?;
             }
+
+            Ok(result)
+        }
+
+        Pattern::TypedBinding {
+            name, type_expr, ..
+        } => {
+            let struct_names: Vec<String> = c.type_ctx.structs.keys().cloned().collect();
+            let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
+            let enum_names: Vec<String> = c.type_ctx.enums.keys().cloned().collect();
+            let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
+            let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+
+            let member_mangled = mangle_type(&resolved);
+            let union_mangled = mangle_type(unwrap_indirect(subject_type));
+
+            let result = compile_tag_check(c, subject_ptr, &union_mangled, &member_mangled)?;
+
+            let (_payload_type, payload_ptr) =
+                get_payload_ptr(c, subject_ptr, &union_mangled, &member_mangled)?;
+            let llvm_ty = to_llvm_type(&resolved, c.context, &c.struct_types).ok_or_else(|| {
+                format!("unsupported type in typed binding: {}", resolved.display())
+            })?;
+            let val = c.builder.build_load(llvm_ty, payload_ptr, name).unwrap();
+            let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
+            c.builder.build_store(alloca, val).unwrap();
+            c.variables
+                .insert(name.clone(), (alloca, resolved, Ownership::Unowned));
 
             Ok(result)
         }
