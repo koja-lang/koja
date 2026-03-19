@@ -203,6 +203,7 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 - Timer wheel for timeouts, intervals, and deadlines
 - Process lifecycle manager (start, stop, crash detection)
 - All functions can suspend; the runtime handles it -- no function coloring
+- **System intrinsics via the runtime** -- `expo-runtime` is the gateway between Expo code and the OS. Beyond scheduling, it provides native functions for time (`expo_time_now_millis`), file I/O, random bytes, and other syscall-dependent operations. The compiler emits calls to these functions as intrinsics (same pattern as `spawn`/`send`/`receive`). Pure Expo types in the stdlib wrap them with ergonomic APIs (`DateTime.now()`, `File.read()`, etc.). This avoids a full C FFI while keeping system access centralized in one linked library. A general FFI for third-party native bindings is a later concern.
 - **Done when**: 10,000 processes run concurrently with correct multi-threaded scheduling
 
 ### Key decisions

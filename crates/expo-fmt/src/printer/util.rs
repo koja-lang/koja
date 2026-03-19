@@ -9,6 +9,56 @@ use crate::doc::*;
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
+/// Formats a comma-separated list of items using fill layout inside brackets.
+///
+/// Items are packed left-to-right on each line. A trailing comma is added
+/// to all items except the last. The result is wrapped in a group so the
+/// whole list can collapse to a single line when it fits.
+pub(super) fn fill_bracket_list(open: &str, close: &str, items: Vec<Doc>) -> Doc {
+    let last = items.len() - 1;
+    let items: Vec<Doc> = items
+        .into_iter()
+        .enumerate()
+        .map(|(i, d)| {
+            if i < last {
+                concat(vec![d, text(",")])
+            } else {
+                d
+            }
+        })
+        .collect();
+    let fill_items: Vec<Doc> = items
+        .into_iter()
+        .enumerate()
+        .map(|(i, d)| if i > 0 { concat(vec![text(" "), d]) } else { d })
+        .collect();
+    group(concat(vec![
+        text(open),
+        indent(2, concat(vec![softline(), fill(fill_items)])),
+        softline(),
+        text(close),
+    ]))
+}
+
+/// Formats a struct-like body: `prefix{ field, field, ... }` with
+/// trailing-comma layout that breaks across lines when needed.
+pub(super) fn struct_body(prefix: Doc, field_docs: Vec<Doc>) -> Doc {
+    group(concat(vec![
+        prefix,
+        text("{"),
+        indent(
+            2,
+            concat(vec![
+                softline(),
+                intersperse(field_docs, concat(vec![text(","), line()])),
+                trailing_comma(),
+            ]),
+        ),
+        softline(),
+        text("}"),
+    ]))
+}
+
 /// Returns the source span for any top-level `Item`.
 pub(super) fn item_span(item: &Item) -> &Span {
     match item {
@@ -43,34 +93,17 @@ pub(super) fn import_to_doc(imp: &Import) -> Doc {
         ImportTarget::Module => text(format!("import {}", path_str)),
         ImportTarget::Item(name) => text(format!("import {}.{}", path_str, name)),
         ImportTarget::Group(names) => {
-            let items: Vec<Doc> = names
-                .iter()
-                .enumerate()
-                .map(|(i, n)| {
-                    if i < names.len() - 1 {
-                        concat(vec![text(n.clone()), text(",")])
-                    } else {
-                        text(n.clone())
-                    }
-                })
-                .collect();
-            let fill_items: Vec<Doc> = items
-                .into_iter()
-                .enumerate()
-                .map(|(i, d)| if i > 0 { concat(vec![text(" "), d]) } else { d })
-                .collect();
-            group(concat(vec![
-                text(format!("import {}.{{", path_str)),
-                indent(2, concat(vec![softline(), fill(fill_items)])),
-                softline(),
-                text("}"),
-            ]))
+            let items: Vec<Doc> = names.iter().map(|n| text(n.clone())).collect();
+            concat(vec![
+                text(format!("import {}.", path_str)),
+                fill_bracket_list("{", "}", items),
+            ])
         }
         ImportTarget::Wildcard => text(format!("import {}.*", path_str)),
     }
 }
 
-/// Formats a `shared` declaration.
+/// Formats a `type` alias declaration (`type Name = TypeExpr`).
 pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
     concat(vec![
         text("type "),
@@ -80,6 +113,7 @@ pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
     ])
 }
 
+/// Formats a `shared` declaration (`shared Name: TypeExpr`).
 pub(super) fn shared_to_doc(s: &SharedDecl) -> Doc {
     concat(vec![
         text("shared "),
@@ -289,20 +323,31 @@ pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
     }
 }
 
-/// Returns `true` if the expression contains multi-line block constructs
-/// (if/match, closures, struct literals, etc.) that warrant breaking after `=`.
-pub(super) fn expr_contains_block(expr: &Expr) -> bool {
-    match expr {
+/// Returns `true` if the expression is a multi-line block construct
+/// (if, match, cond, for, loop, unless, while, closure, receive, arena).
+fn is_block_expr(expr: &Expr) -> bool {
+    matches!(
+        expr,
         Expr::If { .. }
-        | Expr::Match { .. }
-        | Expr::Cond { .. }
-        | Expr::For { .. }
-        | Expr::Loop { .. }
-        | Expr::Unless { .. }
-        | Expr::While { .. }
-        | Expr::Closure { .. }
-        | Expr::Receive { .. }
-        | Expr::Arena { .. } => true,
+            | Expr::Match { .. }
+            | Expr::Cond { .. }
+            | Expr::For { .. }
+            | Expr::Loop { .. }
+            | Expr::Unless { .. }
+            | Expr::While { .. }
+            | Expr::Closure { .. }
+            | Expr::Receive { .. }
+            | Expr::Arena { .. }
+    )
+}
+
+/// Returns `true` if the expression contains multi-line block constructs
+/// that warrant breaking after `=`.
+pub(super) fn expr_contains_block(expr: &Expr) -> bool {
+    if is_block_expr(expr) {
+        return true;
+    }
+    match expr {
         Expr::Call { args, .. } => args.iter().any(|a| expr_contains_block(&a.value)),
         Expr::MethodCall { receiver, args, .. } => {
             expr_contains_block(receiver) || args.iter().any(|a| expr_contains_block(&a.value))
@@ -329,22 +374,8 @@ pub(super) fn arm_is_multiline(body: &[Statement]) -> bool {
     if body.len() > 1 {
         return true;
     }
-    if body.len() == 1
-        && let Statement::Expr(expr) = &body[0]
-    {
-        return matches!(
-            expr,
-            Expr::If { .. }
-                | Expr::Match { .. }
-                | Expr::Cond { .. }
-                | Expr::For { .. }
-                | Expr::Loop { .. }
-                | Expr::Unless { .. }
-                | Expr::While { .. }
-                | Expr::Closure { .. }
-                | Expr::Receive { .. }
-                | Expr::Arena { .. }
-        );
+    if let [Statement::Expr(expr)] = body {
+        return is_block_expr(expr);
     }
     false
 }

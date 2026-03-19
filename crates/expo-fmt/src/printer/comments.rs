@@ -19,6 +19,7 @@ pub(crate) struct CommentCursor<'a> {
 }
 
 impl<'a> CommentCursor<'a> {
+    /// Creates a cursor positioned at the start of the comment list.
     pub(super) fn new(comments: &'a [Comment]) -> Self {
         Self { comments, pos: 0 }
     }

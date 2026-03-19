@@ -71,28 +71,8 @@ impl<'a> Printer<'a> {
                 if elements.is_empty() {
                     text("[]")
                 } else {
-                    let items: Vec<Doc> = elements
-                        .iter()
-                        .enumerate()
-                        .map(|(i, e)| {
-                            if i < elements.len() - 1 {
-                                concat(vec![self.expr_to_doc(e), text(",")])
-                            } else {
-                                self.expr_to_doc(e)
-                            }
-                        })
-                        .collect();
-                    let fill_items: Vec<Doc> = items
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, d)| if i > 0 { concat(vec![text(" "), d]) } else { d })
-                        .collect();
-                    group(concat(vec![
-                        text("["),
-                        indent(2, concat(vec![softline(), fill(fill_items)])),
-                        softline(),
-                        text("]"),
-                    ]))
+                    let items: Vec<Doc> = elements.iter().map(|e| self.expr_to_doc(e)).collect();
+                    fill_bracket_list("[", "]", items)
                 }
             }
 
@@ -102,28 +82,11 @@ impl<'a> Printer<'a> {
                 } else {
                     let items: Vec<Doc> = entries
                         .iter()
-                        .enumerate()
-                        .map(|(i, (k, v))| {
-                            let pair =
-                                concat(vec![self.expr_to_doc(k), text(": "), self.expr_to_doc(v)]);
-                            if i < entries.len() - 1 {
-                                concat(vec![pair, text(",")])
-                            } else {
-                                pair
-                            }
+                        .map(|(k, v)| {
+                            concat(vec![self.expr_to_doc(k), text(": "), self.expr_to_doc(v)])
                         })
                         .collect();
-                    let fill_items: Vec<Doc> = items
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, d)| if i > 0 { concat(vec![text(" "), d]) } else { d })
-                        .collect();
-                    group(concat(vec![
-                        text("["),
-                        indent(2, concat(vec![softline(), fill(fill_items)])),
-                        softline(),
-                        text("]"),
-                    ]))
+                    fill_bracket_list("[", "]", items)
                 }
             }
 
@@ -356,20 +319,7 @@ impl<'a> Printer<'a> {
                     for fi in fields {
                         self.comments.drain_trailing(fi.span.end.line);
                     }
-                    group(concat(vec![
-                        text(path_str),
-                        text("{"),
-                        indent(
-                            2,
-                            concat(vec![
-                                softline(),
-                                intersperse(field_docs, concat(vec![text(","), line()])),
-                                trailing_comma(),
-                            ]),
-                        ),
-                        softline(),
-                        text("}"),
-                    ]))
+                    struct_body(text(path_str), field_docs)
                 }
             }
 
@@ -401,20 +351,7 @@ impl<'a> Printer<'a> {
                         for fi in fields {
                             self.comments.drain_trailing(fi.span.end.line);
                         }
-                        group(concat(vec![
-                            text(prefix),
-                            text("{"),
-                            indent(
-                                2,
-                                concat(vec![
-                                    softline(),
-                                    intersperse(field_docs, concat(vec![text(","), line()])),
-                                    trailing_comma(),
-                                ]),
-                            ),
-                            softline(),
-                            text("}"),
-                        ]))
+                        struct_body(text(prefix), field_docs)
                     }
                 }
             }

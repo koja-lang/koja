@@ -28,7 +28,7 @@ x = 42  # inline comment
 ```
 and, arena, await, break, cond, const, else, end, enum, false, fn, for,
 if, impl, import, in, loop, match, move, not, or, priv, protocol,
-receive, return, self, shared, spawn, struct, true, unless, when
+receive, return, self, shared, spawn, struct, true, type, unless, when
 ```
 
 `or` and `and` are valid as function and field names after `.` (e.g. `x.or(default)`).
@@ -471,6 +471,35 @@ end
 
 ---
 
+## Union Types
+
+A value that can be one of several types. Use `|` between types:
+
+```expo
+fn display(item: Post | Comment | Ad) -> String
+  match item
+    _ -> "an item"
+  end
+end
+```
+
+Use `type` to name a union:
+
+```expo
+type Pet = Cat | Dog | Fish
+```
+
+A member type widens to the union automatically:
+
+```expo
+c = Cat{name: "Whiskers"}
+pet: Pet = c
+```
+
+Order doesn't matter -- `Post | Comment` and `Comment | Post` are the same type.
+
+---
+
 ## Generics
 
 ### Generic Functions
@@ -882,10 +911,6 @@ result = arena
   # only explicitly cloned values escape
 end
 ```
-
-### `Map<K, V>` and `Set<T>`
-
-Built-in generic collection types backed by native implementations. Will implement `Enumeration` for use with `for` loops.
 
 ### Inline Closures
 

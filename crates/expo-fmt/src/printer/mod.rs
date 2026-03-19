@@ -31,6 +31,7 @@ pub(super) struct Printer<'a> {
 }
 
 impl<'a> Printer<'a> {
+    /// Creates a new printer with a comment cursor over the module's comments.
     fn new(comments: &'a [Comment]) -> Self {
         Self {
             comments: CommentCursor::new(comments),
