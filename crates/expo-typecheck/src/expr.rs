@@ -818,8 +818,12 @@ fn infer_field_access(
     ce: &mut CheckEnv,
 ) -> Type {
     let recv_ty = infer_expr(receiver, ctx, ce);
+    let effective_ty = match &recv_ty {
+        Type::Indirect(inner) => inner.as_ref(),
+        other => other,
+    };
 
-    let (struct_name, generic_args) = match &recv_ty {
+    let (struct_name, generic_args) = match effective_ty {
         Type::Struct(name) => (name.as_str(), None),
         Type::GenericInstance {
             base,
@@ -957,7 +961,11 @@ fn infer_method_call(
         }
     }
 
-    let recv_ty = infer_expr(receiver, ctx, ce);
+    let recv_ty_raw = infer_expr(receiver, ctx, ce);
+    let recv_ty = match &recv_ty_raw {
+        Type::Indirect(inner) => inner.as_ref().clone(),
+        other => other.clone(),
+    };
 
     if method == "clone" && args.is_empty() {
         return recv_ty;

@@ -15,6 +15,7 @@ pub fn to_llvm_type<'ctx>(
     struct_types: &HashMap<String, StructType<'ctx>>,
 ) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
+        Type::Indirect(_) => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
         Type::Primitive(p) => Some(primitive_to_llvm(p, context)),
         Type::Struct(name) | Type::Enum(name) => struct_types.get(name).map(|st| (*st).into()),
         Type::Union(_) => {

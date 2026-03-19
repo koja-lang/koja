@@ -1,0 +1,25 @@
+struct Node
+  value: Int
+  next: Option<Node>
+end
+
+fn main
+  leaf = Node{value: 3, next: Option.None}
+  mid = Node{value: 2, next: Option.Some(leaf)}
+  head = Node{value: 1, next: Option.Some(mid)}
+
+  print(head.value)
+
+  match head.next
+    Option.Some(n) ->
+      print(n.value)
+      match n.next
+        Option.Some(n2) ->
+          print(n2.value)
+        Option.None ->
+          print("none")
+      end
+    Option.None ->
+      print("none")
+  end
+end

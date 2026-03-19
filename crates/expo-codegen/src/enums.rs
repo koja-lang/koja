@@ -4,12 +4,13 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::EnumConstructionData;
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Type, unwrap_indirect};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::stmt::infer_type_from_llvm;
+use crate::structs::store_maybe_indirect;
 
 /// Compiles an enum variant construction (`EnumName.Variant(...)` or
 /// `EnumName.Variant { ... }`). Sets the tag byte and populates the payload
@@ -90,10 +91,10 @@ fn compile_concrete_enum<'ctx>(
                 });
 
             for (i, expr) in exprs.iter().enumerate() {
-                let val = if let Some(ref types) = expected_types
-                    && i < types.len()
-                {
-                    compile_expr_coerced(c, expr, &types[i], function)?
+                let elem_type = expected_types.as_ref().and_then(|t| t.get(i));
+                let coerce_ty = elem_type.map(unwrap_indirect);
+                let val = if let Some(ct) = coerce_ty {
+                    compile_expr_coerced(c, expr, ct, function)?
                 } else {
                     compile_expr(c, expr, function)?
                 }
@@ -102,7 +103,17 @@ fn compile_concrete_enum<'ctx>(
                     .builder
                     .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("field_{i}"))
                     .unwrap();
-                c.builder.build_store(field_ptr, val).unwrap();
+                if let Some(et) = elem_type {
+                    store_maybe_indirect(
+                        c,
+                        field_ptr,
+                        val,
+                        et,
+                        &format!("{enum_name}_{variant}_{i}"),
+                    );
+                } else {
+                    c.builder.build_store(field_ptr, val).unwrap();
+                }
             }
         }
         EnumConstructionData::Struct(fields) => {
@@ -140,13 +151,14 @@ fn compile_concrete_enum<'ctx>(
                         )
                     })?;
 
-                let val = compile_expr_coerced(c, &field_init.value, &field_type, function)?
+                let coerce_ty = unwrap_indirect(&field_type);
+                let val = compile_expr_coerced(c, &field_init.value, coerce_ty, function)?
                     .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
                 let field_ptr = c
                     .builder
                     .build_struct_gep(payload_type, payload_ptr, field_idx, &field_init.name)
                     .unwrap();
-                c.builder.build_store(field_ptr, val).unwrap();
+                store_maybe_indirect(c, field_ptr, val, &field_type, &field_init.name);
             }
         }
     }
@@ -265,12 +277,33 @@ fn compile_generic_enum_construction<'ctx>(
             .build_struct_gep(enum_type, alloca, 1, "payload_ptr")
             .unwrap();
 
+        let mono_elem_types: Option<Vec<Type>> = c
+            .mono_enum_variants
+            .get(&mangled)
+            .and_then(|vs| vs.iter().find(|(n, _)| n == variant))
+            .and_then(|(_, vdata)| match vdata {
+                expo_typecheck::context::VariantData::Tuple(types) => Some(types.clone()),
+                _ => None,
+            });
+
         for (i, val) in compiled_values.iter().enumerate() {
             let field_ptr = c
                 .builder
                 .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("field_{i}"))
                 .unwrap();
-            c.builder.build_store(field_ptr, *val).unwrap();
+            if let Some(ref types) = mono_elem_types
+                && i < types.len()
+            {
+                store_maybe_indirect(
+                    c,
+                    field_ptr,
+                    *val,
+                    &types[i],
+                    &format!("{mangled}_{variant}_{i}"),
+                );
+            } else {
+                c.builder.build_store(field_ptr, *val).unwrap();
+            }
         }
     }
 

@@ -330,6 +330,63 @@ end
 
 ---
 
+## Recursive types
+
+Structs and enums may reference themselves, directly or through other types:
+
+```
+struct Node
+  value: Int
+  next: Option<Node>
+end
+
+enum Tree
+  Leaf(Int)
+  Branch(Tree, Tree)
+end
+
+struct GNode<T>
+  value: T
+  next: Option<GNode<T>>
+end
+```
+
+### No user-facing syntax
+
+The compiler handles recursive types entirely behind the scenes. There is no
+`Box`, `indirect`, or `ref` keyword. The developer writes the type as they
+think about it; the compiler inserts the necessary indirection.
+
+### Cycle detection
+
+After type resolution and generic re-resolution, a DFS walks the type graph
+built from struct fields and enum variant elements. Back edges identify fields
+that create cycles. Those fields are wrapped in an internal `Type::Indirect`
+marker.
+
+### LLVM representation
+
+`Type::Indirect` maps to an LLVM pointer type. Construction `malloc`s memory
+for the inner value and stores through the pointer. Field access and match
+payload extraction add an extra pointer load to dereference the indirection.
+
+### Drop semantics
+
+When a value containing `Indirect` fields is dropped, the compiler emits
+`free` calls for each heap-allocated indirection before dropping the outer
+value. Deep recursive structures free one level of indirection at drop time;
+full recursive freeing is a future optimization.
+
+### Monomorphization
+
+`Type::Indirect` is preserved through generic substitution. When monomorphizing
+a struct like `GNode<Int>`, the compiler sets the struct body (using pointer
+types for `Indirect` fields) before ensuring inner types exist. This breaks
+the circular dependency where `GNode<Int>` needs `Option<GNode<Int>>` which
+needs `GNode<Int>`'s size.
+
+---
+
 ## Open questions
 
 - **Generic interaction with unions.** `List<A | B>` is clear (each element is

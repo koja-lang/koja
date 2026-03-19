@@ -118,9 +118,7 @@ pub fn collect(module: &Module) -> TypeContext {
                         }
                     })
                     .collect();
-                if !e.type_params.is_empty() {
-                    ctx.generic_enum_asts.insert(e.name.clone(), e.clone());
-                }
+                ctx.generic_enum_asts.insert(e.name.clone(), e.clone());
                 ctx.enums.insert(
                     e.name.clone(),
                     EnumInfo {
@@ -353,9 +351,7 @@ pub fn collect(module: &Module) -> TypeContext {
                         (f.name.clone(), ty)
                     })
                     .collect();
-                if !s.type_params.is_empty() {
-                    ctx.generic_struct_asts.insert(s.name.clone(), s.clone());
-                }
+                ctx.generic_struct_asts.insert(s.name.clone(), s.clone());
                 ctx.structs.insert(
                     s.name.clone(),
                     StructInfo {

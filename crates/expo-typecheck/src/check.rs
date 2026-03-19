@@ -340,6 +340,14 @@ fn split_mangled_args(s: &str) -> Vec<String> {
 /// Checks if two types are compatible, accounting for numeric coercion and
 /// generic instances with partially-known type arguments.
 pub(crate) fn types_compatible(a: &Type, b: &Type) -> bool {
+    let a = match a {
+        Type::Indirect(inner) => inner.as_ref(),
+        other => other,
+    };
+    let b = match b {
+        Type::Indirect(inner) => inner.as_ref(),
+        other => other,
+    };
     if a == b || numeric_compatible(a, b) {
         return true;
     }

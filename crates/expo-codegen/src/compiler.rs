@@ -626,7 +626,7 @@ impl<'ctx> Compiler<'ctx> {
                             .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
                             .collect();
                         let payload = self.context.struct_type(&field_llvm, true);
-                        let size: u32 = types.iter().map(type_byte_size).sum();
+                        let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                         max_payload_size = max_payload_size.max(size);
                         variant_payloads.push((variant.name.clone(), Some(payload)));
                     }
@@ -638,7 +638,7 @@ impl<'ctx> Compiler<'ctx> {
                             })
                             .collect();
                         let payload = self.context.struct_type(&field_llvm, true);
-                        let size: u32 = fields.iter().map(|(_, ty)| type_byte_size(ty)).sum();
+                        let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                         max_payload_size = max_payload_size.max(size);
                         variant_payloads.push((variant.name.clone(), Some(payload)));
                     }
@@ -890,9 +890,28 @@ pub fn compile_modules(
     })
 }
 
+/// Computes the byte size of an LLVM type for enum payload sizing.
+pub(crate) fn llvm_field_byte_size(ty: inkwell::types::BasicTypeEnum) -> u32 {
+    match ty {
+        inkwell::types::BasicTypeEnum::IntType(it) => it.get_bit_width().div_ceil(8),
+        inkwell::types::BasicTypeEnum::FloatType(_) => 8,
+        inkwell::types::BasicTypeEnum::PointerType(_) => 8,
+        inkwell::types::BasicTypeEnum::StructType(st) => st
+            .get_field_types()
+            .iter()
+            .map(|f| llvm_field_byte_size(*f))
+            .sum(),
+        inkwell::types::BasicTypeEnum::ArrayType(at) => {
+            llvm_field_byte_size(at.get_element_type()) * at.len()
+        }
+        _ => 8,
+    }
+}
+
 pub(crate) fn type_byte_size(ty: &Type) -> u32 {
     use expo_typecheck::types::Primitive;
     match ty {
+        Type::Indirect(_) => 8,
         Type::Primitive(p) => match p {
             Primitive::Bool | Primitive::I8 | Primitive::U8 => 1,
             Primitive::I16 | Primitive::U16 => 2,
@@ -927,6 +946,7 @@ fn collect_union_types(ty: &Type, out: &mut Vec<Type>) {
                 collect_union_types(ta, out);
             }
         }
+        Type::Indirect(inner) => collect_union_types(inner, out),
         Type::Tuple(elems) => {
             for e in elems {
                 collect_union_types(e, out);

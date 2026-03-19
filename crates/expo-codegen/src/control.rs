@@ -4,7 +4,7 @@
 use crate::drop::Ownership;
 use expo_ast::ast::{CondArm, Expr, FieldPattern, Literal, MatchArm, Pattern, Statement};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{Type, mangle_type};
+use expo_typecheck::types::{Type, mangle_type, unwrap_indirect};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -12,6 +12,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
+use crate::structs::load_maybe_indirect;
 use crate::types::to_llvm_type;
 
 /// Compiles a statement list and returns the value of the last expression.
@@ -680,6 +681,12 @@ fn infer_subject_type<'ctx>(
             if c.type_ctx.structs.contains_key(name_str) {
                 return Type::Struct(name_str.to_string());
             }
+            if c.mono_enum_variants.contains_key(name_str) {
+                return Type::Enum(name_str.to_string());
+            }
+            if c.mono_struct_info.contains_key(name_str) {
+                return Type::Struct(name_str.to_string());
+            }
             for ty in c.type_ctx.type_aliases.values() {
                 if let Type::Union(_) = ty
                     && mangle_type(ty) == name_str
@@ -835,24 +842,22 @@ fn compile_field_pattern<'ctx>(
         .find(|(_, (name, _))| *name == fp.name)
         .ok_or_else(|| format!("unknown field `{}` in {enum_name}.{variant}", fp.name))?;
 
-    let field_llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
+    let inner_ty = unwrap_indirect(field_type);
+    let inner_llvm_ty = to_llvm_type(inner_ty, c.context, &c.struct_types)
         .ok_or_else(|| format!("unsupported field type for `{}`", fp.name))?;
     let field_ptr = c
         .builder
         .build_struct_gep(payload_type, payload_ptr, field_idx as u32, &fp.name)
         .unwrap();
-    let field_val = c
-        .builder
-        .build_load(field_llvm_ty, field_ptr, &format!("{}_val", fp.name))
-        .unwrap();
+    let field_val = load_maybe_indirect(c, field_ptr, field_type, &format!("{}_val", fp.name));
     let field_alloca = c
         .builder
-        .build_alloca(field_llvm_ty, &format!("{}_tmp", fp.name))
+        .build_alloca(inner_llvm_ty, &format!("{}_tmp", fp.name))
         .unwrap();
     c.builder.build_store(field_alloca, field_val).unwrap();
 
     if let Some(sub_pat) = &fp.pattern {
-        let sub_result = compile_pattern(c, sub_pat, field_alloca, field_type, function)?;
+        let sub_result = compile_pattern(c, sub_pat, field_alloca, inner_ty, function)?;
         result = c
             .builder
             .build_and(result, sub_result, &format!("{}_and", fp.name))
@@ -860,7 +865,7 @@ fn compile_field_pattern<'ctx>(
     } else {
         c.variables.insert(
             fp.name.clone(),
-            (field_alloca, field_type.clone(), Ownership::Unowned),
+            (field_alloca, inner_ty.clone(), Ownership::Unowned),
         );
     }
 
@@ -928,23 +933,21 @@ fn compile_tuple_elements<'ctx>(
 ) -> Result<IntValue<'ctx>, String> {
     for (i, sub_pat) in elements.iter().enumerate() {
         let field_type = &field_types[i];
-        let field_llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
+        let inner_ty = unwrap_indirect(field_type);
+        let inner_llvm_ty = to_llvm_type(inner_ty, c.context, &c.struct_types)
             .ok_or("unsupported field type in enum variant")?;
         let field_ptr = c
             .builder
             .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("tp{i}"))
             .unwrap();
-        let field_val = c
-            .builder
-            .build_load(field_llvm_ty, field_ptr, &format!("tp{i}_val"))
-            .unwrap();
+        let field_val = load_maybe_indirect(c, field_ptr, field_type, &format!("tp{i}_val"));
         let field_alloca = c
             .builder
-            .build_alloca(field_llvm_ty, &format!("tp{i}_tmp"))
+            .build_alloca(inner_llvm_ty, &format!("tp{i}_tmp"))
             .unwrap();
         c.builder.build_store(field_alloca, field_val).unwrap();
 
-        let sub_result = compile_pattern(c, sub_pat, field_alloca, field_type, function)?;
+        let sub_result = compile_pattern(c, sub_pat, field_alloca, inner_ty, function)?;
         result = c
             .builder
             .build_and(result, sub_result, &format!("tp{i}_and"))
@@ -954,7 +957,8 @@ fn compile_tuple_elements<'ctx>(
 }
 
 fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<String, String> {
-    match subject_type {
+    let ty = unwrap_indirect(subject_type);
+    match ty {
         Type::GenericInstance {
             base,
             type_args,
@@ -962,7 +966,7 @@ fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<Stri
             ..
         } => Ok(expo_typecheck::types::mangle_name(base, type_args)),
         Type::Enum(name) => Ok(name.clone()),
-        Type::Union(_) => Ok(mangle_type(subject_type)),
+        Type::Union(_) => Ok(mangle_type(ty)),
         _ if !type_path.is_empty() => Ok(type_path.join(".")),
         _ => Err("cannot determine enum name for pattern".to_string()),
     }

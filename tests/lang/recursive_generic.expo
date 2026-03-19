@@ -1,0 +1,15 @@
+struct GNode<T>
+  value: T
+  next: Option<GNode<T>>
+end
+
+fn main
+  a = GNode{value: 10, next: Option.None}
+  b = GNode{value: 20, next: Option.Some(a)}
+  print(b.value)
+
+  match b.next
+    Option.Some(n) -> print(n.value)
+    Option.None -> print("none")
+  end
+end

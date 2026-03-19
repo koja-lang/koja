@@ -76,6 +76,7 @@ impl Backend {
             let mut ctx = expo_typecheck::collect_module(&parse_result.module);
             expo_typecheck::merge_stdlib(&self.stdlib_ctx, &mut ctx);
             expo_typecheck::re_resolve_generics(&mut ctx);
+            expo_typecheck::mark_recursive_fields(&mut ctx);
             expo_typecheck::resolve_imports(&parse_result.module, &mut ctx, &module_contexts);
             expo_typecheck::check_module(&parse_result.module, &mut ctx);
             all_diags.extend(ctx.diagnostics.clone());

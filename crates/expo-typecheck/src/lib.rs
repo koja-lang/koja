@@ -1,6 +1,7 @@
 mod check;
 mod collect;
 pub mod context;
+mod cycle;
 mod env;
 mod expr;
 mod pattern;
@@ -91,6 +92,12 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
 /// Walks the AST to collect type signatures for functions, structs, and enums.
 pub fn collect_module(module: &Module) -> TypeContext {
     collect::collect(module)
+}
+
+/// Detects recursive struct/enum fields and wraps them in [`types::Type::Indirect`]
+/// for heap-allocated indirection. Must be called after [`re_resolve_generics`].
+pub fn mark_recursive_fields(ctx: &mut TypeContext) {
+    cycle::mark_recursive_fields(ctx);
 }
 
 /// Merges imported module contexts into the current context based on import statements.

@@ -16,6 +16,10 @@ pub enum Type {
         kind: GenericKind,
         type_args: Vec<Type>,
     },
+    /// A heap-allocated indirection inserted by cycle detection for recursive
+    /// types. Transparent to the user: display, mangling, and unification all
+    /// delegate to the inner type.
+    Indirect(Box<Type>),
     Primitive(Primitive),
     Struct(String),
     Tuple(Vec<Type>),
@@ -87,6 +91,7 @@ impl Type {
                 let args: Vec<String> = type_args.iter().map(|t| t.display()).collect();
                 format!("{}<{}>", base, args.join(", "))
             }
+            Type::Indirect(inner) => inner.display(),
             Type::Primitive(p) => p.display().to_string(),
             Type::Struct(name) => name.clone(),
             Type::Tuple(elems) => {
@@ -114,7 +119,9 @@ impl Type {
             Type::Primitive(_) => true,
             Type::Unit => true,
             Type::Function { .. } => true,
-            Type::Struct(_) | Type::Enum(_) | Type::GenericInstance { .. } => false,
+            Type::Indirect(_) | Type::Struct(_) | Type::Enum(_) | Type::GenericInstance { .. } => {
+                false
+            }
             Type::Tuple(elems) => elems.iter().all(|e| e.is_copy()),
             Type::Union(members) => members.iter().all(|m| m.is_copy()),
             Type::TypeVar(_) | Type::Unknown | Type::Error => true,
@@ -125,6 +132,7 @@ impl Type {
     pub fn is_known(&self) -> bool {
         match self {
             Type::Unknown | Type::Error | Type::TypeVar(_) | Type::GenericInstance { .. } => false,
+            Type::Indirect(inner) => inner.is_known(),
             Type::Union(members) => members.iter().all(|m| m.is_known()),
             _ => true,
         }
@@ -380,6 +388,9 @@ pub fn numeric_compatible(a: &Type, b: &Type) -> bool {
 /// checks consistency on subsequent encounters. Returns `false` if the types conflict.
 pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) -> bool {
     match (param_ty, arg_ty) {
+        (Type::Indirect(inner), other) | (other, Type::Indirect(inner)) => {
+            unify(inner, other, subst)
+        }
         (Type::TypeVar(name), _) => {
             if let Some(existing) = subst.get(name) {
                 existing == arg_ty || numeric_compatible(existing, arg_ty)
@@ -435,6 +446,10 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
             }
             unify(ra, rb, subst)
         }
+        (Type::GenericInstance { base, .. }, Type::Enum(name))
+        | (Type::Enum(name), Type::GenericInstance { base, .. })
+        | (Type::GenericInstance { base, .. }, Type::Struct(name))
+        | (Type::Struct(name), Type::GenericInstance { base, .. }) => base == name,
         (Type::Union(a), Type::Union(b)) => a == b,
         (Type::Unit, Type::Unit) => true,
         (Type::Unknown, _) | (_, Type::Unknown) => true,
@@ -473,6 +488,7 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
                 }
             }
         }
+        Type::Indirect(inner) => Type::Indirect(Box::new(substitute(inner, subst))),
         Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute(e, subst)).collect()),
         Type::Union(members) => Type::union(members.iter().map(|m| substitute(m, subst)).collect()),
         _ => ty.clone(),
@@ -492,6 +508,7 @@ pub fn mangle_name(base: &str, type_args: &[Type]) -> String {
 
 pub fn mangle_type(ty: &Type) -> String {
     match ty {
+        Type::Indirect(inner) => mangle_type(inner),
         Type::Primitive(p) => p.display().to_string(),
         Type::Struct(n) | Type::Enum(n) => n.clone(),
         Type::TypeVar(n) => n.clone(),
@@ -532,8 +549,17 @@ pub fn contains_type_var(ty: &Type) -> bool {
             return_type,
         } => params.iter().any(contains_type_var) || contains_type_var(return_type),
         Type::GenericInstance { type_args, .. } => type_args.iter().any(contains_type_var),
+        Type::Indirect(inner) => contains_type_var(inner),
         Type::Tuple(elems) => elems.iter().any(contains_type_var),
         Type::Union(members) => members.iter().any(contains_type_var),
         _ => false,
+    }
+}
+
+/// Returns the inner type if `ty` is `Indirect`, otherwise returns `ty` itself.
+pub fn unwrap_indirect(ty: &Type) -> &Type {
+    match ty {
+        Type::Indirect(inner) => inner,
+        other => other,
     }
 }

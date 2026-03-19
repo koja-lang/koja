@@ -81,12 +81,54 @@ fn is_set_type(ty: &Type) -> bool {
 }
 
 /// Returns true if a type requires heap deallocation at scope exit.
-fn needs_heap_drop(ty: &Type) -> bool {
-    is_list_type(ty) || is_map_type(ty) || is_set_type(ty)
+fn needs_heap_drop(c: &Compiler, ty: &Type) -> bool {
+    is_list_type(ty) || is_map_type(ty) || is_set_type(ty) || has_indirect_fields(c, ty)
+}
+
+/// Checks whether a struct or enum type contains any [`Type::Indirect`] fields.
+fn has_indirect_fields(c: &Compiler, ty: &Type) -> bool {
+    match ty {
+        Type::Indirect(_) => true,
+        Type::Struct(name) | Type::Enum(name) => {
+            if let Some(fields) = c.mono_struct_info.get(name) {
+                return fields
+                    .iter()
+                    .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
+            }
+            if let Some(info) = c.type_ctx.structs.get(name) {
+                return info
+                    .fields
+                    .iter()
+                    .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
+            }
+            if let Some(variants) = c.mono_enum_variants.get(name) {
+                return variants
+                    .iter()
+                    .any(|(_, vdata)| variant_has_indirect(vdata));
+            }
+            if let Some(info) = c.type_ctx.enums.get(name) {
+                return info.variants.iter().any(|v| variant_has_indirect(&v.data));
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn variant_has_indirect(vdata: &expo_typecheck::context::VariantData) -> bool {
+    match vdata {
+        expo_typecheck::context::VariantData::Tuple(types) => {
+            types.iter().any(|t| matches!(t, Type::Indirect(_)))
+        }
+        expo_typecheck::context::VariantData::Struct(fields) => {
+            fields.iter().any(|(_, t)| matches!(t, Type::Indirect(_)))
+        }
+        expo_typecheck::context::VariantData::Unit => false,
+    }
 }
 
 fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
-    if !needs_heap_drop(ty) {
+    if !needs_heap_drop(c, ty) {
         return;
     }
 
@@ -97,6 +139,11 @@ fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
 
     if is_map_type(ty) || is_set_type(ty) {
         emit_drop_hash_collection(c, ptr, ty);
+        return;
+    }
+
+    if has_indirect_fields(c, ty) {
+        emit_drop_indirect_fields(c, ptr, ty);
         return;
     }
 
@@ -115,6 +162,68 @@ fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
     c.builder
         .build_call(free, &[val.into()], "drop_free")
         .unwrap();
+}
+
+/// Frees heap pointers for each [`Type::Indirect`] field in a struct.
+/// Handles the first level of indirection; deeper recursive nodes are freed
+/// when they themselves go out of scope or are explicitly dropped.
+fn emit_drop_indirect_fields(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
+    let free_fn = *c
+        .functions
+        .get("free")
+        .expect("free not declared in builtins");
+    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+
+    let struct_name = match ty {
+        Type::Struct(n) | Type::Enum(n) => n.clone(),
+        _ => return,
+    };
+
+    let Some(struct_type) = c.struct_types.get(&struct_name).copied() else {
+        return;
+    };
+
+    let fields: Option<Vec<(usize, Type)>> = c
+        .mono_struct_info
+        .get(&struct_name)
+        .map(|fs| {
+            fs.iter()
+                .enumerate()
+                .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
+                .map(|(i, (_, fty))| (i, fty.clone()))
+                .collect()
+        })
+        .or_else(|| {
+            c.type_ctx.structs.get(&struct_name).map(|info| {
+                info.fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
+                    .map(|(i, (_, fty))| (i, fty.clone()))
+                    .collect()
+            })
+        });
+
+    if let Some(indirect_fields) = fields {
+        for (idx, _field_ty) in &indirect_fields {
+            let field_ptr = c
+                .builder
+                .build_struct_gep(
+                    struct_type,
+                    alloca,
+                    *idx as u32,
+                    &format!("drop_field_{idx}"),
+                )
+                .unwrap();
+            let heap_ptr = c
+                .builder
+                .build_load(ptr_ty, field_ptr, &format!("drop_heap_{idx}"))
+                .unwrap();
+            c.builder
+                .build_call(free_fn, &[heap_ptr.into()], &format!("drop_free_{idx}"))
+                .unwrap();
+        }
+    }
 }
 
 /// Drops a List value: extracts the data pointer (field 0) and frees it.

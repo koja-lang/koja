@@ -9,7 +9,7 @@ use expo_typecheck::types::{GenericKind, Type};
 use inkwell::types::BasicType;
 use inkwell::values::FunctionValue;
 
-use crate::compiler::{Compiler, type_byte_size};
+use crate::compiler::{Compiler, llvm_field_byte_size, type_byte_size};
 use crate::expr::compile_expr;
 use crate::stmt::{apply_coercion, compile_statement};
 use crate::types::to_llvm_type;
@@ -201,14 +201,25 @@ impl<'ctx> Compiler<'ctx> {
         let st = self.context.opaque_struct_type(&mangled);
         self.struct_types.insert(mangled.clone(), st);
 
+        let mut deferred_indirect = Vec::new();
         for (_, fty) in &concrete_fields {
-            self.ensure_types_exist(fty)?;
+            if let Type::Indirect(inner) = fty {
+                deferred_indirect.push(inner.as_ref().clone());
+            } else {
+                self.ensure_types_exist(fty)?;
+            }
         }
+
         let field_llvm_types: Vec<_> = concrete_fields
             .iter()
             .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
             .collect();
         st.set_body(&field_llvm_types, false);
+
+        for ty in &deferred_indirect {
+            self.ensure_types_exist(ty)?;
+        }
+
         self.mono_struct_info.insert(mangled, concrete_fields);
 
         Ok(())
@@ -287,7 +298,7 @@ impl<'ctx> Compiler<'ctx> {
                         .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
                         .collect();
                     let payload = self.context.struct_type(&field_llvm, true);
-                    let size: u32 = types.iter().map(type_byte_size).sum();
+                    let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                     max_payload_size = max_payload_size.max(size);
                     variant_payloads.push((vname.clone(), Some(payload)));
                 }
@@ -297,7 +308,7 @@ impl<'ctx> Compiler<'ctx> {
                         .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
                         .collect();
                     let payload = self.context.struct_type(&field_llvm, true);
-                    let size: u32 = fields.iter().map(|(_, ty)| type_byte_size(ty)).sum();
+                    let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                     max_payload_size = max_payload_size.max(size);
                     variant_payloads.push((vname.clone(), Some(payload)));
                 }
@@ -792,6 +803,9 @@ impl<'ctx> Compiler<'ctx> {
                     self.ensure_types_exist(p)?;
                 }
                 self.ensure_types_exist(return_type)?;
+            }
+            Type::Indirect(inner) => {
+                self.ensure_types_exist(inner)?;
             }
             Type::Tuple(elems) => {
                 for e in elems {

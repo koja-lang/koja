@@ -16,11 +16,15 @@ use crate::types::{GenericKind, Primitive, Type, build_substitution, substitute}
 /// Checks whether a match expression covers all variants of an enum subject,
 /// emitting a diagnostic if any variants are missing and no catch-all exists.
 pub(crate) fn check_match_exhaustiveness(
-    subject_type: &Type,
+    subject_type_raw: &Type,
     arms: &[MatchArm],
     span: Span,
     ctx: &mut TypeContext,
 ) {
+    let subject_type = match subject_type_raw {
+        Type::Indirect(inner) => inner.as_ref(),
+        other => other,
+    };
     let has_catch_all = arms.iter().any(|arm| {
         matches!(
             arm.pattern,
@@ -113,6 +117,10 @@ pub(crate) fn resolve_variant_data(
     subject_type: &Type,
     ctx: &TypeContext,
 ) -> Option<VariantData> {
+    let effective_ty = match subject_type {
+        Type::Indirect(inner) => inner.as_ref(),
+        other => other,
+    };
     let enum_info = ctx.enums.get(enum_name)?;
     let vi = enum_info.variants.iter().find(|v| v.name == *variant)?;
     let data = vi.data.clone();
@@ -121,7 +129,7 @@ pub(crate) fn resolve_variant_data(
         type_args,
         kind: GenericKind::Enum,
         ..
-    } = subject_type
+    } = effective_ty
         && !enum_info.type_params.is_empty()
     {
         let subst = build_substitution(&enum_info.type_params, type_args);
@@ -150,10 +158,14 @@ fn substitute_variant_data(data: &VariantData, subst: &HashMap<String, Type>) ->
 /// binding pattern variables into the environment.
 pub(crate) fn check_pattern(
     pat: &Pattern,
-    subject_type: &Type,
+    subject_type_raw: &Type,
     ctx: &mut TypeContext,
     env: &mut HashMap<String, VarInfo>,
 ) {
+    let subject_type = match subject_type_raw {
+        Type::Indirect(inner) => inner.as_ref(),
+        other => other,
+    };
     match pat {
         Pattern::Binding { name, .. } => {
             env.insert(

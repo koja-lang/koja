@@ -336,35 +336,63 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
 
 /// Parses a mangled enum name like `Option_$i32$` and reconstructs a
 /// `GenericInstance` type so unification works in generic function calls.
-fn parse_mangled_enum_type(mangled: &str, c: &Compiler) -> Option<Type> {
-    use expo_typecheck::types::{GenericKind, Primitive};
+fn parse_mangled_type_arg(s: &str, c: &Compiler) -> Type {
+    use expo_typecheck::types::Primitive;
+
+    if s == "unit" {
+        return Type::Unit;
+    }
+    if let Some(p) = Primitive::from_name(s) {
+        return Type::Primitive(p);
+    }
+    if let Some(gi) = try_parse_mangled_generic(s, c) {
+        return gi;
+    }
+    if c.type_ctx.structs.contains_key(s) || c.mono_struct_info.contains_key(s) {
+        return Type::Struct(s.to_string());
+    }
+    if c.type_ctx.enums.contains_key(s) || c.mono_enum_variants.contains_key(s) {
+        return Type::Enum(s.to_string());
+    }
+    Type::Unknown
+}
+
+fn try_parse_mangled_generic(mangled: &str, c: &Compiler) -> Option<Type> {
+    use expo_typecheck::types::GenericKind;
 
     let sep = mangled.find("_$")?;
     let base = &mangled[..sep];
-    if !c.type_ctx.generic_enum_asts.contains_key(base) {
-        return None;
-    }
     if !mangled.ends_with('$') {
         return None;
     }
+    let kind = if c.type_ctx.generic_enum_asts.contains_key(base) {
+        GenericKind::Enum
+    } else if c.type_ctx.generic_struct_asts.contains_key(base) {
+        GenericKind::Struct
+    } else {
+        return None;
+    };
     let inner = &mangled[sep + 2..mangled.len() - 1];
     let type_args: Vec<Type> = inner
         .split('.')
-        .map(|s| {
-            if s == "unit" {
-                Type::Unit
-            } else if let Some(p) = Primitive::from_name(s) {
-                Type::Primitive(p)
-            } else {
-                Type::Struct(s.to_string())
-            }
-        })
+        .map(|s| parse_mangled_type_arg(s, c))
         .collect();
     Some(Type::GenericInstance {
         base: base.to_string(),
         type_args,
-        kind: GenericKind::Enum,
+        kind,
     })
+}
+
+fn parse_mangled_enum_type(mangled: &str, c: &Compiler) -> Option<Type> {
+    let gi = try_parse_mangled_generic(mangled, c)?;
+    match &gi {
+        Type::GenericInstance {
+            kind: expo_typecheck::types::GenericKind::Enum,
+            ..
+        } => Some(gi),
+        _ => None,
+    }
 }
 
 /// Reconstructs an Expo type from an LLVM value by inspecting bit widths and
@@ -391,9 +419,13 @@ pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>
         if let Some(name) = st.get_name()
             && let Ok(name_str) = name.to_str()
         {
-            if c.type_ctx.structs.contains_key(name_str)
-                || c.mono_struct_info.contains_key(name_str)
-            {
+            if c.type_ctx.structs.contains_key(name_str) {
+                return Type::Struct(name_str.to_string());
+            }
+            if c.mono_struct_info.contains_key(name_str) {
+                if let Some(gi) = try_parse_mangled_generic(name_str, c) {
+                    return gi;
+                }
                 return Type::Struct(name_str.to_string());
             }
             if c.type_ctx.enums.contains_key(name_str) {

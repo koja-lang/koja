@@ -2,14 +2,94 @@
 //! generic), and method calls on struct instances.
 
 use expo_ast::ast::{ClosureParam, Expr};
-use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute};
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute, unwrap_indirect};
+use inkwell::types::BasicTypeEnum;
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 
 use crate::calls::compile_call;
 use crate::compiler::Compiler;
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::try_parse_mangled_name;
 use crate::types::to_llvm_type;
+
+/// Loads a value from `field_ptr`. When `field_type` is [`Type::Indirect`],
+/// loads the heap pointer first, then dereferences it to get the inner value.
+pub(crate) fn load_maybe_indirect<'ctx>(
+    c: &mut Compiler<'ctx>,
+    field_ptr: PointerValue<'ctx>,
+    field_type: &Type,
+    label: &str,
+) -> BasicValueEnum<'ctx> {
+    if let Type::Indirect(inner) = field_type {
+        let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+        let heap_ptr = c
+            .builder
+            .build_load(ptr_ty, field_ptr, &format!("{label}_ptr"))
+            .unwrap()
+            .into_pointer_value();
+        let _ = c.ensure_types_exist(inner);
+        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.struct_types)
+            .expect("indirect inner type must have LLVM representation");
+        c.builder
+            .build_load(inner_llvm_ty, heap_ptr, &format!("{label}_deref"))
+            .unwrap()
+    } else {
+        let llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
+            .expect("field type must have LLVM representation");
+        c.builder.build_load(llvm_ty, field_ptr, label).unwrap()
+    }
+}
+
+/// Stores `val` into `field_ptr`. When `field_type` is [`Type::Indirect`],
+/// heap-allocates storage via `malloc`, writes the value there, and stores the
+/// resulting pointer into `field_ptr`.
+pub(crate) fn store_maybe_indirect<'ctx>(
+    c: &mut Compiler<'ctx>,
+    field_ptr: PointerValue<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    field_type: &Type,
+    label: &str,
+) {
+    if let Type::Indirect(inner) = field_type {
+        let _ = c.ensure_types_exist(inner);
+        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.struct_types)
+            .expect("indirect inner type must have LLVM representation");
+        let size = llvm_type_size(inner_llvm_ty, c);
+        let malloc_fn = *c.functions.get("malloc").expect("malloc not declared");
+        let heap_ptr = c
+            .builder
+            .build_call(malloc_fn, &[size.into()], &format!("{label}_malloc"))
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_pointer_value();
+        c.builder.build_store(heap_ptr, val).unwrap();
+        c.builder.build_store(field_ptr, heap_ptr).unwrap();
+    } else {
+        c.builder.build_store(field_ptr, val).unwrap();
+    }
+}
+
+fn llvm_type_size<'ctx>(
+    ty: BasicTypeEnum<'ctx>,
+    c: &Compiler<'ctx>,
+) -> inkwell::values::IntValue<'ctx> {
+    match ty {
+        BasicTypeEnum::StructType(st) => st
+            .size_of()
+            .unwrap_or_else(|| c.context.i64_type().const_int(8, false)),
+        BasicTypeEnum::IntType(it) => it.size_of(),
+        BasicTypeEnum::FloatType(ft) => ft.size_of(),
+        BasicTypeEnum::PointerType(pt) => pt.size_of(),
+        BasicTypeEnum::ArrayType(at) => at
+            .size_of()
+            .unwrap_or_else(|| c.context.i64_type().const_int(8, false)),
+        BasicTypeEnum::VectorType(vt) => vt
+            .size_of()
+            .unwrap_or_else(|| c.context.i64_type().const_int(8, false)),
+    }
+}
 
 /// Compiles a field access expression (`receiver.field`). Handles both
 /// direct variable access (via pointer GEP) and expression receivers
@@ -43,18 +123,12 @@ pub fn compile_field_access<'ctx>(
             .get_field_type(&struct_name, field)
             .ok_or_else(|| format!("unknown field `{field}` on struct `{struct_name}`"))?;
 
-        let field_llvm_ty = to_llvm_type(&field_ty, c.context, &c.struct_types)
-            .ok_or_else(|| format!("unsupported field type for `{field}`"))?;
-
         let field_ptr = c
             .builder
             .build_struct_gep(struct_type, ptr, field_idx, &format!("{name}.{field}"))
             .unwrap();
 
-        let val = c
-            .builder
-            .build_load(field_llvm_ty, field_ptr, field)
-            .unwrap();
+        let val = load_maybe_indirect(c, field_ptr, &field_ty, field);
         Ok(Some(val))
     } else {
         let recv_val = compile_expr(c, receiver, function)?
@@ -84,9 +158,6 @@ pub fn compile_field_access<'ctx>(
             .get_field_type(&struct_name, field)
             .ok_or_else(|| format!("unknown field `{field}` on struct `{struct_name}`"))?;
 
-        let field_llvm_ty = to_llvm_type(&field_ty, c.context, &c.struct_types)
-            .ok_or_else(|| format!("unsupported field type for `{field}`"))?;
-
         let tmp_alloca = c.builder.build_alloca(struct_type, "tmp_struct").unwrap();
         c.builder.build_store(tmp_alloca, recv_val).unwrap();
 
@@ -95,10 +166,7 @@ pub fn compile_field_access<'ctx>(
             .build_struct_gep(struct_type, tmp_alloca, field_idx, field)
             .unwrap();
 
-        let val = c
-            .builder
-            .build_load(field_llvm_ty, field_ptr, field)
-            .unwrap();
+        let val = load_maybe_indirect(c, field_ptr, &field_ty, field);
         Ok(Some(val))
     }
 }
@@ -371,14 +439,15 @@ pub fn compile_struct_construction<'ctx>(
                 )
             })?;
 
-        let val = compile_expr_coerced(c, &field_init.value, &field_type, function)?
+        let coerce_ty = unwrap_indirect(&field_type);
+        let val = compile_expr_coerced(c, &field_init.value, coerce_ty, function)?
             .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
 
         let field_ptr = c
             .builder
             .build_struct_gep(struct_type, alloca, field_idx, &field_init.name)
             .unwrap();
-        c.builder.build_store(field_ptr, val).unwrap();
+        store_maybe_indirect(c, field_ptr, val, &field_type, &field_init.name);
     }
 
     let struct_val = c
@@ -447,11 +516,16 @@ fn compile_generic_struct_construction<'ctx>(
         let field_idx = c
             .get_field_index(&mangled, field_name)
             .ok_or_else(|| format!("unknown field `{field_name}` in struct `{struct_name}`"))?;
+        let field_type = c.get_field_type(&mangled, field_name);
         let field_ptr = c
             .builder
             .build_struct_gep(struct_type, alloca, field_idx, field_name)
             .unwrap();
-        c.builder.build_store(field_ptr, *field_val).unwrap();
+        if let Some(ref ft) = field_type {
+            store_maybe_indirect(c, field_ptr, *field_val, ft, field_name);
+        } else {
+            c.builder.build_store(field_ptr, *field_val).unwrap();
+        }
     }
 
     let struct_val = c.builder.build_load(struct_type, alloca, &mangled).unwrap();
@@ -485,6 +559,7 @@ fn resolve_struct_name<'ctx>(
 
 fn struct_name_from_type(ty: &Type) -> Option<String> {
     match ty {
+        Type::Indirect(inner) => struct_name_from_type(inner),
         Type::Struct(n) | Type::Enum(n) => Some(n.clone()),
         Type::GenericInstance {
             base, type_args, ..
