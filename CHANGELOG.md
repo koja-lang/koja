@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Union types -- `Post | Comment | Ad` as anonymous unions, `type Pet = Cat | Dog | Fish` as named union aliases. Values of a member type widen automatically to the union type at assignment, call, and return sites. `match` works on union-typed values.
+
 ### Fixed
 
 - Proper coercion of Int type in structs, enums, functions, and more.

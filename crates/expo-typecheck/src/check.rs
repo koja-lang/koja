@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
-use crate::context::{FunctionKind, ParamInfo, PassMode, TypeContext};
+use crate::context::{Coercion, FunctionKind, ParamInfo, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr};
 use crate::stmt::check_body;
@@ -189,6 +189,8 @@ fn check_function(
                     ),
                     expr_span(expr),
                 );
+            } else if actual.is_known() {
+                record_coercion_if_needed(&actual, &declared_return, expr_span(expr), ctx);
             }
         }
     } else {
@@ -231,16 +233,20 @@ pub(crate) fn check_call_args(
         for (i, arg) in args.iter().enumerate() {
             let arg_ty = infer_expr(&arg.value, ctx, ce);
             let param = &params[i];
-            if param.ty.is_known() && arg_ty.is_known() && !types_compatible(&param.ty, &arg_ty) {
-                ctx.error(
-                    format!(
-                        "argument `{}`: expected `{}`, found `{}`",
-                        param.name,
-                        param.ty.display(),
-                        arg_ty.display()
-                    ),
-                    arg.span,
-                );
+            if param.ty.is_known() && arg_ty.is_known() {
+                if !types_compatible(&arg_ty, &param.ty) {
+                    ctx.error(
+                        format!(
+                            "argument `{}`: expected `{}`, found `{}`",
+                            param.name,
+                            param.ty.display(),
+                            arg_ty.display()
+                        ),
+                        arg.span,
+                    );
+                } else {
+                    record_coercion_if_needed(&arg_ty, &param.ty, arg.span, ctx);
+                }
             }
             if param.mode == PassMode::Move
                 && !arg_ty.is_copy()
@@ -366,4 +372,26 @@ pub(crate) fn types_compatible(a: &Type, b: &Type) -> bool {
                 .all(|(x, y)| !x.is_known() || !y.is_known() || x == y);
     }
     false
+}
+
+/// If `target` is a union and `source` is a non-union constituent, records a
+/// widening coercion so the codegen can emit the tag+payload wrapper.
+pub(crate) fn record_coercion_if_needed(
+    source: &Type,
+    target: &Type,
+    span: Span,
+    ctx: &mut TypeContext,
+) {
+    if let Type::Union(members) = target
+        && !matches!(source, Type::Union(_))
+        && members.iter().any(|m| types_compatible(source, m))
+    {
+        ctx.coercions.insert(
+            span,
+            Coercion::UnionWiden {
+                source: source.clone(),
+                target: target.clone(),
+            },
+        );
+    }
 }

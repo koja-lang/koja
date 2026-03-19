@@ -12,6 +12,7 @@ use crate::types::Type;
 #[derive(Clone)]
 pub struct TypeContext {
     pub closure_captures: HashMap<Span, Vec<CaptureInfo>>,
+    pub coercions: HashMap<Span, Coercion>,
     pub constants: HashMap<String, Type>,
     pub diagnostics: Vec<Diagnostic>,
     pub enums: HashMap<String, EnumInfo>,
@@ -111,6 +112,13 @@ pub struct CaptureInfo {
     pub mode: PassMode,
 }
 
+/// A type coercion recorded by the type checker for the codegen to apply.
+#[derive(Debug, Clone)]
+pub enum Coercion {
+    /// A value of `source` type is widened into a `target` union type.
+    UnionWiden { source: Type, target: Type },
+}
+
 impl Default for TypeContext {
     fn default() -> Self {
         Self::new()
@@ -142,6 +150,7 @@ impl TypeContext {
     pub fn new() -> Self {
         Self {
             closure_captures: HashMap::new(),
+            coercions: HashMap::new(),
             constants: HashMap::new(),
             diagnostics: Vec::new(),
             enums: HashMap::new(),
@@ -229,6 +238,11 @@ impl TypeContext {
         }
         for (span, captures) in &other.closure_captures {
             self.closure_captures.insert(*span, captures.clone());
+        }
+        for (span, coercion) in &other.coercions {
+            self.coercions
+                .entry(*span)
+                .or_insert_with(|| coercion.clone());
         }
         for (name, ty) in &other.process_fn_msg_types {
             self.process_fn_msg_types

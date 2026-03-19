@@ -490,7 +490,7 @@ pub fn mangle_name(base: &str, type_args: &[Type]) -> String {
     format!("{}_${}$", base, args.join("."))
 }
 
-fn mangle_type(ty: &Type) -> String {
+pub fn mangle_type(ty: &Type) -> String {
     match ty {
         Type::Primitive(p) => p.display().to_string(),
         Type::Struct(n) | Type::Enum(n) => n.clone(),

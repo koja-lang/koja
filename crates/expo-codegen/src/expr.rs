@@ -16,7 +16,7 @@ use crate::control::{
 use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
 use crate::ops::{compile_binary, compile_unary};
-use crate::stmt::{coerce_numeric, infer_type_from_llvm};
+use crate::stmt::{apply_coercion, coerce_numeric, infer_type_from_llvm};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
 
@@ -29,7 +29,14 @@ pub fn compile_expr_coerced<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     let val = compile_expr(c, expr, function)?;
-    Ok(val.map(|v| coerce_numeric(c, v, expected)))
+    match val {
+        Some(v) => {
+            let v = coerce_numeric(c, v, expected);
+            let v = apply_coercion(c, v, expr)?;
+            Ok(Some(v))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Top-level expression dispatch. Matches each AST expression variant and

@@ -1,5 +1,4 @@
-# Anonymous union types: parsing, widening coercion, match exhaustiveness
-# Type-check only -- no codegen yet
+# Anonymous union types: widening coercion and match dispatch
 
 struct Post
   title: String

@@ -4,7 +4,7 @@
 use crate::drop::Ownership;
 use expo_ast::ast::{CondArm, Expr, FieldPattern, Literal, MatchArm, Pattern, Statement};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Type, mangle_type};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -680,6 +680,13 @@ fn infer_subject_type<'ctx>(
             if c.type_ctx.structs.contains_key(name_str) {
                 return Type::Struct(name_str.to_string());
             }
+            for ty in c.type_ctx.type_aliases.values() {
+                if let Type::Union(_) = ty
+                    && mangle_type(ty) == name_str
+                {
+                    return ty.clone();
+                }
+            }
         }
         Type::Unknown
     } else {
@@ -955,6 +962,7 @@ fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<Stri
             ..
         } => Ok(expo_typecheck::types::mangle_name(base, type_args)),
         Type::Enum(name) => Ok(name.clone()),
+        Type::Union(_) => Ok(mangle_type(subject_type)),
         _ if !type_path.is_empty() => Ok(type_path.join(".")),
         _ => Err("cannot determine enum name for pattern".to_string()),
     }
@@ -976,6 +984,12 @@ fn find_constructor_enum<'ctx>(
     }
     if let Type::Enum(name) = subject_type {
         return Ok(name.clone());
+    }
+    if let Type::Union(members) = subject_type {
+        let member_mangled = mangle_type(&Type::Struct(variant_name.to_string()));
+        if members.iter().any(|m| mangle_type(m) == member_mangled) {
+            return Ok(mangle_type(subject_type));
+        }
     }
     for (enum_name, info) in &c.type_ctx.enums {
         if info.variants.iter().any(|v| v.name == variant_name) {

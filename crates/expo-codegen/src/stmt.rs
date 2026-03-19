@@ -2,7 +2,8 @@
 //! return, break, and expression statements.
 
 use expo_ast::ast::{AssignTarget, ClosureParam, Expr, Statement};
-use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name};
+use expo_typecheck::context::Coercion;
+use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name, mangle_type};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
@@ -97,6 +98,7 @@ pub fn compile_statement<'ctx>(
             };
 
             let val = coerce_numeric(c, raw_val, &ty);
+            let val = apply_coercion(c, val, value)?;
 
             match target {
                 AssignTarget::LValue(lvalue) => {
@@ -140,6 +142,7 @@ pub fn compile_statement<'ctx>(
             if let Some(expr) = value {
                 let val = compile_expr(c, expr, function)?;
                 if let Some(v) = val {
+                    let v = apply_coercion(c, v, expr)?;
                     c.builder.build_return(Some(&v)).unwrap();
                 } else {
                     c.builder.build_return(None).unwrap();
@@ -317,6 +320,13 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             params: sig.params.iter().map(|p| p.ty.clone()).collect(),
             return_type: Box::new(sig.return_type.clone()),
         });
+    }
+    if let Expr::Call { callee, .. } = expr
+        && let Expr::Ident { name, .. } = callee.as_ref()
+        && let Some(sig) = c.type_ctx.functions.get(name)
+        && sig.type_params.is_empty()
+    {
+        return Some(sig.return_type.clone());
     }
     if matches!(expr, Expr::Receive { .. }) {
         return c.process_msg_type.clone();
@@ -506,6 +516,114 @@ fn convert_list_literal_if_needed<'ctx>(
         .ok_or("from_list returned void")?;
 
     Ok(result)
+}
+
+/// Wraps a concrete value into a tagged union representation.
+/// Allocates the union struct `{ i8 tag, [N x i8] payload }`, writes the tag
+/// (index of `source` in the union members), stores the value into the payload
+/// area, and loads the whole struct back as a value.
+pub(crate) fn compile_union_wrap<'ctx>(
+    c: &mut Compiler<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    source: &Type,
+    target_union: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let Type::Union(members) = target_union else {
+        return Ok(val);
+    };
+
+    let source_mangled = mangle_type(source);
+    let union_mangled = mangle_type(target_union);
+
+    let tag = members
+        .iter()
+        .position(|m| mangle_type(m) == source_mangled)
+        .ok_or_else(|| {
+            format!(
+                "{} is not a member of union {}",
+                source.display(),
+                target_union.display()
+            )
+        })? as u64;
+
+    let union_llvm_ty = *c
+        .struct_types
+        .get(&union_mangled)
+        .ok_or_else(|| format!("union type {} not registered", union_mangled))?;
+
+    let alloca = c.builder.build_alloca(union_llvm_ty, "union_wrap").unwrap();
+
+    let tag_ptr = c
+        .builder
+        .build_struct_gep(union_llvm_ty, alloca, 0, "tag_ptr")
+        .unwrap();
+    let tag_val = c.context.i8_type().const_int(tag, false);
+    c.builder.build_store(tag_ptr, tag_val).unwrap();
+
+    if union_llvm_ty.count_fields() > 1 {
+        let payload_ptr = c
+            .builder
+            .build_struct_gep(union_llvm_ty, alloca, 1, "payload_ptr")
+            .unwrap();
+        c.builder.build_store(payload_ptr, val).unwrap();
+    }
+
+    let result = c
+        .builder
+        .build_load(union_llvm_ty, alloca, "union_val")
+        .unwrap();
+    Ok(result)
+}
+
+/// Applies a recorded coercion to a compiled value, if one exists for the
+/// given expression span. Currently handles union widening.
+pub(crate) fn apply_coercion<'ctx>(
+    c: &mut Compiler<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    expr: &Expr,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let span = expr_span(expr);
+    if let Some(coercion) = c.type_ctx.coercions.get(&span).cloned() {
+        match coercion {
+            Coercion::UnionWiden { source, target } => compile_union_wrap(c, val, &source, &target),
+        }
+    } else {
+        Ok(val)
+    }
+}
+
+fn expr_span(expr: &Expr) -> expo_ast::span::Span {
+    match expr {
+        Expr::Arena { span, .. }
+        | Expr::Await { span, .. }
+        | Expr::Binary { span, .. }
+        | Expr::Call { span, .. }
+        | Expr::Closure { span, .. }
+        | Expr::Cond { span, .. }
+        | Expr::EnumConstruction { span, .. }
+        | Expr::FieldAccess { span, .. }
+        | Expr::For { span, .. }
+        | Expr::Group { span, .. }
+        | Expr::Ident { span, .. }
+        | Expr::If { span, .. }
+        | Expr::List { span, .. }
+        | Expr::Map { span, .. }
+        | Expr::Literal { span, .. }
+        | Expr::Loop { span, .. }
+        | Expr::Match { span, .. }
+        | Expr::MethodCall { span, .. }
+        | Expr::Receive { span, .. }
+        | Expr::Self_ { span, .. }
+        | Expr::ShortClosure { span, .. }
+        | Expr::Spawn { span, .. }
+        | Expr::String { span, .. }
+        | Expr::StructConstruction { span, .. }
+        | Expr::Ternary { span, .. }
+        | Expr::Tuple { span, .. }
+        | Expr::Unary { span, .. }
+        | Expr::Unless { span, .. }
+        | Expr::While { span, .. } => *span,
+    }
 }
 
 fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {

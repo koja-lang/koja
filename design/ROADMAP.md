@@ -62,6 +62,8 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`)
 - `List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) implemented as pure Expo code in `std.kernel`
 - Bare function names as references (`f = double; f(5)`, `list.map(double)`) -- top-level functions produce closure-compatible fat pointers via thunk wrappers
+- Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support
+- Named union aliases (`type FeedItem = Post | Comment | Ad`) -- `type` keyword declarations resolved in the type context
 
 ### Parsed and type-checked but NOT yet in codegen
 
@@ -69,8 +71,6 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `await` (deferred -- covered by `receive` on processes)
 - Trait bounds on generic type parameters
 - Inline closures (`x -> expr`)
-- Union types (`A | B | C`) -- anonymous tagged unions with widening coercion and exhaustiveness checking
-- Named union aliases (`type FeedItem = Post | Comment | Ad`) -- stored in the type context, name collision checked
 
 ### Design notes
 
@@ -170,18 +170,15 @@ Write the Expo lexer in Expo, compiled by the Rust bootstrap. Validate by compar
 
 The foundation for Expo's concurrency promise. B1-B3 form a dependency chain. B4 is fully independent and can be tackled at any time.
 
-#### B1. Union types
+#### B1. Union types -- done
 
 `A | B` as anonymous enums -- a general-purpose type system feature, not just for mailboxes.
 
 - **Implemented**: parsing (`A | B | C` type expressions), `type Name = ...` declarations, `Type::Union` with canonical constructor (sorted, deduped, flattened), widening coercion (`Post` assignable to `Post | Comment | Ad`), exhaustiveness checking for match on union subjects, named union aliases with collision checking. All integrated into the formatter, LSP, and editor extensions.
-- Type system: order-independent, flattened, usable in generics
-- Pattern matching: exhaustiveness checking across union variants
-- Remaining: codegen (tagged union representation, same as named enums)
+- **Implemented**: codegen -- tagged union representation (`{ i8 tag, [N x i8] payload }`) reusing enum infrastructure, widening coercion at assignment/call/return sites via coercion map, `match` with wildcard/binding patterns on union-typed values.
 - Use cases: process mailbox typing (`Process<ServerMsg | LibResult>`), heterogeneous collections (`List<Post | Comment | Ad>`), error type composition (`Result<User, ValidationError | DatabaseError>`)
-- Design questions: variant name collision resolution, protocol interaction
+- **Remaining**: type-specific pattern matching (e.g. `match item` with `post: Post -> ...` arms) -- needs parser support for typed binding patterns. Variant name collision resolution, protocol interaction.
 - **Numeric tower as first dogfood**: `Int` could be defined in Expo as `type Int = Int8 | Int16 | Int32 | Int64` rather than hardcoded as a compiler primitive. The compiler recognizes that all variants are same-category integers and optimizes to the widest representation (no tag, implicit widening) -- the same behavior as today, but derived from the union definition. Extends naturally to `Float = Float32 | Float64` and user-defined aliases like `type SmallInt = Int8 | Int16`. This validates that the union type implementation is correct and general enough to express the language's own numeric relationships.
-- **Done when**: union types compile and work in match expressions, process mailboxes, and generic type parameters
 
 #### B2. `fn main` as a process
 
@@ -573,7 +570,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 | Phase        | Milestone                                                                            |
 | ------------ | ------------------------------------------------------------------------------------ |
 | Surface (3A) | Binary/bitstring literals, string-as-UTF8, project system + test runner, lexer port  |
-| Runtime (3B) | Union types, `fn main` as process, `copy` keyword, multi-threaded scheduler + I/O    |
+| Runtime (3B) | ~~Union types~~, `fn main` as process, `copy` keyword, multi-threaded scheduler + I/O |
 | Reliability  | Preemption/priority, supervision, `shared_map`                                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages            |
 | Tooling      | Documentation (doctests, search), LSP (autocomplete, type hints), REPL               |

@@ -6,10 +6,10 @@
 
 use expo_ast::ast::*;
 
-use crate::check::types_compatible;
+use crate::check::{record_coercion_if_needed, types_compatible};
 use crate::context::{FunctionKind, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarState};
-use crate::expr::infer_expr;
+use crate::expr::{expr_span, infer_expr};
 use crate::types::{Type, resolve_type_expr};
 
 /// Checks all statements in a body sequentially.
@@ -40,19 +40,20 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
 
             let effective_type = if let Some(te) = type_annotation {
                 let annotated = resolve_type_expr(te, ce.struct_names, ce.enum_names);
-                if value_type.is_known()
-                    && annotated.is_known()
-                    && !types_compatible(&value_type, &annotated)
-                {
-                    ctx.error_with_hint(
-                        format!(
-                            "type mismatch: annotation is `{}` but value has type `{}`",
-                            annotated.display(),
-                            value_type.display()
-                        ),
-                        "ensure the annotation matches the expression type".into(),
-                        *span,
-                    );
+                if value_type.is_known() && annotated.is_known() {
+                    if !types_compatible(&value_type, &annotated) {
+                        ctx.error_with_hint(
+                            format!(
+                                "type mismatch: annotation is `{}` but value has type `{}`",
+                                annotated.display(),
+                                value_type.display()
+                            ),
+                            "ensure the annotation matches the expression type".into(),
+                            *span,
+                        );
+                    } else {
+                        record_coercion_if_needed(&value_type, &annotated, expr_span(value), ctx);
+                    }
                 }
                 annotated
             } else {
@@ -174,22 +175,23 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
                 .as_ref()
                 .map(|v| infer_expr(v, ctx, ce))
                 .unwrap_or(Type::Unit);
-            if ce.return_type.is_known()
-                && actual.is_known()
-                && !types_compatible(&ce.return_type, &actual)
-            {
-                ctx.error_with_hint(
-                    format!(
-                        "return type mismatch: expected `{}`, found `{}`",
-                        ce.return_type.display(),
-                        actual.display()
-                    ),
-                    format!(
-                        "function is declared to return `{}`",
-                        ce.return_type.display()
-                    ),
-                    *span,
-                );
+            if ce.return_type.is_known() && actual.is_known() {
+                if !types_compatible(&actual, &ce.return_type) {
+                    ctx.error_with_hint(
+                        format!(
+                            "return type mismatch: expected `{}`, found `{}`",
+                            ce.return_type.display(),
+                            actual.display()
+                        ),
+                        format!(
+                            "function is declared to return `{}`",
+                            ce.return_type.display()
+                        ),
+                        *span,
+                    );
+                } else if let Some(v) = value {
+                    record_coercion_if_needed(&actual, &ce.return_type, expr_span(v), ctx);
+                }
             }
         }
     }

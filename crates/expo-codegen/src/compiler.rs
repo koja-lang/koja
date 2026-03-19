@@ -17,7 +17,7 @@ use expo_ast::ast::{
     Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, TypeExpr,
 };
 use expo_typecheck::context::{TypeContext, VariantData};
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Type, mangle_type};
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -678,6 +678,61 @@ impl<'ctx> Compiler<'ctx> {
             self.enum_name_tables
                 .insert(name.clone(), table_global.as_pointer_value());
         }
+
+        // Pass 4: register union types (tagged-union layout reusing enum infrastructure)
+        let mut union_types: Vec<Type> = Vec::new();
+        for ty in self.type_ctx.type_aliases.values() {
+            collect_union_types(ty, &mut union_types);
+        }
+        for sig in self.type_ctx.functions.values() {
+            collect_union_types(&sig.return_type, &mut union_types);
+            for p in &sig.params {
+                collect_union_types(&p.ty, &mut union_types);
+            }
+        }
+        for info in self.type_ctx.structs.values() {
+            for (_, ty) in &info.fields {
+                collect_union_types(ty, &mut union_types);
+            }
+        }
+
+        let i8_type = self.context.i8_type();
+        for union_ty in &union_types {
+            let Type::Union(members) = union_ty else {
+                continue;
+            };
+            let mangled = mangle_type(union_ty);
+            if self.struct_types.contains_key(&mangled) {
+                continue;
+            }
+
+            let opaque = self.context.opaque_struct_type(&mangled);
+            self.struct_types.insert(mangled.clone(), opaque);
+
+            let mut variant_payloads = Vec::new();
+            let mut max_payload_size: u32 = 0;
+
+            for member in members {
+                let member_name = mangle_type(member);
+                if let Some(llvm_ty) = to_llvm_type(member, self.context, &self.struct_types) {
+                    let payload = self.context.struct_type(&[llvm_ty], true);
+                    let size = type_byte_size(member);
+                    max_payload_size = max_payload_size.max(size);
+                    variant_payloads.push((member_name, Some(payload)));
+                } else {
+                    variant_payloads.push((member_name, None));
+                }
+            }
+
+            if max_payload_size > 0 {
+                let payload_array = i8_type.array_type(max_payload_size);
+                opaque.set_body(&[i8_type.into(), payload_array.into()], false);
+            } else {
+                opaque.set_body(&[i8_type.into()], false);
+            }
+
+            self.enum_variant_payloads.insert(mangled, variant_payloads);
+        }
     }
 
     fn resolve_param_types(
@@ -840,5 +895,37 @@ pub(crate) fn type_byte_size(ty: &Type) -> u32 {
         },
         Type::Function { .. } => 16,
         _ => 8,
+    }
+}
+
+/// Recursively collects all `Type::Union` variants reachable from `ty`.
+fn collect_union_types(ty: &Type, out: &mut Vec<Type>) {
+    match ty {
+        Type::Union(members) => {
+            out.push(ty.clone());
+            for m in members {
+                collect_union_types(m, out);
+            }
+        }
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            for p in params {
+                collect_union_types(p, out);
+            }
+            collect_union_types(return_type, out);
+        }
+        Type::GenericInstance { type_args, .. } => {
+            for ta in type_args {
+                collect_union_types(ta, out);
+            }
+        }
+        Type::Tuple(elems) => {
+            for e in elems {
+                collect_union_types(e, out);
+            }
+        }
+        _ => {}
     }
 }

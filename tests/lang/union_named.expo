@@ -1,5 +1,5 @@
-# Named union aliases: type alias declarations, collision checking
-# Type-check only -- no codegen yet
+# Named union aliases: type alias declarations with codegen
+
 struct Cat
   name: String
 end

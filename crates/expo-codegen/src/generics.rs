@@ -11,7 +11,7 @@ use inkwell::values::FunctionValue;
 
 use crate::compiler::{Compiler, type_byte_size};
 use crate::expr::compile_expr;
-use crate::stmt::compile_statement;
+use crate::stmt::{apply_coercion, compile_statement};
 use crate::types::to_llvm_type;
 
 impl<'ctx> Compiler<'ctx> {
@@ -41,6 +41,7 @@ impl<'ctx> Compiler<'ctx> {
                 let val = compile_expr(self, expr, fn_value)?;
                 if !self.current_block_terminated() {
                     if let Some(v) = val {
+                        let v = apply_coercion(self, v, expr)?;
                         self.builder.build_return(Some(&v)).unwrap();
                     } else {
                         self.builder.build_return(None).unwrap();
@@ -785,6 +786,43 @@ impl<'ctx> Compiler<'ctx> {
             Type::Tuple(elems) => {
                 for e in elems {
                     self.ensure_types_exist(e)?;
+                }
+            }
+            Type::Union(members) => {
+                for m in members {
+                    self.ensure_types_exist(m)?;
+                }
+                let mangled = expo_typecheck::types::mangle_type(ty);
+                if !self.struct_types.contains_key(&mangled) {
+                    let opaque = self.context.opaque_struct_type(&mangled);
+                    self.struct_types.insert(mangled.clone(), opaque);
+
+                    let i8_type = self.context.i8_type();
+                    let mut variant_payloads = Vec::new();
+                    let mut max_payload_size: u32 = 0;
+
+                    for member in members {
+                        let member_name = expo_typecheck::types::mangle_type(member);
+                        if let Some(llvm_ty) =
+                            to_llvm_type(member, self.context, &self.struct_types)
+                        {
+                            let payload = self.context.struct_type(&[llvm_ty], true);
+                            let size = type_byte_size(member);
+                            max_payload_size = max_payload_size.max(size);
+                            variant_payloads.push((member_name, Some(payload)));
+                        } else {
+                            variant_payloads.push((member_name, None));
+                        }
+                    }
+
+                    if max_payload_size > 0 {
+                        let payload_array = i8_type.array_type(max_payload_size);
+                        opaque.set_body(&[i8_type.into(), payload_array.into()], false);
+                    } else {
+                        opaque.set_body(&[i8_type.into()], false);
+                    }
+
+                    self.enum_variant_payloads.insert(mangled, variant_payloads);
                 }
             }
             _ => {}
