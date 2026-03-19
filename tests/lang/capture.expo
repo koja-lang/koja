@@ -1,10 +1,10 @@
-fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
+fn apply(x: Int, f: fn(Int) -> Int) -> Int
   f(x)
 end
 
 fn main
   multiplier = 3
-  triple = fn (x: Int32) -> Int32
+  triple = fn (x: Int) -> Int
     x * multiplier
   end
   print(triple(4))
@@ -12,12 +12,12 @@ fn main
 
   offset = 100
   scale = 2
-  transform = fn (x: Int32) -> Int32
+  transform = fn (x: Int) -> Int
     x * scale + offset
   end
   print(transform(5))
 
-  print(apply(7, fn (n: Int32) -> Int32
+  print(apply(7, fn (n: Int) -> Int
     n + offset
   end))
 end

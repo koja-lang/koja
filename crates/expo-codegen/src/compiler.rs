@@ -397,7 +397,7 @@ impl<'ctx> Compiler<'ctx> {
                         ..
                     } => {
                         let v = crate::util::parse_int_literal(s)?;
-                        self.context.i32_type().const_int(v as u64, true).into()
+                        self.context.i64_type().const_int(v as u64, true).into()
                     }
                     Expr::Literal {
                         value: Literal::Float(s),

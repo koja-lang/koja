@@ -160,16 +160,15 @@ pub fn emit_hashtable_new<'ctx>(
     Ok(())
 }
 
-/// Emits `fn length(self) -> Int32` for a hash-table-backed collection.
-/// Field 2 is the i64 length; truncates to i32.
+/// Emits `fn length(self) -> Int` for a hash-table-backed collection.
 pub fn emit_hashtable_length<'ctx>(
     c: &mut Compiler<'ctx>,
     mangled_fn: &str,
     collection_struct: inkwell::types::StructType<'ctx>,
 ) -> Result<(), String> {
-    let i32_ty = c.context.i32_type();
+    let i64_ty = c.context.i64_type();
 
-    let fn_type = i32_ty.fn_type(&[collection_struct.into()], false);
+    let fn_type = i64_ty.fn_type(&[collection_struct.into()], false);
     let fn_val = c.module.add_function(mangled_fn, fn_type, None);
     c.functions.insert(mangled_fn.to_string(), fn_val);
 
@@ -178,16 +177,8 @@ pub fn emit_hashtable_length<'ctx>(
     c.builder.position_at_end(entry);
 
     let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-    let len_i64 = c
-        .builder
-        .build_extract_value(self_val, 2, "len")
-        .unwrap()
-        .into_int_value();
-    let len_i32 = c
-        .builder
-        .build_int_truncate(len_i64, i32_ty, "len_i32")
-        .unwrap();
-    c.builder.build_return(Some(&len_i32)).unwrap();
+    let len = c.builder.build_extract_value(self_val, 2, "len").unwrap();
+    c.builder.build_return(Some(&len)).unwrap();
 
     if let Some(bb) = saved_block {
         c.builder.position_at_end(bb);

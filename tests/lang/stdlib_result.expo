@@ -1,27 +1,27 @@
 fn main
-  ok: Result<Int32, Int32> = Result.Ok(42)
+  ok: Result<Int, Int> = Result.Ok(42)
   print(ok.unwrap())
   print(ok.or(0))
   print(ok.ok?())
   print(ok.err?())
 
-  err: Result<Int32, Int32> = Result.Err(1)
+  err: Result<Int, Int> = Result.Err(1)
   print(err.or(99))
   print(err.ok?())
   print(err.err?())
 
   # map
-  mapped = ok.map(fn (v: Int32) -> Int32 v + 8 end)
+  mapped = ok.map(fn (v: Int) -> Int v + 8 end)
   print(mapped.unwrap())
-  err_mapped = err.map(fn (v: Int32) -> Int32 v + 8 end)
+  err_mapped = err.map(fn (v: Int) -> Int v + 8 end)
   print(err_mapped.or(-1))
 
   # then
-  chained = ok.then(fn (v: Int32) -> Result<Int32, Int32>
+  chained = ok.then(fn (v: Int) -> Result<Int, Int>
     Result.Ok(v * 3)
   end)
   print(chained.unwrap())
-  err_chained = err.then(fn (v: Int32) -> Result<Int32, Int32>
+  err_chained = err.then(fn (v: Int) -> Result<Int, Int>
     Result.Ok(v * 3)
   end)
   print(err_chained.or(-1))

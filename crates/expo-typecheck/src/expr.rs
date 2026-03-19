@@ -287,7 +287,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         Expr::Literal { value, .. } => match value {
             Literal::Bool(_) => Type::Primitive(Primitive::Bool),
             Literal::Float(_) => Type::Primitive(Primitive::F64),
-            Literal::Int(_) => Type::Primitive(Primitive::I32),
+            Literal::Int(_) => Type::Primitive(Primitive::I64),
             Literal::Unit => Type::Unit,
         },
 
@@ -506,7 +506,7 @@ fn infer_binary(
                 );
                 return Type::Error;
             }
-            if left_ty.is_known() && right_ty.is_known() && left_ty != right_ty {
+            if left_ty.is_known() && right_ty.is_known() && !types_compatible(&left_ty, &right_ty) {
                 ctx.error(
                     format!(
                         "type mismatch in arithmetic: `{}` and `{}`",
@@ -529,7 +529,7 @@ fn infer_binary(
             Type::Primitive(Primitive::Bool)
         }
         BinOp::Eq | BinOp::Gt | BinOp::GtEq | BinOp::Lt | BinOp::LtEq | BinOp::NotEq => {
-            if left_ty.is_known() && right_ty.is_known() && left_ty != right_ty {
+            if left_ty.is_known() && right_ty.is_known() && !types_compatible(&left_ty, &right_ty) {
                 ctx.error(
                     format!(
                         "cannot compare `{}` and `{}`",
@@ -683,7 +683,7 @@ fn infer_enum_construction(
                                 unify(expected_ty, &arg_ty, &mut subst);
                             } else if expected_ty.is_known()
                                 && arg_ty.is_known()
-                                && *expected_ty != arg_ty
+                                && !types_compatible(expected_ty, &arg_ty)
                             {
                                 ctx.error(
                                     format!(
@@ -710,7 +710,7 @@ fn infer_enum_construction(
                                 unify(field_ty, &value_ty, &mut subst);
                             } else if field_ty.is_known()
                                 && value_ty.is_known()
-                                && *field_ty != value_ty
+                                && !types_compatible(field_ty, &value_ty)
                             {
                                 ctx.error(
                                     format!(
@@ -1157,7 +1157,10 @@ fn infer_struct_construction(
         for fi in fields {
             let value_ty = infer_expr(&fi.value, ctx, ce);
             if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
-                if field_ty.is_known() && value_ty.is_known() && *field_ty != value_ty {
+                if field_ty.is_known()
+                    && value_ty.is_known()
+                    && !types_compatible(field_ty, &value_ty)
+                {
                     ctx.error(
                         format!(
                             "field `{}`: expected `{}`, found `{}`",

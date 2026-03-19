@@ -463,7 +463,7 @@ pub fn compile_for<'ctx>(
         .get(&get_fn_name)
         .ok_or_else(|| format!("no function `{get_fn_name}`"))?;
 
-    let i32_ty = c.context.i32_type();
+    let i64_ty = c.context.i64_type();
 
     let iter_loaded = c
         .builder
@@ -478,9 +478,9 @@ pub fn compile_for<'ctx>(
         .ok_or("length() returned void")?
         .into_int_value();
 
-    let idx_alloca = c.builder.build_alloca(i32_ty, "for_idx").unwrap();
+    let idx_alloca = c.builder.build_alloca(i64_ty, "for_idx").unwrap();
     c.builder
-        .build_store(idx_alloca, i32_ty.const_int(0, false))
+        .build_store(idx_alloca, i64_ty.const_int(0, false))
         .unwrap();
 
     let header_bb = c.context.append_basic_block(function, "for_header");
@@ -492,7 +492,7 @@ pub fn compile_for<'ctx>(
     c.builder.position_at_end(header_bb);
     let idx = c
         .builder
-        .build_load(i32_ty, idx_alloca, "idx")
+        .build_load(i64_ty, idx_alloca, "idx")
         .unwrap()
         .into_int_value();
     let cond = c
@@ -510,7 +510,7 @@ pub fn compile_for<'ctx>(
         .builder
         .build_load(iter_llvm_ty, iter_alloca, "iter_get")
         .unwrap();
-    let idx_for_get = c.builder.build_load(i32_ty, idx_alloca, "idx_get").unwrap();
+    let idx_for_get = c.builder.build_load(i64_ty, idx_alloca, "idx_get").unwrap();
     let elem_val = c
         .builder
         .build_call(get_fn, &[iter_for_get.into(), idx_for_get.into()], "elem")
@@ -538,12 +538,12 @@ pub fn compile_for<'ctx>(
     if !c.current_block_terminated() {
         let cur_idx = c
             .builder
-            .build_load(i32_ty, idx_alloca, "cur_idx")
+            .build_load(i64_ty, idx_alloca, "cur_idx")
             .unwrap()
             .into_int_value();
         let next_idx = c
             .builder
-            .build_int_add(cur_idx, i32_ty.const_int(1, false), "next_idx")
+            .build_int_add(cur_idx, i64_ty.const_int(1, false), "next_idx")
             .unwrap();
         c.builder.build_store(idx_alloca, next_idx).unwrap();
         c.builder.build_unconditional_branch(header_bb).unwrap();
@@ -867,7 +867,7 @@ fn compile_literal_for_pattern<'ctx>(
     match lit {
         Literal::Int(s) => {
             let val = crate::util::parse_int_literal(s)?;
-            Ok(c.context.i32_type().const_int(val as u64, true).into())
+            Ok(c.context.i64_type().const_int(val as u64, true).into())
         }
         Literal::Float(s) => {
             let val: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
@@ -1053,13 +1053,24 @@ fn match_values<'ctx>(
     lit: &BasicValueEnum<'ctx>,
 ) -> Result<IntValue<'ctx>, String> {
     if subject.is_int_value() && lit.is_int_value() {
+        let subj_iv = subject.into_int_value();
+        let mut lit_iv = lit.into_int_value();
+        let subj_bits = subj_iv.get_type().get_bit_width();
+        let lit_bits = lit_iv.get_type().get_bit_width();
+        if subj_bits != lit_bits {
+            let target_ty = c.context.custom_width_int_type(subj_bits);
+            lit_iv = if subj_bits < lit_bits {
+                c.builder
+                    .build_int_truncate(lit_iv, target_ty, "lit_trunc")
+                    .unwrap()
+            } else {
+                c.builder
+                    .build_int_s_extend(lit_iv, target_ty, "lit_sext")
+                    .unwrap()
+            };
+        }
         Ok(c.builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                subject.into_int_value(),
-                lit.into_int_value(),
-                "lit_eq",
-            )
+            .build_int_compare(IntPredicate::EQ, subj_iv, lit_iv, "lit_eq")
             .unwrap())
     } else if subject.is_float_value() && lit.is_float_value() {
         Ok(c.builder

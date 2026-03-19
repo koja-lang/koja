@@ -1,5 +1,5 @@
 fn main()
-  m: Map<Int32, String> = [1: "one", 2: "two", 3: "three"]
+  m: Map<Int, String> = [1: "one", 2: "two", 3: "three"]
 
   print("length: #{m.length()}")
   print("has 1: #{m.has?(1)}")

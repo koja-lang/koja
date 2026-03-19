@@ -20,6 +20,18 @@ use crate::stmt::{coerce_numeric, infer_type_from_llvm};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
 
+/// Compiles an expression and coerces the result to the expected type.
+/// Use when the target type is known (e.g. function arguments, struct fields).
+pub fn compile_expr_coerced<'ctx>(
+    c: &mut Compiler<'ctx>,
+    expr: &Expr,
+    expected: &Type,
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let val = compile_expr(c, expr, function)?;
+    Ok(val.map(|v| coerce_numeric(c, v, expected)))
+}
+
 /// Top-level expression dispatch. Matches each AST expression variant and
 /// delegates to the appropriate specialized compiler function.
 pub fn compile_expr<'ctx>(
@@ -181,7 +193,7 @@ fn compile_literal<'ctx>(
         Literal::Int(s) => {
             let val = crate::util::parse_int_literal(s)?;
             Ok(Some(
-                c.context.i32_type().const_int(val as u64, true).into(),
+                c.context.i64_type().const_int(val as u64, true).into(),
             ))
         }
         Literal::Float(s) => {

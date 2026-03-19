@@ -305,6 +305,15 @@ pub fn resolve_type_expr_with_params(
     }
 }
 
+/// Returns true if two types are compatible numeric types (both int or both float).
+pub fn numeric_compatible(a: &Type, b: &Type) -> bool {
+    if let (Type::Primitive(pa), Type::Primitive(pb)) = (a, b) {
+        (pa.is_integer() && pb.is_integer()) || (pa.is_float() && pb.is_float())
+    } else {
+        false
+    }
+}
+
 /// Attempts to unify a parameter type (possibly containing [`Type::TypeVar`]s) with a
 /// concrete argument type. Binds type variables in `subst` on first encounter, and
 /// checks consistency on subsequent encounters. Returns `false` if the types conflict.
@@ -312,7 +321,7 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
     match (param_ty, arg_ty) {
         (Type::TypeVar(name), _) => {
             if let Some(existing) = subst.get(name) {
-                existing == arg_ty
+                existing == arg_ty || numeric_compatible(existing, arg_ty)
             } else {
                 subst.insert(name.clone(), arg_ty.clone());
                 true
@@ -342,7 +351,9 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
             }
             true
         }
-        (Type::Primitive(a), Type::Primitive(b)) => a == b,
+        (Type::Primitive(a), Type::Primitive(b)) => {
+            a == b || (a.is_integer() && b.is_integer()) || (a.is_float() && b.is_float())
+        }
         (
             Type::Function {
                 params: pa,

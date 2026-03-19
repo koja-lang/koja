@@ -7,7 +7,7 @@ use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
-use crate::expr::compile_expr;
+use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::stmt::infer_type_from_llvm;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
@@ -33,10 +33,21 @@ pub fn compile_call<'ctx>(
         }
         _ => {
             if let Some(callee) = c.functions.get(name).copied() {
+                let param_types: Vec<Type> = c
+                    .type_ctx
+                    .functions
+                    .get(name)
+                    .map(|sig| sig.params.iter().map(|p| p.ty.clone()).collect())
+                    .unwrap_or_default();
+
                 let mut compiled_args = Vec::new();
-                for arg in args {
-                    let val = compile_expr(c, &arg.value, function)?
-                        .ok_or_else(|| format!("argument to {name} produced no value"))?;
+                for (i, arg) in args.iter().enumerate() {
+                    let val = if i < param_types.len() {
+                        compile_expr_coerced(c, &arg.value, &param_types[i], function)?
+                    } else {
+                        compile_expr(c, &arg.value, function)?
+                    }
+                    .ok_or_else(|| format!("argument to {name} produced no value"))?;
                     compiled_args.push(val.into());
                 }
 
@@ -91,9 +102,13 @@ pub fn compile_call<'ctx>(
 
                 let mut compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> =
                     vec![env_ptr.into()];
-                for arg in args {
-                    let val = compile_expr(c, &arg.value, function)?
-                        .ok_or_else(|| format!("argument to {name} produced no value"))?;
+                for (i, arg) in args.iter().enumerate() {
+                    let val = if i < params.len() {
+                        compile_expr_coerced(c, &arg.value, &params[i], function)?
+                    } else {
+                        compile_expr(c, &arg.value, function)?
+                    }
+                    .ok_or_else(|| format!("argument to {name} produced no value"))?;
                     compiled_args.push(val.into());
                 }
 

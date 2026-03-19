@@ -5,7 +5,7 @@ fn main
   print(x.some?())
   print(x.none?())
 
-  y: Option<Int32> = Option.None
+  y: Option<Int> = Option.None
   print(y.or(99))
   print(y.some?())
   print(y.none?())
@@ -15,17 +15,17 @@ fn main
   print(s.or("default"))
 
   # map
-  mapped = x.map(fn (v: Int32) -> Int32 v * 10 end)
+  mapped = x.map(fn (v: Int) -> Int v * 10 end)
   print(mapped.unwrap())
-  none_mapped = y.map(fn (v: Int32) -> Int32 v * 10 end)
+  none_mapped = y.map(fn (v: Int) -> Int v * 10 end)
   print(none_mapped.or(-1))
 
   # then
-  chained = Option.Some(10).then(fn (v: Int32) -> Option<Int32>
+  chained = Option.Some(10).then(fn (v: Int) -> Option<Int>
     Option.Some(v + 5)
   end)
   print(chained.unwrap())
-  none_chained = y.then(fn (v: Int32) -> Option<Int32>
+  none_chained = y.then(fn (v: Int) -> Option<Int>
     Option.Some(v + 5)
   end)
   print(none_chained.or(-1))

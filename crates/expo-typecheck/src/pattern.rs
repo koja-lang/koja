@@ -288,7 +288,7 @@ pub(crate) fn check_pattern(
             let lit_type = match value {
                 Literal::Bool(_) => Type::Primitive(Primitive::Bool),
                 Literal::Float(_) => Type::Primitive(Primitive::F64),
-                Literal::Int(_) => Type::Primitive(Primitive::I32),
+                Literal::Int(_) => Type::Primitive(Primitive::I64),
                 Literal::Unit => Type::Unit,
             };
             if lit_type.is_known() && subject_type.is_known() && lit_type != *subject_type {

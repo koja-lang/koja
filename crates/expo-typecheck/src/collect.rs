@@ -239,7 +239,7 @@ pub fn collect(module: &Module) -> TypeContext {
                     Expr::Literal {
                         value: Literal::Int(_),
                         ..
-                    } => Type::Primitive(crate::types::Primitive::I32),
+                    } => Type::Primitive(crate::types::Primitive::I64),
                     Expr::Literal {
                         value: Literal::Float(_),
                         ..

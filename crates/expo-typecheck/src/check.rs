@@ -13,6 +13,7 @@ use crate::context::{FunctionKind, ParamInfo, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr};
 use crate::stmt::check_body;
+use crate::types::numeric_compatible;
 use crate::types::{Primitive, Type, resolve_type_expr};
 
 /// Type-checks all function bodies and impl blocks in a module, emitting
@@ -175,7 +176,7 @@ fn check_function(
         check_body(&f.body[..f.body.len() - 1], ctx, &mut ce);
         if let Some(Statement::Expr(expr)) = f.body.last() {
             let actual = infer_expr(expr, ctx, &mut ce);
-            if actual.is_known() && actual != declared_return {
+            if actual.is_known() && !types_compatible(&actual, &declared_return) {
                 ctx.error_with_hint(
                     format!(
                         "return type mismatch: expected `{}`, found `{}`",
@@ -230,7 +231,7 @@ pub(crate) fn check_call_args(
         for (i, arg) in args.iter().enumerate() {
             let arg_ty = infer_expr(&arg.value, ctx, ce);
             let param = &params[i];
-            if param.ty.is_known() && arg_ty.is_known() && param.ty != arg_ty {
+            if param.ty.is_known() && arg_ty.is_known() && !types_compatible(&param.ty, &arg_ty) {
                 ctx.error(
                     format!(
                         "argument `{}`: expected `{}`, found `{}`",
@@ -256,7 +257,7 @@ pub(crate) fn check_type(actual: &Type, expected: &Type, span: Span, ctx: &mut T
     if !actual.is_known() || !expected.is_known() {
         return;
     }
-    if actual != expected {
+    if !types_compatible(actual, expected) {
         ctx.error(
             format!(
                 "type mismatch: expected `{}`, found `{}`",
@@ -265,15 +266,6 @@ pub(crate) fn check_type(actual: &Type, expected: &Type, span: Span, ctx: &mut T
             ),
             span,
         );
-    }
-}
-
-/// Returns true if two types are compatible numeric types (both int or both float).
-pub(crate) fn numeric_compatible(a: &Type, b: &Type) -> bool {
-    if let (Type::Primitive(pa), Type::Primitive(pb)) = (a, b) {
-        (pa.is_integer() && pb.is_integer()) || (pa.is_float() && pb.is_float())
-    } else {
-        false
     }
 }
 

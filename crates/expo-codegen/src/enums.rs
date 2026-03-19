@@ -8,7 +8,7 @@ use expo_typecheck::types::Type;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
-use crate::expr::compile_expr;
+use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::stmt::infer_type_from_llvm;
 
 /// Compiles an enum variant construction (`EnumName.Variant(...)` or
@@ -79,9 +79,25 @@ fn compile_concrete_enum<'ctx>(
                 .build_struct_gep(enum_type, alloca, 1, "payload_ptr")
                 .unwrap();
 
+            let expected_types = c
+                .type_ctx
+                .enums
+                .get(enum_name)
+                .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
+                .and_then(|vi| match &vi.data {
+                    expo_typecheck::context::VariantData::Tuple(types) => Some(types.clone()),
+                    _ => None,
+                });
+
             for (i, expr) in exprs.iter().enumerate() {
-                let val = compile_expr(c, expr, function)?
-                    .ok_or_else(|| format!("enum field {i} produced no value"))?;
+                let val = if let Some(ref types) = expected_types
+                    && i < types.len()
+                {
+                    compile_expr_coerced(c, expr, &types[i], function)?
+                } else {
+                    compile_expr(c, expr, function)?
+                }
+                .ok_or_else(|| format!("enum field {i} produced no value"))?;
                 let field_ptr = c
                     .builder
                     .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("field_{i}"))
@@ -112,17 +128,19 @@ fn compile_concrete_enum<'ctx>(
             };
 
             for field_init in fields {
-                let field_idx = expected_fields
+                let (field_idx, field_type) = expected_fields
                     .iter()
-                    .position(|(name, _)| *name == field_init.name)
+                    .enumerate()
+                    .find(|(_, (name, _))| *name == field_init.name)
+                    .map(|(i, (_, ty))| (i as u32, ty.clone()))
                     .ok_or_else(|| {
                         format!(
                             "unknown field `{}` in {enum_name}.{variant}",
                             field_init.name
                         )
-                    })? as u32;
+                    })?;
 
-                let val = compile_expr(c, &field_init.value, function)?
+                let val = compile_expr_coerced(c, &field_init.value, &field_type, function)?
                     .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
                 let field_ptr = c
                     .builder

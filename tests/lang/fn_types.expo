@@ -1,11 +1,11 @@
-fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
+fn apply(x: Int, f: fn(Int) -> Int) -> Int
   f(x)
 end
 
 fn main
-  double = fn (n: Int32) -> Int32 n * 2 end
+  double = fn (n: Int) -> Int n * 2 end
   print(apply(5, double))
 
-  result = apply(7, fn (n: Int32) -> Int32 n + 3 end)
+  result = apply(7, fn (n: Int) -> Int n + 3 end)
   print(result)
 end

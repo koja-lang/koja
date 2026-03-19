@@ -67,10 +67,6 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 - `arena` blocks (deferred post-v1)
 - `await` (deferred -- covered by `receive` on processes)
-- ~~Try operator (`?`) -- removed~~
-- ~~`ref T` -- removed~~
-- ~~`for` loops -- done~~
-- ~~Lists -- done~~
 - Trait bounds on generic type parameters
 - Inline closures (`x -> expr`)
 
@@ -78,13 +74,12 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 - **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `PairLiteral<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
-- **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Used by `map`/`then` on `Option` and `Result`. Inline closures (`x -> expr`) are parsed but deferred to v0.5+.
+- **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Used by `map`/`then` on `Option` and `Result`. Inline closures (`x -> expr`) are parsed but deferred.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 - **PascalCase primitives and type simplification** (done): Primitives renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. User-defined types (`Pair`, `User`) and language types (`Int`, `String`) are now visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction.
 - **`ref T` syntax** (parsed, deferred): Reference types use `ref T` (space, no angle brackets) instead of `ref<T>`. `ref` is a lowercase keyword modifier, consistent with the modifier pattern (`const`, `priv`, `move`, `ref`): lowercase keywords modify the thing that follows them, PascalCase names are always types. However, `ref T` is redundant in parameter position (borrow-by-default) and unsafe in return position without lifetime tracking. Deferred until a concrete use case emerges.
 - **Map literal syntax** (decided): `[key: value, key: value]` with `[:]` for empty maps. Maps are collections (like `List<T>`), not struct-like, so they share the bracket family rather than curly braces. The parser disambiguates list vs. map by peeking for `:` after the first expression. Curly braces remain exclusive to struct construction (`Config{name: "yo"}`).
-- **Subscript syntax** (deferred): `map["key"]` / `list[0]` as sugar for `.get()`. Would be backed by a protocol (e.g., `Subscript<K, V>`). Not needed for v0.5 -- method access (`map.get(key)`, `list.get(0)`) works. Can be added later without grammar conflicts since `[` after an expression is a different parse context than `[` at expression start.
-- **Planned: Byte/bitstring literals**: Erlang-style `<<>>` binary syntax for binary protocol work, crypto, and low-level data manipulation. Design TBD.
+- **Subscript syntax** (deferred): `map["key"]` / `list[0]` as sugar for `.get()`. Would be backed by a protocol (e.g., `Subscript<K, V>`). Not needed yet -- method access (`map.get(key)`, `list.get(0)`) works. Can be added later without grammar conflicts since `[` after an expression is a different parse context than `[` at expression start.
 - **Planned: Irrefutable struct destructuring**: `Config{name, port} = load_config()` as syntactic sugar for pulling struct fields into local variables. Compile-time verified exhaustive -- only works for structs (single shape), not enums. Enum destructuring uses `match`.
 
 ### Known gaps
@@ -99,7 +94,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **EBNF grammar** -- `grammar.ebnf`, 436 lines covering all syntax constructs
 - **Example codebase** -- 17 `.expo` files porting `auth-manager` (a real Rust microservice) into Expo pseudocode, validating the language feels right
 - **Memory strategy** -- documented in `MEMORY.md` (stack, ownership+move, explicit arena)
-- **Concurrency model** -- documented in `CONCURRENCY.md` and `CONCURRENCY_2.md` (processes, native runtime, supervision)
+- **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `CONCURRENCY.md` (processes, native runtime, supervision)
 - **Project config format** -- `project.expo` replacing `Cargo.toml`
 
 ### Tooling (pulled forward)
@@ -108,203 +103,130 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`/`@moduledoc`), and go-to-definition (including qualified module calls) over stdio, integrated with the VSCode/Cursor extension
 - **VSCode extension** -- syntax highlighting and LSP client for `.expo` files
 
----
+### Build history
 
-## Phase 1: Bootstrap compiler -- COMPLETE
-
-Build a minimal Expo compiler in Rust that can compile trivial programs to native binaries via LLVM.
-
-### Month 1 -- Lexer and parser (complete)
-
-- ~~Custom recursive descent parser (not a generator -- easier to produce good error messages, and the grammar is simple enough)~~
-- ~~Lex all tokens defined in `grammar.ebnf` section 18 (identifiers, keywords, literals, operators)~~
-- ~~Parse into a typed AST covering: imports, structs, enums, functions, `if`/`match`/`cond`, `for`/`loop`, expressions, assignments~~
-- ~~Closures and annotations can be parsed but don't need to do anything yet~~
-- ~~**Deliverable**: `expo parse file.expo` prints the AST~~
-
-**Status**: All grammar constructs parse correctly. Pratt parser handles operator precedence. `expo parse` and `expo lex` commands work. String interpolation (`#{}`) and escape sequences (`\"`, `\\`, `\n`, `\t`, `\#`) fully implemented in the lexer with a mode stack for nested interpolation. Multiline strings (`"""`) support the same escapes as single-line strings and are automatically dedented based on the closing delimiter's column position.
-
-### Month 2 -- Type system and semantic analysis (complete)
-
-- ~~Type checking: primitives, structs, enums~~
-- ~~Type inference for local variables (explicit types on function signatures, inferred inside bodies)~~
-- ~~Method resolution for `impl` blocks~~
-- ~~Name resolution across modules (file = module, import-driven discovery)~~
-- ~~`priv fn` visibility enforcement~~
-- ~~Circular import detection~~
-- ~~Match exhaustiveness checking, unused variable warnings~~
-- ~~Import conflict detection, qualified imports (`math.add()`)~~
-- ~~**Deliverable**: `expo check file.expo` reports type errors with clear messages~~
-
-Remaining work (generics, trait impls) is Phase 2 scope.
-
-### Month 3 -- LLVM codegen (complete)
-
-- ~~Integrate LLVM via `inkwell` (Rust LLVM bindings)~~
-- ~~Code generation for: functions, structs, enums, impl functions, if/else, while, loop, break, return, compound assignment, cond, match, string interpolation, closures (non-capturing block form)~~
-- ~~Stack allocation for primitives and small structs~~
-- ~~Link against libc for `main` entry point and basic I/O~~
-- ~~Enums as tagged unions, full pattern matching (wildcard, literal, binding, nested, `when` guards)~~
-- ~~Multi-module compilation to a single native binary~~
-- ~~**Deliverable**: `expo build hello.expo` produces a native binary that runs~~
-
-Remaining work (for loops) is Phase 2 scope. Closure capture analysis is complete.
-
-### Key decisions
-
-| Decision              | Recommendation                                                                                                                                                                                                                                                                                                                |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Parser strategy       | Custom recursive descent. Better error messages, full control, no external dependency. The grammar is small enough.                                                                                                                                                                                                           |
-| LLVM bindings         | `inkwell`. Mature, well-documented, widely used in Rust compiler projects. Cranelift is faster to compile but has a less mature API for a full language.                                                                                                                                                                      |
-| Error message quality | Invest early. Elm proved this matters more than features for adoption. Every error should show the source line, point to the problem, and suggest a fix. Errors should be self-contained and unambiguous -- the same quality bar that helps junior developers also helps AI fix its own generated code without extra context. |
+Phase 1 (bootstrap compiler) and Phase 2 (core language) are complete. The full build history with detailed implementation notes is preserved in [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md).
 
 ---
 
-## Phase 2: Core language -- COMPLETE
+## Phase 3: Language surface + Runtime maturity
 
-Make the compiler powerful enough to compile non-trivial programs with Expo's generics, ownership model, and structured concurrency.
+Phase 2 proved the core language works. Phase 3 makes it real on two fronts simultaneously. These tracks are independent -- no blocking dependencies between them -- so they can be interleaved based on energy, or worked in focused bursts.
 
-**Note**: The parser and AST already handle all Phase 2 constructs (for, closures, arena, spawn/await, generics). The work here is wiring up type checking and codegen, not design or parsing. Generics are the gate to Phase 2 -- `Option<T>`, `Result<T,E>`, collections, and `Pair<A,B>` all depend on them.
+### Dependency graph
 
-**Implementation order**: Generics first (the shared gate -- unlocks everything). After generics, two independent tracks can proceed in parallel:
+```
+Track A:  A1 (binary/bitstring) → A2 (string-as-UTF8) → A3 (project.expo + test runner) → A4 (lexer port)
+Track B:  B1 (union types) → B2 (fn main as process) → B3 (copy keyword)
+          B4 (scheduler/IO) -- independent, anytime
+```
 
-- **Track A -- Ownership/borrowing**: move semantics, borrow checking, drop insertion (pure compile-time flow analysis, no dependency on collections)
-- **Track B -- Collections**: `List<T>`, `Map<K,V>`, iterators, `for` loops (no dependency on ownership)
+No dependencies between tracks. Within Track B, B1-B3 are sequential but B4 can slot in anywhere.
 
-Concurrency requires both tracks to converge (ownership safety across spawn boundaries + practical collection passing). Closure capture analysis is complete (move vs. copy into closures with heap-allocated environments).
+### Track A: Language surface
 
-### Generics and monomorphization
+The foundation for writing real programs in Expo. Binary/bitstring literals are the primitive; `String` becomes UTF-8 utilities built on top of binary. This layering (the Erlang/Elixir approach) gives the language first-class byte-level manipulation for protocol parsing, crypto, and file formats, with string methods as a higher-level convenience layer.
 
-- ~~Type parameter syntax already parsed: `struct Pair<A, B>`, `fn identity<T>(x: T) -> T`~~
-- ~~Monomorphization: generate specialized LLVM IR for each concrete instantiation~~
-- ~~Type variable unification across call sites~~
-- ~~Generic structs and functions~~
-- ~~Generic enums (required for `Option<T>` and `Result<T,E>`)~~
-- ~~Variable type annotations (`x: Int32 = 42`, `z: Option<Int32> = Option.None`) -- unblocks generic enum unit variants and general type safety~~
-- ~~Numeric type coercion for annotated variables (same-category casting: `x: UInt8 = 4`)~~
-- ~~Monomorphization of impl blocks on generic types (methods like `.first()`, `.unwrap()`, `.or()`, `.map()`, `.then()`)~~
-- ~~Generic method monomorphization -- methods with their own type params (`map<U>`, `then<U>`) on generic types (`Option<T>`, `Result<T, E>`) fully compile with correct type substitution for both impl-level and method-level generics~~
-- ~~`Option<T>` and `Result<T,E>` as stdlib enum types with `Some`/`None`/`Ok`/`Err` (auto-imported from `std.kernel`)~~
-- ~~`Pair<A, B>` stdlib struct (with `.first` / `.second`)~~
-- ~~`panic(message)` builtin for fatal errors (prints to stderr, calls `abort`)~~
-- **Done when**: ~~`Option<T>`, `Result<T,E>`, and `Pair<A,B>` compile and work in match expressions~~
+#### A1. Binary/bitstring literals
 
-### Ownership and borrowing
+Expo's version of Elixir's `<<>>` syntax, with full bit-level precision -- not just byte-aligned binary, but sub-byte bitstring pattern matching. This is what makes Elixir dominant in protocol work, compiled to native shift-and-mask operations with zero overhead.
 
-- ~~`Type::is_copy()` to distinguish copy types (primitives, `()`, function pointers) from move types (`String`, structs, enums)~~
-- ~~Variable state tracking: `Live`, `Moved`, `MaybeMoved` -- use-after-move is a compile error~~
-- ~~Borrow-by-default: function parameters are read-only borrows unless marked `move`~~
-- ~~`move self` for mutating impl functions -- same rules as any other param, returns modified value (`list = list.push(42)`)~~
-- ~~`move` only appears in the function/closure signature, never at the call site~~
-- ~~Functions and closures follow identical rules: `fn (T) -> U` borrows, `fn (move T) -> U` takes ownership~~
-- ~~Borrows are always read-only -- no `&mut T`, ever (see `MEMORY.md`)~~
-- ~~No lifetime annotations -- borrows are scoped to the function call~~
-- ~~`clone()` as the explicit escape hatch (auto-generated for all types)~~
-- ~~Drop insertion at scope boundaries (deterministic destruction)~~
-- ~~The `&` symbol does not exist in Expo -- borrowing is implicit~~
-- ~~`ref T` removed -- redundant with borrow-by-default params, unsafe in return position without lifetime tracking. Can be re-added if a concrete use case emerges.~~
-- **Done when**: ~~programs that move, borrow, and clone compile correctly, and use-after-move is caught~~
+Key design decisions:
 
-### Collections and iteration
+- Syntax for constructing binaries (`<<0xFF, 0x00, payload::binary>>` or Expo-flavored equivalent)
+- Binary and bitstring pattern matching in `match` arms
+- Segment specifiers: size in bits (not just bytes), type (integer, float, binary, utf8), endianness, signedness
+- Bit-level field extraction: `<<_::1, stream_id::31>>` compiles to `& 0x7FFFFFFF` -- the same code you'd write by hand in Rust, generated from a pattern match. Protocols like HTTP/2 (24-bit length, 1-bit reserved, 31-bit stream ID), MQTT (4-bit type, 1-bit dup, 2-bit QoS, 1-bit retain), TCP/IP headers, DNS, and Bluetooth LE all need sub-byte field access.
+- Ownership semantics (move, like String -- or should sub-binary refs be possible?)
+- Relationship to String: is String literally a binary with a UTF-8 guarantee, or a distinct type backed by binary?
+- **Serialization protocols**: `FromBinary`/`ToBinary` as the protocol pair for wire format serialization. Any type can implement them using binary pattern matching -- no macros or code generation needed. Protobuf messages, MessagePack, HTTP/2 frames, database wire protocols, and WebSocket frames all become protocol implementations. `String` itself is the first `FromBinary` impl (validate UTF-8 and wrap). This extends the literal protocol philosophy to serialization: user-defined types get the same capabilities as built-in types.
+- **Done when**: binary and bitstring literals construct, pattern match at bit-level precision, and round-trip correctly
 
-- ~~`List<T>`, `Map<K,V>`, `Set<T>` as built-in generic types backed by native implementations~~
-- ~~`Map<K,V>` -- open-addressing hash map with linear probing, 75% load factor resize, SplitMix64/FNV-1a hashing~~
-- ~~`Set<T>` -- hash set reusing `Map` infrastructure, implements `ListLiteral<T>` for `s: Set<Int32> = [1, 2, 3]` syntax~~
-- ~~Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol~~
-- ~~`Hash` and `Equality` protocols with compiler-provided intrinsic implementations for all primitives~~
-- ~~Drop support for `Map` and `Set` (entries and states buffers freed at scope exit)~~
-- ~~Closure capture analysis (move vs. borrow) -- copy for primitives, move for structs/enums, heap-allocated environment with automatic drop~~
-- ~~List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol -- any type can implement `ListLiteral<T>` to be constructible from `[...]` syntax~~
-- ~~`Self` type expression -- resolves to the implementing type inside `protocol` and `impl` blocks~~
-- ~~`unless` expression -- negated `if` for guard clauses (`unless condition ... end`)~~
-- ~~`for` loops over iterables~~
-- ~~`List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) -- implemented as pure Expo code in `std.kernel`, not intrinsics. Enabled by intrinsic dispatch fallthrough (`EmitResult` enum) and codegen fix for generic type resolution in method bodies.~~
-- ~~Bare function names as references (no sigil -- `foo` references, `foo()` calls)~~
-- ~~`arena...end` blocks -- deferred post-v1 (see "Future: Arena blocks"). The design depends on runtime maturity (per-process heaps, multi-threaded scheduler) and real-world allocation patterns.~~
+#### A2. String as UTF-8 binary
 
-### Processes (shipped)
+Build string methods on top of the binary foundation:
 
-**Shipped**: lightweight processes via `spawn`/`receive`/`Process<M>`. A process runs a function on the cooperative scheduler, receives typed messages through a mailbox, and is identified by a `Process<M>` handle. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime`, a Rust static library providing a single-threaded cooperative scheduler with per-process mailboxes. String equality (`==`, `!=`) also shipped to support message matching.
+- Character iteration / codepoint extraction (UTF-8 aware)
+- `.length()`, `.byte_length()`, `.trim()`, `.split()`, `.starts_with?()`, `.contains?()`, `.empty?()`
+- Substring extraction, slicing
+- String-to-binary / binary-to-string conversion (or identity if String = binary)
+- **Done when**: string-heavy programs compile and work (character iteration, splitting, searching)
 
-**Direction**: `spawn`/`receive` processes are the only concurrency primitive. GenServer-like actor patterns, supervision, and worker pools will be built on processes in the stdlib -- no separate `actor` keyword or task state machine. The `actor` keyword remains a design candidate but is deferred until processes are dogfooded enough to determine whether a dedicated keyword provides value beyond what stdlib patterns can offer.
+#### A3. Project system + test runner
 
-**Deferred post-v1**: the original "Tasks" model (stackless state machines, `Handle<T>`, `await`, structured concurrency). With task borrows dropped (see `CONCURRENCY_2.md`), tasks and processes have identical ownership rules (move/clone at all spawn boundaries). The only difference is overhead (state machine vs. real stack). Tasks may be revisited if process overhead proves too high once the runtime matures.
+Minimal `project.expo` (source dirs, test dirs, project name -- no dependency resolution yet) so the toolchain knows what to compile and where to find tests. Then `@test` annotated functions with `expo test` to discover and run them. The project file also improves `expo build` for multi-module projects.
 
-**Open design**: `fn main` needs to be a process with a mailbox so it can `receive` replies from spawned children. Mailbox typing for main is an active design question -- union types (`Process<A | B>`) are the leading candidate. See `CONCURRENCY_2.md` for the full exploration.
+- **Done when**: `expo test` discovers and runs `@test` functions in a project with a `project.expo` file
 
-See `CONCURRENCY.md` and `CONCURRENCY_2.md` for full design details.
+#### A4. Lexer port (validation milestone)
 
-### Risks
+Write the Expo lexer in Expo, compiled by the Rust bootstrap. Validate by comparing token output against the Rust lexer for all test files. This exercises binary pattern matching, string processing, enums, pattern matching, lists, structs, and file I/O. This is validation, not self-hosting -- the Rust compiler remains the real compiler.
 
-- **Generic monomorphization**: generics like `Patch<T>` need to be monomorphized at compile time. This is well-understood (Rust, C++ do it) but adds compiler complexity. Start with concrete types, then generalize.
-- **Borrow checker complexity**: Expo's model is simpler than Rust's (no lifetimes, no mutable borrows), but still requires flow analysis. Start with a conservative checker that rejects some valid programs rather than accepting invalid ones. Loosen over time.
+- **Done when**: the Expo-written lexer produces identical token output to the Rust lexer for all `.expo` test files
 
----
+### Track B: Runtime maturity
 
-## Phase 3: Runtime and process maturity
+The foundation for Expo's concurrency promise. B1-B3 form a dependency chain. B4 is fully independent and can be tackled at any time.
 
-Mature the process primitive and the native runtime. The basic `spawn`/`receive`/`Process<M>` mechanism shipped in Phase 2. This phase makes it production-grade: multi-threaded scheduling, I/O integration, `fn main` as a process, and the `copy` keyword for ergonomic data sharing across spawn boundaries.
+#### B1. Union types
 
-### `fn main` as a process
+`A | B` as anonymous enums -- a general-purpose type system feature, not just for mailboxes.
 
-- `fn main` runs as a process with a mailbox so it can `receive` replies from spawned children
-- Mailbox typing for main is an open design question -- union types (`Process<A | B>`) are the leading candidate (see `CONCURRENCY_2.md`)
-- `self()` returns the current process handle, enabling request/reply patterns
-- **Done when**: `fn main` can spawn a child, pass `self()` as a reply handle, and `receive` the result
-
-### Union types (open design)
-
-- Union types (`A | B`) as a general-purpose type system feature, not just for mailboxes
+- Type system: order-independent, flattened, usable in generics
+- Pattern matching: exhaustiveness checking across union variants
+- Codegen: tagged union representation (same as named enums)
 - Use cases: process mailbox typing (`Process<ServerMsg | LibResult>`), heterogeneous collections (`List<Post | Comment | Ad>`), error type composition (`Result<User, ValidationError | DatabaseError>`)
-- Implementation: anonymous enums -- same tagged union representation as named enums
-- Design questions: order-independence, flattening, variant name collision resolution, protocol interaction
+- Design questions: variant name collision resolution, protocol interaction
 - **Done when**: union types compile and work in match expressions, process mailboxes, and generic type parameters
 
-### `copy` keyword
+#### B2. `fn main` as a process
 
-- Third parameter modifier alongside default borrow and `move`: `fn start(copy config: Config)`
-- Auto-clones at the call boundary -- the caller writes `start(config)`, the compiler inserts `.clone()`
-- Declared in the function signature (same pattern as `move` -- never at the call site)
-- Primary use case: sharing config/context across spawned processes without manual `.clone()` at every call site
-- See `CONCURRENCY_2.md` for full design
+Main gets a mailbox so it can `receive` replies from spawned children. Union types (B1) enable the mailbox to accept messages from multiple sources. `self()` returns the current process handle, enabling request/reply patterns.
 
-### Actor keyword (deferred)
+- **Done when**: `fn main` can spawn a child, pass `self()` as a reply handle, and `receive` the result
 
-The `actor` keyword (typed mailbox exhaustiveness, `@state`, named registration) remains a design candidate but is deferred. GenServer-like patterns will be built on processes first to validate whether a dedicated keyword provides value beyond what stdlib patterns can offer. The decision will be informed by dogfooding the process primitive.
+#### B3. `copy` keyword
 
-### Runtime
+Third parameter modifier alongside default borrow and `move`: `fn start(copy config: Config)`. Auto-clones at the call boundary -- the caller writes `start(config)`, the compiler inserts `.clone()`. Declared in the function signature (same pattern as `move` -- never at the call site). Primary use case: sharing config/context across spawned processes without manual `.clone()` at every call site.
 
-- **Scheduler protocol** -- the runtime is defined as a protocol interface (`spawn_process`, `send_message`, `yield`, `park`/`wake`, `poll_io`), not a monolithic scheduler. The native runtime is one implementation; others (WASM, testing, embedded, debug) implement the same interface. Define the interface first, implement against it. Third-party developers can write custom runtimes for specialized platforms.
-- Work-stealing scheduler (M:N -- many processes on few OS threads) as the default native backend
-- I/O reactor (epoll on Linux, kqueue on macOS) -- the user sees blocking calls, the runtime suspends transparently
+- See `CONCURRENCY.md` for full design
+- **Done when**: `copy` params compile and auto-clone at call sites
+
+#### B4. Multi-threaded scheduler + I/O (independent)
+
+Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can start with a simple multi-threaded round-robin before optimizing to work-stealing.
+
+**No dependencies on B1-B3 or Track A.** The existing `spawn`/`receive`/`Process<M>` API works identically regardless of how many OS threads the scheduler uses underneath.
+
+- **Scheduler protocol** -- the runtime is defined as a protocol interface (`spawn_process`, `send_message`, `yield`, `park`/`wake`, `poll_io`), not a monolithic scheduler. The native runtime is one implementation; others (WASM, testing, embedded, debug) implement the same interface.
 - Timer wheel for timeouts, intervals, and deadlines
 - Process lifecycle manager (start, stop, crash detection)
 - All functions can suspend; the runtime handles it -- no function coloring
-- **WASM portability** -- the protocol-based scheduler enables WASM targets: full M:N on Wasmtime/Wasmer (wasi-threads), fixed thread pool in browsers (Web Workers + SharedArrayBuffer), single-threaded cooperative scheduling on edge platforms (Cloudflare Workers, Fastly). Same code, different scheduler backend. The compiler picks the backend via `--target`, not the developer.
-- **Done when**: 10,000 processes run concurrently with correct scheduling
+- **Done when**: 10,000 processes run concurrently with correct multi-threaded scheduling
 
 ### Key decisions
 
 | Decision           | Recommendation                                                                                                                                                                                                                                     |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Binary-first       | Design binary/bitstring primitives before string methods. String becomes UTF-8 utilities built on binary, not an opaque type with bolted-on methods.                                                                                              |
 | One primitive      | Processes are the sole concurrency primitive. Tasks (stackless state machines) deferred post-v1. GenServer-like actor patterns built on processes in the stdlib.                                                                                   |
 | Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code. |
 | Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with process lifecycle management.                                                                                                   |
-| Scheduler model    | Work-stealing, similar to Tokio/Go. M:N threading. Start with a simple round-robin scheduler, upgrade to work-stealing once correctness is proven.                                                                                                 |
-| I/O model          | epoll/kqueue-backed async I/O under the hood. The user sees blocking calls; the runtime suspends the process.                                                                                                                                      |
 | Typed mailboxes    | Processes declare a message type. `send` and `receive` are type-checked at compile time. Union types enable multi-source mailboxes without wrapper enums.                                                                                          |
+| Validation target  | The lexer port (A4) validates the language surface without requiring external dependencies (no network, no database, no JSON). The Rust compiler remains authoritative; the Expo lexer is compiled by it.                                          |
 
 ### Risks
 
-- **Runtime complexity**: building a work-stealing scheduler with I/O integration is substantial engineering. Start with round-robin and single-threaded I/O, then scale up.
 - **Union type complexity**: union types interact with generics, protocols, and pattern matching. Design carefully to avoid type system bloat.
-- **Scheduler protocol scope**: the protocol must be minimal enough that a single-threaded WASM backend can implement it, but expressive enough that the native M:N scheduler isn't constrained. Err on the side of too-minimal -- operations can be added later, but removing them breaks all backends.
+- **Runtime complexity**: building a work-stealing scheduler with I/O integration is substantial engineering. Start with round-robin and single-threaded I/O, then scale up.
+- **Binary/string design**: the relationship between binary data and String must be clean. Getting this wrong creates a two-world problem that permeates the entire stdlib.
+- **Scheduler protocol scope**: the protocol must be minimal enough that a single-threaded WASM backend can implement it, but expressive enough that the native M:N scheduler isn't constrained. Err on the side of too-minimal.
 
 ---
 
-## Phase 3b: Reliability
+## Phase 4: Reliability
 
-Build on the working process runtime with production-grade reliability features. These are layered on top -- processes must work before they can be supervised or prioritized.
+Build on the working process runtime with production-grade reliability features. These are layered on top -- processes must work before they can be supervised or prioritized. Depends on Phase 3 Track B.
 
 ### Preemption and priority
 
@@ -339,24 +261,27 @@ Build on the working process runtime with production-grade reliability features.
 
 ---
 
-## Phase 4: Standard library
+## Phase 5: Stdlib + first-party packages
 
-Build the minimal stdlib -- only primitives that will still be relevant in 20 years. Everything else ships as first-party packages that version independently of the compiler.
-
-Concurrency primitives (processes, `shared_map`, supervisors) already ship in Phases 2, 3, and 3b.
+Build the remaining stdlib and the first-party package ecosystem. Binary/bitstring and string methods already ship in Phase 3. This phase covers everything else needed to write real applications.
 
 ### Stdlib (ships with the compiler, always available)
 
-- `String` with UTF-8 internals, interpolation (`#{}` with format specs), `.trim()`, `.split()`, `.starts_with?()`, `.empty?()`, `.contains?()`
-- `List<T>`, `Map<K,V>`, and `Set<T>` with full method sets
-- `Option<T>` and `Result<T,E>` methods -- `unwrap`, `or`, `some?`/`none?`, `ok?`/`err?`, `map`, `then` done in `std.kernel`
 - File I/O: `file.read()`, `file.write()`, `file.exists?()`
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
+- `Display` protocol -- auto-derived string representations, `print()` dispatches through it
 - **Done when**: `config.expo` compiles (exercises strings, file reading, option handling, duration)
+
+### Package manager
+
+- `project.expo` extended with dependency declarations (minimal project system ships in Phase 3 A3)
+- Dependency resolution: fetch from hosted sources (git URLs initially, registry/mirror possible long-term)
+- Lock file generation for reproducible builds
+- **Done when**: `project.expo` resolves dependencies and builds the project
 
 ### First-party packages (maintained by the Expo team, versioned independently)
 
-These need the package manager (Phase 5) to exist first. They are high-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline.
+These are high-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline.
 
 - HTTP server and client
 - JSON -- `JsonValue` enum, parser, serializer, convenience methods (`as_string()`, `as_int()`, etc.). No auto-derive or compiler magic; users write `from_json`/`to_json` functions in impl blocks. Decoder combinator API for API input boundaries with error accumulation (all field errors collected, not just the first).
@@ -369,25 +294,11 @@ These need the package manager (Phase 5) to exist first. They are high-quality, 
 
 ### Approach
 
-Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use thin C FFI only for security-critical crypto and performance-critical parsing.
+Implement natively in Expo wherever possible. Use thin C FFI only for security-critical crypto and performance-critical parsing.
 
 ---
 
-## Phase 5: Tooling
-
-### Already done
-
-- ~~`expo run` for development (compile + execute)~~ -- implemented during Phase 1
-- ~~`expo fmt` -- opinionated, zero-config code formatter~~ -- `expo format --write` / `--check` implemented during Phase 1
-- ~~VS Code extension~~ -- syntax highlighting for `.expo` files implemented during Phase 1
-
-### Package manager and project system
-
-- `expo build` compiles a project based on `project.expo`
-- `expo test` discovers and runs `@test` annotated functions
-- Dependency resolution: fetch from hosted sources (git URLs initially, registry/mirror possible long-term)
-- Lock file generation for reproducible builds
-- **Done when**: `project.expo` from this repo resolves its three dependencies and builds the project
+## Phase 6: Tooling maturity
 
 ### Documentation -- started
 
@@ -428,14 +339,14 @@ Implement natively in Expo (or Rust for the bootstrap) wherever possible. Use th
 
 ---
 
-## Phase 6: Self-hosting
+## Phase 7: Self-hosting
 
-Rewrite the Expo compiler in Expo.
+Rewrite the Expo compiler in Expo. The lexer port from Phase 3 A4 (validation) provides a head start -- it was compiled by the Rust bootstrap to validate the language, but now gets promoted to the real compiler.
 
-### Port the lexer and parser
+### Port the parser
 
-- Rewrite the lexer and parser from Rust to Expo
-- This is the first real stress test of the language for non-trivial code
+- Rewrite the parser from Rust to Expo (the lexer is already ported from Phase 3)
+- This is a stress test of the language for non-trivial recursive descent code
 - Expect to discover language shortcomings -- feed them back into design
 - **Done when**: the Expo-written parser can parse all `.expo` files identically to the Rust parser
 
@@ -445,7 +356,6 @@ Rewrite the Expo compiler in Expo.
 - ExpoIR is a flat, lowered representation -- monomorphized, closures desugared, drops inserted. Simple enough that writing a new backend is a tractable project.
 - Define `CodeEmitter` as an Expo protocol. The LLVM backend is `impl CodeEmitter for LlvmEmitter`. Cranelift, WASM, and C backends implement the same interface.
 - Publish `expo-ir` and the backend protocol as packages so third parties can build custom backends.
-- See "ExpoIR and codegen backend protocol" in the design exploration section for full rationale.
 - **Done when**: the LLVM backend works through ExpoIR with no regressions, and a second backend (Cranelift for the REPL) compiles a non-trivial program.
 
 ### Port type checking and codegen
@@ -463,7 +373,7 @@ Rewrite the Expo compiler in Expo.
 
 ---
 
-## Phase 7: Validation
+## Phase 8: Validation
 
 ### Compile auth-manager-expo for real
 
@@ -553,11 +463,11 @@ Syntax undecided -- candidates include `~"""`, `'''`, or something else entirely
 
 ---
 
-## Design exploration (v0.5+)
+## Design exploration
 
 Active design discussions about the type system, code organization, and functional programming patterns. These inform future work but are not committed changes.
 
-### Ownership design decisions (decided)
+### Ownership design decisions (decided, implemented)
 
 - **`move self`**: `self` follows the same rules as any other parameter -- borrows by default (read-only), `move self` for ownership transfer. Mutating impl functions take `move self` and return the modified value: `list = list.push(42).push(37)`. No special "method" semantics -- impl functions with `self` are just functions with dot-call syntax.
 - **Signature-only `move`**: `move` only appears in the function/closure signature, never at the call site. The compiler infers moves from the callee's signature. Consistent with "no magic" -- the function's type signature is the contract, and the compiler fully enforces use-after-move.
@@ -569,7 +479,7 @@ Active design discussions about the type system, code organization, and function
 
 - Inline closure syntax (`x -> expr`) is parsed but not compiled. Block closures (`fn (x: Int32) -> Int32 ... end`) cover all current use cases including `map`/`then` and now support variable capture.
 - Requires closure-specific type inference -- the parameter type must be inferred from the calling context (e.g. `option.map(x -> x + 1)` infers `x: Int32` from `Option<Int32>`).
-- Not needed for v0.4 or core language features. Ergonomic sugar for later.
+- Ergonomic sugar for later.
 
 ### `Self` type expression (implemented)
 
@@ -579,7 +489,7 @@ Active design discussions about the type system, code organization, and function
 - Works with generics and monomorphization. Modeled after Rust's `Self` and Swift's `Self`.
 - Syntax highlighting and formatter support included.
 
-### `impl` and protocols (decided, partially implemented)
+### `impl` and protocols (decided, implemented)
 
 - **Decided**: `protocol` keyword defines behavioral contracts. `impl Protocol for Type` for conformance. Bare `impl Type` survives for direct method attachment.
 - **Implemented**: protocol declarations with function signatures, `impl Protocol for Type` blocks with completeness and signature validation, `priv fn` helpers in impl blocks, `@doc` on protocol declarations.
@@ -589,11 +499,11 @@ Active design discussions about the type system, code organization, and function
 
 ### Type system philosophy
 
-- **Leaning**: enums and structs should have equal capabilities -- fractal design where the same features available to `Option<T>` (a built-in enum) are available to any user-defined enum. No two-tier type system.
-- **Leaning**: if types get inline functions, both structs and enums support them. An enum is semantically a one-field struct with a tagged union type -- the distinction is surface syntax, not fundamental.
+- **Decided**: enums and structs have equal capabilities -- fractal design where the same features available to `Option<T>` (a built-in enum) are available to any user-defined enum. No two-tier type system.
+- **Decided**: if types get inline functions, both structs and enums support them. An enum is semantically a one-field struct with a tagged union type -- the distinction is surface syntax, not fundamental.
 - **Open**: whether inline functions in type bodies are restricted to `self`-taking functions only (instance methods), or also allow non-`self` functions (static/factory -- which makes the type act as a namespace).
 
-### FP and chaining vs `?` operator
+### FP and chaining vs `?` operator (decided, implemented)
 
 - **Decided**: no `?` operator -- removed from the toolchain. Hidden control flow violates the "no magic" principle -- the reader can't see that a function might return early without inspecting every line for `?`. Error handling uses explicit functions instead.
 - **Decided**: no `?.` optional chaining (Swift-style). Would make `Option` a privileged type, breaking fractal design -- user-defined sum types wouldn't get the same syntax.
@@ -601,13 +511,9 @@ Active design discussions about the type system, code organization, and function
 - `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
 - Compiler guidance when `map` is used where `then` is needed (or vice versa).
 - **Decided**: no pipe operator (`|>`). Dot-call chaining with `move self` functions covers the same use case. The `command` construct (post-v1) will handle complex sequential data flow with stronger guarantees.
-- `map`/`then` ship in the stdlib using block closures with explicit types. Inline closures (`x -> expr`) are deferred to v0.5+ but are not needed for core API usage.
+- `map`/`then` ship in the stdlib using block closures with explicit types. Inline closures (`x -> expr`) are deferred but are not needed for core API usage.
 
-### Struct destructuring assignment
-
-- **Planned**: irrefutable struct destructuring on assignment -- `Config{name, port} = load_config()`. Compile-time verified exhaustive (structs have a single shape). Syntactic sugar for pulling fields into local variables. Enum destructuring would require `match`.
-
-### Stdlib design
+### Stdlib design (implemented)
 
 - **Done**: `std.kernel` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. Embedded in the compiler via `include_str!`, parsed at startup, types merged into every module's context before type checking.
 - Rule: "stdlib = always available, packages = explicit import." All `std.*` modules are auto-imported. As the stdlib grows, types split into separate modules (`std.option`, `std.string`, `std.list`) for documentation and organization, but all remain auto-imported.
@@ -630,7 +536,7 @@ Active design discussions about the type system, code organization, and function
 - **Compiler pipeline**: `Source → AST → TypedAST → ExpoIR → [CodeEmitter backend] → output`. Lowering happens once; backends only handle "emit a function call" and "emit a branch," not "figure out how closures capture variables."
 - **Public API**: ExpoIR and the backend protocol would be published as packages after self-hosting, enabling third-party codegen backends. During bootstrap, they're Rust crates wrapping inkwell.
 - **Build-time selection**: `project.expo` or `expo build --backend cranelift` selects the backend. One backend per binary. The compiler monomorphizes all emitter calls against the selected implementation -- no vtable overhead.
-- **Timing**: the IR split is Phase 6 (self-hosting) work. The current crate boundaries (codegen depends on ast + typecheck, clean downward dependencies) already support this separation. Keeping `expo-codegen` internals organized now avoids a painful refactor later.
+- **Timing**: the IR split is Phase 7 (self-hosting) work. The current crate boundaries (codegen depends on ast + typecheck, clean downward dependencies) already support this separation. Keeping `expo-codegen` internals organized now avoids a painful refactor later.
 
 ### Literal protocols
 
@@ -646,53 +552,29 @@ Active design discussions about the type system, code organization, and function
 
 ---
 
-## Summary timeline
-
-Phase 1 infrastructure stood up in ~36 hours with AI assistance. The original 18-month estimate assumed a slower pace. The timeline below reflects actual velocity for scaffolding while staying conservative on genuinely hard problems (borrow checker, async runtime, self-hosting).
+## Summary
 
 ### Done
 
-| Phase     | Milestone                                                                                | Status |
-| --------- | ---------------------------------------------------------------------------------------- | ------ |
-| Bootstrap | Lexer + parser -- all grammar constructs parse, string interpolation + escapes           | Done   |
-| Bootstrap | Type system -- multi-module, `priv fn`, enums, match exhaustiveness, unused var warnings | Done   |
-| Bootstrap | LLVM codegen -- native binaries, enums, match, cond, string interpolation                | Done   |
-| Tooling   | Formatter (`expo format --write`/`--check`)                                              | Done   |
-| Tooling   | `expo run` (compile + execute)                                                           | Done   |
-| Tooling   | VSCode extension (syntax highlighting)                                                   | Done   |
-| Tooling   | LSP -- diagnostics, formatting, hover, go-to-definition                                  | Done   |
-| Tooling   | Documentation generator (`expo doc`) -- HTML output, sidebar nav, brand theme            | Done   |
-| Core      | Generics -- monomorphization of generic functions and structs, type unification          | Done   |
-| Core      | Generic enums, variable type annotations, numeric type coercion                          | Done   |
-| Core      | PascalCase primitive rename (`Int`, `String`, `Bool`, etc.)                              | Done   |
-| Core      | Generic impl monomorphization, stdlib (`Option<T>`, `Result<T,E>`, `Pair<A,B>`), `panic` | Done   |
-| Core      | Function type syntax (`fn(T) -> U`), `map`/`then` for Option and Result                  | Done   |
-| Core      | Ownership + borrowing -- move semantics, use-after-move, `move self`, `clone()`, drop    | Done   |
-| Core      | Protocols -- `protocol` keyword, `impl Protocol for Type`, completeness validation       | Done   |
-| Core      | Closure captures -- copy/move semantics, heap-allocated environments, automatic drop     | Done   |
-| Core      | `unless` expression, `Self` type, list literals (`[1,2,3]`), `ListLiteral<T>` protocol   | Done   |
-| Core      | Processes -- `spawn`/`receive`/`Process<M>`, `expo-runtime` scheduler, string equality   | Done   |
-| Core      | Collections -- `List<T>`, `Map<K,V>`, `Set<T>`, `for` loops, map/set literals            | Done   |
-| Core      | `List<T>` iterator functions -- `map`, `filter`, `any?`, `all?` (pure Expo)              | Done   |
-| Core      | Bare function references -- `f = double; f(5)`, `list.map(double)`                       | Done   |
+| Phase     | Milestone                                                            |
+| --------- | -------------------------------------------------------------------- |
+| Bootstrap | Lexer, parser, type system, LLVM codegen -- native binaries from Expo source |
+| Tooling   | Formatter, `expo run`, VSCode extension, LSP, documentation generator |
+| Core      | Generics, ownership, protocols, closures, collections, processes     |
+
+For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md).
 
 ### Remaining
 
-| Phase      | Milestone                                                                        |
-| ---------- | -------------------------------------------------------------------------------- |
-| Runtime    | `fn main` as process, union types, `copy` keyword, multi-threaded scheduler, I/O |
-| Runtime    | Supervision, preemption/priority, `shared_map` (stdlib on processes)             |
-| Stdlib     | Core types, I/O, time, `config.expo` compiles                                    |
-| Stdlib     | First-party packages (HTTP, JSON, crypto, logging)                               |
-| Tooling    | Package manager, test runner                                                     |
-| Tooling    | Documentation generator (doctests, search, prose pages)                          |
-| Tooling    | LSP -- autocomplete, inline type hints, multi-module                             |
-| Tooling    | Interactive shell (`expo shell`) -- REPL with project loading                    |
-| Self-host  | Lexer + parser in Expo                                                           |
-| Self-host  | ExpoIR + codegen backend protocol (`CodeEmitter`)                                |
-| Self-host  | Full compiler in Expo                                                            |
-| Self-host  | Retire Rust bootstrap                                                            |
-| Validation | auth-manager-expo runs for real                                                  |
+| Phase        | Milestone                                                                            |
+| ------------ | ------------------------------------------------------------------------------------ |
+| Surface (3A) | Binary/bitstring literals, string-as-UTF8, project system + test runner, lexer port  |
+| Runtime (3B) | Union types, `fn main` as process, `copy` keyword, multi-threaded scheduler + I/O    |
+| Reliability  | Preemption/priority, supervision, `shared_map`                                       |
+| Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages            |
+| Tooling      | Documentation (doctests, search), LSP (autocomplete, type hints), REPL               |
+| Self-host    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap           |
+| Validation   | auth-manager-expo runs for real, second project                                      |
 
 ---
 

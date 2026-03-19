@@ -1,6 +1,6 @@
 enum Msg
   Greet(String)
-  Add(Int32, Int32)
+  Add(Int, Int)
   Stop
 end
 

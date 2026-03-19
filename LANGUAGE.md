@@ -2,7 +2,7 @@
 
 Expo is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
 
-See [MEMORY.md](MEMORY.md) for the full ownership and memory strategy. See [CONCURRENCY.md](CONCURRENCY.md) for the task and actor concurrency model.
+See [MEMORY.md](design/MEMORY.md) for the full ownership and memory strategy. See [CONCURRENCY.md](design/CONCURRENCY.md) for the task and actor concurrency model.
 
 ---
 
@@ -646,7 +646,7 @@ a = 42
 b = a     # a is still live
 ```
 
-See [MEMORY.md](MEMORY.md) for the full ownership and memory strategy.
+See [MEMORY.md](design/MEMORY.md) for the full ownership and memory strategy.
 
 ---
 
@@ -854,7 +854,7 @@ handle = spawn fn -> fetch_user(id) end
 user = await handle
 ```
 
-Tasks can borrow from the parent scope (zero-copy reads) because structured concurrency guarantees the parent outlives the task. See [CONCURRENCY.md](CONCURRENCY.md).
+Tasks can borrow from the parent scope (zero-copy reads) because structured concurrency guarantees the parent outlives the task. See [CONCURRENCY.md](design/CONCURRENCY.md).
 
 ### Actors
 
@@ -870,7 +870,7 @@ actor Counter
 end
 ```
 
-Messages are moved (ownership transfer, zero-copy). Actors are preemptively scheduled by a work-stealing runtime. See [CONCURRENCY.md](CONCURRENCY.md).
+Messages are moved (ownership transfer, zero-copy). Actors are preemptively scheduled by a work-stealing runtime. See [CONCURRENCY.md](design/CONCURRENCY.md).
 
 ### `arena` Blocks
 
@@ -927,7 +927,7 @@ end
 
 ### `command` Construct
 
-Language-native typed pipelines for backend business logic with step-ordered type safety and exhaustive data flow checking. See [ROADMAP.md](ROADMAP.md).
+Language-native typed pipelines for backend business logic with step-ordered type safety and exhaustive data flow checking. See [ROADMAP.md](design/ROADMAP.md).
 
 ---
 

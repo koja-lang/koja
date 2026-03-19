@@ -200,8 +200,7 @@ pub fn emit_list_method<'ctx>(
         }
 
         "get" => {
-            let i32_ty = c.context.i32_type();
-            let fn_type = elem_llvm.fn_type(&[list_struct.into(), i32_ty.into()], false);
+            let fn_type = elem_llvm.fn_type(&[list_struct.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
             c.functions.insert(mangled_fn.to_string(), fn_val);
 
@@ -213,11 +212,7 @@ pub fn emit_list_method<'ctx>(
             c.builder.position_at_end(entry);
 
             let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-            let index_i32 = fn_val.get_nth_param(1).unwrap().into_int_value();
-            let index = c
-                .builder
-                .build_int_z_extend(index_i32, i64_ty, "idx_ext")
-                .unwrap();
+            let index = fn_val.get_nth_param(1).unwrap().into_int_value();
 
             let buf_ptr = c
                 .builder
@@ -263,8 +258,7 @@ pub fn emit_list_method<'ctx>(
         }
 
         "length" => {
-            let i32_ty = c.context.i32_type();
-            let fn_type = i32_ty.fn_type(&[list_struct.into()], false);
+            let fn_type = i64_ty.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
             c.functions.insert(mangled_fn.to_string(), fn_val);
 
@@ -273,16 +267,8 @@ pub fn emit_list_method<'ctx>(
             c.builder.position_at_end(entry);
 
             let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-            let len_i64 = c
-                .builder
-                .build_extract_value(self_val, 1, "len")
-                .unwrap()
-                .into_int_value();
-            let len_i32 = c
-                .builder
-                .build_int_truncate(len_i64, i32_ty, "len_i32")
-                .unwrap();
-            c.builder.build_return(Some(&len_i32)).unwrap();
+            let len = c.builder.build_extract_value(self_val, 1, "len").unwrap();
+            c.builder.build_return(Some(&len)).unwrap();
 
             if let Some(bb) = saved_block {
                 c.builder.position_at_end(bb);

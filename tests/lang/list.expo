@@ -1,5 +1,5 @@
 fn main
-  list: List<Int32> = List.new()
+  list: List<Int> = List.new()
   list = list.push(10)
   list = list.push(20)
   list = list.push(30)

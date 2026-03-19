@@ -7,7 +7,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
 use crate::compiler::Compiler;
-use crate::expr::compile_expr;
+use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::types::to_llvm_type;
 
 /// Compiles a field access expression (`receiver.field`). Handles both
@@ -157,12 +157,23 @@ pub fn compile_method_call<'ctx>(
         .get(&mangled)
         .ok_or_else(|| format!("undefined method `{method}` on `{struct_name}`"))?;
 
+    let method_param_types: Vec<Type> = c
+        .type_ctx
+        .functions
+        .get(&mangled)
+        .map(|sig| sig.params.iter().skip(1).map(|p| p.ty.clone()).collect())
+        .unwrap_or_default();
+
     let mut llvm_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
     llvm_args.push(recv_val.into());
 
-    for arg in args {
-        let val = compile_expr(c, &arg.value, function)?
-            .ok_or_else(|| "method argument produced no value".to_string())?;
+    for (i, arg) in args.iter().enumerate() {
+        let val = if i < method_param_types.len() {
+            compile_expr_coerced(c, &arg.value, &method_param_types[i], function)?
+        } else {
+            compile_expr(c, &arg.value, function)?
+        }
+        .ok_or_else(|| "method argument produced no value".to_string())?;
         llvm_args.push(val.into());
     }
 
@@ -323,18 +334,20 @@ pub fn compile_struct_construction<'ctx>(
         .unwrap();
 
     for field_init in fields {
-        let field_idx = struct_info
+        let (field_idx, field_type) = struct_info
             .fields
             .iter()
-            .position(|(name, _)| name == &field_init.name)
+            .enumerate()
+            .find(|(_, (name, _))| name == &field_init.name)
+            .map(|(i, (_, ty))| (i as u32, ty.clone()))
             .ok_or_else(|| {
                 format!(
                     "unknown field `{}` in struct `{}`",
                     field_init.name, struct_name
                 )
-            })? as u32;
+            })?;
 
-        let val = compile_expr(c, &field_init.value, function)?
+        let val = compile_expr_coerced(c, &field_init.value, &field_type, function)?
             .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
 
         let field_ptr = c

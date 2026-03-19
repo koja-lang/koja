@@ -1,5 +1,5 @@
 fn main()
-  m: Map<String, Int32> = Map.new()
+  m: Map<String, Int> = Map.new()
   m = m.put("hello", 10)
   m = m.put("world", 20)
   m = m.put("hello", 30)

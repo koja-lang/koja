@@ -6,7 +6,7 @@ enum Direction
 end
 
 enum Value
-  Integer(Int32)
+  Integer(Int)
   Text(String)
 end
 
@@ -19,7 +19,7 @@ fn opposite(dir: Direction) -> String
   end
 end
 
-fn describe(v: Value) -> Int32
+fn describe(v: Value) -> Int
   match v
     Value.Integer(n) -> n
     Value.Text(_) -> 0

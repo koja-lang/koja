@@ -1,9 +1,9 @@
 struct Point
-  x: Int32
-  y: Int32
+  x: Int
+  y: Int
 end
 
-fn consume(move p: Point) -> Int32
+fn consume(move p: Point) -> Int
   p.x
 end
 

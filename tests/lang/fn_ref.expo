@@ -1,4 +1,4 @@
-fn double(n: Int32) -> Int32
+fn double(n: Int) -> Int
   n * 2
 end
 
@@ -6,7 +6,7 @@ fn greet(name: String) -> String
   "hello #{name}"
 end
 
-fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
+fn apply(x: Int, f: fn(Int) -> Int) -> Int
   f(x)
 end
 
@@ -19,7 +19,7 @@ fn main
   print(apply(10, double))
 
   # bare function ref with list.map
-  nums: List<Int32> = [1, 2, 3]
+  nums: List<Int> = [1, 2, 3]
   doubled = nums.map(double)
   for d in doubled
     print(d)

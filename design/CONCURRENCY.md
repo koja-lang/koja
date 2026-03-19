@@ -1,6 +1,6 @@
 # Concurrency Design — Part 2
 
-Continuation of [CONCURRENCY.md](CONCURRENCY.md). This document captures design
+Continuation of [20260313-CONCURRENCY.md](archive/20260313-CONCURRENCY.md). This document captures design
 refinements from March 2026 that simplify the ownership-at-concurrency-boundaries
 model, introduce the `copy` keyword, and unify the rules for tasks and actors.
 
@@ -11,7 +11,7 @@ records the decisions that emerged from that exploration.
 
 ## Key decision: no borrowing across spawn boundaries
 
-CONCURRENCY.md proposed that tasks could borrow data from their parent scope,
+20260313-CONCURRENCY.md proposed that tasks could borrow data from their parent scope,
 enabled by structured concurrency proving the parent outlives the task. This was
 framed as Expo's key advantage over Erlang — zero-copy reads across tasks.
 
@@ -197,7 +197,7 @@ difference is that borrows don't cross spawn boundaries.
 
 ## Fan-out concurrency: actors, not task borrows
 
-CONCURRENCY.md explored `task.async_stream` for fan-out parallelism, relying on
+20260313-CONCURRENCY.md explored `task.async_stream` for fan-out parallelism, relying on
 task borrows for zero-copy access to shared context. With task borrows removed,
 fan-out uses the actor/move model instead.
 
@@ -330,7 +330,7 @@ usage reveals which APIs matter.
 
 ## Scheduler protocol
 
-See [ROADMAP.md](ROADMAP.md) Phase 3 "Runtime" section for the full scheduler
+See [ROADMAP.md](ROADMAP.md) Phase 3 Track B "Runtime" section for the full scheduler
 protocol design. Key points summarized here:
 
 - The runtime is a **protocol interface**, not a monolith. The scheduler, I/O
@@ -349,9 +349,9 @@ protocol design. Key points summarized here:
 
 ---
 
-## What changes in CONCURRENCY.md
+## What changes in 20260313-CONCURRENCY.md
 
-The following sections of CONCURRENCY.md are superseded or refined by this
+The following sections of 20260313-CONCURRENCY.md are superseded or refined by this
 document:
 
 - **"Tasks: borrow or move" (line 353)** — the "task borrow" model described
@@ -370,7 +370,7 @@ document:
   that clones captures at the boundary is consistent with this document's model.
   The design exploration there remains valid.
 
-The rest of CONCURRENCY.md (actor lifecycle, supervision, cache tables, runtime,
+The rest of 20260313-CONCURRENCY.md (actor lifecycle, supervision, cache tables, runtime,
 scheduler, memory overhead) is unchanged and still current.
 
 ---

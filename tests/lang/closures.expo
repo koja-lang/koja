@@ -1,8 +1,8 @@
 fn main
-  double = fn (x: Int32) -> Int32 x * 2 end
+  double = fn (x: Int) -> Int x * 2 end
   print(double(5))
 
-  add = fn (a: Int32, b: Int32) -> Int32
+  add = fn (a: Int, b: Int) -> Int
     a + b
   end
   print(add(3, 7))

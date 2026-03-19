@@ -1,4 +1,4 @@
-fn classify(n: Int32) -> String
+fn classify(n: Int) -> String
   cond
     n > 100 -> "big"
     n > 10 -> "medium"

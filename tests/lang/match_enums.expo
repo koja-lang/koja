@@ -5,8 +5,8 @@ enum Color
 end
 
 enum Shape
-  Circle(Int32)
-  Rect(Int32, Int32)
+  Circle(Int)
+  Rect(Int, Int)
 end
 
 fn color_name(c: Color) -> String
@@ -17,7 +17,7 @@ fn color_name(c: Color) -> String
   end
 end
 
-fn area(s: Shape) -> Int32
+fn area(s: Shape) -> Int
   match s
     Shape.Circle(r) -> r * r * 3
     Shape.Rect(w, h) -> w * h

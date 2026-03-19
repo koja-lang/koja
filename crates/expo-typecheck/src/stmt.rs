@@ -174,7 +174,10 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
                 .as_ref()
                 .map(|v| infer_expr(v, ctx, ce))
                 .unwrap_or(Type::Unit);
-            if ce.return_type.is_known() && actual.is_known() && ce.return_type != actual {
+            if ce.return_type.is_known()
+                && actual.is_known()
+                && !types_compatible(&ce.return_type, &actual)
+            {
                 ctx.error_with_hint(
                     format!(
                         "return type mismatch: expected `{}`, found `{}`",

@@ -1,0 +1,20 @@
+enum Tree
+  Leaf(Int)
+  Node(Tree, Tree)
+end
+
+fn sum(t: Tree) -> Int
+  match t
+    Tree.Leaf(n) -> n
+    Tree.Node(left, right) -> sum(left) + sum(right)
+  end
+end
+
+fn main
+  leaf1 = Tree.Leaf(1)
+  leaf2 = Tree.Leaf(2)
+  leaf3 = Tree.Leaf(3)
+  branch = Tree.Node(leaf1, leaf2)
+  root = Tree.Node(branch, leaf3)
+  print(sum(root))
+end

@@ -1,8 +1,8 @@
-fn add(a: Int32, b: Int32) -> Int32
+fn add(a: Int, b: Int) -> Int
   a + b
 end
 
-fn fib(n: Int32) -> Int32
+fn fib(n: Int) -> Int
   if n <= 1
     n
   else
@@ -10,7 +10,7 @@ fn fib(n: Int32) -> Int32
   end
 end
 
-fn early_return(x: Int32) -> String
+fn early_return(x: Int) -> String
   if x > 10
     return "big"
   end

@@ -5,7 +5,7 @@ fn main
   print(nums.get(1))
   print(nums.get(2))
 
-  empty: List<Int32> = []
+  empty: List<Int> = []
   print(empty.length())
   print(empty.empty?())
 

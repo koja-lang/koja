@@ -2,7 +2,7 @@ fn main
   x = 10
   print(x)
 
-  y: Int32 = 20
+  y: Int = 20
   print(y)
 
   name = "expo"

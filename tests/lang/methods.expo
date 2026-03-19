@@ -1,14 +1,14 @@
 struct Point
-  x: Int32
-  y: Int32
+  x: Int
+  y: Int
 end
 
 impl Point
-  fn distance_squared(self) -> Int32
+  fn distance_squared(self) -> Int
     self.x * self.x + self.y * self.y
   end
 
-  fn translate(self, dx: Int32, dy: Int32) -> Point
+  fn translate(self, dx: Int, dy: Int) -> Point
     Point{x: self.x + dx, y: self.y + dy}
   end
 end
