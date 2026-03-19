@@ -143,15 +143,18 @@ impl Parser {
         // Constructor shorthand: Some(x), Ok(x), Err(x)
         if self.eat(&TokenKind::LParen).is_some() {
             let mut elements = Vec::new();
+            self.skip_newlines();
             if !self.at(&TokenKind::RParen) {
                 elements.push(self.parse_pattern());
                 while self.eat(&TokenKind::Comma).is_some() {
+                    self.skip_newlines();
                     if self.at(&TokenKind::RParen) {
                         break;
                     }
                     elements.push(self.parse_pattern());
                 }
             }
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             return Pattern::Constructor {
                 name: first,
@@ -175,15 +178,18 @@ impl Parser {
     ) -> Pattern {
         if self.eat(&TokenKind::LParen).is_some() {
             let mut elements = Vec::new();
+            self.skip_newlines();
             if !self.at(&TokenKind::RParen) {
                 elements.push(self.parse_pattern());
                 while self.eat(&TokenKind::Comma).is_some() {
+                    self.skip_newlines();
                     if self.at(&TokenKind::RParen) {
                         break;
                     }
                     elements.push(self.parse_pattern());
                 }
             }
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             Pattern::EnumTuple {
                 type_path,
@@ -219,6 +225,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // (
 
+        self.skip_newlines();
         if self.eat(&TokenKind::RParen).is_some() {
             return Pattern::Literal {
                 value: Literal::Unit,
@@ -229,15 +236,18 @@ impl Parser {
         let first = self.parse_pattern();
         if self.eat(&TokenKind::Comma).is_some() {
             let mut elements = vec![first];
+            self.skip_newlines();
             if !self.at(&TokenKind::RParen) {
                 elements.push(self.parse_pattern());
                 while self.eat(&TokenKind::Comma).is_some() {
+                    self.skip_newlines();
                     if self.at(&TokenKind::RParen) {
                         break;
                     }
                     elements.push(self.parse_pattern());
                 }
             }
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             let span = self.span_from(start);
             self.error(
@@ -246,6 +256,7 @@ impl Parser {
             );
             Pattern::Tuple { elements, span }
         } else {
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             first // grouping in patterns
         }
@@ -255,16 +266,19 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // [
 
+        self.skip_newlines();
         let mut elements = Vec::new();
         if !self.at(&TokenKind::RBracket) {
             elements.push(self.parse_pattern());
             while self.eat(&TokenKind::Comma).is_some() {
+                self.skip_newlines();
                 if self.at(&TokenKind::RBracket) {
                     break;
                 }
                 elements.push(self.parse_pattern());
             }
         }
+        self.skip_newlines();
         self.expect(&TokenKind::RBracket);
 
         Pattern::List {

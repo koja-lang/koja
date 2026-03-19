@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Method arguments on monomorphized generic types are now properly coerced (e.g. `Option<Int32>.or(99)` correctly truncates the literal to `Int32`).
 - `Enumeration` protocol, `List`, `Map`, and `Set` now declare `length` and `get` with `Int` (i64) to match intrinsic implementations.
 - Generic enum unit variants (e.g. `Option.None`) inside methods with their own type parameters (e.g. `map<U>`) now resolve to the correct monomorphized type instead of producing `ret void`.
+- Enums now support line breaks in construction.
 
 ## [0.6.0] - 2026-03-18
 

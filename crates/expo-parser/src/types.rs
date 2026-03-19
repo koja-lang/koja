@@ -69,6 +69,7 @@ impl Parser {
 
         let mut params = Vec::new();
         let mut param_modes = Vec::new();
+        self.skip_newlines();
         if !self.at(&TokenKind::RParen) {
             param_modes.push(if self.eat(&TokenKind::Move).is_some() {
                 PassMode::Move
@@ -77,6 +78,7 @@ impl Parser {
             });
             params.push(self.parse_type_expr());
             while self.eat(&TokenKind::Comma).is_some() {
+                self.skip_newlines();
                 if self.at(&TokenKind::RParen) {
                     break;
                 }
@@ -88,6 +90,7 @@ impl Parser {
                 params.push(self.parse_type_expr());
             }
         }
+        self.skip_newlines();
         self.expect(&TokenKind::RParen);
         self.expect(&TokenKind::Arrow);
         let return_type = self.parse_type_expr();
@@ -103,6 +106,7 @@ impl Parser {
     fn parse_paren_type(&mut self) -> TypeExpr {
         let start = self.current_span();
         self.advance(); // (
+        self.skip_newlines();
         if self.eat(&TokenKind::RParen).is_some() {
             return TypeExpr::Unit {
                 span: self.span_from(start),
@@ -112,19 +116,23 @@ impl Parser {
         let first = self.parse_type_expr();
         if self.eat(&TokenKind::Comma).is_some() {
             let mut elements = vec![first];
+            self.skip_newlines();
             elements.push(self.parse_type_expr());
             while self.eat(&TokenKind::Comma).is_some() {
+                self.skip_newlines();
                 if self.at(&TokenKind::RParen) {
                     break;
                 }
                 elements.push(self.parse_type_expr());
             }
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             TypeExpr::Tuple {
                 elements,
                 span: self.span_from(start),
             }
         } else {
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             first
         }

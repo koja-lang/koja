@@ -165,15 +165,18 @@ impl Parser {
     ) -> Expr {
         if self.eat(&TokenKind::LParen).is_some() {
             let mut args = Vec::new();
+            self.skip_newlines();
             if !self.at(&TokenKind::RParen) {
                 args.push(self.parse_expr());
                 while self.eat(&TokenKind::Comma).is_some() {
+                    self.skip_newlines();
                     if self.at(&TokenKind::RParen) {
                         break;
                     }
                     args.push(self.parse_expr());
                 }
             }
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             let data = if args.is_empty() {
                 EnumConstructionData::Unit
@@ -223,6 +226,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // (
 
+        self.skip_newlines();
         if self.eat(&TokenKind::RParen).is_some() {
             return Expr::Literal {
                 value: Literal::Unit,
@@ -234,15 +238,18 @@ impl Parser {
 
         if self.eat(&TokenKind::Comma).is_some() {
             let mut elements = vec![first];
+            self.skip_newlines();
             if !self.at(&TokenKind::RParen) {
                 elements.push(self.parse_expr());
                 while self.eat(&TokenKind::Comma).is_some() {
+                    self.skip_newlines();
                     if self.at(&TokenKind::RParen) {
                         break;
                     }
                     elements.push(self.parse_expr());
                 }
             }
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             let span = self.span_from(start);
             self.error(
@@ -251,6 +258,7 @@ impl Parser {
             );
             Expr::Tuple { elements, span }
         } else {
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             Expr::Group {
                 expr: Box::new(first),
@@ -354,11 +362,13 @@ impl Parser {
         self.advance(); // fn
 
         self.expect(&TokenKind::LParen);
+        self.skip_newlines();
         let params = if self.at(&TokenKind::RParen) {
             Vec::new()
         } else {
             self.parse_closure_params()
         };
+        self.skip_newlines();
         self.expect(&TokenKind::RParen);
 
         let return_type = if self.eat(&TokenKind::Arrow).is_some() {
@@ -382,7 +392,8 @@ impl Parser {
         let mut params = Vec::new();
         params.push(self.parse_closure_param());
         while self.eat(&TokenKind::Comma).is_some() {
-            if self.at(&TokenKind::Arrow) {
+            self.skip_newlines();
+            if self.at(&TokenKind::Arrow) || self.at(&TokenKind::RParen) {
                 break;
             }
             params.push(self.parse_closure_param());
@@ -414,13 +425,16 @@ impl Parser {
             }
             TokenKind::LParen => {
                 self.advance(); // (
+                self.skip_newlines();
                 let mut names = Vec::new();
                 if !self.at(&TokenKind::RParen) {
                     names.push(self.expect_ident());
                     while self.eat(&TokenKind::Comma).is_some() {
+                        self.skip_newlines();
                         names.push(self.expect_ident());
                     }
                 }
+                self.skip_newlines();
                 self.expect(&TokenKind::RParen);
                 ClosureParam::Destructured {
                     names,

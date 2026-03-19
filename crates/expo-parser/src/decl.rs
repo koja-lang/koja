@@ -196,13 +196,16 @@ impl Parser {
         let name = self.expect_type_ident();
 
         let data = if self.eat(&TokenKind::LParen).is_some() {
+            self.skip_newlines();
             let mut types = vec![self.parse_type_expr()];
             while self.eat(&TokenKind::Comma).is_some() {
+                self.skip_newlines();
                 if self.at(&TokenKind::RParen) {
                     break;
                 }
                 types.push(self.parse_type_expr());
             }
+            self.skip_newlines();
             self.expect(&TokenKind::RParen);
             EnumVariantData::Tuple(types)
         } else if self.eat(&TokenKind::LBrace).is_some() {
