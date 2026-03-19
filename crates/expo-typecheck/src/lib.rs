@@ -111,6 +111,8 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
     let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
     let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
 
+    let type_aliases = ctx.type_aliases.clone();
+
     let generic_struct_names: Vec<String> = ctx.generic_struct_asts.keys().cloned().collect();
     for name in &generic_struct_names {
         let decl = ctx.generic_struct_asts[name].clone();
@@ -120,8 +122,13 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
             .fields
             .iter()
             .map(|f| {
-                let ty =
-                    resolve_type_expr_with_params(&f.type_expr, &struct_refs, &enum_refs, &tp_refs);
+                let ty = resolve_type_expr_with_params(
+                    &f.type_expr,
+                    &struct_refs,
+                    &enum_refs,
+                    &tp_refs,
+                    &type_aliases,
+                );
                 (f.name.clone(), ty)
             })
             .collect();
@@ -153,6 +160,7 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
                         &struct_refs,
                         &enum_refs,
                         &tp_refs,
+                        &type_aliases,
                     ),
                 }),
                 Param::Self_ { .. } => None,
@@ -162,7 +170,9 @@ pub fn re_resolve_generics(ctx: &mut TypeContext) {
         let return_type = func
             .return_type
             .as_ref()
-            .map(|t| resolve_type_expr_with_params(t, &struct_refs, &enum_refs, &tp_refs))
+            .map(|t| {
+                resolve_type_expr_with_params(t, &struct_refs, &enum_refs, &tp_refs, &type_aliases)
+            })
             .unwrap_or(types::Type::Unit);
 
         if let Some(sig) = ctx.functions.get_mut(&name.to_string()) {

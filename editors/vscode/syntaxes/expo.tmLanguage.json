@@ -177,6 +177,10 @@
           "match": "[+\\-*/%]"
         },
         {
+          "name": "keyword.operator.union.expo",
+          "match": "\\|"
+        },
+        {
           "name": "keyword.operator.optional.expo",
           "match": "\\?"
         }

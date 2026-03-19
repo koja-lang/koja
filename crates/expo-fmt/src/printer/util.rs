@@ -20,6 +20,7 @@ pub(super) fn item_span(item: &Item) -> &Span {
         Item::Protocol(p) => &p.span,
         Item::Shared(s) => &s.span,
         Item::Struct(s) => &s.span,
+        Item::TypeAlias(t) => &t.span,
     }
 }
 
@@ -70,6 +71,15 @@ pub(super) fn import_to_doc(imp: &Import) -> Doc {
 }
 
 /// Formats a `shared` declaration.
+pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
+    concat(vec![
+        text("type "),
+        text(&t.name),
+        text(" = "),
+        type_expr_to_doc(&t.type_expr),
+    ])
+}
+
 pub(super) fn shared_to_doc(s: &SharedDecl) -> Doc {
     concat(vec![
         text("shared "),
@@ -143,6 +153,10 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
                 text(") -> "),
                 type_expr_to_doc(return_type),
             ])
+        }
+        TypeExpr::Union { types, .. } => {
+            let parts: Vec<Doc> = types.iter().map(type_expr_to_doc).collect();
+            intersperse(parts, text(" | "))
         }
     }
 }
@@ -451,6 +465,10 @@ pub(super) fn type_expr_text_len(ty: &TypeExpr) -> usize {
             let params_len: usize = params.iter().map(type_expr_text_len).sum::<usize>()
                 + params.len().saturating_sub(1) * 2;
             3 + params_len + 5 + type_expr_text_len(return_type)
+        }
+        TypeExpr::Union { types, .. } => {
+            let inner: usize = types.iter().map(type_expr_text_len).sum::<usize>();
+            inner + types.len().saturating_sub(1) * 3 // " | " between each
         }
     }
 }

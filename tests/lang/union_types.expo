@@ -1,0 +1,39 @@
+# Anonymous union types: parsing, widening coercion, match exhaustiveness
+# Type-check only -- no codegen yet
+
+struct Post
+  title: String
+end
+
+struct Comment
+  body: String
+end
+
+struct Ad
+  url: String
+end
+
+fn display_item(item: Post | Comment | Ad) -> String
+  match item
+    _ -> "an item"
+  end
+end
+
+fn widen_post(p: Post) -> Post | Comment
+  p
+end
+
+fn accept_union(x: Post | Comment) -> String
+  match x
+    _ -> "ok"
+  end
+end
+
+fn main
+  p = Post { title: "Hello" }
+  item: Post | Comment | Ad = p
+  print(display_item(item))
+
+  result = widen_post(Post { title: "Test" })
+  print(accept_union(result))
+end

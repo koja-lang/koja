@@ -274,5 +274,9 @@ fn type_expr_to_string(ty: &TypeExpr) -> String {
                 type_expr_to_string(return_type)
             )
         }
+        TypeExpr::Union { types, .. } => {
+            let parts: Vec<String> = types.iter().map(type_expr_to_string).collect();
+            parts.join(" | ")
+        }
     }
 }

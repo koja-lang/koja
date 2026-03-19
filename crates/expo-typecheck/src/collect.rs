@@ -41,6 +41,35 @@ pub fn collect(module: &Module) -> TypeContext {
         })
         .collect();
 
+    // Pre-pass: collect type aliases so they're available for resolving
+    // function signatures and struct/enum fields in the main pass.
+    for item in &module.items {
+        if let Item::TypeAlias(ta) = item {
+            let resolved = resolve_type_expr_with_params(
+                &ta.type_expr,
+                &struct_names,
+                &enum_names,
+                &[],
+                &std::collections::HashMap::new(),
+            );
+            if let Some(existing) = ctx.type_aliases.get(&ta.name) {
+                if *existing != resolved {
+                    ctx.error(
+                        format!(
+                            "type alias `{}` is already defined with a different type",
+                            ta.name
+                        ),
+                        ta.span,
+                    );
+                }
+            } else {
+                ctx.type_aliases.insert(ta.name.clone(), resolved);
+            }
+        }
+    }
+
+    let type_aliases = ctx.type_aliases.clone();
+
     for item in &module.items {
         match item {
             Item::Enum(e) => {
@@ -59,6 +88,7 @@ pub fn collect(module: &Module) -> TypeContext {
                                             &struct_names,
                                             &enum_names,
                                             &tp_refs,
+                                            &type_aliases,
                                         );
                                         (f.name.clone(), ty)
                                     })
@@ -74,6 +104,7 @@ pub fn collect(module: &Module) -> TypeContext {
                                             &struct_names,
                                             &enum_names,
                                             &tp_refs,
+                                            &type_aliases,
                                         )
                                     })
                                     .collect();
@@ -101,7 +132,8 @@ pub fn collect(module: &Module) -> TypeContext {
                 );
             }
             Item::Function(f) => {
-                if let Some(sig) = build_function_sig(f, &struct_names, &enum_names) {
+                if let Some(sig) = build_function_sig(f, &struct_names, &enum_names, &type_aliases)
+                {
                     if !f.type_params.is_empty() {
                         ctx.generic_function_asts.insert(f.name.clone(), f.clone());
                     }
@@ -157,12 +189,18 @@ pub fn collect(module: &Module) -> TypeContext {
                     &struct_names,
                     &enum_names,
                     &tp_refs,
+                    &type_aliases,
                 );
 
                 for member in &impl_block.members {
                     if let ImplMember::Function(f) = member {
-                        let sig =
-                            build_function_sig_with_params(f, &struct_names, &enum_names, &tp_refs);
+                        let sig = build_function_sig_with_params(
+                            f,
+                            &struct_names,
+                            &enum_names,
+                            &tp_refs,
+                            &type_aliases,
+                        );
                         let Some(sig) = sig else { continue };
                         let sig = substitute_self_type(sig, &self_type);
 
@@ -277,9 +315,13 @@ pub fn collect(module: &Module) -> TypeContext {
                 let tp_refs: Vec<&str> = p.type_params.iter().map(|s| s.as_str()).collect();
                 let mut methods: HashMap<String, FunctionSig> = HashMap::new();
                 for m in &p.methods {
-                    if let Some(sig) =
-                        build_protocol_method_sig(m, &struct_names, &enum_names, &tp_refs)
-                    {
+                    if let Some(sig) = build_protocol_method_sig(
+                        m,
+                        &struct_names,
+                        &enum_names,
+                        &tp_refs,
+                        &type_aliases,
+                    ) {
                         methods.insert(m.name.clone(), sig);
                     }
                 }
@@ -306,6 +348,7 @@ pub fn collect(module: &Module) -> TypeContext {
                             &struct_names,
                             &enum_names,
                             &tp_refs,
+                            &type_aliases,
                         );
                         (f.name.clone(), ty)
                     })
@@ -323,6 +366,7 @@ pub fn collect(module: &Module) -> TypeContext {
                     },
                 );
             }
+            Item::TypeAlias(_) => {} // handled in pre-pass above
             _ => {}
         }
     }
@@ -467,8 +511,9 @@ fn build_function_sig(
     f: &expo_ast::ast::Function,
     known_structs: &[&str],
     known_enums: &[&str],
+    known_type_aliases: &HashMap<String, Type>,
 ) -> Option<FunctionSig> {
-    build_function_sig_with_params(f, known_structs, known_enums, &[])
+    build_function_sig_with_params(f, known_structs, known_enums, &[], known_type_aliases)
 }
 
 fn build_function_sig_with_params(
@@ -476,6 +521,7 @@ fn build_function_sig_with_params(
     known_structs: &[&str],
     known_enums: &[&str],
     extra_type_params: &[&str],
+    known_type_aliases: &HashMap<String, Type>,
 ) -> Option<FunctionSig> {
     let mut all_tp: Vec<&str> = f.type_params.iter().map(|s| s.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
@@ -495,7 +541,13 @@ fn build_function_sig_with_params(
             } => Some(ParamInfo {
                 mode: *mode,
                 name: name.clone(),
-                ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
+                ty: resolve_type_expr_with_params(
+                    type_expr,
+                    known_structs,
+                    known_enums,
+                    &all_tp,
+                    known_type_aliases,
+                ),
             }),
             Param::Self_ { .. } => None,
         })
@@ -504,7 +556,15 @@ fn build_function_sig_with_params(
     let return_type = f
         .return_type
         .as_ref()
-        .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
+        .map(|t| {
+            resolve_type_expr_with_params(
+                t,
+                known_structs,
+                known_enums,
+                &all_tp,
+                known_type_aliases,
+            )
+        })
         .unwrap_or(Type::Unit);
 
     let kind = f
@@ -531,6 +591,7 @@ fn build_protocol_method_sig(
     known_structs: &[&str],
     known_enums: &[&str],
     extra_type_params: &[&str],
+    known_type_aliases: &HashMap<String, Type>,
 ) -> Option<FunctionSig> {
     let mut all_tp: Vec<&str> = m.type_params.iter().map(|s| s.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
@@ -550,7 +611,13 @@ fn build_protocol_method_sig(
             } => Some(ParamInfo {
                 mode: *mode,
                 name: name.clone(),
-                ty: resolve_type_expr_with_params(type_expr, known_structs, known_enums, &all_tp),
+                ty: resolve_type_expr_with_params(
+                    type_expr,
+                    known_structs,
+                    known_enums,
+                    &all_tp,
+                    known_type_aliases,
+                ),
             }),
             Param::Self_ { .. } => None,
         })
@@ -559,7 +626,15 @@ fn build_protocol_method_sig(
     let return_type = m
         .return_type
         .as_ref()
-        .map(|t| resolve_type_expr_with_params(t, known_structs, known_enums, &all_tp))
+        .map(|t| {
+            resolve_type_expr_with_params(
+                t,
+                known_structs,
+                known_enums,
+                &all_tp,
+                known_type_aliases,
+            )
+        })
         .unwrap_or(Type::Unit);
 
     let kind = m

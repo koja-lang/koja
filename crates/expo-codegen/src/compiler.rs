@@ -250,6 +250,7 @@ impl<'ctx> Compiler<'ctx> {
             &struct_names,
             &enum_names,
             &type_params,
+            &self.type_ctx.type_aliases,
         )
     }
 

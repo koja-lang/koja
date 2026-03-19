@@ -337,6 +337,14 @@ pub(crate) fn types_compatible(a: &Type, b: &Type) -> bool {
     if a == b || numeric_compatible(a, b) {
         return true;
     }
+    // A concrete type is compatible with a union if it's one of the constituents (widening)
+    if let Type::Union(members) = b {
+        return members.iter().any(|m| types_compatible(a, m));
+    }
+    // Two unions are compatible if they have the same canonical members
+    if let (Type::Union(ma), Type::Union(mb)) = (a, b) {
+        return ma == mb;
+    }
     if let (
         Type::GenericInstance {
             base: ba,

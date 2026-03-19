@@ -1,0 +1,38 @@
+# Named union aliases: type alias declarations, collision checking
+# Type-check only -- no codegen yet
+struct Cat
+  name: String
+end
+
+struct Dog
+  name: String
+end
+
+struct Fish
+  color: String
+end
+
+type Pet = Cat | Dog | Fish
+
+fn describe(pet: Pet) -> String
+  match pet
+    _ -> "a pet"
+  end
+end
+
+type SmallPet = Cat | Fish
+
+fn small_only(p: SmallPet) -> String
+  match p
+    _ -> "small"
+  end
+end
+
+fn main
+  c = Cat{name: "Whiskers"}
+  pet: Pet = c
+  print(describe(pet))
+
+  f = Fish{color: "orange"}
+  print(small_only(f))
+end

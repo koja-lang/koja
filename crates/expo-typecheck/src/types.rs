@@ -20,6 +20,7 @@ pub enum Type {
     Struct(String),
     Tuple(Vec<Type>),
     TypeVar(String),
+    Union(Vec<Type>),
     Unit,
     Unknown,
 }
@@ -49,6 +50,25 @@ pub enum Primitive {
 }
 
 impl Type {
+    /// Constructs a canonical union type: sorts, deduplicates, flattens nested
+    /// unions, and collapses single-element unions to the inner type.
+    pub fn union(types: Vec<Type>) -> Type {
+        let mut flat = Vec::new();
+        for ty in types {
+            match ty {
+                Type::Union(inner) => flat.extend(inner),
+                other => flat.push(other),
+            }
+        }
+        flat.sort_by_key(|a| a.display());
+        flat.dedup();
+        match flat.len() {
+            0 => Type::Unit,
+            1 => flat.into_iter().next().unwrap(),
+            _ => Type::Union(flat),
+        }
+    }
+
     /// Returns a human-readable string representation of this type for diagnostics.
     pub fn display(&self) -> String {
         match self {
@@ -74,6 +94,10 @@ impl Type {
                 format!("({})", inner.join(", "))
             }
             Type::TypeVar(name) => name.clone(),
+            Type::Union(members) => {
+                let parts: Vec<String> = members.iter().map(|t| t.display()).collect();
+                parts.join(" | ")
+            }
             Type::Unit => "()".to_string(),
             Type::Unknown => "unknown".to_string(),
         }
@@ -92,16 +116,18 @@ impl Type {
             Type::Function { .. } => true,
             Type::Struct(_) | Type::Enum(_) | Type::GenericInstance { .. } => false,
             Type::Tuple(elems) => elems.iter().all(|e| e.is_copy()),
+            Type::Union(members) => members.iter().all(|m| m.is_copy()),
             Type::TypeVar(_) | Type::Unknown | Type::Error => true,
         }
     }
 
     /// Returns true if this type is a concrete, resolved type (not `Unknown`, `Error`, or `TypeVar`).
     pub fn is_known(&self) -> bool {
-        !matches!(
-            self,
-            Type::Unknown | Type::Error | Type::TypeVar(_) | Type::GenericInstance { .. }
-        )
+        match self {
+            Type::Unknown | Type::Error | Type::TypeVar(_) | Type::GenericInstance { .. } => false,
+            Type::Union(members) => members.iter().all(|m| m.is_known()),
+            _ => true,
+        }
     }
 
     /// Returns true if this type is an integer or floating-point primitive.
@@ -182,22 +208,25 @@ impl Primitive {
 }
 
 /// Converts an AST type expression into a resolved [`Type`], looking up user-defined
-/// struct and enum names from the provided slices.
+/// struct and enum names from the provided slices. Pass an empty map for
+/// `known_type_aliases` when none are available.
 pub fn resolve_type_expr(
     type_expr: &TypeExpr,
     known_structs: &[&str],
     known_enums: &[&str],
 ) -> Type {
-    resolve_type_expr_with_params(type_expr, known_structs, known_enums, &[])
+    resolve_type_expr_with_params(type_expr, known_structs, known_enums, &[], &HashMap::new())
 }
 
 /// Like [`resolve_type_expr`] but also resolves type parameter names (e.g. `T`, `A`)
-/// to [`Type::TypeVar`] when they appear in generic function/struct definitions.
+/// to [`Type::TypeVar`] when they appear in generic function/struct definitions,
+/// and named type aliases from the provided map.
 pub fn resolve_type_expr_with_params(
     type_expr: &TypeExpr,
     known_structs: &[&str],
     known_enums: &[&str],
     known_type_params: &[&str],
+    known_type_aliases: &HashMap<String, Type>,
 ) -> Type {
     match type_expr {
         TypeExpr::Generic { path, args, .. } => {
@@ -213,6 +242,7 @@ pub fn resolve_type_expr_with_params(
                             known_structs,
                             known_enums,
                             known_type_params,
+                            known_type_aliases,
                         )
                     })
                     .collect();
@@ -235,6 +265,9 @@ pub fn resolve_type_expr_with_params(
                 let name = path[0].as_str();
                 if known_type_params.contains(&name) {
                     return Type::TypeVar(name.to_string());
+                }
+                if let Some(aliased) = known_type_aliases.get(name) {
+                    return aliased.clone();
                 }
                 match name {
                     "String" => Type::Primitive(Primitive::String),
@@ -267,7 +300,13 @@ pub fn resolve_type_expr_with_params(
             let types: Vec<Type> = elements
                 .iter()
                 .map(|e| {
-                    resolve_type_expr_with_params(e, known_structs, known_enums, known_type_params)
+                    resolve_type_expr_with_params(
+                        e,
+                        known_structs,
+                        known_enums,
+                        known_type_params,
+                        known_type_aliases,
+                    )
                 })
                 .collect();
             Type::Tuple(types)
@@ -288,7 +327,13 @@ pub fn resolve_type_expr_with_params(
             let param_types = params
                 .iter()
                 .map(|p| {
-                    resolve_type_expr_with_params(p, known_structs, known_enums, known_type_params)
+                    resolve_type_expr_with_params(
+                        p,
+                        known_structs,
+                        known_enums,
+                        known_type_params,
+                        known_type_aliases,
+                    )
                 })
                 .collect();
             let ret = resolve_type_expr_with_params(
@@ -296,11 +341,27 @@ pub fn resolve_type_expr_with_params(
                 known_structs,
                 known_enums,
                 known_type_params,
+                known_type_aliases,
             );
             Type::Function {
                 params: param_types,
                 return_type: Box::new(ret),
             }
+        }
+        TypeExpr::Union { types, .. } => {
+            let resolved: Vec<Type> = types
+                .iter()
+                .map(|t| {
+                    resolve_type_expr_with_params(
+                        t,
+                        known_structs,
+                        known_enums,
+                        known_type_params,
+                        known_type_aliases,
+                    )
+                })
+                .collect();
+            Type::union(resolved)
         }
     }
 }
@@ -374,6 +435,7 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
             }
             unify(ra, rb, subst)
         }
+        (Type::Union(a), Type::Union(b)) => a == b,
         (Type::Unit, Type::Unit) => true,
         (Type::Unknown, _) | (_, Type::Unknown) => true,
         _ => false,
@@ -412,6 +474,7 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
             }
         }
         Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute(e, subst)).collect()),
+        Type::Union(members) => Type::union(members.iter().map(|m| substitute(m, subst)).collect()),
         _ => ty.clone(),
     }
 }
@@ -443,6 +506,10 @@ fn mangle_type(ty: &Type) -> String {
             let p: Vec<String> = params.iter().map(mangle_type).collect();
             format!("fn_{}__{}", p.join("_"), mangle_type(return_type))
         }
+        Type::Union(members) => {
+            let parts: Vec<String> = members.iter().map(mangle_type).collect();
+            format!("Union_${}$", parts.join("."))
+        }
         _ => "unknown".to_string(),
     }
 }
@@ -466,6 +533,7 @@ pub fn contains_type_var(ty: &Type) -> bool {
         } => params.iter().any(contains_type_var) || contains_type_var(return_type),
         Type::GenericInstance { type_args, .. } => type_args.iter().any(contains_type_var),
         Type::Tuple(elems) => elems.iter().any(contains_type_var),
+        Type::Union(members) => members.iter().any(contains_type_var),
         _ => false,
     }
 }

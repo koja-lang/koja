@@ -58,6 +58,7 @@ syn match expoTypedAssign     /\<\l\w*\s*:/ contains=expoTypeSep
 " --- Operators --------------------------------------------------------------
 
 syn match expoOperator      /->/
+syn match expoOperator      /|/
 syn match expoOperator      /[+\-*/%]=/
 syn match expoOperator      /[!=]=\|[<>]=/
 

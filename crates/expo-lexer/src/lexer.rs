@@ -139,6 +139,7 @@ impl Lexer {
                     Some('=') => self.double(TokenKind::GtEq),
                     _ => self.single(TokenKind::Gt),
                 },
+                '|' => self.single(TokenKind::Pipe),
                 ':' => self.single(TokenKind::Colon),
                 'a'..='z' | '_' => self.lex_ident(),
                 'A'..='Z' => self.lex_upper_ident(),
@@ -376,7 +377,7 @@ impl Lexer {
     }
 
     /// Peek past whitespace (and comment lines) to check if the next
-    /// meaningful token starts with a continuation (`.` or `|>`).
+    /// meaningful token starts with a continuation (`.`).
     fn next_nonws_continues(&self) -> bool {
         let mut i = self.pos;
         loop {
@@ -406,11 +407,7 @@ impl Lexer {
         if i >= self.chars.len() {
             return false;
         }
-        match self.chars[i] {
-            '.' => true,
-            '|' => i + 1 < self.chars.len() && self.chars[i + 1] == '>',
-            _ => false,
-        }
+        self.chars[i] == '.'
     }
 
     /// Returns true if the last token indicates the expression continues on
@@ -443,6 +440,7 @@ impl Lexer {
                     | TokenKind::SlashEq
                     // Punctuation that expects more
                     | TokenKind::Arrow
+                    | TokenKind::Pipe
                     | TokenKind::Comma
                     | TokenKind::Dot
                     | TokenKind::Colon

@@ -26,6 +26,7 @@ pub struct TypeContext {
     pub protocol_impls: HashMap<String, Vec<String>>,
     pub protocols: HashMap<String, ProtocolInfo>,
     pub structs: HashMap<String, StructInfo>,
+    pub type_aliases: HashMap<String, Type>,
 }
 
 /// Collected metadata for an enum declaration.
@@ -155,6 +156,7 @@ impl TypeContext {
             protocol_impls: HashMap::new(),
             protocols: HashMap::new(),
             structs: HashMap::new(),
+            type_aliases: HashMap::new(),
         }
     }
 
@@ -219,6 +221,11 @@ impl TypeContext {
                 .entry(type_name.clone())
                 .or_default()
                 .extend(protos.iter().cloned());
+        }
+        for (name, ty) in &other.type_aliases {
+            if !self.type_aliases.contains_key(name) {
+                self.type_aliases.insert(name.clone(), ty.clone());
+            }
         }
         for (span, captures) in &other.closure_captures {
             self.closure_captures.insert(*span, captures.clone());

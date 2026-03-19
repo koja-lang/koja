@@ -79,6 +79,7 @@ pub enum TokenKind {
     StarEq,
     SlashEq,
     Arrow,
+    Pipe,
     Question,
     At,
     Dot,

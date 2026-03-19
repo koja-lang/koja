@@ -21,13 +21,6 @@ pub(crate) fn check_match_exhaustiveness(
     span: Span,
     ctx: &mut TypeContext,
 ) {
-    let Type::Enum(enum_name) = subject_type else {
-        return;
-    };
-    let Some(enum_info) = ctx.enums.get(enum_name) else {
-        return;
-    };
-
     let has_catch_all = arms.iter().any(|arm| {
         matches!(
             arm.pattern,
@@ -38,35 +31,77 @@ pub(crate) fn check_match_exhaustiveness(
         return;
     }
 
-    let matched: Vec<&str> = arms
-        .iter()
-        .filter(|arm| arm.guard.is_none())
-        .filter_map(|arm| match &arm.pattern {
-            Pattern::EnumUnit { variant, .. }
-            | Pattern::EnumTuple { variant, .. }
-            | Pattern::EnumStruct { variant, .. } => Some(variant.as_str()),
-            Pattern::Constructor { name, .. } => Some(name.as_str()),
-            _ => None,
-        })
-        .collect();
+    match subject_type {
+        Type::Enum(enum_name) => {
+            let Some(enum_info) = ctx.enums.get(enum_name) else {
+                return;
+            };
 
-    let missing: Vec<&str> = enum_info
-        .variants
-        .iter()
-        .filter(|v| !matched.contains(&v.name.as_str()))
-        .map(|v| v.name.as_str())
-        .collect();
+            let matched: Vec<&str> = arms
+                .iter()
+                .filter(|arm| arm.guard.is_none())
+                .filter_map(|arm| match &arm.pattern {
+                    Pattern::EnumUnit { variant, .. }
+                    | Pattern::EnumTuple { variant, .. }
+                    | Pattern::EnumStruct { variant, .. } => Some(variant.as_str()),
+                    Pattern::Constructor { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
 
-    if !missing.is_empty() {
-        let missing_list = missing.join(", ");
-        ctx.error_with_hint(
-            format!(
-                "non-exhaustive match: missing variant(s) `{}`",
-                missing_list
-            ),
-            format!("add a `_ ->` catch-all or handle: {}", missing_list),
-            span,
-        );
+            let missing: Vec<&str> = enum_info
+                .variants
+                .iter()
+                .filter(|v| !matched.contains(&v.name.as_str()))
+                .map(|v| v.name.as_str())
+                .collect();
+
+            if !missing.is_empty() {
+                let missing_list = missing.join(", ");
+                ctx.error_with_hint(
+                    format!(
+                        "non-exhaustive match: missing variant(s) `{}`",
+                        missing_list
+                    ),
+                    format!("add a `_ ->` catch-all or handle: {}", missing_list),
+                    span,
+                );
+            }
+        }
+        Type::Union(members) => {
+            let member_names: Vec<String> = members.iter().map(|m| m.display()).collect();
+            let matched: Vec<String> = arms
+                .iter()
+                .filter(|arm| arm.guard.is_none())
+                .filter_map(|arm| match &arm.pattern {
+                    Pattern::EnumUnit { type_path, .. } => Some(type_path.join(".")),
+                    Pattern::EnumTuple { type_path, .. } => Some(type_path.join(".")),
+                    Pattern::EnumStruct { type_path, .. } => Some(type_path.join(".")),
+                    Pattern::Constructor { name, .. } => Some(name.clone()),
+                    Pattern::Binding { .. } => None,
+                    _ => None,
+                })
+                .collect();
+
+            let missing: Vec<&str> = member_names
+                .iter()
+                .filter(|name| !matched.contains(name))
+                .map(|n| n.as_str())
+                .collect();
+
+            if !missing.is_empty() {
+                let missing_list = missing.join(", ");
+                ctx.error_with_hint(
+                    format!(
+                        "non-exhaustive match on union type: missing `{}`",
+                        missing_list
+                    ),
+                    format!("add a `_ ->` catch-all or handle: {}", missing_list),
+                    span,
+                );
+            }
+        }
+        _ => {}
     }
 }
 

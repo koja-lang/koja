@@ -69,6 +69,8 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `await` (deferred -- covered by `receive` on processes)
 - Trait bounds on generic type parameters
 - Inline closures (`x -> expr`)
+- Union types (`A | B | C`) -- anonymous tagged unions with widening coercion and exhaustiveness checking
+- Named union aliases (`type FeedItem = Post | Comment | Ad`) -- stored in the type context, name collision checked
 
 ### Design notes
 
@@ -172,11 +174,13 @@ The foundation for Expo's concurrency promise. B1-B3 form a dependency chain. B4
 
 `A | B` as anonymous enums -- a general-purpose type system feature, not just for mailboxes.
 
+- **Implemented**: parsing (`A | B | C` type expressions), `type Name = ...` declarations, `Type::Union` with canonical constructor (sorted, deduped, flattened), widening coercion (`Post` assignable to `Post | Comment | Ad`), exhaustiveness checking for match on union subjects, named union aliases with collision checking. All integrated into the formatter, LSP, and editor extensions.
 - Type system: order-independent, flattened, usable in generics
 - Pattern matching: exhaustiveness checking across union variants
-- Codegen: tagged union representation (same as named enums)
+- Remaining: codegen (tagged union representation, same as named enums)
 - Use cases: process mailbox typing (`Process<ServerMsg | LibResult>`), heterogeneous collections (`List<Post | Comment | Ad>`), error type composition (`Result<User, ValidationError | DatabaseError>`)
 - Design questions: variant name collision resolution, protocol interaction
+- **Numeric tower as first dogfood**: `Int` could be defined in Expo as `type Int = Int8 | Int16 | Int32 | Int64` rather than hardcoded as a compiler primitive. The compiler recognizes that all variants are same-category integers and optimizes to the widest representation (no tag, implicit widening) -- the same behavior as today, but derived from the union definition. Extends naturally to `Float = Float32 | Float64` and user-defined aliases like `type SmallInt = Int8 | Int16`. This validates that the union type implementation is correct and general enough to express the language's own numeric relationships.
 - **Done when**: union types compile and work in match expressions, process mailboxes, and generic type parameters
 
 #### B2. `fn main` as a process

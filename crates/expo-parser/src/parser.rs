@@ -311,6 +311,7 @@ impl Parser {
                     }
                 }
             }
+            TokenKind::Type => Some(self.parse_type_alias_item()),
             TokenKind::Shared => Some(self.parse_shared_item()),
             TokenKind::Const => Some(self.parse_constant_item(None)),
             _ => {

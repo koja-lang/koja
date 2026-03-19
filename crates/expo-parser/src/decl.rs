@@ -430,6 +430,11 @@ impl Parser {
         }
     }
 
+    pub(crate) fn parse_type_alias_item(&mut self) -> Item {
+        let alias = self.parse_type_alias();
+        Item::TypeAlias(alias)
+    }
+
     // =========================================================================
     // Function
     // =========================================================================

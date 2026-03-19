@@ -102,6 +102,7 @@ pub enum Item {
     Protocol(ProtocolDecl),
     Shared(SharedDecl),
     Struct(StructDecl),
+    TypeAlias(TypeAlias),
 }
 
 /// The root AST node representing a single Expo source file.
@@ -317,6 +318,8 @@ pub enum TypeExpr {
     /// The `Self` type: resolves to the implementing type inside `impl` and
     /// `protocol` blocks.
     Self_ { span: Span },
+    /// A union type: `A | B | C`.
+    Union { types: Vec<TypeExpr>, span: Span },
 }
 
 // Statements

@@ -5,6 +5,30 @@ use crate::parser::Parser;
 
 impl Parser {
     pub(crate) fn parse_type_expr(&mut self) -> TypeExpr {
+        let first = self.parse_primary_type_expr();
+        if self.at(&TokenKind::Pipe) {
+            let start_span = match &first {
+                TypeExpr::Named { span, .. }
+                | TypeExpr::Generic { span, .. }
+                | TypeExpr::Tuple { span, .. }
+                | TypeExpr::Unit { span, .. }
+                | TypeExpr::Function { span, .. }
+                | TypeExpr::Self_ { span, .. }
+                | TypeExpr::Union { span, .. } => *span,
+            };
+            let mut types = vec![first];
+            while self.eat(&TokenKind::Pipe).is_some() {
+                types.push(self.parse_primary_type_expr());
+            }
+            return TypeExpr::Union {
+                types,
+                span: self.span_from(start_span),
+            };
+        }
+        first
+    }
+
+    fn parse_primary_type_expr(&mut self) -> TypeExpr {
         match self.peek().clone() {
             TokenKind::Fn => self.parse_function_type(),
             TokenKind::LParen => self.parse_paren_type(),
