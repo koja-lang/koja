@@ -244,6 +244,21 @@ This validates that union types are general enough to express the language's own
 numeric relationships. It extends naturally to user-defined aliases like
 `type SmallInt = Int8 | Int16`.
 
+### Codegen: expected-type threading
+
+For the compiler to "figure it out," codegen needs context. When compiling an
+`Int` literal, it needs to know whether the surrounding context expects `Int32`,
+`Int64`, or the full union. The mechanism for this is **expected-type threading**:
+each expression compilation receives an optional expected type from its parent
+(assignment annotation, function parameter type, return type, etc.).
+
+This is the same infrastructure needed to resolve generic enum unit variants
+(e.g. `Option.None` inside a method that re-parameterizes the enum). Currently
+a targeted `return_type_hint` on the compiler handles the return-position case.
+When the numeric tower ships, this should be generalized into a full
+`expected: Option<&Type>` parameter on `compile_expr` and its callees, so
+codegen can make representation decisions at every expression site.
+
 ---
 
 ## Implementation: canonical hashmap

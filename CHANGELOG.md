@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integer literals in binary operations now coerce to match the other operand's width (e.g. `x * 2` where `x: Int32` no longer produces an LLVM type mismatch).
 - Method arguments on monomorphized generic types are now properly coerced (e.g. `Option<Int32>.or(99)` correctly truncates the literal to `Int32`).
 - `Enumeration` protocol, `List`, `Map`, and `Set` now declare `length` and `get` with `Int` (i64) to match intrinsic implementations.
+- Generic enum unit variants (e.g. `Option.None`) inside methods with their own type parameters (e.g. `map<U>`) now resolve to the correct monomorphized type instead of producing `ret void`.
 
 ## [0.6.0] - 2026-03-18
 

@@ -201,7 +201,7 @@ fn compile_generic_enum_construction<'ctx>(
         }
     }
 
-    let type_args: Vec<Type> = enum_info
+    let mut type_args: Vec<Type> = enum_info
         .type_params
         .iter()
         .map(|tp| {
@@ -212,6 +212,21 @@ fn compile_generic_enum_construction<'ctx>(
                 .unwrap_or(Type::Unknown)
         })
         .collect();
+
+    if subst.is_empty()
+        && let Some(ref hint) = c.return_type_hint
+    {
+        let hint_name = match hint {
+            Type::Enum(n) | Type::Struct(n) => Some(n.as_str()),
+            _ => None,
+        };
+        if let Some(name) = hint_name
+            && let Some((base, hint_args)) = crate::generics::try_parse_mangled_name(name, c)
+            && base == enum_name
+        {
+            type_args = hint_args;
+        }
+    }
 
     let mangled = expo_typecheck::types::mangle_name(enum_name, &type_args);
 

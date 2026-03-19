@@ -59,6 +59,11 @@ pub struct Compiler<'ctx> {
     /// Cache of generated thunk wrappers for bare function references.
     /// Maps original function name to the thunk `FunctionValue`.
     pub fn_ref_thunks: HashMap<String, FunctionValue<'ctx>>,
+    /// Return type of the function currently being compiled. Used by
+    /// generic enum construction to resolve unit variant type args when
+    /// they can't be inferred from arguments (e.g. `Option.None` inside
+    /// a method with its own type parameters like `map<U>`).
+    pub return_type_hint: Option<Type>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -85,6 +90,7 @@ impl<'ctx> Compiler<'ctx> {
             type_subst: HashMap::new(),
             process_msg_type: None,
             fn_ref_thunks: HashMap::new(),
+            return_type_hint: None,
         }
     }
 

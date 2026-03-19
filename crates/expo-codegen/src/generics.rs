@@ -25,6 +25,15 @@ impl<'ctx> Compiler<'ctx> {
         fn_value: FunctionValue<'ctx>,
         is_main: bool,
     ) -> Result<(), String> {
+        let saved_hint = std::mem::replace(
+            &mut self.return_type_hint,
+            if *return_type != Type::Unit {
+                Some(return_type.clone())
+            } else {
+                None
+            },
+        );
+
         let body_len = body.len();
 
         for (i, stmt) in body.iter().enumerate() {
@@ -66,6 +75,7 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
+        self.return_type_hint = saved_hint;
         Ok(())
     }
 
