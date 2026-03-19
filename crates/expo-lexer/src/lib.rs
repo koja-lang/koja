@@ -1,3 +1,8 @@
+//! Lexer for Expo source code.
+//!
+//! Converts a source string into a flat token stream, extracting comments
+//! into a separate list and reporting lexical errors as diagnostics.
+
 mod lexer;
 
 pub use expo_ast::ast::Comment;

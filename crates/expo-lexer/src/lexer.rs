@@ -2,25 +2,33 @@ use expo_ast::ast::{Diagnostic, Severity};
 
 use crate::{Comment, Position, Span, Token, TokenKind};
 
+/// The output of lexing: tokens, extracted comments, and any lexical errors.
 #[derive(Debug)]
 pub struct LexResult {
+    /// Source comments, in order of appearance.
     pub comments: Vec<Comment>,
+    /// Lexical errors (unterminated strings, unknown escapes, etc.).
     pub errors: Vec<Diagnostic>,
+    /// The token stream, always terminated by `TokenKind::Eof`.
     pub tokens: Vec<Token>,
 }
 
+/// Whether a string literal is single-line or triple-quoted multiline.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum StringMode {
     Single,
     Multiline,
 }
 
+/// Tracks brace nesting depth inside a string interpolation so we know
+/// when a `}` closes the interpolation vs. a nested expression.
 #[derive(Debug)]
 struct InterpolState {
     mode: StringMode,
     brace_depth: u32,
 }
 
+/// Mutable state for the lexer: character buffer, cursor, and output vectors.
 struct Lexer {
     chars: Vec<char>,
     pos: usize,
@@ -32,6 +40,7 @@ struct Lexer {
     string_stack: Vec<InterpolState>,
 }
 
+/// Tokenizes Expo source code into a stream of tokens, comments, and errors.
 pub fn lex(source: &str) -> LexResult {
     let mut lexer = Lexer::new(source);
     lexer.run();
@@ -56,6 +65,7 @@ impl Lexer {
         }
     }
 
+    /// Main dispatch loop: consumes characters and emits tokens until EOF.
     fn run(&mut self) {
         while !self.at_end() {
             self.skip_whitespace();
@@ -141,8 +151,7 @@ impl Lexer {
                 },
                 '|' => self.single(TokenKind::Pipe),
                 ':' => self.single(TokenKind::Colon),
-                'a'..='z' | '_' => self.lex_ident(),
-                'A'..='Z' => self.lex_upper_ident(),
+                'a'..='z' | '_' | 'A'..='Z' => self.lex_ident(),
                 '0'..='9' => self.lex_number(),
                 '#' => self.lex_comment(),
                 '"' => {
@@ -175,6 +184,8 @@ impl Lexer {
         });
     }
 
+    /// Scans an identifier or keyword. Uppercase-starting names become
+    /// `TypeIdent`, lowercase names are checked against the keyword table.
     fn lex_ident(&mut self) {
         let start = self.position();
         let start_pos = self.pos;
@@ -196,7 +207,11 @@ impl Lexer {
             || c == '?'
     }
 
+    /// Maps a scanned name to a keyword token or an identifier/type token.
     fn keyword_or_ident(&self, name: String) -> TokenKind {
+        if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return TokenKind::TypeIdent(name);
+        }
         match name.as_str() {
             "and" => TokenKind::And,
             "arena" => TokenKind::Arena,
@@ -236,22 +251,7 @@ impl Lexer {
         }
     }
 
-    fn lex_upper_ident(&mut self) {
-        let start = self.position();
-        let start_pos = self.pos;
-
-        while !self.at_end() {
-            let c = self.peek();
-            if !self.is_ident_char(c) {
-                break;
-            }
-            self.advance();
-        }
-
-        let name: String = self.chars[start_pos..self.pos].iter().collect();
-        self.emit(TokenKind::TypeIdent(name), start);
-    }
-
+    /// Scans a numeric literal: decimal, hex (`0x`), binary (`0b`), or float.
     fn lex_number(&mut self) {
         let start = self.position();
         let start_pos = self.pos;
@@ -260,42 +260,22 @@ impl Lexer {
             && let Some(next) = self.peek_next()
         {
             if next == 'x' || next == 'X' {
-                self.advance(); // 0
-                self.advance(); // x
-                let digit_start = self.pos;
-                while !self.at_end() && self.is_hex_char(self.peek()) {
-                    self.advance();
-                }
-                if self.pos == digit_start {
-                    self.errors.push(Diagnostic {
-                        severity: Severity::Error,
-                        message: "expected hex digits after '0x'".into(),
-                        hint: Some("hex literals use digits 0-9 and a-f, e.g. 0xFF".into()),
-                        span: Span::new(start, self.position()),
-                    });
-                    return;
-                }
-                let name: String = self.chars[start_pos..self.pos].iter().collect();
-                self.emit(TokenKind::IntLit(name), start);
+                self.lex_prefixed_int(
+                    start,
+                    start_pos,
+                    |c| c.is_ascii_hexdigit() || c == '_',
+                    "expected hex digits after '0x'",
+                    "hex literals use digits 0-9 and a-f, e.g. 0xFF",
+                );
                 return;
             } else if next == 'b' || next == 'B' {
-                self.advance(); // 0
-                self.advance(); // b
-                let digit_start = self.pos;
-                while !self.at_end() && self.is_binary_char(self.peek()) {
-                    self.advance();
-                }
-                if self.pos == digit_start {
-                    self.errors.push(Diagnostic {
-                        severity: Severity::Error,
-                        message: "expected binary digits after '0b'".into(),
-                        hint: Some("binary literals use digits 0 and 1, e.g. 0b1010".into()),
-                        span: Span::new(start, self.position()),
-                    });
-                    return;
-                }
-                let name: String = self.chars[start_pos..self.pos].iter().collect();
-                self.emit(TokenKind::IntLit(name), start);
+                self.lex_prefixed_int(
+                    start,
+                    start_pos,
+                    |c| c == '0' || c == '1' || c == '_',
+                    "expected binary digits after '0b'",
+                    "binary literals use digits 0 and 1, e.g. 0b1010",
+                );
                 return;
             }
         }
@@ -321,18 +301,40 @@ impl Lexer {
         self.emit(TokenKind::IntLit(name), start);
     }
 
+    /// Advances past a two-char prefix (e.g. `0x`), scans digits matching
+    /// `pred`, and emits an `IntLit` token or an error if no digits follow.
+    fn lex_prefixed_int(
+        &mut self,
+        start: Position,
+        start_pos: usize,
+        pred: fn(char) -> bool,
+        label: &str,
+        hint: &str,
+    ) {
+        self.advance(); // 0
+        self.advance(); // prefix char
+        let digit_start = self.pos;
+        while !self.at_end() && pred(self.peek()) {
+            self.advance();
+        }
+        if self.pos == digit_start {
+            self.errors.push(Diagnostic {
+                severity: Severity::Error,
+                message: label.into(),
+                hint: Some(hint.into()),
+                span: Span::new(start, self.position()),
+            });
+            return;
+        }
+        let name: String = self.chars[start_pos..self.pos].iter().collect();
+        self.emit(TokenKind::IntLit(name), start);
+    }
+
     fn is_number_char(&self, c: char) -> bool {
         c.is_ascii_digit() || c == '_'
     }
 
-    fn is_hex_char(&self, c: char) -> bool {
-        c.is_ascii_hexdigit() || c == '_'
-    }
-
-    fn is_binary_char(&self, c: char) -> bool {
-        c == '0' || c == '1' || c == '_'
-    }
-
+    /// Scans a `#`-prefixed comment and pushes it onto the comments list.
     fn lex_comment(&mut self) {
         let start = self.position();
 
@@ -355,6 +357,8 @@ impl Lexer {
         });
     }
 
+    /// Emits a `Newline` token unless the newline should be suppressed
+    /// (line continuation, leading dot, or duplicate newline).
     fn lex_newline(&mut self) {
         let start = self.position();
         self.advance();
@@ -456,6 +460,7 @@ impl Lexer {
         }
     }
 
+    /// Opens a single-line string (`"`) and enters the string body scanner.
     fn lex_string(&mut self) {
         let start = self.position();
         self.advance(); // opening "
@@ -463,6 +468,7 @@ impl Lexer {
         self.lex_string_body(false);
     }
 
+    /// Opens a triple-quoted multiline string (`"""`) and enters the string body scanner.
     fn lex_multiline_string(&mut self) {
         let start = self.position();
         self.advance(); // "
@@ -472,24 +478,19 @@ impl Lexer {
         self.lex_string_body(true);
     }
 
+    /// Scans the interior of a string literal, emitting `StringFragment`,
+    /// `InterpolStart`/`InterpolEnd`, escape sequences, and the closing delimiter.
     fn lex_string_body(&mut self, multiline: bool) {
         let frag_start = self.position();
         let mut text = String::new();
 
         loop {
             if self.at_end() {
-                if !text.is_empty() {
-                    self.emit(TokenKind::StringFragment(text), frag_start);
-                }
-                let label = if multiline {
-                    "unterminated multiline string"
+                self.emit_fragment(&mut text, frag_start);
+                let (label, hint) = if multiline {
+                    ("unterminated multiline string", "add a closing '\"\"\"'")
                 } else {
-                    "unterminated string"
-                };
-                let hint = if multiline {
-                    "add a closing '\"\"\"'"
-                } else {
-                    "add a closing '\"'"
+                    ("unterminated string", "add a closing '\"'")
                 };
                 self.errors.push(Diagnostic {
                     severity: Severity::Error,
@@ -502,39 +503,30 @@ impl Lexer {
 
             let c = self.peek();
 
-            // Single-line string terminator
             if !multiline && c == '"' {
-                if !text.is_empty() {
-                    self.emit(TokenKind::StringFragment(text), frag_start);
-                }
+                self.emit_fragment(&mut text, frag_start);
                 let end_start = self.position();
                 self.advance();
                 self.emit(TokenKind::StringEnd, end_start);
                 return;
             }
 
-            // Multiline string terminator
             if multiline
                 && c == '"'
                 && self.peek_next() == Some('"')
                 && self.chars.get(self.pos + 2).copied() == Some('"')
             {
-                if !text.is_empty() {
-                    self.emit(TokenKind::StringFragment(text), frag_start);
-                }
+                self.emit_fragment(&mut text, frag_start);
                 let end_start = self.position();
-                self.advance(); // "
-                self.advance(); // "
-                self.advance(); // "
+                self.advance();
+                self.advance();
+                self.advance();
                 self.emit(TokenKind::MultilineStringEnd, end_start);
                 return;
             }
 
-            // Newline terminates single-line strings
             if !multiline && c == '\n' {
-                if !text.is_empty() {
-                    self.emit(TokenKind::StringFragment(text), frag_start);
-                }
+                self.emit_fragment(&mut text, frag_start);
                 self.errors.push(Diagnostic {
                     severity: Severity::Error,
                     message: "unterminated string".into(),
@@ -544,14 +536,11 @@ impl Lexer {
                 return;
             }
 
-            // Interpolation: #{
             if c == '#' && self.peek_next() == Some('{') {
-                if !text.is_empty() {
-                    self.emit(TokenKind::StringFragment(text), frag_start);
-                }
+                self.emit_fragment(&mut text, frag_start);
                 let interp_start = self.position();
-                self.advance(); // #
-                self.advance(); // {
+                self.advance();
+                self.advance();
                 self.emit(TokenKind::InterpolStart, interp_start);
                 let mode = if multiline {
                     StringMode::Multiline
@@ -565,49 +554,33 @@ impl Lexer {
                 return;
             }
 
-            // Escape sequences
             if c == '\\'
                 && let Some(next) = self.peek_next()
             {
-                match next {
-                    '"' => {
-                        self.advance();
-                        self.advance();
-                        text.push('"');
-                    }
-                    '\\' => {
-                        self.advance();
-                        self.advance();
-                        text.push('\\');
-                    }
-                    'n' => {
-                        self.advance();
-                        self.advance();
-                        text.push('\n');
-                    }
-                    't' => {
-                        self.advance();
-                        self.advance();
-                        text.push('\t');
-                    }
-                    '#' => {
-                        self.advance();
-                        self.advance();
-                        text.push('#');
-                    }
-                    _ => {
-                        let esc_start = self.position();
-                        self.advance();
-                        self.advance();
-                        self.errors.push(Diagnostic {
-                            severity: Severity::Error,
-                            message: format!("unknown escape sequence '\\{next}'"),
-                            hint: Some("supported escapes: \\\\, \\\", \\n, \\t, \\#".into()),
-                            span: Span::new(esc_start, self.position()),
-                        });
-                        text.push('\\');
-                        text.push(next);
-                    }
+                let mapped = match next {
+                    '"' => Some('"'),
+                    '\\' => Some('\\'),
+                    'n' => Some('\n'),
+                    't' => Some('\t'),
+                    '#' => Some('#'),
+                    _ => None,
+                };
+                if let Some(ch) = mapped {
+                    self.advance();
+                    self.advance();
+                    text.push(ch);
+                } else {
+                    let esc_start = self.position();
+                    self.advance();
+                    self.advance();
+                    self.errors.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!("unknown escape sequence '\\{next}'"),
+                        hint: Some("supported escapes: \\\\, \\\", \\n, \\t, \\#".into()),
+                        span: Span::new(esc_start, self.position()),
+                    });
+                    text.push('\\');
+                    text.push(next);
                 }
                 continue;
             }
@@ -617,9 +590,12 @@ impl Lexer {
         }
     }
 
-    // =====================================================================
-    // Helpers -- these are yours to use
-    // =====================================================================
+    /// Emits a `StringFragment` token if `text` is non-empty, draining it.
+    fn emit_fragment(&mut self, text: &mut String, frag_start: Position) {
+        if !text.is_empty() {
+            self.emit(TokenKind::StringFragment(std::mem::take(text)), frag_start);
+        }
+    }
 
     /// Current char without advancing. Panics if at end (always check at_end first).
     fn peek(&self) -> char {
