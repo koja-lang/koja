@@ -53,11 +53,24 @@
       {
         "command": "expo.restartServer",
         "title": "Expo: Restart Language Server"
+      },
+      {
+        "command": "expo.runFile",
+        "title": "Expo: Run File"
+      },
+      {
+        "command": "expo.buildFile",
+        "title": "Expo: Build File"
       }
     ],
     "configuration": {
       "title": "Expo",
       "properties": {
+        "expo.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the expo CLI binary. If empty, searches $PATH."
+        },
         "expo.lsp.path": {
           "type": "string",
           "default": "",

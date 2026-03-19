@@ -2,12 +2,13 @@
 //! generic), and method calls on struct instances.
 
 use expo_ast::ast::{ClosureParam, Expr};
-use expo_typecheck::types::{Type, mangle_name};
+use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::calls::compile_call;
 use crate::compiler::Compiler;
 use crate::expr::{compile_expr, compile_expr_coerced};
+use crate::generics::try_parse_mangled_name;
 use crate::types::to_llvm_type;
 
 /// Compiles a field access expression (`receiver.field`). Handles both
@@ -136,7 +137,7 @@ pub fn compile_method_call<'ctx>(
 
     let mut mangled = format!("{}_{}", struct_name, method);
 
-    if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&struct_name, c) {
+    if let Some((base, type_args)) = try_parse_mangled_name(&struct_name, c) {
         let method_type_params = lookup_method_type_params(c, &base, method);
 
         if !method_type_params.is_empty() {
@@ -162,6 +163,29 @@ pub fn compile_method_call<'ctx>(
         .functions
         .get(&mangled)
         .map(|sig| sig.params.iter().skip(1).map(|p| p.ty.clone()).collect())
+        .or_else(|| {
+            let (base, type_args) = try_parse_mangled_name(&struct_name, c)?;
+            let lookup = c
+                .type_ctx
+                .structs
+                .get(&base)
+                .map(|si| (&si.methods, &si.type_params))
+                .or_else(|| {
+                    c.type_ctx
+                        .enums
+                        .get(&base)
+                        .map(|ei| (&ei.methods, &ei.type_params))
+                });
+            let (methods, type_params) = lookup?;
+            let sig = methods.get(method)?;
+            let subst = build_substitution(type_params, &type_args);
+            Some(
+                sig.params
+                    .iter()
+                    .map(|p| substitute(&p.ty, &subst))
+                    .collect(),
+            )
+        })
         .unwrap_or_default();
 
     let mut llvm_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();

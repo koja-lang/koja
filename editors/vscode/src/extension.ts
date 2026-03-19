@@ -1,4 +1,4 @@
-import { commands, workspace, ExtensionContext } from "vscode";
+import { commands, window, workspace, ExtensionContext } from "vscode";
 import {
   LanguageClient,
   LanguageClientOptions,
@@ -6,6 +6,11 @@ import {
 } from "vscode-languageclient/node";
 
 let client: LanguageClient | undefined;
+
+function getExpoBinary(): string {
+  const config = workspace.getConfiguration("expo");
+  return config.get<string>("path", "") || "expo";
+}
 
 function createClient(): LanguageClient {
   const config = workspace.getConfiguration("expo.lsp");
@@ -29,6 +34,35 @@ function createClient(): LanguageClient {
   );
 }
 
+function runExpoCommand(subcommand: string) {
+  const editor = window.activeTextEditor;
+  if (!editor) {
+    window.showErrorMessage("No active file to run.");
+    return;
+  }
+
+  const doc = editor.document;
+  if (doc.languageId !== "expo") {
+    window.showErrorMessage("Active file is not an Expo file.");
+    return;
+  }
+
+  if (doc.isUntitled) {
+    window.showErrorMessage("Save the file before running.");
+    return;
+  }
+
+  doc.save().then(() => {
+    const binary = getExpoBinary();
+    const filePath = doc.uri.fsPath;
+    const terminal =
+      window.terminals.find((t) => t.name === "Expo") ||
+      window.createTerminal("Expo");
+    terminal.show();
+    terminal.sendText(`${binary} ${subcommand} "${filePath}"`);
+  });
+}
+
 export function activate(context: ExtensionContext) {
   client = createClient();
   client.start();
@@ -45,6 +79,14 @@ export function activate(context: ExtensionContext) {
       }
       client = createClient();
       await client.start();
+    }),
+
+    commands.registerCommand("expo.runFile", () => {
+      runExpoCommand("run");
+    }),
+
+    commands.registerCommand("expo.buildFile", () => {
+      runExpoCommand("build");
     }),
   );
 }

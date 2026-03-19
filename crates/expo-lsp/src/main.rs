@@ -1,5 +1,12 @@
 mod backend;
+mod completion;
+mod convert;
+mod definition;
+mod diagnostics;
+mod hover;
 mod lookup;
+mod signature_help;
+mod symbols;
 
 use tower_lsp_server::{LspService, Server};
 

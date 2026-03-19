@@ -1,138 +1,20 @@
+//! AST traversal helpers for finding symbols at a cursor position.
+//!
+//! Recursively walks expressions and statements to locate the innermost
+//! symbol that contains the given cursor position.
+
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 use expo_typecheck::context::TypeContext;
 
-#[derive(Debug)]
-pub enum SymbolInfo {
-    Constant { name: String },
-    Enum { name: String },
-    Function { name: String },
-    Module { path: Vec<String> },
-    ModuleFunction { module: String, name: String },
-    Struct { name: String },
-    Variable { name: String },
-}
+use super::span::span_contains;
+use super::{SymbolInfo, classify_name};
 
-pub fn find_symbol_at(
-    module: &Module,
-    line: u32,
-    col: u32,
-    ctx: &TypeContext,
-) -> Option<SymbolInfo> {
-    for item in &module.items {
-        match item {
-            Item::Function(f) => {
-                if !span_contains(&f.span, line, col) {
-                    continue;
-                }
-                if let Some(info) = find_in_ident_at_name(&f.name, &f.span, line, col, ctx) {
-                    return Some(info);
-                }
-                for stmt in &f.body {
-                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                        return Some(info);
-                    }
-                }
-            }
-            Item::Impl(imp) => {
-                for member in &imp.members {
-                    if let ImplMember::Function(f) = member {
-                        if !span_contains(&f.span, line, col) {
-                            continue;
-                        }
-                        for stmt in &f.body {
-                            if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                                return Some(info);
-                            }
-                        }
-                    }
-                }
-            }
-            Item::Struct(s) => {
-                if span_contains_name(&s.name, &s.span, line, col) {
-                    return Some(SymbolInfo::Struct {
-                        name: s.name.clone(),
-                    });
-                }
-            }
-            Item::Enum(e) => {
-                if span_contains_name(&e.name, &e.span, line, col) {
-                    return Some(SymbolInfo::Enum {
-                        name: e.name.clone(),
-                    });
-                }
-            }
-            Item::Import(imp) => {
-                if span_contains(&imp.span, line, col) {
-                    return Some(SymbolInfo::Module {
-                        path: imp.path.clone(),
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-pub fn find_doc_for(module: &Module, name: &str) -> Option<String> {
-    for item in &module.items {
-        match item {
-            Item::Function(f) if f.name == name => {
-                return annotation_doc(&f.annotation);
-            }
-            Item::Struct(s) if s.name == name => {
-                return annotation_doc(&s.annotation);
-            }
-            Item::Enum(e) if e.name == name => {
-                return annotation_doc(&e.annotation);
-            }
-            Item::Constant(c) if c.name == name => {
-                return annotation_doc(&c.annotation);
-            }
-            Item::Impl(imp) => {
-                for member in &imp.members {
-                    if let ImplMember::Function(f) = member
-                        && f.name == name
-                    {
-                        return annotation_doc(&f.annotation);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn annotation_doc(annotation: &Option<Annotation>) -> Option<String> {
-    annotation
-        .as_ref()
-        .filter(|a| a.name == "doc")
-        .and_then(|a| match &a.value {
-            Some(AnnotationValue::String(s)) => Some(s.clone()),
-            _ => None,
-        })
-}
-
-fn span_contains(span: &Span, line: u32, col: u32) -> bool {
-    if line < span.start.line || line > span.end.line {
-        return false;
-    }
-    if line == span.start.line && col < span.start.column {
-        return false;
-    }
-    if line == span.end.line && col > span.end.column {
-        return false;
-    }
-    true
-}
-
-fn span_contains_name(_name: &str, span: &Span, line: u32, col: u32) -> bool {
-    span.start.line == line && col >= span.start.column && col <= span.end.column
-}
-
-fn find_in_ident_at_name(
+/// Attempts to match a function name identifier at the cursor position.
+///
+/// Accounts for the `fn ` keyword prefix when calculating the identifier's
+/// column range.
+pub(crate) fn find_in_ident_at_name(
     name: &str,
     span: &Span,
     line: u32,
@@ -153,7 +35,9 @@ fn find_in_ident_at_name(
     None
 }
 
-fn find_in_statement(
+/// Searches a statement for a symbol at the cursor position by
+/// delegating to expression traversal.
+pub(crate) fn find_in_statement(
     stmt: &Statement,
     line: u32,
     col: u32,
@@ -170,6 +54,14 @@ fn find_in_statement(
     }
 }
 
+/// Searches a statement body (slice) for a symbol at the cursor position.
+fn find_in_body(body: &[Statement], line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
+    body.iter()
+        .find_map(|stmt| find_in_statement(stmt, line, col, ctx))
+}
+
+/// Recursively searches an expression tree for a symbol at the cursor
+/// position, descending into sub-expressions and statement bodies.
 fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
     match expr {
         Expr::Ident { name, span } => {
@@ -256,17 +148,13 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 if let Some(info) = find_in_expr(condition, line, col, ctx) {
                     return Some(info);
                 }
-                for stmt in then_body {
-                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                        return Some(info);
-                    }
+                if let Some(info) = find_in_body(then_body, line, col, ctx) {
+                    return Some(info);
                 }
-                if let Some(else_stmts) = else_body {
-                    for stmt in else_stmts {
-                        if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                            return Some(info);
-                        }
-                    }
+                if let Some(else_stmts) = else_body
+                    && let Some(info) = find_in_body(else_stmts, line, col, ctx)
+                {
+                    return Some(info);
                 }
             }
         }
@@ -280,10 +168,8 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                     return Some(info);
                 }
                 for arm in arms {
-                    for stmt in &arm.body {
-                        if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                            return Some(info);
-                        }
+                    if let Some(info) = find_in_body(&arm.body, line, col, ctx) {
+                        return Some(info);
                     }
                 }
             }
@@ -298,18 +184,14 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                     if let Some(info) = find_in_expr(&arm.condition, line, col, ctx) {
                         return Some(info);
                     }
-                    for stmt in &arm.body {
-                        if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                            return Some(info);
-                        }
+                    if let Some(info) = find_in_body(&arm.body, line, col, ctx) {
+                        return Some(info);
                     }
                 }
-                if let Some(body) = else_body {
-                    for stmt in body {
-                        if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                            return Some(info);
-                        }
-                    }
+                if let Some(body) = else_body
+                    && let Some(info) = find_in_body(body, line, col, ctx)
+                {
+                    return Some(info);
                 }
             }
         }
@@ -343,29 +225,23 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 if let Some(info) = find_in_expr(condition, line, col, ctx) {
                     return Some(info);
                 }
-                for stmt in body {
-                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                        return Some(info);
-                    }
+                if let Some(info) = find_in_body(body, line, col, ctx) {
+                    return Some(info);
                 }
             }
         }
         Expr::Loop { body, span } => {
-            if span_contains(span, line, col) {
-                for stmt in body {
-                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                        return Some(info);
-                    }
-                }
+            if span_contains(span, line, col)
+                && let Some(info) = find_in_body(body, line, col, ctx)
+            {
+                return Some(info);
             }
         }
         Expr::Closure { body, span, .. } => {
-            if span_contains(span, line, col) {
-                for stmt in body {
-                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                        return Some(info);
-                    }
-                }
+            if span_contains(span, line, col)
+                && let Some(info) = find_in_body(body, line, col, ctx)
+            {
+                return Some(info);
             }
         }
         Expr::ShortClosure { body, span, .. } => {
@@ -382,10 +258,8 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 if let Some(info) = find_in_expr(condition, line, col, ctx) {
                     return Some(info);
                 }
-                for stmt in body {
-                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                        return Some(info);
-                    }
+                if let Some(info) = find_in_body(body, line, col, ctx) {
+                    return Some(info);
                 }
             }
         }
@@ -419,32 +293,4 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
         _ => {}
     }
     None
-}
-
-fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo> {
-    if ctx.functions.contains_key(name) {
-        Some(SymbolInfo::Function {
-            name: name.to_string(),
-        })
-    } else if ctx.structs.contains_key(name) {
-        Some(SymbolInfo::Struct {
-            name: name.to_string(),
-        })
-    } else if ctx.enums.contains_key(name) {
-        Some(SymbolInfo::Enum {
-            name: name.to_string(),
-        })
-    } else if ctx.constants.contains_key(name) {
-        Some(SymbolInfo::Constant {
-            name: name.to_string(),
-        })
-    } else if ctx.imported_modules.contains_key(name) {
-        Some(SymbolInfo::Module {
-            path: vec![name.to_string()],
-        })
-    } else {
-        Some(SymbolInfo::Variable {
-            name: name.to_string(),
-        })
-    }
 }

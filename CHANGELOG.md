@@ -10,10 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Union types -- `Post | Comment | Ad` as anonymous unions, `type Pet = Cat | Dog | Fish` as named union aliases. Values of a member type widen automatically to the union type at assignment, call, and return sites. `match` works on union-typed values.
+- LSP -- document symbols (outline view) for functions, structs, enums, constants, impl blocks, protocols, type aliases, and shared declarations.
+- LSP -- completion for keywords and known symbols (functions, structs, enums, constants, imported modules) from the current module and stdlib.
+- LSP -- signature help with parameter hints when typing function calls.
+- VS Code -- "Expo: Run File" and "Expo: Build File" commands in the command palette.
+- VS Code -- `expo.path` setting to configure the `expo` CLI binary location.
 
 ### Fixed
 
 - Proper coercion of Int type in structs, enums, functions, and more.
+- Integer literals in binary operations now coerce to match the other operand's width (e.g. `x * 2` where `x: Int32` no longer produces an LLVM type mismatch).
+- Method arguments on monomorphized generic types are now properly coerced (e.g. `Option<Int32>.or(99)` correctly truncates the literal to `Int32`).
+- `Enumeration` protocol, `List`, `Map`, and `Set` now declare `length` and `get` with `Int` (i64) to match intrinsic implementations.
 
 ## [0.6.0] - 2026-03-18
 

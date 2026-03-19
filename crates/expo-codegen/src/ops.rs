@@ -64,8 +64,20 @@ pub fn compile_binary<'ctx>(
         };
         Ok(Some(result))
     } else if lhs.is_int_value() && rhs.is_int_value() {
-        let l = lhs.into_int_value();
-        let r = rhs.into_int_value();
+        let mut l = lhs.into_int_value();
+        let mut r = rhs.into_int_value();
+
+        let l_bits = l.get_type().get_bit_width();
+        let r_bits = r.get_type().get_bit_width();
+        if l_bits != r_bits && l_bits > 1 && r_bits > 1 {
+            let narrow = l_bits.min(r_bits);
+            let target = c.context.custom_width_int_type(narrow);
+            if l_bits > narrow {
+                l = c.builder.build_int_truncate(l, target, "trunc").unwrap();
+            } else {
+                r = c.builder.build_int_truncate(r, target, "trunc").unwrap();
+            }
+        }
 
         let is_bool = l.get_type().get_bit_width() == 1;
 
