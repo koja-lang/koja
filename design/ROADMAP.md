@@ -90,6 +90,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **Struct/enum constants**: `const` currently only supports primitive literals (Int, Float, String, Bool). Enum unit variants (`const DEFAULT = Color.Red`) and struct constructions with all-literal fields (`const ORIGIN = Point{x: 0, y: 0}`) would be natural extensions without requiring a full const evaluator.
 - **Type checker**: `ref T` parsed but deferred (redundant with borrow-by-default, revisit if a concrete use case emerges)
 - **Codegen**: inline closures (`x -> expr`) are parsed but not yet compiled
+- **Closure `move` params**: `ClosureParam` has no `PassMode` field -- `fn (move x: T) -> U ... end` doesn't parse. `Type::Function` also doesn't carry param modes, so the type checker can't enforce `fn(move T) -> U` vs `fn(T) -> U` contracts. Both need fixing: add `mode` to `ClosureParam`, parse `move` in closure params, and add param modes to `Type::Function` for type-level enforcement.
 
 ### Design artifacts
 

@@ -1,4 +1,4 @@
-fn main()
+fn main
   m: Map<Int, String> = [1: "one", 2: "two", 3: "three"]
 
   print("length: #{m.length()}")

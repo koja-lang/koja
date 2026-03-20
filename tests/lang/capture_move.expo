@@ -9,9 +9,10 @@ end
 
 fn main
   c = Config{scale: 3, offset: 100}
-  transform = fn (x: Int) -> Int
-    x * c.scale + c.offset
-  end
+
+  transform =
+    fn (x: Int) -> Int x * c.scale + c.offset end
+
   print(transform(5))
   print(apply(10, transform))
 end

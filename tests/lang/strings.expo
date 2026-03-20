@@ -8,9 +8,7 @@ fn main
   print("hello #{name}")
   print("1 + 2 = #{1 + 2}")
 
-  msg = """
-  first line
-  second line
-  """
+  msg = """first line
+  second line"""
   print(msg)
 end

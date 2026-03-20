@@ -41,8 +41,10 @@ fn main
   print("doubled: #{score.map(fn (n: Int32) -> Int32 n * 2 end).or(0)}")
 
   threshold = 80
+
   passing =
     fn (s: Int32) -> Bool s >= threshold end
+
   print("87 passing? #{passing(87)}")
   print("applied: #{apply(5, fn (n: Int32) -> Int32 n * n end)}")
 end

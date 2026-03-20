@@ -1,5 +1,4 @@
 # Named union aliases: type alias declarations with codegen
-
 struct Cat
   name: String
 end

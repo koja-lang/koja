@@ -1,4 +1,4 @@
-fn worker()
+fn worker
   receive
     msg -> print(msg)
   end

@@ -1,4 +1,4 @@
-fn main()
+fn main
   m: Map<String, Int> = Map.new()
   m = m.put("hello", 10)
   m = m.put("world", 20)

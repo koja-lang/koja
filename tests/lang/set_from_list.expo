@@ -1,4 +1,4 @@
-fn main()
+fn main
   s: Set<Int> = [1, 2, 3, 2, 1]
 
   print("length: #{s.length()}")

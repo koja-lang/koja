@@ -646,7 +646,7 @@ Convenience helper for process handlers -- use `reply(from, value)` instead
 of manually matching on the `Option`.
 """
 fn reply<R>(from: Option<ReplyTo<R>>, value: R)
-  from.map(fn (move r: ReplyTo<R>) -> ()
+  from.map(fn (r: ReplyTo<R>) -> ()
     r.send(value)
   end)
 end

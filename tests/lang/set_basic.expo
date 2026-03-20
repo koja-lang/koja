@@ -1,4 +1,4 @@
-fn main()
+fn main
   s: Set<Int> = Set.new()
   s = s.insert(10)
   s = s.insert(20)

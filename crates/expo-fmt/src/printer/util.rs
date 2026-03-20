@@ -332,7 +332,7 @@ pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
 
 /// Returns `true` if the expression is a multi-line block construct
 /// (if, match, cond, for, loop, unless, while, closure, receive, arena).
-fn is_block_expr(expr: &Expr) -> bool {
+pub(super) fn is_block_expr(expr: &Expr) -> bool {
     matches!(
         expr,
         Expr::If { .. }
@@ -346,6 +346,12 @@ fn is_block_expr(expr: &Expr) -> bool {
             | Expr::Receive { .. }
             | Expr::Arena { .. }
     )
+}
+
+/// Returns `true` if the statement is an assignment whose value is a
+/// block expression (match, cond, if, receive, for, loop, while, etc.).
+pub(super) fn is_block_assignment(stmt: &Statement) -> bool {
+    matches!(stmt, Statement::Assignment { value, .. } if is_block_expr(value))
 }
 
 /// Returns `true` if the expression contains multi-line block constructs
@@ -385,6 +391,33 @@ pub(super) fn arm_is_multiline(body: &[Statement]) -> bool {
         return is_block_expr(expr);
     }
     false
+}
+
+/// Assembles a `keyword ... arms ... end` block.
+///
+/// Handles indented arm spacing (extra blank lines when `any_multiline`),
+/// an optional suffix between the arms and `end` (e.g. `after` clause),
+/// and the closing `end` keyword.
+pub(super) fn arms_block(
+    header: Doc,
+    arm_docs: Vec<Doc>,
+    any_multiline: bool,
+    suffix: Vec<Doc>,
+) -> Doc {
+    let mut spaced = Vec::new();
+    for (i, doc) in arm_docs.into_iter().enumerate() {
+        spaced.push(hardline());
+        if any_multiline && i > 0 {
+            spaced.push(hardline());
+        }
+        spaced.push(doc);
+    }
+    let mut parts = vec![header];
+    parts.push(indent(2, concat(spaced)));
+    parts.extend(suffix);
+    parts.push(hardline());
+    parts.push(text("end"));
+    concat(parts)
 }
 
 /// Returns the source-code string for a binary operator.

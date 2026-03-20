@@ -1,5 +1,4 @@
 # Anonymous union types: widening coercion and match dispatch
-
 struct Post
   title: String
 end
@@ -29,10 +28,10 @@ fn accept_union(x: Post | Comment) -> String
 end
 
 fn main
-  p = Post { title: "Hello" }
+  p = Post{title: "Hello"}
   item: Post | Comment | Ad = p
   print(display_item(item))
 
-  result = widen_post(Post { title: "Test" })
+  result = widen_post(Post{title: "Test"})
   print(accept_union(result))
 end

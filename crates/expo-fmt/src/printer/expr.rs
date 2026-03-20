@@ -152,16 +152,12 @@ impl<'a> Printer<'a> {
                 ..
             } => {
                 let any_multiline = arms.iter().any(|a| arm_is_multiline(&a.body));
-                let mut parts = vec![text("match "), self.expr_to_doc(subject)];
-                let mut arm_docs = Vec::new();
-                for arm in arms {
-                    arm_docs.push(hardline());
-                    arm_docs.push(self.match_arm_to_doc(arm, any_multiline, span.end.line));
-                }
-                parts.push(indent(2, concat(arm_docs)));
-                parts.push(hardline());
-                parts.push(text("end"));
-                concat(parts)
+                let rendered: Vec<Doc> = arms
+                    .iter()
+                    .map(|arm| self.match_arm_to_doc(arm, any_multiline, span.end.line))
+                    .collect();
+                let header = concat(vec![text("match "), self.expr_to_doc(subject)]);
+                arms_block(header, rendered, any_multiline, vec![])
             }
 
             Expr::Cond {
@@ -173,20 +169,14 @@ impl<'a> Printer<'a> {
                 let else_multiline = else_body.as_ref().is_some_and(|b| arm_is_multiline(b));
                 let any_multiline =
                     else_multiline || arms.iter().any(|a| arm_is_multiline(&a.body));
-                let mut parts = vec![text("cond")];
-                let mut arm_docs = Vec::new();
-                for arm in arms {
-                    arm_docs.push(hardline());
-                    arm_docs.push(self.cond_arm_to_doc(arm, any_multiline, span.end.line));
-                }
+                let mut rendered: Vec<Doc> = arms
+                    .iter()
+                    .map(|arm| self.cond_arm_to_doc(arm, any_multiline, span.end.line))
+                    .collect();
                 if let Some(body) = else_body {
-                    arm_docs.push(hardline());
-                    arm_docs.push(self.else_arm_to_doc(body, any_multiline, span.end.line));
+                    rendered.push(self.else_arm_to_doc(body, any_multiline, span.end.line));
                 }
-                parts.push(indent(2, concat(arm_docs)));
-                parts.push(hardline());
-                parts.push(text("end"));
-                concat(parts)
+                arms_block(text("cond"), rendered, any_multiline, vec![])
             }
 
             Expr::Receive {
@@ -198,22 +188,18 @@ impl<'a> Printer<'a> {
             } => {
                 let any_multiline =
                     arms.iter().any(|a| arm_is_multiline(&a.body)) || arm_is_multiline(after_body);
-                let mut parts = vec![text("receive")];
-                let mut arm_docs = Vec::new();
-                for arm in arms {
-                    arm_docs.push(hardline());
-                    arm_docs.push(self.match_arm_to_doc(arm, any_multiline, span.end.line));
-                }
-                parts.push(indent(2, concat(arm_docs)));
+                let rendered: Vec<Doc> = arms
+                    .iter()
+                    .map(|arm| self.match_arm_to_doc(arm, any_multiline, span.end.line))
+                    .collect();
+                let mut suffix = Vec::new();
                 if let Some(timeout) = after_timeout {
-                    parts.push(hardline());
-                    parts.push(text("after "));
-                    parts.push(self.expr_to_doc(timeout));
-                    parts.push(self.body_to_doc(after_body, span.end.line));
+                    suffix.push(hardline());
+                    suffix.push(text("after "));
+                    suffix.push(self.expr_to_doc(timeout));
+                    suffix.push(self.body_to_doc(after_body, span.end.line));
                 }
-                parts.push(hardline());
-                parts.push(text("end"));
-                concat(parts)
+                arms_block(text("receive"), rendered, any_multiline, suffix)
             }
 
             Expr::For {

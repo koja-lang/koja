@@ -607,8 +607,15 @@ impl<'a> Printer<'a> {
 
             if i > 0 {
                 parts.push(hardline());
-                if next_line > prev_end + 1 {
+                let source_has_blank = next_line > prev_end + 1;
+                if source_has_blank {
                     parts.push(hardline());
+                } else {
+                    let prev_is_block = is_block_assignment(&stmts[i - 1]);
+                    let curr_is_block = is_block_assignment(stmt);
+                    if prev_is_block != curr_is_block {
+                        parts.push(hardline());
+                    }
                 }
             }
 

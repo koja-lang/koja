@@ -2,33 +2,42 @@ fn main
   nums: List<Int> = [1, 2, 3, 4, 5]
 
   # map - same type
-  doubled = nums.map(fn (n: Int) -> Int n * 2 end)
+  doubled =
+    nums.map(fn (n: Int) -> Int n * 2 end)
   for d in doubled
     print(d)
   end
 
   # map - type change
-  strings = nums.map(fn (n: Int) -> String "item_#{n}" end)
+  strings =
+    nums.map(fn (n: Int) -> String "item_#{n}" end)
   for s in strings
     print(s)
   end
 
   # filter
-  big = nums.filter(fn (n: Int) -> Bool n > 2 end)
+  big =
+    nums.filter(fn (n: Int) -> Bool n > 2 end)
   for b in big
     print(b)
   end
 
   # any? / all?
-  has_big = nums.any?(fn (n: Int) -> Bool n > 4 end)
+  has_big =
+    nums.any?(fn (n: Int) -> Bool n > 4 end)
   print(has_big)
-  all_pos = nums.all?(fn (n: Int) -> Bool n > 0 end)
+  all_pos =
+    nums.all?(fn (n: Int) -> Bool n > 0 end)
   print(all_pos)
-  all_big = nums.all?(fn (n: Int) -> Bool n > 3 end)
+  all_big =
+    nums.all?(fn (n: Int) -> Bool n > 3 end)
   print(all_big)
 
   # chaining
-  chained = nums.filter(fn (n: Int) -> Bool n > 2 end).map(fn (n: Int) -> Int n * 10 end)
+  chained =
+    nums.filter(fn (n: Int) -> Bool n > 2 end).map(
+      fn (n: Int) -> Int n * 10 end,
+    )
   for c in chained
     print(c)
   end

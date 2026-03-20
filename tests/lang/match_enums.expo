@@ -32,10 +32,13 @@ fn main
   print(area(Shape.Rect(4, 6)))
 
   x = Option.Some(10)
-  msg = match x
-    Option.Some(v) when v > 5 -> "big some"
-    Option.Some(_) -> "small some"
-    Option.None -> "none"
-  end
+
+  msg =
+    match x
+      Option.Some(v) when v > 5 -> "big some"
+      Option.Some(_) -> "small some"
+      Option.None -> "none"
+    end
+
   print(msg)
 end
