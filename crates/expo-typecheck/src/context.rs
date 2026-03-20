@@ -23,8 +23,7 @@ pub struct TypeContext {
     pub generic_protocol_asts: HashMap<String, ProtocolDecl>,
     pub generic_struct_asts: HashMap<String, StructDecl>,
     pub imported_modules: HashMap<String, TypeContext>,
-    pub process_fn_msg_types: HashMap<String, Type>,
-    pub protocol_impls: HashMap<String, Vec<String>>,
+    pub protocol_impls: HashMap<String, Vec<(String, Vec<Type>)>>,
     pub protocols: HashMap<String, ProtocolInfo>,
     pub structs: HashMap<String, StructInfo>,
     pub type_aliases: HashMap<String, Type>,
@@ -161,7 +160,6 @@ impl TypeContext {
             generic_protocol_asts: HashMap::new(),
             generic_struct_asts: HashMap::new(),
             imported_modules: HashMap::new(),
-            process_fn_msg_types: HashMap::new(),
             protocol_impls: HashMap::new(),
             protocols: HashMap::new(),
             structs: HashMap::new(),
@@ -225,11 +223,11 @@ impl TypeContext {
                 self.protocols.insert(name.clone(), info.clone());
             }
         }
-        for (type_name, protos) in &other.protocol_impls {
+        for (type_name, impls) in &other.protocol_impls {
             self.protocol_impls
                 .entry(type_name.clone())
                 .or_default()
-                .extend(protos.iter().cloned());
+                .extend(impls.iter().cloned());
         }
         for (name, ty) in &other.type_aliases {
             if !self.type_aliases.contains_key(name) {
@@ -243,11 +241,6 @@ impl TypeContext {
             self.coercions
                 .entry(*span)
                 .or_insert_with(|| coercion.clone());
-        }
-        for (name, ty) in &other.process_fn_msg_types {
-            self.process_fn_msg_types
-                .entry(name.clone())
-                .or_insert_with(|| ty.clone());
         }
     }
 

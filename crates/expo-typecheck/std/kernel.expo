@@ -623,24 +623,69 @@ impl ListLiteral<T> for Set<T>
 end
 
 @doc """
-A handle to a lightweight process, parameterised by its message type `M`.
-
-`M` can be any type: a primitive (`String`, `Int32`, `Bool`), a struct,
-or an enum. The message is shallow-copied into the process mailbox on
-`send` and materialised as a value of type `M` by `receive` inside the
-process function.
+A typed reply channel for process handlers. Wraps the caller's process
+id and enforces that replies match the expected type `R` at compile time.
+At runtime this is a bare integer (the caller's pid).
 """
-struct Process<M>
+struct ReplyTo<R>
+  id: Int
 end
 
-impl Process<M>
+impl ReplyTo<R>
   @doc """
-  Sends a message to this process. 
-  
-  The message is shallow-copied into the process mailbox. `M` can be any 
-  type — strings, primitives, structs, or enums.
+  Sends a reply of type `R` to the caller that initiated a synchronous call.
   """
-  fn send(self, msg: M)
+  fn send(self, reply: R)
     panic("intrinsic")
   end
+end
+
+@doc """
+Sends `value` to the caller if `from` is present, does nothing otherwise.
+Convenience helper for process handlers -- use `reply(from, value)` instead
+of manually matching on the `Option`.
+"""
+fn reply<R>(from: Option<ReplyTo<R>>, value: R)
+  from.map(fn (move r: ReplyTo<R>) -> ()
+    r.send(value)
+  end)
+end
+
+@doc """
+A typed handle to a running process. `M` is the message type the process
+accepts, `R` is its reply type. Returned by `spawn`. At runtime this is
+a bare integer (the process pid).
+"""
+struct Ref<M, R>
+  id: Int
+end
+
+impl Ref<M, R>
+  @doc """
+  Sends a message to the process without waiting for a reply (fire and forget).
+  The handler receives `from = Option.None`.
+  """
+  fn cast(self, msg: M)
+    panic("intrinsic")
+  end
+
+  @doc """
+  Sends a message and waits up to `timeout` milliseconds for a reply.
+  Returns `Option.Some(reply)` on success, `Option.None` on timeout.
+  The handler receives `from = Option.Some(reply_to)`.
+  """
+  fn call(self, msg: M, timeout: Int) -> Option<R>
+    panic("intrinsic")
+  end
+end
+
+@doc """
+The process protocol. Structs implement this to become spawnable processes.
+`C` is the config type passed to `init`, `M` is the message type handled
+while running, `R` is the reply type for synchronous calls.
+"""
+protocol Process<C, M, R>
+  fn init(config: C) -> Self
+  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self
+  fn start(move self)
 end

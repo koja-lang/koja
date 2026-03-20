@@ -213,6 +213,7 @@ impl Lexer {
             return TokenKind::TypeIdent(name);
         }
         match name.as_str() {
+            "after" => TokenKind::After,
             "and" => TokenKind::And,
             "arena" => TokenKind::Arena,
             "await" => TokenKind::Await,

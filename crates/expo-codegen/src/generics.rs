@@ -175,8 +175,11 @@ impl<'ctx> Compiler<'ctx> {
         if name == "Map" || name == "Set" {
             return crate::hashtable::monomorphize_hashtable_struct(self, &mangled);
         }
-        if name == "Process" {
-            return crate::process::monomorphize_process_struct(self, &mangled);
+        if name == "Ref" {
+            return crate::process::monomorphize_ref_struct(self, &mangled);
+        }
+        if name == "ReplyTo" {
+            return crate::process::monomorphize_reply_to_struct(self, &mangled);
         }
 
         let info = self
@@ -404,8 +407,19 @@ impl<'ctx> Compiler<'ctx> {
                     return Ok(());
                 }
             }
-            "Process" => {
-                if let crate::compiler::EmitResult::Emitted = crate::process::emit_process_method(
+            "Ref" => {
+                if let crate::compiler::EmitResult::Emitted = crate::process::emit_ref_method(
+                    self,
+                    &mangled_type,
+                    &mangled_fn,
+                    method_name,
+                    type_args,
+                )? {
+                    return Ok(());
+                }
+            }
+            "ReplyTo" => {
+                if let crate::compiler::EmitResult::Emitted = crate::process::emit_reply_to_method(
                     self,
                     &mangled_type,
                     &mangled_fn,

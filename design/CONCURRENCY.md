@@ -35,12 +35,12 @@ borrow.**
 This applies uniformly to tasks and actors. The only difference between the two
 primitives is lifetime and weight, not ownership rules:
 
-|                | Task                          | Actor                          |
-| -------------- | ----------------------------- | ------------------------------ |
-| Lifetime       | Structured (scoped to parent) | Unstructured (independent)     |
-| Overhead       | ~64-256 bytes (state machine) | ~4-8 KB (stack + mailbox)      |
-| Ownership rule | Move or clone                 | Move or clone                  |
-| Use case       | Async function call           | Long-lived stateful service    |
+|                | Task                          | Actor                       |
+| -------------- | ----------------------------- | --------------------------- |
+| Lifetime       | Structured (scoped to parent) | Unstructured (independent)  |
+| Overhead       | ~64-256 bytes (state machine) | ~4-8 KB (stack + mailbox)   |
+| Ownership rule | Move or clone                 | Move or clone               |
+| Use case       | Async function call           | Long-lived stateful service |
 
 ---
 
@@ -49,7 +49,7 @@ primitives is lifetime and weight, not ownership rules:
 The original framing ("task borrows are Expo's advantage over Erlang") was
 wrong. The real advantage is simpler and more fundamental: **move**.
 
-Erlang's limitation isn't that it copies — it's that copying is the *only*
+Erlang's limitation isn't that it copies — it's that copying is the _only_
 option. Every message, every spawn, every process boundary: full deep copy, no
 exceptions. The BEAM's per-process heap isolation makes this unavoidable.
 
@@ -152,11 +152,11 @@ having to remember the `.clone()`.
 
 The three modes form a clean spectrum:
 
-| Keyword | Cost    | Caller keeps it? | Callee owns it? |
-| ------- | ------- | ----------------- | --------------- |
-| (none)  | Zero    | Yes               | No (read-only)  |
-| `move`  | Zero    | No                | Yes             |
-| `copy`  | Clone   | Yes               | Yes (own copy)  |
+| Keyword | Cost  | Caller keeps it? | Callee owns it? |
+| ------- | ----- | ---------------- | --------------- |
+| (none)  | Zero  | Yes              | No (read-only)  |
+| `move`  | Zero  | No               | Yes             |
+| `copy`  | Clone | Yes              | Yes (own copy)  |
 
 ### Edge cases
 
@@ -290,12 +290,12 @@ end
 
 Compare to other languages:
 
-| Language | Request handling                     | Cost                        |
-| -------- | ------------------------------------ | --------------------------- |
-| Erlang   | Deep copy of request per message     | GC pressure per request     |
-| Go       | Shared pointer to request            | Data race risk              |
-| Rust     | `Arc<Request>` + `Send + 'static`    | Safe but verbose            |
-| Expo     | Move the request, move the response  | Zero-copy, zero annotations |
+| Language | Request handling                    | Cost                        |
+| -------- | ----------------------------------- | --------------------------- |
+| Erlang   | Deep copy of request per message    | GC pressure per request     |
+| Go       | Shared pointer to request           | Data race risk              |
+| Rust     | `Arc<Request>` + `Send + 'static`   | Safe but verbose            |
+| Expo     | Move the request, move the response | Zero-copy, zero annotations |
 
 ---
 
@@ -494,3 +494,601 @@ Design questions that need answers before implementation:
 This is not blocking current Phase 2 work. The existing `Process<M>` model with
 a single message type works for all current use cases. Union types and the main-
 as-process design will be revisited when concurrency work resumes.
+
+---
+
+## 2026-03-19: Protocol-based process model
+
+### Problem with the current approach
+
+The current typed mailbox system infers `M` from the **caller's** `Process<M>`
+annotation at the spawn site:
+
+```expo
+pid: Process<Msg> = spawn worker
+```
+
+The type checker runs a pre-pass (`collect_process_msg_types`) that scans for
+this pattern and records `fn_name -> M`, so that `receive` inside the spawned
+function can infer the correct message type.
+
+This is backwards. The caller is telling the function what messages it handles.
+Three problems:
+
+1. **Source of truth is on the wrong side.** The function's own signature gives
+   no indication that it's a process function or what it expects. The caller
+   declares the contract, not the callee.
+2. **Fragile pre-pass.** The type checker must scan all function bodies for a
+   specific assignment pattern before type checking begins. Only works with
+   named functions in direct spawn assignments — not closures, not nested.
+3. **Mismatch risk.** Multiple callers could annotate the same function with
+   different `Process<M>` types. Nothing prevents it.
+
+### Exploration: return type as mailbox type
+
+First idea: move M to the spawned function's return type. The function declares
+what messages it handles, and `spawn` infers `Process<M>` from it:
+
+```expo
+fn worker() -> Msg
+  match receive
+    Msg.Greet(name) -> print(name)
+    Msg.Stop -> print("done")
+  end
+end
+
+pid = spawn worker   # pid : Process<Msg>
+```
+
+This puts the source of truth on the right side (the function), but has a
+semantic problem: `-> Msg` means "this function produces a Msg." Process
+functions consume messages — the arrow points the wrong direction. A reader sees
+`fn worker() -> Msg` and thinks "this returns a Msg value." It doesn't.
+
+**Variant: `-> Stream<Msg>`.** A new generic type that describes the function's
+relationship more honestly — "this function processes a stream of Msg values."
+This resolves the semantic overload (`Stream<Msg>` is distinct from a regular
+return type), and the compiler can distinguish process functions from regular
+functions by checking for `Stream<M>` in the return position.
+
+But `-> Stream<Msg>` still describes an **output**: the function produces a
+stream. In the mailbox model, the message type describes an **input** — what the
+process accepts. If taken literally, `-> Stream<Msg>` means the spawner should
+read from the stream, not send to it. Following that honestly leads to a model
+where `spawn` returns a read handle and the spawned function writes to it —
+which is channels. Go channels, Rust `mpsc`, Gleam subjects.
+
+Return types describe outputs. Mailbox types describe inputs. The return type is
+the wrong place for this annotation.
+
+### The protocol model
+
+Instead of annotating functions, **structs implement a protocol to become
+processes**. The mailbox type lives in the protocol's type parameter — on the
+receiving side, declared by the implementor.
+
+The protocol is `Process<M, R>` — because that's what it is. A struct that
+implements `Process<M, R>` IS a process.
+
+Two handle types replace the existing `Process<M>` struct:
+
+- **`Pid`** — type-erased process identifier. Just the raw process ID. Storable,
+  comparable, monitorable. Used in `ExitSignal`, registries, and anywhere you
+  need to identify a process without knowing its message types.
+- **`Ref<M, R>`** — typed capability to send messages. Wraps a `Pid` plus the
+  message type `M` and reply type `R`. What `spawn` returns. What you call
+  `cast`/`call` on.
+
+After `spawn`, the struct has been moved into the process; what you hold is a
+`Ref`, not the struct itself.
+
+`Ref<M, R>` echoes the removed `ref T` keyword but is a different concept: not
+a reference to data in memory, but a typed reference to a running process.
+Lowercase `ref` was a keyword modifier (removed); PascalCase `Ref<M, R>` is a
+type. Follows the convention: lowercase keywords modify, PascalCase names are
+types.
+
+```expo
+protocol Process<C, M, R>
+  fn init(config: C) -> Self
+
+  fn handle(move self, msg: M, from: Option<Ref<R>>) -> Self
+
+  fn start(move self)
+    pair = receive
+    new_self = self.handle(pair.first, pair.second)
+    new_self.start()
+  end
+end
+```
+
+Three type parameters, three concerns:
+
+- **C** — what you receive to start (config/args → `init`)
+- **M** — what you receive while running (messages → `handle`)
+- **R** — what you send back (replies)
+
+Internal state is `Self` — never exposed to the caller. The caller only sees
+C, M, and R.
+
+`init` transforms a public config into private process state — the bridge
+between what callers know (config) and what the process needs (internal state).
+`handle` is the message handler. Both are implemented by the user. `start` is a
+default implementation that provides the receive loop — it blocks on `receive`,
+dispatches to `handle`, takes the returned state, and tail-recurses. The user
+never writes the loop.
+
+Default protocol implementations are a new language feature motivated by this
+design. Well-understood semantics (Rust default trait methods, Swift protocol
+extensions, Kotlin interface defaults).
+
+A struct becomes a process by implementing `Process<C, M, R>`:
+
+```expo
+struct CounterConfig
+  initial_count: Int
+end
+
+enum CounterMsg
+  Increment
+  Decrement
+  GetCount
+end
+
+struct Counter
+  count: Int
+end
+
+impl Process<CounterConfig, CounterMsg, Int> for Counter
+  fn init(config: CounterConfig) -> Self
+    Counter{count: config.initial_count}
+  end
+
+  fn handle(move self, msg: CounterMsg, from: Option<Ref<Int>>) -> Self
+    match msg
+      CounterMsg.Increment -> Counter{count: self.count + 1}
+      CounterMsg.Decrement -> Counter{count: self.count - 1}
+      CounterMsg.GetCount ->
+        from.map(fn (move f: Ref<Int>) -> ()
+          f.send(self.count)
+        end)
+        self
+    end
+  end
+end
+```
+
+Counter accepts `CounterConfig` to start, `CounterMsg` while running, and
+replies with `Int` — a typed service contract. The config is public, the
+`Counter` struct's internals are private. The caller never constructs `Counter`
+directly — `init` handles that.
+
+Spawning:
+
+```expo
+fn main
+  pid: Ref<CounterMsg, Int> = spawn Counter.init(CounterConfig{initial_count: 0})
+  pid.cast(CounterMsg.Increment)
+  pid.cast(CounterMsg.Increment)
+  count = pid.call(CounterMsg.GetCount, 5000)   # count : Option<Int>
+end
+```
+
+`spawn` takes an initialized struct, calls `start` on it in a new process.
+`start` provides the receive loop via its default implementation. The user only
+writes `init` and `handle`.
+
+Where do C, M, and R come from? `impl Process<CounterConfig, CounterMsg, Int>
+for Counter`. The compiler sees `spawn Counter.init(...)`, checks that `Counter`
+implements `Process<C, M, R>`, extracts the types, and types the handle as
+`Ref<CounterMsg, Int>`.
+
+### What this solves
+
+- **Source of truth is on the receiving side.** The struct declares what messages
+  it handles via its protocol impl. Not the caller.
+- **No pre-pass.** The compiler resolves M through normal protocol resolution —
+  the same machinery that handles `ListLiteral<T>`, `Hash`, `Equality`.
+- **No mismatch risk.** Every caller gets the same type from the same impl.
+- **Struct IS the state.** `handle` takes `move self` and returns `Self` — each
+  message transforms the state. No separate state management.
+- **No new syntax.** Protocols, impl blocks, `move self`, `Self` return types
+  are all existing language features. Default protocol implementations are the
+  one new feature, motivated by this design but useful far beyond it.
+- **Fractal design.** `print(x)` dispatches to `Display`. `spawn x` dispatches
+  to `Process`. Language operations backed by protocol dispatch.
+- **No compiler magic for the loop.** The receive loop is a default `start`
+  method on the protocol, using `receive` and tail recursion — existing
+  primitives. The user can override `start` if they need custom loop behavior.
+
+### Unified handler: call and cast via Option
+
+OTP's GenServer has three handlers: `handle_call` (synchronous, reply
+expected), `handle_cast` (async, fire and forget), and `handle_info` (system
+messages, catch-all). These can be unified.
+
+**Call and cast are the same operation with an optional reply handle.** One
+`handle` function, one `from` parameter:
+
+- `from` is `Option.Some(process)` — it's a call. The handler should reply.
+- `from` is `Option.None` — it's a cast. Fire and forget.
+
+On the caller side, `Ref<M, R>` provides `cast` and `call`:
+
+```expo
+impl Ref<M, R>
+  fn cast(self, msg: M)
+    self.send(msg, Option.None)
+  end
+
+  fn call(self, msg: M, timeout: Int) -> Option<R>
+    self.send(msg, Option.Some(self()))
+    receive
+      reply -> Option.Some(reply)
+    after timeout
+      Option.None
+    end
+  end
+end
+```
+
+`cast` sends the message with `from = None` — fire and forget. `call` sends
+with `from = Some(self())` and blocks on `receive` with an `after` clause until
+the handler replies or the timeout expires. Returns `Option<R>` — `Some(reply)`
+on success, `None` on timeout.
+
+```expo
+pid.cast(CounterMsg.Increment)                    # fire and forget
+count = pid.call(CounterMsg.GetCount, 5000)      # blocks, returns Option<Int>
+```
+
+On the receiving side, the default `start` impl receives a `Pair<M, Option<Ref<R>>>`
+and dispatches to `handle`:
+
+```expo
+fn start(move self)
+  pair = receive
+  new_self = self.handle(pair.first, pair.second)
+  new_self.start()
+end
+```
+
+`receive` in the `start` loop returns a pair of `(msg, from)`, not just the raw
+message. The runtime always delivers both, even when `from` is None. This is an
+internal detail — users implement `handle` and never see the pair.
+
+### No handle_info
+
+`handle_info` exists in Elixir because mailboxes are untyped — any process can
+send any term to any process. Monitor `:DOWN` messages, timer fires, raw TCP
+tuples, and stray messages all arrive in the same untyped inbox. `handle_info`
+is the catch-all for messages that don't come through `call` or `cast`.
+
+In a typed mailbox system, this is unnecessary. `send` is type-checked — you can
+only send `M` to a `Ref<M, R>`. Nothing else gets in. The type system does what
+`handle_info` was compensating for.
+
+System-level concerns that currently arrive as `handle_info` messages need
+first-class typed mechanisms instead:
+
+- **Monitors/links:** process exit signals as a typed protocol, not surprise
+  tuples in the mailbox.
+- **Timers:** timer handles that send a specific message type, not raw terms.
+- **I/O:** TCP/UDP data through typed stream abstractions.
+
+These are better as explicit typed interfaces than as untyped messages that
+require a catch-all handler to not crash the process.
+
+### Simple processes: empty structs
+
+Not every process needs state or config. The simplest process is an empty struct
+with a unit config:
+
+```expo
+struct Printer end
+
+impl Process<(), String, ()> for Printer
+  fn init(config: ()) -> Self
+    Printer{}
+  end
+
+  fn handle(move self, msg: String, from: Option<Ref<()>>) -> Self
+    print(msg)
+    self
+  end
+end
+
+pid = spawn Printer.init(())
+pid.cast("hello")
+```
+
+`C = ()` means no config needed. `R = ()` signals "this process never replies" —
+cast-only, fire and forget.
+
+One model for everything. Stateful processes have struct fields and config
+structs. Stateless processes have empty structs and unit config. Same protocol,
+same spawn, same API.
+
+### GenServer parallel
+
+The protocol model is GenServer expressed in Expo's type system:
+
+| Elixir GenServer                    | Expo Process protocol                                          |
+| ----------------------------------- | -------------------------------------------------------------- |
+| `handle_call(msg, from, state)`     | `fn handle(move self, msg: M, from: Option<Ref<R>>)` with Some |
+| `handle_cast(msg, state)`           | same `fn handle`, with `from` = None                           |
+| `handle_info(msg, state)`           | eliminated — typed mailboxes prevent untyped messages          |
+| `init(args)` returns `{:ok, state}` | `fn init(config: C) -> Self` — config in, process state out    |
+| state is an opaque term             | state is the struct itself, fully typed                        |
+| receive loop in GenServer module    | default `start` impl on the Process protocol                   |
+
+### What changes in the current implementation
+
+The protocol model supersedes:
+
+- **`receive` moves from user code to the protocol.** `receive` remains as a
+  language primitive, but users don't write it directly. The default `start`
+  implementation on the Process protocol contains the receive loop. Users
+  implement `handle` to process one message at a time.
+- **`receive ... after` for timeouts.** `receive` gains an optional `after`
+  clause: `receive msg -> ... after timeout -> ... end`. If no message arrives
+  within the timeout (in milliseconds), the `after` branch executes. No
+  separate `receive_timeout` primitive — one construct handles both blocking
+  and timed receives. Used internally by `Ref.call` for call timeouts.
+  Also useful for processes that need periodic work (heartbeats, cache expiry)
+  via overridden `start` loops. Grammar and parser need updating to support
+  the `after` clause on `receive` blocks.
+- **The `collect_process_msg_types` pre-pass.** M comes from the protocol impl,
+  resolved through normal protocol machinery.
+- **Caller-side `Process<M>` annotations.** C, M, and R are inferred from the
+  struct's Process impl at the spawn site.
+- **Two systems for process typing.** Everything is struct + protocol + spawn.
+- **`Process<M>` struct becomes `Pid` + `Ref<M, R>`.** The protocol owns the
+  `Process` name. `Pid` is the type-erased raw identifier; `Ref<M, R>` is the
+  typed handle carrying request and response types. `spawn` returns `Ref<M, R>`.
+
+### Open questions
+
+- **Reply type — decided.** `Process<C, M, R>` with R as a fixed reply type per
+  process. Same shape as a service contract: C is the config, M is the request,
+  R is the response. Heterogeneous reply types use a union for R. Pure-cast
+  processes use `R = ()`. Per-variant reply handles in the message enum
+  (option B, Gleam's approach) are more flexible but lose the clean unified
+  handler signature.
+
+  Fixed R means the type system doesn't enforce which response variant
+  corresponds to which message variant — that mapping is a convention, like a
+  REST API spec. The caller matches on the response union to see what came back.
+  Wrapper functions narrow the type, serving the same role as a typed API client
+  over raw HTTP. If the process replies with the wrong variant, it's a contract
+  violation (the equivalent of a 500). This matches how real service contracts
+  work — per-endpoint precision is a gentleman's agreement, not a protocol-level
+  guarantee.
+
+- **Default protocol implementations.** Required for the `start` loop. This is
+  a new language feature — protocols currently only declare signatures. Adding
+  default implementations is well-understood (Rust, Swift, Kotlin) and useful
+  beyond processes (e.g., a `Display` protocol with a default `to_string` built
+  on `display`, or an `Equality` protocol with a default `ne` built on `eq`).
+
+- **`fn main` framing.** Main remains a bare function that spawns processes and
+  communicates via their Ref handles. Application startup uses `Supervisor` —
+  main creates child specs, passes them to a Supervisor, and spawns it. No need
+  for main to implement Process.
+
+- **System signals — decided.** Exit signals are regular typed messages, not a
+  separate callback or protocol. `ExitSignal` is a stdlib struct:
+
+  ```expo
+  struct ExitSignal
+    pid: Pid
+    reason: ExitReason
+  end
+  ```
+
+  `ExitSignal` carries a `Pid` (type-erased), not a `Ref<M, R>`. A supervisor
+  monitoring workers with different types needs a common signal type — `Pid`
+  identifies which process died without requiring knowledge of its M/R.
+
+  A process that needs to monitor children includes `ExitSignal` in its message
+  type via union: `type PoolMsg = PoolCmd | ExitSignal`. `Process.monitor(ref)`
+  tells the runtime to send an `ExitSignal` to the caller's mailbox when the
+  monitored process dies. The type checker verifies that the caller's M includes
+  `ExitSignal` at the `Process.monitor` call site — if it doesn't, compile
+  error. Match exhaustiveness forces handling.
+
+  `Process.monitor` is a static function, not a protocol method — monitoring
+  behavior is always the same (tell the runtime to watch a process), there is
+  nothing to customize per-process.
+
+  This is opt-in. Only processes whose M includes `ExitSignal` can call
+  `Process.monitor` — typically library authors building supervision patterns,
+  not application developers. Application developers use stdlib Supervisor
+  abstractions that handle monitoring internally.
+
+  ```expo
+  enum PoolCmd
+    Scale(Int)
+  end
+
+  type PoolMsg = PoolCmd | ExitSignal
+
+  struct PoolConfig
+    size: Int
+  end
+
+  struct PoolManager
+    workers: Map<Pid, Ref<WorkerMsg, WorkerResult>>
+  end
+
+  impl Process<PoolConfig, PoolMsg, ()> for PoolManager
+    fn init(config: PoolConfig) -> Self
+      PoolManager{workers: Map.new()}
+    end
+
+    fn handle(move self, msg: PoolMsg, from: Option<Ref<()>>) -> Self
+      match msg
+        PoolCmd.Scale(n) -> self
+        e: ExitSignal ->
+          new_worker = spawn Worker.init(WorkerConfig{})
+          Process.monitor(new_worker)
+          self
+      end
+    end
+  end
+  ```
+
+  Layering: `receive` (primitive) → `Process<M, R>` + `handle` (app devs) →
+  `Process.monitor` + `ExitSignal` (library authors) → Supervisor stdlib
+  patterns (app devs configure). Timers and I/O follow the same pattern —
+  stdlib types composed into M via union, not special callbacks.
+
+- **Process discovery and registration.** Monitoring, named processes, and
+  registries are all the same problem: how do you get a handle to a process you
+  didn't spawn? In Erlang, this is trivial because pids are untyped — a registry
+  is just `name -> pid`. In Expo, refs are typed (`Ref<M, R>`), so discovery
+  must bridge type-erased storage (`Pid`) and type-safe retrieval (`Ref<M, R>`).
+
+  Two levels:
+
+  **Runtime-level global registration.** Simple `name -> Pid` mapping in the
+  runtime. `Process.register(ref, "counter")` and `Process.whereis<M, R>("counter")`
+  returning `Option<Ref<M, R>>`. The `Option` return makes absence explicit —
+  the type system forces handling, unlike Erlang where `whereis` returns `nil`
+  and you might not check. Good for well-known singletons (database pool,
+  metrics collector).
+
+  **Registry as a stdlib process.** A typed `Registry<M, R>` process for
+  dynamic, composable, scoped registries. Worker pools, connection managers,
+  anything with N processes registered under keys. The registry implements
+  `Process` like everything else, monitors its entries via `ExitSignal`, and
+  auto-removes dead entries. No stale refs.
+
+  Both coexist. Runtime provides the primitive, stdlib builds richer
+  abstractions on top. Same layering as supervision.
+
+- **Supervision, child specs, and application startup.** In Elixir, a child spec
+  is `{Module, args}` — the module name and the init params. In Expo, the
+  equivalent is an instance of the config struct. The config struct IS the child
+  spec — it carries everything needed to start a process. The M and R come from
+  the struct's `Process<C, M, R>` impl.
+
+  The problem: a generic reusable `Supervisor` needs a `List<???>` of
+  heterogeneous config types. `DatabasePoolConfig` and `WebServerConfig` are
+  different types. Without dynamic dispatch (decided: static dispatch via
+  monomorphization, no vtables), heterogeneous collections need type erasure.
+
+  **Solution: config structs implement a protocol.** Like Elixir's `use
+  GenServer` auto-defining `child_spec/1`, config structs implement a protocol
+  that produces a uniform `ChildSpec` struct. The protocol bridges typed configs
+  to type-erased child specs via a closure:
+
+  ```expo
+  struct ChildSpec
+    start: fn() -> Pid
+    strategy: RestartStrategy
+  end
+  ```
+
+  The `start` closure captures the config and calls `init` + `spawn` internally.
+  The supervisor never sees the typed process — it only needs `Pid` for
+  monitoring and the closure for restart.
+
+  The `Process` protocol provides `child_spec` as a third default implementation
+  (alongside `start`):
+
+  ```expo
+  protocol Process<C, M, R>
+    fn init(config: C) -> Self
+    fn handle(move self, msg: M, from: Option<Ref<R>>) -> Self
+
+    fn child_spec(config: C) -> ChildSpec
+      ChildSpec{
+        start: fn() -> spawn(Self.init(copy config)).pid(),
+        strategy: RestartStrategy.Permanent
+      }
+    end
+
+    fn start(move self)
+      pair = receive
+      new_self = self.handle(pair.first, pair.second)
+      new_self.start()
+    end
+  end
+  ```
+
+  Most processes never override `child_spec` — the default starts the process
+  with a `Permanent` restart strategy. Processes that need custom restart
+  behavior (transient, temporary) override it.
+
+  Application startup looks like Elixir:
+
+  ```expo
+  fn main()
+    children = [
+      Counter.child_spec(CounterConfig{initial_count: 0}),
+      DatabasePool.child_spec(DatabasePoolConfig{url: "postgres://...", pool_size: 10}),
+      WebServer.child_spec(WebServerConfig{port: 4000}),
+    ]
+
+    sup = Supervisor{children: children, strategy: SupervisorStrategy.OneForOne}
+    spawn sup
+  end
+  ```
+
+  On restart: the supervisor calls the `start` closure again, which calls `init`
+  with a copy of the original config, producing fresh process state every time.
+
+  **Open: protocol naming.** Config structs could also implement a separate
+  protocol (e.g., `Child`, `Service`, or another noun TBD) instead of
+  `child_spec` living on the `Process` protocol itself. The separate protocol
+  would let config structs declare supervision independently from the process
+  impl — different module, different concern. The naming is unresolved:
+  `ChildSpec` conflicts with the struct name, `Service` is a candidate but needs
+  consideration. The mechanism is settled — a protocol on config structs
+  producing a uniform `ChildSpec` — the name is not.
+
+  Three default impls total: `start` (receive loop), `child_spec` (supervision
+  bridge), and two required: `init` (config → state), `handle` (message
+  dispatch).
+
+- **Task: one-off async work.** The `Process<C, M, R>` model is optimized for
+  long-running stateful processes. One-off work (compute something in the
+  background, fire-and-forget side effects) shouldn't require defining a struct,
+  implementing a protocol, and writing a no-op `handle`.
+
+  `Task` is a kernel struct that absorbs this boilerplate. Under the hood it
+  implements `Process<fn() -> R, (), ()>` — the config is a closure, the message
+  and reply types are unit. It overrides `start` to run the closure and exit
+  instead of entering a receive loop.
+
+  The API:
+
+  ```expo
+  handle = Task.async(fn() -> expensive_computation() end)
+  // ... do other work ...
+  result = handle.await()
+  ```
+
+  `Task.async` spawns the closure in a new process and returns a
+  `TaskHandle<R>`, where `R` is inferred from the closure's return type.
+  `TaskHandle<R>` has one method: `.await()`, which blocks until the task
+  finishes and returns the result. No `cast`, no `call`, no message sending —
+  just "wait for the result."
+
+  For fire-and-forget, don't await:
+
+  ```expo
+  Task.async(fn() -> send_notification_email() end)
+  ```
+
+  `TaskHandle<R>` is a purpose-built handle type, not `Ref<M, R>`. As a kernel
+  struct, `Task` can define its own handle with exactly the right interface.
+  `Ref<M, R>` would expose `cast`/`call` methods that are nonsensical for a
+  one-off task — `TaskHandle<R>` is honest about what you can do: await or
+  ignore.
+
+  This validates the `Process<C, M, R>` model: the protocol handles the
+  stateful long-running case (GenServer), and stdlib/kernel builds ergonomic
+  abstractions for simpler patterns on top. One model, multiple ergonomic
+  surfaces.

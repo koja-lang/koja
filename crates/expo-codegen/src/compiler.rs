@@ -52,9 +52,8 @@ pub struct Compiler<'ctx> {
     /// Active type substitution during monomorphized body compilation.
     /// Maps type parameter names (e.g. "T", "U") to concrete types.
     pub type_subst: HashMap<String, Type>,
-    /// Maps process function names to their message type, populated from
-    /// `TypeContext::process_fn_msg_types` so `receive` codegen can determine
-    /// the LLVM type to load from the mailbox pointer.
+    /// The message type M for the current process function, used by `receive`
+    /// codegen to determine the LLVM type to load from the mailbox pointer.
     pub process_msg_type: Option<Type>,
     /// Cache of generated thunk wrappers for bare function references.
     /// Maps original function name to the thunk `FunctionValue`.
@@ -326,7 +325,10 @@ impl<'ctx> Compiler<'ctx> {
         let memcpy = self.module.add_function("memcpy", memcpy_type, None);
         self.functions.insert("memcpy".to_string(), memcpy);
 
-        let spawn_type = i64_type.fn_type(&[i8_ptr_type.into()], false);
+        let spawn_type = i64_type.fn_type(
+            &[i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into()],
+            false,
+        );
         let spawn = self.module.add_function("expo_rt_spawn", spawn_type, None);
         self.functions.insert("expo_rt_spawn".to_string(), spawn);
 
@@ -344,6 +346,14 @@ impl<'ctx> Compiler<'ctx> {
         self.functions
             .insert("expo_rt_receive".to_string(), receive);
 
+        let i64_type = self.context.i64_type();
+        let receive_timeout_type = i8_ptr_type.fn_type(&[i64_type.into()], false);
+        let receive_timeout =
+            self.module
+                .add_function("expo_rt_receive_timeout", receive_timeout_type, None);
+        self.functions
+            .insert("expo_rt_receive_timeout".to_string(), receive_timeout);
+
         let main_done_type = self.context.void_type().fn_type(&[], false);
         let main_done = self
             .module
@@ -357,7 +367,17 @@ impl<'ctx> Compiler<'ctx> {
         func: &Function,
         self_type_name: Option<&str>,
     ) -> Result<FunctionValue<'ctx>, String> {
-        let return_type = self.resolve_return_type(&func.return_type);
+        let mut return_type = self.resolve_return_type(&func.return_type);
+        if let Some(name) = self_type_name
+            && return_type == Type::Unknown
+            && matches!(&func.return_type, Some(TypeExpr::Self_ { .. }))
+        {
+            if self.type_ctx.structs.contains_key(name) {
+                return_type = Type::Struct(name.to_string());
+            } else if self.type_ctx.enums.contains_key(name) {
+                return_type = Type::Enum(name.to_string());
+            }
+        }
         let mut param_types = Vec::new();
 
         if let Some(name) = self_type_name
@@ -536,11 +556,26 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         let saved_process_msg = self.process_msg_type.take();
-        if self_type_name.is_none() {
-            self.process_msg_type = self.type_ctx.process_fn_msg_types.get(&func.name).cloned();
+        if let Some(target) = self_type_name {
+            self.process_msg_type = self.type_ctx.protocol_impls.get(target).and_then(|impls| {
+                impls
+                    .iter()
+                    .find(|(proto, _)| proto == "Process")
+                    .and_then(|(_, args)| args.get(1).cloned())
+            });
         }
 
-        let return_type = self.resolve_return_type(&func.return_type);
+        let mut return_type = self.resolve_return_type(&func.return_type);
+        if let Some(target) = self_type_name
+            && return_type == Type::Unknown
+            && matches!(&func.return_type, Some(TypeExpr::Self_ { .. }))
+        {
+            if self.type_ctx.structs.contains_key(target) {
+                return_type = Type::Struct(target.to_string());
+            } else if self.type_ctx.enums.contains_key(target) {
+                return_type = Type::Enum(target.to_string());
+            }
+        }
         let is_main = func.name == "main" && self_type_name.is_none();
         let result = self.compile_function_body(&func.body, &return_type, fn_value, is_main);
 

@@ -28,6 +28,7 @@ pub enum TokenKind {
     False,
 
     // Keywords
+    After,
     And,
     Arena,
     Await,
@@ -104,7 +105,8 @@ impl TokenKind {
     pub fn is_keyword(&self) -> bool {
         matches!(
             self,
-            TokenKind::And
+            TokenKind::After
+                | TokenKind::And
                 | TokenKind::Arena
                 | TokenKind::Await
                 | TokenKind::Break

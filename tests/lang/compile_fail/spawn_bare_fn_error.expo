@@ -1,0 +1,9 @@
+fn worker()
+  receive
+    msg -> print(msg)
+  end
+end
+
+fn main
+  spawn worker
+end

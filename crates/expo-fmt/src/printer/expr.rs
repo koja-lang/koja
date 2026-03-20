@@ -189,7 +189,32 @@ impl<'a> Printer<'a> {
                 concat(parts)
             }
 
-            Expr::Receive { .. } => text("receive"),
+            Expr::Receive {
+                arms,
+                after_timeout,
+                after_body,
+                span,
+                ..
+            } => {
+                let any_multiline =
+                    arms.iter().any(|a| arm_is_multiline(&a.body)) || arm_is_multiline(after_body);
+                let mut parts = vec![text("receive")];
+                let mut arm_docs = Vec::new();
+                for arm in arms {
+                    arm_docs.push(hardline());
+                    arm_docs.push(self.match_arm_to_doc(arm, any_multiline, span.end.line));
+                }
+                parts.push(indent(2, concat(arm_docs)));
+                if let Some(timeout) = after_timeout {
+                    parts.push(hardline());
+                    parts.push(text("after "));
+                    parts.push(self.expr_to_doc(timeout));
+                    parts.push(self.body_to_doc(after_body, span.end.line));
+                }
+                parts.push(hardline());
+                parts.push(text("end"));
+                concat(parts)
+            }
 
             Expr::For {
                 pattern,

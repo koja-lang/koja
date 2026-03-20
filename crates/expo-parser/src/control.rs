@@ -52,7 +52,7 @@ impl Parser {
         let mut arms = Vec::new();
         while !self.at(&TokenKind::End) && !self.at_eof() {
             let before = self.pos;
-            arms.push(self.parse_match_arm());
+            arms.push(self.parse_match_arm(&[]));
             if self.pos == before {
                 self.advance();
             }
@@ -67,7 +67,7 @@ impl Parser {
         }
     }
 
-    fn parse_match_arm(&mut self) -> MatchArm {
+    fn parse_match_arm(&mut self, extra_stops: &[TokenKind]) -> MatchArm {
         let start = self.current_span();
         let pattern = self.parse_pattern();
 
@@ -78,7 +78,7 @@ impl Parser {
         };
 
         self.expect(&TokenKind::Arrow);
-        let body = self.parse_match_body();
+        let body = self.parse_match_body(extra_stops);
 
         MatchArm {
             pattern,
@@ -88,19 +88,20 @@ impl Parser {
         }
     }
 
-    pub(crate) fn parse_match_body(&mut self) -> Vec<Statement> {
+    fn parse_match_body(&mut self, extra_stops: &[TokenKind]) -> Vec<Statement> {
         let mut stmts = Vec::new();
 
-        if !matches!(
-            self.peek(),
-            TokenKind::End | TokenKind::Eof | TokenKind::Newline
-        ) {
+        let peek = self.peek();
+        if !matches!(peek, TokenKind::End | TokenKind::Eof | TokenKind::Newline)
+            && !extra_stops.contains(peek)
+        {
             stmts.push(self.parse_statement());
         }
 
         self.skip_newlines();
 
-        while !self.at(&TokenKind::End) && !self.at_eof() {
+        while !self.at(&TokenKind::End) && !extra_stops.iter().any(|t| self.at(t)) && !self.at_eof()
+        {
             if self.looks_like_new_arm() {
                 break;
             }
@@ -152,7 +153,7 @@ impl Parser {
             let arm_start = self.current_span();
             let condition = self.parse_expr_bp(crate::expr::BP_ARROW + 1);
             self.expect(&TokenKind::Arrow);
-            let body = self.parse_match_body();
+            let body = self.parse_match_body(&[]);
             arms.push(CondArm {
                 condition,
                 body,
@@ -165,7 +166,7 @@ impl Parser {
         }
         if self.eat(&TokenKind::Else).is_some() {
             self.expect(&TokenKind::Arrow);
-            else_body = Some(self.parse_match_body());
+            else_body = Some(self.parse_match_body(&[]));
             self.skip_newlines();
         } else {
             self.error("cond requires an `else ->` arm".into(), self.current_span());
@@ -238,8 +239,32 @@ impl Parser {
     pub(crate) fn parse_receive_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.advance(); // receive
+        self.skip_newlines();
+
+        let mut arms = Vec::new();
+        let after_stop = [TokenKind::After];
+        while !self.at(&TokenKind::End) && !self.at(&TokenKind::After) && !self.at_eof() {
+            let before = self.pos;
+            arms.push(self.parse_match_arm(&after_stop));
+            if self.pos == before {
+                self.advance();
+            }
+            self.skip_newlines();
+        }
+
+        let mut after_timeout = None;
+        let mut after_body = Vec::new();
+        if self.eat(&TokenKind::After).is_some() {
+            after_timeout = Some(Box::new(self.parse_expr()));
+            after_body = self.parse_block();
+        }
+
+        self.expect(&TokenKind::End);
 
         Expr::Receive {
+            arms,
+            after_timeout,
+            after_body,
             span: self.span_from(start),
         }
     }

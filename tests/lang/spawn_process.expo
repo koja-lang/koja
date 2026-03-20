@@ -1,0 +1,58 @@
+struct WorkerConfig
+  label: String
+end
+
+enum WorkerMsg
+  Greet(String)
+  Add(Int, Int)
+  Stop
+end
+
+struct Worker
+  label: String
+end
+
+impl Process<WorkerConfig, WorkerMsg, String> for Worker
+  fn init(config: WorkerConfig) -> Self
+    Worker{label: config.label}
+  end
+
+  fn handle(move self, msg: WorkerMsg, from: Option<ReplyTo<String>>) -> Self
+    match msg
+      WorkerMsg.Greet(name) ->
+        print("#{self.label}: Hello, #{name}!")
+        self
+      WorkerMsg.Add(a, b) ->
+        result = a + b
+        print("#{self.label}: Sum: #{result}")
+        self
+      WorkerMsg.Stop ->
+        print("#{self.label}: Stopped.")
+        self
+    end
+  end
+
+  fn start(move self)
+    receive
+      msg ->
+        match msg
+          WorkerMsg.Greet(name) ->
+            print("#{self.label}: Hello, #{name}!")
+            self.start()
+          WorkerMsg.Add(a, b) ->
+            result = a + b
+            print("#{self.label}: Sum: #{result}")
+            self.start()
+          WorkerMsg.Stop ->
+            print("#{self.label}: Stopped.")
+        end
+    end
+  end
+end
+
+fn main
+  w = spawn Worker.init(WorkerConfig{label: "w1"})
+  w.cast(WorkerMsg.Greet("Expo"))
+  w.cast(WorkerMsg.Add(10, 32))
+  w.cast(WorkerMsg.Stop)
+end

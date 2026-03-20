@@ -24,8 +24,6 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
     let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
     let enum_name_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
 
-    collect_process_msg_types(module, ctx, &struct_name_refs, &enum_name_refs);
-
     for item in &module.items {
         match item {
             Item::Function(f) => {
@@ -49,54 +47,33 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 } else {
                     continue;
                 };
+
+                let impl_process_msg =
+                    ctx.protocol_impls
+                        .get(target_name.as_str())
+                        .and_then(|impls| {
+                            impls
+                                .iter()
+                                .find(|(proto, _)| proto == "Process")
+                                .and_then(|(_, args)| args.get(1).cloned())
+                        });
+
                 for member in &impl_block.members {
                     if let ImplMember::Function(f) = member
                         && f.type_params.is_empty()
                     {
-                        check_function(
+                        check_function_with_msg(
                             f,
                             ctx,
                             Some(&self_type),
                             &struct_name_refs,
                             &enum_name_refs,
+                            impl_process_msg.clone(),
                         );
                     }
                 }
             }
             _ => {}
-        }
-    }
-}
-
-/// Pre-pass: scan all function bodies for `pid: Process<M> = spawn fn_name`
-/// assignments and record the mapping `fn_name -> M` so that `receive` inside
-/// those functions can infer the correct message type.
-fn collect_process_msg_types(
-    module: &Module,
-    ctx: &mut TypeContext,
-    struct_names: &[&str],
-    enum_names: &[&str],
-) {
-    for item in &module.items {
-        let stmts = match item {
-            Item::Function(f) => &f.body,
-            _ => continue,
-        };
-        for stmt in stmts {
-            if let Statement::Assignment {
-                type_annotation: Some(TypeExpr::Generic { path, args, .. }),
-                value,
-                ..
-            } = stmt
-                && path.len() == 1
-                && path[0] == "Process"
-                && args.len() == 1
-                && let Expr::Spawn { expr, .. } = value
-                && let Expr::Ident { name, .. } = expr.as_ref()
-            {
-                let msg_type = resolve_type_expr(&args[0], struct_names, enum_names);
-                ctx.process_fn_msg_types.insert(name.clone(), msg_type);
-            }
         }
     }
 }
@@ -107,6 +84,17 @@ fn check_function(
     self_type: Option<&Type>,
     struct_names: &[&str],
     enum_names: &[&str],
+) {
+    check_function_with_msg(f, ctx, self_type, struct_names, enum_names, None);
+}
+
+fn check_function_with_msg(
+    f: &Function,
+    ctx: &mut TypeContext,
+    self_type: Option<&Type>,
+    struct_names: &[&str],
+    enum_names: &[&str],
+    override_msg_type: Option<Type>,
 ) {
     let mut env: HashMap<String, VarInfo> = HashMap::new();
 
@@ -155,7 +143,7 @@ fn check_function(
         })
         .unwrap_or(FunctionKind::Static);
 
-    let process_msg_type = ctx.process_fn_msg_types.get(&f.name).cloned();
+    let process_msg_type = override_msg_type;
 
     let mut ce = CheckEnv {
         env,

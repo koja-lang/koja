@@ -599,7 +599,7 @@ fn resolve_enumerable_info<'ctx>(
         .protocol_impls
         .get(&base)
         .ok_or_else(|| format!("`{}` does not implement the Enumeration protocol", base))?;
-    if !protos.iter().any(|p| p == "Enumeration") {
+    if !protos.iter().any(|(p, _)| p == "Enumeration") {
         return Err(format!(
             "`{}` does not implement the Enumeration protocol",
             base
@@ -703,7 +703,7 @@ fn infer_subject_type<'ctx>(
 
 /// Recursively compiles a match pattern into a boolean condition. As a side
 /// effect, binds matched variables into the compiler's variable scope.
-fn compile_pattern<'ctx>(
+pub(crate) fn compile_pattern<'ctx>(
     c: &mut Compiler<'ctx>,
     pattern: &Pattern,
     subject_ptr: PointerValue<'ctx>,

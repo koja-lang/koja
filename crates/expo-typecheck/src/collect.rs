@@ -173,12 +173,6 @@ pub fn collect(module: &Module) -> TypeContext {
                     _ => None,
                 });
 
-                if let Some(ref proto) = protocol_name
-                    && !ctx.protocols.contains_key(proto)
-                {
-                    ctx.error(format!("unknown protocol `{proto}`"), impl_block.span);
-                }
-
                 let tp_refs: Vec<&str> = impl_type_params.iter().map(|s| s.as_str()).collect();
                 let mut impl_method_names: HashSet<String> = HashSet::new();
 
@@ -260,10 +254,26 @@ pub fn collect(module: &Module) -> TypeContext {
                             impl_block.span,
                         );
                     }
+                    let proto_type_args: Vec<Type> =
+                        if let Some(TypeExpr::Generic { args, .. }) = &impl_block.trait_expr {
+                            args.iter()
+                                .map(|a| {
+                                    resolve_type_expr_with_params(
+                                        a,
+                                        &struct_names,
+                                        &enum_names,
+                                        &tp_refs,
+                                        &type_aliases,
+                                    )
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                     ctx.protocol_impls
                         .entry(target_name.clone())
                         .or_default()
-                        .push(proto.clone());
+                        .push((proto.clone(), proto_type_args));
                 }
             }
             Item::Constant(c) => {

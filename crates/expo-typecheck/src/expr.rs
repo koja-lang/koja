@@ -351,19 +351,103 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             }
         }
 
-        Expr::Spawn { expr: inner, .. } => {
+        Expr::Spawn { expr: inner, span } => {
+            let type_name = match inner.as_ref() {
+                Expr::MethodCall {
+                    receiver, method, ..
+                } if method == "init" => {
+                    if let Expr::Ident { name, .. } = receiver.as_ref() {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                }
+                Expr::Call { callee, .. } => match callee.as_ref() {
+                    Expr::FieldAccess {
+                        receiver, field, ..
+                    } if field == "init" => {
+                        if let Expr::Ident { name, .. } = receiver.as_ref() {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+
+            let Some(target) = type_name else {
+                ctx.error(
+                    "spawn requires `Type.init(config)` form where Type implements Process"
+                        .to_string(),
+                    *span,
+                );
+                return Type::Unknown;
+            };
+
+            let process_args = ctx.protocol_impls.get(&target).and_then(|impls| {
+                impls
+                    .iter()
+                    .find(|(proto, _)| proto == "Process")
+                    .map(|(_, args)| args.clone())
+            });
+
+            let Some(args) = process_args else {
+                ctx.error(
+                    format!("`{target}` does not implement the Process protocol"),
+                    *span,
+                );
+                return Type::Unknown;
+            };
+
+            if args.len() < 3 {
+                ctx.error(
+                    format!("Process impl for `{target}` is missing type arguments"),
+                    *span,
+                );
+                return Type::Unknown;
+            }
+
+            let msg_type = args[1].clone();
+            let reply_type = args[2].clone();
+
             infer_expr(inner, ctx, ce);
-            if let Some(hint) = &ce.type_hint {
-                hint.clone()
-            } else {
-                Type::Unknown
+
+            Type::GenericInstance {
+                base: "Ref".to_string(),
+                type_args: vec![msg_type, reply_type],
+                kind: crate::types::GenericKind::Struct,
             }
         }
 
-        Expr::Receive { .. } => ce
-            .process_msg_type
-            .clone()
-            .unwrap_or(Type::Primitive(Primitive::String)),
+        Expr::Receive {
+            arms,
+            after_timeout,
+            after_body,
+            ..
+        } => {
+            let subject_type = ce
+                .process_msg_type
+                .clone()
+                .unwrap_or(Type::Primitive(Primitive::String));
+            for arm in arms {
+                let mut arm_ce = ce.child(Type::Unknown);
+                check_pattern(&arm.pattern, &subject_type, ctx, &mut arm_ce.env);
+                if let Some(guard) = &arm.guard {
+                    let guard_ty = infer_expr(guard, ctx, &mut arm_ce);
+                    check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);
+                }
+                check_body(&arm.body, ctx, &mut arm_ce);
+            }
+            if let Some(timeout) = after_timeout {
+                infer_expr(timeout, ctx, ce);
+            }
+            for stmt in after_body {
+                crate::stmt::check_statement(stmt, ctx, ce);
+            }
+            subject_type
+        }
 
         Expr::String { parts, .. } => {
             for part in parts {
@@ -1295,7 +1379,7 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
     };
 
     let protos = ctx.protocol_impls.get(&base)?;
-    if !protos.iter().any(|p| p == "Enumeration") {
+    if !protos.iter().any(|(p, _)| p == "Enumeration") {
         return None;
     }
 

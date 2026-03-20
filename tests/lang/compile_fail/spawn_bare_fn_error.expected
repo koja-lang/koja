@@ -1,0 +1,1 @@
+spawn requires `Type.init(config)` form where Type implements Process

@@ -444,7 +444,39 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 return find_in_expr(expr, line, col, ctx);
             }
         }
-        Expr::Receive { .. } => {}
+        Expr::Receive {
+            arms,
+            after_timeout,
+            after_body,
+            span: recv_span,
+            ..
+        } => {
+            if span_contains(recv_span, line, col) {
+                for arm in arms {
+                    if let Some(r) = find_in_pattern(&arm.pattern, line, col, ctx) {
+                        return Some(r);
+                    }
+                    if let Some(guard) = &arm.guard
+                        && let Some(r) = find_in_expr(guard, line, col, ctx)
+                    {
+                        return Some(r);
+                    }
+                    if let Some(r) = find_in_body(&arm.body, line, col, ctx) {
+                        return Some(r);
+                    }
+                }
+                if let Some(timeout) = after_timeout
+                    && let Some(r) = find_in_expr(timeout, line, col, ctx)
+                {
+                    return Some(r);
+                }
+                for stmt in after_body {
+                    if let Some(r) = find_in_statement(stmt, line, col, ctx) {
+                        return Some(r);
+                    }
+                }
+            }
+        }
         _ => {}
     }
     None

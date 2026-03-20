@@ -517,8 +517,14 @@ pub enum Expr {
         args: Vec<Arg>,
         span: Span,
     },
-    /// A bare receive expression: `receive`.
-    Receive { span: Span },
+    /// A receive block with match arms and optional timeout:
+    /// `receive ... after timeout -> ... end`.
+    Receive {
+        arms: Vec<MatchArm>,
+        after_timeout: Option<Box<Expr>>,
+        after_body: Vec<Statement>,
+        span: Span,
+    },
     /// A self reference: `self`.
     Self_ { span: Span },
     /// An inline closure: `x -> x * 2`.

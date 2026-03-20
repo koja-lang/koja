@@ -301,21 +301,22 @@ arena_expr = "arena" ,
 
 
 (* ========================================================================== *)
-(* 12. Async                                                                  *)
+(* 12. Concurrency                                                            *)
 (* ========================================================================== *)
 
-(* spawn is a regular function call that takes a closure *)
-spawn_call = "spawn" , "(" , closure , ")" ;
+(* spawn creates a new process from a struct implementing Process<C, M, R> *)
+spawn_call = "spawn" , named_type , "." , "init" , "(" , [ arg_list ] , ")" ;
 
 (* await is a keyword prefix on a handle expression *)
 await_expr = "await" , expr ;
 
-(* receive waits for the first of multiple async sources *)
+(* receive blocks until a message arrives or the optional timeout expires.
+   Arms use the same pattern -> body syntax as match. The after clause
+   provides a timeout in milliseconds followed by a body block — no arrow. *)
 receive_expr = "receive" ,
-               { receive_arm } ,
+               { match_arm } ,
+               [ "after" , expr , { statement } ] ,
                "end" ;
-
-receive_arm = pattern , "=" , expr , "->" , match_body ;
 
 
 (* ========================================================================== *)
@@ -450,6 +451,6 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* and, arena, await, break, cond, const, else, end, enum, false, fn, for,    *)
-(* if, impl, import, in, loop, match, move, not, or, priv, protocol,          *)
+(* after, and, arena, await, break, cond, const, else, end, enum, false, fn,  *)
+(* for, if, impl, import, in, loop, match, move, not, or, priv, protocol,     *)
 (* receive, return, self, shared, spawn, struct, true, type, unless, when      *)

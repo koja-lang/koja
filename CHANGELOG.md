@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Protocol-based process model -- structs implement `Process<C, M, R>` to become processes. `C` is the config type, `M` is the message type, `R` is the reply type. Two required methods: `init(config: C) -> Self` and `handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self`. Replaces the old caller-side `Process<M>` annotation.
+- `spawn T.init(config)` syntax -- creates a process by calling the struct's `init` method with a config value, runs `start` in a new process, and returns a typed `Ref<M, R>` handle.
+- `receive ... after` timeout clause -- `receive` blocks now support an optional `after timeout_ms` body that executes when no message arrives within the timeout. No arrow on the `after` clause (it's not a pattern match). Wired end-to-end through parser, type checker, and codegen (`expo_rt_receive_timeout`).
 - Recursive types -- structs and enums that reference themselves (e.g. linked lists, trees) are now supported without any special syntax. The compiler automatically detects cycles in the type graph, inserts heap-allocated indirection where needed, and frees the memory on drop. Works with generics and stdlib types like `Option<T>`.
 - Union types -- `Post | Comment | Ad` as anonymous unions, `type Pet = Cat | Dog | Fish` as named union aliases. Values of a member type widen automatically to the union type at assignment, call, and return sites. `match` works on union-typed values with typed binding patterns (`p: Post -> p.title`) for matching by type and binding the unwrapped value.
 - Typed constants -- `const NAME: Type = expr` now accepts an optional type annotation, enabling generic type inference for constant declarations (e.g. `const SESSIONS: TableDefinition<String, Bytes> = TableDefinition.new("sessions")`).
@@ -19,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LSP -- signature help with parameter hints when typing function calls.
 - VS Code -- "Expo: Run File" and "Expo: Build File" commands in the command palette.
 - VS Code -- `expo.path` setting to configure the `expo` CLI binary location.
+
+### Changed
+
+- **Breaking**: `spawn` now requires the `T.init(config)` form (`spawn Counter.init(config)`). Bare function spawn (`spawn some_function`) is a compile error. Processes must implement `Process<C, M, R>`.
+- **Breaking**: `spawn` returns `Ref<M, R>` (typed process handle) instead of `Process<M>`. `M` and `R` are inferred from the struct's `Process<C, M, R>` implementation.
 
 ### Fixed
 
