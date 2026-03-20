@@ -225,7 +225,9 @@ pub struct ProtocolDecl {
     pub span: Span,
 }
 
-/// A method signature within a protocol declaration (no body).
+/// A method within a protocol declaration.
+/// If `body` is `None`, the method is required (implementors must provide it).
+/// If `body` is `Some`, it serves as the default implementation.
 #[derive(Debug, Clone)]
 pub struct ProtocolMethod {
     pub annotation: Option<Annotation>,
@@ -233,6 +235,7 @@ pub struct ProtocolMethod {
     pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
+    pub body: Option<Vec<Statement>>,
     pub span: Span,
 }
 

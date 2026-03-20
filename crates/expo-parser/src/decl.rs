@@ -323,12 +323,23 @@ impl Parser {
             None
         };
 
+        self.skip_newlines();
+        let body =
+            if !self.at(&TokenKind::End) && !self.at(&TokenKind::Fn) && !self.at(&TokenKind::At) {
+                let stmts = self.parse_block();
+                self.expect(&TokenKind::End);
+                Some(stmts)
+            } else {
+                None
+            };
+
         ProtocolMethod {
             annotation,
             name,
             type_params,
             params,
             return_type,
+            body,
             span: self.span_from(start),
         }
     }

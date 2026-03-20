@@ -188,9 +188,10 @@ The foundation for Expo's concurrency promise. B1-B3 form a dependency chain. B4
 Replaces the old `Process<M>` handle struct and caller-side annotations. Processes are now structs implementing a `Process<C, M, R>` protocol. See `CONCURRENCY.md` for full design exploration.
 
 - **`Process<C, M, R>` protocol** -- three type params: C (config to start), M (messages while running), R (replies sent back). Two required methods (`init`, `handle`), two default impls (`start` receive loop, `child_spec` supervision bridge).
-  - **Implemented**: protocol declaration, `impl Process<C, M, R> for T`, type checker extracts C/M/R from `protocol_impls`, `process_msg_type` set from protocol impl (no more `collect_process_msg_types` pre-pass).
+  - **Implemented**: protocol declaration, `impl Process<C, M, R> for T`, type checker extracts C/M/R from `protocol_impls`, `process_msg_type` set to `Pair<M, Option<ReplyTo<R>>>` envelope type. Default `start` method synthesized from protocol. `cast` wraps in `Pair<msg, Option.None>`, `call` wraps in `Pair<msg, Option.Some(ReplyTo)>` with `expo_rt_self()` for caller PID.
 - **Default protocol implementations** -- new language feature. Protocols can provide default method bodies (like Rust default trait methods, Swift protocol extensions). Motivated by the `start` loop but useful throughout the language (`Display` with default `to_string`, `Equality` with default `ne`).
-  - **Remaining**: not yet implemented. Processes currently override `start` manually.
+  - **Implemented**: parser, AST (`ProtocolMethod.body`), type checker synthesis with full type parameter substitution (Self + protocol type params in body patterns and expressions), codegen declaration/definition, formatter, LSP traversal. Default `start` loop on `Process` receives `Pair<M, Option<ReplyTo<R>>>`, unpacks, calls `handle`, recurses. Post-merge synthesis pass for stdlib protocols.
+  - **Known limitation**: protocol method name collisions -- if two protocols define a method with the same name, the second impl silently overwrites the first in the method table. Needs qualified dispatch or a diagnostic.
 - **`Pid` + `Ref<M, R>`** -- `Pid` is type-erased (raw process ID, used in `ExitSignal`, registries). `Ref<M, R>` is the typed handle for `cast`/`call`. `spawn` returns `Ref<M, R>`.
   - **Implemented**: `spawn T.init(config)` returns `Ref<M, R>` with M and R resolved from the Process impl. Bare function spawn (`spawn some_function`) is now a compile error. Runtime accepts initial process state via `expo_rt_spawn(fn_ptr, state_ptr, state_len)`.
   - **Remaining**: `cast`/`call` methods on `Ref<M, R>`. `Pid` type.
@@ -198,7 +199,7 @@ Replaces the old `Process<M>` handle struct and caller-side annotations. Process
   - **Implemented**: parser (`after` as receive-only stop token, not leaked into `match`/`cond`), type checker (timeout expression + body), codegen (calls `expo_rt_receive_timeout`, branches on null for timeout path), formatter, LSP traverse (patterns + guards in receive arms), grammar updated.
 - **Trait bounds on generics** -- `fn foo<T: Process<C, M, R>>(x: T)` needed for `child_spec` and generic process utilities. Requires protocols, now unblocked.
   - **Remaining**: not yet implemented.
-- **Done when**: a struct implementing `Process<C, M, R>` can be spawned, receive messages via `cast`/`call` with typed `Ref<M, R>`, and the default `start` loop works via default protocol impl.
+- **Done when**: a struct implementing `Process<C, M, R>` can be spawned, receive messages via `cast`/`call` with typed `Ref<M, R>`, and the default `start` loop works via default protocol impl. ✓ Basic flow complete -- default `start` works with pair envelope, `cast` tested end-to-end. `call` codegen complete but untested pending a proper runtime scheduler with blocking `receive`.
 
 #### B3. `copy` keyword
 
@@ -621,7 +622,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 | Phase        | Milestone                                                                                                                                           |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Surface (3A) | Binary/bitstring literals, string-as-UTF8, project system + test runner, lexer port                                                                 |
-| Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, default impls, `Pid`, `cast`/`call`, `copy`, scheduler + I/O |
+| Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, `Pid`, `copy`, scheduler + I/O |
 | Reliability  | Supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), `Task`, process discovery, preemption, `shared_map`                                     |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                           |
 | Tooling      | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                              |

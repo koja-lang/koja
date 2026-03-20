@@ -827,23 +827,37 @@ pub(crate) fn compile_pattern<'ctx>(
             let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
             let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
 
-            let member_mangled = mangle_type(&resolved);
-            let union_mangled = mangle_type(unwrap_indirect(subject_type));
+            if mangle_type(&resolved) == mangle_type(unwrap_indirect(subject_type)) {
+                let llvm_ty =
+                    to_llvm_type(&resolved, c.context, &c.struct_types).ok_or_else(|| {
+                        format!("unsupported type in typed binding: {}", resolved.display())
+                    })?;
+                let val = c.builder.build_load(llvm_ty, subject_ptr, name).unwrap();
+                let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
+                c.builder.build_store(alloca, val).unwrap();
+                c.variables
+                    .insert(name.clone(), (alloca, resolved, Ownership::Unowned));
+                Ok(c.context.bool_type().const_int(1, false))
+            } else {
+                let member_mangled = mangle_type(&resolved);
+                let union_mangled = mangle_type(unwrap_indirect(subject_type));
 
-            let result = compile_tag_check(c, subject_ptr, &union_mangled, &member_mangled)?;
+                let result = compile_tag_check(c, subject_ptr, &union_mangled, &member_mangled)?;
 
-            let (_payload_type, payload_ptr) =
-                get_payload_ptr(c, subject_ptr, &union_mangled, &member_mangled)?;
-            let llvm_ty = to_llvm_type(&resolved, c.context, &c.struct_types).ok_or_else(|| {
-                format!("unsupported type in typed binding: {}", resolved.display())
-            })?;
-            let val = c.builder.build_load(llvm_ty, payload_ptr, name).unwrap();
-            let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
-            c.builder.build_store(alloca, val).unwrap();
-            c.variables
-                .insert(name.clone(), (alloca, resolved, Ownership::Unowned));
+                let (_payload_type, payload_ptr) =
+                    get_payload_ptr(c, subject_ptr, &union_mangled, &member_mangled)?;
+                let llvm_ty =
+                    to_llvm_type(&resolved, c.context, &c.struct_types).ok_or_else(|| {
+                        format!("unsupported type in typed binding: {}", resolved.display())
+                    })?;
+                let val = c.builder.build_load(llvm_ty, payload_ptr, name).unwrap();
+                let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
+                c.builder.build_store(alloca, val).unwrap();
+                c.variables
+                    .insert(name.clone(), (alloca, resolved, Ownership::Unowned));
 
-            Ok(result)
+                Ok(result)
+            }
         }
 
         Pattern::Tuple { .. } | Pattern::List { .. } => {

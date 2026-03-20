@@ -563,3 +563,23 @@ pub fn unwrap_indirect(ty: &Type) -> &Type {
         other => other,
     }
 }
+
+/// Builds the mailbox envelope type `Pair<M, Option<ReplyTo<R>>>` from M and R.
+pub fn process_envelope_type(m: &Type, r: &Type) -> Type {
+    Type::GenericInstance {
+        base: "Pair".to_string(),
+        kind: GenericKind::Struct,
+        type_args: vec![
+            m.clone(),
+            Type::GenericInstance {
+                base: "Option".to_string(),
+                kind: GenericKind::Enum,
+                type_args: vec![Type::GenericInstance {
+                    base: "ReplyTo".to_string(),
+                    kind: GenericKind::Struct,
+                    type_args: vec![r.clone()],
+                }],
+            },
+        ],
+    }
+}

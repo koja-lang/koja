@@ -433,7 +433,7 @@ impl<'a> Printer<'a> {
         concat(parts)
     }
 
-    /// Formats a protocol method signature (no body).
+    /// Formats a protocol method (signature only, or with default body).
     fn protocol_method_to_doc(&mut self, m: &ProtocolMethod) -> Doc {
         let mut parts = Vec::new();
         if let Some(ann) = &m.annotation {
@@ -472,6 +472,12 @@ impl<'a> Printer<'a> {
         if let Some(ret) = return_doc {
             parts.push(text(" "));
             parts.push(ret);
+        }
+
+        if let Some(body) = &m.body {
+            parts.push(self.body_to_doc(body, m.span.end.line));
+            parts.push(hardline());
+            parts.push(text("end"));
         }
 
         concat(parts)

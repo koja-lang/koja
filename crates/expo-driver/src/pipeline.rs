@@ -63,6 +63,7 @@ pub fn typecheck_modules(
         let rm = &graph.modules[name];
         let mut ctx = expo_typecheck::collect_module(&rm.module);
         expo_typecheck::merge_stdlib(&stdlib.ctx, &mut ctx);
+        expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
         expo_typecheck::re_resolve_generics(&mut ctx);
         expo_typecheck::mark_recursive_fields(&mut ctx);
         expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);

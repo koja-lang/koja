@@ -82,7 +82,8 @@ protocol_decl = [ annotation ] , "protocol" , TYPE_IDENT , [ type_params ] ,
                 "end" ;
 
 protocol_method = [ annotation ] , "fn" , IDENT , [ type_params ] ,
-                  [ "(" , [ param_list ] , ")" ] , [ "->" , type_expr ] ;
+                  [ "(" , [ param_list ] , ")" ] , [ "->" , type_expr ] ,
+                  [ { statement } , "end" ] ;
 
 
 (* ========================================================================== *)

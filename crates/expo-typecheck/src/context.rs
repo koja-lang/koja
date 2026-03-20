@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{
-    Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, Severity, StructDecl,
+    Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, ProtocolMethod, Severity, StructDecl,
 };
 pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::span::Span;
@@ -26,6 +26,7 @@ pub struct TypeContext {
     pub protocol_impls: HashMap<String, Vec<(String, Vec<Type>)>>,
     pub protocols: HashMap<String, ProtocolInfo>,
     pub structs: HashMap<String, StructInfo>,
+    pub synthesized_default_fns: HashMap<String, Vec<Function>>,
     pub type_aliases: HashMap<String, Type>,
 }
 
@@ -72,6 +73,7 @@ pub struct ParamInfo {
 /// Collected metadata for a protocol declaration.
 #[derive(Clone)]
 pub struct ProtocolInfo {
+    pub default_bodies: HashMap<String, ProtocolMethod>,
     pub methods: HashMap<String, FunctionSig>,
     #[allow(dead_code)]
     pub span: Span,
@@ -163,6 +165,7 @@ impl TypeContext {
             protocol_impls: HashMap::new(),
             protocols: HashMap::new(),
             structs: HashMap::new(),
+            synthesized_default_fns: HashMap::new(),
             type_aliases: HashMap::new(),
         }
     }
@@ -228,6 +231,12 @@ impl TypeContext {
                 .entry(type_name.clone())
                 .or_default()
                 .extend(impls.iter().cloned());
+        }
+        for (type_name, fns) in &other.synthesized_default_fns {
+            self.synthesized_default_fns
+                .entry(type_name.clone())
+                .or_default()
+                .extend(fns.iter().cloned());
         }
         for (name, ty) in &other.type_aliases {
             if !self.type_aliases.contains_key(name) {

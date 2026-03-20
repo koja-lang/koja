@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use expo_ast::ast::{
-    EnumVariantData, Expr, ImplMember, ImportTarget, Item, Literal, Module, Param, ProtocolMethod,
-    TypeExpr,
+    EnumVariantData, Expr, Function, ImplMember, ImportTarget, Item, Literal, Module, Param,
+    Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
 };
 use expo_ast::span::Span;
 
@@ -248,11 +248,68 @@ pub fn collect(module: &Module) -> TypeContext {
                                 .collect()
                         })
                         .unwrap_or_default();
+                    let proto_type_param_names: Vec<String> = ctx
+                        .protocols
+                        .get(proto)
+                        .map(|pi| pi.type_params.clone())
+                        .unwrap_or_default();
+                    let proto_type_args: Vec<String> = if let Some(TypeExpr::Generic {
+                        args, ..
+                    }) = &impl_block.trait_expr
+                    {
+                        args.iter()
+                            .map(|a| match a {
+                                TypeExpr::Named { path, .. } if path.len() == 1 => path[0].clone(),
+                                _ => String::new(),
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let type_param_map: Vec<(&str, &str)> = proto_type_param_names
+                        .iter()
+                        .zip(proto_type_args.iter())
+                        .map(|(k, v)| (k.as_str(), v.as_str()))
+                        .collect();
+
                     for name in &missing {
-                        ctx.error(
-                            format!("missing method `{name}` required by protocol `{proto}`"),
-                            impl_block.span,
-                        );
+                        let has_default = ctx
+                            .protocols
+                            .get(proto)
+                            .is_some_and(|pi| pi.default_bodies.contains_key(name));
+                        if has_default {
+                            let pm = ctx.protocols[proto].default_bodies[name].clone();
+                            let synth = synthesize_default_fn(&pm, &target_name, &type_param_map);
+                            let sig = build_function_sig_with_params(
+                                &synth,
+                                &struct_names,
+                                &enum_names,
+                                &tp_refs,
+                                &type_aliases,
+                            );
+                            if let Some(sig) = sig {
+                                let sig = substitute_self_type(sig, &self_type);
+                                let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
+                                    Some(&mut si.methods)
+                                } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
+                                    Some(&mut ei.methods)
+                                } else {
+                                    None
+                                };
+                                if let Some(methods) = methods {
+                                    methods.insert(name.clone(), sig);
+                                }
+                            }
+                            ctx.synthesized_default_fns
+                                .entry(target_name.clone())
+                                .or_default()
+                                .push(synth);
+                        } else {
+                            ctx.error(
+                                format!("missing method `{name}` required by protocol `{proto}`"),
+                                impl_block.span,
+                            );
+                        }
                     }
                     let proto_type_args: Vec<Type> =
                         if let Some(TypeExpr::Generic { args, .. }) = &impl_block.trait_expr {
@@ -332,6 +389,7 @@ pub fn collect(module: &Module) -> TypeContext {
             Item::Protocol(p) => {
                 let tp_refs: Vec<&str> = p.type_params.iter().map(|s| s.as_str()).collect();
                 let mut methods: HashMap<String, FunctionSig> = HashMap::new();
+                let mut default_bodies: HashMap<String, ProtocolMethod> = HashMap::new();
                 for m in &p.methods {
                     if let Some(sig) = build_protocol_method_sig(
                         m,
@@ -342,6 +400,9 @@ pub fn collect(module: &Module) -> TypeContext {
                     ) {
                         methods.insert(m.name.clone(), sig);
                     }
+                    if m.body.is_some() {
+                        default_bodies.insert(m.name.clone(), m.clone());
+                    }
                 }
                 if !p.type_params.is_empty() {
                     ctx.generic_protocol_asts.insert(p.name.clone(), p.clone());
@@ -349,6 +410,7 @@ pub fn collect(module: &Module) -> TypeContext {
                 ctx.protocols.insert(
                     p.name.clone(),
                     ProtocolInfo {
+                        default_bodies,
                         methods,
                         span: p.span,
                         type_params: p.type_params.clone(),
@@ -420,6 +482,148 @@ pub fn collect(module: &Module) -> TypeContext {
     );
 
     ctx
+}
+
+/// Synthesizes default protocol method implementations for impl blocks whose
+/// protocol info wasn't available during initial collection (e.g. stdlib
+/// protocols like `Process`). Must be called after `merge_stdlib`.
+pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
+    let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+    let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
+    let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
+    let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
+    let type_aliases = ctx.type_aliases.clone();
+    let tp_refs: Vec<&str> = Vec::new();
+
+    for item in &module.items {
+        if let Item::Impl(impl_block) = item {
+            let target_name = if let TypeExpr::Named { path, .. } = &impl_block.target
+                && path.len() == 1
+            {
+                path[0].clone()
+            } else {
+                continue;
+            };
+
+            let protocol_name = impl_block.trait_expr.as_ref().and_then(|te| match te {
+                TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].clone()),
+                TypeExpr::Generic { path, .. } if path.len() == 1 => Some(path[0].clone()),
+                _ => None,
+            });
+
+            let Some(proto) = protocol_name else {
+                continue;
+            };
+
+            if ctx.synthesized_default_fns.contains_key(&target_name)
+                && ctx.synthesized_default_fns[&target_name].iter().any(|f| {
+                    ctx.protocols
+                        .get(&proto)
+                        .is_some_and(|pi| pi.default_bodies.contains_key(&f.name))
+                })
+            {
+                continue;
+            }
+
+            let impl_method_names: std::collections::HashSet<String> = impl_block
+                .members
+                .iter()
+                .filter_map(|m| {
+                    if let ImplMember::Function(f) = m {
+                        Some(f.name.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let missing: Vec<String> = ctx
+                .protocols
+                .get(&proto)
+                .map(|pi| {
+                    pi.methods
+                        .keys()
+                        .filter(|name| !impl_method_names.contains(*name))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if missing.is_empty() {
+                continue;
+            }
+
+            let self_type = if ctx.structs.contains_key(&target_name) {
+                Type::Struct(target_name.clone())
+            } else if ctx.enums.contains_key(&target_name) {
+                Type::Enum(target_name.clone())
+            } else {
+                continue;
+            };
+
+            let proto_type_param_names: Vec<String> = ctx
+                .protocols
+                .get(&proto)
+                .map(|pi| pi.type_params.clone())
+                .unwrap_or_default();
+            let proto_type_args: Vec<String> =
+                if let Some(TypeExpr::Generic { args, .. }) = &impl_block.trait_expr {
+                    args.iter()
+                        .map(|a| match a {
+                            TypeExpr::Named { path, .. } if path.len() == 1 => path[0].clone(),
+                            _ => String::new(),
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+            let type_param_map: Vec<(&str, &str)> = proto_type_param_names
+                .iter()
+                .zip(proto_type_args.iter())
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+
+            for name in &missing {
+                let has_default = ctx
+                    .protocols
+                    .get(&proto)
+                    .is_some_and(|pi| pi.default_bodies.contains_key(name));
+                if has_default {
+                    let pm = ctx.protocols[&proto].default_bodies[name].clone();
+                    let synth = synthesize_default_fn(&pm, &target_name, &type_param_map);
+                    let sig = build_function_sig_with_params(
+                        &synth,
+                        &struct_refs,
+                        &enum_refs,
+                        &tp_refs,
+                        &type_aliases,
+                    );
+                    if let Some(sig) = sig {
+                        let sig = substitute_self_type(sig, &self_type);
+                        let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
+                            Some(&mut si.methods)
+                        } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
+                            Some(&mut ei.methods)
+                        } else {
+                            None
+                        };
+                        if let Some(methods) = methods {
+                            methods.insert(name.clone(), sig);
+                        }
+                    }
+                    ctx.synthesized_default_fns
+                        .entry(target_name.clone())
+                        .or_default()
+                        .push(synth);
+                } else {
+                    ctx.error(
+                        format!("missing method `{name}` required by protocol `{proto}`"),
+                        impl_block.span,
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Processes import statements and merges symbols from other module contexts
@@ -813,6 +1017,558 @@ fn merge_named(
         format!("`{name}` not found in module `{module_path}`"),
         span,
     );
+}
+
+/// Converts a `ProtocolMethod` with a default body into a `Function` AST node
+/// suitable for compilation as `{target_type}_{method_name}`.
+/// `type_param_map` maps protocol type params to concrete type names (e.g., `T` -> `String`).
+fn synthesize_default_fn(
+    pm: &ProtocolMethod,
+    target_type: &str,
+    type_param_map: &[(&str, &str)],
+) -> Function {
+    let mut params = pm.params.clone();
+    for p in &mut params {
+        if let Param::Regular { type_expr, .. } = p {
+            substitute_self_in_type_expr(type_expr, target_type);
+            for (from, to) in type_param_map {
+                substitute_named_in_type_expr(type_expr, from, to);
+            }
+        }
+    }
+    let mut return_type = pm.return_type.clone();
+    if let Some(rt) = &mut return_type {
+        substitute_self_in_type_expr(rt, target_type);
+        for (from, to) in type_param_map {
+            substitute_named_in_type_expr(rt, from, to);
+        }
+    }
+    let mut body = pm.body.clone().unwrap_or_default();
+    for stmt in &mut body {
+        substitute_self_in_statement(stmt, target_type);
+        for (from, to) in type_param_map {
+            substitute_named_in_statement(stmt, from, to);
+        }
+    }
+    Function {
+        annotation: pm.annotation.clone(),
+        visibility: Visibility::Public,
+        name: pm.name.clone(),
+        type_params: pm.type_params.clone(),
+        params,
+        return_type,
+        body,
+        span: pm.span,
+    }
+}
+
+/// Replaces a named type reference (e.g., a protocol type parameter like `T`)
+/// with a concrete type name throughout a type expression tree.
+fn substitute_named_in_type_expr(te: &mut TypeExpr, from: &str, to: &str) {
+    match te {
+        TypeExpr::Named { path, .. } if path.len() == 1 && path[0] == from => {
+            path[0] = to.to_string();
+        }
+        TypeExpr::Generic { args, .. } => {
+            for arg in args {
+                substitute_named_in_type_expr(arg, from, to);
+            }
+        }
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            for p in params {
+                substitute_named_in_type_expr(p, from, to);
+            }
+            substitute_named_in_type_expr(return_type, from, to);
+        }
+        TypeExpr::Tuple { elements, .. } => {
+            for e in elements {
+                substitute_named_in_type_expr(e, from, to);
+            }
+        }
+        TypeExpr::Union { types, .. } => {
+            for t in types {
+                substitute_named_in_type_expr(t, from, to);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn substitute_named_in_statement(stmt: &mut Statement, from: &str, to: &str) {
+    match stmt {
+        Statement::Expr(expr) => substitute_named_in_expr(expr, from, to),
+        Statement::Assignment {
+            type_annotation,
+            value,
+            ..
+        } => {
+            if let Some(ta) = type_annotation {
+                substitute_named_in_type_expr(ta, from, to);
+            }
+            substitute_named_in_expr(value, from, to);
+        }
+        Statement::CompoundAssign { value, .. } => {
+            substitute_named_in_expr(value, from, to);
+        }
+        Statement::Return { value, .. } => {
+            if let Some(v) = value {
+                substitute_named_in_expr(v, from, to);
+            }
+        }
+        Statement::Break { .. } => {}
+    }
+}
+
+fn substitute_named_in_arms(arms: &mut [expo_ast::ast::MatchArm], from: &str, to: &str) {
+    for arm in arms {
+        substitute_named_in_pattern(&mut arm.pattern, from, to);
+        if let Some(g) = &mut arm.guard {
+            substitute_named_in_expr(g, from, to);
+        }
+        for s in &mut arm.body {
+            substitute_named_in_statement(s, from, to);
+        }
+    }
+}
+
+fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &str) {
+    match expr {
+        Expr::Match { subject, arms, .. } => {
+            substitute_named_in_expr(subject, from, to);
+            substitute_named_in_arms(arms, from, to);
+        }
+        Expr::Receive { arms, .. } => {
+            substitute_named_in_arms(arms, from, to);
+        }
+        Expr::Closure {
+            return_type, body, ..
+        } => {
+            if let Some(rt) = return_type {
+                substitute_named_in_type_expr(rt, from, to);
+            }
+            for s in body {
+                substitute_named_in_statement(s, from, to);
+            }
+        }
+        Expr::Call { callee, args, .. } => {
+            substitute_named_in_expr(callee, from, to);
+            for a in args {
+                substitute_named_in_expr(&mut a.value, from, to);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            substitute_named_in_expr(receiver, from, to);
+            for a in args {
+                substitute_named_in_expr(&mut a.value, from, to);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            substitute_named_in_expr(left, from, to);
+            substitute_named_in_expr(right, from, to);
+        }
+        Expr::Unary { operand, .. } => substitute_named_in_expr(operand, from, to),
+        Expr::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            substitute_named_in_expr(condition, from, to);
+            for s in then_body {
+                substitute_named_in_statement(s, from, to);
+            }
+            if let Some(eb) = else_body {
+                for s in eb {
+                    substitute_named_in_statement(s, from, to);
+                }
+            }
+        }
+        Expr::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            substitute_named_in_pattern(pattern, from, to);
+            substitute_named_in_expr(iterable, from, to);
+            for s in body {
+                substitute_named_in_statement(s, from, to);
+            }
+        }
+        Expr::While {
+            condition, body, ..
+        } => {
+            substitute_named_in_expr(condition, from, to);
+            for s in body {
+                substitute_named_in_statement(s, from, to);
+            }
+        }
+        Expr::Loop { body, .. } | Expr::Arena { body, .. } => {
+            for s in body {
+                substitute_named_in_statement(s, from, to);
+            }
+        }
+        Expr::FieldAccess { receiver, .. } => substitute_named_in_expr(receiver, from, to),
+        Expr::Group { expr, .. } | Expr::Await { expr, .. } | Expr::Spawn { expr, .. } => {
+            substitute_named_in_expr(expr, from, to)
+        }
+        Expr::Cond {
+            arms, else_body, ..
+        } => {
+            for arm in arms {
+                substitute_named_in_expr(&mut arm.condition, from, to);
+                for s in &mut arm.body {
+                    substitute_named_in_statement(s, from, to);
+                }
+            }
+            if let Some(eb) = else_body {
+                for s in eb {
+                    substitute_named_in_statement(s, from, to);
+                }
+            }
+        }
+        Expr::String { parts, .. } => {
+            for part in parts {
+                if let StringPart::Interpolation { expr, .. } = part {
+                    substitute_named_in_expr(expr, from, to);
+                }
+            }
+        }
+        Expr::Tuple { elements, .. } | Expr::List { elements, .. } => {
+            for e in elements {
+                substitute_named_in_expr(e, from, to);
+            }
+        }
+        Expr::StructConstruction { fields, .. } => {
+            for f in fields {
+                substitute_named_in_expr(&mut f.value, from, to);
+            }
+        }
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            substitute_named_in_expr(condition, from, to);
+            substitute_named_in_expr(then_expr, from, to);
+            substitute_named_in_expr(else_expr, from, to);
+        }
+        Expr::Unless {
+            condition, body, ..
+        } => {
+            substitute_named_in_expr(condition, from, to);
+            for s in body {
+                substitute_named_in_statement(s, from, to);
+            }
+        }
+        Expr::ShortClosure { body, .. } => substitute_named_in_expr(body, from, to),
+        Expr::Map { entries, .. } => {
+            for (k, v) in entries {
+                substitute_named_in_expr(k, from, to);
+                substitute_named_in_expr(v, from, to);
+            }
+        }
+        Expr::Ident { .. }
+        | Expr::Literal { .. }
+        | Expr::Self_ { .. }
+        | Expr::EnumConstruction { .. } => {}
+    }
+}
+
+fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &str) {
+    match pat {
+        Pattern::TypedBinding { type_expr, .. } => {
+            substitute_named_in_type_expr(type_expr, from, to);
+        }
+        Pattern::EnumTuple { elements, .. } => {
+            for e in elements {
+                substitute_named_in_pattern(e, from, to);
+            }
+        }
+        Pattern::EnumStruct { fields, .. } => {
+            for f in fields {
+                if let Some(p) = &mut f.pattern {
+                    substitute_named_in_pattern(p, from, to);
+                }
+            }
+        }
+        Pattern::Constructor { elements, .. } => {
+            for e in elements {
+                substitute_named_in_pattern(e, from, to);
+            }
+        }
+        Pattern::Tuple { elements, .. } | Pattern::List { elements, .. } => {
+            for e in elements {
+                substitute_named_in_pattern(e, from, to);
+            }
+        }
+        Pattern::Wildcard { .. }
+        | Pattern::Literal { .. }
+        | Pattern::Binding { .. }
+        | Pattern::EnumUnit { .. } => {}
+    }
+}
+
+fn substitute_self_in_statement(stmt: &mut Statement, target: &str) {
+    match stmt {
+        Statement::Expr(expr) => substitute_self_in_expr(expr, target),
+        Statement::Assignment {
+            type_annotation,
+            value,
+            ..
+        } => {
+            if let Some(ta) = type_annotation {
+                substitute_self_in_type_expr(ta, target);
+            }
+            substitute_self_in_expr(value, target);
+        }
+        Statement::CompoundAssign { value, .. } => substitute_self_in_expr(value, target),
+        Statement::Return { value, .. } => {
+            if let Some(v) = value {
+                substitute_self_in_expr(v, target);
+            }
+        }
+        Statement::Break { .. } => {}
+    }
+}
+
+fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
+    match expr {
+        Expr::Match { subject, arms, .. } => {
+            substitute_self_in_expr(subject, target);
+            for arm in arms {
+                substitute_self_in_pattern(&mut arm.pattern, target);
+                if let Some(g) = &mut arm.guard {
+                    substitute_self_in_expr(g, target);
+                }
+                for s in &mut arm.body {
+                    substitute_self_in_statement(s, target);
+                }
+            }
+        }
+        Expr::Receive { arms, .. } => {
+            for arm in arms {
+                substitute_self_in_pattern(&mut arm.pattern, target);
+                if let Some(g) = &mut arm.guard {
+                    substitute_self_in_expr(g, target);
+                }
+                for s in &mut arm.body {
+                    substitute_self_in_statement(s, target);
+                }
+            }
+        }
+        Expr::Closure {
+            return_type, body, ..
+        } => {
+            if let Some(rt) = return_type {
+                substitute_self_in_type_expr(rt, target);
+            }
+            for s in body {
+                substitute_self_in_statement(s, target);
+            }
+        }
+        Expr::Call { callee, args, .. } => {
+            substitute_self_in_expr(callee, target);
+            for a in args {
+                substitute_self_in_expr(&mut a.value, target);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            substitute_self_in_expr(receiver, target);
+            for a in args {
+                substitute_self_in_expr(&mut a.value, target);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            substitute_self_in_expr(left, target);
+            substitute_self_in_expr(right, target);
+        }
+        Expr::Unary { operand, .. } => substitute_self_in_expr(operand, target),
+        Expr::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            substitute_self_in_expr(condition, target);
+            for s in then_body {
+                substitute_self_in_statement(s, target);
+            }
+            if let Some(eb) = else_body {
+                for s in eb {
+                    substitute_self_in_statement(s, target);
+                }
+            }
+        }
+        Expr::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            substitute_self_in_pattern(pattern, target);
+            substitute_self_in_expr(iterable, target);
+            for s in body {
+                substitute_self_in_statement(s, target);
+            }
+        }
+        Expr::While {
+            condition, body, ..
+        } => {
+            substitute_self_in_expr(condition, target);
+            for s in body {
+                substitute_self_in_statement(s, target);
+            }
+        }
+        Expr::Loop { body, .. } | Expr::Arena { body, .. } => {
+            for s in body {
+                substitute_self_in_statement(s, target);
+            }
+        }
+        Expr::FieldAccess { receiver, .. } => substitute_self_in_expr(receiver, target),
+        Expr::Group { expr, .. } | Expr::Await { expr, .. } | Expr::Spawn { expr, .. } => {
+            substitute_self_in_expr(expr, target)
+        }
+        Expr::Cond {
+            arms, else_body, ..
+        } => {
+            for arm in arms {
+                substitute_self_in_expr(&mut arm.condition, target);
+                for s in &mut arm.body {
+                    substitute_self_in_statement(s, target);
+                }
+            }
+            if let Some(eb) = else_body {
+                for s in eb {
+                    substitute_self_in_statement(s, target);
+                }
+            }
+        }
+        Expr::String { parts, .. } => {
+            for part in parts {
+                if let StringPart::Interpolation { expr, .. } = part {
+                    substitute_self_in_expr(expr, target);
+                }
+            }
+        }
+        Expr::Tuple { elements, .. } | Expr::List { elements, .. } => {
+            for e in elements {
+                substitute_self_in_expr(e, target);
+            }
+        }
+        Expr::StructConstruction { fields, .. } => {
+            for f in fields {
+                substitute_self_in_expr(&mut f.value, target);
+            }
+        }
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            substitute_self_in_expr(condition, target);
+            substitute_self_in_expr(then_expr, target);
+            substitute_self_in_expr(else_expr, target);
+        }
+        Expr::Unless {
+            condition, body, ..
+        } => {
+            substitute_self_in_expr(condition, target);
+            for s in body {
+                substitute_self_in_statement(s, target);
+            }
+        }
+        Expr::ShortClosure { body, .. } => substitute_self_in_expr(body, target),
+        Expr::Map { entries, .. } => {
+            for (k, v) in entries {
+                substitute_self_in_expr(k, target);
+                substitute_self_in_expr(v, target);
+            }
+        }
+        Expr::Ident { .. }
+        | Expr::Literal { .. }
+        | Expr::Self_ { .. }
+        | Expr::EnumConstruction { .. } => {}
+    }
+}
+
+fn substitute_self_in_pattern(pat: &mut Pattern, target: &str) {
+    match pat {
+        Pattern::TypedBinding { type_expr, .. } => {
+            substitute_self_in_type_expr(type_expr, target);
+        }
+        Pattern::EnumTuple { elements, .. } => {
+            for e in elements {
+                substitute_self_in_pattern(e, target);
+            }
+        }
+        Pattern::EnumStruct { fields, .. } => {
+            for f in fields {
+                if let Some(p) = &mut f.pattern {
+                    substitute_self_in_pattern(p, target);
+                }
+            }
+        }
+        Pattern::Constructor { elements, .. } => {
+            for e in elements {
+                substitute_self_in_pattern(e, target);
+            }
+        }
+        Pattern::Tuple { elements, .. } | Pattern::List { elements, .. } => {
+            for e in elements {
+                substitute_self_in_pattern(e, target);
+            }
+        }
+        Pattern::Wildcard { .. }
+        | Pattern::Literal { .. }
+        | Pattern::Binding { .. }
+        | Pattern::EnumUnit { .. } => {}
+    }
+}
+
+/// Replaces `TypeExpr::Self_` with a `TypeExpr::Named` pointing to the
+/// concrete target type throughout a type expression tree.
+fn substitute_self_in_type_expr(te: &mut TypeExpr, target: &str) {
+    match te {
+        TypeExpr::Self_ { span } => {
+            *te = TypeExpr::Named {
+                path: vec![target.to_string()],
+                span: *span,
+            };
+        }
+        TypeExpr::Generic { args, .. } => {
+            for arg in args {
+                substitute_self_in_type_expr(arg, target);
+            }
+        }
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            for p in params {
+                substitute_self_in_type_expr(p, target);
+            }
+            substitute_self_in_type_expr(return_type, target);
+        }
+        TypeExpr::Tuple { elements, .. } => {
+            for e in elements {
+                substitute_self_in_type_expr(e, target);
+            }
+        }
+        TypeExpr::Union { types, .. } => {
+            for t in types {
+                substitute_self_in_type_expr(t, target);
+            }
+        }
+        TypeExpr::Named { .. } | TypeExpr::Unit { .. } => {}
+    }
 }
 
 /// Replaces `Type::TypeVar("Self")` with the concrete impl target type in a

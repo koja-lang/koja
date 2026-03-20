@@ -52,16 +52,36 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                     ctx.protocol_impls
                         .get(target_name.as_str())
                         .and_then(|impls| {
-                            impls
-                                .iter()
-                                .find(|(proto, _)| proto == "Process")
-                                .and_then(|(_, args)| args.get(1).cloned())
+                            impls.iter().find(|(proto, _)| proto == "Process").and_then(
+                                |(_, args)| {
+                                    let m = args.get(1)?;
+                                    let r = args.get(2)?;
+                                    Some(crate::types::process_envelope_type(m, r))
+                                },
+                            )
                         });
 
                 for member in &impl_block.members {
                     if let ImplMember::Function(f) = member
                         && f.type_params.is_empty()
                     {
+                        check_function_with_msg(
+                            f,
+                            ctx,
+                            Some(&self_type),
+                            &struct_name_refs,
+                            &enum_name_refs,
+                            impl_process_msg.clone(),
+                        );
+                    }
+                }
+                let synth_fns = ctx
+                    .synthesized_default_fns
+                    .get(target_name.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                for f in &synth_fns {
+                    if f.type_params.is_empty() {
                         check_function_with_msg(
                             f,
                             ctx,

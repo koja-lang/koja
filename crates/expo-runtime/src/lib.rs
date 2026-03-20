@@ -135,6 +135,11 @@ pub extern "C" fn expo_rt_receive_timeout(_timeout_ms: i64) -> *const u8 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn expo_rt_self() -> i64 {
+    sched().current_pid
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn expo_rt_main_done() {
     let s = sched();
     loop {

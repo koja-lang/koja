@@ -960,7 +960,7 @@ fn compile_receive<'ctx>(
 
     let merge_bb = c.context.append_basic_block(function, "recv_end");
 
-    if has_after {
+    {
         let ptr_val = raw_ptr.into_pointer_value();
         let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
         let null_ptr = ptr_ty.const_null();
@@ -969,22 +969,36 @@ fn compile_receive<'ctx>(
             .build_int_compare(inkwell::IntPredicate::EQ, ptr_val, null_ptr, "is_timeout")
             .unwrap();
 
-        let after_bb = c.context.append_basic_block(function, "recv_after");
-        let got_msg_bb = c.context.append_basic_block(function, "recv_got_msg");
+        if has_after {
+            let after_bb = c.context.append_basic_block(function, "recv_after");
+            let got_msg_bb = c.context.append_basic_block(function, "recv_got_msg");
 
-        c.builder
-            .build_conditional_branch(is_null, after_bb, got_msg_bb)
-            .unwrap();
+            c.builder
+                .build_conditional_branch(is_null, after_bb, got_msg_bb)
+                .unwrap();
 
-        c.builder.position_at_end(after_bb);
-        for stmt in after_body {
-            crate::stmt::compile_statement(c, stmt, function)?;
+            c.builder.position_at_end(after_bb);
+            for stmt in after_body {
+                crate::stmt::compile_statement(c, stmt, function)?;
+            }
+            if !c.current_block_terminated() {
+                c.builder.build_unconditional_branch(merge_bb).unwrap();
+            }
+
+            c.builder.position_at_end(got_msg_bb);
+        } else {
+            let got_msg_bb = c.context.append_basic_block(function, "recv_got_msg");
+            let empty_bb = c.context.append_basic_block(function, "recv_empty");
+
+            c.builder
+                .build_conditional_branch(is_null, empty_bb, got_msg_bb)
+                .unwrap();
+
+            c.builder.position_at_end(empty_bb);
+            c.builder.build_return(None).unwrap();
+
+            c.builder.position_at_end(got_msg_bb);
         }
-        if !c.current_block_terminated() {
-            c.builder.build_unconditional_branch(merge_bb).unwrap();
-        }
-
-        c.builder.position_at_end(got_msg_bb);
     }
 
     let msg_type = c.process_msg_type.clone();

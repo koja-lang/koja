@@ -354,6 +354,12 @@ impl<'ctx> Compiler<'ctx> {
         self.functions
             .insert("expo_rt_receive_timeout".to_string(), receive_timeout);
 
+        let self_pid_type = i64_type.fn_type(&[], false);
+        let self_pid = self
+            .module
+            .add_function("expo_rt_self", self_pid_type, None);
+        self.functions.insert("expo_rt_self".to_string(), self_pid);
+
         let main_done_type = self.context.void_type().fn_type(&[], false);
         let main_done = self
             .module
@@ -465,6 +471,21 @@ impl<'ctx> Compiler<'ctx> {
 
     fn declare_functions(&mut self, module: &Module) -> Result<(), String> {
         for item in &module.items {
+            if let Item::Impl(impl_block) = item {
+                for member in &impl_block.members {
+                    if let ImplMember::Function(func) = member {
+                        for param in &func.params {
+                            if let Param::Regular { type_expr, .. } = param {
+                                let ty = self.resolve_type_expr(type_expr);
+                                let _ = self.ensure_types_exist(&ty);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for item in &module.items {
             match item {
                 Item::Function(func) => {
                     if !func.type_params.is_empty() {
@@ -479,6 +500,15 @@ impl<'ctx> Compiler<'ctx> {
                     if let Some(target_name) = target_name {
                         for member in &impl_block.members {
                             if let ImplMember::Function(func) = member {
+                                let mangled = format!("{}_{}", target_name, func.name);
+                                let fn_value = self.declare_function(func, Some(&target_name))?;
+                                self.functions.insert(mangled, fn_value);
+                            }
+                        }
+                        if let Some(synth_fns) =
+                            self.type_ctx.synthesized_default_fns.get(&target_name)
+                        {
+                            for func in synth_fns {
                                 let mangled = format!("{}_{}", target_name, func.name);
                                 let fn_value = self.declare_function(func, Some(&target_name))?;
                                 self.functions.insert(mangled, fn_value);
@@ -561,8 +591,15 @@ impl<'ctx> Compiler<'ctx> {
                 impls
                     .iter()
                     .find(|(proto, _)| proto == "Process")
-                    .and_then(|(_, args)| args.get(1).cloned())
+                    .and_then(|(_, args)| {
+                        let m = args.get(1)?;
+                        let r = args.get(2)?;
+                        Some(expo_typecheck::types::process_envelope_type(m, r))
+                    })
             });
+            if let Some(env_type) = self.process_msg_type.clone() {
+                let _ = self.ensure_types_exist(&env_type);
+            }
         }
 
         let mut return_type = self.resolve_return_type(&func.return_type);
@@ -597,6 +634,13 @@ impl<'ctx> Compiler<'ctx> {
                     if let Some(target_name) = target_name {
                         for member in &impl_block.members {
                             if let ImplMember::Function(func) = member {
+                                self.define_function(func, Some(&target_name))?;
+                            }
+                        }
+                        if let Some(synth_fns) =
+                            self.type_ctx.synthesized_default_fns.get(&target_name)
+                        {
+                            for func in synth_fns {
                                 self.define_function(func, Some(&target_name))?;
                             }
                         }

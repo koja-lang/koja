@@ -687,5 +687,11 @@ while running, `R` is the reply type for synchronous calls.
 protocol Process<C, M, R>
   fn init(config: C) -> Self
   fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self
+
   fn start(move self)
+    receive
+      pair: Pair<M, Option<ReplyTo<R>>> ->
+        self.handle(pair.first, pair.second).start()
+    end
+  end
 end

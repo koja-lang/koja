@@ -33,25 +33,6 @@ impl Process<WorkerConfig, WorkerMsg, String> for Worker
         self
     end
   end
-
-  fn start(move self)
-    receive
-      msg ->
-        match msg
-          WorkerMsg.Greet(name) ->
-            print("#{self.label}: Hello, #{name}!")
-            self.start()
-
-          WorkerMsg.Add(a, b) ->
-            result = a + b
-            print("#{self.label}: Sum: #{result}")
-            self.start()
-
-          WorkerMsg.Stop ->
-            print("#{self.label}: Stopped.")
-        end
-    end
-  end
 end
 
 fn main

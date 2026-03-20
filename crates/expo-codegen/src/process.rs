@@ -113,6 +113,9 @@ pub fn emit_ref_method<'ctx>(
             let msg_type = type_args
                 .first()
                 .ok_or("Ref.cast requires a type argument")?;
+            let reply_type = type_args
+                .get(1)
+                .ok_or("Ref.cast requires R type argument")?;
             let is_string = matches!(msg_type, Type::Primitive(Primitive::String));
 
             let msg_llvm = if is_string {
@@ -121,6 +124,12 @@ pub fn emit_ref_method<'ctx>(
                 to_llvm_type(msg_type, c.context, &c.struct_types)
                     .ok_or_else(|| format!("no LLVM type for message `{msg_type:?}`"))?
             };
+
+            let envelope_type = expo_typecheck::types::process_envelope_type(msg_type, reply_type);
+            c.ensure_types_exist(&envelope_type)?;
+            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.struct_types)
+                .ok_or("no LLVM type for Pair envelope")?
+                .into_struct_type();
 
             let fn_type = c
                 .context
@@ -133,7 +142,70 @@ pub fn emit_ref_method<'ctx>(
             let saved_block = c.builder.get_insert_block();
             c.builder.position_at_end(entry);
 
-            build_send_body(c, fn_val, msg_type, msg_llvm, is_string)?;
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let pid = c
+                .builder
+                .build_extract_value(self_val, 0, "pid")
+                .unwrap()
+                .into_int_value();
+
+            let msg_val = fn_val.get_nth_param(1).unwrap();
+
+            let option_reply_type = Type::GenericInstance {
+                base: "Option".to_string(),
+                kind: expo_typecheck::types::GenericKind::Enum,
+                type_args: vec![Type::GenericInstance {
+                    base: "ReplyTo".to_string(),
+                    kind: expo_typecheck::types::GenericKind::Struct,
+                    type_args: vec![reply_type.clone()],
+                }],
+            };
+            c.ensure_types_exist(&option_reply_type)?;
+            let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.struct_types)
+                .ok_or("no LLVM type for Option<ReplyTo<R>>")?
+                .into_struct_type();
+
+            let mut option_none = option_llvm.get_undef();
+            let tag_zero = c.context.i8_type().const_int(0, false);
+            option_none = c
+                .builder
+                .build_insert_value(option_none, tag_zero, 0, "none_tag")
+                .unwrap()
+                .into_struct_value();
+
+            let mut pair_val = envelope_llvm.get_undef();
+            pair_val = c
+                .builder
+                .build_insert_value(pair_val, msg_val, 0, "pair_first")
+                .unwrap()
+                .into_struct_value();
+            pair_val = c
+                .builder
+                .build_insert_value(pair_val, option_none, 1, "pair_second")
+                .unwrap()
+                .into_struct_value();
+
+            let send_fn = *c
+                .functions
+                .get("expo_rt_send")
+                .ok_or("expo_rt_send not declared")?;
+
+            let ptr_ty = c.context.ptr_type(AddressSpace::default());
+            let alloca = c
+                .builder
+                .build_alloca(envelope_llvm, "envelope_buf")
+                .unwrap();
+            c.builder.build_store(alloca, pair_val).unwrap();
+            let msg_ptr = c
+                .builder
+                .build_pointer_cast(alloca, ptr_ty, "envelope_ptr")
+                .unwrap();
+            let msg_len = envelope_llvm
+                .size_of()
+                .ok_or("cannot compute envelope byte size")?;
+            c.builder
+                .build_call(send_fn, &[pid.into(), msg_ptr.into(), msg_len.into()], "")
+                .unwrap();
 
             c.builder.build_return(None).unwrap();
 
@@ -174,18 +246,44 @@ pub fn emit_ref_method<'ctx>(
                     .ok_or_else(|| format!("no LLVM type for reply `{reply_type:?}`"))?
             };
 
-            let option_mangled =
+            let option_reply_mangled =
                 expo_typecheck::types::mangle_name("Option", std::slice::from_ref(reply_type));
-            if !c.struct_types.contains_key(&option_mangled) {
-                c.monomorphize_struct("Option", std::slice::from_ref(reply_type))?;
+            if !c.struct_types.contains_key(&option_reply_mangled) {
+                c.monomorphize_enum("Option", std::slice::from_ref(reply_type))?;
             }
-            let option_struct = *c
+            let option_reply_struct = *c
                 .struct_types
-                .get(&option_mangled)
+                .get(&option_reply_mangled)
                 .ok_or("Option struct not found for call reply")?;
 
-            let fn_type =
-                option_struct.fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
+            let envelope_type = expo_typecheck::types::process_envelope_type(msg_type, reply_type);
+            c.ensure_types_exist(&envelope_type)?;
+            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.struct_types)
+                .ok_or("no LLVM type for Pair envelope")?
+                .into_struct_type();
+
+            let reply_to_type = Type::GenericInstance {
+                base: "ReplyTo".to_string(),
+                kind: expo_typecheck::types::GenericKind::Struct,
+                type_args: vec![reply_type.clone()],
+            };
+            c.ensure_types_exist(&reply_to_type)?;
+            let reply_to_llvm = to_llvm_type(&reply_to_type, c.context, &c.struct_types)
+                .ok_or("no LLVM type for ReplyTo<R>")?
+                .into_struct_type();
+
+            let option_from_type = Type::GenericInstance {
+                base: "Option".to_string(),
+                kind: expo_typecheck::types::GenericKind::Enum,
+                type_args: vec![reply_to_type],
+            };
+            c.ensure_types_exist(&option_from_type)?;
+            let option_from_llvm = to_llvm_type(&option_from_type, c.context, &c.struct_types)
+                .ok_or("no LLVM type for Option<ReplyTo<R>>")?
+                .into_struct_type();
+
+            let fn_type = option_reply_struct
+                .fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
             c.functions.insert(mangled_fn.to_string(), fn_val);
 
@@ -193,7 +291,84 @@ pub fn emit_ref_method<'ctx>(
             let saved_block = c.builder.get_insert_block();
             c.builder.position_at_end(entry);
 
-            build_send_body(c, fn_val, msg_type, msg_llvm, is_msg_string)?;
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let target_pid = c
+                .builder
+                .build_extract_value(self_val, 0, "target_pid")
+                .unwrap()
+                .into_int_value();
+            let msg_val = fn_val.get_nth_param(1).unwrap();
+
+            let self_fn = *c
+                .functions
+                .get("expo_rt_self")
+                .ok_or("expo_rt_self not declared")?;
+            let caller_pid = c
+                .builder
+                .build_call(self_fn, &[], "caller_pid")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .ok_or("expo_rt_self did not return a value")?
+                .into_int_value();
+
+            let mut reply_to_val = reply_to_llvm.get_undef();
+            reply_to_val = c
+                .builder
+                .build_insert_value(reply_to_val, caller_pid, 0, "reply_to_id")
+                .unwrap()
+                .into_struct_value();
+
+            let mut option_some = option_from_llvm.get_undef();
+            let tag_one = c.context.i8_type().const_int(1, false);
+            option_some = c
+                .builder
+                .build_insert_value(option_some, tag_one, 0, "some_tag")
+                .unwrap()
+                .into_struct_value();
+            option_some = c
+                .builder
+                .build_insert_value(option_some, reply_to_val, 1, "some_val")
+                .unwrap()
+                .into_struct_value();
+
+            let mut pair_val = envelope_llvm.get_undef();
+            pair_val = c
+                .builder
+                .build_insert_value(pair_val, msg_val, 0, "pair_first")
+                .unwrap()
+                .into_struct_value();
+            pair_val = c
+                .builder
+                .build_insert_value(pair_val, option_some, 1, "pair_second")
+                .unwrap()
+                .into_struct_value();
+
+            let send_fn = *c
+                .functions
+                .get("expo_rt_send")
+                .ok_or("expo_rt_send not declared")?;
+
+            let ptr_ty = c.context.ptr_type(AddressSpace::default());
+            let alloca = c
+                .builder
+                .build_alloca(envelope_llvm, "envelope_buf")
+                .unwrap();
+            c.builder.build_store(alloca, pair_val).unwrap();
+            let msg_ptr = c
+                .builder
+                .build_pointer_cast(alloca, ptr_ty, "envelope_ptr")
+                .unwrap();
+            let msg_len = envelope_llvm
+                .size_of()
+                .ok_or("cannot compute envelope byte size")?;
+            c.builder
+                .build_call(
+                    send_fn,
+                    &[target_pid.into(), msg_ptr.into(), msg_len.into()],
+                    "",
+                )
+                .unwrap();
 
             let timeout_val = fn_val.get_nth_param(2).unwrap().into_int_value();
 
@@ -211,7 +386,6 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("expo_rt_receive_timeout did not return a value")?
                 .into_pointer_value();
 
-            let ptr_ty = c.context.ptr_type(AddressSpace::default());
             let null_ptr = ptr_ty.const_null();
             let is_null = c
                 .builder
@@ -227,7 +401,7 @@ pub fn emit_ref_method<'ctx>(
                 .unwrap();
 
             c.builder.position_at_end(then_bb);
-            let mut none_val = option_struct.get_undef();
+            let mut none_val = option_reply_struct.get_undef();
             let tag_zero = c.context.i8_type().const_int(0, false);
             none_val = c
                 .builder
@@ -244,11 +418,11 @@ pub fn emit_ref_method<'ctx>(
                     .build_load(reply_llvm, raw_ptr, "reply_val")
                     .unwrap()
             };
-            let mut some_val = option_struct.get_undef();
-            let tag_one = c.context.i8_type().const_int(1, false);
+            let mut some_val = option_reply_struct.get_undef();
+            let tag_one_reply = c.context.i8_type().const_int(1, false);
             some_val = c
                 .builder
-                .build_insert_value(some_val, tag_one, 0, "some_tag")
+                .build_insert_value(some_val, tag_one_reply, 0, "some_tag")
                 .unwrap()
                 .into_struct_value();
             some_val = c
@@ -259,7 +433,10 @@ pub fn emit_ref_method<'ctx>(
             c.builder.build_unconditional_branch(merge_bb).unwrap();
 
             c.builder.position_at_end(merge_bb);
-            let phi = c.builder.build_phi(option_struct, "call_result").unwrap();
+            let phi = c
+                .builder
+                .build_phi(option_reply_struct, "call_result")
+                .unwrap();
             phi.add_incoming(&[(&none_val, then_bb), (&some_val, else_bb)]);
 
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();

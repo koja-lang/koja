@@ -417,7 +417,7 @@ pub(crate) fn check_pattern(
                         *span,
                     );
                 }
-            } else if subject_type.is_known() {
+            } else if subject_type.is_known() && resolved.display() != subject_type.display() {
                 ctx.error(
                     format!(
                         "typed binding pattern on non-union type `{}`",

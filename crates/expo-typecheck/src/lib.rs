@@ -94,6 +94,13 @@ pub fn collect_module(module: &Module) -> TypeContext {
     collect::collect(module)
 }
 
+/// Synthesizes default protocol methods for impls whose protocols were unknown
+/// during initial collection (e.g. after merging stdlib). Must be called after
+/// [`merge_stdlib`].
+pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
+    collect::synthesize_protocol_defaults(module, ctx);
+}
+
 /// Detects recursive struct/enum fields and wraps them in [`types::Type::Indirect`]
 /// for heap-allocated indirection. Must be called after [`re_resolve_generics`].
 pub fn mark_recursive_fields(ctx: &mut TypeContext) {

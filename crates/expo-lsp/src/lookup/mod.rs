@@ -62,6 +62,23 @@ pub(crate) fn find_symbol_at(
                     }
                 }
             }
+            Item::Protocol(p) => {
+                if !span_contains(&p.span, line, col) {
+                    continue;
+                }
+                for m in &p.methods {
+                    if let Some(body) = &m.body {
+                        if !span_contains(&m.span, line, col) {
+                            continue;
+                        }
+                        for stmt in body {
+                            if let Some(info) = find_in_statement(stmt, line, col, ctx) {
+                                return Some(info);
+                            }
+                        }
+                    }
+                }
+            }
             Item::Struct(s) => {
                 if span_contains_name(&s.name, &s.span, line, col) {
                     return Some(SymbolInfo::Struct {

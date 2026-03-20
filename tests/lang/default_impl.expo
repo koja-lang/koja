@@ -1,0 +1,40 @@
+protocol Greeter<T>
+  fn greet(self, name: T) -> String
+
+  fn greet_twice(self, name: T) -> String
+    first = self.greet(name)
+    "#{first} #{first}"
+  end
+end
+
+struct HelloGreeter
+end
+
+impl Greeter<String> for HelloGreeter
+  fn greet(self, name: String) -> String
+    "Hello, #{name}!"
+  end
+end
+
+struct FancyGreeter
+end
+
+impl Greeter<String> for FancyGreeter
+  fn greet(self, name: String) -> String
+    "Greetings, #{name}!"
+  end
+
+  fn greet_twice(self, name: String) -> String
+    "Greetings and salutations, #{name}!"
+  end
+end
+
+fn main
+  g = HelloGreeter{}
+  print(g.greet("world"))
+  print(g.greet_twice("Expo"))
+
+  f = FancyGreeter{}
+  print(f.greet("world"))
+  print(f.greet_twice("Expo"))
+end
