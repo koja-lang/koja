@@ -1,9 +1,25 @@
-import { commands, window, workspace, ExtensionContext } from "vscode";
+import {
+  commands,
+  languages,
+  window,
+  workspace,
+  ExtensionContext,
+  TextDocument,
+  TextEdit,
+  Range,
+  Position,
+  FormattingOptions,
+  CancellationToken,
+} from "vscode";
 import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
 } from "vscode-languageclient/node";
+import { execFileSync } from "child_process";
+import { writeFileSync, unlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 let client: LanguageClient | undefined;
 
@@ -87,6 +103,45 @@ export function activate(context: ExtensionContext) {
 
     commands.registerCommand("expo.buildFile", () => {
       runExpoCommand("build");
+    }),
+
+    languages.registerDocumentFormattingEditProvider("expo", {
+      provideDocumentFormattingEdits(
+        document: TextDocument,
+        _options: FormattingOptions,
+        _token: CancellationToken,
+      ): TextEdit[] {
+        const binary = getExpoBinary();
+        const text = document.getText();
+        const tmpFile = join(tmpdir(), `expo-fmt-${Date.now()}.expo`);
+
+        try {
+          writeFileSync(tmpFile, text, "utf-8");
+          const formatted = execFileSync(binary, ["format", tmpFile], {
+            encoding: "utf-8",
+            timeout: 10_000,
+          });
+
+          if (formatted === text) {
+            return [];
+          }
+
+          const lastLine = document.lineCount - 1;
+          const fullRange = new Range(
+            new Position(0, 0),
+            new Position(lastLine, document.lineAt(lastLine).text.length),
+          );
+          return [TextEdit.replace(fullRange, formatted)];
+        } catch {
+          return [];
+        } finally {
+          try {
+            unlinkSync(tmpFile);
+          } catch {
+            // cleanup is best-effort
+          }
+        }
+      },
     }),
   );
 }

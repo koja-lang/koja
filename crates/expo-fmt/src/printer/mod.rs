@@ -74,31 +74,48 @@ impl<'a> Printer<'a> {
                 after_moduledoc = true;
             }
 
-            if let Item::Import(_) = &module.items[i] {
+            if matches!(&module.items[i], Item::Import(_) | Item::Constant(_)) {
+                let is_import = matches!(&module.items[i], Item::Import(_));
                 let run_start = i;
-                let mut imports: Vec<&Import> = Vec::new();
-                while i < module.items.len() {
-                    if let Item::Import(imp) = &module.items[i] {
-                        imports.push(imp);
+
+                if emitted && (!is_import || run_start > 0 || after_moduledoc) {
+                    parts.push(hardline());
+                }
+
+                if is_import {
+                    let mut imports: Vec<&Import> = Vec::new();
+                    while i < module.items.len() {
+                        if let Item::Import(imp) = &module.items[i] {
+                            imports.push(imp);
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let block_end = imports.last().unwrap().span.end.line + 1;
+                    let _ = self.comments.drain_before(block_end);
+
+                    imports.sort_by_key(|imp| import_sort_key(imp));
+
+                    for imp in &imports {
+                        parts.push(import_to_doc(imp));
+                        parts.push(hardline());
+                    }
+                } else {
+                    while i < module.items.len() && matches!(&module.items[i], Item::Constant(_)) {
+                        let item = &module.items[i];
+                        let span = item_span(item);
+                        let (comment_docs, _) = self.comments.drain_before(span.start.line);
+                        for c in comment_docs {
+                            parts.push(c);
+                        }
+                        parts.push(self.item_to_doc(item));
+                        parts.push(hardline());
                         i += 1;
-                    } else {
-                        break;
                     }
                 }
 
-                let block_end = imports.last().unwrap().span.end.line + 1;
-                let _ = self.comments.drain_before(block_end);
-
-                imports.sort_by_key(|imp| import_sort_key(imp));
-
-                if emitted && (run_start > 0 || after_moduledoc) {
-                    parts.push(hardline());
-                }
-
-                for imp in &imports {
-                    parts.push(import_to_doc(imp));
-                    parts.push(hardline());
-                }
                 emitted = true;
                 after_moduledoc = false;
             } else {

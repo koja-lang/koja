@@ -63,6 +63,11 @@
         "title": "Expo: Build File"
       }
     ],
+    "configurationDefaults": {
+      "[expo]": {
+        "editor.formatOnSave": true
+      }
+    },
     "configuration": {
       "title": "Expo",
       "properties": {
@@ -87,6 +92,7 @@
     "vscode-languageclient": "^9.0.0"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "@types/vscode": "^1.75.0",
     "typescript": "^5.0.0"
   }
