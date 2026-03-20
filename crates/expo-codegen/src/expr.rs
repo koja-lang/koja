@@ -783,16 +783,16 @@ fn compile_spawn<'ctx>(
                 if let Expr::Ident { name, .. } = r.as_ref() {
                     name.clone()
                 } else {
-                    return Err("spawn requires T.init(config) form".to_string());
+                    return Err("spawn requires T.new(config) form".to_string());
                 }
             }
-            _ => return Err("spawn requires T.init(config) form".to_string()),
+            _ => return Err("spawn requires T.new(config) form".to_string()),
         },
-        _ => return Err("spawn requires T.init(config) form".to_string()),
+        _ => return Err("spawn requires T.new(config) form".to_string()),
     };
 
     let init_value = compile_expr(c, expr, function)?
-        .ok_or_else(|| format!("{type_name}.init() did not produce a value"))?;
+        .ok_or_else(|| format!("{type_name}.new() did not produce a value"))?;
 
     let struct_type = init_value.get_type().into_struct_type();
     let state_alloca = c.builder.build_alloca(struct_type, "spawn_state").unwrap();
@@ -813,11 +813,11 @@ fn compile_spawn<'ctx>(
         .build_int_cast(state_size, c.context.i64_type(), "state_size")
         .unwrap();
 
-    let start_fn_name = format!("{type_name}_start");
-    let start_fn = c
+    let run_fn_name = format!("{type_name}_run");
+    let run_fn = c
         .module
-        .get_function(&start_fn_name)
-        .ok_or_else(|| format!("undefined start function: {start_fn_name}"))?;
+        .get_function(&run_fn_name)
+        .ok_or_else(|| format!("undefined run function: {run_fn_name}"))?;
 
     let wrapper_name = format!("__spawn_{type_name}");
     let wrapper = if let Some(existing) = c.module.get_function(&wrapper_name) {
@@ -847,9 +847,7 @@ fn compile_spawn<'ctx>(
             .build_load(struct_type, typed_ptr, "loaded_state")
             .unwrap();
 
-        c.builder
-            .build_call(start_fn, &[loaded.into()], "")
-            .unwrap();
+        c.builder.build_call(run_fn, &[loaded.into()], "").unwrap();
         c.builder.build_return(None).unwrap();
 
         if let Some(bb) = saved_block {

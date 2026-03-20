@@ -355,7 +355,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             let type_name = match inner.as_ref() {
                 Expr::MethodCall {
                     receiver, method, ..
-                } if method == "init" => {
+                } if method == "new" => {
                     if let Expr::Ident { name, .. } = receiver.as_ref() {
                         Some(name.clone())
                     } else {
@@ -365,7 +365,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 Expr::Call { callee, .. } => match callee.as_ref() {
                     Expr::FieldAccess {
                         receiver, field, ..
-                    } if field == "init" => {
+                    } if field == "new" => {
                         if let Expr::Ident { name, .. } = receiver.as_ref() {
                             Some(name.clone())
                         } else {
@@ -379,7 +379,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
 
             let Some(target) = type_name else {
                 ctx.error(
-                    "spawn requires `Type.init(config)` form where Type implements Process"
+                    "spawn requires `Type.new(config)` form where Type implements Process"
                         .to_string(),
                     *span,
                 );

@@ -53,7 +53,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - Function type syntax (`fn(T) -> U`) for closure-accepting parameters
 - `print` builtin
 - `panic` builtin (prints to stderr, aborts)
-- Lightweight processes -- structs implement `Process<C, M, R>` protocol. `spawn T.init(config)` creates a process and returns `Ref<M, R>`. `receive` blocks for messages with optional `after timeout` clause. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime` cooperative scheduler.
+- Lightweight processes -- structs implement `Process<C, M, R>` protocol. `spawn T.new(config)` creates a process and returns `Ref<M, R>`. `receive` blocks for messages with optional `after timeout` clause. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime` cooperative scheduler.
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
@@ -187,19 +187,19 @@ The foundation for Expo's concurrency promise. B1-B3 form a dependency chain. B4
 
 Replaces the old `Process<M>` handle struct and caller-side annotations. Processes are now structs implementing a `Process<C, M, R>` protocol. See `CONCURRENCY.md` for full design exploration.
 
-- **`Process<C, M, R>` protocol** -- three type params: C (config to start), M (messages while running), R (replies sent back). Two required methods (`init`, `handle`), two default impls (`start` receive loop, `child_spec` supervision bridge).
-  - **Implemented**: protocol declaration, `impl Process<C, M, R> for T`, type checker extracts C/M/R from `protocol_impls`, `process_msg_type` set to `Pair<M, Option<ReplyTo<R>>>` envelope type. Default `start` method synthesized from protocol. `cast` wraps in `Pair<msg, Option.None>`, `call` wraps in `Pair<msg, Option.Some(ReplyTo)>` with `expo_rt_self()` for caller PID.
-- **Default protocol implementations** -- new language feature. Protocols can provide default method bodies (like Rust default trait methods, Swift protocol extensions). Motivated by the `start` loop but useful throughout the language (`Display` with default `to_string`, `Equality` with default `ne`).
-  - **Implemented**: parser, AST (`ProtocolMethod.body`), type checker synthesis with full type parameter substitution (Self + protocol type params in body patterns and expressions), codegen declaration/definition, formatter, LSP traversal. Default `start` loop on `Process` receives `Pair<M, Option<ReplyTo<R>>>`, unpacks, calls `handle`, recurses. Post-merge synthesis pass for stdlib protocols.
+- **`Process<C, M, R>` protocol** -- three type params: C (config to construct), M (messages while running), R (replies sent back). Two required methods (`new`, `handle`), two default impls (`run` receive loop, `child_spec` supervision bridge).
+  - **Implemented**: protocol declaration, `impl Process<C, M, R> for T`, type checker extracts C/M/R from `protocol_impls`, `process_msg_type` set to `Pair<M, Option<ReplyTo<R>>>` envelope type. Default `run` method synthesized from protocol. `cast` wraps in `Pair<msg, Option.None>`, `call` wraps in `Pair<msg, Option.Some(ReplyTo)>` with `expo_rt_self()` for caller PID.
+- **Default protocol implementations** -- new language feature. Protocols can provide default method bodies (like Rust default trait methods, Swift protocol extensions). Motivated by the `run` loop but useful throughout the language (`Display` with default `to_string`, `Equality` with default `ne`).
+  - **Implemented**: parser, AST (`ProtocolMethod.body`), type checker synthesis with full type parameter substitution (Self + protocol type params in body patterns and expressions), codegen declaration/definition, formatter, LSP traversal. Default `run` loop on `Process` receives `Pair<M, Option<ReplyTo<R>>>`, unpacks, calls `handle`, recurses. Post-merge synthesis pass for stdlib protocols.
   - **Known limitation**: protocol method name collisions -- if two protocols define a method with the same name, the second impl silently overwrites the first in the method table. Needs qualified dispatch or a diagnostic.
 - **`Pid` + `Ref<M, R>`** -- `Pid` is type-erased (raw process ID, used in `ExitSignal`, registries). `Ref<M, R>` is the typed handle for `cast`/`call`. `spawn` returns `Ref<M, R>`.
-  - **Implemented**: `spawn T.init(config)` returns `Ref<M, R>` with M and R resolved from the Process impl. Bare function spawn (`spawn some_function`) is now a compile error. Runtime accepts initial process state via `expo_rt_spawn(fn_ptr, state_ptr, state_len)`.
+  - **Implemented**: `spawn T.new(config)` returns `Ref<M, R>` with M and R resolved from the Process impl. Bare function spawn (`spawn some_function`) is now a compile error. Runtime accepts initial process state via `expo_rt_spawn(fn_ptr, state_ptr, state_len)`.
   - **Remaining**: `cast`/`call` methods on `Ref<M, R>`. `Pid` type.
 - **`receive ... after` syntax** -- `receive` gains an optional `after timeout` clause for timed receives. No separate `receive_timeout` primitive. No arrow on the `after` clause. Used by `Ref.call` for call timeouts, and by processes needing periodic work (heartbeats, cache expiry).
   - **Implemented**: parser (`after` as receive-only stop token, not leaked into `match`/`cond`), type checker (timeout expression + body), codegen (calls `expo_rt_receive_timeout`, branches on null for timeout path), formatter, LSP traverse (patterns + guards in receive arms), grammar updated.
 - **Trait bounds on generics** -- `fn foo<T: Process<C, M, R>>(x: T)` needed for `child_spec` and generic process utilities. Requires protocols, now unblocked.
   - **Remaining**: not yet implemented.
-- **Done when**: a struct implementing `Process<C, M, R>` can be spawned, receive messages via `cast`/`call` with typed `Ref<M, R>`, and the default `start` loop works via default protocol impl. ✓ Basic flow complete -- default `start` works with pair envelope, `cast` tested end-to-end. `call` codegen complete but untested pending a proper runtime scheduler with blocking `receive`.
+- **Done when**: a struct implementing `Process<C, M, R>` can be spawned, receive messages via `cast`/`call` with typed `Ref<M, R>`, and the default `run` loop works via default protocol impl. ✓ Basic flow complete -- default `run` works with pair envelope, `cast` tested end-to-end. `call` codegen complete but untested pending a proper runtime scheduler with blocking `receive`.
 
 #### B3. `copy` keyword
 
@@ -227,7 +227,7 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Binary-first       | Design binary/bitstring primitives before string methods. String becomes UTF-8 utilities built on binary, not an opaque type with bolted-on methods.                                                                                               |
 | One primitive      | Processes are the sole concurrency primitive. `Task` is a kernel struct built on `Process<C, M, R>`, not a separate primitive. GenServer-like actor patterns are the `Process` protocol itself.                                                    |
-| Process protocol   | `Process<C, M, R>` with three type params. Config (C) separates public args from private state via `init`. Fixed reply type (R) per process -- same as a service contract. Union types for heterogeneous replies.                                  |
+| Process protocol   | `Process<C, M, R>` with three type params. Config (C) separates public args from private state via `new`. Fixed reply type (R) per process -- same as a service contract. Union types for heterogeneous replies.                                  |
 | Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code. |
 | Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with process lifecycle management.                                                                                                   |
 | Typed mailboxes    | Processes declare message type M via protocol impl. `send` and `receive` are type-checked at compile time. Union types enable multi-source mailboxes (e.g., `PoolCmd \| ExitSignal`).                                                              |
@@ -260,7 +260,7 @@ The API design is largely settled (see `CONCURRENCY.md`). Implementation work:
 
 - **`ExitSignal` struct** -- stdlib struct with `pid: Pid` and `reason: ExitReason`. Included in a process's M via union type (`type PoolMsg = PoolCmd | ExitSignal`). Type checker verifies M includes `ExitSignal` at `Process.monitor` call sites.
 - **`Process.monitor(ref)`** -- static function, not a protocol method. Tells the runtime to send an `ExitSignal` to the caller's mailbox when the monitored process dies.
-- **`ChildSpec` struct** -- holds `start: fn() -> Pid` and `strategy: RestartStrategy`. The closure captures `copy config` and calls `init` + `spawn`, enabling type-erased restart.
+- **`ChildSpec` struct** -- holds `start: fn() -> Pid` and `strategy: RestartStrategy`. The closure captures `copy config` and calls `new` + `spawn`, enabling type-erased restart.
 - **`child_spec` default impl on `Process`** -- produces a `ChildSpec` with `RestartStrategy.Permanent`. Processes override for custom restart strategies (transient, temporary).
 - **`Supervisor` stdlib process** -- implements `Process`, holds `List<ChildSpec>`, monitors children via `ExitSignal`, restarts on death by re-calling the `start` closure. Restart strategies: `OneForOne`, `OneForAll`, `RestForOne`. Max-restarts-exceeded crashes the supervisor.
 - **Application startup** -- `fn main` creates child specs via `Type.child_spec(config)`, passes to Supervisor, spawns it. No framework, no Application behavior -- main is just a function.
@@ -272,7 +272,7 @@ The API design is largely settled (see `CONCURRENCY.md`). Implementation work:
 
 - **`Task.async(fn() -> R)`** -- spawns a one-off closure in a new process, returns `TaskHandle<R>`.
 - **`TaskHandle<R>.await()`** -- blocks until the task finishes, returns the result.
-- Under the hood, `Task` implements `Process<fn() -> R, (), ()>`, overrides `start` to run the closure and exit (no receive loop).
+- Under the hood, `Task` implements `Process<fn() -> R, (), ()>`, overrides `run` to run the closure and exit (no receive loop).
 - Fire-and-forget: call `Task.async` without awaiting.
 - **Done when**: `Task.async` + `.await()` works for one-off async work
 

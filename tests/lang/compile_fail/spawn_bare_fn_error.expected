@@ -1,1 +1,1 @@
-spawn requires `Type.init(config)` form where Type implements Process
+spawn requires `Type.new(config)` form where Type implements Process

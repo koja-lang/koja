@@ -13,7 +13,7 @@ struct Worker
 end
 
 impl Process<WorkerConfig, WorkerMsg, String> for Worker
-  fn init(config: WorkerConfig) -> Self
+  fn new(config: WorkerConfig) -> Self
     Worker{label: config.label}
   end
 
@@ -36,7 +36,7 @@ impl Process<WorkerConfig, WorkerMsg, String> for Worker
 end
 
 fn main
-  w = spawn Worker.init(WorkerConfig{label: "w1"})
+  w = spawn Worker.new(WorkerConfig{label: "w1"})
   w.cast(WorkerMsg.Greet("Expo"))
   w.cast(WorkerMsg.Add(10, 32))
   w.cast(WorkerMsg.Stop)

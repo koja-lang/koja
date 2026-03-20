@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Protocol-based process model -- structs implement `Process<C, M, R>` to become processes. `C` is the config type, `M` is the message type, `R` is the reply type. Two required methods: `init(config: C) -> Self` and `handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self`. Replaces the old caller-side `Process<M>` annotation.
+- Protocol-based process model -- structs implement `Process<C, M, R>` to become processes. `C` is the config type, `M` is the message type, `R` is the reply type. Two required methods: `new(config: C) -> Self` and `handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self`. Replaces the old caller-side `Process<M>` annotation.
 - Default protocol implementations -- protocols can now provide method bodies that serve as defaults for implementors. Types that `impl` a protocol without defining a default method automatically inherit it. Types can override defaults by providing their own implementation. Synthesized at the AST level with full type parameter substitution (`Self`, protocol type params).
-- Pair-based process mailbox envelope -- `cast` and `call` wrap messages in `Pair<M, Option<ReplyTo<R>>>` before sending. The default `start` loop receives the pair and unpacks `msg` and `from` for `handle`. `cast` sends `Pair<msg, Option.None>`; `call` sends `Pair<msg, Option.Some(ReplyTo{id: caller_pid}))` using `expo_rt_self()`.
-- `spawn T.init(config)` syntax -- creates a process by calling the struct's `init` method with a config value, runs `start` in a new process, and returns a typed `Ref<M, R>` handle.
+- Pair-based process mailbox envelope -- `cast` and `call` wrap messages in `Pair<M, Option<ReplyTo<R>>>` before sending. The default `run` loop receives the pair and unpacks `msg` and `from` for `handle`. `cast` sends `Pair<msg, Option.None>`; `call` sends `Pair<msg, Option.Some(ReplyTo{id: caller_pid}))` using `expo_rt_self()`.
+- `spawn T.new(config)` syntax -- creates a process by calling the struct's `new` method with a config value, runs `run` in a new process, and returns a typed `Ref<M, R>` handle.
 - `receive ... after` timeout clause -- `receive` blocks now support an optional `after timeout_ms` body that executes when no message arrives within the timeout. No arrow on the `after` clause (it's not a pattern match). Wired end-to-end through parser, type checker, and codegen (`expo_rt_receive_timeout`).
 - Recursive types -- structs and enums that reference themselves (e.g. linked lists, trees) are now supported without any special syntax. The compiler automatically detects cycles in the type graph, inserts heap-allocated indirection where needed, and frees the memory on drop. Works with generics and stdlib types like `Option<T>`.
 - Union types -- `Post | Comment | Ad` as anonymous unions, `type Pet = Cat | Dog | Fish` as named union aliases. Values of a member type widen automatically to the union type at assignment, call, and return sites. `match` works on union-typed values with typed binding patterns (`p: Post -> p.title`) for matching by type and binding the unwrapped value.
@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking**: `spawn` now requires the `T.init(config)` form (`spawn Counter.init(config)`). Bare function spawn (`spawn some_function`) is a compile error. Processes must implement `Process<C, M, R>`.
+- **Breaking**: `spawn` now requires the `T.new(config)` form (`spawn Counter.new(config)`). Bare function spawn (`spawn some_function`) is a compile error. Processes must implement `Process<C, M, R>`.
 - **Breaking**: `spawn` returns `Ref<M, R>` (typed process handle) instead of `Process<M>`. `M` and `R` are inferred from the struct's `Process<C, M, R>` implementation.
 
 ### Fixed

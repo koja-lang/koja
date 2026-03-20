@@ -306,7 +306,7 @@ arena_expr = "arena" ,
 (* ========================================================================== *)
 
 (* spawn creates a new process from a struct implementing Process<C, M, R> *)
-spawn_call = "spawn" , named_type , "." , "init" , "(" , [ arg_list ] , ")" ;
+spawn_call = "spawn" , named_type , "." , "new" , "(" , [ arg_list ] , ")" ;
 
 (* await is a keyword prefix on a handle expression *)
 await_expr = "await" , expr ;

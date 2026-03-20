@@ -590,30 +590,35 @@ types.
 
 ```expo
 protocol Process<C, M, R>
-  fn init(config: C) -> Self
+  fn new(config: C) -> Self
 
   fn handle(move self, msg: M, from: Option<Ref<R>>) -> Self
 
-  fn start(move self)
+  fn run(move self)
     pair = receive
     new_self = self.handle(pair.first, pair.second)
-    new_self.start()
+    new_self.run()
   end
 end
 ```
 
+> **Rename note:** `init` was renamed to `new` (aligns with Expo's struct
+> constructor convention -- `Map.new()`, `Set.new()`), and `start` was renamed
+> to `run` (describes the internal receive loop, not external control like
+> Elixir's `GenServer.start_link`). Old names appear in earlier design sections.
+
 Three type parameters, three concerns:
 
-- **C** — what you receive to start (config/args → `init`)
+- **C** — what you receive to construct (config/args → `new`)
 - **M** — what you receive while running (messages → `handle`)
 - **R** — what you send back (replies)
 
 Internal state is `Self` — never exposed to the caller. The caller only sees
 C, M, and R.
 
-`init` transforms a public config into private process state — the bridge
+`new` transforms a public config into private process state — the bridge
 between what callers know (config) and what the process needs (internal state).
-`handle` is the message handler. Both are implemented by the user. `start` is a
+`handle` is the message handler. Both are implemented by the user. `run` is a
 default implementation that provides the receive loop — it blocks on `receive`,
 dispatches to `handle`, takes the returned state, and tail-recurses. The user
 never writes the loop.
@@ -640,7 +645,7 @@ struct Counter
 end
 
 impl Process<CounterConfig, CounterMsg, Int> for Counter
-  fn init(config: CounterConfig) -> Self
+  fn new(config: CounterConfig) -> Self
     Counter{count: config.initial_count}
   end
 
@@ -658,28 +663,28 @@ impl Process<CounterConfig, CounterMsg, Int> for Counter
 end
 ```
 
-Counter accepts `CounterConfig` to start, `CounterMsg` while running, and
+Counter accepts `CounterConfig` to construct, `CounterMsg` while running, and
 replies with `Int` — a typed service contract. The config is public, the
 `Counter` struct's internals are private. The caller never constructs `Counter`
-directly — `init` handles that.
+directly — `new` handles that.
 
 Spawning:
 
 ```expo
 fn main
-  pid: Ref<CounterMsg, Int> = spawn Counter.init(CounterConfig{initial_count: 0})
+  pid: Ref<CounterMsg, Int> = spawn Counter.new(CounterConfig{initial_count: 0})
   pid.cast(CounterMsg.Increment)
   pid.cast(CounterMsg.Increment)
   count = pid.call(CounterMsg.GetCount, 5000)   # count : Option<Int>
 end
 ```
 
-`spawn` takes an initialized struct, calls `start` on it in a new process.
-`start` provides the receive loop via its default implementation. The user only
-writes `init` and `handle`.
+`spawn` takes a constructed struct, calls `run` on it in a new process.
+`run` provides the receive loop via its default implementation. The user only
+writes `new` and `handle`.
 
 Where do C, M, and R come from? `impl Process<CounterConfig, CounterMsg, Int>
-for Counter`. The compiler sees `spawn Counter.init(...)`, checks that `Counter`
+for Counter`. The compiler sees `spawn Counter.new(...)`, checks that `Counter`
 implements `Process<C, M, R>`, extracts the types, and types the handle as
 `Ref<CounterMsg, Int>`.
 
@@ -697,9 +702,9 @@ implements `Process<C, M, R>`, extracts the types, and types the handle as
   one new feature, motivated by this design but useful far beyond it.
 - **Fractal design.** `print(x)` dispatches to `Display`. `spawn x` dispatches
   to `Process`. Language operations backed by protocol dispatch.
-- **No compiler magic for the loop.** The receive loop is a default `start`
+- **No compiler magic for the loop.** The receive loop is a default `run`
   method on the protocol, using `receive` and tail recursion — existing
-  primitives. The user can override `start` if they need custom loop behavior.
+  primitives. The user can override `run` if they need custom loop behavior.
 
 ### Unified handler: call and cast via Option
 
@@ -742,18 +747,18 @@ pid.cast(CounterMsg.Increment)                    # fire and forget
 count = pid.call(CounterMsg.GetCount, 5000)      # blocks, returns Option<Int>
 ```
 
-On the receiving side, the default `start` impl receives a `Pair<M, Option<Ref<R>>>`
+On the receiving side, the default `run` impl receives a `Pair<M, Option<Ref<R>>>`
 and dispatches to `handle`:
 
 ```expo
-fn start(move self)
+fn run(move self)
   pair = receive
   new_self = self.handle(pair.first, pair.second)
-  new_self.start()
+  new_self.run()
 end
 ```
 
-`receive` in the `start` loop returns a pair of `(msg, from)`, not just the raw
+`receive` in the `run` loop returns a pair of `(msg, from)`, not just the raw
 message. The runtime always delivers both, even when `from` is None. This is an
 internal detail — users implement `handle` and never see the pair.
 
@@ -788,7 +793,7 @@ with a unit config:
 struct Printer end
 
 impl Process<(), String, ()> for Printer
-  fn init(config: ()) -> Self
+  fn new(config: ()) -> Self
     Printer{}
   end
 
@@ -798,7 +803,7 @@ impl Process<(), String, ()> for Printer
   end
 end
 
-pid = spawn Printer.init(())
+pid = spawn Printer.new(())
 pid.cast("hello")
 ```
 
@@ -818,16 +823,16 @@ The protocol model is GenServer expressed in Expo's type system:
 | `handle_call(msg, from, state)`     | `fn handle(move self, msg: M, from: Option<Ref<R>>)` with Some |
 | `handle_cast(msg, state)`           | same `fn handle`, with `from` = None                           |
 | `handle_info(msg, state)`           | eliminated — typed mailboxes prevent untyped messages          |
-| `init(args)` returns `{:ok, state}` | `fn init(config: C) -> Self` — config in, process state out    |
+| `init(args)` returns `{:ok, state}` | `fn new(config: C) -> Self` — config in, process state out     |
 | state is an opaque term             | state is the struct itself, fully typed                        |
-| receive loop in GenServer module    | default `start` impl on the Process protocol                   |
+| receive loop in GenServer module    | default `run` impl on the Process protocol                     |
 
 ### What changes in the current implementation
 
 The protocol model supersedes:
 
 - **`receive` moves from user code to the protocol.** `receive` remains as a
-  language primitive, but users don't write it directly. The default `start`
+  language primitive, but users don't write it directly. The default `run`
   implementation on the Process protocol contains the receive loop. Users
   implement `handle` to process one message at a time.
 - **`receive ... after` for timeouts.** `receive` gains an optional `after`
@@ -836,7 +841,7 @@ The protocol model supersedes:
   separate `receive_timeout` primitive — one construct handles both blocking
   and timed receives. Used internally by `Ref.call` for call timeouts.
   Also useful for processes that need periodic work (heartbeats, cache expiry)
-  via overridden `start` loops. Grammar and parser need updating to support
+  via overridden `run` loops. Grammar and parser need updating to support
   the `after` clause on `receive` blocks.
 - **The `collect_process_msg_types` pre-pass.** M comes from the protocol impl,
   resolved through normal protocol machinery.
@@ -865,7 +870,7 @@ The protocol model supersedes:
   work — per-endpoint precision is a gentleman's agreement, not a protocol-level
   guarantee.
 
-- **Default protocol implementations.** Required for the `start` loop. This is
+- **Default protocol implementations.** Required for the `run` loop. This is
   a new language feature — protocols currently only declare signatures. Adding
   default implementations is well-understood (Rust, Swift, Kotlin) and useful
   beyond processes (e.g., a `Display` protocol with a default `to_string` built
@@ -922,7 +927,7 @@ The protocol model supersedes:
   end
 
   impl Process<PoolConfig, PoolMsg, ()> for PoolManager
-    fn init(config: PoolConfig) -> Self
+    fn new(config: PoolConfig) -> Self
       PoolManager{workers: Map.new()}
     end
 
@@ -930,7 +935,7 @@ The protocol model supersedes:
       match msg
         PoolCmd.Scale(n) -> self
         e: ExitSignal ->
-          new_worker = spawn Worker.init(WorkerConfig{})
+          new_worker = spawn Worker.new(WorkerConfig{})
           Process.monitor(new_worker)
           self
       end
@@ -979,7 +984,7 @@ The protocol model supersedes:
   monomorphization, no vtables), heterogeneous collections need type erasure.
 
   **Solution: config structs implement a protocol.** Like Elixir's `use
-  GenServer` auto-defining `child_spec/1`, config structs implement a protocol
+GenServer` auto-defining `child_spec/1`, config structs implement a protocol
   that produces a uniform `ChildSpec` struct. The protocol bridges typed configs
   to type-erased child specs via a closure:
 
@@ -990,29 +995,29 @@ The protocol model supersedes:
   end
   ```
 
-  The `start` closure captures the config and calls `init` + `spawn` internally.
+  The `start` closure captures the config and calls `new` + `spawn` internally.
   The supervisor never sees the typed process — it only needs `Pid` for
   monitoring and the closure for restart.
 
   The `Process` protocol provides `child_spec` as a third default implementation
-  (alongside `start`):
+  (alongside `run`):
 
   ```expo
   protocol Process<C, M, R>
-    fn init(config: C) -> Self
+    fn new(config: C) -> Self
     fn handle(move self, msg: M, from: Option<Ref<R>>) -> Self
 
     fn child_spec(config: C) -> ChildSpec
       ChildSpec{
-        start: fn() -> spawn(Self.init(copy config)).pid(),
+        start: fn() -> spawn(Self.new(copy config)).pid(),
         strategy: RestartStrategy.Permanent
       }
     end
 
-    fn start(move self)
+    fn run(move self)
       pair = receive
       new_self = self.handle(pair.first, pair.second)
-      new_self.start()
+      new_self.run()
     end
   end
   ```
@@ -1036,7 +1041,7 @@ The protocol model supersedes:
   end
   ```
 
-  On restart: the supervisor calls the `start` closure again, which calls `init`
+  On restart: the supervisor calls the `start` closure again, which calls `new`
   with a copy of the original config, producing fresh process state every time.
 
   **Open: protocol naming.** Config structs could also implement a separate
@@ -1048,8 +1053,8 @@ The protocol model supersedes:
   consideration. The mechanism is settled — a protocol on config structs
   producing a uniform `ChildSpec` — the name is not.
 
-  Three default impls total: `start` (receive loop), `child_spec` (supervision
-  bridge), and two required: `init` (config → state), `handle` (message
+  Three default impls total: `run` (receive loop), `child_spec` (supervision
+  bridge), and two required: `new` (config → state), `handle` (message
   dispatch).
 
 - **Task: one-off async work.** The `Process<C, M, R>` model is optimized for
@@ -1059,7 +1064,7 @@ The protocol model supersedes:
 
   `Task` is a kernel struct that absorbs this boilerplate. Under the hood it
   implements `Process<fn() -> R, (), ()>` — the config is a closure, the message
-  and reply types are unit. It overrides `start` to run the closure and exit
+  and reply types are unit. It overrides `run` to execute the closure and exit
   instead of entering a receive loop.
 
   The API:
