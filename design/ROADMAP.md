@@ -91,6 +91,8 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **Type checker**: `ref T` parsed but deferred (redundant with borrow-by-default, revisit if a concrete use case emerges)
 - **Codegen**: inline closures (`x -> expr`) are parsed but not yet compiled
 - **Closure `move` params**: `ClosureParam` has no `PassMode` field -- `fn (move x: T) -> U ... end` doesn't parse. `Type::Function` also doesn't carry param modes, so the type checker can't enforce `fn(move T) -> U` vs `fn(T) -> U` contracts. Both need fixing: add `mode` to `ClosureParam`, parse `move` in closure params, and add param modes to `Type::Function` for type-level enforcement.
+- **Identifier priming for keyword/builtin collisions**: (for self-hosting) `IDENT` and `TYPE_IDENT` cannot use reserved words or built-in type names as identifiers. Trailing prime notation (`'`) would allow `end'` as a field name and `Self'` or `String'` as enum variant names without ambiguity. Grammar change: append `[ "'" ]` to both `IDENT` and `TYPE_IDENT` rules (trailing-only, single prime). Surfaced by the `expo-ast` self-hosting port: `Span.end` had to become `Span.stop`, and enum variants like `Self`, `String`, `Bool`, `Int`, `Float` needed descriptive renames (`SelfReceiver`, `StringVal`, `BoolLit`, etc.). Leading `'` stays invalid, so `'wrongstring'` is always a syntax error.
+- **`@doc` on type aliases**: annotations can only precede `struct`, `enum`, `fn`, and `protocol` declarations. `type Name = ...` aliases cannot carry `@doc` annotations. Surfaced by the `expo-ast` self-hosting port where union type aliases (`type Item = ...`) couldn't be documented.
 
 ### Design artifacts
 
@@ -121,11 +123,11 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 
 ```
 Track A:  A1 (binary/bitstring) → A2 (string-as-UTF8) → A3 (project.expo + test runner) → A4 (lexer port)
-Track B:  B1 (union types) → B2 (Process<C,M,R> protocol + default impls + Pid/Ref + cast/call) → B3 (copy keyword)
+Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task)
           B4 (scheduler/IO) -- independent, anytime
 ```
 
-No dependencies between tracks. Within Track B, B1-B3 are sequential but B4 can slot in anywhere.
+No dependencies between tracks. B1 and B2 are complete. B3 (Task) builds on existing process infrastructure. B4 can slot in anywhere.
 
 ### Track A: Language surface
 
@@ -183,7 +185,7 @@ The foundation for Expo's concurrency promise. B1-B3 form a dependency chain. B4
 - **Remaining**: variant name collision resolution, protocol interaction, struct destructuring in match arms (deferred to irrefutable destructuring milestone).
 - **Numeric tower as first dogfood**: `Int` could be defined in Expo as `type Int = Int8 | Int16 | Int32 | Int64` rather than hardcoded as a compiler primitive. The compiler recognizes that all variants are same-category integers and optimizes to the widest representation (no tag, implicit widening) -- the same behavior as today, but derived from the union definition. Extends naturally to `Float = Float32 | Float64` and user-defined aliases like `type SmallInt = Int8 | Int16`. This validates that the union type implementation is correct and general enough to express the language's own numeric relationships.
 
-#### B2. Protocol-based process model -- in progress
+#### B2. Protocol-based process model -- done
 
 Replaces the old `Process<M>` handle struct and caller-side annotations. Processes are now structs implementing a `Process<C, M, R>` protocol. See `CONCURRENCY.md` for full design exploration.
 
@@ -192,21 +194,23 @@ Replaces the old `Process<M>` handle struct and caller-side annotations. Process
 - **Default protocol implementations** -- new language feature. Protocols can provide default method bodies (like Rust default trait methods, Swift protocol extensions). Motivated by the `run` loop but useful throughout the language (`Display` with default `to_string`, `Equality` with default `ne`).
   - **Implemented**: parser, AST (`ProtocolMethod.body`), type checker synthesis with full type parameter substitution (Self + protocol type params in body patterns and expressions), codegen declaration/definition, formatter, LSP traversal. Default `run` loop on `Process` receives `Pair<M, Option<ReplyTo<R>>>`, unpacks, calls `handle`, recurses. Post-merge synthesis pass for stdlib protocols.
   - **Known limitation**: protocol method name collisions -- if two protocols define a method with the same name, the second impl silently overwrites the first in the method table. Needs qualified dispatch or a diagnostic.
-- **`Pid` + `Ref<M, R>`** -- `Pid` is type-erased (raw process ID, used in `ExitSignal`, registries). `Ref<M, R>` is the typed handle for `cast`/`call`. `spawn` returns `Ref<M, R>`.
+- **`Ref<M, R>`** -- the typed handle for `cast`/`call`. `spawn` returns `Ref<M, R>`. (`Pid` type-erased process ID deferred to Phase 4 supervision prerequisites.)
   - **Implemented**: `spawn T.new(config)` returns `Ref<M, R>` with M and R resolved from the Process impl. Bare function spawn (`spawn some_function`) is now a compile error. Runtime accepts initial process state via `expo_rt_spawn(fn_ptr, state_ptr, state_len)`.
-  - **Remaining**: `cast`/`call` methods on `Ref<M, R>`. `Pid` type.
+  - **Implemented**: `cast`/`call` methods on `Ref<M, R>` -- declared in `std.kernel` as intrinsics, full codegen in `process.rs` (`cast` builds envelope and sends via `expo_rt_send`; `call` builds envelope with `ReplyTo<R>`, sends, calls `expo_rt_receive_timeout`, decodes reply into `Option<R>`).
 - **`receive ... after` syntax** -- `receive` gains an optional `after timeout` clause for timed receives. No separate `receive_timeout` primitive. No arrow on the `after` clause. Used by `Ref.call` for call timeouts, and by processes needing periodic work (heartbeats, cache expiry).
   - **Implemented**: parser (`after` as receive-only stop token, not leaked into `match`/`cond`), type checker (timeout expression + body), codegen (calls `expo_rt_receive_timeout`, branches on null for timeout path), formatter, LSP traverse (patterns + guards in receive arms), grammar updated.
-- **Trait bounds on generics** -- `fn foo<T: Process<C, M, R>>(x: T)` needed for `child_spec` and generic process utilities. Requires protocols, now unblocked.
-  - **Remaining**: not yet implemented.
-- **Done when**: a struct implementing `Process<C, M, R>` can be spawned, receive messages via `cast`/`call` with typed `Ref<M, R>`, and the default `run` loop works via default protocol impl. ✓ Basic flow complete -- default `run` works with pair envelope, `cast` tested end-to-end. `call` codegen complete but untested pending a proper runtime scheduler with blocking `receive`.
+- **Done when**: a struct implementing `Process<C, M, R>` can be spawned, receive messages via `cast`/`call` with typed `Ref<M, R>`, and the default `run` loop works via default protocol impl. ✓ Complete -- default `run` works with pair envelope, `cast` and `call` codegen implemented end-to-end. `call` untested pending a proper runtime scheduler with blocking `receive`.
 
-#### B3. `copy` keyword
+#### B3. Task (kernel struct)
 
-Third parameter modifier alongside default borrow and `move`: `fn start(copy config: Config)`. Auto-clones at the call boundary -- the caller writes `start(config)`, the compiler inserts `.clone()`. Declared in the function signature (same pattern as `move` -- never at the call site). Primary use case: `child_spec` default impl captures `copy config` in a closure for supervisor restart.
+One-off async work using the existing process infrastructure. `Task` is a kernel struct implementing `Process`, not a new primitive.
 
-- See `CONCURRENCY.md` for full design
-- **Done when**: `copy` params compile and auto-clone at call sites
+- **`Task.async(fn() -> R)`** -- spawns a one-off closure in a new process, returns `TaskHandle<R>`.
+- **`TaskHandle<R>.await()`** -- blocks until the task finishes, returns the result.
+- Under the hood, `Task` implements `Process<fn() -> R, (), ()>`, overrides `run` to run the closure and exit (no receive loop).
+- Fire-and-forget: call `Task.async` without awaiting.
+- No new language features required -- uses existing `Process<C, M, R>` protocol, `spawn`, `Ref<M, R>`, and `receive`.
+- **Done when**: `Task.async` + `.await()` works for one-off async work
 
 #### B4. Multi-threaded scheduler + I/O (independent)
 
@@ -215,6 +219,9 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 **No dependencies on B1-B3 or Track A.** The `Process<C, M, R>` protocol and `spawn`/`receive` work identically regardless of how many OS threads the scheduler uses underneath.
 
 - **Scheduler protocol** -- the runtime is defined as a protocol interface (`spawn_process`, `send_message`, `yield`, `park`/`wake`, `poll_io`), not a monolithic scheduler. The native runtime is one implementation; others (WASM, testing, embedded, debug) implement the same interface.
+- **Container-aware thread count** -- detect cgroup CPU limits (`/sys/fs/cgroup/cpu.max` on cgroups v2) for scheduler thread count, not host CPU count. A pod with `resources.limits.cpu: 2` on a 96-core host should spawn 2 scheduler threads. Fall back to `available_parallelism` on bare metal.
+- **Idle thread parking (default: no spin)** -- idle scheduler threads park on a condvar/futex when no work is available, consuming zero CPU. No busy-wait by default. Configurable via `EXPO_SCHEDULER_BUSYWAIT=none|short` environment variable: `none` (default, container-safe) parks immediately; `short` spins briefly before parking for ~1-5 microsecond lower steal latency on bare metal with dedicated cores. BEAM's `+sbwt short` default caused silent CFS quota burn in Kubernetes deployments -- Expo avoids this by defaulting to the container-safe behavior.
+- **Graceful SIGTERM handling** -- K8s sends SIGTERM with a configurable grace period (default 30s). The scheduler stops accepting new spawns, drains in-flight processes, and exits cleanly. Processes that don't exit in time are killed on SIGKILL.
 - Timer wheel for timeouts, intervals, and deadlines
 - Process lifecycle manager (start, stop, crash detection)
 - All functions can suspend; the runtime handles it -- no function coloring
@@ -227,7 +234,7 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Binary-first       | Design binary/bitstring primitives before string methods. String becomes UTF-8 utilities built on binary, not an opaque type with bolted-on methods.                                                                                               |
 | One primitive      | Processes are the sole concurrency primitive. `Task` is a kernel struct built on `Process<C, M, R>`, not a separate primitive. GenServer-like actor patterns are the `Process` protocol itself.                                                    |
-| Process protocol   | `Process<C, M, R>` with three type params. Config (C) separates public args from private state via `new`. Fixed reply type (R) per process -- same as a service contract. Union types for heterogeneous replies.                                  |
+| Process protocol   | `Process<C, M, R>` with three type params. Config (C) separates public args from private state via `new`. Fixed reply type (R) per process -- same as a service contract. Union types for heterogeneous replies.                                   |
 | Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code. |
 | Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with process lifecycle management.                                                                                                   |
 | Typed mailboxes    | Processes declare message type M via protocol impl. `send` and `receive` are type-checked at compile time. Union types enable multi-source mailboxes (e.g., `PoolCmd \| ExitSignal`).                                                              |
@@ -247,6 +254,14 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 
 Build on the working process runtime with production-grade reliability features. These are layered on top -- processes must work before they can be supervised or prioritized. Depends on Phase 3 Track B.
 
+### Supervision prerequisites
+
+Three features deferred from Phase 3 because their primary use cases are supervision constructs:
+
+- **`Pid` type** -- type-erased process ID (raw integer). Used in `ExitSignal` (which carries the crashed process's pid), registries, and `Process.monitor`. Distinct from `Ref<M, R>` (typed handle).
+- **Trait bounds on generics** -- `fn foo<T: Process<C, M, R>>(x: T)` needed for `child_spec` and generic process utilities. Parser currently only accepts bare `<T>`, needs `:` bound syntax. Touches parser, type checker, and codegen.
+- **`copy` keyword** -- third parameter modifier alongside default borrow and `move`: `fn start(copy config: Config)`. Auto-clones at the call boundary. Primary use case: `child_spec` default impl captures `copy config` in a closure for supervisor restart. `PassMode::Copy` already exists for closure captures; this extends it to parameter declarations. See `CONCURRENCY.md` for full design.
+
 ### Preemption and priority
 
 - Compiler-inserted yield checks at function call preambles and loop back-edges
@@ -256,7 +271,7 @@ Build on the working process runtime with production-grade reliability features.
 
 ### Supervision
 
-The API design is largely settled (see `CONCURRENCY.md`). Implementation work:
+The API design is largely settled (see `CONCURRENCY.md`). Depends on the three prerequisites above. Implementation work:
 
 - **`ExitSignal` struct** -- stdlib struct with `pid: Pid` and `reason: ExitReason`. Included in a process's M via union type (`type PoolMsg = PoolCmd | ExitSignal`). Type checker verifies M includes `ExitSignal` at `Process.monitor` call sites.
 - **`Process.monitor(ref)`** -- static function, not a protocol method. Tells the runtime to send an `ExitSignal` to the caller's mailbox when the monitored process dies.
@@ -267,14 +282,6 @@ The API design is largely settled (see `CONCURRENCY.md`). Implementation work:
 - Root supervisor crash exits the OS process (deterministic shutdown)
 - Ownership ensures deterministic cleanup on process crash -- all owned memory is freed, no leaks
 - **Done when**: a supervised process tree restarts crashed children correctly
-
-### Task (kernel struct)
-
-- **`Task.async(fn() -> R)`** -- spawns a one-off closure in a new process, returns `TaskHandle<R>`.
-- **`TaskHandle<R>.await()`** -- blocks until the task finishes, returns the result.
-- Under the hood, `Task` implements `Process<fn() -> R, (), ()>`, overrides `run` to run the closure and exit (no receive loop).
-- Fire-and-forget: call `Task.async` without awaiting.
-- **Done when**: `Task.async` + `.await()` works for one-off async work
 
 ### Process discovery
 
@@ -619,15 +626,15 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 ### Remaining
 
-| Phase        | Milestone                                                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Surface (3A) | Binary/bitstring literals, string-as-UTF8, project system + test runner, lexer port                                                                 |
-| Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, `Pid`, `copy`, scheduler + I/O |
-| Reliability  | Supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), `Task`, process discovery, preemption, `shared_map`                                     |
-| Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                           |
-| Tooling      | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                              |
-| Self-host    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                          |
-| Validation   | auth-manager-expo runs for real, second project                                                                                                     |
+| Phase        | Milestone                                                                                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Surface (3A) | Binary/bitstring literals, string-as-UTF8, project system + test runner, lexer port                                                                                       |
+| Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, `Task`, scheduler + I/O |
+| Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
+| Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                                 |
+| Tooling      | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                                    |
+| Self-host    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                |
+| Validation   | auth-manager-expo runs for real, second project                                                                                                                           |
 
 ---
 

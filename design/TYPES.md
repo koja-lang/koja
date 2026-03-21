@@ -187,7 +187,7 @@ irrefutable destructuring (`Config{name, port} = load_config()`).
 When constituent types are enums with their own variants, qualify to
 disambiguate:
 
-```
+```expo
 item: ServerMsg | LibResult = receive()
 
 match item
@@ -209,7 +209,7 @@ automatically implement `Display`.
 To attach protocol behavior to a union, use a named union with an explicit
 `impl` block:
 
-```
+```expo
 type FeedItem = Post | Comment | Ad
 
 impl Display for FeedItem
