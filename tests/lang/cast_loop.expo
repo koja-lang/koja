@@ -1,0 +1,32 @@
+struct CounterConfig
+end
+
+enum CounterMsg
+  Increment
+end
+
+struct Counter
+  count: Int
+end
+
+impl Process<CounterConfig, CounterMsg, Int> for Counter
+  fn new(config: CounterConfig) -> Self
+    Counter{count: 0}
+  end
+
+  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self
+    match msg
+      CounterMsg.Increment ->
+        new_count = self.count + 1
+        print("count: #{new_count}")
+        Counter{count: new_count}
+    end
+  end
+end
+
+fn main
+  counter = spawn Counter.new(CounterConfig{})
+  counter.cast(CounterMsg.Increment)
+  counter.cast(CounterMsg.Increment)
+  counter.cast(CounterMsg.Increment)
+end

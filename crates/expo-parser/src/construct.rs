@@ -565,10 +565,12 @@ mod tests {
         for item in &result.module.items {
             if let expo_ast::ast::Item::Function(func) = item {
                 for stmt in &func.body {
-                    if let Statement::Assignment { value, .. } = stmt {
-                        if let Expr::String { parts, .. } = value {
-                            return parts.clone();
-                        }
+                    if let Statement::Assignment {
+                        value: Expr::String { parts, .. },
+                        ..
+                    } = stmt
+                    {
+                        return parts.clone();
                     }
                 }
             }

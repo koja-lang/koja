@@ -7,3 +7,6 @@ version.workspace = true
 
 [lib]
 crate-type = ["staticlib"]
+
+[build-dependencies]
+cc = "1"

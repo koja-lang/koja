@@ -23,7 +23,7 @@ impl<'ctx> Compiler<'ctx> {
         body: &[Statement],
         return_type: &Type,
         fn_value: FunctionValue<'ctx>,
-        is_main: bool,
+        _is_main: bool,
     ) -> Result<(), String> {
         let saved_hint = std::mem::replace(
             &mut self.return_type_hint,
@@ -64,15 +64,7 @@ impl<'ctx> Compiler<'ctx> {
 
         if !self.current_block_terminated() {
             crate::drop::drop_live_variables(self);
-            if is_main {
-                if let Some(main_done) = self.functions.get("expo_rt_main_done") {
-                    self.builder.build_call(*main_done, &[], "").unwrap();
-                }
-                let zero = self.context.i32_type().const_int(0, false);
-                self.builder.build_return(Some(&zero)).unwrap();
-            } else {
-                self.builder.build_return(None).unwrap();
-            }
+            self.builder.build_return(None).unwrap();
         }
 
         self.return_type_hint = saved_hint;

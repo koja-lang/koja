@@ -1,0 +1,37 @@
+struct CalcConfig
+end
+
+enum CalcMsg
+  Add(Int, Int)
+end
+
+struct Calc
+end
+
+impl Process<CalcConfig, CalcMsg, Int> for Calc
+  fn new(config: CalcConfig) -> Self
+    Calc{}
+  end
+
+  fn handle(move self, msg: CalcMsg, from: Option<ReplyTo<Int>>) -> Self
+    match msg
+      CalcMsg.Add(a, b) ->
+        sum = a + b
+        print("calc: #{sum}")
+        match from
+          Option.Some(reply) -> reply.send(sum)
+          Option.None -> ()
+        end
+        self
+    end
+  end
+end
+
+fn main
+  calc = spawn Calc.new(CalcConfig{})
+  result = calc.call(CalcMsg.Add(10, 32), 5000)
+  match result
+    Option.Some(n) -> print("result: #{n}")
+    Option.None -> print("timeout!")
+  end
+end

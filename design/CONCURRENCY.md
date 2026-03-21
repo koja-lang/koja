@@ -1097,3 +1097,106 @@ GenServer` auto-defining `child_spec/1`, config structs implement a protocol
   stateful long-running case (GenServer), and stdlib/kernel builds ergonomic
   abstractions for simpler patterns on top. One model, multiple ergonomic
   surfaces.
+
+---
+
+## 2026-03-20: `Process.self()` and main's process identity
+
+### `Process.self()`
+
+A static method on `Process` that returns `Ref<M, R>` for the calling process.
+Scoped under `Process` to avoid collision with the instance `self` parameter in
+method bodies:
+
+```expo
+fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self
+  self.count          # struct field access — the instance
+  Process.self()      # process identity — the Ref
+end
+```
+
+`self` (lowercase, no parens) is always the struct instance. `Process.self()`
+(static call) is always the process Ref. No ambiguity.
+
+Mirrors Elixir's namespacing of process operations under `Process`
+(`Process.send_after`, `Process.alive?`, `Process.exit`). Opens the same
+namespace for future additions:
+
+- `Process.self()` — `Ref<M, R>` for the current process
+- `Process.send_after(ref, msg, delay_ms)` — scheduled cast (GenServer tick)
+- `Process.alive?(ref)` — liveness check
+- `Process.exit(ref, reason)` — termination
+
+Implementation: emits `expo_rt_self()` (returns raw pid), wraps in `Ref<M, R>`.
+Inside a `handle` function, the compiler knows M and R from the
+`impl Process<C, M, R>` declaration. This is the primary use case — the
+GenServer self-tick pattern:
+
+```expo
+fn handle(move self, msg: TimerMsg, from: Option<ReplyTo<()>>) -> Self
+  match msg
+    TimerMsg.Tick ->
+      do_periodic_work()
+      Process.self().cast(TimerMsg.Tick)
+      self
+  end
+end
+```
+
+### Main as a process: the `Process<C, M, R>` mapping
+
+Main is pid=1 in the runtime. Making `Process.self()` work in main raises the
+question: what are main's C, M, and R?
+
+**R = ()** — main is the top-level process. It doesn't reply to anyone. Start
+with unit. If union widening is later needed, the type system handles it.
+
+**M = SystemMsg** — main receives system-level messages. The runtime translates
+OS signals into typed messages delivered to pid=1:
+
+```expo
+enum SystemMsg
+  Shutdown        # SIGTERM — Kubernetes pod termination, docker stop
+  Interrupt       # SIGINT — Ctrl+C
+  ChildExited(Int)  # monitored process died
+end
+```
+
+This is how Erlang works — the init process receives system signals as messages.
+The same mechanism that handles `CounterMsg` handles `SystemMsg`. No special
+signal handlers, no callbacks — just messages in a typed mailbox.
+
+**C = CLI args** — the process config for main is the arguments to the binary.
+This is `String[] args` from Java, but hidden until needed through progressive
+disclosure:
+
+```expo
+# Simple script — no ceremony
+fn main
+  print("hello")
+end
+
+# CLI tool — access args when needed
+fn main
+  args = Process.config()
+  filename = args.get(0)
+end
+
+# Server — receive system signals for graceful shutdown
+fn main
+  sup = spawn Supervisor.new(children)
+  receive
+    SystemMsg.Shutdown -> sup.cast(SupervisorMsg.StopAll)
+    SystemMsg.Interrupt -> sup.cast(SupervisorMsg.StopAll)
+  end
+end
+```
+
+The runtime passes `argv` as main's config. Simple scripts ignore it. CLI tools
+access it via `Process.config()`. Servers use `receive` to handle system
+signals. Same process model at every level of complexity.
+
+This is the same insight as `Process<C, M, R>`: C is what you receive to start
+(config/args → `new`), M is what you receive while running (messages →
+`handle`), R is what you send back (replies). Main follows the same pattern —
+C is argv, M is system signals, R is unit. The process model is universal.

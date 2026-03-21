@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cooperative process runtime -- processes block properly on `receive` and resume when a message arrives. Supports aarch64 (Apple Silicon, Linux ARM), x86_64 (Linux, macOS), and x86_64 Windows.
+- `Ref.call` -- synchronous request/reply. `ref.call(msg, timeout_ms)` sends a message, waits for the reply, and returns `Option<R>` (`Some` on reply, `None` on timeout).
+- `Ref.cast` -- fire-and-forget message send. `ref.cast(msg)` sends a message and returns immediately.
+- `fn main` runs as a process -- `main` can now use `call`, `receive`, and other blocking operations alongside spawned processes.
 - Protocol-based process model -- structs implement `Process<C, M, R>` to become processes. `C` is the config type, `M` is the message type, `R` is the reply type. Two required methods: `new(config: C) -> Self` and `handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self`. Replaces the old caller-side `Process<M>` annotation.
 - Default protocol implementations -- protocols can now provide method bodies that serve as defaults for implementors. Types that `impl` a protocol without defining a default method automatically inherit it. Types can override defaults by providing their own implementation. Synthesized at the AST level with full type parameter substitution (`Self`, protocol type params).
 - Pair-based process mailbox envelope -- `cast` and `call` wrap messages in `Pair<M, Option<ReplyTo<R>>>` before sending. The default `run` loop receives the pair and unpacks `msg` and `from` for `handle`. `cast` sends `Pair<msg, Option.None>`; `call` sends `Pair<msg, Option.Some(ReplyTo{id: caller_pid}))` using `expo_rt_self()`.
@@ -32,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `receive` null-safety -- when the mailbox is empty and there is no `after` clause, the process terminates cleanly instead of crashing. Proper blocking semantics deferred to the real runtime scheduler.
+- `Ref.call` now correctly delivers the `ReplyTo` handle to the process handler, and returns the reply value to the caller.
+- `receive` -- when the mailbox is empty and there is no `after` clause, the process blocks until a message arrives instead of crashing.
+- Clean exit -- when `main` finishes, the program exits immediately instead of reporting a false deadlock for background processes.
 - Typed binding patterns on non-union types -- `pair: Pair<M, Option<ReplyTo<R>>>` in a `receive` arm now works when the annotation matches the subject type (previously only worked for union member discrimination).
 - Proper coercion of Int type in structs, enums, functions, and more.
 - Integer literals in binary operations now coerce to match the other operand's width (e.g. `x * 2` where `x: Int32` no longer produces an LLVM type mismatch).

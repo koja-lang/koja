@@ -166,10 +166,10 @@ pub fn emit_ref_method<'ctx>(
                 .into_struct_type();
 
             let mut option_none = option_llvm.get_undef();
-            let tag_zero = c.context.i8_type().const_int(0, false);
+            let tag_none = c.context.i8_type().const_int(1, false);
             option_none = c
                 .builder
-                .build_insert_value(option_none, tag_zero, 0, "none_tag")
+                .build_insert_value(option_none, tag_none, 0, "none_tag")
                 .unwrap()
                 .into_struct_value();
 
@@ -319,18 +319,35 @@ pub fn emit_ref_method<'ctx>(
                 .unwrap()
                 .into_struct_value();
 
-            let mut option_some = option_from_llvm.get_undef();
-            let tag_one = c.context.i8_type().const_int(1, false);
-            option_some = c
-                .builder
-                .build_insert_value(option_some, tag_one, 0, "some_tag")
-                .unwrap()
-                .into_struct_value();
-            option_some = c
-                .builder
-                .build_insert_value(option_some, reply_to_val, 1, "some_val")
-                .unwrap()
-                .into_struct_value();
+            let option_some = {
+                let alloca = c
+                    .builder
+                    .build_alloca(option_from_llvm, "option_some_buf")
+                    .unwrap();
+                let tag_ptr = c
+                    .builder
+                    .build_struct_gep(option_from_llvm, alloca, 0, "tag_ptr")
+                    .unwrap();
+                let tag_some = c.context.i8_type().const_int(0, false);
+                c.builder.build_store(tag_ptr, tag_some).unwrap();
+                let payload_ptr = c
+                    .builder
+                    .build_struct_gep(option_from_llvm, alloca, 1, "payload_ptr")
+                    .unwrap();
+                let typed_ptr = c
+                    .builder
+                    .build_pointer_cast(
+                        payload_ptr,
+                        c.context.ptr_type(AddressSpace::default()),
+                        "typed_payload_ptr",
+                    )
+                    .unwrap();
+                c.builder.build_store(typed_ptr, reply_to_val).unwrap();
+                c.builder
+                    .build_load(option_from_llvm, alloca, "option_some")
+                    .unwrap()
+                    .into_struct_value()
+            };
 
             let mut pair_val = envelope_llvm.get_undef();
             pair_val = c
@@ -402,10 +419,10 @@ pub fn emit_ref_method<'ctx>(
 
             c.builder.position_at_end(then_bb);
             let mut none_val = option_reply_struct.get_undef();
-            let tag_zero = c.context.i8_type().const_int(0, false);
+            let tag_none = c.context.i8_type().const_int(1, false);
             none_val = c
                 .builder
-                .build_insert_value(none_val, tag_zero, 0, "none_tag")
+                .build_insert_value(none_val, tag_none, 0, "none_tag")
                 .unwrap()
                 .into_struct_value();
             c.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -418,18 +435,35 @@ pub fn emit_ref_method<'ctx>(
                     .build_load(reply_llvm, raw_ptr, "reply_val")
                     .unwrap()
             };
-            let mut some_val = option_reply_struct.get_undef();
-            let tag_one_reply = c.context.i8_type().const_int(1, false);
-            some_val = c
-                .builder
-                .build_insert_value(some_val, tag_one_reply, 0, "some_tag")
-                .unwrap()
-                .into_struct_value();
-            some_val = c
-                .builder
-                .build_insert_value(some_val, reply_val, 1, "some_val")
-                .unwrap()
-                .into_struct_value();
+            let some_val = {
+                let alloca = c
+                    .builder
+                    .build_alloca(option_reply_struct, "some_reply_buf")
+                    .unwrap();
+                let tag_ptr = c
+                    .builder
+                    .build_struct_gep(option_reply_struct, alloca, 0, "reply_tag_ptr")
+                    .unwrap();
+                let tag_some_reply = c.context.i8_type().const_int(0, false);
+                c.builder.build_store(tag_ptr, tag_some_reply).unwrap();
+                let payload_ptr = c
+                    .builder
+                    .build_struct_gep(option_reply_struct, alloca, 1, "reply_payload_ptr")
+                    .unwrap();
+                let typed_ptr = c
+                    .builder
+                    .build_pointer_cast(
+                        payload_ptr,
+                        c.context.ptr_type(AddressSpace::default()),
+                        "reply_typed_ptr",
+                    )
+                    .unwrap();
+                c.builder.build_store(typed_ptr, reply_val).unwrap();
+                c.builder
+                    .build_load(option_reply_struct, alloca, "some_val")
+                    .unwrap()
+                    .into_struct_value()
+            };
             c.builder.build_unconditional_branch(merge_bb).unwrap();
 
             c.builder.position_at_end(merge_bb);

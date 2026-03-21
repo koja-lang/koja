@@ -544,6 +544,51 @@ impl<'ctx> Compiler<'ctx> {
             .get(&mangled)
             .ok_or_else(|| format!("undeclared function: {}", mangled))?;
 
+        let is_main = func.name == "main" && self_type_name.is_none();
+
+        if is_main {
+            let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+            let user_main_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+            let user_main = self
+                .module
+                .add_function("__expo_user_main", user_main_ty, None);
+            self.functions
+                .insert("__expo_user_main".to_string(), user_main);
+            let um_entry = self.context.append_basic_block(user_main, "entry");
+            self.builder.position_at_end(um_entry);
+            self.variables.clear();
+            self.compile_function_body(&func.body, &Type::Unit, user_main, false)?;
+
+            let main_entry = self.context.append_basic_block(fn_value, "entry");
+            self.builder.position_at_end(main_entry);
+
+            let spawn_fn = *self
+                .functions
+                .get("expo_rt_spawn")
+                .ok_or("expo_rt_spawn not declared")?;
+            let user_main_ptr = user_main.as_global_value().as_pointer_value();
+            let null_ptr = ptr_ty.const_null();
+            let zero_i64 = self.context.i64_type().const_int(0, false);
+            self.builder
+                .build_call(
+                    spawn_fn,
+                    &[user_main_ptr.into(), null_ptr.into(), zero_i64.into()],
+                    "",
+                )
+                .unwrap();
+
+            let main_done = *self
+                .functions
+                .get("expo_rt_main_done")
+                .ok_or("expo_rt_main_done not declared")?;
+            self.builder.build_call(main_done, &[], "").unwrap();
+
+            let zero_i32 = self.context.i32_type().const_int(0, false);
+            self.builder.build_return(Some(&zero_i32)).unwrap();
+
+            return Ok(());
+        }
+
         let entry = self.context.append_basic_block(fn_value, "entry");
         self.builder.position_at_end(entry);
 
@@ -613,8 +658,8 @@ impl<'ctx> Compiler<'ctx> {
                 return_type = Type::Enum(target.to_string());
             }
         }
-        let is_main = func.name == "main" && self_type_name.is_none();
-        let result = self.compile_function_body(&func.body, &return_type, fn_value, is_main);
+
+        let result = self.compile_function_body(&func.body, &return_type, fn_value, false);
 
         self.process_msg_type = saved_process_msg;
         result
