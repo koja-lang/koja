@@ -164,6 +164,32 @@ impl<'ctx> Compiler<'ctx> {
         Ok(thunk_fn)
     }
 
+    /// Creates a length-prefixed string global: `{ i64 bit_length, [N x i8] "bytes\0" }`.
+    /// Returns a constant pointer to the payload (past the 8-byte header).
+    pub fn create_string_global(&self, bytes: &[u8], name: &str) -> PointerValue<'ctx> {
+        let byte_count = bytes.len() as u64;
+        let bit_length = byte_count * 8;
+        let i64_type = self.context.i64_type();
+        let i8_type = self.context.i8_type();
+        let str_array_type = i8_type.array_type((byte_count + 1) as u32);
+        let header_type = self
+            .context
+            .struct_type(&[i64_type.into(), str_array_type.into()], false);
+        let str_bytes = self.context.const_string(bytes, true);
+        let struct_val = header_type.const_named_struct(&[
+            i64_type.const_int(bit_length, false).into(),
+            str_bytes.into(),
+        ]);
+        let global = self.module.add_global(header_type, None, name);
+        global.set_initializer(&struct_val);
+        global.set_constant(true);
+        unsafe {
+            global
+                .as_pointer_value()
+                .const_gep(i8_type, &[i64_type.const_int(8, false)])
+        }
+    }
+
     /// Writes the compiled LLVM module to a native object file at `path`.
     pub fn emit_object_file(&self, path: &Path) -> Result<(), String> {
         Target::initialize_native(&InitializationConfig::default())
@@ -375,6 +401,20 @@ impl<'ctx> Compiler<'ctx> {
             .add_function("expo_rt_main_done", main_done_type, None);
         self.functions
             .insert("expo_rt_main_done".to_string(), main_done);
+
+        let memcmp_type = i32_type.fn_type(
+            &[i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into()],
+            false,
+        );
+        let memcmp = self.module.add_function("memcmp", memcmp_type, None);
+        self.functions.insert("memcmp".to_string(), memcmp);
+
+        let utf8_validate_type = i64_type.fn_type(&[i8_ptr_type.into(), i64_type.into()], false);
+        let utf8_validate =
+            self.module
+                .add_function("expo_utf8_validate", utf8_validate_type, None);
+        self.functions
+            .insert("expo_utf8_validate".to_string(), utf8_validate);
     }
 
     fn declare_function(
@@ -463,12 +503,8 @@ impl<'ctx> Compiler<'ctx> {
                                 combined.push_str(value);
                             }
                         }
-                        let bytes = combined.as_bytes();
-                        let str_type = self.context.i8_type().array_type((bytes.len() + 1) as u32);
-                        let global = self.module.add_global(str_type, None, &c.name);
-                        global.set_initializer(&self.context.const_string(bytes, true));
-                        global.set_constant(true);
-                        global.as_pointer_value().into()
+                        self.create_string_global(combined.as_bytes(), &c.name)
+                            .into()
                     }
                     _ => continue,
                 };
@@ -488,6 +524,10 @@ impl<'ctx> Compiler<'ctx> {
                                 let ty = self.resolve_type_expr(type_expr);
                                 let _ = self.ensure_types_exist(&ty);
                             }
+                        }
+                        if let Some(ret_te) = &func.return_type {
+                            let ret_ty = self.resolve_type_expr(ret_te);
+                            let _ = self.ensure_types_exist(&ret_ty);
                         }
                     }
                 }

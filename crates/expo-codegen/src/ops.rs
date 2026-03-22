@@ -194,7 +194,8 @@ fn concat_operand_type(c: &Compiler, expr: &Expr) -> Type {
     Type::Primitive(Primitive::String)
 }
 
-/// String <> String: strlen both, malloc(len1 + len2 + 1), memcpy, null-terminate.
+/// String <> String: load bit_lengths from headers, malloc(8 + l_bytes + r_bytes + 1),
+/// store combined bit_length, memcpy payloads, null-terminate.
 fn compile_string_concat<'ctx>(
     c: &mut Compiler<'ctx>,
     lhs: BasicValueEnum<'ctx>,
@@ -205,77 +206,108 @@ fn compile_string_concat<'ctx>(
     let l_ptr = lhs.into_pointer_value();
     let r_ptr = rhs.into_pointer_value();
 
-    let strlen = *c.functions.get("strlen").ok_or("strlen not declared")?;
     let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
     let memcpy = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+    let neg8 = i64_type.const_int((-8i64) as u64, true);
+    let eight = i64_type.const_int(8, false);
+    let three = i64_type.const_int(3, false);
 
-    let l_len = c
+    let l_hdr_ptr = unsafe {
+        c.builder
+            .build_gep(i8_type, l_ptr, &[neg8], "l_hdr")
+            .unwrap()
+    };
+    let l_bits = c
         .builder
-        .build_call(strlen, &[l_ptr.into()], "l_len")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .build_load(i64_type, l_hdr_ptr, "l_bits")
         .unwrap()
         .into_int_value();
-    let r_len = c
+    let l_bytes = c
         .builder
-        .build_call(strlen, &[r_ptr.into()], "r_len")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_int_value();
-
-    let total = c.builder.build_int_add(l_len, r_len, "cat_len").unwrap();
-    let alloc_size = c
-        .builder
-        .build_int_add(total, i64_type.const_int(1, false), "cat_alloc")
+        .build_right_shift(l_bits, three, false, "l_bytes")
         .unwrap();
 
-    let buf = c
+    let r_hdr_ptr = unsafe {
+        c.builder
+            .build_gep(i8_type, r_ptr, &[neg8], "r_hdr")
+            .unwrap()
+    };
+    let r_bits = c
         .builder
-        .build_call(malloc, &[alloc_size.into()], "cat_buf")
+        .build_load(i64_type, r_hdr_ptr, "r_bits")
+        .unwrap()
+        .into_int_value();
+    let r_bytes = c
+        .builder
+        .build_right_shift(r_bits, three, false, "r_bytes")
+        .unwrap();
+
+    let total_bits = c
+        .builder
+        .build_int_add(l_bits, r_bits, "cat_total_bits")
+        .unwrap();
+    let total_bytes = c
+        .builder
+        .build_int_add(l_bytes, r_bytes, "cat_total_bytes")
+        .unwrap();
+
+    let alloc_size = c
+        .builder
+        .build_int_add(total_bytes, i64_type.const_int(9, false), "cat_alloc")
+        .unwrap();
+
+    let base_ptr = c
+        .builder
+        .build_call(malloc, &[alloc_size.into()], "cat_base")
         .unwrap()
         .try_as_basic_value()
         .left()
         .unwrap()
         .into_pointer_value();
 
+    c.builder.build_store(base_ptr, total_bits).unwrap();
+
+    let payload = unsafe {
+        c.builder
+            .build_in_bounds_gep(i8_type, base_ptr, &[eight], "cat_payload")
+            .unwrap()
+    };
+
     c.builder
         .build_call(
             memcpy,
-            &[buf.into(), l_ptr.into(), l_len.into()],
+            &[payload.into(), l_ptr.into(), l_bytes.into()],
             "cat_cpy1",
         )
         .unwrap();
 
     let mid = unsafe {
         c.builder
-            .build_in_bounds_gep(i8_type, buf, &[l_len], "cat_mid")
+            .build_in_bounds_gep(i8_type, payload, &[l_bytes], "cat_mid")
             .unwrap()
     };
     c.builder
         .build_call(
             memcpy,
-            &[mid.into(), r_ptr.into(), r_len.into()],
+            &[mid.into(), r_ptr.into(), r_bytes.into()],
             "cat_cpy2",
         )
         .unwrap();
 
     let end = unsafe {
         c.builder
-            .build_in_bounds_gep(i8_type, buf, &[total], "cat_end")
+            .build_in_bounds_gep(i8_type, payload, &[total_bytes], "cat_end")
             .unwrap()
     };
     c.builder
         .build_store(end, i8_type.const_int(0, false))
         .unwrap();
 
-    Ok(Some(buf.into()))
+    Ok(Some(payload.into()))
 }
 
-/// Binary/Bits <> Binary/Bits: load both lengths from ptr-8, malloc(8 + len1 + len2),
-/// store combined length, memcpy both payloads.
+/// Binary/Bits <> Binary/Bits: load bit_lengths from headers, compute byte counts,
+/// malloc(8 + l_bytes + r_bytes), store combined bit_length, memcpy payloads.
 fn compile_binary_concat<'ctx>(
     c: &mut Compiler<'ctx>,
     lhs: BasicValueEnum<'ctx>,
@@ -291,33 +323,49 @@ fn compile_binary_concat<'ctx>(
 
     let neg8 = i64_type.const_int((-8i64) as u64, true);
     let eight = i64_type.const_int(8, false);
+    let three = i64_type.const_int(3, false);
 
-    let l_len_ptr = unsafe {
+    let l_hdr_ptr = unsafe {
         c.builder
-            .build_gep(i8_type, l_ptr, &[neg8], "l_len_ptr")
+            .build_gep(i8_type, l_ptr, &[neg8], "l_hdr_ptr")
             .unwrap()
     };
-    let l_len = c
+    let l_bits = c
         .builder
-        .build_load(i64_type, l_len_ptr, "l_len")
+        .build_load(i64_type, l_hdr_ptr, "l_bits")
         .unwrap()
         .into_int_value();
+    let l_bytes = c
+        .builder
+        .build_right_shift(l_bits, three, false, "l_bytes")
+        .unwrap();
 
-    let r_len_ptr = unsafe {
+    let r_hdr_ptr = unsafe {
         c.builder
-            .build_gep(i8_type, r_ptr, &[neg8], "r_len_ptr")
+            .build_gep(i8_type, r_ptr, &[neg8], "r_hdr_ptr")
             .unwrap()
     };
-    let r_len = c
+    let r_bits = c
         .builder
-        .build_load(i64_type, r_len_ptr, "r_len")
+        .build_load(i64_type, r_hdr_ptr, "r_bits")
         .unwrap()
         .into_int_value();
+    let r_bytes = c
+        .builder
+        .build_right_shift(r_bits, three, false, "r_bytes")
+        .unwrap();
 
-    let total_len = c.builder.build_int_add(l_len, r_len, "cat_total").unwrap();
+    let total_bits = c
+        .builder
+        .build_int_add(l_bits, r_bits, "cat_total_bits")
+        .unwrap();
+    let total_bytes = c
+        .builder
+        .build_int_add(l_bytes, r_bytes, "cat_total_bytes")
+        .unwrap();
     let alloc_size = c
         .builder
-        .build_int_add(total_len, eight, "cat_alloc")
+        .build_int_add(total_bytes, eight, "cat_alloc")
         .unwrap();
 
     let base_ptr = c
@@ -329,7 +377,7 @@ fn compile_binary_concat<'ctx>(
         .unwrap()
         .into_pointer_value();
 
-    c.builder.build_store(base_ptr, total_len).unwrap();
+    c.builder.build_store(base_ptr, total_bits).unwrap();
 
     let payload = unsafe {
         c.builder
@@ -340,20 +388,20 @@ fn compile_binary_concat<'ctx>(
     c.builder
         .build_call(
             memcpy,
-            &[payload.into(), l_ptr.into(), l_len.into()],
+            &[payload.into(), l_ptr.into(), l_bytes.into()],
             "cat_cpy1",
         )
         .unwrap();
 
     let mid = unsafe {
         c.builder
-            .build_in_bounds_gep(i8_type, payload, &[l_len], "cat_mid")
+            .build_in_bounds_gep(i8_type, payload, &[l_bytes], "cat_mid")
             .unwrap()
     };
     c.builder
         .build_call(
             memcpy,
-            &[mid.into(), r_ptr.into(), r_len.into()],
+            &[mid.into(), r_ptr.into(), r_bytes.into()],
             "cat_cpy2",
         )
         .unwrap();

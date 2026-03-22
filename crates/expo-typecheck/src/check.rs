@@ -44,6 +44,8 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                     Type::Struct(target_name.clone())
                 } else if ctx.enums.contains_key(target_name.as_str()) {
                     Type::Enum(target_name.clone())
+                } else if let Some(p) = Primitive::from_name(target_name) {
+                    Type::Primitive(p)
                 } else {
                     continue;
                 };

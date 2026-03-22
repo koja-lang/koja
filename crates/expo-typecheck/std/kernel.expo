@@ -732,3 +732,43 @@ impl Process<Task<R>, (), R> for Task<R>
     self
   end
 end
+
+impl String
+  @doc """
+  Converts a `String` to `Binary`. This is a zero-cost widening conversion:
+  every valid UTF-8 string is also a valid byte sequence.
+  """
+  fn to_binary(self) -> Binary
+    panic("intrinsic")
+  end
+end
+
+impl Binary
+  @doc """
+  Converts a `Binary` to `Bits`. This is a zero-cost widening conversion:
+  every byte-aligned binary is also a valid bitstring.
+  """
+  fn to_bits(self) -> Bits
+    panic("intrinsic")
+  end
+
+  @doc """
+  Attempts to interpret the binary as a UTF-8 string. Returns `Result.Ok`
+  with the string if the bytes are valid UTF-8, or `Result.Err` with a
+  diagnostic message otherwise.
+  """
+  fn to_string(self) -> Result<String, String>
+    panic("intrinsic")
+  end
+end
+
+impl Bits
+  @doc """
+  Attempts to narrow a `Bits` value to `Binary`. Returns `Result.Ok` if
+  the bit length is byte-aligned (divisible by 8), or `Result.Err` with
+  a diagnostic message otherwise.
+  """
+  fn to_binary(self) -> Result<Binary, String>
+    panic("intrinsic")
+  end
+end

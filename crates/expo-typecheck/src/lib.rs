@@ -80,6 +80,17 @@ pub fn merge_stdlib(stdlib: &TypeContext, target: &mut TypeContext) {
             .or_default()
             .extend(protos.iter().cloned());
     }
+    for (prim_name, methods) in &stdlib.primitive_methods {
+        let entry = target
+            .primitive_methods
+            .entry(prim_name.clone())
+            .or_default();
+        for (method_name, sig) in methods {
+            if !entry.contains_key(method_name) {
+                entry.insert(method_name.clone(), sig.clone());
+            }
+        }
+    }
     for (span, captures) in &stdlib.closure_captures {
         target.closure_captures.insert(*span, captures.clone());
     }
@@ -122,6 +133,92 @@ pub fn resolve_imports(
     module_contexts: &HashMap<String, TypeContext>,
 ) {
     collect::resolve_imports(module, ctx, module_contexts);
+}
+
+/// Re-resolves generic type signatures that may have `Type::Unknown` fields,
+/// parameters, or return types because the referenced types (e.g. stdlib types)
+/// weren't known during initial collection. Must be called after merging stdlib.
+pub fn re_resolve_generics(ctx: &mut TypeContext) {
+    let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+    let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
+    let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
+    let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
+
+    let type_aliases = ctx.type_aliases.clone();
+
+    let generic_struct_names: Vec<String> = ctx.generic_struct_asts.keys().cloned().collect();
+    for name in &generic_struct_names {
+        let decl = ctx.generic_struct_asts[name].clone();
+        let tp_refs: Vec<&str> = decl.type_params.iter().map(|s| s.as_str()).collect();
+
+        let fields: Vec<(String, types::Type)> = decl
+            .fields
+            .iter()
+            .map(|f| {
+                let ty = resolve_type_expr_with_params(
+                    &f.type_expr,
+                    &struct_refs,
+                    &enum_refs,
+                    &tp_refs,
+                    &type_aliases,
+                );
+                (f.name.clone(), ty)
+            })
+            .collect();
+
+        if let Some(info) = ctx.structs.get_mut(name) {
+            info.fields = fields;
+        }
+    }
+
+    let fn_names: Vec<String> = ctx.generic_function_asts.keys().cloned().collect();
+    for name in &fn_names {
+        let func = ctx.generic_function_asts[name].clone();
+        let tp_refs: Vec<&str> = func.type_params.iter().map(|s| s.as_str()).collect();
+
+        let params: Vec<ParamInfo> = func
+            .params
+            .iter()
+            .filter_map(|p| match p {
+                Param::Regular {
+                    mode,
+                    name,
+                    type_expr,
+                    ..
+                } => Some(ParamInfo {
+                    mode: *mode,
+                    name: name.clone(),
+                    ty: resolve_type_expr_with_params(
+                        type_expr,
+                        &struct_refs,
+                        &enum_refs,
+                        &tp_refs,
+                        &type_aliases,
+                    ),
+                }),
+                Param::Self_ { .. } => None,
+            })
+            .collect();
+
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|t| {
+                resolve_type_expr_with_params(t, &struct_refs, &enum_refs, &tp_refs, &type_aliases)
+            })
+            .unwrap_or(types::Type::Unit);
+
+        if let Some(sig) = ctx.functions.get_mut(&name.to_string()) {
+            *sig = FunctionSig {
+                visibility: sig.visibility,
+                params,
+                return_type,
+                kind: sig.kind,
+                span: sig.span,
+                type_params: sig.type_params.clone(),
+            };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -209,91 +306,5 @@ mod tests {
             "expected greedy-rest error, got: {:?}",
             errors(&ctx)
         );
-    }
-}
-
-/// Re-resolves generic type signatures that may have `Type::Unknown` fields,
-/// parameters, or return types because the referenced types (e.g. stdlib types)
-/// weren't known during initial collection. Must be called after merging stdlib.
-pub fn re_resolve_generics(ctx: &mut TypeContext) {
-    let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
-    let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
-    let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-    let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
-
-    let type_aliases = ctx.type_aliases.clone();
-
-    let generic_struct_names: Vec<String> = ctx.generic_struct_asts.keys().cloned().collect();
-    for name in &generic_struct_names {
-        let decl = ctx.generic_struct_asts[name].clone();
-        let tp_refs: Vec<&str> = decl.type_params.iter().map(|s| s.as_str()).collect();
-
-        let fields: Vec<(String, types::Type)> = decl
-            .fields
-            .iter()
-            .map(|f| {
-                let ty = resolve_type_expr_with_params(
-                    &f.type_expr,
-                    &struct_refs,
-                    &enum_refs,
-                    &tp_refs,
-                    &type_aliases,
-                );
-                (f.name.clone(), ty)
-            })
-            .collect();
-
-        if let Some(info) = ctx.structs.get_mut(name) {
-            info.fields = fields;
-        }
-    }
-
-    let fn_names: Vec<String> = ctx.generic_function_asts.keys().cloned().collect();
-    for name in &fn_names {
-        let func = ctx.generic_function_asts[name].clone();
-        let tp_refs: Vec<&str> = func.type_params.iter().map(|s| s.as_str()).collect();
-
-        let params: Vec<ParamInfo> = func
-            .params
-            .iter()
-            .filter_map(|p| match p {
-                Param::Regular {
-                    mode,
-                    name,
-                    type_expr,
-                    ..
-                } => Some(ParamInfo {
-                    mode: *mode,
-                    name: name.clone(),
-                    ty: resolve_type_expr_with_params(
-                        type_expr,
-                        &struct_refs,
-                        &enum_refs,
-                        &tp_refs,
-                        &type_aliases,
-                    ),
-                }),
-                Param::Self_ { .. } => None,
-            })
-            .collect();
-
-        let return_type = func
-            .return_type
-            .as_ref()
-            .map(|t| {
-                resolve_type_expr_with_params(t, &struct_refs, &enum_refs, &tp_refs, &type_aliases)
-            })
-            .unwrap_or(types::Type::Unit);
-
-        if let Some(sig) = ctx.functions.get_mut(&name.to_string()) {
-            *sig = FunctionSig {
-                visibility: sig.visibility,
-                params,
-                return_type,
-                kind: sig.kind,
-                span: sig.span,
-                type_params: sig.type_params.clone(),
-            };
-        }
     }
 }

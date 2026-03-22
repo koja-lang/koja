@@ -1,0 +1,36 @@
+fn main
+  # String segment in binary construction
+  pkt = <<"HELLO", 0x01>>
+  match pkt
+    <<0x48, 0x45, 0x4C, 0x4C, 0x4F, 0x01>> -> print("string seg ok")
+    _ -> print("string seg fail")
+  end
+
+  # String segment in binary pattern matching
+  data = <<0x48, 0x49>>
+  match data
+    <<"HI">> -> print("string pat ok")
+    _ -> print("string pat fail")
+  end
+
+  # Mixed: string + integer segments in pattern
+  frame = <<0x4F, 0x4B, 0x2A>>
+  match frame
+    <<"OK", val::8>> -> print(val)
+    _ -> print("mixed pat fail")
+  end
+
+  # Multi-arm string pattern dispatch
+  msg = <<0x47, 0x45, 0x54, 0x20, 0x2F>>
+  match msg
+    <<"POST", _rest: Binary>> -> print("post")
+    <<"GET ", path: Binary>> ->
+      match path
+        <<0x2F>> -> print("get root")
+        _ -> print("get other")
+      end
+    _ -> print("unknown")
+  end
+
+  print("all binary string segment tests passed")
+end

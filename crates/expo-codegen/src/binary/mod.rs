@@ -5,12 +5,15 @@
 pub(crate) mod construction;
 pub(crate) mod patterns;
 
-use expo_ast::ast::{BinarySegment, BinaryUnit, Expr, Literal, TypeExpr};
+use expo_ast::ast::{BinarySegment, BinaryUnit, Expr, Literal, StringPart, TypeExpr};
 use expo_typecheck::types::Primitive;
 
 /// Resolves a segment's bit width from its AST specification. Returns an error
 /// for dynamic (non-literal) sizes which are not yet supported.
 pub(crate) fn segment_bit_width(seg: &BinarySegment) -> Result<u64, String> {
+    if let Some(bit_width) = string_segment_bit_width(seg) {
+        return Ok(bit_width);
+    }
     if let Some(size_expr) = &seg.size {
         if let Expr::Literal {
             value: Literal::Int(n),
@@ -33,6 +36,23 @@ pub(crate) fn segment_bit_width(seg: &BinarySegment) -> Result<u64, String> {
             .ok_or_else(|| "unknown type annotation in binary segment".to_string())
     } else {
         Ok(8)
+    }
+}
+
+/// Returns the bit width of a string literal segment, or `None` if the segment
+/// is not a plain string literal (interpolations are not supported in binary segments).
+pub(crate) fn string_segment_bit_width(seg: &BinarySegment) -> Option<u64> {
+    if let Expr::String { parts, .. } = seg.value.as_ref() {
+        let byte_len: u64 = parts
+            .iter()
+            .map(|p| match p {
+                StringPart::Literal { value, .. } => value.len() as u64,
+                _ => 0,
+            })
+            .sum();
+        Some(byte_len * 8)
+    } else {
+        None
     }
 }
 

@@ -9,7 +9,7 @@ fn main
   # Variable binding
   packet = <<0xAB, 0x00, 0x10>>
   match packet
-    <<tag::8, length::16>> -> print(tag)
+    <<tag::8, _length::16>> -> print(tag)
     _ -> print("no match")
   end
 

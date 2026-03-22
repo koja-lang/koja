@@ -303,6 +303,15 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
         if is_type_name {
             return infer_static_method_return_type(c, type_name, method, args);
         }
+
+        if let Some((_, recv_ty, _)) = c.variables.get(type_name)
+            && matches!(recv_ty, Type::Primitive(_))
+        {
+            let ret = infer_instance_method_return_type(c, recv_ty, method);
+            if ret.is_some() {
+                return ret;
+            }
+        }
     }
     if let Expr::Closure {
         params,
@@ -365,6 +374,58 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
         });
     }
     None
+}
+
+/// Looks up the return type of an instance method on a given receiver type.
+fn infer_instance_method_return_type(c: &Compiler, recv_ty: &Type, method: &str) -> Option<Type> {
+    use expo_typecheck::types::GenericKind;
+
+    match recv_ty {
+        Type::Primitive(p) => c
+            .type_ctx
+            .primitive_methods
+            .get(p.display())
+            .and_then(|m| m.get(method))
+            .map(|sig| sig.return_type.clone()),
+        Type::Struct(name) => c
+            .type_ctx
+            .structs
+            .get(name)
+            .and_then(|si| si.methods.get(method))
+            .map(|sig| sig.return_type.clone()),
+        Type::Enum(name) => c
+            .type_ctx
+            .enums
+            .get(name)
+            .and_then(|ei| ei.methods.get(method))
+            .map(|sig| sig.return_type.clone()),
+        Type::GenericInstance {
+            base,
+            type_args,
+            kind,
+        } => {
+            let (methods, type_params) = match kind {
+                GenericKind::Struct => c
+                    .type_ctx
+                    .structs
+                    .get(base)
+                    .map(|si| (&si.methods, &si.type_params)),
+                GenericKind::Enum => c
+                    .type_ctx
+                    .enums
+                    .get(base)
+                    .map(|ei| (&ei.methods, &ei.type_params)),
+            }?;
+            let sig = methods.get(method)?;
+            let subst: std::collections::HashMap<String, Type> = type_params
+                .iter()
+                .zip(type_args.iter())
+                .map(|(p, a)| (p.clone(), a.clone()))
+                .collect();
+            Some(expo_typecheck::types::substitute(&sig.return_type, &subst))
+        }
+        _ => None,
+    }
 }
 
 /// Parses a mangled enum name like `Option_$i32$` and reconstructs a

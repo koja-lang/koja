@@ -20,6 +20,13 @@ const BITWISE_TYPES: &[&str] = &[
     "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
 ];
 
+const CONVERSION_INTRINSICS: &[&str] = &[
+    "String_to_binary",
+    "Binary_to_bits",
+    "Binary_to_string",
+    "Bits_to_binary",
+];
+
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     for prim in PRIMITIVE_TYPES {
         if mangled == format!("{prim}_hash") || mangled == format!("{prim}_eq") {
@@ -33,7 +40,7 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
             }
         }
     }
-    false
+    CONVERSION_INTRINSICS.contains(&mangled)
 }
 
 pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
@@ -41,6 +48,10 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
         .functions
         .get(mangled)
         .ok_or_else(|| format!("undeclared intrinsic: {mangled}"))?;
+
+    if CONVERSION_INTRINSICS.contains(&mangled) {
+        return emit_conversion_intrinsic(c, fn_val, mangled);
+    }
 
     if let Some(type_name) = mangled.strip_suffix("_hash") {
         emit_hash_intrinsic(c, fn_val, type_name)
@@ -451,6 +462,257 @@ fn emit_bitwise_intrinsic<'ctx>(
     Ok(())
 }
 
+fn emit_conversion_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    mangled: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    match mangled {
+        "String_to_binary" | "Binary_to_bits" => {
+            let self_val = fn_val.get_nth_param(0).unwrap();
+            c.builder.build_return(Some(&self_val)).unwrap();
+        }
+        "Binary_to_string" => {
+            let self_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
+            let i8_ty = c.context.i8_type();
+            let i64_ty = c.context.i64_type();
+
+            let neg8 = i64_ty.const_int((-8i64) as u64, true);
+            let hdr_ptr = unsafe {
+                c.builder
+                    .build_gep(i8_ty, self_ptr, &[neg8], "hdr")
+                    .unwrap()
+            };
+            let bit_length = c
+                .builder
+                .build_load(i64_ty, hdr_ptr, "bit_len")
+                .unwrap()
+                .into_int_value();
+            let byte_count = c
+                .builder
+                .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "bytes")
+                .unwrap();
+
+            let validate_fn = *c
+                .functions
+                .get("expo_utf8_validate")
+                .ok_or("expo_utf8_validate not declared")?;
+            let is_valid = c
+                .builder
+                .build_call(
+                    validate_fn,
+                    &[self_ptr.into(), byte_count.into()],
+                    "utf8_ok",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+
+            let valid_bb = c.context.append_basic_block(fn_val, "valid");
+            let invalid_bb = c.context.append_basic_block(fn_val, "invalid");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            let cond = c
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    is_valid,
+                    i64_ty.const_int(0, false),
+                    "is_valid",
+                )
+                .unwrap();
+            c.builder
+                .build_conditional_branch(cond, valid_bb, invalid_bb)
+                .unwrap();
+
+            c.builder.position_at_end(valid_bb);
+            let malloc_fn = *c.functions.get("malloc").ok_or("malloc not declared")?;
+            let memcpy_fn = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+            let alloc_size = c
+                .builder
+                .build_int_add(byte_count, i64_ty.const_int(9, false), "alloc_sz")
+                .unwrap();
+            let new_base = c
+                .builder
+                .build_call(malloc_fn, &[alloc_size.into()], "new_base")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_pointer_value();
+            c.builder.build_store(new_base, bit_length).unwrap();
+            let new_payload = unsafe {
+                c.builder
+                    .build_in_bounds_gep(
+                        i8_ty,
+                        new_base,
+                        &[i64_ty.const_int(8, false)],
+                        "new_payload",
+                    )
+                    .unwrap()
+            };
+            c.builder
+                .build_call(
+                    memcpy_fn,
+                    &[new_payload.into(), self_ptr.into(), byte_count.into()],
+                    "cpy",
+                )
+                .unwrap();
+            let nul_ptr = unsafe {
+                c.builder
+                    .build_in_bounds_gep(i8_ty, new_payload, &[byte_count], "nul")
+                    .unwrap()
+            };
+            c.builder
+                .build_store(nul_ptr, i8_ty.const_int(0, false))
+                .unwrap();
+
+            let result_type = fn_val
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_struct_type();
+            let ok_result = build_result_ok(c, new_payload.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let valid_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(invalid_bb);
+            let err_msg = c.create_string_global(b"invalid UTF-8", "utf8_err_msg");
+            let err_result = build_result_err(c, err_msg.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let invalid_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, valid_end), (&err_result, invalid_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Bits_to_binary" => {
+            let self_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
+            let i8_ty = c.context.i8_type();
+            let i64_ty = c.context.i64_type();
+
+            let neg8 = i64_ty.const_int((-8i64) as u64, true);
+            let hdr_ptr = unsafe {
+                c.builder
+                    .build_gep(i8_ty, self_ptr, &[neg8], "hdr")
+                    .unwrap()
+            };
+            let bit_length = c
+                .builder
+                .build_load(i64_ty, hdr_ptr, "bit_len")
+                .unwrap()
+                .into_int_value();
+
+            let remainder = c
+                .builder
+                .build_and(bit_length, i64_ty.const_int(7, false), "rem")
+                .unwrap();
+            let is_aligned = c
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    remainder,
+                    i64_ty.const_int(0, false),
+                    "aligned",
+                )
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_aligned, ok_bb, err_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let result_type = fn_val
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_struct_type();
+            let ok_result = build_result_ok(c, self_ptr.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_msg =
+                c.create_string_global(b"bit length is not byte-aligned", "align_err_msg");
+            let err_result = build_result_err(c, err_msg.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        _ => return Err(format!("unknown conversion intrinsic: {mangled}")),
+    }
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
+}
+
+/// Constructs a `Result.Ok(value)` struct: tag=0, payload=value.
+fn build_result_ok<'ctx>(
+    c: &Compiler<'ctx>,
+    value: inkwell::values::BasicValueEnum<'ctx>,
+    result_type: inkwell::types::StructType<'ctx>,
+) -> inkwell::values::BasicValueEnum<'ctx> {
+    let alloca = c.builder.build_alloca(result_type, "ok_buf").unwrap();
+    let tag_ptr = c
+        .builder
+        .build_struct_gep(result_type, alloca, 0, "ok_tag_ptr")
+        .unwrap();
+    c.builder
+        .build_store(tag_ptr, c.context.i8_type().const_int(0, false))
+        .unwrap();
+    if result_type.count_fields() > 1 {
+        let payload_ptr = c
+            .builder
+            .build_struct_gep(result_type, alloca, 1, "ok_payload_ptr")
+            .unwrap();
+        c.builder.build_store(payload_ptr, value).unwrap();
+    }
+    c.builder.build_load(result_type, alloca, "ok_val").unwrap()
+}
+
+/// Constructs a `Result.Err(value)` struct: tag=1, payload=value.
+fn build_result_err<'ctx>(
+    c: &Compiler<'ctx>,
+    value: inkwell::values::BasicValueEnum<'ctx>,
+    result_type: inkwell::types::StructType<'ctx>,
+) -> inkwell::values::BasicValueEnum<'ctx> {
+    let alloca = c.builder.build_alloca(result_type, "err_buf").unwrap();
+    let tag_ptr = c
+        .builder
+        .build_struct_gep(result_type, alloca, 0, "err_tag_ptr")
+        .unwrap();
+    c.builder
+        .build_store(tag_ptr, c.context.i8_type().const_int(1, false))
+        .unwrap();
+    if result_type.count_fields() > 1 {
+        let payload_ptr = c
+            .builder
+            .build_struct_gep(result_type, alloca, 1, "err_payload_ptr")
+            .unwrap();
+        c.builder.build_store(payload_ptr, value).unwrap();
+    }
+    c.builder
+        .build_load(result_type, alloca, "err_val")
+        .unwrap()
+}
+
 /// SplitMix64 finalizer: produces well-distributed hash from any i64 input.
 fn emit_splitmix64<'ctx>(
     c: &Compiler<'ctx>,
@@ -487,7 +749,7 @@ fn emit_splitmix64<'ctx>(
     c.builder.build_xor(mul2, shifted3, "xor3").unwrap()
 }
 
-/// FNV-1a hash over a null-terminated C string.
+/// FNV-1a hash over a length-prefixed string (reads byte count from header).
 fn emit_fnv1a_hash<'ctx>(
     c: &mut Compiler<'ctx>,
     str_ptr: inkwell::values::PointerValue<'ctx>,
@@ -498,6 +760,22 @@ fn emit_fnv1a_hash<'ctx>(
 
     let offset_basis = i64_ty.const_int(0xcbf29ce484222325, false);
     let fnv_prime = i64_ty.const_int(0x100000001b3, false);
+
+    let neg8 = i64_ty.const_int((-8i64) as u64, true);
+    let hdr_ptr = unsafe {
+        c.builder
+            .build_gep(i8_ty, str_ptr, &[neg8], "hdr_ptr")
+            .unwrap()
+    };
+    let bit_length = c
+        .builder
+        .build_load(i64_ty, hdr_ptr, "bit_length")
+        .unwrap()
+        .into_int_value();
+    let byte_count = c
+        .builder
+        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
+        .unwrap();
 
     let header_bb = c.context.append_basic_block(fn_val, "fnv_header");
     let body_bb = c.context.append_basic_block(fn_val, "fnv_body");
@@ -515,6 +793,15 @@ fn emit_fnv1a_hash<'ctx>(
     let current_hash = phi_hash.as_basic_value().into_int_value();
     let current_idx = phi_idx.as_basic_value().into_int_value();
 
+    let at_end = c
+        .builder
+        .build_int_compare(IntPredicate::UGE, current_idx, byte_count, "at_end")
+        .unwrap();
+    c.builder
+        .build_conditional_branch(at_end, done_bb, body_bb)
+        .unwrap();
+
+    c.builder.position_at_end(body_bb);
     let byte_ptr = unsafe {
         c.builder
             .build_gep(i8_ty, str_ptr, &[current_idx], "byte_ptr")
@@ -525,16 +812,6 @@ fn emit_fnv1a_hash<'ctx>(
         .build_load(i8_ty, byte_ptr, "byte")
         .unwrap()
         .into_int_value();
-
-    let is_null = c
-        .builder
-        .build_int_compare(IntPredicate::EQ, byte, i8_ty.const_int(0, false), "is_null")
-        .unwrap();
-    c.builder
-        .build_conditional_branch(is_null, done_bb, body_bb)
-        .unwrap();
-
-    c.builder.position_at_end(body_bb);
     let byte_ext = c
         .builder
         .build_int_z_extend(byte, i64_ty, "byte_ext")

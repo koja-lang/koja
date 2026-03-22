@@ -253,16 +253,21 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 {
                     let method_start = recv_span.end.column + 2;
                     let method_end = method_start + method.len() as u32;
-                    if line == recv_span.end.line
-                        && col >= method_start
-                        && col <= method_end
-                        && ctx.imported_modules.contains_key(mod_name)
-                    {
-                        return Some(SymbolInfo::ModuleFunction {
-                            module: mod_name.clone(),
-                            name: method.clone(),
-                        });
+                    if line == recv_span.end.line && col >= method_start && col <= method_end {
+                        if ctx.imported_modules.contains_key(mod_name) {
+                            return Some(SymbolInfo::ModuleFunction {
+                                module: mod_name.clone(),
+                                name: method.clone(),
+                            });
+                        }
+                        if let Some(mangled) = resolve_method_name(receiver, method, ctx) {
+                            return Some(SymbolInfo::Function { name: mangled });
+                        }
                     }
+                } else if let Some(mangled) = resolve_method_name(receiver, method, ctx)
+                    && cursor_on_method(receiver, method, span, line, col)
+                {
+                    return Some(SymbolInfo::Function { name: mangled });
                 }
                 for arg in args {
                     if let Some(info) = find_in_expr(&arg.value, line, col, ctx) {
@@ -485,4 +490,53 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
         _ => {}
     }
     None
+}
+
+/// Resolves the mangled function name for a method call by inferring the
+/// receiver's type from the type context (e.g. `Int_band` for `5.band(3)`).
+fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Option<String> {
+    let type_name = match receiver {
+        Expr::Literal { value, .. } => match value {
+            Literal::Int(_) => Some("Int"),
+            Literal::Float(_) => Some("Float"),
+            Literal::Bool(_) => Some("Bool"),
+            Literal::Unit => None,
+        },
+        Expr::Ident { name, .. } => {
+            if ctx.structs.contains_key(name) || ctx.enums.contains_key(name) {
+                Some(name.as_str())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(tn) = type_name {
+        let mangled = format!("{tn}_{method}");
+        if ctx.functions.contains_key(&mangled) {
+            return Some(mangled);
+        }
+    }
+    // For variable receivers where we don't know the type, try all known types
+    ctx.functions
+        .keys()
+        .find(|k| k.ends_with(&format!("_{method}")))
+        .cloned()
+}
+
+/// Returns true if the cursor is positioned on the method name portion of a
+/// method call (after the `.`), not on the receiver or arguments.
+fn cursor_on_method(receiver: &Expr, method: &str, span: &Span, line: u32, col: u32) -> bool {
+    let recv_end = match receiver {
+        Expr::Literal { span: s, .. }
+        | Expr::Ident { span: s, .. }
+        | Expr::Group { span: s, .. }
+        | Expr::Call { span: s, .. }
+        | Expr::MethodCall { span: s, .. }
+        | Expr::FieldAccess { span: s, .. } => s.end.column,
+        _ => return span_contains(span, line, col),
+    };
+    let method_start = recv_end + 2;
+    let method_end = method_start + method.len() as u32;
+    line == span.start.line && col >= method_start && col <= method_end
 }

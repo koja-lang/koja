@@ -10,7 +10,7 @@ use crate::context::{
     EnumInfo, FunctionKind, FunctionSig, ParamInfo, PassMode, ProtocolInfo, StructInfo,
     TypeContext, VariantData, VariantInfo, Visibility,
 };
-use crate::types::{Type, resolve_type_expr_with_params};
+use crate::types::{Primitive, Type, resolve_type_expr_with_params};
 
 /// Walks all top-level items in a module and builds a [`TypeContext`] containing
 /// function signatures, struct definitions, and enum definitions.
@@ -213,6 +213,7 @@ pub fn collect(module: &Module) -> TypeContext {
                             }
                         }
 
+                        let is_primitive = Primitive::from_name(&target_name).is_some();
                         let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
                             Some(&mut si.methods)
                         } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
@@ -231,6 +232,22 @@ pub fn collect(module: &Module) -> TypeContext {
                                 );
                             } else {
                                 methods.insert(f.name.clone(), sig);
+                            }
+                        } else if is_primitive {
+                            let prim_methods = ctx
+                                .primitive_methods
+                                .entry(target_name.clone())
+                                .or_default();
+                            if prim_methods.contains_key(&f.name) {
+                                ctx.error(
+                                    format!(
+                                        "duplicate method `{}` in impl for `{}`",
+                                        f.name, target_name
+                                    ),
+                                    f.span,
+                                );
+                            } else {
+                                prim_methods.insert(f.name.clone(), sig);
                             }
                         }
                     }
@@ -557,6 +574,8 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
                 Type::Struct(target_name.clone())
             } else if ctx.enums.contains_key(&target_name) {
                 Type::Enum(target_name.clone())
+            } else if let Some(p) = Primitive::from_name(&target_name) {
+                Type::Primitive(p)
             } else {
                 continue;
             };

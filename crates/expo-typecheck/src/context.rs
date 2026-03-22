@@ -23,6 +23,7 @@ pub struct TypeContext {
     pub generic_protocol_asts: HashMap<String, ProtocolDecl>,
     pub generic_struct_asts: HashMap<String, StructDecl>,
     pub imported_modules: HashMap<String, TypeContext>,
+    pub primitive_methods: HashMap<String, HashMap<String, FunctionSig>>,
     pub protocol_impls: HashMap<String, Vec<(String, Vec<Type>)>>,
     pub protocols: HashMap<String, ProtocolInfo>,
     pub structs: HashMap<String, StructInfo>,
@@ -162,6 +163,7 @@ impl TypeContext {
             generic_protocol_asts: HashMap::new(),
             generic_struct_asts: HashMap::new(),
             imported_modules: HashMap::new(),
+            primitive_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
             protocols: HashMap::new(),
             structs: HashMap::new(),
@@ -224,6 +226,14 @@ impl TypeContext {
         for (name, info) in &other.protocols {
             if !self.protocols.contains_key(name) {
                 self.protocols.insert(name.clone(), info.clone());
+            }
+        }
+        for (prim_name, methods) in &other.primitive_methods {
+            let entry = self.primitive_methods.entry(prim_name.clone()).or_default();
+            for (method_name, sig) in methods {
+                if !entry.contains_key(method_name) {
+                    entry.insert(method_name.clone(), sig.clone());
+                }
             }
         }
         for (type_name, impls) in &other.protocol_impls {

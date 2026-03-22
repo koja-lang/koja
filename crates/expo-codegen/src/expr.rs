@@ -241,8 +241,8 @@ fn compile_string<'ctx>(
                 combined.push_str(value);
             }
         }
-        let global = c.builder.build_global_string_ptr(&combined, "str").unwrap();
-        return Ok(Some(global.as_pointer_value().into()));
+        let payload_ptr = c.create_string_global(combined.as_bytes(), "str");
+        return Ok(Some(payload_ptr.into()));
     }
 
     let snprintf = *c.functions.get("snprintf").ok_or("snprintf not declared")?;
@@ -312,20 +312,43 @@ fn compile_string<'ctx>(
     let buf_size = c.builder.build_int_add(needed, one, "buf_size").unwrap();
 
     let malloc_fn = *c.functions.get("malloc").ok_or("malloc not declared")?;
-    let buf_size_i64 = c
+    let i64_type = c.context.i64_type();
+    let i8_type = c.context.i8_type();
+    let needed_i64 = c
         .builder
-        .build_int_z_extend(buf_size, c.context.i64_type(), "buf_size_i64")
+        .build_int_z_extend(needed, i64_type, "needed_i64")
         .unwrap();
-    let buf = c
+    let alloc_size = c
         .builder
-        .build_call(malloc_fn, &[buf_size_i64.into()], "interp_buf")
+        .build_int_add(needed_i64, i64_type.const_int(9, false), "interp_alloc_sz")
+        .unwrap();
+    let base_ptr = c
+        .builder
+        .build_call(malloc_fn, &[alloc_size.into()], "interp_base")
         .unwrap()
         .try_as_basic_value()
         .left()
         .ok_or("malloc did not return a value")?
         .into_pointer_value();
 
-    let mut write_args: Vec<BasicValueEnum> = vec![buf.into(), buf_size.into(), fmt_ptr.into()];
+    let bit_length = c
+        .builder
+        .build_int_mul(needed_i64, i64_type.const_int(8, false), "bit_length")
+        .unwrap();
+    c.builder.build_store(base_ptr, bit_length).unwrap();
+
+    let payload = unsafe {
+        c.builder
+            .build_in_bounds_gep(
+                i8_type,
+                base_ptr,
+                &[i64_type.const_int(8, false)],
+                "interp_payload",
+            )
+            .unwrap()
+    };
+
+    let mut write_args: Vec<BasicValueEnum> = vec![payload.into(), buf_size.into(), fmt_ptr.into()];
     write_args.extend_from_slice(&interp_values);
     let write_args_meta: Vec<_> = write_args.iter().map(|v| (*v).into()).collect();
 
@@ -333,7 +356,7 @@ fn compile_string<'ctx>(
         .build_call(snprintf, &write_args_meta, "interp_write")
         .unwrap();
 
-    Ok(Some(buf.into()))
+    Ok(Some(payload.into()))
 }
 
 /// Converts an enum value to a string pointer for interpolation. Calls
@@ -1041,7 +1064,18 @@ fn compile_receive<'ctx>(
         .is_none_or(|t| matches!(t, Type::Primitive(Primitive::String)));
 
     let subject_val = if is_string {
-        raw_ptr
+        let i8_type = c.context.i8_type();
+        let payload = unsafe {
+            c.builder
+                .build_in_bounds_gep(
+                    i8_type,
+                    raw_ptr.into_pointer_value(),
+                    &[c.context.i64_type().const_int(8, false)],
+                    "recv_str_payload",
+                )
+                .unwrap()
+        };
+        payload.into()
     } else {
         let msg_ty = msg_type.unwrap();
         let llvm_ty = crate::types::to_llvm_type(&msg_ty, c.context, &c.struct_types)

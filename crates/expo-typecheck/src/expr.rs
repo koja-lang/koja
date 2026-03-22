@@ -754,6 +754,25 @@ fn infer_binary_literal(
                     None
                 }
             }
+        } else if matches!(val_ty, Type::Primitive(Primitive::String)) {
+            if seg.signedness.is_some() || seg.endianness.is_some() {
+                ctx.error(
+                    "string segments do not support signedness or endianness modifiers".to_string(),
+                    seg.span,
+                );
+            }
+            if let Expr::String { parts, .. } = seg.value.as_ref() {
+                let byte_len: usize = parts
+                    .iter()
+                    .map(|p| match p {
+                        StringPart::Literal { value, .. } => value.len(),
+                        _ => 0,
+                    })
+                    .sum();
+                Some(byte_len as u64 * 8)
+            } else {
+                None
+            }
         } else {
             if val_ty.is_known() && !matches!(val_ty, Type::Primitive(p) if p.is_integer()) {
                 ctx.error(
@@ -1373,6 +1392,14 @@ fn infer_method_call(
                 (None, None)
             }
         }
+        Type::Primitive(p) => {
+            let sig = ctx
+                .primitive_methods
+                .get(p.display())
+                .and_then(|m| m.get(method))
+                .cloned();
+            (sig, None)
+        }
         _ => (None, None),
     };
 
@@ -1474,6 +1501,24 @@ fn infer_method_call(
                 };
                 ctx.error_with_hint(
                     format!("{} `{}` has no function `{}`", kind_str, base, method),
+                    hint,
+                    span,
+                );
+                Type::Error
+            }
+            Type::Primitive(p) => {
+                let available: Vec<&str> = ctx
+                    .primitive_methods
+                    .get(p.display())
+                    .map(|m| m.keys().map(|k| k.as_str()).collect())
+                    .unwrap_or_default();
+                let hint = if available.is_empty() {
+                    format!("type `{}` has no functions defined", p.display())
+                } else {
+                    format!("available functions: {}", available.join(", "))
+                };
+                ctx.error_with_hint(
+                    format!("type `{}` has no function `{}`", p.display(), method),
                     hint,
                     span,
                 );

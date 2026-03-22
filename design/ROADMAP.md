@@ -124,7 +124,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 ```
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
           → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise) ✓
-          → A2a (type conversion) → A2b (string stdlib) → A2c (ranges + OR patterns)
+          → A2a (type conversion) ✓ → A2b (string stdlib) → A2c (ranges + OR patterns)
           → A3 (project.expo + test runner) → A4 (lexer port)
 
 Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
@@ -191,14 +191,17 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 
 `String`, `Binary`, and `Bits` are distinct types with explicit conversion. No `Char` type -- single-codepoint strings serve the same purpose (fractal design). String ranges and OR patterns enable clean pattern matching for lexers and parsers.
 
-##### A2a. String/Binary/Bits distinct types + conversion
+##### A2a. String/Binary/Bits distinct types + conversion -- done
 
-- `String.to_binary()` (zero-cost widening, always succeeds)
-- `String.from_binary(data)` → `Result<String, Error>` (validates UTF-8)
-- `Binary.to_bits()` (zero-cost widening, always succeeds)
-- `Bits.to_binary()` → `Result<Binary, Error>` (validates byte alignment)
-- String literals in `<<>>` for construction and pattern matching (`<<"hello">>`, `<<"HTTP/1.1 ", rest: Binary>>`)
-- **Done when**: conversion round-trips work, `<<"hello">>` constructs a Binary from a string literal
+- Unified `[i64 bit_length][payload...]` memory layout for `String`, `Binary`, and `Bits`
+- `String.to_binary()` -- zero-cost widening (same pointer, always succeeds)
+- `Binary.to_string()` → `Result<String, String>` (validates UTF-8 via `expo_utf8_validate` runtime function)
+- `Binary.to_bits()` -- zero-cost widening (same pointer, always succeeds)
+- `Bits.to_binary()` → `Result<Binary, String>` (validates byte alignment)
+- Conversion methods declared as `panic("intrinsic")` in `std.kernel`, compiled to LLVM IR via intrinsic dispatch
+- String literals in `<<>>` for construction (`memcpy`) and pattern matching (`memcmp`)
+- Primitive method dispatch: `impl` blocks on primitive types (`String`, `Binary`, `Bits`, `Int`, etc.) store methods in `TypeContext.primitive_methods`, merged from stdlib, dispatched by both type checker and codegen
+- **Done**: conversion round-trips work, `<<"hello">>` constructs a Binary from a string literal, all lang tests pass
 
 ##### A2b. String stdlib methods
 
@@ -604,6 +607,7 @@ Active design discussions about the type system, code organization, and function
 - **Decided**: `protocol` keyword defines behavioral contracts. `impl Protocol for Type` for conformance. Bare `impl Type` survives for direct method attachment.
 - **Implemented**: protocol declarations with function signatures, `impl Protocol for Type` blocks with completeness and signature validation, `priv fn` helpers in impl blocks, `@doc` on protocol declarations.
 - **Decided**: static dispatch via monomorphization -- no vtables, no dynamic dispatch. Consistent with the existing generic compilation model.
+- **Implemented**: `impl` blocks on primitive types (`String`, `Binary`, `Bits`, `Int`, etc.) -- methods stored in `TypeContext.primitive_methods`, separate from struct/enum methods. Currently used for conversion intrinsics (`to_binary`, `to_string`, `to_bits`) and protocol methods (`eq`, `hash`, bitwise ops). User-defined `impl` on primitives is currently possible but undocumented; a future unified method storage system may replace the separate `primitive_methods` map with a shared registry for structs, enums, and primitives alike.
 - **Open**: trait bounds on generic type parameters (`fn foo<T: Display>(x: T)`) -- requires protocols, now unblocked.
 - **Open**: whether bare `impl Type` eventually migrates to inline functions in type bodies, or both coexist permanently.
 
@@ -693,7 +697,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, A2a type conversion, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |

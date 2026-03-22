@@ -7,7 +7,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 
-use super::{is_float_segment, segment_bit_width};
+use super::{is_float_segment, segment_bit_width, string_segment_bit_width};
 
 /// Compiles a `<<seg1, seg2, ...>>` binary literal into a heap-allocated,
 /// length-prefixed byte buffer. Returns a pointer to the payload (past the
@@ -45,7 +45,7 @@ pub(crate) fn compile_binary_literal<'ctx>(
         .into_pointer_value();
 
     c.builder
-        .build_store(base_ptr, i64_type.const_int(total_bytes, false))
+        .build_store(base_ptr, i64_type.const_int(total_bits, false))
         .unwrap();
 
     let payload_ptr = unsafe {
@@ -63,6 +63,36 @@ pub(crate) fn compile_binary_literal<'ctx>(
     for seg in segments {
         let bits = segment_bit_width(seg)?;
         let num_bytes = bits / 8;
+
+        if string_segment_bit_width(seg).is_some() {
+            let str_ptr = compile_expr(c, &seg.value, function)?
+                .ok_or("string segment produced no value")?
+                .into_pointer_value();
+            let dest = unsafe {
+                c.builder
+                    .build_in_bounds_gep(
+                        i8_type,
+                        payload_ptr,
+                        &[i64_type.const_int(byte_offset, false)],
+                        "str_seg_dest",
+                    )
+                    .unwrap()
+            };
+            let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
+            c.builder
+                .build_call(
+                    memcpy,
+                    &[
+                        dest.into(),
+                        str_ptr.into(),
+                        i64_type.const_int(num_bytes, false).into(),
+                    ],
+                    "str_seg_cpy",
+                )
+                .unwrap();
+            byte_offset += num_bytes;
+            continue;
+        }
 
         let value = compile_expr(c, &seg.value, function)?
             .ok_or("binary segment value produced no value")?;

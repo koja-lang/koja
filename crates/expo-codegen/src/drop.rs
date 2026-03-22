@@ -34,27 +34,11 @@ pub fn drop_live_variables(c: &mut Compiler) {
         if ty.is_copy() {
             continue;
         }
-        if matches!(ty, Type::Primitive(Primitive::String)) && *ownership == Ownership::Owned {
-            let free_fn = *c
-                .functions
-                .get("free")
-                .expect("free not declared in builtins");
-            let str_val = c
-                .builder
-                .build_load(
-                    c.context.ptr_type(inkwell::AddressSpace::default()),
-                    *ptr,
-                    "str_drop",
-                )
-                .unwrap();
-            c.builder
-                .build_call(free_fn, &[str_val.into()], "drop_free_str")
-                .unwrap();
-            continue;
-        }
         if matches!(
             ty,
-            Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
+            Type::Primitive(Primitive::String)
+                | Type::Primitive(Primitive::Binary)
+                | Type::Primitive(Primitive::Bits)
         ) && *ownership == Ownership::Owned
         {
             let free_fn = *c
@@ -68,7 +52,7 @@ pub fn drop_live_variables(c: &mut Compiler) {
                 .build_load(
                     c.context.ptr_type(inkwell::AddressSpace::default()),
                     *ptr,
-                    "bin_drop",
+                    "heap_drop",
                 )
                 .unwrap()
                 .into_pointer_value();
@@ -78,12 +62,12 @@ pub fn drop_live_variables(c: &mut Compiler) {
                         i8_type,
                         payload_ptr,
                         &[i64_type.const_int((-8i64) as u64, true)],
-                        "bin_base",
+                        "heap_base",
                     )
                     .unwrap()
             };
             c.builder
-                .build_call(free_fn, &[base_ptr.into()], "drop_free_bin")
+                .build_call(free_fn, &[base_ptr.into()], "drop_free_heap")
                 .unwrap();
             continue;
         }

@@ -11,7 +11,7 @@ use crate::compiler::Compiler;
 use crate::drop::Ownership;
 use crate::expr::compile_expr;
 
-use super::{is_float_segment, segment_bit_width};
+use super::{is_float_segment, segment_bit_width, string_segment_bit_width};
 
 /// Compiles a binary pattern (`<<seg1, seg2, ...>>`) into an i1 condition.
 /// Emits a length check against the total fixed prefix, then extracts each
@@ -42,11 +42,20 @@ pub(crate) fn compile_binary_pattern<'ctx>(
             )
             .unwrap()
     };
-    let byte_length = c
+    let bit_length = c
         .builder
-        .build_load(i64_type, len_ptr, "bin_len")
+        .build_load(i64_type, len_ptr, "bin_bit_len")
         .unwrap()
         .into_int_value();
+    let byte_length = c
+        .builder
+        .build_right_shift(
+            bit_length,
+            i64_type.const_int(3, false),
+            false,
+            "bin_byte_len",
+        )
+        .unwrap();
 
     let mut total_fixed_bits: u64 = 0;
     let has_greedy = segments.iter().any(is_greedy_rest);
@@ -90,6 +99,52 @@ pub(crate) fn compile_binary_pattern<'ctx>(
 
         let bits = segment_bit_width(seg)?;
         let num_bytes = bits / 8;
+
+        if string_segment_bit_width(seg).is_some() {
+            let str_ptr = compile_expr(c, &seg.value, function)?
+                .ok_or("string segment produced no value")?
+                .into_pointer_value();
+            let buf_ptr = unsafe {
+                c.builder
+                    .build_in_bounds_gep(
+                        i8_type,
+                        payload_ptr,
+                        &[i64_type.const_int(byte_offset, false)],
+                        "str_pat_ptr",
+                    )
+                    .unwrap()
+            };
+            let memcmp = *c.functions.get("memcmp").expect("memcmp not declared");
+            let cmp_result = c
+                .builder
+                .build_call(
+                    memcmp,
+                    &[
+                        buf_ptr.into(),
+                        str_ptr.into(),
+                        i64_type.const_int(num_bytes, false).into(),
+                    ],
+                    "str_pat_cmp",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+            let cmp = c
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    cmp_result,
+                    c.context.i32_type().const_int(0, false),
+                    "str_pat_eq",
+                )
+                .unwrap();
+            result = c.builder.build_and(result, cmp, "str_seg_and").unwrap();
+            byte_offset += num_bytes;
+            continue;
+        }
+
         let is_little = matches!(seg.endianness, Some(BinaryEndianness::Little));
         let is_literal = matches!(
             seg.value.as_ref(),
@@ -181,19 +236,23 @@ fn compile_greedy_rest<'ctx>(
     let i8_type = c.context.i8_type();
     let i64_type = c.context.i64_type();
 
-    let remaining = c
+    let remaining_bytes = c
         .builder
         .build_int_sub(
             byte_length,
             i64_type.const_int(fixed_offset, false),
-            "rest_len",
+            "rest_bytes",
         )
+        .unwrap();
+    let remaining_bits = c
+        .builder
+        .build_int_mul(remaining_bytes, i64_type.const_int(8, false), "rest_bits")
         .unwrap();
 
     let eight = i64_type.const_int(8, false);
     let alloc_size = c
         .builder
-        .build_int_add(eight, remaining, "rest_alloc_sz")
+        .build_int_add(eight, remaining_bytes, "rest_alloc_sz")
         .unwrap();
     let malloc = *c.functions.get("malloc").expect("malloc not declared");
     let base_ptr = c
@@ -205,7 +264,7 @@ fn compile_greedy_rest<'ctx>(
         .unwrap()
         .into_pointer_value();
 
-    c.builder.build_store(base_ptr, remaining).unwrap();
+    c.builder.build_store(base_ptr, remaining_bits).unwrap();
 
     let rest_payload = unsafe {
         c.builder
@@ -228,7 +287,7 @@ fn compile_greedy_rest<'ctx>(
     c.builder
         .build_call(
             memcpy,
-            &[rest_payload.into(), src_ptr.into(), remaining.into()],
+            &[rest_payload.into(), src_ptr.into(), remaining_bytes.into()],
             "rest_cpy",
         )
         .unwrap();

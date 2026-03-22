@@ -139,10 +139,22 @@ pub(crate) fn find_doc_for(module: &Module, name: &str) -> Option<String> {
             }
             Item::Impl(imp) => {
                 for member in &imp.members {
-                    if let ImplMember::Function(f) = member
-                        && f.name == name
-                    {
-                        return span::annotation_doc(&f.annotation);
+                    if let ImplMember::Function(f) = member {
+                        if f.name == name {
+                            return span::annotation_doc(&f.annotation);
+                        }
+                        let impl_type_name = match &imp.target {
+                            TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
+                                path.last().map(|s| s.as_str())
+                            }
+                            _ => None,
+                        };
+                        let mangled = impl_type_name
+                            .map(|t| format!("{t}_{}", f.name))
+                            .unwrap_or_default();
+                        if mangled == name {
+                            return span::annotation_doc(&f.annotation);
+                        }
                     }
                 }
             }

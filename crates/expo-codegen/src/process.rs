@@ -60,21 +60,38 @@ fn build_send_body<'ctx>(
 
     if is_string {
         let msg_ptr = fn_val.get_nth_param(1).unwrap().into_pointer_value();
-        let strlen_fn = *c.functions.get("strlen").ok_or("strlen not declared")?;
-        let str_len = c
+        let i8_ty = c.context.i8_type();
+        let neg8 = i64_ty.const_int((-8i64) as u64, true);
+        let hdr_ptr = unsafe {
+            c.builder
+                .build_gep(i8_ty, msg_ptr, &[neg8], "str_hdr_ptr")
+                .unwrap()
+        };
+        let bit_length = c
             .builder
-            .build_call(strlen_fn, &[msg_ptr.into()], "str_len")
+            .build_load(i64_ty, hdr_ptr, "str_bit_len")
             .unwrap()
-            .try_as_basic_value()
-            .left()
-            .ok_or("strlen did not return a value")?
             .into_int_value();
+        let byte_count = c
+            .builder
+            .build_right_shift(
+                bit_length,
+                i64_ty.const_int(3, false),
+                false,
+                "str_byte_count",
+            )
+            .unwrap();
+        let base_ptr = unsafe {
+            c.builder
+                .build_gep(i8_ty, msg_ptr, &[neg8], "str_base")
+                .unwrap()
+        };
         let msg_len = c
             .builder
-            .build_int_add(str_len, i64_ty.const_int(1, false), "msg_len")
+            .build_int_add(byte_count, i64_ty.const_int(9, false), "msg_len")
             .unwrap();
         c.builder
-            .build_call(send_fn, &[pid.into(), msg_ptr.into(), msg_len.into()], "")
+            .build_call(send_fn, &[pid.into(), base_ptr.into(), msg_len.into()], "")
             .unwrap();
     } else {
         let msg_val = fn_val.get_nth_param(1).unwrap();

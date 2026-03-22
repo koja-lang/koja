@@ -189,7 +189,7 @@ pub unsafe extern "C" fn expo_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
 
     let len = msg_len as usize;
     unsafe {
-        let layout = std::alloc::Layout::from_size_align(len, 1).unwrap();
+        let layout = std::alloc::Layout::from_size_align(len, 8).unwrap();
         let ptr = std::alloc::alloc(layout);
         std::ptr::copy_nonoverlapping(msg_ptr, ptr, len);
         s.processes[idx].mailbox.push_back(ptr);
@@ -253,6 +253,21 @@ pub extern "C" fn expo_rt_receive_timeout(timeout_ms: i64) -> *const u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn expo_rt_self() -> i64 {
     sched().current_pid
+}
+
+/// Validates that `len` bytes starting at `ptr` are valid UTF-8.
+/// Returns 1 if valid, 0 otherwise.
+///
+/// # Safety
+/// `ptr` must point to at least `len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_utf8_validate(ptr: *const u8, len: u64) -> i64 {
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    if std::str::from_utf8(slice).is_ok() {
+        1
+    } else {
+        0
+    }
 }
 
 // ---------------------------------------------------------------------------
