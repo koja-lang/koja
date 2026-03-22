@@ -34,7 +34,7 @@ fn infix_bp(kind: &TokenKind) -> Option<(u8, u8)> {
         | TokenKind::Gt
         | TokenKind::LtEq
         | TokenKind::GtEq => Some((BP_CMP_L, BP_CMP_R)),
-        TokenKind::Plus | TokenKind::Minus => Some((BP_ADD_L, BP_ADD_R)),
+        TokenKind::Plus | TokenKind::Minus | TokenKind::LtGt => Some((BP_ADD_L, BP_ADD_R)),
         TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Some((BP_MUL_L, BP_MUL_R)),
         _ => None,
     }
@@ -54,6 +54,7 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
         TokenKind::LtEq => BinOp::LtEq,
         TokenKind::GtEq => BinOp::GtEq,
         TokenKind::And => BinOp::And,
+        TokenKind::LtGt => BinOp::Concat,
         TokenKind::Or => BinOp::Or,
         _ => unreachable!("not a binary operator: {:?}", kind),
     }

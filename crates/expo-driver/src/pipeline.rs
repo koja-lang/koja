@@ -16,18 +16,25 @@ use crate::resolve;
 /// user module contexts.
 pub struct Stdlib {
     pub ctx: expo_typecheck::context::TypeContext,
-    pub module: Module,
+    pub modules: Vec<Module>,
 }
 
-/// Parses the kernel source embedded in `expo_typecheck` and collects its
-/// type information. Called once per compilation.
+/// Parses all embedded stdlib sources (in dependency order) and collects
+/// their type information into a single merged context. Called once per
+/// compilation. Each module sees the types from all preceding modules.
 pub fn parse_stdlib() -> Stdlib {
-    let parse_result = expo_parser::parse(expo_typecheck::KERNEL_SOURCE);
-    let ctx = expo_typecheck::collect_module(&parse_result.module);
-    Stdlib {
-        ctx,
-        module: parse_result.module,
+    let mut ctx = expo_typecheck::context::TypeContext::new();
+    let mut modules = Vec::new();
+
+    for source in expo_typecheck::STDLIB_SOURCES {
+        let parsed = expo_parser::parse(source);
+        let mut mod_ctx = expo_typecheck::collect_module(&parsed.module);
+        expo_typecheck::merge_stdlib(&ctx, &mut mod_ctx);
+        expo_typecheck::merge_stdlib(&mod_ctx, &mut ctx);
+        modules.push(parsed.module);
     }
+
+    Stdlib { ctx, modules }
 }
 
 /// Runs the type-checking pipeline for every module in the resolved graph.
@@ -145,7 +152,7 @@ pub fn build(args: &[String], quiet: bool, color: bool) {
         merged_ctx.merge(ctx);
     }
 
-    let mut modules_ast: Vec<&Module> = vec![&stdlib.module];
+    let mut modules_ast: Vec<&Module> = stdlib.modules.iter().collect();
     modules_ast.extend(graph.order.iter().map(|name| &graph.modules[name].module));
 
     let obj_path = format!("{output}.o");

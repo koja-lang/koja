@@ -35,10 +35,12 @@ impl Backend {
         };
 
         let hover_text = match &symbol {
-            SymbolInfo::Function { name } => build_function_hover(name, state, &self.stdlib_module),
-            SymbolInfo::Struct { name } => build_struct_hover(name, state, &self.stdlib_module),
+            SymbolInfo::Function { name } => {
+                build_function_hover(name, state, &self.stdlib_modules)
+            }
+            SymbolInfo::Struct { name } => build_struct_hover(name, state, &self.stdlib_modules),
             SymbolInfo::Constant { name } => build_constant_hover(name, state),
-            SymbolInfo::Enum { name } => build_enum_hover(name, state, &self.stdlib_module),
+            SymbolInfo::Enum { name } => build_enum_hover(name, state, &self.stdlib_modules),
             SymbolInfo::ModuleFunction { module, name } => {
                 build_module_function_hover(module, name, state)
             }
@@ -60,20 +62,23 @@ impl Backend {
 }
 
 /// Resolves a doc comment for `name`, checking imported origins first,
-/// then the local module, then the stdlib.
-fn resolve_doc(name: &str, state: &DocumentState, stdlib_module: &Module) -> Option<String> {
+/// then the local module, then all stdlib modules.
+fn resolve_doc(name: &str, state: &DocumentState, stdlib_modules: &[Module]) -> Option<String> {
     if let Some(origin_uri) = state.imported_origins.get(name) {
         find_doc_from_uri(origin_uri, name)
     } else {
-        lookup::find_doc_for(&state.module, name)
-            .or_else(|| lookup::find_doc_for(stdlib_module, name))
+        lookup::find_doc_for(&state.module, name).or_else(|| {
+            stdlib_modules
+                .iter()
+                .find_map(|m| lookup::find_doc_for(m, name))
+        })
     }
 }
 
 fn build_function_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_module: &Module,
+    stdlib_modules: &[Module],
 ) -> Option<String> {
     let sig = state.ctx.functions.get(name)?;
     let params_str: Vec<String> = sig
@@ -99,11 +104,15 @@ fn build_function_hover(
         params_str.join(", "),
         sig.return_type.display()
     );
-    let doc = resolve_doc(name, state, stdlib_module);
+    let doc = resolve_doc(name, state, stdlib_modules);
     Some(format_hover(&signature, doc.as_deref()))
 }
 
-fn build_struct_hover(name: &str, state: &DocumentState, stdlib_module: &Module) -> Option<String> {
+fn build_struct_hover(
+    name: &str,
+    state: &DocumentState,
+    stdlib_modules: &[Module],
+) -> Option<String> {
     let info = state.ctx.structs.get(name)?;
     let fields: Vec<String> = info
         .fields
@@ -116,7 +125,7 @@ fn build_struct_hover(name: &str, state: &DocumentState, stdlib_module: &Module)
         format!("<{}>", info.type_params.join(", "))
     };
     let signature = format!("struct {}{}\n{}\nend", name, tp, fields.join("\n"));
-    let doc = resolve_doc(name, state, stdlib_module);
+    let doc = resolve_doc(name, state, stdlib_modules);
     Some(format_hover(&signature, doc.as_deref()))
 }
 
@@ -127,7 +136,11 @@ fn build_constant_hover(name: &str, state: &DocumentState) -> Option<String> {
     Some(format_hover(&signature, doc.as_deref()))
 }
 
-fn build_enum_hover(name: &str, state: &DocumentState, stdlib_module: &Module) -> Option<String> {
+fn build_enum_hover(
+    name: &str,
+    state: &DocumentState,
+    stdlib_modules: &[Module],
+) -> Option<String> {
     let info = state.ctx.enums.get(name)?;
     let variants: Vec<String> = info
         .variants
@@ -148,7 +161,7 @@ fn build_enum_hover(name: &str, state: &DocumentState, stdlib_module: &Module) -
         })
         .collect();
     let signature = format!("enum {}\n{}\nend", name, variants.join("\n"));
-    let doc = resolve_doc(name, state, stdlib_module);
+    let doc = resolve_doc(name, state, stdlib_modules);
     Some(format_hover(&signature, doc.as_deref()))
 }
 

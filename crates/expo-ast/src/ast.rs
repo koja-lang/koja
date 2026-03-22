@@ -391,6 +391,7 @@ pub struct Arg {
 pub enum BinOp {
     Add,
     And,
+    Concat,
     Div,
     Eq,
     Gt,

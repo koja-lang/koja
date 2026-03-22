@@ -34,7 +34,7 @@ pub struct Backend {
     pub(crate) client: Client,
     pub(crate) documents: Arc<RwLock<HashMap<String, DocumentState>>>,
     pub(crate) stdlib_ctx: TypeContext,
-    pub(crate) stdlib_module: Module,
+    pub(crate) stdlib_modules: Vec<Module>,
 }
 
 impl std::fmt::Debug for Backend {
@@ -50,15 +50,24 @@ impl std::fmt::Debug for DocumentState {
 }
 
 impl Backend {
-    /// Creates a new backend, pre-loading the stdlib (kernel) module.
+    /// Creates a new backend, pre-loading all stdlib modules.
     pub fn new(client: Client) -> Self {
-        let parsed = expo_parser::parse(expo_typecheck::KERNEL_SOURCE);
-        let ctx = expo_typecheck::collect_module(&parsed.module);
+        let mut ctx = expo_typecheck::context::TypeContext::new();
+        let mut stdlib_modules = Vec::new();
+
+        for source in expo_typecheck::STDLIB_SOURCES {
+            let parsed = expo_parser::parse(source);
+            let mut mod_ctx = expo_typecheck::collect_module(&parsed.module);
+            expo_typecheck::merge_stdlib(&ctx, &mut mod_ctx);
+            expo_typecheck::merge_stdlib(&mod_ctx, &mut ctx);
+            stdlib_modules.push(parsed.module);
+        }
+
         Self {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
             stdlib_ctx: ctx,
-            stdlib_module: parsed.module,
+            stdlib_modules,
         }
     }
 }

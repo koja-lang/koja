@@ -737,6 +737,11 @@ fn resolve_struct_name<'ctx>(
         }
     }
 
+    let inferred = crate::stmt::infer_type_from_llvm(c, recv_val);
+    if let Some(sn) = struct_name_from_type(&inferred) {
+        return Ok(sn);
+    }
+
     Err("cannot determine struct type for method call".to_string())
 }
 
@@ -744,6 +749,7 @@ fn struct_name_from_type(ty: &Type) -> Option<String> {
     match ty {
         Type::Indirect(inner) => struct_name_from_type(inner),
         Type::Struct(n) | Type::Enum(n) => Some(n.clone()),
+        Type::Primitive(p) => Some(p.display().to_string()),
         Type::GenericInstance {
             base, type_args, ..
         } => Some(mangle_name(base, type_args)),

@@ -635,6 +635,42 @@ fn infer_binary(
             }
             Type::Primitive(Primitive::Bool)
         }
+        BinOp::Concat => {
+            let is_concat_type = |ty: &Type| {
+                matches!(
+                    ty,
+                    Type::Primitive(Primitive::String)
+                        | Type::Primitive(Primitive::Binary)
+                        | Type::Primitive(Primitive::Bits)
+                )
+            };
+            if left_ty.is_known() && !is_concat_type(&left_ty) {
+                ctx.error(
+                    format!(
+                        "`<>` requires String, Binary, or Bits, found `{}`",
+                        left_ty.display()
+                    ),
+                    span,
+                );
+                return Type::Error;
+            }
+            if left_ty.is_known() && right_ty.is_known() && !types_compatible(&left_ty, &right_ty) {
+                ctx.error(
+                    format!(
+                        "`<>` requires both sides to be the same type, found `{}` and `{}`",
+                        left_ty.display(),
+                        right_ty.display()
+                    ),
+                    span,
+                );
+                return Type::Error;
+            }
+            if left_ty.is_known() {
+                left_ty
+            } else {
+                right_ty
+            }
+        }
     }
 }
 

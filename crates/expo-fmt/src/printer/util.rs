@@ -463,6 +463,7 @@ pub(super) fn binop_str(op: &BinOp) -> &'static str {
     match op {
         BinOp::Add => "+",
         BinOp::And => "and",
+        BinOp::Concat => "<>",
         BinOp::Div => "/",
         BinOp::Eq => "==",
         BinOp::Gt => ">",

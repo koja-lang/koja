@@ -123,7 +123,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 
 ```
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
-          → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise)
+          → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise) ✓
           → A2a (type conversion) → A2b (string stdlib) → A2c (ranges + OR patterns)
           → A3 (project.expo + test runner) → A4 (lexer port)
 
@@ -180,12 +180,12 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 - Integration with existing `compile_match` in `expo-codegen/src/control/patterns.rs`
 - **Done**: binary pattern matching compiles to LLVM IR with lang tests for literal matching, variable extraction, greedy rest, multi-arm dispatch, endianness, and discard segments
 
-##### A1e. Concatenation + Bitwise protocol
+##### A1e. Concatenation + Bitwise protocol -- done
 
 - `<>` operator for `Binary <> Binary`, `Bits <> Bits`, `String <> String` (type-checked, no cross-type mixing)
-- `Bitwise` protocol in stdlib: `band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr`
-- `Int` implements `Bitwise` via compiler intrinsics
-- **Done when**: `flags.band(0x01) != 0` compiles, `header <> payload` concatenates
+- `Bitwise` protocol in `std.bitwise`: `band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr` with `@moduledoc`/`@doc` annotations
+- All integer types (`Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`) implement `Bitwise` via compiler intrinsics
+- **Done**: concat and bitwise operations compile to LLVM IR with lang tests for string concat, binary concat, bitwise ops, and compile-fail type mismatch
 
 #### A2. String stdlib + type conversions
 
@@ -693,7 +693,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, A1e concat+bitwise, A2a type conversion, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, A2a type conversion, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |

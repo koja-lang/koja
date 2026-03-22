@@ -18,6 +18,14 @@ use types::resolve_type_expr_with_params;
 /// with `expo_parser::parse` and pass the resulting context to [`merge_stdlib`].
 pub const KERNEL_SOURCE: &str = include_str!("../std/kernel.expo");
 
+/// The source of `std.bitwise`, embedded at compile time. Provides the
+/// `Bitwise` protocol and intrinsic implementations for all integer types.
+pub const BITWISE_SOURCE: &str = include_str!("../std/bitwise.expo");
+
+/// All embedded stdlib sources in dependency order. Kernel must come first;
+/// subsequent modules may reference types defined by earlier ones.
+pub const STDLIB_SOURCES: &[&str] = &[KERNEL_SOURCE, BITWISE_SOURCE];
+
 /// Merges a stdlib [`TypeContext`] into `target`, adding any types, functions,
 /// and generic ASTs that aren't already defined in the target module.
 pub fn merge_stdlib(stdlib: &TypeContext, target: &mut TypeContext) {

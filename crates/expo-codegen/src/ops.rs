@@ -2,6 +2,7 @@
 //! with dispatch based on operand types (integer vs. floating-point).
 
 use expo_ast::ast::{BinOp, Expr, UnaryOp};
+use expo_typecheck::types::{Primitive, Type};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
@@ -17,6 +18,10 @@ pub fn compile_binary<'ctx>(
     right: &Expr,
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    if matches!(op, BinOp::Concat) {
+        return compile_concat(c, left, right, function);
+    }
+
     let lhs = compile_expr(c, left, function)?.ok_or("left side of binary op produced no value")?;
     let rhs =
         compile_expr(c, right, function)?.ok_or("right side of binary op produced no value")?;
@@ -122,6 +127,7 @@ pub fn compile_binary<'ctx>(
             BinOp::And | BinOp::Or => {
                 return Err("logical operators require bool operands".to_string());
             }
+            BinOp::Concat => unreachable!("handled by early return"),
         };
         Ok(Some(result))
     } else if lhs.is_pointer_value() && rhs.is_pointer_value() {
@@ -155,6 +161,204 @@ pub fn compile_binary<'ctx>(
     } else {
         Err("mismatched types in binary operation".to_string())
     }
+}
+
+/// Compiles the `<>` concatenation operator for String, Binary, and Bits.
+fn compile_concat<'ctx>(
+    c: &mut Compiler<'ctx>,
+    left: &Expr,
+    right: &Expr,
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let lhs_ty = concat_operand_type(c, left);
+    let lhs = compile_expr(c, left, function)?.ok_or("left side of <> produced no value")?;
+    let rhs = compile_expr(c, right, function)?.ok_or("right side of <> produced no value")?;
+
+    match &lhs_ty {
+        Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits) => {
+            compile_binary_concat(c, lhs, rhs)
+        }
+        _ => compile_string_concat(c, lhs, rhs),
+    }
+}
+
+fn concat_operand_type(c: &Compiler, expr: &Expr) -> Type {
+    if let Expr::Ident { name, .. } = expr
+        && let Some((_, ty, _)) = c.variables.get(name)
+    {
+        return ty.clone();
+    }
+    if matches!(expr, Expr::BinaryLiteral { .. }) {
+        return Type::Primitive(Primitive::Binary);
+    }
+    Type::Primitive(Primitive::String)
+}
+
+/// String <> String: strlen both, malloc(len1 + len2 + 1), memcpy, null-terminate.
+fn compile_string_concat<'ctx>(
+    c: &mut Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let i8_type = c.context.i8_type();
+    let i64_type = c.context.i64_type();
+    let l_ptr = lhs.into_pointer_value();
+    let r_ptr = rhs.into_pointer_value();
+
+    let strlen = *c.functions.get("strlen").ok_or("strlen not declared")?;
+    let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
+    let memcpy = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+
+    let l_len = c
+        .builder
+        .build_call(strlen, &[l_ptr.into()], "l_len")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .unwrap()
+        .into_int_value();
+    let r_len = c
+        .builder
+        .build_call(strlen, &[r_ptr.into()], "r_len")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .unwrap()
+        .into_int_value();
+
+    let total = c.builder.build_int_add(l_len, r_len, "cat_len").unwrap();
+    let alloc_size = c
+        .builder
+        .build_int_add(total, i64_type.const_int(1, false), "cat_alloc")
+        .unwrap();
+
+    let buf = c
+        .builder
+        .build_call(malloc, &[alloc_size.into()], "cat_buf")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .unwrap()
+        .into_pointer_value();
+
+    c.builder
+        .build_call(
+            memcpy,
+            &[buf.into(), l_ptr.into(), l_len.into()],
+            "cat_cpy1",
+        )
+        .unwrap();
+
+    let mid = unsafe {
+        c.builder
+            .build_in_bounds_gep(i8_type, buf, &[l_len], "cat_mid")
+            .unwrap()
+    };
+    c.builder
+        .build_call(
+            memcpy,
+            &[mid.into(), r_ptr.into(), r_len.into()],
+            "cat_cpy2",
+        )
+        .unwrap();
+
+    let end = unsafe {
+        c.builder
+            .build_in_bounds_gep(i8_type, buf, &[total], "cat_end")
+            .unwrap()
+    };
+    c.builder
+        .build_store(end, i8_type.const_int(0, false))
+        .unwrap();
+
+    Ok(Some(buf.into()))
+}
+
+/// Binary/Bits <> Binary/Bits: load both lengths from ptr-8, malloc(8 + len1 + len2),
+/// store combined length, memcpy both payloads.
+fn compile_binary_concat<'ctx>(
+    c: &mut Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let i8_type = c.context.i8_type();
+    let i64_type = c.context.i64_type();
+    let l_ptr = lhs.into_pointer_value();
+    let r_ptr = rhs.into_pointer_value();
+
+    let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
+    let memcpy = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+
+    let neg8 = i64_type.const_int((-8i64) as u64, true);
+    let eight = i64_type.const_int(8, false);
+
+    let l_len_ptr = unsafe {
+        c.builder
+            .build_gep(i8_type, l_ptr, &[neg8], "l_len_ptr")
+            .unwrap()
+    };
+    let l_len = c
+        .builder
+        .build_load(i64_type, l_len_ptr, "l_len")
+        .unwrap()
+        .into_int_value();
+
+    let r_len_ptr = unsafe {
+        c.builder
+            .build_gep(i8_type, r_ptr, &[neg8], "r_len_ptr")
+            .unwrap()
+    };
+    let r_len = c
+        .builder
+        .build_load(i64_type, r_len_ptr, "r_len")
+        .unwrap()
+        .into_int_value();
+
+    let total_len = c.builder.build_int_add(l_len, r_len, "cat_total").unwrap();
+    let alloc_size = c
+        .builder
+        .build_int_add(total_len, eight, "cat_alloc")
+        .unwrap();
+
+    let base_ptr = c
+        .builder
+        .build_call(malloc, &[alloc_size.into()], "cat_base")
+        .unwrap()
+        .try_as_basic_value()
+        .left()
+        .unwrap()
+        .into_pointer_value();
+
+    c.builder.build_store(base_ptr, total_len).unwrap();
+
+    let payload = unsafe {
+        c.builder
+            .build_in_bounds_gep(i8_type, base_ptr, &[eight], "cat_payload")
+            .unwrap()
+    };
+
+    c.builder
+        .build_call(
+            memcpy,
+            &[payload.into(), l_ptr.into(), l_len.into()],
+            "cat_cpy1",
+        )
+        .unwrap();
+
+    let mid = unsafe {
+        c.builder
+            .build_in_bounds_gep(i8_type, payload, &[l_len], "cat_mid")
+            .unwrap()
+    };
+    c.builder
+        .build_call(
+            memcpy,
+            &[mid.into(), r_ptr.into(), r_len.into()],
+            "cat_cpy2",
+        )
+        .unwrap();
+
+    Ok(Some(payload.into()))
 }
 
 /// Compiles a unary operation (negation or logical not).

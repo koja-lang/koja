@@ -348,6 +348,22 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
     if matches!(expr, Expr::Receive { .. }) {
         return c.process_msg_type.clone();
     }
+    if let Expr::Binary {
+        op: expo_ast::ast::BinOp::Concat,
+        left,
+        ..
+    } = expr
+    {
+        return infer_type_from_expr(c, left).or_else(|| {
+            if let Expr::Ident { name, .. } = left.as_ref() {
+                c.variables.get(name).map(|(_, ty, _)| ty.clone())
+            } else if matches!(left.as_ref(), Expr::BinaryLiteral { .. }) {
+                Some(Type::Primitive(expo_typecheck::types::Primitive::Binary))
+            } else {
+                None
+            }
+        });
+    }
     None
 }
 
@@ -710,6 +726,9 @@ fn expr_span(expr: &Expr) -> expo_ast::span::Span {
 }
 
 fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
+    if is_concat_expr(expr) {
+        return Ownership::Owned;
+    }
     if matches!(
         ty,
         Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
@@ -737,4 +756,14 @@ fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
         Expr::Receive { .. } => Ownership::Owned,
         _ => Ownership::Unowned,
     }
+}
+
+fn is_concat_expr(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Binary {
+            op: expo_ast::ast::BinOp::Concat,
+            ..
+        }
+    )
 }

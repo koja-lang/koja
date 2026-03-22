@@ -14,10 +14,23 @@ const PRIMITIVE_TYPES: &[&str] = &[
     "Bool", "Int", "Int8", "Int16", "Int32", "String", "UInt8", "UInt16", "UInt32", "UInt64",
 ];
 
+const BITWISE_OPS: &[&str] = &["band", "bor", "bxor", "bnot", "bsl", "bsr"];
+
+const BITWISE_TYPES: &[&str] = &[
+    "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
+];
+
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     for prim in PRIMITIVE_TYPES {
         if mangled == format!("{prim}_hash") || mangled == format!("{prim}_eq") {
             return true;
+        }
+    }
+    for prim in BITWISE_TYPES {
+        for op in BITWISE_OPS {
+            if mangled == format!("{prim}_{op}") {
+                return true;
+            }
         }
     }
     false
@@ -34,6 +47,11 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
     } else if let Some(type_name) = mangled.strip_suffix("_eq") {
         emit_eq_intrinsic(c, fn_val, type_name)
     } else {
+        for op in BITWISE_OPS {
+            if let Some(type_name) = mangled.strip_suffix(&format!("_{op}")) {
+                return emit_bitwise_intrinsic(c, fn_val, type_name, op);
+            }
+        }
         Err(format!("unknown primitive intrinsic: {mangled}"))
     }
 }
@@ -369,6 +387,61 @@ fn emit_eq_intrinsic<'ctx>(
                 "int_eq",
             )
             .unwrap()
+    };
+
+    c.builder.build_return(Some(&result)).unwrap();
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
+}
+
+fn emit_bitwise_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    type_name: &str,
+    op: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    let self_val = fn_val.get_nth_param(0).unwrap().into_int_value();
+    let is_unsigned = type_name.starts_with('U');
+
+    let result = match op {
+        "band" => {
+            let other = fn_val.get_nth_param(1).unwrap().into_int_value();
+            c.builder.build_and(self_val, other, "band").unwrap()
+        }
+        "bor" => {
+            let other = fn_val.get_nth_param(1).unwrap().into_int_value();
+            c.builder.build_or(self_val, other, "bor").unwrap()
+        }
+        "bxor" => {
+            let other = fn_val.get_nth_param(1).unwrap().into_int_value();
+            c.builder.build_xor(self_val, other, "bxor").unwrap()
+        }
+        "bnot" => c.builder.build_not(self_val, "bnot").unwrap(),
+        "bsl" => {
+            let n = fn_val.get_nth_param(1).unwrap().into_int_value();
+            let n_cast = c
+                .builder
+                .build_int_truncate_or_bit_cast(n, self_val.get_type(), "bsl_n")
+                .unwrap();
+            c.builder.build_left_shift(self_val, n_cast, "bsl").unwrap()
+        }
+        "bsr" => {
+            let n = fn_val.get_nth_param(1).unwrap().into_int_value();
+            let n_cast = c
+                .builder
+                .build_int_truncate_or_bit_cast(n, self_val.get_type(), "bsr_n")
+                .unwrap();
+            c.builder
+                .build_right_shift(self_val, n_cast, !is_unsigned, "bsr")
+                .unwrap()
+        }
+        _ => return Err(format!("unknown bitwise op: {op}")),
     };
 
     c.builder.build_return(Some(&result)).unwrap();

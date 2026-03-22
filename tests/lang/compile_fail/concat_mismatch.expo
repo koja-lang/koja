@@ -1,0 +1,6 @@
+fn main()
+  a = "hello"
+  b: Binary = <<1, 2>>
+  c = a <> b
+  print(c)
+end
