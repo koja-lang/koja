@@ -20,10 +20,6 @@ fn type_expr_label(te: &TypeExpr) -> String {
             let args_str: Vec<String> = args.iter().map(type_expr_label).collect();
             format!("{}<{}>", path.join("."), args_str.join(", "))
         }
-        TypeExpr::Tuple { elements, .. } => {
-            let elems: Vec<String> = elements.iter().map(type_expr_label).collect();
-            format!("({})", elems.join(", "))
-        }
         TypeExpr::Unit { .. } => "()".to_string(),
         TypeExpr::Function {
             params,

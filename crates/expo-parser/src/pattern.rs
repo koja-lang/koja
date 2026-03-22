@@ -246,17 +246,13 @@ impl Parser {
 
         let first = self.parse_pattern();
         if self.eat(&TokenKind::Comma).is_some() {
-            let mut elements = vec![first];
             self.skip_newlines();
-            if !self.at(&TokenKind::RParen) {
-                elements.push(self.parse_pattern());
-                while self.eat(&TokenKind::Comma).is_some() {
-                    self.skip_newlines();
-                    if self.at(&TokenKind::RParen) {
-                        break;
-                    }
-                    elements.push(self.parse_pattern());
+            while !self.at(&TokenKind::RParen) && !self.at_eof() {
+                self.parse_pattern();
+                if self.eat(&TokenKind::Comma).is_none() {
+                    break;
                 }
+                self.skip_newlines();
             }
             self.skip_newlines();
             self.expect(&TokenKind::RParen);
@@ -265,11 +261,11 @@ impl Parser {
                 "tuples are not supported, use a struct instead".to_string(),
                 span,
             );
-            Pattern::Tuple { elements, span }
+            Pattern::Wildcard { span }
         } else {
             self.skip_newlines();
             self.expect(&TokenKind::RParen);
-            first // grouping in patterns
+            first
         }
     }
 

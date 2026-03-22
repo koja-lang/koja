@@ -157,10 +157,6 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
                 text(">"),
             ])
         }
-        TypeExpr::Tuple { elements, .. } => {
-            let elems: Vec<Doc> = elements.iter().map(type_expr_to_doc).collect();
-            concat(vec![text("("), intersperse(elems, text(", ")), text(")")])
-        }
         TypeExpr::Unit { .. } => text("()"),
         TypeExpr::Self_ { .. } => text("Self"),
         TypeExpr::Function {
@@ -271,10 +267,6 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
                     text(")"),
                 ])
             }
-        }
-        Pattern::Tuple { elements, .. } => {
-            let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
-            concat(vec![text("("), intersperse(elems, text(", ")), text(")")])
         }
         Pattern::TypedBinding {
             name, type_expr, ..
@@ -520,11 +512,6 @@ pub(super) fn type_expr_text_len(ty: &TypeExpr) -> usize {
                 + args.len().saturating_sub(1) * 2;
             path_len + 1 + args_len + 1
         }
-        TypeExpr::Tuple { elements, .. } => {
-            let inner: usize = elements.iter().map(type_expr_text_len).sum::<usize>()
-                + elements.len().saturating_sub(1) * 2;
-            1 + inner + 1
-        }
         TypeExpr::Unit { .. } => 2,
         TypeExpr::Self_ { .. } => 4,
         TypeExpr::Function {
@@ -571,7 +558,6 @@ fn expr_span(expr: &Expr) -> &Span {
         | String { span, .. }
         | StructConstruction { span, .. }
         | Ternary { span, .. }
-        | Tuple { span, .. }
         | Unary { span, .. }
         | Unless { span, .. }
         | While { span, .. } => span,

@@ -702,7 +702,6 @@ fn expr_span(expr: &Expr) -> expo_ast::span::Span {
         | Expr::String { span, .. }
         | Expr::StructConstruction { span, .. }
         | Expr::Ternary { span, .. }
-        | Expr::Tuple { span, .. }
         | Expr::Unary { span, .. }
         | Expr::Unless { span, .. }
         | Expr::While { span, .. } => *span,

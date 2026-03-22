@@ -287,9 +287,7 @@ pub(crate) fn compile_pattern<'ctx>(
             }
         }
 
-        Pattern::Tuple { .. } | Pattern::List { .. } => {
-            Err("tuple and list patterns not yet supported in compilation".to_string())
-        }
+        Pattern::List { .. } => Err("list patterns not yet supported in compilation".to_string()),
     }
 }
 

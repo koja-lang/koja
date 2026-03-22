@@ -10,7 +10,6 @@ impl Parser {
             let start_span = match &first {
                 TypeExpr::Named { span, .. }
                 | TypeExpr::Generic { span, .. }
-                | TypeExpr::Tuple { span, .. }
                 | TypeExpr::Unit { span, .. }
                 | TypeExpr::Function { span, .. }
                 | TypeExpr::Self_ { span, .. }
@@ -114,28 +113,9 @@ impl Parser {
         }
 
         let first = self.parse_type_expr();
-        if self.eat(&TokenKind::Comma).is_some() {
-            let mut elements = vec![first];
-            self.skip_newlines();
-            elements.push(self.parse_type_expr());
-            while self.eat(&TokenKind::Comma).is_some() {
-                self.skip_newlines();
-                if self.at(&TokenKind::RParen) {
-                    break;
-                }
-                elements.push(self.parse_type_expr());
-            }
-            self.skip_newlines();
-            self.expect(&TokenKind::RParen);
-            TypeExpr::Tuple {
-                elements,
-                span: self.span_from(start),
-            }
-        } else {
-            self.skip_newlines();
-            self.expect(&TokenKind::RParen);
-            first
-        }
+        self.skip_newlines();
+        self.expect(&TokenKind::RParen);
+        first
     }
 
     fn parse_named_type(&mut self) -> TypeExpr {

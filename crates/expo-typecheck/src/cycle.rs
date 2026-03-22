@@ -172,11 +172,6 @@ fn collect_refs(ty: &Type, known: &HashSet<String>, refs: &mut HashSet<String>) 
             }
         }
         Type::Indirect(inner) => collect_refs(inner, known, refs),
-        Type::Tuple(elems) => {
-            for e in elems {
-                collect_refs(e, known, refs);
-            }
-        }
         Type::Union(members) => {
             for m in members {
                 collect_refs(m, known, refs);

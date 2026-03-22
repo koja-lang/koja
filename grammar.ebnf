@@ -126,7 +126,6 @@ primary_type_expr = "fn" , "(" , [ fn_type_param , { "," , fn_type_param } ] , "
                   | named_type , "<" , type_expr , { "," , type_expr } , ">"  (* generic *)
                   | named_type                                              (* simple *)
                   | "Self"                                                  (* self type *)
-                  | "(" , type_expr , "," , type_expr , { "," , type_expr } , ")"  (* tuple *)
                   | "(" , ")" ;                                             (* unit *)
 
 fn_type_param = [ "move" ] , type_expr ;
@@ -209,8 +208,7 @@ primary = literal
         | arena_expr
         | receive_expr
         | spawn_call
-        | "(" , expr , ")"                                  (* grouping *)
-        | tuple_expr ;
+        | "(" , expr , ")" ;                                 (* grouping *)
 
 struct_construction = named_type , "{" ,
                       field_init , { "," , field_init } , [ "," ] ,
@@ -223,8 +221,6 @@ enum_construction = named_type , "." , TYPE_IDENT                     (* unit *)
                     "(" , expr , { "," , expr } , ")"                 (* tuple *)
                   | named_type , "." , TYPE_IDENT ,
                     "{" , field_init , { "," , field_init } , "}" ;   (* struct *)
-
-tuple_expr = "(" , expr , "," , expr , { "," , expr } , ")" ;
 
 
 (* ========================================================================== *)
@@ -334,7 +330,6 @@ pattern = "_"                                                       (* wildcard 
           "(" , pattern , { "," , pattern } , ")"                   (* enum tuple *)
         | named_type , "." , TYPE_IDENT ,
           "{" , field_pattern , { "," , field_pattern } , "}"       (* enum struct *)
-        | "(" , pattern , "," , pattern , { "," , pattern } , ")"   (* tuple *)
         | "[" , [ pattern , { "," , pattern } ] , "]"               (* list *)
         | TYPE_IDENT ,
           "(" , pattern , { "," , pattern } , ")" ;                 (* Some/Ok/Err *)

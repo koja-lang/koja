@@ -853,11 +853,6 @@ impl<'ctx> Compiler<'ctx> {
             Type::Indirect(inner) => {
                 self.ensure_types_exist(inner)?;
             }
-            Type::Tuple(elems) => {
-                for e in elems {
-                    self.ensure_types_exist(e)?;
-                }
-            }
             Type::Union(members) => {
                 for m in members {
                     self.ensure_types_exist(m)?;

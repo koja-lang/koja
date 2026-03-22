@@ -22,7 +22,6 @@ pub enum Type {
     Indirect(Box<Type>),
     Primitive(Primitive),
     Struct(String),
-    Tuple(Vec<Type>),
     TypeVar(String),
     Union(Vec<Type>),
     Unit,
@@ -94,10 +93,6 @@ impl Type {
             Type::Indirect(inner) => inner.display(),
             Type::Primitive(p) => p.display().to_string(),
             Type::Struct(name) => name.clone(),
-            Type::Tuple(elems) => {
-                let inner: Vec<String> = elems.iter().map(|t| t.display()).collect();
-                format!("({})", inner.join(", "))
-            }
             Type::TypeVar(name) => name.clone(),
             Type::Union(members) => {
                 let parts: Vec<String> = members.iter().map(|t| t.display()).collect();
@@ -122,7 +117,6 @@ impl Type {
             Type::Indirect(_) | Type::Struct(_) | Type::Enum(_) | Type::GenericInstance { .. } => {
                 false
             }
-            Type::Tuple(elems) => elems.iter().all(|e| e.is_copy()),
             Type::Union(members) => members.iter().all(|m| m.is_copy()),
             Type::TypeVar(_) | Type::Unknown | Type::Error => true,
         }
@@ -304,24 +298,6 @@ pub fn resolve_type_expr_with_params(
                 Type::Unknown
             }
         }
-        TypeExpr::Tuple { elements, .. } => {
-            if elements.is_empty() {
-                return Type::Unit;
-            }
-            let types: Vec<Type> = elements
-                .iter()
-                .map(|e| {
-                    resolve_type_expr_with_params(
-                        e,
-                        known_structs,
-                        known_enums,
-                        known_type_params,
-                        known_type_aliases,
-                    )
-                })
-                .collect();
-            Type::Tuple(types)
-        }
         TypeExpr::Self_ { .. } => {
             if known_type_params.contains(&"Self") {
                 Type::TypeVar("Self".to_string())
@@ -454,9 +430,6 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
         | (Type::GenericInstance { base, .. }, Type::Struct(name))
         | (Type::Struct(name), Type::GenericInstance { base, .. }) => base == name,
         (Type::Union(a), Type::Union(b)) => a == b,
-        (Type::Tuple(a), Type::Tuple(b)) if a.len() == b.len() => {
-            a.iter().zip(b.iter()).all(|(x, y)| unify(x, y, subst))
-        }
         (Type::Unit, Type::Unit) => true,
         (Type::Unknown, _) | (_, Type::Unknown) => true,
         _ => false,
@@ -495,7 +468,6 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
             }
         }
         Type::Indirect(inner) => Type::Indirect(Box::new(substitute(inner, subst))),
-        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute(e, subst)).collect()),
         Type::Union(members) => Type::union(members.iter().map(|m| substitute(m, subst)).collect()),
         _ => ty.clone(),
     }
@@ -531,12 +503,6 @@ pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
                 .collect(),
         },
         Type::Indirect(inner) => Type::Indirect(Box::new(substitute_preserving(inner, subst))),
-        Type::Tuple(elems) => Type::Tuple(
-            elems
-                .iter()
-                .map(|e| substitute_preserving(e, subst))
-                .collect(),
-        ),
         Type::Union(members) => Type::union(
             members
                 .iter()
@@ -602,7 +568,6 @@ pub fn contains_type_var(ty: &Type) -> bool {
         } => params.iter().any(contains_type_var) || contains_type_var(return_type),
         Type::GenericInstance { type_args, .. } => type_args.iter().any(contains_type_var),
         Type::Indirect(inner) => contains_type_var(inner),
-        Type::Tuple(elems) => elems.iter().any(contains_type_var),
         Type::Union(members) => members.iter().any(contains_type_var),
         _ => false,
     }

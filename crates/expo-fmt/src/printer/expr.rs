@@ -90,22 +90,6 @@ impl<'a> Printer<'a> {
                 }
             }
 
-            Expr::Tuple { elements, .. } => {
-                let elems: Vec<Doc> = elements.iter().map(|e| self.expr_to_doc(e)).collect();
-                group(concat(vec![
-                    text("("),
-                    indent(
-                        2,
-                        concat(vec![
-                            softline(),
-                            intersperse(elems, concat(vec![text(","), line()])),
-                        ]),
-                    ),
-                    softline(),
-                    text(")"),
-                ]))
-            }
-
             Expr::String {
                 parts, multiline, ..
             } => self.string_to_doc(parts, *multiline),

@@ -362,39 +362,6 @@ pub(crate) fn check_pattern(
             }
         }
 
-        Pattern::Tuple { elements, span } => match subject_type {
-            Type::Tuple(expected_types) => {
-                if elements.len() != expected_types.len() {
-                    ctx.error(
-                        format!(
-                            "tuple pattern has {} elements, expected {}",
-                            elements.len(),
-                            expected_types.len()
-                        ),
-                        *span,
-                    );
-                } else {
-                    for (sub_pat, expected_ty) in elements.iter().zip(expected_types.iter()) {
-                        check_pattern(sub_pat, expected_ty, ctx, env);
-                    }
-                }
-            }
-            Type::Unknown | Type::Error => {
-                for sub_pat in elements {
-                    check_pattern(sub_pat, &Type::Unknown, ctx, env);
-                }
-            }
-            _ => {
-                ctx.error(
-                    format!(
-                        "tuple pattern on non-tuple type `{}`",
-                        subject_type.display()
-                    ),
-                    *span,
-                );
-            }
-        },
-
         Pattern::TypedBinding {
             name,
             type_expr,
@@ -453,7 +420,6 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
             out.push((name.clone(), *span));
         }
         Pattern::EnumTuple { elements, .. }
-        | Pattern::Tuple { elements, .. }
         | Pattern::Constructor { elements, .. }
         | Pattern::List { elements, .. } => {
             for sub in elements {

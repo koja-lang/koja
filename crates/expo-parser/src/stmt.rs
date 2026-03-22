@@ -150,16 +150,6 @@ impl Parser {
                 name: name.clone(),
                 span: *span,
             }),
-            Expr::Tuple { elements, span } => {
-                let mut pats = Vec::new();
-                for elem in elements {
-                    pats.push(self.try_expr_to_pattern(elem)?);
-                }
-                Some(Pattern::Tuple {
-                    elements: pats,
-                    span: *span,
-                })
-            }
             _ => None,
         }
     }

@@ -500,11 +500,6 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             if then_ty.is_known() { then_ty } else { else_ty }
         }
 
-        Expr::Tuple { elements, .. } => {
-            let types: Vec<Type> = elements.iter().map(|e| infer_expr(e, ctx, ce)).collect();
-            Type::Tuple(types)
-        }
-
         Expr::Unary { op, operand, span } => {
             let operand_ty = infer_expr(operand, ctx, ce);
             match op {
@@ -1402,7 +1397,6 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
         | Expr::String { span, .. }
         | Expr::StructConstruction { span, .. }
         | Expr::Ternary { span, .. }
-        | Expr::Tuple { span, .. }
         | Expr::Unary { span, .. }
         | Expr::Unless { span, .. }
         | Expr::While { span, .. } => *span,

@@ -306,8 +306,6 @@ pub enum TypeExpr {
         args: Vec<TypeExpr>,
         span: Span,
     },
-    /// A tuple type: `(i32, String)`.
-    Tuple { elements: Vec<TypeExpr>, span: Span },
     /// The unit type: `()`.
     Unit { span: Span },
     /// A function type: `fn (Int32, String) -> Bool`.
@@ -555,8 +553,6 @@ pub enum Expr {
         else_expr: Box<Expr>,
         span: Span,
     },
-    /// A tuple literal: `(1, "hello")`.
-    Tuple { elements: Vec<Expr>, span: Span },
     /// A unary operation: `-x`, `not flag`.
     Unary {
         op: UnaryOp,
@@ -685,8 +681,6 @@ pub enum Pattern {
         type_expr: TypeExpr,
         span: Span,
     },
-    /// A tuple pattern: `(a, b)`.
-    Tuple { elements: Vec<Pattern>, span: Span },
     /// A list pattern: `[head, tail]`.
     List { elements: Vec<Pattern>, span: Span },
 }

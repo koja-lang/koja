@@ -1104,11 +1104,6 @@ fn collect_union_types(ty: &Type, out: &mut Vec<Type>) {
             }
         }
         Type::Indirect(inner) => collect_union_types(inner, out),
-        Type::Tuple(elems) => {
-            for e in elems {
-                collect_union_types(e, out);
-            }
-        }
         _ => {}
     }
 }

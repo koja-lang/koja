@@ -2,7 +2,6 @@ use expo_ast::ast::*;
 use expo_ast::span::Span;
 use expo_ast::token::TokenKind;
 
-use crate::expr::expr_span;
 use crate::parser::Parser;
 
 impl Parser {
@@ -237,17 +236,13 @@ impl Parser {
         let first = self.parse_expr();
 
         if self.eat(&TokenKind::Comma).is_some() {
-            let mut elements = vec![first];
             self.skip_newlines();
-            if !self.at(&TokenKind::RParen) {
-                elements.push(self.parse_expr());
-                while self.eat(&TokenKind::Comma).is_some() {
-                    self.skip_newlines();
-                    if self.at(&TokenKind::RParen) {
-                        break;
-                    }
-                    elements.push(self.parse_expr());
+            while !self.at(&TokenKind::RParen) && !self.at_eof() {
+                self.parse_expr();
+                if self.eat(&TokenKind::Comma).is_none() {
+                    break;
                 }
+                self.skip_newlines();
             }
             self.skip_newlines();
             self.expect(&TokenKind::RParen);
@@ -256,7 +251,10 @@ impl Parser {
                 "tuples are not supported, use a struct instead".to_string(),
                 span,
             );
-            Expr::Tuple { elements, span }
+            Expr::Literal {
+                value: Literal::Unit,
+                span,
+            }
         } else {
             self.skip_newlines();
             self.expect(&TokenKind::RParen);
@@ -453,27 +451,6 @@ impl Parser {
                     type_expr: None,
                     span: *span,
                 }]
-            }
-            Expr::Tuple { elements, .. } => {
-                let mut params = Vec::new();
-                for elem in elements {
-                    match elem {
-                        Expr::Ident { name, span } => {
-                            params.push(ClosureParam::Name {
-                                name: name.clone(),
-                                type_expr: None,
-                                span: *span,
-                            });
-                        }
-                        _ => {
-                            self.error("invalid closure parameter".to_string(), expr_span(elem));
-                            params.push(ClosureParam::Wildcard {
-                                span: expr_span(elem),
-                            });
-                        }
-                    }
-                }
-                params
             }
             Expr::Group { expr: inner, .. } => self.expr_to_closure_params(inner, span),
             _ => {

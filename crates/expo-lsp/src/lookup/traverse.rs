@@ -95,15 +95,6 @@ pub(crate) fn find_in_type_expr(
                 }
             }
         }
-        TypeExpr::Tuple { elements, span } => {
-            if span_contains(span, line, col) {
-                for e in elements {
-                    if let Some(info) = find_in_type_expr(e, line, col, ctx) {
-                        return Some(info);
-                    }
-                }
-            }
-        }
         TypeExpr::Function {
             params,
             return_type,
@@ -193,7 +184,7 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Opt
                 return classify_name(name, ctx);
             }
         }
-        Pattern::Tuple { elements, span } | Pattern::List { elements, span } => {
+        Pattern::List { elements, span } => {
             if span_contains(span, line, col) {
                 for sub in elements {
                     if let Some(info) = find_in_pattern(sub, line, col, ctx) {

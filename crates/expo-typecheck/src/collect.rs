@@ -1084,11 +1084,6 @@ fn substitute_named_in_type_expr(te: &mut TypeExpr, from: &str, to: &str) {
             }
             substitute_named_in_type_expr(return_type, from, to);
         }
-        TypeExpr::Tuple { elements, .. } => {
-            for e in elements {
-                substitute_named_in_type_expr(e, from, to);
-            }
-        }
         TypeExpr::Union { types, .. } => {
             for t in types {
                 substitute_named_in_type_expr(t, from, to);
@@ -1238,7 +1233,7 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &str) {
                 }
             }
         }
-        Expr::Tuple { elements, .. } | Expr::List { elements, .. } => {
+        Expr::List { elements, .. } => {
             for e in elements {
                 substitute_named_in_expr(e, from, to);
             }
@@ -1302,7 +1297,7 @@ fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &str) {
                 substitute_named_in_pattern(e, from, to);
             }
         }
-        Pattern::Tuple { elements, .. } | Pattern::List { elements, .. } => {
+        Pattern::List { elements, .. } => {
             for e in elements {
                 substitute_named_in_pattern(e, from, to);
             }
@@ -1456,7 +1451,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 }
             }
         }
-        Expr::Tuple { elements, .. } | Expr::List { elements, .. } => {
+        Expr::List { elements, .. } => {
             for e in elements {
                 substitute_self_in_expr(e, target);
             }
@@ -1520,7 +1515,7 @@ fn substitute_self_in_pattern(pat: &mut Pattern, target: &str) {
                 substitute_self_in_pattern(e, target);
             }
         }
-        Pattern::Tuple { elements, .. } | Pattern::List { elements, .. } => {
+        Pattern::List { elements, .. } => {
             for e in elements {
                 substitute_self_in_pattern(e, target);
             }
@@ -1556,11 +1551,6 @@ fn substitute_self_in_type_expr(te: &mut TypeExpr, target: &str) {
                 substitute_self_in_type_expr(p, target);
             }
             substitute_self_in_type_expr(return_type, target);
-        }
-        TypeExpr::Tuple { elements, .. } => {
-            for e in elements {
-                substitute_self_in_type_expr(e, target);
-            }
         }
         TypeExpr::Union { types, .. } => {
             for t in types {
