@@ -171,6 +171,7 @@ dependencies = [
  "expo-fmt",
  "expo-lexer",
  "expo-parser",
+ "expo-runtime",
  "expo-typecheck",
 ]
 

@@ -7,6 +7,9 @@ mod diagnostics;
 mod pipeline;
 mod resolve;
 
+// Ensures `expo-runtime` (and `libexpo_runtime.a`) is built before this crate's `build.rs`.
+use expo_runtime as _;
+
 use std::env;
 use std::process;
 

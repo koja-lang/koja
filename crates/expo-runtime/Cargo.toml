@@ -6,7 +6,7 @@ license.workspace = true
 version.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["rlib", "staticlib"]
 
 [build-dependencies]
 cc = "1"

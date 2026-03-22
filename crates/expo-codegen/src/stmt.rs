@@ -348,6 +348,25 @@ fn parse_mangled_type_arg(s: &str, c: &Compiler) -> Type {
     if let Some(gi) = try_parse_mangled_generic(s, c) {
         return gi;
     }
+    if let Some(body) = s.strip_prefix("fn_")
+        && let Some(dunder_pos) = body.rfind("__")
+    {
+        let params_str = &body[..dunder_pos];
+        let return_str = &body[dunder_pos + 2..];
+        let params = if params_str.is_empty() {
+            Vec::new()
+        } else {
+            params_str
+                .split('_')
+                .map(|p| parse_mangled_type_arg(p, c))
+                .collect()
+        };
+        let return_type = Box::new(parse_mangled_type_arg(return_str, c));
+        return Type::Function {
+            params,
+            return_type,
+        };
+    }
     if c.type_ctx.structs.contains_key(s) || c.mono_struct_info.contains_key(s) {
         return Type::Struct(s.to_string());
     }

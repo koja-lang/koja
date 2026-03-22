@@ -6,16 +6,21 @@ if exists("b:current_syntax")
   finish
 endif
 
+" --- Syntax sync (:help syn-sync) --------------------------------------------
+" Default sync guesses from a line above the viewport; long \"\"\" docstrings
+" confuse that guess when jumping (G, tags, large scrolls), so highlighting
+" toggles wrong until redraw. Sync from buffer start — fine for typical .expo
+" sizes; for huge files, try: syn sync minlines=300 (or higher) instead.
+syn sync fromstart
+
 " --- Keywords ---------------------------------------------------------------
 
-syn keyword expoKeyword     const fn priv end move spawn await return break
-syn keyword expoKeyword     impl for type shared import in
-syn keyword expoConditional if else unless match cond when
+syn keyword expoKeyword     after arena await break const end enum fn for import impl in
+syn keyword expoKeyword     move priv protocol receive return shared spawn struct type
+syn keyword expoConditional cond else if match unless when
 syn keyword expoRepeat      for loop while
-syn keyword expoOperatorKw  and or not
-syn keyword expoStructure   struct enum protocol arena receive
-syn keyword expoBoolean     true false
-syn keyword expoConstant    none
+syn keyword expoOperatorKw  and not or
+syn keyword expoBoolean     false true
 syn keyword expoSelf        self
 
 " --- Annotations ------------------------------------------------------------
@@ -24,7 +29,7 @@ syn match expoAnnotation    /@\w\+/
 
 " --- Types (PascalCase identifiers) -----------------------------------------
 
-syn keyword expoPrimitiveType Bool Float32 Float Int8 Int16 Int32 Int String UInt8 UInt16 UInt32 UInt64
+syn keyword expoPrimitiveType Bool Float Float32 Int Int8 Int16 Int32 String UInt8 UInt16 UInt32 UInt64
 syn match expoType          /\<[A-Z][A-Za-z0-9]*\>/
 
 " --- Constants (ALL_CAPS identifiers) ---------------------------------------
@@ -40,8 +45,11 @@ syn match expoNumber        /\<0b[01_]\+\>/
 
 " --- Strings ----------------------------------------------------------------
 
+" Vim does not support priority= on :syn region (E475); keyword vs region
+" priority is fixed (:help syn-priority — keywords beat regions). Suppressing
+" keywords inside \"\"\" needs contained keywords or a different approach.
 syn region expoString       start=/"/ skip=/\\"/ end=/"/ contains=expoInterpolation,expoEscape oneline
-syn region expoMultiString  start=/"""/ end=/"""/       contains=expoInterpolation,expoEscape
+syn region expoMultiString  start=/"""/ end=/"""/ contains=expoInterpolation,expoEscape
 syn match  expoEscape       /\\[nrt\\"#]/ contained
 syn region expoInterpolation matchgroup=expoInterpDelim start=/#{/ end=/}/ contained contains=TOP
 
@@ -51,9 +59,11 @@ syn match expoModulePath      /\(\<import\s\+\)\@<=\l\w*\(\.\l\w*\)*/
 syn match expoModuleQualifier /\<\l\w*\ze\.\l\w*\s*(/
 
 " --- Typed assignments (x: Type = value) ------------------------------------
+" Require a real type head after ':' (PascalCase type name or `fn`), so prose
+" like `key: value` in docstrings does not match.
 
 syn match expoTypeSep         /:/ contained
-syn match expoTypedAssign     /\<\l\w*\s*:/ contains=expoTypeSep
+syn match expoTypedAssign     /\<\l\w\+\s*:\s*\([A-Z][A-Za-z0-9]*\|fn\)/ contains=expoTypeSep
 
 " --- Operators --------------------------------------------------------------
 
@@ -73,9 +83,7 @@ hi def link expoKeyword       Keyword
 hi def link expoConditional   Conditional
 hi def link expoRepeat        Repeat
 hi def link expoOperatorKw    Keyword
-hi def link expoStructure     Structure
 hi def link expoBoolean       Boolean
-hi def link expoConstant      Constant
 hi def link expoSelf          Constant
 hi def link expoPrimitiveType  Type
 hi def link expoType          Type

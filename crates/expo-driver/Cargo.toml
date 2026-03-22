@@ -10,6 +10,7 @@ name = "expo"
 path = "src/main.rs"
 
 [dependencies]
+expo-runtime = { path = "../expo-runtime" }
 expo-ast = { path = "../expo-ast" }
 expo-codegen = { path = "../expo-codegen" }
 expo-doc = { path = "../expo-doc" }

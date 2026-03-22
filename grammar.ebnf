@@ -205,6 +205,7 @@ primary = literal
         | cond_expr
         | for_expr
         | loop_expr
+        | while_expr
         | arena_expr
         | await_expr
         | receive_expr
@@ -290,6 +291,10 @@ for_expr = "for" , pattern , "in" , expr ,
 loop_expr = "loop" ,
             { statement } ,
             "end" ;
+
+while_expr = "while" , expr ,
+             { statement } ,
+             "end" ;
 
 
 (* ========================================================================== *)
@@ -454,4 +459,5 @@ BIN_DIGIT = "0" | "1" ;
 
 (* after, and, arena, await, break, cond, const, else, end, enum, false, fn,  *)
 (* for, if, impl, import, in, loop, match, move, not, or, priv, protocol,     *)
-(* receive, return, self, shared, spawn, struct, true, type, unless, when      *)
+(* receive, return, self, shared, spawn, struct, true, type, unless, when,      *)
+(* while                                                                        *)

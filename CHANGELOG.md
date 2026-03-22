@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The EBNF grammar (`grammar.ebnf`) now spells out `while` loops explicitly (behavior matches what the compiler already accepted).
 - **Breaking**: `spawn` now requires the `T.new(config)` form (`spawn Counter.new(config)`). Bare function spawn (`spawn some_function`) is a compile error. Processes must implement `Process<C, M, R>`.
 - **Breaking**: `spawn` returns `Ref<M, R>` (typed process handle) instead of `Process<M>`. `M` and `R` are inferred from the struct's `Process<C, M, R>` implementation.
 
@@ -46,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Enumeration` protocol, `List`, `Map`, and `Set` now declare `length` and `get` with `Int` (i64) to match intrinsic implementations.
 - Generic enum unit variants (e.g. `Option.None`) inside methods with their own type parameters (e.g. `map<U>`) now resolve to the correct monomorphized type instead of producing `ret void`.
 - Enums now support line breaks in construction.
+- Generic struct construction -- when a field is initialized from a local variable, the compiler uses that variable's type to infer generic parameters (fixes cases such as storing a closure in a field typed with a function type parameter).
+- Monomorphized calls that involve function types as generic arguments (e.g. passing a closure where a `fn(...) -> ...` type parameter is expected) compile more reliably.
+- Building the `expo` CLI from source reliably links the embedded process runtime, including when using a non-default Cargo target directory or building crates in parallel.
+- Vim: syntax highlighting stays consistent when jumping or scrolling in long files with multiline docstrings (`"""`); reserved-word list updated; docstrings no longer mis-highlight prose like `` `key: value` `` as typed field syntax.
 
 ## [0.6.0] - 2026-03-18
 

@@ -474,9 +474,15 @@ fn compile_generic_struct_construction<'ctx>(
     }
 
     let mut subst = std::collections::HashMap::new();
-    for (field_init_name, field_val) in &compiled_fields {
+    for (i, (field_init_name, field_val)) in compiled_fields.iter().enumerate() {
         if let Some((_, field_ty)) = info.fields.iter().find(|(n, _)| n == field_init_name) {
-            let concrete = infer_type_from_llvm(c, field_val);
+            let concrete = if let expo_ast::ast::Expr::Ident { name, .. } = &fields[i].value
+                && let Some((_, var_ty, _)) = c.variables.get(name)
+            {
+                var_ty.clone()
+            } else {
+                infer_type_from_llvm(c, field_val)
+            };
             if !expo_typecheck::types::unify(field_ty, &concrete, &mut subst) {
                 return Err(format!(
                     "type mismatch for field `{field_init_name}` in generic struct `{struct_name}`"
