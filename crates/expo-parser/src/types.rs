@@ -173,7 +173,7 @@ impl Parser {
             while self.eat(&TokenKind::Comma).is_some() {
                 args.push(self.parse_type_expr());
             }
-            self.expect(&TokenKind::Gt);
+            self.expect_gt();
             TypeExpr::Generic {
                 path,
                 args,

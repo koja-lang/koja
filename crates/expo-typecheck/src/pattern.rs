@@ -403,6 +403,13 @@ pub(crate) fn check_pattern(
             );
         }
 
+        Pattern::Binary { span, .. } => {
+            ctx.error(
+                "binary patterns are not yet type-checked".to_string(),
+                *span,
+            );
+        }
+
         Pattern::Wildcard { .. } => {}
     }
 }
@@ -438,6 +445,19 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
         Pattern::TypedBinding { name, span, .. } => {
             out.push((name.clone(), *span));
         }
+        Pattern::Binary { segments, .. } => {
+            for seg in segments {
+                collect_bindings_inner_expr(&seg.value, out);
+            }
+        }
         Pattern::Wildcard { .. } | Pattern::Literal { .. } | Pattern::EnumUnit { .. } => {}
+    }
+}
+
+fn collect_bindings_inner_expr(expr: &Expr, out: &mut Vec<(String, Span)>) {
+    if let Expr::Ident { name, span } = expr {
+        if name != "_" {
+            out.push((name.clone(), *span));
+        }
     }
 }

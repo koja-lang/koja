@@ -72,6 +72,9 @@ pub enum TokenKind {
     NotEq,
     Lt,
     Gt,
+    LtLt,
+    GtGt,
+    LtGt,
     LtEq,
     GtEq,
     PlusEq,
@@ -93,6 +96,7 @@ pub enum TokenKind {
     RBracket,
     Comma,
     Colon,
+    ColonColon,
 
     // Structural
     Newline,

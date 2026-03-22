@@ -142,15 +142,21 @@ impl Lexer {
                     }
                 },
                 '<' => match self.peek_next() {
+                    Some('<') => self.double(TokenKind::LtLt),
+                    Some('>') => self.double(TokenKind::LtGt),
                     Some('=') => self.double(TokenKind::LtEq),
                     _ => self.single(TokenKind::Lt),
                 },
                 '>' => match self.peek_next() {
+                    Some('>') => self.double(TokenKind::GtGt),
                     Some('=') => self.double(TokenKind::GtEq),
                     _ => self.single(TokenKind::Gt),
                 },
                 '|' => self.single(TokenKind::Pipe),
-                ':' => self.single(TokenKind::Colon),
+                ':' => match self.peek_next() {
+                    Some(':') => self.double(TokenKind::ColonColon),
+                    _ => self.single(TokenKind::Colon),
+                },
                 'a'..='z' | '_' | 'A'..='Z' => self.lex_ident(),
                 '0'..='9' => self.lex_number(),
                 '#' => self.lex_comment(),
@@ -448,11 +454,14 @@ impl Lexer {
                     | TokenKind::Comma
                     | TokenKind::Dot
                     | TokenKind::Colon
+                    | TokenKind::ColonColon
+                    | TokenKind::LtGt
                     | TokenKind::At
                     // Opening delimiters
                     | TokenKind::LParen
                     | TokenKind::LBrace
                     | TokenKind::LBracket
+                    | TokenKind::LtLt
                     // Keywords that start blocks
                     | TokenKind::Import
                     | TokenKind::Newline

@@ -96,6 +96,7 @@ impl Parser {
             TokenKind::TypeIdent(_) => self.parse_type_pattern(),
             TokenKind::LParen => self.parse_tuple_pattern(),
             TokenKind::LBracket => self.parse_list_pattern(),
+            TokenKind::LtLt => self.parse_binary_pattern(),
             TokenKind::Minus => {
                 let start = self.current_span();
                 self.advance();
@@ -290,6 +291,36 @@ impl Parser {
 
         Pattern::List {
             elements,
+            span: self.span_from(start),
+        }
+    }
+
+    fn parse_binary_pattern(&mut self) -> Pattern {
+        let start = self.current_span();
+        self.advance(); // <<
+
+        let mut segments = Vec::new();
+        if self.eat(&TokenKind::GtGt).is_some() {
+            return Pattern::Binary {
+                segments,
+                span: self.span_from(start),
+            };
+        }
+
+        self.skip_newlines();
+        segments.push(self.parse_binary_segment());
+        while self.eat(&TokenKind::Comma).is_some() {
+            self.skip_newlines();
+            if self.at(&TokenKind::GtGt) {
+                break;
+            }
+            segments.push(self.parse_binary_segment());
+        }
+        self.skip_newlines();
+        self.expect(&TokenKind::GtGt);
+
+        Pattern::Binary {
+            segments,
             span: self.span_from(start),
         }
     }

@@ -1268,6 +1268,14 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &str) {
                 substitute_named_in_expr(v, from, to);
             }
         }
+        Expr::BinaryLiteral { segments, .. } => {
+            for seg in segments {
+                substitute_named_in_expr(&mut seg.value, from, to);
+                if let Some(sz) = &mut seg.size {
+                    substitute_named_in_expr(sz, from, to);
+                }
+            }
+        }
         Expr::Ident { .. }
         | Expr::Literal { .. }
         | Expr::Self_ { .. }
@@ -1300,6 +1308,14 @@ fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &str) {
         Pattern::List { elements, .. } => {
             for e in elements {
                 substitute_named_in_pattern(e, from, to);
+            }
+        }
+        Pattern::Binary { segments, .. } => {
+            for seg in segments {
+                substitute_named_in_expr(&mut seg.value, from, to);
+                if let Some(sz) = &mut seg.size {
+                    substitute_named_in_expr(sz, from, to);
+                }
             }
         }
         Pattern::Wildcard { .. }
@@ -1486,6 +1502,14 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 substitute_self_in_expr(v, target);
             }
         }
+        Expr::BinaryLiteral { segments, .. } => {
+            for seg in segments {
+                substitute_self_in_expr(&mut seg.value, target);
+                if let Some(sz) = &mut seg.size {
+                    substitute_self_in_expr(sz, target);
+                }
+            }
+        }
         Expr::Ident { .. }
         | Expr::Literal { .. }
         | Expr::Self_ { .. }
@@ -1518,6 +1542,14 @@ fn substitute_self_in_pattern(pat: &mut Pattern, target: &str) {
         Pattern::List { elements, .. } => {
             for e in elements {
                 substitute_self_in_pattern(e, target);
+            }
+        }
+        Pattern::Binary { segments, .. } => {
+            for seg in segments {
+                substitute_self_in_expr(&mut seg.value, target);
+                if let Some(sz) = &mut seg.size {
+                    substitute_self_in_expr(sz, target);
+                }
             }
         }
         Pattern::Wildcard { .. }

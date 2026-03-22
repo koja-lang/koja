@@ -195,6 +195,7 @@ primary = literal
         | "self"
         | struct_construction
         | enum_construction
+        | binary_literal
         | closure
         | short_closure
         
@@ -318,7 +319,30 @@ receive_expr = "receive" ,
 
 
 (* ========================================================================== *)
-(* 13. Pattern matching                                                       *)
+(* 13. Binary / bitstring literals                                            *)
+(* ========================================================================== *)
+
+binary_literal  = "<<" , [ binary_segment , { "," , binary_segment } ] , ">>" ;
+
+binary_pattern  = "<<" , [ binary_pat_segment , { "," , binary_pat_segment } ] , ">>" ;
+
+binary_segment  = expr , [ segment_modifier ]
+                | expr , ":" , type_expr ;
+
+binary_pat_segment = expr , [ segment_modifier ]
+                   | expr , ":" , type_expr ;
+
+segment_modifier = "::" , expr , [ "byte" ] , { modifier } ;
+
+modifier = "signed" | "unsigned" | "big" | "little" ;
+
+(* Size (::N) and type annotation (: Type) are mutually exclusive.           *)
+(* Modifiers signed/unsigned/big/little are contextual identifiers, not      *)
+(* reserved keywords.                                                        *)
+
+
+(* ========================================================================== *)
+(* 14. Pattern matching                                                       *)
 (* ========================================================================== *)
 
 pattern = "_"                                                       (* wildcard *)
@@ -331,6 +355,7 @@ pattern = "_"                                                       (* wildcard 
         | named_type , "." , TYPE_IDENT ,
           "{" , field_pattern , { "," , field_pattern } , "}"       (* enum struct *)
         | "[" , [ pattern , { "," , pattern } ] , "]"               (* list *)
+        | binary_pattern                                             (* binary *)
         | TYPE_IDENT ,
           "(" , pattern , { "," , pattern } , ")" ;                 (* Some/Ok/Err *)
 
@@ -338,7 +363,7 @@ field_pattern = IDENT , [ ":" , pattern ] ;
 
 
 (* ========================================================================== *)
-(* 14. Literals                                                               *)
+(* 15. Literals                                                               *)
 (* ========================================================================== *)
 
 literal = integer_lit
@@ -383,7 +408,7 @@ map_lit  = "[" , ":" , "]"                                          (* empty map
 
 
 (* ========================================================================== *)
-(* 15. Operators                                                              *)
+(* 16. Operators                                                              *)
 (* ========================================================================== *)
 
 (* Precedence (lowest to highest):                                            *)
@@ -402,7 +427,7 @@ compound_assign = lvalue , ( "+=" | "-=" | "*=" | "/=" ) , expr ;
 
 
 (* ========================================================================== *)
-(* 16. Annotations                                                            *)
+(* 17. Annotations                                                            *)
 (* ========================================================================== *)
 
 annotation = "@" , IDENT , [ annotation_value ] ;
@@ -412,7 +437,7 @@ annotation_value = string_lit
 
 
 (* ========================================================================== *)
-(* 17. Comments                                                               *)
+(* 18. Comments                                                               *)
 (* ========================================================================== *)
 
 (* Line comments begin with # and extend to end of line.
@@ -422,7 +447,7 @@ comment = "#" , { any_char_except_newline } ;
 
 
 (* ========================================================================== *)
-(* 18. Other top-level declarations                                           *)
+(* 19. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
 constant_decl = "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
@@ -431,7 +456,7 @@ shared_decl = "shared" , IDENT , ":" , type_expr ;
 
 
 (* ========================================================================== *)
-(* 19. Lexical elements                                                       *)
+(* 20. Lexical elements                                                       *)
 (* ========================================================================== *)
 
 IDENT       = LOWER , { LOWER | UPPER | DIGIT | "_" | "?" } ;

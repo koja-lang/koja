@@ -193,6 +193,20 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Opt
                 }
             }
         }
+        Pattern::Binary { segments, span } => {
+            if span_contains(span, line, col) {
+                for seg in segments {
+                    if let Some(info) = find_in_expr(&seg.value, line, col, ctx) {
+                        return Some(info);
+                    }
+                    if let Some(sz) = &seg.size {
+                        if let Some(info) = find_in_expr(sz, line, col, ctx) {
+                            return Some(info);
+                        }
+                    }
+                }
+            }
+        }
         Pattern::Wildcard { .. } | Pattern::Literal { .. } | Pattern::Binding { .. } => {}
     }
     None

@@ -314,6 +314,29 @@ impl<'a> Printer<'a> {
                 }
             }
 
+            Expr::BinaryLiteral { segments, .. } => {
+                if segments.is_empty() {
+                    text("<<>>")
+                } else {
+                    let seg_docs: Vec<Doc> = segments
+                        .iter()
+                        .map(|seg| self.binary_segment_to_doc(seg))
+                        .collect();
+                    group(concat(vec![
+                        text("<<"),
+                        indent(
+                            2,
+                            concat(vec![
+                                softline(),
+                                intersperse(seg_docs, concat(vec![text(","), line()])),
+                            ]),
+                        ),
+                        softline(),
+                        text(">>"),
+                    ]))
+                }
+            }
+
             Expr::EnumConstruction {
                 type_path,
                 variant,
@@ -390,6 +413,33 @@ impl<'a> Printer<'a> {
             text(": "),
             self.expr_to_doc(&fi.value),
         ])
+    }
+
+    fn binary_segment_to_doc(&mut self, seg: &BinarySegment) -> Doc {
+        let mut parts = vec![self.expr_to_doc(&seg.value)];
+        if let Some(size) = &seg.size {
+            parts.push(text("::"));
+            parts.push(self.expr_to_doc(size));
+            if seg.unit == BinaryUnit::Byte {
+                parts.push(text(" byte"));
+            }
+            if let Some(s) = &seg.signedness {
+                parts.push(text(match s {
+                    BinarySignedness::Signed => " signed",
+                    BinarySignedness::Unsigned => " unsigned",
+                }));
+            }
+            if let Some(e) = &seg.endianness {
+                parts.push(text(match e {
+                    BinaryEndianness::Big => " big",
+                    BinaryEndianness::Little => " little",
+                }));
+            }
+        } else if let Some(ta) = &seg.type_ann {
+            parts.push(text(": "));
+            parts.push(type_expr_to_doc(ta));
+        }
+        concat(parts)
     }
 
     /// Formats a string literal (single-line or multi-line heredoc).

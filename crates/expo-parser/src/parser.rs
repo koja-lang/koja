@@ -13,6 +13,7 @@ pub(crate) struct Parser {
     pub(crate) comments: Vec<Comment>,
     pub(crate) pos: usize,
     pub(crate) errors: Vec<Diagnostic>,
+    pub(crate) pending_token: Option<TokenKind>,
 }
 
 impl Parser {
@@ -22,6 +23,7 @@ impl Parser {
             comments: lex_result.comments,
             pos: 0,
             errors: lex_result.errors,
+            pending_token: None,
         }
     }
 
@@ -85,6 +87,22 @@ impl Parser {
                 span,
             });
             self.advance()
+        }
+    }
+
+    /// Expect a closing `>` for generics. Handles the `>>` ambiguity:
+    /// if the current token is `>>`, consumes it and stashes a leftover `>`
+    /// for the outer generic to pick up on the next call.
+    pub(crate) fn expect_gt(&mut self) {
+        if self.pending_token == Some(TokenKind::Gt) {
+            self.pending_token = None;
+        } else if self.eat(&TokenKind::Gt).is_some() {
+            // Normal single > in the token stream.
+        } else if self.eat(&TokenKind::GtGt).is_some() {
+            self.pending_token = Some(TokenKind::Gt);
+        } else {
+            let span = self.current_span();
+            self.error(format!("expected >, found {:?}", self.peek()), span);
         }
     }
 

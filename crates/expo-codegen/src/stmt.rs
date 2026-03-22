@@ -679,6 +679,7 @@ pub(crate) fn apply_coercion<'ctx>(
 fn expr_span(expr: &Expr) -> expo_ast::span::Span {
     match expr {
         Expr::Arena { span, .. }
+        | Expr::BinaryLiteral { span, .. }
         | Expr::Binary { span, .. }
         | Expr::Call { span, .. }
         | Expr::Closure { span, .. }

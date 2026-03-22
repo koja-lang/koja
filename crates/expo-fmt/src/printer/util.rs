@@ -279,6 +279,53 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
             concat(vec![text("["), intersperse(elems, text(", ")), text("]")])
         }
+        Pattern::Binary { segments, .. } => {
+            if segments.is_empty() {
+                text("<<>>")
+            } else {
+                let seg_docs: Vec<Doc> = segments.iter().map(binary_segment_pat_to_doc).collect();
+                concat(vec![
+                    text("<<"),
+                    intersperse(seg_docs, text(", ")),
+                    text(">>"),
+                ])
+            }
+        }
+    }
+}
+
+fn binary_segment_pat_to_doc(seg: &BinarySegment) -> Doc {
+    let mut parts = vec![expr_value_to_doc(&seg.value)];
+    if let Some(size) = &seg.size {
+        parts.push(text("::"));
+        parts.push(expr_value_to_doc(size));
+        if seg.unit == BinaryUnit::Byte {
+            parts.push(text(" byte"));
+        }
+        if let Some(s) = &seg.signedness {
+            parts.push(text(match s {
+                BinarySignedness::Signed => " signed",
+                BinarySignedness::Unsigned => " unsigned",
+            }));
+        }
+        if let Some(e) = &seg.endianness {
+            parts.push(text(match e {
+                BinaryEndianness::Big => " big",
+                BinaryEndianness::Little => " little",
+            }));
+        }
+    } else if let Some(ta) = &seg.type_ann {
+        parts.push(text(": "));
+        parts.push(type_expr_to_doc(ta));
+    }
+    concat(parts)
+}
+
+fn expr_value_to_doc(expr: &Expr) -> Doc {
+    match expr {
+        Expr::Ident { name, .. } => text(name.clone()),
+        Expr::Literal { value, .. } => literal_to_doc(value),
+        _ => text("<expr>"),
     }
 }
 
@@ -535,6 +582,7 @@ fn expr_span(expr: &Expr) -> &Span {
     use expo_ast::ast::Expr::*;
     match expr {
         Arena { span, .. }
+        | BinaryLiteral { span, .. }
         | Binary { span, .. }
         | Call { span, .. }
         | Closure { span, .. }

@@ -687,7 +687,7 @@ impl Parser {
         while self.eat(&TokenKind::Comma).is_some() {
             params.push(self.expect_type_ident());
         }
-        self.expect(&TokenKind::Gt);
+        self.expect_gt();
         params
     }
 

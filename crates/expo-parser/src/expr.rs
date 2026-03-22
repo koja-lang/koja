@@ -313,6 +313,7 @@ impl Parser {
 
             TokenKind::LParen => self.parse_paren_expr(),
             TokenKind::LBracket => self.parse_list_expr(),
+            TokenKind::LtLt => self.parse_binary_literal(),
 
             TokenKind::Minus => {
                 let start = self.current_span();
@@ -476,6 +477,7 @@ impl Parser {
 pub(crate) fn expr_span(expr: &Expr) -> Span {
     match expr {
         Expr::Arena { span, .. }
+        | Expr::BinaryLiteral { span, .. }
         | Expr::Binary { span, .. }
         | Expr::Call { span, .. }
         | Expr::Closure { span, .. }

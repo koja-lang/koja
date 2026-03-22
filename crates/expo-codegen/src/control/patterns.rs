@@ -288,6 +288,9 @@ pub(crate) fn compile_pattern<'ctx>(
         }
 
         Pattern::List { .. } => Err("list patterns not yet supported in compilation".to_string()),
+        Pattern::Binary { .. } => {
+            Err("binary patterns not yet supported in compilation".to_string())
+        }
     }
 }
 

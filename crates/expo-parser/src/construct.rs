@@ -460,6 +460,91 @@ impl Parser {
         }
     }
 
+    pub(crate) fn parse_binary_literal(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // <<
+
+        let mut segments = Vec::new();
+        if self.eat(&TokenKind::GtGt).is_some() {
+            return Expr::BinaryLiteral {
+                segments,
+                span: self.span_from(start),
+            };
+        }
+
+        self.skip_newlines();
+        segments.push(self.parse_binary_segment());
+        while self.eat(&TokenKind::Comma).is_some() {
+            self.skip_newlines();
+            if self.at(&TokenKind::GtGt) {
+                break;
+            }
+            segments.push(self.parse_binary_segment());
+        }
+        self.skip_newlines();
+        self.expect(&TokenKind::GtGt);
+
+        Expr::BinaryLiteral {
+            segments,
+            span: self.span_from(start),
+        }
+    }
+
+    pub(crate) fn parse_binary_segment(&mut self) -> BinarySegment {
+        let start = self.current_span();
+        let value = Box::new(self.parse_expr());
+
+        let mut size = None;
+        let mut unit = BinaryUnit::Bit;
+        let mut signedness = None;
+        let mut endianness = None;
+        let mut type_ann = None;
+
+        if self.eat(&TokenKind::ColonColon).is_some() {
+            size = Some(Box::new(self.parse_expr()));
+
+            if self.at_contextual_ident("byte") {
+                self.advance();
+                unit = BinaryUnit::Byte;
+            }
+
+            loop {
+                if self.at_contextual_ident("signed") {
+                    self.advance();
+                    signedness = Some(BinarySignedness::Signed);
+                } else if self.at_contextual_ident("unsigned") {
+                    self.advance();
+                    signedness = Some(BinarySignedness::Unsigned);
+                } else if self.at_contextual_ident("big") {
+                    self.advance();
+                    endianness = Some(BinaryEndianness::Big);
+                } else if self.at_contextual_ident("little") {
+                    self.advance();
+                    endianness = Some(BinaryEndianness::Little);
+                } else {
+                    break;
+                }
+            }
+        } else if self.at(&TokenKind::Colon) && size.is_none() {
+            self.advance();
+            type_ann = Some(self.parse_type_expr());
+        }
+
+        BinarySegment {
+            value,
+            size,
+            unit,
+            signedness,
+            endianness,
+            type_ann,
+            span: self.span_from(start),
+        }
+    }
+
+    fn at_contextual_ident(&self, name: &str) -> bool {
+        matches!(self.peek(), TokenKind::Ident(n) if n == name)
+    }
+
     pub(crate) fn extract_type_path(&self, expr: &Expr) -> Vec<String> {
         match expr {
             Expr::Ident { name, .. } => vec![name.clone()],
@@ -612,5 +697,127 @@ mod tests {
         let src = "fn main\n  x = \"\"\"\n    hello\\tworld\n    \"\"\"\nend\n";
         let parts = parse_string_parts(src);
         assert_eq!(literal_values(&parts), vec!["hello\tworld"]);
+    }
+
+    #[test]
+    fn test_binary_literal_empty() {
+        let result = parse("fn main\n  x = <<>>\nend\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let func = match &result.module.items[0] {
+            expo_ast::ast::Item::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        match &func.body[0] {
+            Statement::Assignment {
+                value: Expr::BinaryLiteral { segments, .. },
+                ..
+            } => assert!(segments.is_empty()),
+            other => panic!("expected binary literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_binary_literal_segments() {
+        let result = parse("fn main\n  x = <<0xFF, 0x00>>\nend\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let func = match &result.module.items[0] {
+            expo_ast::ast::Item::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        match &func.body[0] {
+            Statement::Assignment {
+                value: Expr::BinaryLiteral { segments, .. },
+                ..
+            } => assert_eq!(segments.len(), 2),
+            other => panic!("expected binary literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_binary_literal_with_size() {
+        let result = parse("fn main\n  x = <<header::8, length::16 big>>\nend\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let func = match &result.module.items[0] {
+            expo_ast::ast::Item::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        match &func.body[0] {
+            Statement::Assignment {
+                value: Expr::BinaryLiteral { segments, .. },
+                ..
+            } => {
+                assert_eq!(segments.len(), 2);
+                assert!(segments[0].size.is_some());
+                assert!(segments[1].size.is_some());
+                assert_eq!(
+                    segments[1].endianness,
+                    Some(expo_ast::ast::BinaryEndianness::Big)
+                );
+            }
+            other => panic!("expected binary literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_binary_literal_with_type() {
+        let result = parse("fn main\n  x = <<value: Int>>\nend\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let func = match &result.module.items[0] {
+            expo_ast::ast::Item::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        match &func.body[0] {
+            Statement::Assignment {
+                value: Expr::BinaryLiteral { segments, .. },
+                ..
+            } => {
+                assert_eq!(segments.len(), 1);
+                assert!(segments[0].type_ann.is_some());
+                assert!(segments[0].size.is_none());
+            }
+            other => panic!("expected binary literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_binary_literal_byte_modifier() {
+        let result = parse("fn main\n  x = <<data::32 byte unsigned little>>\nend\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let func = match &result.module.items[0] {
+            expo_ast::ast::Item::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        match &func.body[0] {
+            Statement::Assignment {
+                value: Expr::BinaryLiteral { segments, .. },
+                ..
+            } => {
+                assert_eq!(segments.len(), 1);
+                assert_eq!(segments[0].unit, expo_ast::ast::BinaryUnit::Byte);
+                assert_eq!(
+                    segments[0].signedness,
+                    Some(expo_ast::ast::BinarySignedness::Unsigned)
+                );
+                assert_eq!(
+                    segments[0].endianness,
+                    Some(expo_ast::ast::BinaryEndianness::Little)
+                );
+            }
+            other => panic!("expected binary literal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_binary_pattern() {
+        let result = parse(
+            "fn main\n  match msg\n    <<tag::8, payload::16 big>> -> tag\n    <<>> -> 0\n  end\nend\n",
+        );
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn test_generics_still_work_after_gtgt() {
+        let result = parse("fn main\n  x: List<Option<Int>> = []\nend\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     }
 }

@@ -435,6 +435,11 @@ pub enum EnumConstructionData {
 pub enum Expr {
     /// An arena allocation block: `arena ... end`.
     Arena { body: Vec<Statement>, span: Span },
+    /// A binary/bitstring literal: `<<0xFF, 0x00, length::16>>`.
+    BinaryLiteral {
+        segments: Vec<BinarySegment>,
+        span: Span,
+    },
     /// A binary operation: `a + b`, `x |> f`.
     Binary {
         op: BinOp,
@@ -610,6 +615,41 @@ pub enum UnaryOp {
     Not,
 }
 
+// Binary literals
+
+/// Whether a binary segment size is measured in bits (default) or bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryUnit {
+    Bit,
+    Byte,
+}
+
+/// Signedness modifier for a binary segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinarySignedness {
+    Signed,
+    Unsigned,
+}
+
+/// Endianness modifier for a binary segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryEndianness {
+    Big,
+    Little,
+}
+
+/// A single segment within a `<<...>>` binary literal or pattern.
+#[derive(Debug, Clone)]
+pub struct BinarySegment {
+    pub value: Box<Expr>,
+    pub size: Option<Box<Expr>>,
+    pub unit: BinaryUnit,
+    pub signedness: Option<BinarySignedness>,
+    pub endianness: Option<BinaryEndianness>,
+    pub type_ann: Option<TypeExpr>,
+    pub span: Span,
+}
+
 // Arms
 
 /// A single branch in a `cond` expression.
@@ -646,6 +686,11 @@ pub enum Pattern {
     Wildcard { span: Span },
     /// A literal match: `42`, `true`.
     Literal { value: Literal, span: Span },
+    /// A binary/bitstring pattern: `<<header::8, rest::bytes>>`.
+    Binary {
+        segments: Vec<BinarySegment>,
+        span: Span,
+    },
     /// A variable binding: `x`, `name`.
     Binding { name: String, span: Span },
     /// A unit enum variant: `Color.Red`.
