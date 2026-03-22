@@ -34,59 +34,28 @@ pub fn compile_statement<'ctx>(
             let mut saved_subst = None;
             if let Some(te) = type_annotation {
                 let annotated = c.resolve_type_expr(te);
-                // `resolve_type_expr` runs `substitute`, which lowers fully-instantiated
-                // `GenericInstance` (e.g. `List<Int>`) to `Struct("List_$Int$")`. Static calls
-                // like `List.new()` still need struct type params in `type_subst`, so handle
-                // mangled names as well as `GenericInstance`.
-                match &annotated {
-                    Type::GenericInstance {
-                        base, type_args, ..
-                    } => {
-                        let type_params = c
-                            .type_ctx
-                            .structs
-                            .get(base.as_str())
-                            .map(|si| si.type_params.clone())
-                            .or_else(|| {
-                                c.type_ctx
-                                    .enums
-                                    .get(base.as_str())
-                                    .map(|ei| ei.type_params.clone())
-                            });
-                        if let Some(tp) = type_params {
-                            saved_subst = Some(c.type_subst.clone());
-                            for (param, arg) in tp.iter().zip(type_args.iter()) {
-                                let concrete =
-                                    expo_typecheck::types::substitute(arg, &c.type_subst);
-                                c.type_subst.insert(param.clone(), concrete);
-                            }
+                if let Type::GenericInstance {
+                    base, type_args, ..
+                } = &annotated
+                {
+                    let type_params = c
+                        .type_ctx
+                        .structs
+                        .get(base.as_str())
+                        .map(|si| si.type_params.clone())
+                        .or_else(|| {
+                            c.type_ctx
+                                .enums
+                                .get(base.as_str())
+                                .map(|ei| ei.type_params.clone())
+                        });
+                    if let Some(tp) = type_params {
+                        saved_subst = Some(c.type_subst.clone());
+                        for (param, arg) in tp.iter().zip(type_args.iter()) {
+                            let concrete = expo_typecheck::types::substitute(arg, &c.type_subst);
+                            c.type_subst.insert(param.clone(), concrete);
                         }
                     }
-                    Type::Struct(name) | Type::Enum(name) => {
-                        if let Some((base, type_args)) =
-                            crate::generics::try_parse_mangled_name(name, c)
-                        {
-                            let type_params = c
-                                .type_ctx
-                                .structs
-                                .get(&base)
-                                .map(|si| si.type_params.clone())
-                                .or_else(|| {
-                                    c.type_ctx.enums.get(&base).map(|ei| ei.type_params.clone())
-                                });
-                            if let Some(tp) = type_params
-                                && tp.len() == type_args.len()
-                            {
-                                saved_subst = Some(c.type_subst.clone());
-                                for (param, arg) in tp.iter().zip(type_args.iter()) {
-                                    let concrete =
-                                        expo_typecheck::types::substitute(arg, &c.type_subst);
-                                    c.type_subst.insert(param.clone(), concrete);
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
                 }
             }
 
@@ -107,7 +76,7 @@ pub fn compile_statement<'ctx>(
                     } => {
                         let resolved_args: Vec<Type> = type_args
                             .iter()
-                            .map(|t| expo_typecheck::types::substitute(t, &c.type_subst))
+                            .map(|t| expo_typecheck::types::substitute_preserving(t, &c.type_subst))
                             .collect();
                         Type::GenericInstance {
                             base,
@@ -605,23 +574,10 @@ fn convert_list_literal_if_needed<'ctx>(
     list_val: BasicValueEnum<'ctx>,
     target_type: &Type,
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    // TODO: refactor — resolve_type_expr collapses GenericInstance to mangled
-    // Struct/Enum names, so we must handle both forms here. A cleaner approach
-    // would be to keep GenericInstance until the point of use.
     let (base, type_args) = match target_type {
         Type::GenericInstance {
             base, type_args, ..
         } if base != "List" => (base.clone(), type_args.clone()),
-        Type::Struct(name) | Type::Enum(name) => {
-            if let Some((b, ta)) = crate::generics::try_parse_mangled_name(name, c) {
-                if b == "List" {
-                    return Ok(list_val);
-                }
-                (b, ta)
-            } else {
-                return Ok(list_val);
-            }
-        }
         _ => return Ok(list_val),
     };
 

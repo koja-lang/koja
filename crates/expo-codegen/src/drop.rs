@@ -89,30 +89,38 @@ fn needs_heap_drop(c: &Compiler, ty: &Type) -> bool {
 fn has_indirect_fields(c: &Compiler, ty: &Type) -> bool {
     match ty {
         Type::Indirect(_) => true,
-        Type::Struct(name) | Type::Enum(name) => {
-            if let Some(fields) = c.mono_struct_info.get(name) {
-                return fields
-                    .iter()
-                    .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
-            }
-            if let Some(info) = c.type_ctx.structs.get(name) {
-                return info
-                    .fields
-                    .iter()
-                    .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
-            }
-            if let Some(variants) = c.mono_enum_variants.get(name) {
-                return variants
-                    .iter()
-                    .any(|(_, vdata)| variant_has_indirect(vdata));
-            }
-            if let Some(info) = c.type_ctx.enums.get(name) {
-                return info.variants.iter().any(|v| variant_has_indirect(&v.data));
-            }
-            false
+        Type::GenericInstance {
+            base, type_args, ..
+        } => {
+            let mangled = expo_typecheck::types::mangle_name(base, type_args);
+            has_indirect_fields_by_name(c, &mangled)
         }
+        Type::Struct(name) | Type::Enum(name) => has_indirect_fields_by_name(c, name),
         _ => false,
     }
+}
+
+fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
+    if let Some(fields) = c.mono_struct_info.get(name) {
+        return fields
+            .iter()
+            .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
+    }
+    if let Some(info) = c.type_ctx.structs.get(name) {
+        return info
+            .fields
+            .iter()
+            .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
+    }
+    if let Some(variants) = c.mono_enum_variants.get(name) {
+        return variants
+            .iter()
+            .any(|(_, vdata)| variant_has_indirect(vdata));
+    }
+    if let Some(info) = c.type_ctx.enums.get(name) {
+        return info.variants.iter().any(|v| variant_has_indirect(&v.data));
+    }
+    false
 }
 
 fn variant_has_indirect(vdata: &expo_typecheck::context::VariantData) -> bool {
@@ -175,6 +183,9 @@ fn emit_drop_indirect_fields(c: &mut Compiler, alloca: PointerValue, ty: &Type) 
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
 
     let struct_name = match ty {
+        Type::GenericInstance {
+            base, type_args, ..
+        } => expo_typecheck::types::mangle_name(base, type_args),
         Type::Struct(n) | Type::Enum(n) => n.clone(),
         _ => return,
     };

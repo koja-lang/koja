@@ -497,54 +497,26 @@ fn compile_closure<'ctx>(
     let saved_block = c.builder.get_insert_block();
     let saved_subst = {
         let mut extra = std::collections::HashMap::<String, Type>::new();
-        // TODO: refactor — resolve_type_expr collapses GenericInstance to mangled
-        // Struct/Enum names via substitute(). This means we must handle both
-        // GenericInstance (pre-collapse) and Struct/Enum (post-collapse) here
-        // to recover type params for the closure body. A cleaner approach would
-        // be to have resolve_type_expr return the un-collapsed form and only
-        // collapse at the point of use.
-        match &ret_type {
-            Type::GenericInstance {
-                base, type_args, ..
-            } => {
-                let type_params = c
-                    .type_ctx
-                    .enums
-                    .get(base.as_str())
-                    .map(|ei| &ei.type_params)
-                    .or_else(|| {
-                        c.type_ctx
-                            .structs
-                            .get(base.as_str())
-                            .map(|si| &si.type_params)
-                    });
-                if let Some(tps) = type_params {
-                    for (tp, ta) in tps.iter().zip(type_args.iter()) {
-                        extra.insert(tp.clone(), ta.clone());
-                    }
-                }
-            }
-            Type::Struct(name) | Type::Enum(name) => {
-                if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(name, c) {
-                    let type_params = c
-                        .type_ctx
-                        .enums
+        if let Type::GenericInstance {
+            base, type_args, ..
+        } = &ret_type
+        {
+            let type_params = c
+                .type_ctx
+                .enums
+                .get(base.as_str())
+                .map(|ei| &ei.type_params)
+                .or_else(|| {
+                    c.type_ctx
+                        .structs
                         .get(base.as_str())
-                        .map(|ei| &ei.type_params)
-                        .or_else(|| {
-                            c.type_ctx
-                                .structs
-                                .get(base.as_str())
-                                .map(|si| &si.type_params)
-                        });
-                    if let Some(tps) = type_params {
-                        for (tp, ta) in tps.iter().zip(type_args.iter()) {
-                            extra.insert(tp.clone(), ta.clone());
-                        }
-                    }
+                        .map(|si| &si.type_params)
+                });
+            if let Some(tps) = type_params {
+                for (tp, ta) in tps.iter().zip(type_args.iter()) {
+                    extra.insert(tp.clone(), ta.clone());
                 }
             }
-            _ => {}
         }
         if extra.is_empty() {
             None

@@ -228,15 +228,22 @@ fn compile_generic_enum_construction<'ctx>(
     if subst.is_empty()
         && let Some(ref hint) = c.return_type_hint
     {
-        let hint_name = match hint {
-            Type::Enum(n) | Type::Struct(n) => Some(n.as_str()),
-            _ => None,
-        };
-        if let Some(name) = hint_name
-            && let Some((base, hint_args)) = crate::generics::try_parse_mangled_name(name, c)
-            && base == enum_name
-        {
-            type_args = hint_args;
+        match hint {
+            Type::GenericInstance {
+                base,
+                type_args: hint_args,
+                ..
+            } if base == enum_name => {
+                type_args = hint_args.clone();
+            }
+            Type::Enum(n) | Type::Struct(n) => {
+                if let Some((base, hint_args)) = crate::generics::try_parse_mangled_name(n, c)
+                    && base == enum_name
+                {
+                    type_args = hint_args;
+                }
+            }
+            _ => {}
         }
     }
 

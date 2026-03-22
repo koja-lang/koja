@@ -17,7 +17,7 @@ use expo_ast::ast::{
     Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, TypeExpr,
 };
 use expo_typecheck::context::{TypeContext, VariantData};
-use expo_typecheck::types::{Type, mangle_type, substitute};
+use expo_typecheck::types::{Type, mangle_type};
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -265,7 +265,7 @@ impl<'ctx> Compiler<'ctx> {
             &type_params,
             &self.type_ctx.type_aliases,
         );
-        substitute(&ty, &self.type_subst)
+        expo_typecheck::types::substitute_preserving(&ty, &self.type_subst)
     }
 
     fn declare_builtins(&mut self) {

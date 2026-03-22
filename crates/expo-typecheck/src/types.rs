@@ -501,6 +501,52 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
     }
 }
 
+/// Like [`substitute`], but preserves [`Type::GenericInstance`] instead of
+/// collapsing fully-resolved instances to mangled `Struct`/`Enum` names.
+/// Used by `resolve_type_expr` so downstream code can inspect the structured
+/// generic form without re-parsing mangled names.
+pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::TypeVar(name) => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|p| substitute_preserving(p, subst))
+                .collect(),
+            return_type: Box::new(substitute_preserving(return_type, subst)),
+        },
+        Type::GenericInstance {
+            base,
+            kind,
+            type_args,
+        } => Type::GenericInstance {
+            base: base.clone(),
+            kind: kind.clone(),
+            type_args: type_args
+                .iter()
+                .map(|t| substitute_preserving(t, subst))
+                .collect(),
+        },
+        Type::Indirect(inner) => Type::Indirect(Box::new(substitute_preserving(inner, subst))),
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|e| substitute_preserving(e, subst))
+                .collect(),
+        ),
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|m| substitute_preserving(m, subst))
+                .collect(),
+        ),
+        _ => ty.clone(),
+    }
+}
+
 /// Produces a mangled name for a monomorphized generic using a nesting-safe
 /// scheme: `Pair<i32, string>` becomes `Pair_$i32.string$` and
 /// `List<Pair<i32, i32>>` becomes `List_$Pair_$i32.i32$$`.
