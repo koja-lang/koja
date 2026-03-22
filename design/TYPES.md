@@ -12,7 +12,7 @@ composition, and function parameters that accept related but distinct types.
 `A | B` is a composite type expression, usable anywhere a type is expected:
 variable annotations, function parameters, return types, generic type arguments.
 
-```
+```expo
 x: Post | Comment | Ad = get_feed_item()
 
 fn render(content: Text | Image | Video) -> Html
@@ -32,7 +32,7 @@ Anonymous unions cannot have protocol implementations. They are composite types,
 not base types. To use a protocol method, match to decompose into a concrete
 type first:
 
-```
+```expo
 item: Post | Comment = get_item(id)
 
 # Compile error -- no Display impl for Post | Comment
@@ -51,7 +51,7 @@ end
 
 The `type` keyword creates a named alias for a composite:
 
-```
+```expo
 type FeedItem = Post | Comment | Ad
 ```
 
@@ -60,7 +60,7 @@ and `Post | Comment | Ad` are the same type. The name provides three things:
 
 1. **A handle for protocol impls.** Named unions can have explicit `impl` blocks:
 
-```
+```expo
 impl Display for FeedItem
   fn display(self) -> String
     match self
@@ -82,7 +82,7 @@ end
 Two aliases with the same name in scope must refer to the same composite.
 If they don't, it's a compile error:
 
-```
+```expo
 # module_a.expo
 type FeedItem = Post | Comment | Ad
 
@@ -101,7 +101,7 @@ Union types appear only at explicit annotation sites. The compiler never infers
 a union type on its own. If branches return different types and no union type
 is annotated, it's a type error:
 
-```
+```expo
 # Compile error: branches return different types (Post vs Comment)
 fn get_item(id: Int)
   if is_post?(id) then Post.load(id) else Comment.load(id) end
@@ -119,7 +119,7 @@ When the target type is a union and the source type is one of its constituents,
 the compiler inserts a widening coercion automatically. This uses the same
 mechanism as numeric coercion (`x: UInt8 = 4`):
 
-```
+```expo
 x: Post | Comment | Ad = Post.new("hello")  # Post widens to Post | Comment | Ad
 
 fn process(item: Post | Comment | Ad)
@@ -156,7 +156,7 @@ value. The `:` is consistent with its meaning everywhere else in Expo --
 "has type" -- in variable annotations (`x: Int`), function params (`n: Int`),
 and future binary segments (`<<len: Int(16)>>`).
 
-```
+```expo
 item: Post | Comment | Ad = get_item(id)
 
 match item
@@ -169,7 +169,7 @@ end
 Match arms are checked against the union's constituent types. Exhaustiveness
 uses the same logic as enum variant checking:
 
-```
+```expo
 match item
   p: Post -> render_post(p)
   c: Comment -> render_comment(c)
@@ -247,7 +247,7 @@ gets a mailbox with a tagged union layout for `ServerMsg | LibResult`.
 The numeric tower can be defined in Expo using union types rather than
 hardcoded as a compiler primitive:
 
-```
+```expo
 type Int = Int8 | Int16 | Int32 | Int64
 type Float = Float32 | Float64
 ```
@@ -310,7 +310,7 @@ and enum type IDs.
 **Process mailbox typing.** A process that receives messages from multiple
 sources declares a union mailbox type:
 
-```
+```expo
 fn main() : Process<ServerMsg | LibResult>
   lib_handle: Process<LibResult> = self()
   spawn(lib_worker(lib_handle))
@@ -324,14 +324,14 @@ end
 
 **Heterogeneous collections.** A list of mixed types for API responses:
 
-```
+```expo
 items: List<Post | Comment | Ad> = load_feed(user_id)
 ```
 
 **Error type composition.** Combining error types from different sources
 without manual wrapper enums:
 
-```
+```expo
 fn create_user(input: Input) -> Result<User, ValidationError | DatabaseError>
   validated = validate(input)?
   save(validated)
@@ -340,7 +340,7 @@ end
 
 **Function parameters.** Accepting related but distinct types:
 
-```
+```expo
 fn render(content: Text | Image | Video) -> Html
   match content
     Text(t) -> render_text(t)
@@ -356,7 +356,7 @@ end
 
 Structs and enums may reference themselves, directly or through other types:
 
-```
+```expo
 struct Node
   value: Int
   next: Option<Node>

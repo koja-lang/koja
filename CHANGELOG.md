@@ -5,59 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.7.0] - 2026-03-22
 
 ### Added
 
-- **`Task<R>` async work** -- `Task.async(fn () -> R)` runs a closure in a spawned process and returns `Ref<(), R>`. `Task.await` waits for the result with a timeout and returns `Option<R>`. Implemented in `std.kernel` on top of `Process` / `Ref` / `call` (no new language primitive). Example: `expo/tests/lang/task.expo`.
-- Cooperative process runtime -- processes block properly on `receive` and resume when a message arrives. Supports aarch64 (Apple Silicon, Linux ARM), x86_64 (Linux, macOS), and x86_64 Windows.
-- `Ref.call` -- synchronous request/reply. `ref.call(msg, timeout_ms)` sends a message, waits for the reply, and returns `Option<R>` (`Some` on reply, `None` on timeout).
-- `Ref.cast` -- fire-and-forget message send. `ref.cast(msg)` sends a message and returns immediately.
-- `fn main` runs as a process -- `main` can now use `call`, `receive`, and other blocking operations alongside spawned processes.
-- Protocol-based process model -- structs implement `Process<C, M, R>` to become processes. `C` is the config type, `M` is the message type, `R` is the reply type. Two required methods: `new(config: C) -> Self` and `handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self`. Replaces the old caller-side `Process<M>` annotation.
-- Default protocol implementations -- protocols can now provide method bodies that serve as defaults for implementors. Types that `impl` a protocol without defining a default method automatically inherit it. Types can override defaults by providing their own implementation. Synthesized at the AST level with full type parameter substitution (`Self`, protocol type params).
-- Pair-based process mailbox envelope -- `cast` and `call` wrap messages in `Pair<M, Option<ReplyTo<R>>>` before sending. The default `run` loop receives the pair and unpacks `msg` and `from` for `handle`. `cast` sends `Pair<msg, Option.None>`; `call` sends `Pair<msg, Option.Some(ReplyTo{id: caller_pid}))` using `expo_rt_self()`.
-- `spawn T.new(config)` syntax -- creates a process by calling the struct's `new` method with a config value, runs `run` in a new process, and returns a typed `Ref<M, R>` handle.
-- `receive ... after` timeout clause -- `receive` blocks now support an optional `after timeout_ms` body that executes when no message arrives within the timeout. No arrow on the `after` clause (it's not a pattern match). Wired end-to-end through parser, type checker, and codegen (`expo_rt_receive_timeout`).
-- Recursive types -- structs and enums that reference themselves (e.g. linked lists, trees) are now supported without any special syntax. The compiler automatically detects cycles in the type graph, inserts heap-allocated indirection where needed, and frees the memory on drop. Works with generics and stdlib types like `Option<T>`.
-- Union types -- `Post | Comment | Ad` as anonymous unions, `type Pet = Cat | Dog | Fish` as named union aliases. Values of a member type widen automatically to the union type at assignment, call, and return sites. `match` works on union-typed values with typed binding patterns (`p: Post -> p.title`) for matching by type and binding the unwrapped value.
-- Typed constants -- `const NAME: Type = expr` now accepts an optional type annotation, enabling generic type inference for constant declarations (e.g. `const SESSIONS: TableDefinition<String, Bytes> = TableDefinition.new("sessions")`).
-- LSP -- hover and go-to-definition on type names and enum variants inside match patterns (including typed bindings, constructors, and enum patterns).
-- LSP -- hover and go-to-definition on type names within constant type annotations.
-- LSP -- document symbols (outline view) for functions, structs, enums, constants, impl blocks, protocols, type aliases, and shared declarations.
-- LSP -- completion for keywords and known symbols (functions, structs, enums, constants, imported modules) from the current module and stdlib.
-- LSP -- signature help with parameter hints when typing function calls.
-- VS Code -- "Expo: Run File" and "Expo: Build File" commands in the command palette.
-- VS Code -- `expo.path` setting to configure the `expo` CLI binary location.
+- Union types -- `Post | Comment | Ad` as anonymous unions, `type Pet = Cat | Dog | Fish` as named aliases. Automatic widening at assignment/call/return sites. `match` with typed binding patterns (`p: Post -> p.title`).
+- `Process<C, M, R>` protocol -- structs implement `Process<C, M, R>` to become processes. `spawn T.new(config)` returns a typed `Ref<M, R>` handle. `Ref.cast` for fire-and-forget, `Ref.call` for synchronous request/reply with timeout.
+- Default protocol implementations -- protocols can provide method bodies as defaults. Types inherit defaults automatically or override with their own implementation.
+- `Task<R>` -- `Task.async(fn () -> R)` / `Task.await` for one-off async work, built on `Process` / `Ref` / `call`.
+- Cooperative process runtime -- processes block on `receive` and resume on message arrival. `receive ... after` timeout clause for timed receives. Cross-platform: aarch64, x86_64, Windows.
+- Recursive types -- structs and enums can reference themselves (linked lists, trees). Automatic cycle detection, heap indirection, and cleanup on drop.
+- Typed constants -- `const NAME: Type = expr` with optional type annotations for generic inference.
+- LSP: autocomplete (keywords, symbols, imports), signature help, document symbols, hover/go-to-definition on type names in match patterns and constant annotations.
+- VS Code: "Expo: Run File" and "Expo: Build File" commands, `expo.path` setting.
 
 ### Changed
 
-- **Breaking**: Remove the `await` keyword; task completion uses `.await()` on handles (see [CONCURRENCY.md](design/CONCURRENCY.md)). The identifier `await` is no longer reserved.
-- The EBNF grammar (`grammar.ebnf`) now spells out `while` loops explicitly (behavior matches what the compiler already accepted).
-- **Breaking**: `spawn` now requires the `T.new(config)` form (`spawn Counter.new(config)`). Bare function spawn (`spawn some_function`) is a compile error. Processes must implement `Process<C, M, R>`.
-- **Breaking**: `spawn` returns `Ref<M, R>` (typed process handle) instead of `Process<M>`. `M` and `R` are inferred from the struct's `Process<C, M, R>` implementation.
+- **Breaking**: `spawn` requires `T.new(config)` form and returns `Ref<M, R>` (typed handle). Bare function spawn is a compile error. Replaces the old `Process<M>` model.
+- **Breaking**: `fn main` runs as a process -- `main` can use `receive`, `call`, and other blocking operations directly alongside spawned processes.
+- **Breaking**: `await` keyword removed; task completion uses `Task.await(ref)`.
 
 ### Fixed
 
-- Monomorphized `Process` impl methods (`T_$args$_run`, etc.) now resolve the mailbox envelope type the same way as top-level functions, so `receive` and typed patterns match `Pair<M, Option<ReplyTo<R>>>` with concrete `R`.
-- `Ref.call` with a `()` message or reply: codegen uses a stable `i8` placeholder at the LLVM ABI where Expo `Unit` has no LLVM type; `()` arguments at call sites pass a zero `i8` for those parameters.
-- `spawn` + `Ref<M, R>`: when the spawned state type is monomorphized (e.g. `Task_$Int$`), `M` and `R` for the returned `Ref` are taken from the `Process` impl with type parameters substituted — not left as generic type variables from `protocol_impls`.
-- Generic struct literals (`Task{ work: config.work }`, etc.) infer type arguments using field-access types when needed; closure fat pointers alone are not enough for field unification.
-- Struct types with ZST fields (`Pair<Unit, T>`, etc.) keep LLVM field indices aligned with layout metadata by using a placeholder field where `Unit` has no native LLVM representation.
-- `Ref.call` now correctly delivers the `ReplyTo` handle to the process handler, and returns the reply value to the caller.
-- `receive` -- when the mailbox is empty and there is no `after` clause, the process blocks until a message arrives instead of crashing.
-- Clean exit -- when `main` finishes, the program exits immediately instead of reporting a false deadlock for background processes.
-- Typed binding patterns on non-union types -- `pair: Pair<M, Option<ReplyTo<R>>>` in a `receive` arm now works when the annotation matches the subject type (previously only worked for union member discrimination).
-- Proper coercion of Int type in structs, enums, functions, and more.
-- Integer literals in binary operations now coerce to match the other operand's width (e.g. `x * 2` where `x: Int32` no longer produces an LLVM type mismatch).
-- Method arguments on monomorphized generic types are now properly coerced (e.g. `Option<Int32>.or(99)` correctly truncates the literal to `Int32`).
-- `Enumeration` protocol, `List`, `Map`, and `Set` now declare `length` and `get` with `Int` (i64) to match intrinsic implementations.
-- Generic enum unit variants (e.g. `Option.None`) inside methods with their own type parameters (e.g. `map<U>`) now resolve to the correct monomorphized type instead of producing `ret void`.
-- Enums now support line breaks in construction.
-- Generic struct construction -- when a field is initialized from a local variable, the compiler uses that variable's type to infer generic parameters (fixes cases such as storing a closure in a field typed with a function type parameter).
-- Monomorphized calls that involve function types as generic arguments (e.g. passing a closure where a `fn(...) -> ...` type parameter is expected) compile more reliably.
-- Building the `expo` CLI from source reliably links the embedded process runtime, including when using a non-default Cargo target directory or building crates in parallel.
-- Vim: syntax highlighting stays consistent when jumping or scrolling in long files with multiline docstrings (`"""`); reserved-word list updated; docstrings no longer mis-highlight prose like `` `key: value` `` as typed field syntax.
+- `receive` blocks until a message arrives instead of crashing on empty mailbox. Clean exit when `main` finishes (no false deadlock for background processes). `Ref.call` correctly delivers `ReplyTo` and returns the reply value.
+- Integer literals in binary operations coerce to match the other operand's width. Method arguments on monomorphized generic types are properly coerced.
+- Generic struct literals infer type arguments from field-access types. Generic enum unit variants resolve correctly inside methods with their own type parameters. Generic struct construction from local variables works with function type parameters.
+- `Pair<Unit, T>` and similar types with zero-sized fields keep LLVM field indices aligned with layout metadata.
+- `expo` CLI reliably links the embedded process runtime across Cargo target directories.
+- Vim: multiline docstring highlighting stays consistent when scrolling.
 
 ## [0.6.0] - 2026-03-18
 

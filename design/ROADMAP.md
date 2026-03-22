@@ -122,41 +122,96 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 ### Dependency graph
 
 ```
-Track A:  A1 (binary/bitstring) → A2 (string-as-UTF8) → A3 (project.expo + test runner) → A4 (lexer port)
+Track A:  A1a (lexer/parser/AST) → A1b (types + type checker) → A1c (codegen: construction)
+          → A1d (codegen: pattern matching) → A1e (concat + bitwise)
+          → A2a (type conversion) → A2b (string stdlib) → A2c (ranges + OR patterns)
+          → A3 (project.expo + test runner) → A4 (lexer port)
+
 Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
           B4 (scheduler/IO) -- independent, anytime
 ```
 
-No dependencies between tracks. B1, B2, and B3 are complete. B4 can slot in anywhere.
+No dependencies between tracks. B1, B2, and B3 are complete. B4 can slot in anywhere. Track A sub-milestones are sequential -- each builds on the previous. See `BITSTRINGS.md` for the full design document covering A1 and A2.
 
 ### Track A: Language surface
 
-The foundation for writing real programs in Expo. Binary/bitstring literals are the primitive; `String` becomes UTF-8 utilities built on top of binary. This layering (the Erlang/Elixir approach) gives the language first-class byte-level manipulation for protocol parsing, crypto, and file formats, with string methods as a higher-level convenience layer.
+The foundation for writing real programs in Expo. `String`, `Binary`, and `Bits` are three distinct types with explicit conversion between them. `Binary` and `Bits` use `<<>>` syntax for construction and pattern matching, compiled to native shift-and-mask operations. `String` provides codepoint-aware text methods. All design decisions are finalized in `BITSTRINGS.md`.
 
 #### A1. Binary/bitstring literals
 
-Expo's version of Elixir's `<<>>` syntax, with full bit-level precision -- not just byte-aligned binary, but sub-byte bitstring pattern matching. This is what makes Elixir dominant in protocol work, compiled to native shift-and-mask operations with zero overhead.
+Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from the total bit count: byte-aligned totals produce `Binary`, non-byte-aligned produce `Bits`. Defaults are unsigned big-endian (matching Erlang). Sub-byte field extraction like `<<_::1, stream_id::31>>` compiles to native shift-and-mask code.
 
-Key design decisions:
+##### A1a. Lexer + Parser + AST
 
-- Syntax for constructing binaries (`<<0xFF, 0x00, payload::binary>>` or Expo-flavored equivalent)
-- Binary and bitstring pattern matching in `match` arms
-- Segment specifiers: size in bits (not just bytes), type (integer, float, binary, utf8), endianness, signedness
-- Bit-level field extraction: `<<_::1, stream_id::31>>` compiles to `& 0x7FFFFFFF` -- the same code you'd write by hand in Rust, generated from a pattern match. Protocols like HTTP/2 (24-bit length, 1-bit reserved, 31-bit stream ID), MQTT (4-bit type, 1-bit dup, 2-bit QoS, 1-bit retain), TCP/IP headers, DNS, and Bluetooth LE all need sub-byte field access.
-- Ownership semantics (move, like String -- or should sub-binary refs be possible?)
-- Relationship to String: is String literally a binary with a UTF-8 guarantee, or a distinct type backed by binary?
-- **Serialization protocols**: `FromBinary`/`ToBinary` as the protocol pair for wire format serialization. Any type can implement them using binary pattern matching -- no macros or code generation needed. Protobuf messages, MessagePack, HTTP/2 frames, database wire protocols, and WebSocket frames all become protocol implementations. `String` itself is the first `FromBinary` impl (validate UTF-8 and wrap). This extends the literal protocol philosophy to serialization: user-defined types get the same capabilities as built-in types.
-- **Done when**: binary and bitstring literals construct, pattern match at bit-level precision, and round-trip correctly
+- New tokens: `<<`, `>>`, `<>`, `::`, modifiers (`signed`, `unsigned`, `big`, `little`, `byte`)
+- New AST nodes: `BinaryLiteral` (construction), `BinaryPattern` (match arms), `BinarySegment` (shared)
+- Parser: `<<segments...>>` in expression position and pattern position
+- Segment forms: `value`, `value::N`, `value::N byte`, `value: Type`
+- **Done when**: `expo parse` produces correct AST for binary literals and patterns
 
-#### A2. String as UTF-8 binary
+##### A1b. Binary/Bits types + type checker
 
-Build string methods on top of the binary foundation:
+- Register `Binary` and `Bits` as built-in types (distinct, no subtype relationship)
+- Type checker validates: segment sizes, modifier combos, alignment, greedy-rest rules, catch-all requirement
+- Binding type assignment (`::N` → Int, `::N byte` → Binary, `: Bool` → Bool, `: Int16` → Int16, etc.)
+- `<<>>` type inference rule (byte-aligned total → Binary, non-byte-aligned → Bits)
+- **Done when**: `expo check` reports correct errors for invalid binary patterns and accepts valid ones
 
-- Character iteration / codepoint extraction (UTF-8 aware)
-- `.length()`, `.byte_length()`, `.trim()`, `.split()`, `.starts_with?()`, `.contains?()`, `.empty?()`
-- Substring extraction, slicing
-- String-to-binary / binary-to-string conversion (or identity if String = binary)
-- **Done when**: string-heavy programs compile and work (character iteration, splitting, searching)
+##### A1c. Codegen: binary construction
+
+- Emit LLVM IR for `<<segments...>>`: allocate buffer, pack segments with shifts/masks
+- Handle default 8-bit segments, `::N` bit-width, `::N byte`, type-annotated segments (`: Bool`, `: Float32`, etc.)
+- Modifiers: unsigned (default), big-endian (default), signed, little
+- **Done when**: `<<0xFF, 0x00, value::16>>` constructs correct byte sequences at runtime
+
+##### A1d. Codegen: binary pattern matching
+
+- Emit LLVM IR for binary patterns in `match` arms
+- Single length check per arm (total fixed-size prefix computed at compile time)
+- Segment extraction via shifts and masks
+- Greedy rest capture (`rest: Binary`, `rest: Bits`)
+- Integration with existing `compile_match` in `expo-codegen/src/control/patterns.rs`
+- **Done when**: HTTP/2 frame parsing example from `BITSTRINGS.md` compiles and runs correctly
+
+##### A1e. Concatenation + Bitwise protocol
+
+- `<>` operator for `Binary <> Binary`, `Bits <> Bits`, `String <> String` (type-checked, no cross-type mixing)
+- `Bitwise` protocol in stdlib: `band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr`
+- `Int` implements `Bitwise` via compiler intrinsics
+- **Done when**: `flags.band(0x01) != 0` compiles, `header <> payload` concatenates
+
+#### A2. String stdlib + type conversions
+
+`String`, `Binary`, and `Bits` are distinct types with explicit conversion. No `Char` type -- single-codepoint strings serve the same purpose (fractal design). String ranges and OR patterns enable clean pattern matching for lexers and parsers.
+
+##### A2a. String/Binary/Bits distinct types + conversion
+
+- `String.to_binary()` (zero-cost widening, always succeeds)
+- `String.from_binary(data)` → `Result<String, Error>` (validates UTF-8)
+- `Binary.to_bits()` (zero-cost widening, always succeeds)
+- `Bits.to_binary()` → `Result<Binary, Error>` (validates byte alignment)
+- String literals in `<<>>` for construction and pattern matching (`<<"hello">>`, `<<"HTTP/1.1 ", rest: Binary>>`)
+- **Done when**: conversion round-trips work, `<<"hello">>` constructs a Binary from a string literal
+
+##### A2b. String stdlib methods
+
+- Core: `length()`, `byte_length()`, `empty?()`, `at()`, `contains?()`, `starts_with?()`, `ends_with?()`
+- Transform: `trim()`, `trim_start()`, `trim_end()`, `upcase()`, `downcase()`, `replace()`, `reverse()`
+- Split/join: `split()`, `join()` (on List of String)
+- Classification: `is_alpha?()`, `is_digit?()`, `is_whitespace?()` (on String -- checks all codepoints)
+- Iteration: `codepoints()`, `graphemes()`
+- Parsing: `to_int()`, `to_float()`
+- **Done when**: string-heavy programs compile and work (character iteration, splitting, searching, classification)
+
+##### A2c. Ranges + OR patterns
+
+- `..` range operator (always inclusive on both ends)
+- Range expressions for iteration (`for i in 1..10`, `for c in "a".."z"`)
+- Range patterns in match (`"a".."z"`, `0..255`)
+- String ranges ordered by codepoint value, endpoints must be single-codepoint string literals
+- OR patterns (`|`) in match arms -- multiple patterns for one arm, same-binding constraint
+- New AST variants: `Pattern::Or`, `Pattern::Range`
+- **Done when**: lexer-style match with `"a".."z" | "A".."Z" | "_" -> ...` compiles and runs
 
 #### A3. Project system + test runner
 
@@ -232,7 +287,11 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 
 | Decision           | Recommendation                                                                                                                                                                                                                                     |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Binary-first       | Design binary/bitstring primitives before string methods. String becomes UTF-8 utilities built on binary, not an opaque type with bolted-on methods.                                                                                               |
+| Distinct types     | `String`, `Binary`, and `Bits` are three distinct types with no subtype relationships. Explicit conversion between them: widening always succeeds (zero-cost), narrowing validates and returns `Result`. See `BITSTRINGS.md`.                      |
+| No Char            | No dedicated character type. Single-codepoint `String` values serve the same purpose -- fractal design. String ranges (`"a".."z"`) and classification methods (`is_alpha?()`) work on String directly.                                             |
+| Inclusive ranges   | One range operator (`..`), always inclusive on both ends. Pattern matching is the primary use case; numeric loops are rare in idiomatic Expo. `0..n-1` for the occasional exclusive case.                                                          |
+| Erlang defaults    | Binary segments default to unsigned big-endian (network byte order). Matches Erlang and covers the primary use case: HTTP microservices and network protocol parsing.                                                                              |
+| Bitwise protocol   | Bitwise operations are methods (`band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr`) on a `Bitwise` protocol, not symbol operators. Frees `<<`/`>>` for binary literals and `&`/`\|`/`^` for other uses.                                                 |
 | One primitive      | Processes are the sole concurrency primitive. `Task` is a kernel struct built on `Process<C, M, R>`, not a separate primitive. GenServer-like actor patterns are the `Process` protocol itself.                                                    |
 | Process protocol   | `Process<C, M, R>` with three type params. Config (C) separates public args from private state via `new`. Fixed reply type (R) per process -- same as a service contract. Union types for heterogeneous replies.                                   |
 | Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code. |
@@ -244,7 +303,6 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 
 - **Union type complexity**: union types interact with generics, protocols, and pattern matching. Design carefully to avoid type system bloat.
 - **Runtime complexity**: building a work-stealing scheduler with I/O integration is substantial engineering. Start with round-robin and single-threaded I/O, then scale up.
-- **Binary/string design**: the relationship between binary data and String must be clean. Getting this wrong creates a two-world problem that permeates the entire stdlib.
 - **Scheduler protocol scope**: the protocol must be minimal enough that a single-threaded WASM backend can implement it, but expressive enough that the native M:N scheduler isn't constrained. Err on the side of too-minimal.
 - **Default protocol impls**: new language feature with well-understood semantics but requires careful design of override rules, interaction with protocol conformance checking, and method resolution order.
 
@@ -628,8 +686,8 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | Binary/bitstring literals, string-as-UTF8, project system + test runner, lexer port                                                                                |
-| Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, `Task`, scheduler + I/O |
+| Surface (3A) | A1a lexer/parser/AST, A1b types+checker, A1c codegen construction, A1d codegen patterns, A1e concat+bitwise, A2a type conversion, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
+| Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |
 | Tooling      | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                             |
