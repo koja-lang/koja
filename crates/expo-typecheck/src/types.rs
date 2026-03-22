@@ -38,6 +38,8 @@ pub enum GenericKind {
 /// Built-in primitive types with known sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Primitive {
+    Binary,
+    Bits,
     Bool,
     F32,
     F64,
@@ -156,6 +158,8 @@ impl Primitive {
     /// Returns the Expo source-level name of this primitive type.
     pub fn display(&self) -> &'static str {
         match self {
+            Primitive::Binary => "Binary",
+            Primitive::Bits => "Bits",
             Primitive::Bool => "Bool",
             Primitive::F32 => "Float32",
             Primitive::F64 => "Float",
@@ -168,6 +172,19 @@ impl Primitive {
             Primitive::U16 => "UInt16",
             Primitive::U32 => "UInt32",
             Primitive::U64 => "UInt64",
+        }
+    }
+
+    /// Returns the fixed bit width of this primitive, or `None` for
+    /// variable-size types (`String`, `Binary`, `Bits`).
+    pub fn bit_width(&self) -> Option<u64> {
+        match self {
+            Primitive::Bool => Some(1),
+            Primitive::I8 | Primitive::U8 => Some(8),
+            Primitive::I16 | Primitive::U16 => Some(16),
+            Primitive::I32 | Primitive::U32 | Primitive::F32 => Some(32),
+            Primitive::I64 | Primitive::U64 | Primitive::F64 => Some(64),
+            Primitive::String | Primitive::Binary | Primitive::Bits => None,
         }
     }
 
@@ -192,6 +209,8 @@ impl Primitive {
     /// Parses a primitive type name string back into a [`Primitive`].
     pub fn from_name(s: &str) -> Option<Primitive> {
         match s {
+            "Binary" => Some(Primitive::Binary),
+            "Bits" => Some(Primitive::Bits),
             "Bool" => Some(Primitive::Bool),
             "Float32" => Some(Primitive::F32),
             "Float" => Some(Primitive::F64),
@@ -272,6 +291,8 @@ pub fn resolve_type_expr_with_params(
                     return aliased.clone();
                 }
                 match name {
+                    "Binary" => Type::Primitive(Primitive::Binary),
+                    "Bits" => Type::Primitive(Primitive::Bits),
                     "String" => Type::Primitive(Primitive::String),
                     "Bool" => Type::Primitive(Primitive::Bool),
                     "Float32" => Type::Primitive(Primitive::F32),

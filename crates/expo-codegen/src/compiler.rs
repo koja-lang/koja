@@ -1046,7 +1046,12 @@ pub(crate) fn type_byte_size(ty: &Type) -> u32 {
             Primitive::Bool | Primitive::I8 | Primitive::U8 => 1,
             Primitive::I16 | Primitive::U16 => 2,
             Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
-            Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::String => 8,
+            Primitive::I64
+            | Primitive::U64
+            | Primitive::F64
+            | Primitive::String
+            | Primitive::Binary
+            | Primitive::Bits => 8,
         },
         Type::Function { .. } => 16,
         _ => 8,

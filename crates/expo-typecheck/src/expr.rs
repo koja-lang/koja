@@ -556,6 +556,8 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             Type::Unknown
         }
 
+        Expr::BinaryLiteral { segments, span } => infer_binary_literal(segments, *span, ctx, ce),
+
         Expr::Self_ { span } => {
             if let Some(ty) = ce.get_type("self") {
                 ty.clone()
@@ -632,6 +634,173 @@ fn infer_binary(
                 );
             }
             Type::Primitive(Primitive::Bool)
+        }
+    }
+}
+
+/// Type-checks a binary/bitstring literal (`<<segments...>>`), validating each
+/// segment and computing whether the result is `Binary` (byte-aligned) or
+/// `Bits` (non-byte-aligned).
+fn infer_binary_literal(
+    segments: &[BinarySegment],
+    _span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    if segments.is_empty() {
+        return Type::Primitive(Primitive::Binary);
+    }
+
+    let mut total_bits: Option<u64> = Some(0);
+
+    for seg in segments {
+        let val_ty = infer_expr(&seg.value, ctx, ce);
+
+        let seg_bits: Option<u64> = if let Some(size_expr) = &seg.size {
+            let size_ty = infer_expr(size_expr, ctx, ce);
+            if size_ty.is_known() && !matches!(size_ty, Type::Primitive(p) if p.is_integer()) {
+                ctx.error(
+                    format!(
+                        "segment size must be an integer, found `{}`",
+                        size_ty.display()
+                    ),
+                    seg.span,
+                );
+            }
+
+            if let Expr::Literal {
+                value: Literal::Int(n),
+                ..
+            } = size_expr.as_ref()
+            {
+                if let Ok(bits) = n.parse::<u64>() {
+                    let actual_bits = if seg.unit == BinaryUnit::Byte {
+                        bits * 8
+                    } else {
+                        bits
+                    };
+                    check_literal_overflow(&seg.value, actual_bits, seg.signedness, seg.span, ctx);
+                    Some(actual_bits)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else if let Some(type_ann) = &seg.type_ann {
+            let ann_ty = resolve_type_expr(type_ann, ce.struct_names, ce.enum_names);
+            match &ann_ty {
+                Type::Primitive(p) => {
+                    if let Some(w) = p.bit_width() {
+                        Some(w)
+                    } else {
+                        if *p != Primitive::Binary && *p != Primitive::Bits {
+                            ctx.error(
+                                format!(
+                                    "type `{}` has no fixed bit width, use a concrete type like Int32 or Float64",
+                                    p.display()
+                                ),
+                                seg.span,
+                            );
+                        }
+                        None
+                    }
+                }
+                Type::Unknown => None,
+                _ => {
+                    ctx.error(
+                        format!(
+                            "segment type annotation must be a primitive type, found `{}`",
+                            ann_ty.display()
+                        ),
+                        seg.span,
+                    );
+                    None
+                }
+            }
+        } else {
+            if val_ty.is_known() && !matches!(val_ty, Type::Primitive(p) if p.is_integer()) {
+                ctx.error(
+                    format!(
+                        "default segment value must be an integer (8-bit), found `{}`",
+                        val_ty.display()
+                    ),
+                    seg.span,
+                );
+            }
+            check_literal_overflow(&seg.value, 8, None, seg.span, ctx);
+            Some(8)
+        };
+
+        if seg.signedness.is_some() && seg.size.is_none() && seg.type_ann.is_none() {
+            ctx.error(
+                "signedness modifier requires a size specifier (::N)".to_string(),
+                seg.span,
+            );
+        }
+        if seg.endianness.is_some() && seg.size.is_none() && seg.type_ann.is_none() {
+            ctx.error(
+                "endianness modifier requires a size specifier (::N)".to_string(),
+                seg.span,
+            );
+        }
+
+        match (total_bits, seg_bits) {
+            (Some(acc), Some(b)) => total_bits = Some(acc + b),
+            _ => total_bits = None,
+        }
+    }
+
+    match total_bits {
+        Some(n) if n.is_multiple_of(8) => Type::Primitive(Primitive::Binary),
+        Some(_) => Type::Primitive(Primitive::Bits),
+        None => Type::Primitive(Primitive::Binary),
+    }
+}
+
+/// Checks whether a literal integer value fits in the given bit width.
+fn check_literal_overflow(
+    value_expr: &Expr,
+    bits: u64,
+    signedness: Option<BinarySignedness>,
+    span: Span,
+    ctx: &mut TypeContext,
+) {
+    if bits == 0 || bits > 64 {
+        return;
+    }
+    let Expr::Literal {
+        value: Literal::Int(n),
+        ..
+    } = value_expr
+    else {
+        return;
+    };
+    let Ok(val) = n.parse::<i128>() else {
+        return;
+    };
+
+    let is_signed = signedness == Some(BinarySignedness::Signed);
+    if is_signed {
+        let min = -(1i128 << (bits - 1));
+        let max = (1i128 << (bits - 1)) - 1;
+        if val < min || val > max {
+            ctx.error(
+                format!("{val} does not fit in {bits} signed bits (range {min}..{max})"),
+                span,
+            );
+        }
+    } else {
+        let max = if bits >= 128 {
+            i128::MAX
+        } else {
+            (1i128 << bits) - 1
+        };
+        if val < 0 || val > max {
+            ctx.error(
+                format!("{val} does not fit in {bits} unsigned bits (range 0..{max})"),
+                span,
+            );
         }
     }
 }

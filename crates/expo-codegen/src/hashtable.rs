@@ -262,6 +262,8 @@ pub fn ensure_eq_fn<'ctx>(
 pub fn type_display_name(ty: &Type) -> String {
     match ty {
         Type::Primitive(p) => match p {
+            Primitive::Binary => "Binary".to_string(),
+            Primitive::Bits => "Bits".to_string(),
             Primitive::Bool => "Bool".to_string(),
             Primitive::I8 => "Int8".to_string(),
             Primitive::I16 => "Int16".to_string(),

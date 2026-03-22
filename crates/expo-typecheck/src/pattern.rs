@@ -38,6 +38,18 @@ pub(crate) fn check_match_exhaustiveness(
     }
 
     match subject_type {
+        Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits) => {
+            let has_binary_pattern = arms
+                .iter()
+                .any(|arm| matches!(arm.pattern, Pattern::Binary { .. }));
+            if has_binary_pattern {
+                ctx.error_with_hint(
+                    "non-exhaustive match on binary data: missing catch-all".to_string(),
+                    "binary patterns cannot cover all inputs -- add a `_ ->` catch-all arm".into(),
+                    span,
+                );
+            }
+        }
         Type::Enum(enum_name) => {
             let Some(enum_info) = ctx.enums.get(enum_name) else {
                 return;
@@ -403,14 +415,268 @@ pub(crate) fn check_pattern(
             );
         }
 
-        Pattern::Binary { span, .. } => {
-            ctx.error(
-                "binary patterns are not yet type-checked".to_string(),
-                *span,
-            );
+        Pattern::Binary { segments, span } => {
+            check_binary_pattern(segments, subject_type, *span, ctx, env);
         }
 
         Pattern::Wildcard { .. } => {}
+    }
+}
+
+/// Validates a binary pattern's segments: assigns binding types, checks greedy
+/// rest rules, and validates modifier usage.
+fn check_binary_pattern(
+    segments: &[BinarySegment],
+    subject_type: &Type,
+    span: Span,
+    ctx: &mut TypeContext,
+    env: &mut HashMap<String, VarInfo>,
+) {
+    if subject_type.is_known()
+        && !matches!(
+            subject_type,
+            Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
+        )
+    {
+        ctx.error(
+            format!(
+                "binary pattern requires `Binary` or `Bits` subject, found `{}`",
+                subject_type.display()
+            ),
+            span,
+        );
+    }
+
+    let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+    let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
+    let enum_name_keys: Vec<String> = ctx.enums.keys().cloned().collect();
+    let enum_refs: Vec<&str> = enum_name_keys.iter().map(|s| s.as_str()).collect();
+
+    let mut total_fixed_bits: u64 = 0;
+    let mut has_greedy = false;
+
+    for (i, seg) in segments.iter().enumerate() {
+        let is_last = i == segments.len() - 1;
+
+        let is_binding = matches!(seg.value.as_ref(), Expr::Ident { name, .. } if name != "_");
+        let is_discard = matches!(seg.value.as_ref(), Expr::Ident { name, .. } if name == "_");
+        let is_literal = matches!(
+            seg.value.as_ref(),
+            Expr::Literal { .. } | Expr::Unary { .. }
+        );
+
+        let is_greedy_rest = seg.type_ann.is_some() && seg.size.is_none() && {
+            let ann_ty =
+                resolve_type_expr(seg.type_ann.as_ref().unwrap(), &struct_refs, &enum_refs);
+            matches!(
+                ann_ty,
+                Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
+            )
+        };
+
+        if is_greedy_rest {
+            if has_greedy {
+                ctx.error(
+                    "at most one greedy rest segment allowed per binary pattern".to_string(),
+                    seg.span,
+                );
+            }
+            if !is_last {
+                ctx.error(
+                    "greedy rest segment must be the last segment".to_string(),
+                    seg.span,
+                );
+            }
+            has_greedy = true;
+
+            let ann_ty =
+                resolve_type_expr(seg.type_ann.as_ref().unwrap(), &struct_refs, &enum_refs);
+            if matches!(ann_ty, Type::Primitive(Primitive::Binary))
+                && !total_fixed_bits.is_multiple_of(8)
+            {
+                ctx.error(
+                    format!(
+                        "`: Binary` rest requires byte-aligned prefix, but fixed prefix is {} bits",
+                        total_fixed_bits
+                    ),
+                    seg.span,
+                );
+            }
+
+            if is_binding && let Expr::Ident { name, .. } = seg.value.as_ref() {
+                env.insert(
+                    name.clone(),
+                    VarInfo {
+                        ty: ann_ty,
+                        state: VarState::Live,
+                    },
+                );
+            }
+            continue;
+        }
+
+        let seg_bits: Option<u64> = if let Some(size_expr) = &seg.size {
+            if let Expr::Literal {
+                value: Literal::Int(n),
+                ..
+            } = size_expr.as_ref()
+            {
+                if let Ok(bits) = n.parse::<u64>() {
+                    let actual = if seg.unit == BinaryUnit::Byte {
+                        bits * 8
+                    } else {
+                        bits
+                    };
+                    Some(actual)
+                } else {
+                    ctx.error(
+                        "segment size must be a non-negative integer literal".to_string(),
+                        seg.span,
+                    );
+                    None
+                }
+            } else {
+                ctx.error(
+                    "segment size in patterns must be a literal integer".to_string(),
+                    seg.span,
+                );
+                None
+            }
+        } else if let Some(type_ann) = &seg.type_ann {
+            let ann_ty = resolve_type_expr(type_ann, &struct_refs, &enum_refs);
+            match &ann_ty {
+                Type::Primitive(p) => {
+                    if let Some(w) = p.bit_width() {
+                        Some(w)
+                    } else {
+                        ctx.error(
+                            format!(
+                                "type `{}` has no fixed bit width in binary pattern",
+                                p.display()
+                            ),
+                            seg.span,
+                        );
+                        None
+                    }
+                }
+                _ => {
+                    ctx.error(
+                        format!(
+                            "segment type must be a primitive type, found `{}`",
+                            ann_ty.display()
+                        ),
+                        seg.span,
+                    );
+                    None
+                }
+            }
+        } else {
+            Some(8)
+        };
+
+        if let Some(bits) = seg_bits {
+            total_fixed_bits += bits;
+        }
+
+        if is_binding {
+            if let Expr::Ident { name, .. } = seg.value.as_ref() {
+                let binding_ty = if let Some(type_ann) = &seg.type_ann {
+                    resolve_type_expr(type_ann, &struct_refs, &enum_refs)
+                } else if seg.size.is_some() && seg.unit == BinaryUnit::Byte {
+                    Type::Primitive(Primitive::Binary)
+                } else {
+                    Type::Primitive(Primitive::I64)
+                };
+                env.insert(
+                    name.clone(),
+                    VarInfo {
+                        ty: binding_ty,
+                        state: VarState::Live,
+                    },
+                );
+            }
+        } else if is_literal {
+            if let Some(bits) = seg_bits {
+                check_pattern_literal_overflow(&seg.value, bits, seg.signedness, seg.span, ctx);
+            }
+        } else if is_discard {
+            // skip
+        }
+
+        if seg.signedness.is_some() && seg.size.is_none() && seg.type_ann.is_none() {
+            ctx.error(
+                "signedness modifier requires a size specifier (::N)".to_string(),
+                seg.span,
+            );
+        }
+        if seg.endianness.is_some() && seg.size.is_none() && seg.type_ann.is_none() {
+            ctx.error(
+                "endianness modifier requires a size specifier (::N)".to_string(),
+                seg.span,
+            );
+        }
+    }
+}
+
+/// Checks whether a literal integer value in a pattern fits in the given bit width.
+fn check_pattern_literal_overflow(
+    value_expr: &Expr,
+    bits: u64,
+    signedness: Option<BinarySignedness>,
+    span: Span,
+    ctx: &mut TypeContext,
+) {
+    if bits == 0 || bits > 64 {
+        return;
+    }
+
+    let val = match value_expr {
+        Expr::Literal {
+            value: Literal::Int(n),
+            ..
+        } => n.parse::<i128>().ok(),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+            ..
+        } => {
+            if let Expr::Literal {
+                value: Literal::Int(n),
+                ..
+            } = operand.as_ref()
+            {
+                n.parse::<i128>().ok().map(|v| -v)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    let Some(val) = val else { return };
+
+    let is_signed = signedness == Some(BinarySignedness::Signed);
+    if is_signed {
+        let min = -(1i128 << (bits - 1));
+        let max = (1i128 << (bits - 1)) - 1;
+        if val < min || val > max {
+            ctx.error(
+                format!("{val} does not fit in {bits} signed bits (range {min}..{max})"),
+                span,
+            );
+        }
+    } else {
+        let max = if bits >= 128 {
+            i128::MAX
+        } else {
+            (1i128 << bits) - 1
+        };
+        if val < 0 || val > max {
+            ctx.error(
+                format!("{val} does not fit in {bits} unsigned bits (range 0..{max})"),
+                span,
+            );
+        }
     }
 }
 

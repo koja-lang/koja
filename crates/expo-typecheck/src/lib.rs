@@ -116,6 +116,94 @@ pub fn resolve_imports(
     collect::resolve_imports(module, ctx, module_contexts);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_source(src: &str) -> TypeContext {
+        let parse_result = expo_parser::parse(src);
+        check(&parse_result.module)
+    }
+
+    fn errors(ctx: &TypeContext) -> Vec<&str> {
+        ctx.diagnostics.iter().map(|d| d.message.as_str()).collect()
+    }
+
+    #[test]
+    fn binary_literal_infers_binary_type() {
+        let ctx = check_source("fn main\n  x = <<0xFF, 0x00>>\nend\n");
+        assert!(errors(&ctx).is_empty(), "errors: {:?}", errors(&ctx));
+    }
+
+    #[test]
+    fn binary_literal_non_byte_aligned_infers_bits() {
+        let ctx = check_source("fn main\n  x = <<1::3, 0::5>>\nend\n");
+        assert!(errors(&ctx).is_empty(), "errors: {:?}", errors(&ctx));
+    }
+
+    #[test]
+    fn binary_literal_empty_infers_binary() {
+        let ctx = check_source("fn main\n  x = <<>>\nend\n");
+        assert!(errors(&ctx).is_empty(), "errors: {:?}", errors(&ctx));
+    }
+
+    #[test]
+    fn binary_literal_overflow_detected() {
+        let ctx = check_source("fn main\n  x = <<256>>\nend\n");
+        assert!(
+            errors(&ctx).iter().any(|e| e.contains("does not fit")),
+            "expected overflow error, got: {:?}",
+            errors(&ctx)
+        );
+    }
+
+    #[test]
+    fn binary_pattern_binds_int_for_sized_segment() {
+        let ctx = check_source(
+            "fn main\n  data: Binary = <<>>\n  match data\n    <<tag::8, _rest: Binary>> -> tag\n    _ -> 0\n  end\nend\n",
+        );
+        assert!(errors(&ctx).is_empty(), "errors: {:?}", errors(&ctx));
+    }
+
+    #[test]
+    fn binary_pattern_requires_catch_all() {
+        let ctx = check_source(
+            "fn main\n  data: Binary = <<>>\n  match data\n    <<tag::8>> -> tag\n  end\nend\n",
+        );
+        assert!(
+            errors(&ctx).iter().any(|e| e.contains("catch-all")),
+            "expected catch-all error, got: {:?}",
+            errors(&ctx)
+        );
+    }
+
+    #[test]
+    fn binary_pattern_rejects_non_binary_subject() {
+        let ctx = check_source(
+            "fn main\n  x = 42\n  match x\n    <<tag::8>> -> tag\n    _ -> 0\n  end\nend\n",
+        );
+        assert!(
+            errors(&ctx)
+                .iter()
+                .any(|e| e.contains("Binary") || e.contains("Bits")),
+            "expected binary subject error, got: {:?}",
+            errors(&ctx)
+        );
+    }
+
+    #[test]
+    fn binary_pattern_greedy_rest_must_be_last() {
+        let ctx = check_source(
+            "fn main\n  data: Binary = <<>>\n  match data\n    <<rest: Binary, tag::8>> -> tag\n    _ -> 0\n  end\nend\n",
+        );
+        assert!(
+            errors(&ctx).iter().any(|e| e.contains("last segment")),
+            "expected greedy-rest error, got: {:?}",
+            errors(&ctx)
+        );
+    }
+}
+
 /// Re-resolves generic type signatures that may have `Type::Unknown` fields,
 /// parameters, or return types because the referenced types (e.g. stdlib types)
 /// weren't known during initial collection. Must be called after merging stdlib.

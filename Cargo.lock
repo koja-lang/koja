@@ -222,6 +222,7 @@ name = "expo-typecheck"
 version = "0.7.0"
 dependencies = [
  "expo-ast",
+ "expo-parser",
 ]
 
 [[package]]

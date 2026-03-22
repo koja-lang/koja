@@ -122,7 +122,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 ### Dependency graph
 
 ```
-Track A:  A1a (lexer/parser/AST) → A1b (types + type checker) → A1c (codegen: construction)
+Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction)
           → A1d (codegen: pattern matching) → A1e (concat + bitwise)
           → A2a (type conversion) → A2b (string stdlib) → A2c (ranges + OR patterns)
           → A3 (project.expo + test runner) → A4 (lexer port)
@@ -141,21 +141,23 @@ The foundation for writing real programs in Expo. `String`, `Binary`, and `Bits`
 
 Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from the total bit count: byte-aligned totals produce `Binary`, non-byte-aligned produce `Bits`. Defaults are unsigned big-endian (matching Erlang). Sub-byte field extraction like `<<_::1, stream_id::31>>` compiles to native shift-and-mask code.
 
-##### A1a. Lexer + Parser + AST
+##### A1a. Lexer + Parser + AST -- done
 
 - New tokens: `<<`, `>>`, `<>`, `::`, modifiers (`signed`, `unsigned`, `big`, `little`, `byte`)
 - New AST nodes: `BinaryLiteral` (construction), `BinaryPattern` (match arms), `BinarySegment` (shared)
 - Parser: `<<segments...>>` in expression position and pattern position
 - Segment forms: `value`, `value::N`, `value::N byte`, `value: Type`
-- **Done when**: `expo parse` produces correct AST for binary literals and patterns
+- `>>` ambiguity with nested generics resolved via `pending_token` + `expect_gt()` in the parser
+- **Done**: `expo parse` produces correct AST for binary literals and patterns
 
-##### A1b. Binary/Bits types + type checker
+##### A1b. Binary/Bits types + type checker -- done
 
 - Register `Binary` and `Bits` as built-in types (distinct, no subtype relationship)
 - Type checker validates: segment sizes, modifier combos, alignment, greedy-rest rules, catch-all requirement
 - Binding type assignment (`::N` → Int, `::N byte` → Binary, `: Bool` → Bool, `: Int16` → Int16, etc.)
 - `<<>>` type inference rule (byte-aligned total → Binary, non-byte-aligned → Bits)
-- **Done when**: `expo check` reports correct errors for invalid binary patterns and accepts valid ones
+- Literal overflow checking at compile time (e.g., `<<256>>` errors)
+- **Done**: type checker validates binary literals and patterns with 8 unit tests
 
 ##### A1c. Codegen: binary construction
 
@@ -686,7 +688,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | A1a lexer/parser/AST, A1b types+checker, A1c codegen construction, A1d codegen patterns, A1e concat+bitwise, A2a type conversion, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, A1c codegen construction, A1d codegen patterns, A1e concat+bitwise, A2a type conversion, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |
