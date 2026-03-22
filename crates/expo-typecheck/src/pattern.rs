@@ -455,9 +455,9 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
 }
 
 fn collect_bindings_inner_expr(expr: &Expr, out: &mut Vec<(String, Span)>) {
-    if let Expr::Ident { name, span } = expr {
-        if name != "_" {
-            out.push((name.clone(), *span));
-        }
+    if let Expr::Ident { name, span } = expr
+        && name != "_"
+    {
+        out.push((name.clone(), *span));
     }
 }

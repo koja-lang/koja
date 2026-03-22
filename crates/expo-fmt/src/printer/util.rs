@@ -582,8 +582,8 @@ fn expr_span(expr: &Expr) -> &Span {
     use expo_ast::ast::Expr::*;
     match expr {
         Arena { span, .. }
-        | BinaryLiteral { span, .. }
         | Binary { span, .. }
+        | BinaryLiteral { span, .. }
         | Call { span, .. }
         | Closure { span, .. }
         | Cond { span, .. }

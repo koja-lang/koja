@@ -180,9 +180,9 @@ pub struct EnumVariant {
 pub enum EnumVariantData {
     /// A unit variant carrying no data: `None`.
     Unit,
-    /// A tuple variant: `Some(i32)`.
+    /// A tuple variant: `Some(Int)`.
     Tuple(Vec<TypeExpr>),
-    /// A struct variant with named fields: `Move { x: i32, y: i32 }`.
+    /// A struct variant with named fields: `Move { x: Int, y: Int }`.
     Struct(Vec<StructField>),
 }
 
@@ -295,12 +295,12 @@ pub struct TypeAlias {
 
 // Type expressions
 
-/// A type annotation in source code (e.g., `i32`, `List<String>`).
+/// A type annotation in source code (e.g., `Int`, `List<String>`).
 #[derive(Debug, Clone)]
 pub enum TypeExpr {
-    /// A simple named type: `i32`, `String`, `MyStruct`.
+    /// A simple named type: `Int`, `String`, `MyStruct`.
     Named { path: Vec<String>, span: Span },
-    /// A generic type with type arguments: `List<i32>`, `Map<String, i32>`.
+    /// A generic type with type arguments: `List<Int>`, `Map<String, Int>`.
     Generic {
         path: Vec<String>,
         args: Vec<TypeExpr>,
@@ -331,7 +331,7 @@ pub enum TypeExpr {
 pub enum AssignTarget {
     /// A simple or dotted lvalue: `x`, `point.x`.
     LValue(LValue),
-    /// A destructuring pattern: `(a, b) = expr`.
+    /// A destructuring pattern: `[a, b] = expr`.
     Pattern(Pattern),
 }
 
@@ -356,7 +356,7 @@ pub struct LValue {
 pub enum Statement {
     /// A bare expression evaluated for its side effects.
     Expr(Expr),
-    /// A variable or pattern assignment: `x = expr`, `x: Type = expr`, `(a, b) = expr`.
+    /// A variable or pattern assignment: `x = expr`, `x: Type = expr`.
     Assignment {
         target: AssignTarget,
         type_annotation: Option<TypeExpr>,
@@ -407,7 +407,7 @@ pub enum BinOp {
 /// A parameter in a closure expression.
 #[derive(Debug, Clone)]
 pub enum ClosureParam {
-    /// A named parameter with optional type: `x`, `x: i32`.
+    /// A named parameter with optional type: `x`, `x: Int`.
     Name {
         name: String,
         type_expr: Option<TypeExpr>,
@@ -435,16 +435,16 @@ pub enum EnumConstructionData {
 pub enum Expr {
     /// An arena allocation block: `arena ... end`.
     Arena { body: Vec<Statement>, span: Span },
-    /// A binary/bitstring literal: `<<0xFF, 0x00, length::16>>`.
-    BinaryLiteral {
-        segments: Vec<BinarySegment>,
-        span: Span,
-    },
-    /// A binary operation: `a + b`, `x |> f`.
+    /// A binary operation: `a + b`, `x * y`.
     Binary {
         op: BinOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        span: Span,
+    },
+    /// A binary/bitstring literal: `<<0xFF, 0x00, length::16>>`.
+    BinaryLiteral {
+        segments: Vec<BinarySegment>,
         span: Span,
     },
     /// A function call: `f(args)`.
@@ -453,7 +453,7 @@ pub enum Expr {
         args: Vec<Arg>,
         span: Span,
     },
-    /// A block closure: `fn (x: i32) -> i32 ... end`.
+    /// A block closure: `fn (x: Int) -> Int ... end`.
     Closure {
         params: Vec<ClosureParam>,
         return_type: Option<TypeExpr>,
@@ -686,7 +686,7 @@ pub enum Pattern {
     Wildcard { span: Span },
     /// A literal match: `42`, `true`.
     Literal { value: Literal, span: Span },
-    /// A binary/bitstring pattern: `<<header::8, rest::bytes>>`.
+    /// A binary/bitstring pattern: `<<header::8, payload::16 big>>`.
     Binary {
         segments: Vec<BinarySegment>,
         span: Span,

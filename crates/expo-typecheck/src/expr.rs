@@ -1374,8 +1374,8 @@ fn bind_closure_params(
 pub(crate) fn expr_span(expr: &Expr) -> Span {
     match expr {
         Expr::Arena { span, .. }
-        | Expr::BinaryLiteral { span, .. }
         | Expr::Binary { span, .. }
+        | Expr::BinaryLiteral { span, .. }
         | Expr::Call { span, .. }
         | Expr::Closure { span, .. }
         | Expr::Cond { span, .. }
