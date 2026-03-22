@@ -1213,7 +1213,7 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &str) {
             }
         }
         Expr::FieldAccess { receiver, .. } => substitute_named_in_expr(receiver, from, to),
-        Expr::Group { expr, .. } | Expr::Await { expr, .. } | Expr::Spawn { expr, .. } => {
+        Expr::Group { expr, .. } | Expr::Spawn { expr, .. } => {
             substitute_named_in_expr(expr, from, to)
         }
         Expr::Cond {
@@ -1431,7 +1431,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
             }
         }
         Expr::FieldAccess { receiver, .. } => substitute_self_in_expr(receiver, target),
-        Expr::Group { expr, .. } | Expr::Await { expr, .. } | Expr::Spawn { expr, .. } => {
+        Expr::Group { expr, .. } | Expr::Spawn { expr, .. } => {
             substitute_self_in_expr(expr, target)
         }
         Expr::Cond {

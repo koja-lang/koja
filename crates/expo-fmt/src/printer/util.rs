@@ -366,7 +366,6 @@ pub(super) fn expr_contains_block(expr: &Expr) -> bool {
             expr_contains_block(receiver) || args.iter().any(|a| expr_contains_block(&a.value))
         }
         Expr::Binary { right, .. } => expr_contains_block(right),
-        Expr::Await { expr, .. } => expr_contains_block(expr),
         Expr::Ternary {
             condition,
             then_expr,
@@ -549,7 +548,6 @@ fn expr_span(expr: &Expr) -> &Span {
     use expo_ast::ast::Expr::*;
     match expr {
         Arena { span, .. }
-        | Await { span, .. }
         | Binary { span, .. }
         | Call { span, .. }
         | Closure { span, .. }

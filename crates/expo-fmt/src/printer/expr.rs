@@ -289,10 +289,6 @@ impl<'a> Printer<'a> {
                 concat(vec![text("spawn "), self.expr_to_doc(inner)])
             }
 
-            Expr::Await { expr: inner, .. } => {
-                concat(vec![text("await "), self.expr_to_doc(inner)])
-            }
-
             Expr::Ternary {
                 condition,
                 then_expr,

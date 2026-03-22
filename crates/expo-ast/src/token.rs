@@ -31,7 +31,6 @@ pub enum TokenKind {
     After,
     And,
     Arena,
-    Await,
     Break,
     Cond,
     Const,
@@ -108,7 +107,6 @@ impl TokenKind {
             TokenKind::After
                 | TokenKind::And
                 | TokenKind::Arena
-                | TokenKind::Await
                 | TokenKind::Break
                 | TokenKind::Cond
                 | TokenKind::Const

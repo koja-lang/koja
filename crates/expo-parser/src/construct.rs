@@ -335,17 +335,6 @@ impl Parser {
         }
     }
 
-    pub(crate) fn parse_await_expr(&mut self) -> Expr {
-        let start = self.current_span();
-        self.advance(); // await
-        let expr = self.parse_expr();
-
-        Expr::Await {
-            expr: Box::new(expr),
-            span: self.span_from(start),
-        }
-    }
-
     pub(crate) fn parse_spawn_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.advance(); // spawn

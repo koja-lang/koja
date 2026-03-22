@@ -15,7 +15,7 @@ syn sync fromstart
 
 " --- Keywords ---------------------------------------------------------------
 
-syn keyword expoKeyword     after arena await break const end enum fn for import impl in
+syn keyword expoKeyword     after arena break const end enum fn for import impl in
 syn keyword expoKeyword     move priv protocol receive return shared spawn struct type
 syn keyword expoConditional cond else if match unless when
 syn keyword expoRepeat      for loop while

@@ -437,8 +437,6 @@ pub enum EnumConstructionData {
 pub enum Expr {
     /// An arena allocation block: `arena ... end`.
     Arena { body: Vec<Statement>, span: Span },
-    /// An await expression: `await expr`.
-    Await { expr: Box<Expr>, span: Span },
     /// A binary operation: `a + b`, `x |> f`.
     Binary {
         op: BinOp,

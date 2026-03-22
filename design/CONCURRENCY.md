@@ -240,7 +240,7 @@ Fan-out has properties that match actors, not tasks:
 - Backpressure via bounded worker pools.
 
 A stdlib `async_map` function can be built in userland Expo once `spawn` and
-`await` exist. It doesn't need to be a language primitive.
+task-handle `.await()` exist. It doesn't need to be a language primitive.
 
 ### Backpressure
 
@@ -323,7 +323,7 @@ needed for either.
 
 Design both APIs on paper, then implement sequential iterators first. The
 concurrent versions (worker pools, `async_map`) can be built in userland once
-`spawn`/`await` exist. Promote the best patterns into the stdlib after real
+`spawn` and `.await()` on task handles exist. Promote the best patterns into the stdlib after real
 usage reveals which APIs matter.
 
 ---

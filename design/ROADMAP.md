@@ -68,7 +68,6 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 ### Parsed and type-checked but NOT yet in codegen
 
 - `arena` blocks (deferred post-v1)
-- `await` (deferred -- covered by `receive` on processes)
 - Trait bounds on generic type parameters
 - Inline closures (`x -> expr`)
 
@@ -626,15 +625,15 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 ### Remaining
 
-| Phase        | Milestone                                                                                                                                                                 |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Surface (3A) | Binary/bitstring literals, string-as-UTF8, project system + test runner, lexer port                                                                                       |
+| Phase        | Milestone                                                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Surface (3A) | Binary/bitstring literals, string-as-UTF8, project system + test runner, lexer port                                                                                |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, `Task`, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
-| Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                                 |
-| Tooling      | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                                    |
-| Self-host    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                |
-| Validation   | auth-manager-expo runs for real, second project                                                                                                                           |
+| Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |
+| Tooling      | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                             |
+| Self-host    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                         |
+| Validation   | auth-manager-expo runs for real, second project                                                                                                                    |
 
 ---
 

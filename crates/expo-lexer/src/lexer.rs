@@ -216,7 +216,6 @@ impl Lexer {
             "after" => TokenKind::After,
             "and" => TokenKind::And,
             "arena" => TokenKind::Arena,
-            "await" => TokenKind::Await,
             "break" => TokenKind::Break,
             "cond" => TokenKind::Cond,
             "const" => TokenKind::Const,

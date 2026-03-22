@@ -207,7 +207,6 @@ primary = literal
         | loop_expr
         | while_expr
         | arena_expr
-        | await_expr
         | receive_expr
         | spawn_call
         | "(" , expr , ")"                                  (* grouping *)
@@ -312,9 +311,6 @@ arena_expr = "arena" ,
 
 (* spawn creates a new process from a struct implementing Process<C, M, R> *)
 spawn_call = "spawn" , named_type , "." , "new" , "(" , [ arg_list ] , ")" ;
-
-(* await is a keyword prefix on a handle expression *)
-await_expr = "await" , expr ;
 
 (* receive blocks until a message arrives or the optional timeout expires.
    Arms use the same pattern -> body syntax as match. The after clause
@@ -457,7 +453,7 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, and, arena, await, break, cond, const, else, end, enum, false, fn,  *)
+(* after, and, arena, break, cond, const, else, end, enum, false, fn,  *)
 (* for, if, impl, import, in, loop, match, move, not, or, priv, protocol,     *)
 (* receive, return, self, shared, spawn, struct, true, type, unless, when,      *)
 (* while                                                                        *)

@@ -344,7 +344,6 @@ impl Parser {
             TokenKind::Loop => self.parse_loop_expr(),
             TokenKind::While => self.parse_while_expr(),
             TokenKind::Arena => self.parse_arena_expr(),
-            TokenKind::Await => self.parse_await_expr(),
             TokenKind::Receive => self.parse_receive_expr(),
             TokenKind::Spawn => self.parse_spawn_expr(),
             TokenKind::Fn => self.parse_closure_expr(),
@@ -477,7 +476,6 @@ impl Parser {
 pub(crate) fn expr_span(expr: &Expr) -> Span {
     match expr {
         Expr::Arena { span, .. }
-        | Expr::Await { span, .. }
         | Expr::Binary { span, .. }
         | Expr::Call { span, .. }
         | Expr::Closure { span, .. }

@@ -114,7 +114,7 @@
         },
         {
           "name": "keyword.control.concurrency.expo",
-          "match": "\\b(spawn|await|receive|move)\\b"
+          "match": "\\b(spawn|receive|move)\\b"
         },
         {
           "name": "keyword.other.fn.expo",

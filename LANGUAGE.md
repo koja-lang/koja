@@ -26,7 +26,7 @@ x = 42  # inline comment
 ### Keywords
 
 ```
-and, arena, await, break, cond, const, else, end, enum, false, fn, for,
+and, arena, break, cond, const, else, end, enum, false, fn, for,
 if, impl, import, in, loop, match, move, not, or, priv, protocol,
 receive, return, self, shared, spawn, struct, true, type, unless, when
 ```
@@ -880,7 +880,7 @@ Lightweight concurrent computations. Stackless state machines with structured li
 
 ```expo
 handle = spawn fn -> fetch_user(id) end
-user = await handle
+user = handle.await()
 ```
 
 Tasks can borrow from the parent scope (zero-copy reads) because structured concurrency guarantees the parent outlives the task. See [CONCURRENCY.md](design/CONCURRENCY.md).

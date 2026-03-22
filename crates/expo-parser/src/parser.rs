@@ -139,7 +139,6 @@ impl Parser {
         let name = match self.peek() {
             TokenKind::And => "and",
             TokenKind::Arena => "arena",
-            TokenKind::Await => "await",
             TokenKind::Break => "break",
             TokenKind::Cond => "cond",
             TokenKind::Else => "else",

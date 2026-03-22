@@ -26,11 +26,6 @@ use crate::types::{
 /// be determined.
 pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
     match expr {
-        Expr::Await { expr: inner, .. } => {
-            infer_expr(inner, ctx, ce);
-            Type::Unknown
-        }
-
         Expr::Binary {
             op,
             left,
@@ -1330,7 +1325,6 @@ fn bind_closure_params(
 pub(crate) fn expr_span(expr: &Expr) -> Span {
     match expr {
         Expr::Arena { span, .. }
-        | Expr::Await { span, .. }
         | Expr::Binary { span, .. }
         | Expr::Call { span, .. }
         | Expr::Closure { span, .. }

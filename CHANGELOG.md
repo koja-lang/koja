@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking**: Remove the `await` keyword; task completion uses `.await()` on handles (see [CONCURRENCY.md](design/CONCURRENCY.md)). The identifier `await` is no longer reserved.
 - The EBNF grammar (`grammar.ebnf`) now spells out `while` loops explicitly (behavior matches what the compiler already accepted).
 - **Breaking**: `spawn` now requires the `T.new(config)` form (`spawn Counter.new(config)`). Bare function spawn (`spawn some_function`) is a compile error. Processes must implement `Process<C, M, R>`.
 - **Breaking**: `spawn` returns `Ref<M, R>` (typed process handle) instead of `Process<M>`. `M` and `R` are inferred from the struct's `Process<C, M, R>` implementation.
