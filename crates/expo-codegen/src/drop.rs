@@ -52,6 +52,41 @@ pub fn drop_live_variables(c: &mut Compiler) {
                 .unwrap();
             continue;
         }
+        if matches!(
+            ty,
+            Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
+        ) && *ownership == Ownership::Owned
+        {
+            let free_fn = *c
+                .functions
+                .get("free")
+                .expect("free not declared in builtins");
+            let i8_type = c.context.i8_type();
+            let i64_type = c.context.i64_type();
+            let payload_ptr = c
+                .builder
+                .build_load(
+                    c.context.ptr_type(inkwell::AddressSpace::default()),
+                    *ptr,
+                    "bin_drop",
+                )
+                .unwrap()
+                .into_pointer_value();
+            let base_ptr = unsafe {
+                c.builder
+                    .build_gep(
+                        i8_type,
+                        payload_ptr,
+                        &[i64_type.const_int((-8i64) as u64, true)],
+                        "bin_base",
+                    )
+                    .unwrap()
+            };
+            c.builder
+                .build_call(free_fn, &[base_ptr.into()], "drop_free_bin")
+                .unwrap();
+            continue;
+        }
         emit_drop(c, *ptr, ty);
     }
 }

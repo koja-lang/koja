@@ -114,7 +114,7 @@
         },
         {
           "name": "keyword.control.concurrency.expo",
-          "match": "\\b(spawn|receive|move)\\b"
+          "match": "\\b(spawn|receive|after|move)\\b"
         },
         {
           "name": "keyword.other.fn.expo",
@@ -151,6 +151,10 @@
         {
           "name": "variable.language.self-type.expo",
           "match": "\\bSelf\\b"
+        },
+        {
+          "name": "constant.numeric.modifier.expo",
+          "match": "\\b(signed|unsigned|big|little|byte)\\b"
         }
       ]
     },
@@ -159,6 +163,14 @@
         {
           "name": "keyword.operator.arrow.expo",
           "match": "->"
+        },
+        {
+          "name": "keyword.operator.binary-literal.expo",
+          "match": "<<|>>|<>"
+        },
+        {
+          "name": "keyword.operator.size-separator.expo",
+          "match": "::"
         },
         {
           "name": "keyword.operator.comparison.expo",
@@ -190,7 +202,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.expo",
-          "match": "\\b(Bool|Float32|Float|Int8|Int16|Int32|Int|String|UInt8|UInt16|UInt32|UInt64)\\b"
+          "match": "\\b(Binary|Bits|Bool|Float32|Float64|Float|Int8|Int16|Int32|Int64|Int|String|UInt8|UInt16|UInt32|UInt64)\\b"
         }
       ]
     },

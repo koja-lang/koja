@@ -22,6 +22,7 @@ syn keyword expoRepeat      for loop while
 syn keyword expoOperatorKw  and not or
 syn keyword expoBoolean     false true
 syn keyword expoSelf        self
+syn keyword expoBinaryMod   signed unsigned big little byte
 
 " --- Annotations ------------------------------------------------------------
 
@@ -29,7 +30,7 @@ syn match expoAnnotation    /@\w\+/
 
 " --- Types (PascalCase identifiers) -----------------------------------------
 
-syn keyword expoPrimitiveType Bool Float Float32 Int Int8 Int16 Int32 String UInt8 UInt16 UInt32 UInt64
+syn keyword expoPrimitiveType Binary Bits Bool Float Float32 Float64 Int Int8 Int16 Int32 Int64 String UInt8 UInt16 UInt32 UInt64
 syn match expoType          /\<[A-Z][A-Za-z0-9]*\>/
 
 " --- Constants (ALL_CAPS identifiers) ---------------------------------------
@@ -68,6 +69,10 @@ syn match expoTypedAssign     /\<\l\w\+\s*:\s*\([A-Z][A-Za-z0-9]*\|fn\)/ contain
 " --- Operators --------------------------------------------------------------
 
 syn match expoOperator      /->/
+syn match expoOperator      /<</
+syn match expoOperator      />>/
+syn match expoOperator      /<>/
+syn match expoOperator      /::/
 syn match expoOperator      /|/
 syn match expoOperator      /[+\-*/%]=/
 syn match expoOperator      /[!=]=\|[<>]=/
@@ -85,6 +90,7 @@ hi def link expoRepeat        Repeat
 hi def link expoOperatorKw    Keyword
 hi def link expoBoolean       Boolean
 hi def link expoSelf          Constant
+hi def link expoBinaryMod     Number
 hi def link expoPrimitiveType  Type
 hi def link expoType          Type
 hi def link expoModuleConst   Constant

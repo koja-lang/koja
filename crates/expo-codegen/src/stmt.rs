@@ -710,6 +710,16 @@ fn expr_span(expr: &Expr) -> expo_ast::span::Span {
 }
 
 fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
+    if matches!(
+        ty,
+        Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
+    ) {
+        return match expr {
+            Expr::BinaryLiteral { .. } => Ownership::Owned,
+            Expr::Receive { .. } => Ownership::Owned,
+            _ => Ownership::Unowned,
+        };
+    }
     if !matches!(ty, Type::Primitive(Primitive::String)) {
         return Ownership::Unowned;
     }
