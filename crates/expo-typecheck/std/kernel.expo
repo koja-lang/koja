@@ -165,6 +165,7 @@ Requires indexed access via `length` and `get`.
 """
 protocol Enumeration<T>
   fn length(self) -> Int
+
   fn get(self, index: Int) -> T
 end
 
@@ -195,7 +196,7 @@ impl List<T>
   @doc """
   Creates a new empty list.
   """
-  fn new() -> List<T>
+  fn new -> List<T>
     panic("intrinsic")
   end
 
@@ -520,7 +521,7 @@ impl Map<K, V>
   @doc """
   Creates a new empty map with an initial capacity of 8.
   """
-  fn new() -> Map<K, V>
+  fn new -> Map<K, V>
     panic("intrinsic")
   end
 
@@ -599,7 +600,7 @@ impl Set<T>
   @doc """
   Creates a new empty set with an initial capacity of 8.
   """
-  fn new() -> Set<T>
+  fn new -> Set<T>
     panic("intrinsic")
   end
 
@@ -646,9 +647,7 @@ Convenience helper for process handlers -- use `reply(from, value)` instead
 of manually matching on the `Option`.
 """
 fn reply<R>(from: Option<ReplyTo<R>>, value: R)
-  from.map(fn (r: ReplyTo<R>) -> ()
-    r.send(value)
-  end)
+  from.map(fn (r: ReplyTo<R>) -> () r.send(value) end)
 end
 
 @doc """
@@ -686,6 +685,7 @@ while running, `R` is the reply type for synchronous calls.
 """
 protocol Process<C, M, R>
   fn new(config: C) -> Self
+
   fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self
 
   fn run(move self)
@@ -693,5 +693,42 @@ protocol Process<C, M, R>
       pair: Pair<M, Option<ReplyTo<R>>> ->
         self.handle(pair.first, pair.second).run()
     end
+  end
+end
+
+struct Task<R>
+  work: fn() -> R
+end
+
+impl Task<R>
+  fn async(fun: fn() -> R) -> Ref<(), R>
+    spawn Task.new(Task{work: fun})
+  end
+
+  fn await(move reference: Ref<(), R>) -> Option<R>
+    reference.call((), 5000)
+  end
+end
+
+impl Process<Task<R>, (), R> for Task<R>
+  fn new(config: Task<R>) -> Self
+    config
+  end
+
+  fn run(move self)
+    result = self.work()
+    receive
+      pair: Pair<(), Option<ReplyTo<R>>> ->
+        match pair.second
+          Option.Some(reply_to) -> reply_to.send(result)
+          Option.None -> ()
+        end
+        self
+    end
+  end
+
+  fn handle(move self, msg: (), from: Option<ReplyTo<R>>) -> Self
+    # Intentionally a no-op. Task should receive exactly one () message.
+    self
   end
 end

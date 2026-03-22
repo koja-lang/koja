@@ -3,7 +3,7 @@
 
 use expo_ast::ast::{ClosureParam, Expr, Literal, Statement, StringPart};
 
-use expo_typecheck::types::{Primitive, Type, mangle_name};
+use expo_typecheck::types::{Primitive, Type, build_substitution, mangle_name, substitute};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
@@ -497,26 +497,54 @@ fn compile_closure<'ctx>(
     let saved_block = c.builder.get_insert_block();
     let saved_subst = {
         let mut extra = std::collections::HashMap::<String, Type>::new();
-        if let Type::GenericInstance {
-            base, type_args, ..
-        } = &ret_type
-        {
-            let type_params = c
-                .type_ctx
-                .enums
-                .get(base.as_str())
-                .map(|ei| &ei.type_params)
-                .or_else(|| {
-                    c.type_ctx
-                        .structs
-                        .get(base.as_str())
-                        .map(|si| &si.type_params)
-                });
-            if let Some(tps) = type_params {
-                for (tp, ta) in tps.iter().zip(type_args.iter()) {
-                    extra.insert(tp.clone(), ta.clone());
+        // TODO: refactor — resolve_type_expr collapses GenericInstance to mangled
+        // Struct/Enum names via substitute(). This means we must handle both
+        // GenericInstance (pre-collapse) and Struct/Enum (post-collapse) here
+        // to recover type params for the closure body. A cleaner approach would
+        // be to have resolve_type_expr return the un-collapsed form and only
+        // collapse at the point of use.
+        match &ret_type {
+            Type::GenericInstance {
+                base, type_args, ..
+            } => {
+                let type_params = c
+                    .type_ctx
+                    .enums
+                    .get(base.as_str())
+                    .map(|ei| &ei.type_params)
+                    .or_else(|| {
+                        c.type_ctx
+                            .structs
+                            .get(base.as_str())
+                            .map(|si| &si.type_params)
+                    });
+                if let Some(tps) = type_params {
+                    for (tp, ta) in tps.iter().zip(type_args.iter()) {
+                        extra.insert(tp.clone(), ta.clone());
+                    }
                 }
             }
+            Type::Struct(name) | Type::Enum(name) => {
+                if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(name, c) {
+                    let type_params = c
+                        .type_ctx
+                        .enums
+                        .get(base.as_str())
+                        .map(|ei| &ei.type_params)
+                        .or_else(|| {
+                            c.type_ctx
+                                .structs
+                                .get(base.as_str())
+                                .map(|si| &si.type_params)
+                        });
+                    if let Some(tps) = type_params {
+                        for (tp, ta) in tps.iter().zip(type_args.iter()) {
+                            extra.insert(tp.clone(), ta.clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
         if extra.is_empty() {
             None
@@ -813,13 +841,19 @@ fn compile_spawn<'ctx>(
         .build_int_cast(state_size, c.context.i64_type(), "state_size")
         .unwrap();
 
-    let run_fn_name = format!("{type_name}_run");
+    let mangled_state = c.mangled_name_for_struct_type(struct_type).ok_or_else(|| {
+        format!("could not resolve mangled struct name for spawn state (receiver `{type_name}`)")
+    })?;
+    if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&mangled_state, c) {
+        c.monomorphize_impl_method(&base, "run", &type_args)?;
+    }
+    let run_fn_name = format!("{mangled_state}_run");
     let run_fn = c
         .module
         .get_function(&run_fn_name)
         .ok_or_else(|| format!("undefined run function: {run_fn_name}"))?;
 
-    let wrapper_name = format!("__spawn_{type_name}");
+    let wrapper_name = format!("__spawn_{mangled_state}");
     let wrapper = if let Some(existing) = c.module.get_function(&wrapper_name) {
         existing
     } else {
@@ -877,26 +911,53 @@ fn compile_spawn<'ctx>(
         .ok_or("expo_rt_spawn did not return a value")?
         .into_int_value();
 
-    let process_args = c
-        .type_ctx
-        .protocol_impls
-        .get(&type_name)
-        .and_then(|impls| {
-            impls
-                .iter()
-                .find(|(proto, _)| proto == "Process")
-                .map(|(_, args)| args.clone())
-        })
-        .ok_or_else(|| format!("`{type_name}` does not implement Process"))?;
-
-    let msg_type = process_args
-        .get(1)
-        .cloned()
-        .unwrap_or(Type::Primitive(Primitive::String));
-    let reply_type = process_args
-        .get(2)
-        .cloned()
-        .unwrap_or(Type::Primitive(Primitive::String));
+    // `protocol_impls` stores generic `Process<…, M, R>` args; for `spawn Task.new(…)`
+    // the state is monomorphized (e.g. `Task_$Int$`) so we must substitute `R` → `Int`
+    // when building `Ref<M, R>` — same idea as `resolve_process_envelope_type`.
+    let (msg_type, reply_type) = if let Some((base, type_args)) =
+        crate::generics::try_parse_mangled_name(&mangled_state, c)
+    {
+        let impls = c
+            .type_ctx
+            .protocol_impls
+            .get(&base)
+            .ok_or_else(|| format!("`{base}` does not implement Process"))?;
+        let (_, proto_args) = impls
+            .iter()
+            .find(|(proto, _)| proto == "Process")
+            .ok_or_else(|| format!("`{base}` does not implement Process"))?;
+        let si = c
+            .type_ctx
+            .structs
+            .get(&base)
+            .ok_or_else(|| format!("no struct `{base}` for Process impl"))?;
+        let subst = build_substitution(&si.type_params, &type_args);
+        let default_m_r = Type::Primitive(Primitive::String);
+        let m = substitute(proto_args.get(1).unwrap_or(&default_m_r), &subst);
+        let r = substitute(proto_args.get(2).unwrap_or(&default_m_r), &subst);
+        (m, r)
+    } else {
+        let process_args = c
+            .type_ctx
+            .protocol_impls
+            .get(&type_name)
+            .and_then(|impls| {
+                impls
+                    .iter()
+                    .find(|(proto, _)| proto == "Process")
+                    .map(|(_, args)| args.clone())
+            })
+            .ok_or_else(|| format!("`{type_name}` does not implement Process"))?;
+        let m = process_args
+            .get(1)
+            .cloned()
+            .unwrap_or(Type::Primitive(Primitive::String));
+        let r = process_args
+            .get(2)
+            .cloned()
+            .unwrap_or(Type::Primitive(Primitive::String));
+        (m, r)
+    };
 
     let type_args = vec![msg_type, reply_type];
     let mangled = mangle_name("Ref", &type_args);

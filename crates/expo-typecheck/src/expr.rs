@@ -19,6 +19,7 @@ use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_
 use crate::stmt::check_body;
 use crate::types::{
     GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute, unify,
+    unwrap_indirect,
 };
 
 /// Infers the type of an expression, emitting diagnostics for any type errors
@@ -405,9 +406,26 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             }
 
             let msg_type = args[1].clone();
-            let reply_type = args[2].clone();
+            let reply_type_template = args[2].clone();
 
-            infer_expr(inner, ctx, ce);
+            let inner_ty = infer_expr(inner, ctx, ce);
+
+            let reply_type = match &inner_ty {
+                Type::GenericInstance {
+                    base, type_args, ..
+                } if *base == target && type_args.len() == 1 => type_args[0].clone(),
+                Type::Struct(name) => {
+                    if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx)
+                        && base == target
+                        && type_args.len() == 1
+                    {
+                        type_args[0].clone()
+                    } else {
+                        reply_type_template.clone()
+                    }
+                }
+                _ => reply_type_template.clone(),
+            };
 
             Type::GenericInstance {
                 base: "Ref".to_string(),
@@ -664,6 +682,41 @@ fn infer_call(
     }
 }
 
+/// Whether an argument type should drive generic parameter unification.
+/// [`Type::is_known`] is false for [`Type::GenericInstance`], but concrete
+/// instances like `Ref<(), Int>` must still unify with `Ref<(), R>` to bind `R`.
+fn arg_ty_participates_in_unification(ty: &Type) -> bool {
+    !matches!(unwrap_indirect(ty), Type::Unknown | Type::Error)
+}
+
+/// If `ty` is a monomorphized struct name (`Ref_$unit.Int$`), expand to [`Type::GenericInstance`]
+/// so it unifies with generic signatures that still use [`Type::GenericInstance`].
+fn expand_mangled_generic_type(ty: &Type, ctx: &TypeContext) -> Type {
+    let ty = match ty {
+        Type::Indirect(inner) => inner.as_ref(),
+        other => other,
+    };
+    match ty {
+        Type::Struct(name) => {
+            if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
+                let kind = if ctx.structs.contains_key(&base) {
+                    GenericKind::Struct
+                } else {
+                    GenericKind::Enum
+                };
+                Type::GenericInstance {
+                    base,
+                    kind,
+                    type_args,
+                }
+            } else {
+                ty.clone()
+            }
+        }
+        _ => ty.clone(),
+    }
+}
+
 /// Infers the return type of a generic function call via type parameter unification.
 fn infer_generic_call(
     name: &str,
@@ -691,8 +744,9 @@ fn infer_generic_call(
     let mut subst = HashMap::new();
     for (i, arg) in args.iter().enumerate() {
         let arg_ty = infer_expr(&arg.value, ctx, ce);
+        let arg_ty = expand_mangled_generic_type(&arg_ty, ctx);
         let param_ty = &sig.params[i].ty;
-        if arg_ty.is_known() && !unify(param_ty, &arg_ty, &mut subst) {
+        if arg_ty_participates_in_unification(&arg_ty) && !unify(param_ty, &arg_ty, &mut subst) {
             ctx.error(
                 format!(
                     "argument `{}`: type `{}` conflicts with previous binding for type parameter",

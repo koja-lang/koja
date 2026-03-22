@@ -9,7 +9,9 @@ use expo_typecheck::types::{GenericKind, Type};
 use inkwell::types::BasicType;
 use inkwell::values::FunctionValue;
 
-use crate::compiler::{Compiler, llvm_field_byte_size, type_byte_size};
+use crate::compiler::{
+    Compiler, llvm_field_byte_size, resolve_process_envelope_type, type_byte_size,
+};
 use crate::expr::compile_expr;
 use crate::stmt::{apply_coercion, compile_statement};
 use crate::types::to_llvm_type;
@@ -205,9 +207,17 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
+        // `to_llvm_type` returns `None` for `Unit` and other ZSTs, but we must keep one
+        // LLVM field per logical field so GEP indices match `mono_struct_info` (e.g.
+        // `Pair<Unit, T>.second` is index 1, not 0 when `first` is Unit).
         let field_llvm_types: Vec<_> = concrete_fields
             .iter()
-            .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
+            .map(|(_, ty)| {
+                to_llvm_type(ty, self.context, &self.struct_types).unwrap_or_else(|| {
+                    // Placeholder for ZST / missing LLVM mapping; keeps field indices aligned.
+                    self.context.i8_type().into()
+                })
+            })
             .collect();
         st.set_body(&field_llvm_types, false);
 
@@ -288,20 +298,28 @@ impl<'ctx> Compiler<'ctx> {
                     variant_payloads.push((vname.clone(), None));
                 }
                 VariantData::Tuple(types) => {
-                    let field_llvm: Vec<_> = types
+                    let mut field_llvm: Vec<_> = types
                         .iter()
                         .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
                         .collect();
+                    // ZST tuple fields (e.g. `()`) map to no LLVM type; keep a placeholder so
+                    // the tagged enum always has a tag + payload field layout (see `get_payload_ptr`).
+                    if field_llvm.is_empty() && !types.is_empty() {
+                        field_llvm.push(self.context.i8_type().into());
+                    }
                     let payload = self.context.struct_type(&field_llvm, true);
                     let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                     max_payload_size = max_payload_size.max(size);
                     variant_payloads.push((vname.clone(), Some(payload)));
                 }
                 VariantData::Struct(fields) => {
-                    let field_llvm: Vec<_> = fields
+                    let mut field_llvm: Vec<_> = fields
                         .iter()
                         .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
                         .collect();
+                    if field_llvm.is_empty() && !fields.is_empty() {
+                        field_llvm.push(self.context.i8_type().into());
+                    }
                     let payload = self.context.struct_type(&field_llvm, true);
                     let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                     max_payload_size = max_payload_size.max(size);
@@ -513,9 +531,10 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         for ty in &param_types {
-            if let Some(lt) = to_llvm_type(ty, self.context, &self.struct_types) {
-                llvm_param_types.push(lt.into());
-            }
+            let lt = to_llvm_type(ty, self.context, &self.struct_types).ok_or_else(|| {
+                format!("no LLVM type for method parameter type `{ty:?}` in `{mangled_fn}`")
+            })?;
+            llvm_param_types.push(lt.into());
         }
 
         let fn_type = match to_llvm_type(&return_type, self.context, &self.struct_types) {
@@ -563,18 +582,28 @@ impl<'ctx> Compiler<'ctx> {
             if let Param::Regular { name: pname, .. } = param {
                 let ty = &param_types[type_idx];
                 type_idx += 1;
-                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.struct_types) {
-                    let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
-                    let param_val = fn_value.get_nth_param(param_idx).unwrap();
-                    self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables
-                        .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
-                    param_idx += 1;
-                }
+                let llvm_ty =
+                    to_llvm_type(ty, self.context, &self.struct_types).ok_or_else(|| {
+                        format!("no LLVM type for parameter `{pname}` of `{mangled_fn}` ({ty:?})")
+                    })?;
+                let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
+                let param_val = fn_value.get_nth_param(param_idx).unwrap();
+                self.builder.build_store(alloca, param_val).unwrap();
+                self.variables
+                    .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
+                param_idx += 1;
             }
         }
 
+        let saved_process_msg = self.process_msg_type.take();
+        self.process_msg_type = resolve_process_envelope_type(self, &mangled_type);
+        if let Some(env_type) = self.process_msg_type.clone() {
+            self.ensure_types_exist(&env_type)?;
+        }
+
         self.compile_function_body(&func_ast.body, &return_type, fn_value, false)?;
+
+        self.process_msg_type = saved_process_msg;
 
         self.variables = saved_vars;
         self.type_subst = saved_subst;
@@ -695,9 +724,10 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         for ty in &param_types {
-            if let Some(lt) = to_llvm_type(ty, self.context, &self.struct_types) {
-                llvm_param_types.push(lt.into());
-            }
+            let lt = to_llvm_type(ty, self.context, &self.struct_types).ok_or_else(|| {
+                format!("no LLVM type for method parameter type `{ty:?}` in `{mangled_fn}`")
+            })?;
+            llvm_param_types.push(lt.into());
         }
 
         let fn_type = match to_llvm_type(&return_type, self.context, &self.struct_types) {
@@ -745,18 +775,28 @@ impl<'ctx> Compiler<'ctx> {
             if let Param::Regular { name: pname, .. } = param {
                 let ty = &param_types[type_idx];
                 type_idx += 1;
-                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.struct_types) {
-                    let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
-                    let param_val = fn_value.get_nth_param(param_idx).unwrap();
-                    self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables
-                        .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
-                    param_idx += 1;
-                }
+                let llvm_ty =
+                    to_llvm_type(ty, self.context, &self.struct_types).ok_or_else(|| {
+                        format!("no LLVM type for parameter `{pname}` of `{mangled_fn}` ({ty:?})")
+                    })?;
+                let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
+                let param_val = fn_value.get_nth_param(param_idx).unwrap();
+                self.builder.build_store(alloca, param_val).unwrap();
+                self.variables
+                    .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
+                param_idx += 1;
             }
         }
 
+        let saved_process_msg = self.process_msg_type.take();
+        self.process_msg_type = resolve_process_envelope_type(self, &mangled_type);
+        if let Some(env_type) = self.process_msg_type.clone() {
+            self.ensure_types_exist(&env_type)?;
+        }
+
         self.compile_function_body(&func_ast.body, &return_type, fn_value, false)?;
+
+        self.process_msg_type = saved_process_msg;
 
         self.variables = saved_vars;
         self.type_subst = saved_subst;

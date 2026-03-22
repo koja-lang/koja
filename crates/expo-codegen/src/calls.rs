@@ -2,15 +2,66 @@
 //! dispatch including type inference and monomorphization triggers.
 
 use expo_ast::ast::Arg;
-use expo_typecheck::types::{Type, mangle_name};
+use expo_typecheck::types::{Type, mangle_name, unwrap_indirect};
 use inkwell::types::BasicType;
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, StructValue};
 
 use crate::compiler::Compiler;
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::stmt::infer_type_from_llvm;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
+
+/// Invokes a closure fat pointer (fn ptr + env ptr struct) with the given signature.
+pub fn invoke_closure_fat_ptr<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fat_ptr: StructValue<'ctx>,
+    params: &[Type],
+    return_type: &Type,
+    args: &[Arg],
+    function: FunctionValue<'ctx>,
+    label: &str,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+    let fn_ptr = c
+        .builder
+        .build_extract_value(fat_ptr, 0, &format!("{label}_fn_ptr"))
+        .unwrap()
+        .into_pointer_value();
+    let env_ptr = c
+        .builder
+        .build_extract_value(fat_ptr, 1, &format!("{label}_env_ptr"))
+        .unwrap();
+
+    let mut llvm_call_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
+    for p in params {
+        if let Some(lt) = to_llvm_type(p, c.context, &c.struct_types) {
+            llvm_call_params.push(lt.into());
+        }
+    }
+    let fn_type = match to_llvm_type(return_type, c.context, &c.struct_types) {
+        Some(ret) => ret.fn_type(&llvm_call_params, false),
+        None => c.context.void_type().fn_type(&llvm_call_params, false),
+    };
+
+    let mut compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![env_ptr.into()];
+    for (i, arg) in args.iter().enumerate() {
+        let val = if i < params.len() {
+            compile_expr_coerced(c, &arg.value, &params[i], function)?
+        } else {
+            compile_expr(c, &arg.value, function)?
+        }
+        .ok_or_else(|| format!("argument to {label} produced no value"))?;
+        compiled_args.push(val.into());
+    }
+
+    let call_val = c
+        .builder
+        .build_indirect_call(fn_type, fn_ptr, &compiled_args, &format!("call_{label}"))
+        .unwrap();
+
+    Ok(call_val.try_as_basic_value().left())
+}
 
 /// Compiles a function call by name. Handles struct constructors, builtins
 /// (`print`), direct function calls, and indirect calls through function
@@ -57,15 +108,15 @@ pub fn compile_call<'ctx>(
                     .unwrap();
 
                 Ok(result.try_as_basic_value().left())
-            } else if let Some((
-                var_ptr,
-                Type::Function {
+            } else if let Some((var_ptr, raw_ty, _)) = c.variables.get(name).cloned() {
+                let ty = unwrap_indirect(&raw_ty);
+                let Type::Function {
                     params,
                     return_type,
-                },
-                _,
-            )) = c.variables.get(name).cloned()
-            {
+                } = ty.clone()
+                else {
+                    return Err(format!("undefined function: {name}"));
+                };
                 let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
                 let closure_struct_ty = c
                     .context
@@ -77,47 +128,15 @@ pub fn compile_call<'ctx>(
                     .unwrap()
                     .into_struct_value();
 
-                let fn_ptr = c
-                    .builder
-                    .build_extract_value(fat_ptr, 0, "fn_ptr")
-                    .unwrap()
-                    .into_pointer_value();
-                let env_ptr = c
-                    .builder
-                    .build_extract_value(fat_ptr, 1, "env_ptr")
-                    .unwrap();
-
-                // Build fn type with env_ptr as first param
-                let mut llvm_call_params: Vec<inkwell::types::BasicMetadataTypeEnum> =
-                    vec![ptr_ty.into()];
-                for ty in &params {
-                    if let Some(lt) = to_llvm_type(ty, c.context, &c.struct_types) {
-                        llvm_call_params.push(lt.into());
-                    }
-                }
-                let fn_type = match to_llvm_type(&return_type, c.context, &c.struct_types) {
-                    Some(ret) => ret.fn_type(&llvm_call_params, false),
-                    None => c.context.void_type().fn_type(&llvm_call_params, false),
-                };
-
-                let mut compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-                    vec![env_ptr.into()];
-                for (i, arg) in args.iter().enumerate() {
-                    let val = if i < params.len() {
-                        compile_expr_coerced(c, &arg.value, &params[i], function)?
-                    } else {
-                        compile_expr(c, &arg.value, function)?
-                    }
-                    .ok_or_else(|| format!("argument to {name} produced no value"))?;
-                    compiled_args.push(val.into());
-                }
-
-                let call_val = c
-                    .builder
-                    .build_indirect_call(fn_type, fn_ptr, &compiled_args, &format!("call_{name}"))
-                    .unwrap();
-
-                Ok(call_val.try_as_basic_value().left())
+                invoke_closure_fat_ptr(
+                    c,
+                    fat_ptr,
+                    &params,
+                    return_type.as_ref(),
+                    args,
+                    function,
+                    name,
+                )
             } else if c.generic_fn_asts.contains_key(name) {
                 compile_generic_call(c, name, args, function)
             } else {

@@ -4,7 +4,7 @@
 use crate::drop::Ownership;
 use expo_ast::ast::{CondArm, Expr, FieldPattern, Literal, MatchArm, Pattern, Statement};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{Type, mangle_type, resolve_type_expr, unwrap_indirect};
+use expo_typecheck::types::{Type, mangle_type, unwrap_indirect};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -664,41 +664,7 @@ fn infer_subject_type<'ctx>(
     {
         return ty.clone();
     }
-    if val.is_int_value() {
-        match val.into_int_value().get_type().get_bit_width() {
-            1 => Type::Primitive(expo_typecheck::types::Primitive::Bool),
-            32 => Type::Primitive(expo_typecheck::types::Primitive::I32),
-            64 => Type::Primitive(expo_typecheck::types::Primitive::I64),
-            _ => Type::Unknown,
-        }
-    } else if val.is_struct_value() {
-        let st = val.into_struct_value().get_type();
-        if let Some(name) = st.get_name() {
-            let name_str = name.to_str().unwrap_or("");
-            if c.type_ctx.enums.contains_key(name_str) {
-                return Type::Enum(name_str.to_string());
-            }
-            if c.type_ctx.structs.contains_key(name_str) {
-                return Type::Struct(name_str.to_string());
-            }
-            if c.mono_enum_variants.contains_key(name_str) {
-                return Type::Enum(name_str.to_string());
-            }
-            if c.mono_struct_info.contains_key(name_str) {
-                return Type::Struct(name_str.to_string());
-            }
-            for ty in c.type_ctx.type_aliases.values() {
-                if let Type::Union(_) = ty
-                    && mangle_type(ty) == name_str
-                {
-                    return ty.clone();
-                }
-            }
-        }
-        Type::Unknown
-    } else {
-        Type::Unknown
-    }
+    crate::stmt::infer_type_from_llvm(c, val)
 }
 
 /// Recursively compiles a match pattern into a boolean condition. As a side
@@ -717,7 +683,7 @@ pub(crate) fn compile_pattern<'ctx>(
 
         Pattern::Binding { name, .. } => {
             let llvm_ty = to_llvm_type(subject_type, c.context, &c.struct_types)
-                .ok_or("cannot load subject of unsupported type in pattern")?;
+                .unwrap_or_else(|| c.context.i8_type().into());
             let val = c.builder.build_load(llvm_ty, subject_ptr, name).unwrap();
             let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
             c.builder.build_store(alloca, val).unwrap();
@@ -742,7 +708,7 @@ pub(crate) fn compile_pattern<'ctx>(
         Pattern::EnumUnit {
             type_path, variant, ..
         } => {
-            let enum_name = enum_name_from_path(type_path, subject_type)?;
+            let enum_name = enum_name_from_path(c, type_path, subject_type)?;
             compile_tag_check(c, subject_ptr, &enum_name, variant)
         }
 
@@ -752,7 +718,7 @@ pub(crate) fn compile_pattern<'ctx>(
             elements,
             ..
         } => {
-            let enum_name = enum_name_from_path(type_path, subject_type)?;
+            let enum_name = enum_name_from_path(c, type_path, subject_type)?;
             let mut result = compile_tag_check(c, subject_ptr, &enum_name, variant)?;
             let (payload_type, payload_ptr) = get_payload_ptr(c, subject_ptr, &enum_name, variant)?;
             let field_types = get_tuple_variant_types(c, &enum_name, variant)?;
@@ -774,7 +740,7 @@ pub(crate) fn compile_pattern<'ctx>(
             fields,
             ..
         } => {
-            let enum_name = enum_name_from_path(type_path, subject_type)?;
+            let enum_name = enum_name_from_path(c, type_path, subject_type)?;
             let mut result = compile_tag_check(c, subject_ptr, &enum_name, variant)?;
             let (payload_type, payload_ptr) = get_payload_ptr(c, subject_ptr, &enum_name, variant)?;
             let expected_fields = get_struct_variant_fields(c, &enum_name, variant)?;
@@ -821,11 +787,10 @@ pub(crate) fn compile_pattern<'ctx>(
         Pattern::TypedBinding {
             name, type_expr, ..
         } => {
-            let struct_names: Vec<String> = c.type_ctx.structs.keys().cloned().collect();
-            let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-            let enum_names: Vec<String> = c.type_ctx.enums.keys().cloned().collect();
-            let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
-            let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+            // Use the compiler resolver so `type_subst` applies (e.g. `R` → `Int` inside
+            // monomorphized `Task_$Int$_run`); otherwise pattern types stay generic and
+            // never match the concrete mailbox `subject_type`, tripping the broken union path.
+            let resolved = c.resolve_type_expr(type_expr);
 
             if mangle_type(&resolved) == mangle_type(unwrap_indirect(subject_type)) {
                 let llvm_ty =
@@ -976,8 +941,10 @@ fn compile_tuple_elements<'ctx>(
     for (i, sub_pat) in elements.iter().enumerate() {
         let field_type = &field_types[i];
         let inner_ty = unwrap_indirect(field_type);
+        // Align with monomorphized enum payloads: ZST fields use an i8 placeholder when
+        // `to_llvm_type` is `None` (e.g. `()`), so LLVM layout and pattern loads stay in sync.
         let inner_llvm_ty = to_llvm_type(inner_ty, c.context, &c.struct_types)
-            .ok_or("unsupported field type in enum variant")?;
+            .unwrap_or_else(|| c.context.i8_type().into());
         let field_ptr = c
             .builder
             .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("tp{i}"))
@@ -998,7 +965,11 @@ fn compile_tuple_elements<'ctx>(
     Ok(result)
 }
 
-fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<String, String> {
+fn enum_name_from_path<'ctx>(
+    c: &Compiler<'ctx>,
+    type_path: &[String],
+    subject_type: &Type,
+) -> Result<String, String> {
     let ty = unwrap_indirect(subject_type);
     match ty {
         Type::GenericInstance {
@@ -1009,7 +980,39 @@ fn enum_name_from_path(type_path: &[String], subject_type: &Type) -> Result<Stri
         } => Ok(expo_typecheck::types::mangle_name(base, type_args)),
         Type::Enum(name) => Ok(name.clone()),
         Type::Union(_) => Ok(mangle_type(ty)),
-        _ if !type_path.is_empty() => Ok(type_path.join(".")),
+        // Monomorphized enum subjects are `Type::Struct("Option_$Int$")` after substitution.
+        Type::Struct(name) => {
+            if let Some((base, _)) = crate::generics::try_parse_mangled_name(name, c)
+                && c.type_ctx.enums.contains_key(&base)
+            {
+                Ok(name.clone())
+            } else if !type_path.is_empty() {
+                let joined = type_path.join(".");
+                if c.struct_types.contains_key(&joined)
+                    || c.mono_enum_variants.contains_key(&joined)
+                {
+                    Ok(joined)
+                } else {
+                    Err(format!(
+                        "cannot resolve enum name from pattern `{joined}` for match subject type `{}`",
+                        subject_type.display()
+                    ))
+                }
+            } else {
+                Err("cannot determine enum name for pattern".to_string())
+            }
+        }
+        _ if !type_path.is_empty() => {
+            let joined = type_path.join(".");
+            if c.struct_types.contains_key(&joined) || c.mono_enum_variants.contains_key(&joined) {
+                Ok(joined)
+            } else {
+                Err(format!(
+                    "cannot resolve enum name from pattern `{joined}` for match subject type `{}`",
+                    subject_type.display()
+                ))
+            }
+        }
         _ => Err("cannot determine enum name for pattern".to_string()),
     }
 }
@@ -1019,6 +1022,7 @@ fn find_constructor_enum<'ctx>(
     variant_name: &str,
     subject_type: &Type,
 ) -> Result<String, String> {
+    let subject_type = unwrap_indirect(subject_type);
     if let Type::GenericInstance {
         base,
         type_args,
@@ -1029,6 +1033,14 @@ fn find_constructor_enum<'ctx>(
         return Ok(expo_typecheck::types::mangle_name(base, type_args));
     }
     if let Type::Enum(name) = subject_type {
+        return Ok(name.clone());
+    }
+    // Monomorphized enum: subject is `Type::Struct("Option_$Int$")`, not GenericInstance.
+    // Prefer the mangled LLVM name so layout/variant tables match `struct_types`.
+    if let Type::Struct(name) = subject_type
+        && let Some((base, _)) = crate::generics::try_parse_mangled_name(name, c)
+        && c.type_ctx.enums.contains_key(&base)
+    {
         return Ok(name.clone());
     }
     if let Type::Union(members) = subject_type {

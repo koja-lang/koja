@@ -9,6 +9,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 use crate::compiler::Compiler;
 use crate::drop::Ownership;
 use crate::expr::compile_expr;
+use crate::structs::infer_static_method_return_type;
 use crate::types::to_llvm_type;
 
 /// Compiles a single statement (assignment, return, break, or compound
@@ -33,28 +34,59 @@ pub fn compile_statement<'ctx>(
             let mut saved_subst = None;
             if let Some(te) = type_annotation {
                 let annotated = c.resolve_type_expr(te);
-                if let Type::GenericInstance {
-                    base, type_args, ..
-                } = &annotated
-                {
-                    let type_params = c
-                        .type_ctx
-                        .structs
-                        .get(base.as_str())
-                        .map(|si| si.type_params.clone())
-                        .or_else(|| {
-                            c.type_ctx
-                                .enums
-                                .get(base.as_str())
-                                .map(|ei| ei.type_params.clone())
-                        });
-                    if let Some(tp) = type_params {
-                        saved_subst = Some(c.type_subst.clone());
-                        for (param, arg) in tp.iter().zip(type_args.iter()) {
-                            let concrete = expo_typecheck::types::substitute(arg, &c.type_subst);
-                            c.type_subst.insert(param.clone(), concrete);
+                // `resolve_type_expr` runs `substitute`, which lowers fully-instantiated
+                // `GenericInstance` (e.g. `List<Int>`) to `Struct("List_$Int$")`. Static calls
+                // like `List.new()` still need struct type params in `type_subst`, so handle
+                // mangled names as well as `GenericInstance`.
+                match &annotated {
+                    Type::GenericInstance {
+                        base, type_args, ..
+                    } => {
+                        let type_params = c
+                            .type_ctx
+                            .structs
+                            .get(base.as_str())
+                            .map(|si| si.type_params.clone())
+                            .or_else(|| {
+                                c.type_ctx
+                                    .enums
+                                    .get(base.as_str())
+                                    .map(|ei| ei.type_params.clone())
+                            });
+                        if let Some(tp) = type_params {
+                            saved_subst = Some(c.type_subst.clone());
+                            for (param, arg) in tp.iter().zip(type_args.iter()) {
+                                let concrete =
+                                    expo_typecheck::types::substitute(arg, &c.type_subst);
+                                c.type_subst.insert(param.clone(), concrete);
+                            }
                         }
                     }
+                    Type::Struct(name) | Type::Enum(name) => {
+                        if let Some((base, type_args)) =
+                            crate::generics::try_parse_mangled_name(name, c)
+                        {
+                            let type_params = c
+                                .type_ctx
+                                .structs
+                                .get(&base)
+                                .map(|si| si.type_params.clone())
+                                .or_else(|| {
+                                    c.type_ctx.enums.get(&base).map(|ei| ei.type_params.clone())
+                                });
+                            if let Some(tp) = type_params
+                                && tp.len() == type_args.len()
+                            {
+                                saved_subst = Some(c.type_subst.clone());
+                                for (param, arg) in tp.iter().zip(type_args.iter()) {
+                                    let concrete =
+                                        expo_typecheck::types::substitute(arg, &c.type_subst);
+                                    c.type_subst.insert(param.clone(), concrete);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
 
@@ -287,6 +319,22 @@ fn compile_field_assignment<'ctx>(
 /// `Some(Type::Function{..})` for closures so the variable is stored with the
 /// correct callable type rather than being misidentified as a string pointer.
 fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
+    if let Expr::MethodCall {
+        receiver,
+        method,
+        args,
+        ..
+    } = expr
+        && let Expr::Ident {
+            name: type_name, ..
+        } = receiver.as_ref()
+    {
+        let is_type_name =
+            c.type_ctx.structs.contains_key(type_name) || c.type_ctx.enums.contains_key(type_name);
+        if is_type_name {
+            return infer_static_method_return_type(c, type_name, method, args);
+        }
+    }
     if let Expr::Closure {
         params,
         return_type,
@@ -414,6 +462,35 @@ fn parse_mangled_enum_type(mangled: &str, c: &Compiler) -> Option<Type> {
     }
 }
 
+fn expo_type_from_mangled_llvm_struct_name(c: &Compiler, name_str: &str) -> Option<Type> {
+    if c.type_ctx.structs.contains_key(name_str) {
+        return Some(Type::Struct(name_str.to_string()));
+    }
+    if c.mono_struct_info.contains_key(name_str) {
+        if let Some(gi) = try_parse_mangled_generic(name_str, c) {
+            return Some(gi);
+        }
+        return Some(Type::Struct(name_str.to_string()));
+    }
+    if c.type_ctx.enums.contains_key(name_str) {
+        return Some(Type::Enum(name_str.to_string()));
+    }
+    if c.mono_enum_variants.contains_key(name_str) {
+        if let Some(gi) = parse_mangled_enum_type(name_str, c) {
+            return Some(gi);
+        }
+        return Some(Type::Enum(name_str.to_string()));
+    }
+    for ty in c.type_ctx.type_aliases.values() {
+        if let Type::Union(_) = ty
+            && mangle_type(ty) == name_str
+        {
+            return Some(ty.clone());
+        }
+    }
+    None
+}
+
 /// Reconstructs an Expo type from an LLVM value by inspecting bit widths and
 /// struct names. Used when assigning to a new variable without a type annotation.
 pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) -> Type {
@@ -430,34 +507,21 @@ pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>
         }
     } else if val.is_float_value() {
         Type::Primitive(Primitive::F64)
-    } else if val.is_pointer_value() {
-        Type::Primitive(Primitive::String)
     } else if val.is_struct_value() {
         let sv = val.into_struct_value();
         let st = sv.get_type();
         if let Some(name) = st.get_name()
             && let Ok(name_str) = name.to_str()
+            && let Some(ty) = expo_type_from_mangled_llvm_struct_name(c, name_str)
         {
-            if c.type_ctx.structs.contains_key(name_str) {
-                return Type::Struct(name_str.to_string());
-            }
-            if c.mono_struct_info.contains_key(name_str) {
-                if let Some(gi) = try_parse_mangled_generic(name_str, c) {
-                    return gi;
-                }
-                return Type::Struct(name_str.to_string());
-            }
-            if c.type_ctx.enums.contains_key(name_str) {
-                return Type::Enum(name_str.to_string());
-            }
-            if c.mono_enum_variants.contains_key(name_str) {
-                if let Some(gi) = parse_mangled_enum_type(name_str, c) {
-                    return gi;
-                }
-                return Type::Enum(name_str.to_string());
-            }
+            return ty;
         }
         Type::Unknown
+    } else if val.is_pointer_value() {
+        // LLVM opaque pointers do not expose a pointee struct type; heap strings and
+        // other pointers both look like `ptr`. Call sites that need a precise type
+        // should get it from `infer_type_from_expr` instead of LLVM inspection.
+        Type::Primitive(Primitive::String)
     } else {
         Type::Unknown
     }
@@ -541,17 +605,30 @@ fn convert_list_literal_if_needed<'ctx>(
     list_val: BasicValueEnum<'ctx>,
     target_type: &Type,
 ) -> Result<BasicValueEnum<'ctx>, String> {
+    // TODO: refactor — resolve_type_expr collapses GenericInstance to mangled
+    // Struct/Enum names, so we must handle both forms here. A cleaner approach
+    // would be to keep GenericInstance until the point of use.
     let (base, type_args) = match target_type {
         Type::GenericInstance {
             base, type_args, ..
-        } if base != "List" => (base.as_str(), type_args),
+        } if base != "List" => (base.clone(), type_args.clone()),
+        Type::Struct(name) | Type::Enum(name) => {
+            if let Some((b, ta)) = crate::generics::try_parse_mangled_name(name, c) {
+                if b == "List" {
+                    return Ok(list_val);
+                }
+                (b, ta)
+            } else {
+                return Ok(list_val);
+            }
+        }
         _ => return Ok(list_val),
     };
 
-    let target_mangled = mangle_name(base, type_args);
+    let target_mangled = mangle_name(&base, &type_args);
     let from_list_fn_name = format!("{target_mangled}_from_list");
     if !c.functions.contains_key(&from_list_fn_name) {
-        c.monomorphize_impl_method(base, "from_list", type_args)?;
+        c.monomorphize_impl_method(&base, "from_list", &type_args)?;
     }
     let from_list_fn = *c
         .functions

@@ -17,7 +17,7 @@ use expo_ast::ast::{
     Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, TypeExpr,
 };
 use expo_typecheck::context::{TypeContext, VariantData};
-use expo_typecheck::types::{Type, mangle_type};
+use expo_typecheck::types::{Type, mangle_type, substitute};
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -91,6 +91,14 @@ impl<'ctx> Compiler<'ctx> {
             fn_ref_thunks: HashMap::new(),
             return_type_hint: None,
         }
+    }
+
+    /// Maps an LLVM struct type back to the Expo mangled name (e.g. `Task_$Int$`).
+    pub fn mangled_name_for_struct_type(&self, st: StructType<'ctx>) -> Option<String> {
+        self.struct_types
+            .iter()
+            .find(|(_, registered)| **registered == st)
+            .map(|(name, _)| name.clone())
     }
 
     /// Returns true if the current basic block already has a terminator
@@ -250,13 +258,14 @@ impl<'ctx> Compiler<'ctx> {
         let struct_names: Vec<&str> = self.type_ctx.structs.keys().map(|s| s.as_str()).collect();
         let enum_names: Vec<&str> = self.type_ctx.enums.keys().map(|s| s.as_str()).collect();
         let type_params: Vec<&str> = self.type_subst.keys().map(|s| s.as_str()).collect();
-        expo_typecheck::types::resolve_type_expr_with_params(
+        let ty = expo_typecheck::types::resolve_type_expr_with_params(
             type_expr,
             &struct_names,
             &enum_names,
             &type_params,
             &self.type_ctx.type_aliases,
-        )
+        );
+        substitute(&ty, &self.type_subst)
     }
 
     fn declare_builtins(&mut self) {
@@ -632,16 +641,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let saved_process_msg = self.process_msg_type.take();
         if let Some(target) = self_type_name {
-            self.process_msg_type = self.type_ctx.protocol_impls.get(target).and_then(|impls| {
-                impls
-                    .iter()
-                    .find(|(proto, _)| proto == "Process")
-                    .and_then(|(_, args)| {
-                        let m = args.get(1)?;
-                        let r = args.get(2)?;
-                        Some(expo_typecheck::types::process_envelope_type(m, r))
-                    })
-            });
+            self.process_msg_type = resolve_process_envelope_type(self, target);
             if let Some(env_type) = self.process_msg_type.clone() {
                 let _ = self.ensure_types_exist(&env_type);
             }
@@ -745,22 +745,28 @@ impl<'ctx> Compiler<'ctx> {
                         variant_payloads.push((variant.name.clone(), None));
                     }
                     VariantData::Tuple(types) => {
-                        let field_llvm: Vec<_> = types
+                        let mut field_llvm: Vec<_> = types
                             .iter()
                             .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
                             .collect();
+                        if field_llvm.is_empty() && !types.is_empty() {
+                            field_llvm.push(self.context.i8_type().into());
+                        }
                         let payload = self.context.struct_type(&field_llvm, true);
                         let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                         max_payload_size = max_payload_size.max(size);
                         variant_payloads.push((variant.name.clone(), Some(payload)));
                     }
                     VariantData::Struct(fields) => {
-                        let field_llvm: Vec<_> = fields
+                        let mut field_llvm: Vec<_> = fields
                             .iter()
                             .filter_map(|(_, ty)| {
                                 to_llvm_type(ty, self.context, &self.struct_types)
                             })
                             .collect();
+                        if field_llvm.is_empty() && !fields.is_empty() {
+                            field_llvm.push(self.context.i8_type().into());
+                        }
                         let payload = self.context.struct_type(&field_llvm, true);
                         let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                         max_payload_size = max_payload_size.max(size);
@@ -1045,6 +1051,33 @@ pub(crate) fn type_byte_size(ty: &Type) -> u32 {
         Type::Function { .. } => 16,
         _ => 8,
     }
+}
+
+/// Resolves the mailbox message type `Pair<M, Option<ReplyTo<R>>>` for `receive`
+/// when compiling a `Process` impl method. Uses an exact `protocol_impls` key
+/// (e.g. `Task`) or, for monomorphized impls, the base type name plus substitution
+/// from the mangled self type (e.g. `Task_$Int$`).
+pub(crate) fn resolve_process_envelope_type<'ctx>(
+    c: &Compiler<'ctx>,
+    target: &str,
+) -> Option<Type> {
+    if let Some(impls) = c.type_ctx.protocol_impls.get(target)
+        && let Some((_, args)) = impls.iter().find(|(proto, _)| proto == "Process")
+    {
+        let m = args.get(1)?;
+        let r = args.get(2)?;
+        return Some(expo_typecheck::types::process_envelope_type(m, r));
+    }
+    if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(target, c) {
+        let impls = c.type_ctx.protocol_impls.get(&base)?;
+        let (_, proto_args) = impls.iter().find(|(proto, _)| proto == "Process")?;
+        let si = c.type_ctx.structs.get(&base)?;
+        let subst = expo_typecheck::types::build_substitution(&si.type_params, &type_args);
+        let m = expo_typecheck::types::substitute(proto_args.get(1)?, &subst);
+        let r = expo_typecheck::types::substitute(proto_args.get(2)?, &subst);
+        return Some(expo_typecheck::types::process_envelope_type(&m, &r));
+    }
+    None
 }
 
 /// Recursively collects all `Type::Union` variants reachable from `ty`.

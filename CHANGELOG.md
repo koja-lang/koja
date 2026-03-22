@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Task<R>` async work** -- `Task.async(fn () -> R)` runs a closure in a spawned process and returns `Ref<(), R>`. `Task.await` waits for the result with a timeout and returns `Option<R>`. Implemented in `std.kernel` on top of `Process` / `Ref` / `call` (no new language primitive). Example: `expo/tests/lang/task.expo`.
 - Cooperative process runtime -- processes block properly on `receive` and resume when a message arrives. Supports aarch64 (Apple Silicon, Linux ARM), x86_64 (Linux, macOS), and x86_64 Windows.
 - `Ref.call` -- synchronous request/reply. `ref.call(msg, timeout_ms)` sends a message, waits for the reply, and returns `Option<R>` (`Some` on reply, `None` on timeout).
 - `Ref.cast` -- fire-and-forget message send. `ref.cast(msg)` sends a message and returns immediately.
@@ -38,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Monomorphized `Process` impl methods (`T_$args$_run`, etc.) now resolve the mailbox envelope type the same way as top-level functions, so `receive` and typed patterns match `Pair<M, Option<ReplyTo<R>>>` with concrete `R`.
+- `Ref.call` with a `()` message or reply: codegen uses a stable `i8` placeholder at the LLVM ABI where Expo `Unit` has no LLVM type; `()` arguments at call sites pass a zero `i8` for those parameters.
+- `spawn` + `Ref<M, R>`: when the spawned state type is monomorphized (e.g. `Task_$Int$`), `M` and `R` for the returned `Ref` are taken from the `Process` impl with type parameters substituted — not left as generic type variables from `protocol_impls`.
+- Generic struct literals (`Task{ work: config.work }`, etc.) infer type arguments using field-access types when needed; closure fat pointers alone are not enough for field unification.
+- Struct types with ZST fields (`Pair<Unit, T>`, etc.) keep LLVM field indices aligned with layout metadata by using a placeholder field where `Unit` has no native LLVM representation.
 - `Ref.call` now correctly delivers the `ReplyTo` handle to the process handler, and returns the reply value to the caller.
 - `receive` -- when the mailbox is empty and there is no `after` clause, the process blocks until a message arrives instead of crashing.
 - Clean exit -- when `main` finishes, the program exits immediately instead of reporting a false deadlock for background processes.

@@ -2,14 +2,17 @@
 //! generic), and method calls on struct instances.
 
 use expo_ast::ast::{ClosureParam, Expr};
-use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute, unwrap_indirect};
+use expo_typecheck::types::{
+    GenericKind, Type, build_substitution, mangle_name, substitute, unify, unwrap_indirect,
+};
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 
-use crate::calls::compile_call;
+use crate::calls::{compile_call, invoke_closure_fat_ptr};
 use crate::compiler::Compiler;
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::try_parse_mangled_name;
+use crate::stmt::infer_type_from_llvm;
 use crate::types::to_llvm_type;
 
 /// Loads a value from `field_ptr`. When `field_type` is [`Type::Indirect`],
@@ -35,7 +38,7 @@ pub(crate) fn load_maybe_indirect<'ctx>(
             .unwrap()
     } else {
         let llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
-            .expect("field type must have LLVM representation");
+            .unwrap_or_else(|| c.context.i8_type().into());
         c.builder.build_load(llvm_ty, field_ptr, label).unwrap()
     }
 }
@@ -203,6 +206,37 @@ pub fn compile_method_call<'ctx>(
 
     let struct_name = resolve_struct_name(c, receiver, &recv_val)?;
 
+    let base = try_parse_mangled_name(&struct_name, c)
+        .map(|(b, _)| b)
+        .unwrap_or_else(|| struct_name.clone());
+    let has_impl_method = c
+        .type_ctx
+        .structs
+        .get(&base)
+        .and_then(|si| si.methods.get(method))
+        .is_some();
+    if !has_impl_method && let Some(field_ty) = c.get_field_type(&struct_name, method) {
+        let inner = unwrap_indirect(&field_ty);
+        if let Type::Function {
+            params,
+            return_type,
+        } = inner.clone()
+        {
+            let field_val = compile_field_access(c, receiver, method, function)?
+                .ok_or_else(|| format!("field `{method}` produced no value"))?;
+            let fat = field_val.into_struct_value();
+            return invoke_closure_fat_ptr(
+                c,
+                fat,
+                &params,
+                return_type.as_ref(),
+                args,
+                function,
+                &format!("field_{method}"),
+            );
+        }
+    }
+
     let mut mangled = format!("{}_{}", struct_name, method);
 
     if let Some((base, type_args)) = try_parse_mangled_name(&struct_name, c) {
@@ -261,11 +295,19 @@ pub fn compile_method_call<'ctx>(
 
     for (i, arg) in args.iter().enumerate() {
         let val = if i < method_param_types.len() {
-            compile_expr_coerced(c, &arg.value, &method_param_types[i], function)?
+            let expected = &method_param_types[i];
+            if matches!(expected, Type::Unit) {
+                // Ref.call<Unit, R> and similar use an i8 placeholder at the LLVM ABI
+                // (see process.rs); `()` has no value from compile_expr.
+                c.context.i8_type().const_int(0, false).into()
+            } else {
+                compile_expr_coerced(c, &arg.value, expected, function)?
+                    .ok_or_else(|| "method argument produced no value".to_string())?
+            }
         } else {
             compile_expr(c, &arg.value, function)?
-        }
-        .ok_or_else(|| "method argument produced no value".to_string())?;
+                .ok_or_else(|| "method argument produced no value".to_string())?
+        };
         llvm_args.push(val.into());
     }
 
@@ -328,7 +370,7 @@ fn infer_method_type_args(
         if i >= substituted_params.len() {
             break;
         }
-        let arg_type = infer_arg_expo_type(c, &arg.value);
+        let arg_type = expand_mangled_arg_type(c, &infer_arg_expo_type(c, &arg.value));
         if arg_type != Type::Unknown {
             expo_typecheck::types::unify(&substituted_params[i], &arg_type, &mut method_subst);
         }
@@ -339,6 +381,119 @@ fn infer_method_type_args(
         .iter()
         .map(|tp| method_subst.get(tp).cloned().unwrap_or(Type::Unknown))
         .collect())
+}
+
+/// Expands a mangled monomorphized name (e.g. `Ref_$unit.Int$`) to [`Type::GenericInstance`]
+/// so it can unify with generic method signatures.
+fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
+    match ty {
+        Type::Indirect(inner) => Type::Indirect(Box::new(expand_mangled_arg_type(c, inner))),
+        Type::Struct(name) | Type::Enum(name) => {
+            if let Some((base, type_args)) = try_parse_mangled_name(name, c) {
+                let kind = if c.type_ctx.enums.contains_key(&base)
+                    || c.type_ctx.generic_enum_asts.contains_key(&base)
+                {
+                    GenericKind::Enum
+                } else {
+                    GenericKind::Struct
+                };
+                Type::GenericInstance {
+                    base,
+                    kind,
+                    type_args,
+                }
+            } else {
+                ty.clone()
+            }
+        }
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            let expanded_params: Vec<Type> = params
+                .iter()
+                .map(|p| expand_mangled_arg_type(c, p))
+                .collect();
+            let expanded_ret = expand_mangled_arg_type(c, return_type);
+            Type::Function {
+                params: expanded_params,
+                return_type: Box::new(expanded_ret),
+            }
+        }
+        _ => ty.clone(),
+    }
+}
+
+fn infer_static_struct_type_args_from_args(
+    c: &Compiler,
+    type_name: &str,
+    method: &str,
+    args: &[expo_ast::ast::Arg],
+    type_params: &[String],
+) -> Result<Vec<Type>, String> {
+    if type_params.is_empty() {
+        return Ok(vec![]);
+    }
+    let methods = c
+        .type_ctx
+        .structs
+        .get(type_name)
+        .map(|si| &si.methods)
+        .or_else(|| c.type_ctx.enums.get(type_name).map(|ei| &ei.methods))
+        .ok_or_else(|| format!("unknown type `{type_name}`"))?;
+    let sig = methods
+        .get(method)
+        .ok_or_else(|| format!("no method `{method}` on `{type_name}`"))?;
+    let mut subst = std::collections::HashMap::new();
+    for (i, arg) in args.iter().enumerate() {
+        if i >= sig.params.len() {
+            break;
+        }
+        let arg_ty = expand_mangled_arg_type(c, &infer_arg_expo_type(c, &arg.value));
+        if arg_ty != Type::Unknown && !unify(&sig.params[i].ty, &arg_ty, &mut subst) {
+            return Err(format!(
+                "argument `{}` to `{type_name}.{method}` does not match expected type",
+                sig.params[i].name
+            ));
+        }
+    }
+    type_params
+        .iter()
+        .map(|tp| {
+            subst.get(tp).cloned().ok_or_else(|| {
+                format!("cannot infer type parameter `{tp}` for `{type_name}.{method}`")
+            })
+        })
+        .collect()
+}
+
+/// Infers the return type of a static struct/enum method call (e.g. `Task.async(...)`) for
+/// codegen variable typing when there is no annotation.
+pub fn infer_static_method_return_type(
+    c: &Compiler,
+    type_name: &str,
+    method: &str,
+    args: &[expo_ast::ast::Arg],
+) -> Option<Type> {
+    let (methods, type_params) = c
+        .type_ctx
+        .structs
+        .get(type_name)
+        .map(|si| (&si.methods, &si.type_params))
+        .or_else(|| {
+            c.type_ctx
+                .enums
+                .get(type_name)
+                .map(|ei| (&ei.methods, &ei.type_params))
+        })?;
+    let sig = methods.get(method)?;
+    if type_params.is_empty() {
+        return Some(sig.return_type.clone());
+    }
+    let inferred =
+        infer_static_struct_type_args_from_args(c, type_name, method, args, type_params).ok()?;
+    let subst = build_substitution(type_params, &inferred);
+    Some(substitute(&sig.return_type, &subst))
 }
 
 fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
@@ -457,6 +612,36 @@ pub fn compile_struct_construction<'ctx>(
     Ok(Some(struct_val))
 }
 
+/// For generic struct literals, infer the field expression type for unification.
+/// Handles `config.work` and similar when `infer_type_from_llvm` cannot see through closures.
+fn concrete_type_for_field_init<'ctx>(
+    c: &Compiler<'ctx>,
+    expr: &Expr,
+    field_val: &BasicValueEnum<'ctx>,
+) -> Type {
+    match expr {
+        Expr::Ident { name, .. } => c
+            .variables
+            .get(name)
+            .map(|(_, ty, _)| ty.clone())
+            .unwrap_or_else(|| infer_type_from_llvm(c, field_val)),
+        Expr::FieldAccess {
+            receiver, field, ..
+        } => {
+            if let Expr::Ident { name, .. } = receiver.as_ref()
+                && let Some((_, recv_ty, _)) = c.variables.get(name)
+                && let Some(sn) = struct_name_from_type(recv_ty)
+                && let Some(ft) = c.get_field_type(&sn, field)
+            {
+                substitute(&ft, &c.type_subst)
+            } else {
+                infer_type_from_llvm(c, field_val)
+            }
+        }
+        _ => infer_type_from_llvm(c, field_val),
+    }
+}
+
 fn compile_generic_struct_construction<'ctx>(
     c: &mut Compiler<'ctx>,
     struct_name: &str,
@@ -464,8 +649,6 @@ fn compile_generic_struct_construction<'ctx>(
     fields: &[expo_ast::ast::FieldInit],
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    use crate::stmt::infer_type_from_llvm;
-
     let mut compiled_fields: Vec<(String, BasicValueEnum<'ctx>)> = Vec::new();
     for field_init in fields {
         let val = compile_expr(c, &field_init.value, function)?
@@ -476,13 +659,7 @@ fn compile_generic_struct_construction<'ctx>(
     let mut subst = std::collections::HashMap::new();
     for (i, (field_init_name, field_val)) in compiled_fields.iter().enumerate() {
         if let Some((_, field_ty)) = info.fields.iter().find(|(n, _)| n == field_init_name) {
-            let concrete = if let expo_ast::ast::Expr::Ident { name, .. } = &fields[i].value
-                && let Some((_, var_ty, _)) = c.variables.get(name)
-            {
-                var_ty.clone()
-            } else {
-                infer_type_from_llvm(c, field_val)
-            };
+            let concrete = concrete_type_for_field_init(c, &fields[i].value, field_val);
             if !expo_typecheck::types::unify(field_ty, &concrete, &mut subst) {
                 return Err(format!(
                     "type mismatch for field `{field_init_name}` in generic struct `{struct_name}`"
@@ -588,7 +765,7 @@ fn compile_static_call<'ctx>(
         .map(|si| &si.type_params)
         .or_else(|| c.type_ctx.enums.get(type_name).map(|ei| &ei.type_params));
 
-    let type_args: Vec<Type> = if let Some(tp) = type_params
+    let mut type_args: Vec<Type> = if let Some(tp) = type_params
         && !tp.is_empty()
     {
         tp.iter()
@@ -597,6 +774,13 @@ fn compile_static_call<'ctx>(
     } else {
         Vec::new()
     };
+
+    if let Some(tp) = type_params
+        && !tp.is_empty()
+        && type_args.len() != tp.len()
+    {
+        type_args = infer_static_struct_type_args_from_args(c, type_name, method, args, tp)?;
+    }
 
     let mangled_type = if type_args.is_empty() {
         type_name.to_string()

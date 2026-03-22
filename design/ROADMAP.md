@@ -54,6 +54,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `print` builtin
 - `panic` builtin (prints to stderr, aborts)
 - Lightweight processes -- structs implement `Process<C, M, R>` protocol. `spawn T.new(config)` creates a process and returns `Ref<M, R>`. `receive` blocks for messages with optional `after timeout` clause. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime` cooperative scheduler.
+- **`Task<R>`** -- `Task.async(fn () -> R)` / `Task.await` for one-off async work on top of processes (`Ref<(), R>` + `call`); see `std.kernel` and `tests/lang/task.expo`.
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
@@ -122,11 +123,11 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 
 ```
 Track A:  A1 (binary/bitstring) → A2 (string-as-UTF8) → A3 (project.expo + test runner) → A4 (lexer port)
-Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task)
+Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
           B4 (scheduler/IO) -- independent, anytime
 ```
 
-No dependencies between tracks. B1 and B2 are complete. B3 (Task) builds on existing process infrastructure. B4 can slot in anywhere.
+No dependencies between tracks. B1, B2, and B3 are complete. B4 can slot in anywhere.
 
 ### Track A: Language surface
 
@@ -171,7 +172,7 @@ Write the Expo lexer in Expo, compiled by the Rust bootstrap. Validate by compar
 
 ### Track B: Runtime maturity
 
-The foundation for Expo's concurrency promise. B1-B3 form a dependency chain. B4 is fully independent and can be tackled at any time.
+The foundation for Expo's concurrency promise. B1–B3 form a dependency chain (all complete). B4 is fully independent and can be tackled at any time.
 
 #### B1. Union types -- done
 
@@ -200,16 +201,16 @@ Replaces the old `Process<M>` handle struct and caller-side annotations. Process
   - **Implemented**: parser (`after` as receive-only stop token, not leaked into `match`/`cond`), type checker (timeout expression + body), codegen (calls `expo_rt_receive_timeout`, branches on null for timeout path), formatter, LSP traverse (patterns + guards in receive arms), grammar updated.
 - **Done when**: a struct implementing `Process<C, M, R>` can be spawned, receive messages via `cast`/`call` with typed `Ref<M, R>`, and the default `run` loop works via default protocol impl. ✓ Complete -- default `run` works with pair envelope, `cast` and `call` codegen implemented end-to-end. `call` untested pending a proper runtime scheduler with blocking `receive`.
 
-#### B3. Task (kernel struct)
+#### B3. Task (kernel struct) -- done
 
-One-off async work using the existing process infrastructure. `Task` is a kernel struct implementing `Process`, not a new primitive.
+One-off async work using the existing process infrastructure. `Task` is a stdlib struct implementing `Process`, not a new language primitive.
 
-- **`Task.async(fn() -> R)`** -- spawns a one-off closure in a new process, returns `TaskHandle<R>`.
-- **`TaskHandle<R>.await()`** -- blocks until the task finishes, returns the result.
-- Under the hood, `Task` implements `Process<fn() -> R, (), ()>`, overrides `run` to run the closure and exit (no receive loop).
+- **`Task.async(fun: fn() -> R) -> Ref<(), R>`** -- spawns `Task.new(Task{work: fun})`, returns a typed `Ref` to the task process.
+- **`Task.await(move reference: Ref<(), R>) -> Option<R>`** -- synchronous wait via `reference.call((), timeout_ms)` (timeout is fixed in the current stdlib impl).
+- **`Task<R>`** implements `Process<Task<R>, (), R>` (config type is the same as process state) -- `run` executes the closure, `receive`s a `Pair<(), Option<ReplyTo<R>>>`, and replies with the result. `handle` is a no-op for the unit message.
 - Fire-and-forget: call `Task.async` without awaiting.
-- No new language features required -- uses existing `Process<C, M, R>` protocol, `spawn`, `Ref<M, R>`, and `receive`.
-- **Done when**: `Task.async` + `.await()` works for one-off async work
+- No new surface syntax -- uses `Process`, `spawn`, `Ref`, `call`, `receive`, and `match` only.
+- **Done when**: `Task.async` + `Task.await` work for one-off async work ✓ (`tests/lang/task.expo`).
 
 #### B4. Multi-threaded scheduler + I/O (independent)
 

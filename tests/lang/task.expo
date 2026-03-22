@@ -1,0 +1,13 @@
+fn main
+  t = Task.async(fn () -> Int
+    42
+  end)
+  r = Task.await(t)
+  match r
+    Option.Some(v) ->
+      print(v)
+
+    Option.None ->
+      print("timeout")
+  end
+end

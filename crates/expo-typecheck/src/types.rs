@@ -305,6 +305,9 @@ pub fn resolve_type_expr_with_params(
             }
         }
         TypeExpr::Tuple { elements, .. } => {
+            if elements.is_empty() {
+                return Type::Unit;
+            }
             let types: Vec<Type> = elements
                 .iter()
                 .map(|e| {
@@ -451,6 +454,9 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
         | (Type::GenericInstance { base, .. }, Type::Struct(name))
         | (Type::Struct(name), Type::GenericInstance { base, .. }) => base == name,
         (Type::Union(a), Type::Union(b)) => a == b,
+        (Type::Tuple(a), Type::Tuple(b)) if a.len() == b.len() => {
+            a.iter().zip(b.iter()).all(|(x, y)| unify(x, y, subst))
+        }
         (Type::Unit, Type::Unit) => true,
         (Type::Unknown, _) | (_, Type::Unknown) => true,
         _ => false,

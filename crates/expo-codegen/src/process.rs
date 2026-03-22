@@ -229,9 +229,14 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("Ref.call requires R type argument")?;
             let is_msg_string = matches!(msg_type, Type::Primitive(Primitive::String));
             let is_reply_string = matches!(reply_type, Type::Primitive(Primitive::String));
+            let is_msg_unit = matches!(msg_type, Type::Unit);
+            let is_reply_unit = matches!(reply_type, Type::Unit);
 
             let msg_llvm = if is_msg_string {
                 c.context.ptr_type(AddressSpace::default()).into()
+            } else if is_msg_unit {
+                // ZST message; i8 placeholder matches Pair<Unit,_> envelope field layout.
+                c.context.i8_type().into()
             } else {
                 to_llvm_type(msg_type, c.context, &c.struct_types)
                     .ok_or_else(|| format!("no LLVM type for call message `{msg_type:?}`"))?
@@ -241,6 +246,8 @@ pub fn emit_ref_method<'ctx>(
 
             let reply_llvm = if is_reply_string {
                 c.context.ptr_type(AddressSpace::default()).into()
+            } else if is_reply_unit {
+                c.context.i8_type().into()
             } else {
                 to_llvm_type(reply_type, c.context, &c.struct_types)
                     .ok_or_else(|| format!("no LLVM type for reply `{reply_type:?}`"))?
