@@ -1,0 +1,65 @@
+fn main
+  # Simple literal matching
+  data = <<0x01, 0x02, 0x03>>
+  match data
+    <<0x01, 0x02, 0x03>> -> print("exact match")
+    _ -> print("no match")
+  end
+
+  # Variable binding
+  packet = <<0xAB, 0x00, 0x10>>
+  match packet
+    <<tag::8, length::16>> -> print(tag)
+    _ -> print("no match")
+  end
+
+  # Multi-arm dispatch by first byte
+  msg1 = <<0x01, 0xFF>>
+  match msg1
+    <<0x02, _::8>> -> print("type 2")
+    <<0x01, val::8>> -> print(val)
+    _ -> print("unknown")
+  end
+
+  # Greedy rest capture
+  stream = <<0xAA, 0xBB, 0xCC, 0xDD>>
+  match stream
+    <<header::8, rest: Binary>> ->
+      print(header)
+      match rest
+        <<0xBB, 0xCC, 0xDD>> -> print("rest ok")
+        _ -> print("rest wrong")
+      end
+    _ -> print("no match")
+  end
+
+  # Little-endian extraction
+  le_data = <<0x02, 0x01>>
+  match le_data
+    <<val::16 little>> -> print(val)
+    _ -> print("no match")
+  end
+
+  # Discard segments
+  frame = <<0x00, 0x00, 0x00, 0x42>>
+  match frame
+    <<_::24, payload::8>> -> print(payload)
+    _ -> print("no match")
+  end
+
+  # Length check (too short, falls through)
+  short = <<0x01>>
+  match short
+    <<_::8, _::8, _::8>> -> print("should not match")
+    _ -> print("too short")
+  end
+
+  # Empty binary matches empty pattern
+  empty: Binary = <<>>
+  match empty
+    <<>> -> print("empty ok")
+    _ -> print("not empty")
+  end
+
+  print("all binary match tests passed")
+end

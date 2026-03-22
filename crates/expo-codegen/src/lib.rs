@@ -1,3 +1,4 @@
+mod binary;
 mod calls;
 mod compiler;
 mod control;

@@ -2,6 +2,7 @@
 //! lowering for all pattern variants (bindings, literals, enum variants, typed
 //! bindings, constructors).
 
+use crate::binary::patterns::compile_binary_pattern;
 use crate::drop::Ownership;
 use expo_ast::ast::{Expr, FieldPattern, Literal, MatchArm, Pattern};
 use expo_typecheck::context::VariantData;
@@ -288,8 +289,8 @@ pub(crate) fn compile_pattern<'ctx>(
         }
 
         Pattern::List { .. } => Err("list patterns not yet supported in compilation".to_string()),
-        Pattern::Binary { .. } => {
-            Err("binary patterns not yet supported in compilation".to_string())
+        Pattern::Binary { segments, .. } => {
+            compile_binary_pattern(c, segments, subject_ptr, function)
         }
     }
 }

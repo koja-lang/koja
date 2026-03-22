@@ -123,7 +123,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 
 ```
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
-          → A1d (codegen: pattern matching) → A1e (concat + bitwise)
+          → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise)
           → A2a (type conversion) → A2b (string stdlib) → A2c (ranges + OR patterns)
           → A3 (project.expo + test runner) → A4 (lexer port)
 
@@ -168,14 +168,17 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 - Ownership tracking (`Owned` for `BinaryLiteral`) and scope-drop freeing at `ptr - 8`
 - **Done**: byte-aligned binary construction compiles to LLVM IR with proper allocation and cleanup
 
-##### A1d. Codegen: binary pattern matching
+##### A1d. Codegen: binary pattern matching -- done
 
 - Emit LLVM IR for binary patterns in `match` arms
-- Single length check per arm (total fixed-size prefix computed at compile time)
-- Segment extraction via shifts and masks
-- Greedy rest capture (`rest: Binary`, `rest: Bits`)
+- Single length check per arm: `EQ` for fixed-size patterns, `UGE` for patterns with greedy rest
+- Segment extraction via byte loads, shifts, and masks (inverse of A1c packing)
+- Greedy rest capture (`rest: Binary`, `rest: Bits`): `malloc` + `memcpy` with length prefix, bound as `Owned`
+- Literal matching: extracted values compared with `icmp eq`, `and`-chained into overall condition
+- Variable binding: extracted values stored in alloca, inserted into scope with inferred type and `Unowned`
+- Float segments: bitcast from integer to `f32`/`f64` for `: Float32` / `: Float64` bindings
 - Integration with existing `compile_match` in `expo-codegen/src/control/patterns.rs`
-- **Done when**: HTTP/2 frame parsing example from `BITSTRINGS.md` compiles and runs correctly
+- **Done**: binary pattern matching compiles to LLVM IR with lang tests for literal matching, variable extraction, greedy rest, multi-arm dispatch, endianness, and discard segments
 
 ##### A1e. Concatenation + Bitwise protocol
 
@@ -690,7 +693,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, A1d codegen patterns, A1e concat+bitwise, A2a type conversion, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, A1e concat+bitwise, A2a type conversion, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |
