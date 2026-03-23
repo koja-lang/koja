@@ -124,7 +124,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 ```
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
           → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise) ✓
-          → A2a (type conversion) ✓ → A2b (string stdlib) → A2c (ranges + OR patterns)
+          → A2a (type conversion) ✓ → A2b (string stdlib) → A2c (OR patterns) → A2d (ranges)
           → A3 (project.expo + test runner) → A4 (lexer port)
 
 Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
@@ -213,15 +213,21 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 - Parsing: `to_int()`, `to_float()`
 - **Done when**: string-heavy programs compile and work (character iteration, splitting, searching, classification)
 
-##### A2c. Ranges + OR patterns
+##### A2c. OR patterns
+
+- OR patterns (`|`) in match arms -- multiple patterns sharing one arm body
+- Same-binding constraint: all alternatives must bind the same set of variables with compatible types
+- New AST variant: `Pattern::Or`
+- **Done when**: `match x 1 | 2 | 3 -> "small" ...` compiles and runs
+
+##### A2d. Ranges
 
 - `..` range operator (always inclusive on both ends)
-- Range expressions for iteration (`for i in 1..10`, `for c in "a".."z"`)
-- Range patterns in match (`"a".."z"`, `0..255`)
+- Range patterns in match (`0..255`, `"a".."z"`) -- `Pattern::Range` AST node, codegen as `>= start && <= end`
+- `Range` struct in `std.kernel` implementing `Enumeration<Int>` with `length()` and `get()` -- existing `for` loop codegen + LLVM inlining handles efficient iteration
+- `1..10` as expression sugar for `Range{start: 1, stop: 10}`
 - String ranges ordered by codepoint value, endpoints must be single-codepoint string literals
-- OR patterns (`|`) in match arms -- multiple patterns for one arm, same-binding constraint
-- New AST variants: `Pattern::Or`, `Pattern::Range`
-- **Done when**: lexer-style match with `"a".."z" | "A".."Z" | "_" -> ...` compiles and runs
+- **Done when**: `for i in 1..10` iterates, `match c "a".."z" -> ...` compiles and runs, lexer-style `"a".."z" | "A".."Z" | "_" -> ...` works (combined with A2c)
 
 #### A3. Project system + test runner
 
@@ -697,7 +703,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, A2b string stdlib, A2c ranges+OR patterns, A3 project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, A2b string stdlib, A2c OR patterns, A2d ranges, A3 project system, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |

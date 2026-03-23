@@ -415,6 +415,44 @@ impl<'ctx> Compiler<'ctx> {
                 .add_function("expo_utf8_validate", utf8_validate_type, None);
         self.functions
             .insert("expo_utf8_validate".to_string(), utf8_validate);
+
+        let string_length_type = i64_type.fn_type(&[i8_ptr_type.into()], false);
+        let string_length =
+            self.module
+                .add_function("expo_string_length", string_length_type, None);
+        self.functions
+            .insert("expo_string_length".to_string(), string_length);
+
+        let string_get_type = i8_ptr_type.fn_type(&[i8_ptr_type.into(), i64_type.into()], false);
+        let string_get = self
+            .module
+            .add_function("expo_string_get", string_get_type, None);
+        self.functions
+            .insert("expo_string_get".to_string(), string_get);
+
+        let string_slice_type = i8_ptr_type.fn_type(
+            &[i8_ptr_type.into(), i64_type.into(), i64_type.into()],
+            false,
+        );
+        let string_slice = self
+            .module
+            .add_function("expo_string_slice", string_slice_type, None);
+        self.functions
+            .insert("expo_string_slice".to_string(), string_slice);
+
+        let int_parse_type = i64_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into()], false);
+        let int_parse = self
+            .module
+            .add_function("expo_int_parse", int_parse_type, None);
+        self.functions
+            .insert("expo_int_parse".to_string(), int_parse);
+
+        let float_parse_type = i64_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into()], false);
+        let float_parse = self
+            .module
+            .add_function("expo_float_parse", float_parse_type, None);
+        self.functions
+            .insert("expo_float_parse".to_string(), float_parse);
     }
 
     fn declare_function(

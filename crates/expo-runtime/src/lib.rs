@@ -271,6 +271,138 @@ pub unsafe extern "C" fn expo_utf8_validate(ptr: *const u8, len: u64) -> i64 {
 }
 
 // ---------------------------------------------------------------------------
+// String intrinsics
+// ---------------------------------------------------------------------------
+
+/// Returns the number of Unicode scalar values (codepoints) in a NUL-terminated
+/// UTF-8 string.
+///
+/// # Safety
+/// `ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_string_length(ptr: *const u8) -> i64 {
+    let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const i8) };
+    let s = std::str::from_utf8(s.to_bytes()).unwrap();
+    s.chars().count() as i64
+}
+
+/// Returns a newly allocated NUL-terminated string containing the single
+/// character at the given codepoint index. Panics if `index` is out of bounds.
+///
+/// The returned pointer uses the standard `[i64 bit_length][payload...][NUL]`
+/// layout: it points to the start of `payload`.
+///
+/// # Safety
+/// `ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_string_get(ptr: *const u8, index: i64) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const i8) };
+    let s = std::str::from_utf8(s.to_bytes()).unwrap();
+    let ch = s.chars().nth(index as usize).unwrap_or_else(|| {
+        eprintln!(
+            "panic: string index {} out of bounds (length {})",
+            index,
+            s.chars().count()
+        );
+        std::process::abort();
+    });
+    let mut buf = [0u8; 4];
+    let encoded = ch.encode_utf8(&mut buf);
+    let byte_len = encoded.len();
+    unsafe {
+        let layout = std::alloc::Layout::from_size_align(8 + byte_len + 1, 8).unwrap();
+        let base = std::alloc::alloc(layout);
+        let bit_len = (byte_len as i64) * 8;
+        std::ptr::copy_nonoverlapping(&bit_len as *const i64 as *const u8, base, 8);
+        let payload = base.add(8);
+        std::ptr::copy_nonoverlapping(encoded.as_ptr(), payload, byte_len);
+        *payload.add(byte_len) = 0;
+        payload
+    }
+}
+
+/// Returns a newly allocated substring spanning the inclusive codepoint range
+/// `[start, stop]`. Out-of-bounds endpoints are clamped.
+///
+/// # Safety
+/// `ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_string_slice(ptr: *const u8, start: i64, stop: i64) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const i8) };
+    let s = std::str::from_utf8(s.to_bytes()).unwrap();
+    let len = s.chars().count();
+
+    let start = (start as usize).min(len);
+    let stop = ((stop + 1) as usize).min(len);
+    let stop = stop.max(start);
+
+    let byte_start = s
+        .char_indices()
+        .nth(start)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let byte_end = if stop == len {
+        s.len()
+    } else {
+        s.char_indices()
+            .nth(stop)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len())
+    };
+    let slice = &s[byte_start..byte_end];
+    let byte_len = slice.len();
+
+    unsafe {
+        let layout = std::alloc::Layout::from_size_align(8 + byte_len + 1, 8).unwrap();
+        let base = std::alloc::alloc(layout);
+        let bit_len = (byte_len as i64) * 8;
+        std::ptr::copy_nonoverlapping(&bit_len as *const i64 as *const u8, base, 8);
+        let payload = base.add(8);
+        std::ptr::copy_nonoverlapping(slice.as_ptr(), payload, byte_len);
+        *payload.add(byte_len) = 0;
+        payload
+    }
+}
+
+/// Attempts to parse a NUL-terminated UTF-8 string as a 64-bit signed integer.
+/// On success, writes the parsed value to `*out` and returns 1. On failure,
+/// returns 0 and leaves `*out` unchanged.
+///
+/// # Safety
+/// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
+    let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const i8) };
+    let s = std::str::from_utf8(s.to_bytes()).unwrap();
+    match s.trim().parse::<i64>() {
+        Ok(v) => {
+            unsafe { *out = v };
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+/// Attempts to parse a NUL-terminated UTF-8 string as a 64-bit float.
+/// On success, writes the parsed value to `*out` and returns 1. On failure,
+/// returns 0 and leaves `*out` unchanged.
+///
+/// # Safety
+/// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_float_parse(ptr: *const u8, out: *mut f64) -> i64 {
+    let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const i8) };
+    let s = std::str::from_utf8(s.to_bytes()).unwrap();
+    match s.trim().parse::<f64>() {
+        Ok(v) => {
+            unsafe { *out = v };
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Scheduler loop
 // ---------------------------------------------------------------------------
 

@@ -190,8 +190,9 @@ pub fn compile_method_call<'ctx>(
     }
 
     if let Expr::Ident { name, .. } = receiver {
-        let is_type_name =
-            c.type_ctx.structs.contains_key(name) || c.type_ctx.enums.contains_key(name);
+        let is_type_name = c.type_ctx.structs.contains_key(name)
+            || c.type_ctx.enums.contains_key(name)
+            || c.type_ctx.primitive_methods.contains_key(name);
         if is_type_name {
             return compile_static_call(c, name, method, args, function);
         }

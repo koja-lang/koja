@@ -33,6 +33,14 @@ struct Pair<A, B>
   second: B
 end
 
+@doc """
+An inclusive range from `start` to `stop`. Both endpoints are included.
+"""
+struct Range
+  start: Int
+  stop: Int
+end
+
 impl Option<T>
   @doc """
   Applies `f` to the contained value if `Some`, returns `None` otherwise.
@@ -319,15 +327,6 @@ impl Equality for Int32
   end
 end
 
-impl Equality for String
-  @doc """
-  Returns `true` if both strings have the same content.
-  """
-  fn eq(self, other: String) -> Bool
-    panic("intrinsic")
-  end
-end
-
 impl Equality for UInt8
   @doc """
   Returns `true` if both 8-bit unsigned integers are equal.
@@ -411,15 +410,6 @@ end
 impl Hash for Int32
   @doc """
   Returns a hash of this 32-bit integer using SplitMix64.
-  """
-  fn hash(self) -> Int
-    panic("intrinsic")
-  end
-end
-
-impl Hash for String
-  @doc """
-  Returns a hash of the string content using FNV-1a.
   """
   fn hash(self) -> Int
     panic("intrinsic")
@@ -733,12 +723,22 @@ impl Process<Task<R>, (), R> for Task<R>
   end
 end
 
-impl String
+impl Int
   @doc """
-  Converts a `String` to `Binary`. This is a zero-cost widening conversion:
-  every valid UTF-8 string is also a valid byte sequence.
+  Parses a string as a 64-bit signed integer. Returns `Result.Ok(value)` on
+  success, or `Result.Err(message)` if the string is not a valid integer.
   """
-  fn to_binary(self) -> Binary
+  fn parse(input: String) -> Result<Int, String>
+    panic("intrinsic")
+  end
+end
+
+impl Float
+  @doc """
+  Parses a string as a 64-bit floating-point number. Returns `Result.Ok(value)`
+  on success, or `Result.Err(message)` if the string is not a valid float.
+  """
+  fn parse(input: String) -> Result<Float, String>
     panic("intrinsic")
   end
 end

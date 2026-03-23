@@ -251,6 +251,10 @@ fn resolve_enumerable_info<'ctx>(
                 ));
             }
         }
+        Type::Primitive(_) => {
+            let name = crate::hashtable::type_display_name(ty);
+            (name, Vec::new())
+        }
         _ => {
             return Err(format!(
                 "`for` requires an Enumeration type, found `{}`",
@@ -264,6 +268,7 @@ fn resolve_enumerable_info<'ctx>(
         .protocol_impls
         .get(&base)
         .ok_or_else(|| format!("`{}` does not implement the Enumeration protocol", base))?;
+
     if !protos.iter().any(|(p, _)| p == "Enumeration") {
         return Err(format!(
             "`{}` does not implement the Enumeration protocol",
@@ -271,17 +276,24 @@ fn resolve_enumerable_info<'ctx>(
         ));
     }
 
-    let struct_info = c
-        .type_ctx
-        .structs
-        .get(&base)
-        .ok_or_else(|| format!("no struct info for `{base}`"))?;
-    let get_sig = struct_info
-        .methods
-        .get("get")
-        .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
-    let subst = expo_typecheck::types::build_substitution(&struct_info.type_params, &type_args);
-    let elem_expo_ty = expo_typecheck::types::substitute(&get_sig.return_type, &subst);
+    let elem_expo_ty = if let Some(prim_methods) = c.type_ctx.primitive_methods.get(&base) {
+        let get_sig = prim_methods
+            .get("get")
+            .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
+        get_sig.return_type.clone()
+    } else {
+        let struct_info = c
+            .type_ctx
+            .structs
+            .get(&base)
+            .ok_or_else(|| format!("no struct info for `{base}`"))?;
+        let get_sig = struct_info
+            .methods
+            .get("get")
+            .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
+        let subst = expo_typecheck::types::build_substitution(&struct_info.type_params, &type_args);
+        expo_typecheck::types::substitute(&get_sig.return_type, &subst)
+    };
 
     let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.struct_types)
         .ok_or("cannot resolve element LLVM type")?;

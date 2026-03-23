@@ -1288,6 +1288,17 @@ fn infer_method_call(
                         None
                     }
                 })
+            })
+            .or_else(|| {
+                ctx.primitive_methods.get(type_name).and_then(|methods| {
+                    methods.get(method).and_then(|sig| {
+                        if sig.kind == FunctionKind::Static {
+                            Some((sig.clone(), Vec::new()))
+                        } else {
+                            None
+                        }
+                    })
+                })
             });
 
         if let Some((sig, type_params)) = static_sig_info {
@@ -1668,12 +1679,18 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
                 return None;
             }
         }
+        Type::Primitive(p) => (p.display().to_string(), Vec::new()),
         _ => return None,
     };
 
     let protos = ctx.protocol_impls.get(&base)?;
     if !protos.iter().any(|(p, _)| p == "Enumeration") {
         return None;
+    }
+
+    if let Some(prim_methods) = ctx.primitive_methods.get(&base) {
+        let get_sig = prim_methods.get("get")?;
+        return Some(get_sig.return_type.clone());
     }
 
     let struct_info = ctx.structs.get(&base)?;

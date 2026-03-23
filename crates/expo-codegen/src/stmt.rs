@@ -294,20 +294,33 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
         args,
         ..
     } = expr
-        && let Expr::Ident {
+    {
+        if let Expr::Ident {
             name: type_name, ..
         } = receiver.as_ref()
-    {
-        let is_type_name =
-            c.type_ctx.structs.contains_key(type_name) || c.type_ctx.enums.contains_key(type_name);
-        if is_type_name {
-            return infer_static_method_return_type(c, type_name, method, args);
+        {
+            let is_type_name = c.type_ctx.structs.contains_key(type_name)
+                || c.type_ctx.enums.contains_key(type_name)
+                || c.type_ctx.primitive_methods.contains_key(type_name);
+            if is_type_name {
+                return infer_static_method_return_type(c, type_name, method, args);
+            }
+
+            if let Some((_, recv_ty, _)) = c.variables.get(type_name)
+                && matches!(recv_ty, Type::Primitive(_))
+            {
+                let ret = infer_instance_method_return_type(c, recv_ty, method);
+                if ret.is_some() {
+                    return ret;
+                }
+            }
         }
 
-        if let Some((_, recv_ty, _)) = c.variables.get(type_name)
-            && matches!(recv_ty, Type::Primitive(_))
+        let recv_ty = infer_receiver_type(c, receiver);
+        if let Some(ref ty) = recv_ty
+            && matches!(ty, Type::Primitive(_))
         {
-            let ret = infer_instance_method_return_type(c, recv_ty, method);
+            let ret = infer_instance_method_return_type(c, ty, method);
             if ret.is_some() {
                 return ret;
             }
@@ -535,6 +548,40 @@ fn expo_type_from_mangled_llvm_struct_name(c: &Compiler, name_str: &str) -> Opti
         }
     }
     None
+}
+
+/// Infers the Expo type of a receiver expression without compiling it.
+fn infer_receiver_type(c: &Compiler, expr: &Expr) -> Option<Type> {
+    match expr {
+        Expr::String { .. } => Some(Type::Primitive(expo_typecheck::types::Primitive::String)),
+        Expr::Literal { value, .. } => {
+            use expo_ast::ast::Literal;
+            match value {
+                Literal::Int(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::I64)),
+                Literal::Float(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::F64)),
+                Literal::Bool(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::Bool)),
+                Literal::Unit => Some(Type::Unit),
+            }
+        }
+        Expr::Ident { name, .. } => c.variables.get(name).map(|(_, ty, _)| ty.clone()),
+        Expr::MethodCall {
+            receiver, method, ..
+        } => {
+            let recv_ty = infer_receiver_type(c, receiver)?;
+            infer_instance_method_return_type(c, &recv_ty, method)
+        }
+        Expr::Call { callee, .. } => {
+            if let Expr::Ident { name, .. } = callee.as_ref() {
+                c.type_ctx
+                    .functions
+                    .get(name)
+                    .map(|sig| sig.return_type.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Reconstructs an Expo type from an LLVM value by inspecting bit widths and

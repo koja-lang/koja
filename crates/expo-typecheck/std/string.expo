@@ -1,0 +1,63 @@
+@moduledoc """
+String methods: iteration, slicing, byte-level access, and type conversion.
+"""
+
+impl Equality for String
+  @doc """
+  Returns `true` if both strings have the same content.
+  """
+  fn eq(self, other: String) -> Bool
+    panic("intrinsic")
+  end
+end
+
+impl Hash for String
+  @doc """
+  Returns a hash of the string content using FNV-1a.
+  """
+  fn hash(self) -> Int
+    panic("intrinsic")
+  end
+end
+
+impl Enumeration<String> for String
+  @doc """
+  Returns the number of Unicode grapheme clusters (characters) in the string.
+  """
+  fn length(self) -> Int
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the single-character string at the given index. Panics if the
+  index is out of bounds.
+  """
+  fn get(self, index: Int) -> String
+    panic("intrinsic")
+  end
+end
+
+impl String
+  @doc """
+  Returns the number of bytes in the string's UTF-8 encoding.
+  """
+  fn byte_length(self) -> Int
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns a substring spanning the given inclusive range of character
+  indices. Clamps out-of-bounds endpoints to the string boundaries.
+  """
+  fn slice(self, range: Range) -> String
+    panic("intrinsic")
+  end
+
+  @doc """
+  Converts a `String` to `Binary`. This is a zero-cost widening conversion:
+  every valid UTF-8 string is also a valid byte sequence.
+  """
+  fn to_binary(self) -> Binary
+    panic("intrinsic")
+  end
+end

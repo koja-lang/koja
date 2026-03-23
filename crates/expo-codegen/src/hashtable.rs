@@ -27,6 +27,15 @@ const CONVERSION_INTRINSICS: &[&str] = &[
     "Bits_to_binary",
 ];
 
+const STRING_INTRINSICS: &[&str] = &[
+    "String_length",
+    "String_get",
+    "String_byte_length",
+    "String_slice",
+];
+
+const PARSE_INTRINSICS: &[&str] = &["Int_parse", "Float_parse"];
+
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     for prim in PRIMITIVE_TYPES {
         if mangled == format!("{prim}_hash") || mangled == format!("{prim}_eq") {
@@ -40,7 +49,13 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
             }
         }
     }
-    CONVERSION_INTRINSICS.contains(&mangled)
+    if CONVERSION_INTRINSICS.contains(&mangled)
+        || STRING_INTRINSICS.contains(&mangled)
+        || PARSE_INTRINSICS.contains(&mangled)
+    {
+        return true;
+    }
+    false
 }
 
 pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
@@ -51,6 +66,14 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
 
     if CONVERSION_INTRINSICS.contains(&mangled) {
         return emit_conversion_intrinsic(c, fn_val, mangled);
+    }
+
+    if STRING_INTRINSICS.contains(&mangled) {
+        return emit_string_intrinsic(c, fn_val, mangled);
+    }
+
+    if PARSE_INTRINSICS.contains(&mangled) {
+        return emit_parse_intrinsic(c, fn_val, mangled);
     }
 
     if let Some(type_name) = mangled.strip_suffix("_hash") {
@@ -711,6 +734,219 @@ fn build_result_err<'ctx>(
     c.builder
         .build_load(result_type, alloca, "err_val")
         .unwrap()
+}
+
+fn emit_string_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    mangled: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    match mangled {
+        "String_length" => {
+            let self_ptr = fn_val.get_nth_param(0).unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_string_length")
+                .ok_or("expo_string_length not declared")?;
+            let result = c
+                .builder
+                .build_call(rt_fn, &[self_ptr.into()], "len")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
+            c.builder.build_return(Some(&result)).unwrap();
+        }
+        "String_get" => {
+            let self_ptr = fn_val.get_nth_param(0).unwrap();
+            let index = fn_val.get_nth_param(1).unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_string_get")
+                .ok_or("expo_string_get not declared")?;
+            let result = c
+                .builder
+                .build_call(rt_fn, &[self_ptr.into(), index.into()], "ch")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
+            c.builder.build_return(Some(&result)).unwrap();
+        }
+        "String_byte_length" => {
+            let self_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
+            let i8_ty = c.context.i8_type();
+            let i64_ty = c.context.i64_type();
+            let neg8 = i64_ty.const_int((-8i64) as u64, true);
+            let hdr_ptr = unsafe {
+                c.builder
+                    .build_gep(i8_ty, self_ptr, &[neg8], "hdr")
+                    .unwrap()
+            };
+            let bit_length = c
+                .builder
+                .build_load(i64_ty, hdr_ptr, "bit_len")
+                .unwrap()
+                .into_int_value();
+            let byte_count = c
+                .builder
+                .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "bytes")
+                .unwrap();
+            c.builder.build_return(Some(&byte_count)).unwrap();
+        }
+        "String_slice" => {
+            let self_ptr = fn_val.get_nth_param(0).unwrap();
+            let range_val = fn_val.get_nth_param(1).unwrap().into_struct_value();
+            let start = c
+                .builder
+                .build_extract_value(range_val, 0, "start")
+                .unwrap();
+            let stop = c.builder.build_extract_value(range_val, 1, "stop").unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_string_slice")
+                .ok_or("expo_string_slice not declared")?;
+            let result = c
+                .builder
+                .build_call(
+                    rt_fn,
+                    &[self_ptr.into(), start.into(), stop.into()],
+                    "sliced",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
+            c.builder.build_return(Some(&result)).unwrap();
+        }
+        _ => return Err(format!("unknown string intrinsic: {mangled}")),
+    }
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
+}
+
+fn emit_parse_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    mangled: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    let input_ptr = fn_val.get_nth_param(0).unwrap();
+    let result_type = fn_val
+        .get_type()
+        .get_return_type()
+        .unwrap()
+        .into_struct_type();
+
+    match mangled {
+        "Int_parse" => {
+            let i64_ty = c.context.i64_type();
+            let out_alloca = c.builder.build_alloca(i64_ty, "out").unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_int_parse")
+                .ok_or("expo_int_parse not declared")?;
+            let ok = c
+                .builder
+                .build_call(rt_fn, &[input_ptr.into(), out_alloca.into()], "ok")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            let cond = c
+                .builder
+                .build_int_compare(IntPredicate::NE, ok, i64_ty.const_int(0, false), "parsed")
+                .unwrap();
+            c.builder
+                .build_conditional_branch(cond, ok_bb, err_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let parsed = c.builder.build_load(i64_ty, out_alloca, "val").unwrap();
+            let ok_result = build_result_ok(c, parsed, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_msg = c.create_string_global(b"invalid integer", "int_parse_err");
+            let err_result = build_result_err(c, err_msg.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Float_parse" => {
+            let i64_ty = c.context.i64_type();
+            let f64_ty = c.context.f64_type();
+            let out_alloca = c.builder.build_alloca(f64_ty, "out").unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_float_parse")
+                .ok_or("expo_float_parse not declared")?;
+            let ok = c
+                .builder
+                .build_call(rt_fn, &[input_ptr.into(), out_alloca.into()], "ok")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            let cond = c
+                .builder
+                .build_int_compare(IntPredicate::NE, ok, i64_ty.const_int(0, false), "parsed")
+                .unwrap();
+            c.builder
+                .build_conditional_branch(cond, ok_bb, err_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let parsed = c.builder.build_load(f64_ty, out_alloca, "val").unwrap();
+            let ok_result = build_result_ok(c, parsed, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_msg = c.create_string_global(b"invalid float", "float_parse_err");
+            let err_result = build_result_err(c, err_msg.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        _ => return Err(format!("unknown parse intrinsic: {mangled}")),
+    }
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
 }
 
 /// SplitMix64 finalizer: produces well-distributed hash from any i64 input.
