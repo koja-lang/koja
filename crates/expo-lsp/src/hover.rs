@@ -113,9 +113,9 @@ fn build_struct_hover(
     state: &DocumentState,
     stdlib_modules: &[Module],
 ) -> Option<String> {
-    let info = state.ctx.structs.get(name)?;
+    let info = state.ctx.types.get(name)?;
     let fields: Vec<String> = info
-        .fields
+        .fields()?
         .iter()
         .map(|(n, t)| format!("  {}: {}", n, t.display()))
         .collect();
@@ -141,9 +141,9 @@ fn build_enum_hover(
     state: &DocumentState,
     stdlib_modules: &[Module],
 ) -> Option<String> {
-    let info = state.ctx.enums.get(name)?;
+    let info = state.ctx.types.get(name)?;
     let variants: Vec<String> = info
-        .variants
+        .variants()?
         .iter()
         .map(|v| match &v.data {
             VariantData::Unit => format!("  {}", v.name),

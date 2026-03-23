@@ -276,22 +276,19 @@ fn resolve_enumerable_info<'ctx>(
         ));
     }
 
-    let elem_expo_ty = if let Some(prim_methods) = c.type_ctx.primitive_methods.get(&base) {
-        let get_sig = prim_methods
-            .get("get")
-            .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
+    let ti = c
+        .type_ctx
+        .types
+        .get(&base)
+        .ok_or_else(|| format!("no type info for `{base}`"))?;
+    let get_sig = ti
+        .functions
+        .get("get")
+        .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
+    let elem_expo_ty = if ti.type_params.is_empty() {
         get_sig.return_type.clone()
     } else {
-        let struct_info = c
-            .type_ctx
-            .structs
-            .get(&base)
-            .ok_or_else(|| format!("no struct info for `{base}`"))?;
-        let get_sig = struct_info
-            .methods
-            .get("get")
-            .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
-        let subst = expo_typecheck::types::build_substitution(&struct_info.type_params, &type_args);
+        let subst = expo_typecheck::types::build_substitution(&ti.type_params, &type_args);
         expo_typecheck::types::substitute(&get_sig.return_type, &subst)
     };
 

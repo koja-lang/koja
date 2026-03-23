@@ -57,11 +57,10 @@ impl Backend {
                                 origins.insert(name.clone(), dep_uri.clone());
                             }
                         }
-                        for name in dep_ctx.structs.keys() {
-                            origins.insert(name.clone(), dep_uri.clone());
-                        }
-                        for name in dep_ctx.enums.keys() {
-                            origins.insert(name.clone(), dep_uri.clone());
+                        for (name, ti) in &dep_ctx.types {
+                            if ti.is_struct() || ti.is_enum() {
+                                origins.insert(name.clone(), dep_uri.clone());
+                            }
                         }
 
                         if let Some(q) = qualifier {

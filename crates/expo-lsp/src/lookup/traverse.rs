@@ -504,7 +504,7 @@ fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Opti
             Literal::Unit => None,
         },
         Expr::Ident { name, .. } => {
-            if ctx.structs.contains_key(name) || ctx.enums.contains_key(name) {
+            if ctx.is_struct(name) || ctx.is_enum(name) {
                 Some(name.as_str())
             } else {
                 None

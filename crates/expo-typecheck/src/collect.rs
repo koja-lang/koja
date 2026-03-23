@@ -7,8 +7,8 @@ use expo_ast::ast::{
 use expo_ast::span::Span;
 
 use crate::context::{
-    EnumInfo, FunctionKind, FunctionSig, ParamInfo, PassMode, ProtocolInfo, StructInfo,
-    TypeContext, VariantData, VariantInfo, Visibility,
+    FunctionKind, FunctionSig, ParamInfo, PassMode, ProtocolInfo, TypeContext, TypeInfo, TypeKind,
+    VariantData, VariantInfo, Visibility,
 };
 use crate::types::{Primitive, Type, resolve_type_expr_with_params};
 
@@ -119,13 +119,13 @@ pub fn collect(module: &Module) -> TypeContext {
                     })
                     .collect();
                 ctx.generic_enum_asts.insert(e.name.clone(), e.clone());
-                ctx.enums.insert(
+                ctx.types.insert(
                     e.name.clone(),
-                    EnumInfo {
-                        methods: HashMap::new(),
+                    TypeInfo {
+                        functions: HashMap::new(),
+                        kind: TypeKind::Enum { variants },
                         span: e.span,
                         type_params: e.type_params.clone(),
-                        variants,
                     },
                 );
             }
@@ -213,41 +213,39 @@ pub fn collect(module: &Module) -> TypeContext {
                             }
                         }
 
-                        let is_primitive = Primitive::from_name(&target_name).is_some();
-                        let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
-                            Some(&mut si.methods)
-                        } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
-                            Some(&mut ei.methods)
-                        } else {
-                            None
-                        };
-                        if let Some(methods) = methods {
-                            if methods.contains_key(&f.name) {
+                        let ti = ctx.types.get_mut(&target_name);
+                        if let Some(ti) = ti {
+                            if ti.functions.contains_key(&f.name) {
                                 ctx.error(
                                     format!(
-                                        "duplicate method `{}` in impl for `{}`",
+                                        "duplicate function `{}` in impl for `{}`",
                                         f.name, target_name
                                     ),
                                     f.span,
                                 );
                             } else {
-                                methods.insert(f.name.clone(), sig);
+                                ti.functions.insert(f.name.clone(), sig);
                             }
-                        } else if is_primitive {
-                            let prim_methods = ctx
-                                .primitive_methods
-                                .entry(target_name.clone())
-                                .or_default();
-                            if prim_methods.contains_key(&f.name) {
+                        } else if Primitive::from_name(&target_name).is_some() {
+                            let ti =
+                                ctx.types
+                                    .entry(target_name.clone())
+                                    .or_insert_with(|| TypeInfo {
+                                        functions: HashMap::new(),
+                                        kind: TypeKind::Primitive,
+                                        span: f.span,
+                                        type_params: Vec::new(),
+                                    });
+                            if ti.functions.contains_key(&f.name) {
                                 ctx.error(
                                     format!(
-                                        "duplicate method `{}` in impl for `{}`",
+                                        "duplicate function `{}` in impl for `{}`",
                                         f.name, target_name
                                     ),
                                     f.span,
                                 );
                             } else {
-                                prim_methods.insert(f.name.clone(), sig);
+                                ti.functions.insert(f.name.clone(), sig);
                             }
                         }
                     }
@@ -306,15 +304,8 @@ pub fn collect(module: &Module) -> TypeContext {
                             );
                             if let Some(sig) = sig {
                                 let sig = substitute_self_type(sig, &self_type);
-                                let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
-                                    Some(&mut si.methods)
-                                } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
-                                    Some(&mut ei.methods)
-                                } else {
-                                    None
-                                };
-                                if let Some(methods) = methods {
-                                    methods.insert(name.clone(), sig);
+                                if let Some(ti) = ctx.types.get_mut(&target_name) {
+                                    ti.functions.insert(name.clone(), sig);
                                 }
                             }
                             ctx.synthesized_default_fns
@@ -388,10 +379,7 @@ pub fn collect(module: &Module) -> TypeContext {
                 };
                 if ctx.constants.contains_key(&c.name) {
                     ctx.error(format!("duplicate constant `{}`", c.name), c.span);
-                } else if ctx.functions.contains_key(&c.name)
-                    || ctx.structs.contains_key(&c.name)
-                    || ctx.enums.contains_key(&c.name)
-                {
+                } else if ctx.functions.contains_key(&c.name) || ctx.types.contains_key(&c.name) {
                     ctx.error(
                         format!(
                             "constant `{}` conflicts with an existing declaration",
@@ -451,11 +439,11 @@ pub fn collect(module: &Module) -> TypeContext {
                     })
                     .collect();
                 ctx.generic_struct_asts.insert(s.name.clone(), s.clone());
-                ctx.structs.insert(
+                ctx.types.insert(
                     s.name.clone(),
-                    StructInfo {
-                        fields,
-                        methods: HashMap::new(),
+                    TypeInfo {
+                        functions: HashMap::new(),
+                        kind: TypeKind::Struct { fields },
                         span: s.span,
                         type_params: s.type_params.clone(),
                     },
@@ -505,8 +493,18 @@ pub fn collect(module: &Module) -> TypeContext {
 /// protocol info wasn't available during initial collection (e.g. stdlib
 /// protocols like `Process`). Must be called after `merge_stdlib`.
 pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
-    let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
-    let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
+    let struct_names: Vec<String> = ctx
+        .types
+        .iter()
+        .filter(|(_, ti)| ti.is_struct())
+        .map(|(n, _)| n.clone())
+        .collect();
+    let enum_names: Vec<String> = ctx
+        .types
+        .iter()
+        .filter(|(_, ti)| ti.is_enum())
+        .map(|(n, _)| n.clone())
+        .collect();
     let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
     let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
     let type_aliases = ctx.type_aliases.clone();
@@ -570,9 +568,9 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
                 continue;
             }
 
-            let self_type = if ctx.structs.contains_key(&target_name) {
+            let self_type = if ctx.is_struct(&target_name) {
                 Type::Struct(target_name.clone())
-            } else if ctx.enums.contains_key(&target_name) {
+            } else if ctx.is_enum(&target_name) {
                 Type::Enum(target_name.clone())
             } else if let Some(p) = Primitive::from_name(&target_name) {
                 Type::Primitive(p)
@@ -619,15 +617,8 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
                     );
                     if let Some(sig) = sig {
                         let sig = substitute_self_type(sig, &self_type);
-                        let methods = if let Some(si) = ctx.structs.get_mut(&target_name) {
-                            Some(&mut si.methods)
-                        } else if let Some(ei) = ctx.enums.get_mut(&target_name) {
-                            Some(&mut ei.methods)
-                        } else {
-                            None
-                        };
-                        if let Some(methods) = methods {
-                            methods.insert(name.clone(), sig);
+                        if let Some(ti) = ctx.types.get_mut(&target_name) {
+                            ti.functions.insert(name.clone(), sig);
                         }
                     }
                     ctx.synthesized_default_fns
@@ -746,6 +737,8 @@ pub fn resolve_imports(
     }
 }
 
+/// Builds a [`FunctionSig`] from a function AST, delegating to
+/// [`build_function_sig_with_params`] with no extra type parameters.
 fn build_function_sig(
     f: &expo_ast::ast::Function,
     known_structs: &[&str],
@@ -755,6 +748,8 @@ fn build_function_sig(
     build_function_sig_with_params(f, known_structs, known_enums, &[], known_type_aliases)
 }
 
+/// Resolves a function AST node into a [`FunctionSig`], handling `self` receivers,
+/// parameter types, and merging `extra_type_params` from the enclosing type.
 fn build_function_sig_with_params(
     f: &expo_ast::ast::Function,
     known_structs: &[&str],
@@ -825,6 +820,8 @@ fn build_function_sig_with_params(
     })
 }
 
+/// Builds a [`FunctionSig`] from a protocol method declaration, treating all
+/// protocol methods as instance functions with borrowed `self`.
 fn build_protocol_method_sig(
     m: &ProtocolMethod,
     known_structs: &[&str],
@@ -905,15 +902,14 @@ fn clone_public_context(source: &TypeContext) -> TypeContext {
             ctx.functions.insert(name.clone(), cloned);
         }
     }
-    for (name, info) in &source.structs {
-        ctx.structs.insert(name.clone(), info.clone());
-    }
-    for (name, info) in &source.enums {
-        ctx.enums.insert(name.clone(), info.clone());
+    for (name, info) in &source.types {
+        ctx.types.insert(name.clone(), info.clone());
     }
     ctx
 }
 
+/// Registers an imported module's context under its qualifier name, or
+/// emits an error if the qualifier already exists (duplicate import).
 fn insert_module_or_error(
     ctx: &mut TypeContext,
     module_name: &str,
@@ -955,26 +951,18 @@ fn merge_all_public(
             ctx.functions.insert(name.clone(), cloned);
         }
     }
-    for (name, info) in &source.structs {
+    for (name, info) in &source.types {
         if imported_names.contains(name) {
             ctx.error(
-                format!("struct `{name}` is already imported from another module"),
+                format!(
+                    "{} `{name}` is already imported from another module",
+                    info.kind_label()
+                ),
                 span,
             );
-        } else if !ctx.structs.contains_key(name) {
+        } else if !ctx.types.contains_key(name) {
             imported_names.insert(name.clone());
-            ctx.structs.insert(name.clone(), info.clone());
-        }
-    }
-    for (name, info) in &source.enums {
-        if imported_names.contains(name) {
-            ctx.error(
-                format!("enum `{name}` is already imported from another module"),
-                span,
-            );
-        } else if !ctx.enums.contains_key(name) {
-            imported_names.insert(name.clone());
-            ctx.enums.insert(name.clone(), info.clone());
+            ctx.types.insert(name.clone(), info.clone());
         }
     }
 }
@@ -1008,27 +996,18 @@ fn merge_named(
         }
         return;
     }
-    if let Some(info) = source.structs.get(name) {
+    if let Some(info) = source.types.get(name) {
         if imported_names.contains(name) {
             ctx.error(
-                format!("struct `{name}` is already imported from another module"),
+                format!(
+                    "{} `{name}` is already imported from another module",
+                    info.kind_label()
+                ),
                 span,
             );
-        } else if !ctx.structs.contains_key(name) {
+        } else if !ctx.types.contains_key(name) {
             imported_names.insert(name.to_string());
-            ctx.structs.insert(name.to_string(), info.clone());
-        }
-        return;
-    }
-    if let Some(info) = source.enums.get(name) {
-        if imported_names.contains(name) {
-            ctx.error(
-                format!("enum `{name}` is already imported from another module"),
-                span,
-            );
-        } else if !ctx.enums.contains_key(name) {
-            imported_names.insert(name.to_string());
-            ctx.enums.insert(name.to_string(), info.clone());
+            ctx.types.insert(name.to_string(), info.clone());
         }
         return;
     }
@@ -1112,6 +1091,8 @@ fn substitute_named_in_type_expr(te: &mut TypeExpr, from: &str, to: &str) {
     }
 }
 
+/// Recursively renames type references from `from` to `to` inside a statement,
+/// used when synthesizing protocol defaults for a concrete type parameter.
 fn substitute_named_in_statement(stmt: &mut Statement, from: &str, to: &str) {
     match stmt {
         Statement::Expr(expr) => substitute_named_in_expr(expr, from, to),
@@ -1137,6 +1118,7 @@ fn substitute_named_in_statement(stmt: &mut Statement, from: &str, to: &str) {
     }
 }
 
+/// Renames type references from `from` to `to` inside match/receive arms.
 fn substitute_named_in_arms(arms: &mut [expo_ast::ast::MatchArm], from: &str, to: &str) {
     for arm in arms {
         substitute_named_in_pattern(&mut arm.pattern, from, to);
@@ -1149,6 +1131,7 @@ fn substitute_named_in_arms(arms: &mut [expo_ast::ast::MatchArm], from: &str, to
     }
 }
 
+/// Recursively renames type references from `from` to `to` inside an expression tree.
 fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &str) {
     match expr {
         Expr::Match { subject, arms, .. } => {
@@ -1302,6 +1285,7 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &str) {
     }
 }
 
+/// Renames type references from `from` to `to` inside a pattern tree.
 fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &str) {
     match pat {
         Pattern::TypedBinding { type_expr, .. } => {
@@ -1344,6 +1328,8 @@ fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &str) {
     }
 }
 
+/// Replaces `Self` type references with the concrete `target` type name in a statement,
+/// used when inlining synthesized protocol default function bodies.
 fn substitute_self_in_statement(stmt: &mut Statement, target: &str) {
     match stmt {
         Statement::Expr(expr) => substitute_self_in_expr(expr, target),
@@ -1367,6 +1353,7 @@ fn substitute_self_in_statement(stmt: &mut Statement, target: &str) {
     }
 }
 
+/// Replaces `Self` type references with the concrete `target` name in an expression tree.
 fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
     match expr {
         Expr::Match { subject, arms, .. } => {
@@ -1536,6 +1523,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
     }
 }
 
+/// Replaces `Self` type references with the concrete `target` name in a pattern tree.
 fn substitute_self_in_pattern(pat: &mut Pattern, target: &str) {
     match pat {
         Pattern::TypedBinding { type_expr, .. } => {

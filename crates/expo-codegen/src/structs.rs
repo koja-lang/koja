@@ -2,6 +2,7 @@
 //! generic), and method calls on struct instances.
 
 use expo_ast::ast::{ClosureParam, Expr};
+use expo_typecheck::context::TypeInfo;
 use expo_typecheck::types::{
     GenericKind, Type, build_substitution, mangle_name, substitute, unify, unwrap_indirect,
 };
@@ -190,9 +191,7 @@ pub fn compile_method_call<'ctx>(
     }
 
     if let Expr::Ident { name, .. } = receiver {
-        let is_type_name = c.type_ctx.structs.contains_key(name)
-            || c.type_ctx.enums.contains_key(name)
-            || c.type_ctx.primitive_methods.contains_key(name);
+        let is_type_name = c.type_ctx.types.contains_key(name);
         if is_type_name {
             return compile_static_call(c, name, method, args, function);
         }
@@ -212,9 +211,9 @@ pub fn compile_method_call<'ctx>(
         .unwrap_or_else(|| struct_name.clone());
     let has_impl_method = c
         .type_ctx
-        .structs
+        .types
         .get(&base)
-        .and_then(|si| si.methods.get(method))
+        .and_then(|ti| ti.functions.get(method))
         .is_some();
     if !has_impl_method && let Some(field_ty) = c.get_field_type(&struct_name, method) {
         let inner = unwrap_indirect(&field_ty);
@@ -270,15 +269,9 @@ pub fn compile_method_call<'ctx>(
             let (base, type_args) = try_parse_mangled_name(&struct_name, c)?;
             let lookup = c
                 .type_ctx
-                .structs
+                .types
                 .get(&base)
-                .map(|si| (&si.methods, &si.type_params))
-                .or_else(|| {
-                    c.type_ctx
-                        .enums
-                        .get(&base)
-                        .map(|ei| (&ei.methods, &ei.type_params))
-                });
+                .map(|ti| (&ti.functions, &ti.type_params));
             let (methods, type_params) = lookup?;
             let sig = methods.get(method)?;
             let subst = build_substitution(type_params, &type_args);
@@ -321,12 +314,7 @@ pub fn compile_method_call<'ctx>(
 }
 
 fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<String> {
-    let methods = c
-        .type_ctx
-        .structs
-        .get(base_type)
-        .map(|si| &si.methods)
-        .or_else(|| c.type_ctx.enums.get(base_type).map(|ei| &ei.methods));
+    let methods = c.type_ctx.types.get(base_type).map(|ti| &ti.functions);
     if let Some(methods) = methods
         && let Some(sig) = methods.get(method)
     {
@@ -344,15 +332,9 @@ fn infer_method_type_args(
 ) -> Result<Vec<Type>, String> {
     let (methods, type_params) = c
         .type_ctx
-        .structs
+        .types
         .get(base_type)
-        .map(|si| (&si.methods, &si.type_params))
-        .or_else(|| {
-            c.type_ctx
-                .enums
-                .get(base_type)
-                .map(|ei| (&ei.methods, &ei.type_params))
-        })
+        .map(|ti| (&ti.functions, &ti.type_params))
         .ok_or_else(|| format!("no type info for `{base_type}`"))?;
 
     let sig = methods
@@ -391,7 +373,7 @@ fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
         Type::Indirect(inner) => Type::Indirect(Box::new(expand_mangled_arg_type(c, inner))),
         Type::Struct(name) | Type::Enum(name) => {
             if let Some((base, type_args)) = try_parse_mangled_name(name, c) {
-                let kind = if c.type_ctx.enums.contains_key(&base)
+                let kind = if c.type_ctx.is_enum(&base)
                     || c.type_ctx.generic_enum_asts.contains_key(&base)
                 {
                     GenericKind::Enum
@@ -437,10 +419,9 @@ fn infer_static_struct_type_args_from_args(
     }
     let methods = c
         .type_ctx
-        .structs
+        .types
         .get(type_name)
-        .map(|si| &si.methods)
-        .or_else(|| c.type_ctx.enums.get(type_name).map(|ei| &ei.methods))
+        .map(|ti| &ti.functions)
         .ok_or_else(|| format!("unknown type `{type_name}`"))?;
     let sig = methods
         .get(method)
@@ -478,15 +459,9 @@ pub fn infer_static_method_return_type(
 ) -> Option<Type> {
     let (methods, type_params) = c
         .type_ctx
-        .structs
+        .types
         .get(type_name)
-        .map(|si| (&si.methods, &si.type_params))
-        .or_else(|| {
-            c.type_ctx
-                .enums
-                .get(type_name)
-                .map(|ei| (&ei.methods, &ei.type_params))
-        })?;
+        .map(|ti| (&ti.functions, &ti.type_params))?;
     let sig = methods.get(method)?;
     if type_params.is_empty() {
         return Some(sig.return_type.clone());
@@ -559,7 +534,8 @@ pub fn compile_struct_construction<'ctx>(
         .ok_or("empty type path in struct construction")?;
 
     // For generic structs, compile field values first, infer type args, and monomorphize
-    if let Some(info) = c.type_ctx.structs.get(struct_name)
+    if let Some(info) = c.type_ctx.types.get(struct_name)
+        && info.is_struct()
         && !info.type_params.is_empty()
     {
         return compile_generic_struct_construction(c, struct_name, info.clone(), fields, function);
@@ -572,9 +548,14 @@ pub fn compile_struct_construction<'ctx>(
 
     let struct_info = c
         .type_ctx
-        .structs
+        .types
         .get(struct_name)
+        .filter(|ti| ti.is_struct())
         .ok_or_else(|| format!("unknown struct: {struct_name}"))?;
+
+    let struct_fields = struct_info
+        .fields()
+        .ok_or_else(|| format!("internal: `{struct_name}` is not a struct"))?;
 
     let alloca = c
         .builder
@@ -582,8 +563,7 @@ pub fn compile_struct_construction<'ctx>(
         .unwrap();
 
     for field_init in fields {
-        let (field_idx, field_type) = struct_info
-            .fields
+        let (field_idx, field_type) = struct_fields
             .iter()
             .enumerate()
             .find(|(_, (name, _))| name == &field_init.name)
@@ -646,10 +626,13 @@ fn concrete_type_for_field_init<'ctx>(
 fn compile_generic_struct_construction<'ctx>(
     c: &mut Compiler<'ctx>,
     struct_name: &str,
-    info: expo_typecheck::context::StructInfo,
+    info: TypeInfo,
     fields: &[expo_ast::ast::FieldInit],
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let struct_fields = info
+        .fields()
+        .ok_or_else(|| format!("internal: generic construction expected struct `{struct_name}`"))?;
     let mut compiled_fields: Vec<(String, BasicValueEnum<'ctx>)> = Vec::new();
     for field_init in fields {
         let val = compile_expr(c, &field_init.value, function)?
@@ -659,7 +642,7 @@ fn compile_generic_struct_construction<'ctx>(
 
     let mut subst = std::collections::HashMap::new();
     for (i, (field_init_name, field_val)) in compiled_fields.iter().enumerate() {
-        if let Some((_, field_ty)) = info.fields.iter().find(|(n, _)| n == field_init_name) {
+        if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| n == field_init_name) {
             let concrete = concrete_type_for_field_init(c, &fields[i].value, field_val);
             if !expo_typecheck::types::unify(field_ty, &concrete, &mut subst) {
                 return Err(format!(
@@ -765,12 +748,7 @@ fn compile_static_call<'ctx>(
     args: &[expo_ast::ast::Arg],
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let type_params = c
-        .type_ctx
-        .structs
-        .get(type_name)
-        .map(|si| &si.type_params)
-        .or_else(|| c.type_ctx.enums.get(type_name).map(|ei| &ei.type_params));
+    let type_params = c.type_ctx.types.get(type_name).map(|ti| &ti.type_params);
 
     let mut type_args: Vec<Type> = if let Some(tp) = type_params
         && !tp.is_empty()
@@ -794,7 +772,7 @@ fn compile_static_call<'ctx>(
     } else {
         let m = mangle_name(type_name, &type_args);
         if !c.struct_types.contains_key(&m) {
-            if c.type_ctx.structs.contains_key(type_name) {
+            if c.type_ctx.is_struct(type_name) {
                 c.monomorphize_struct(type_name, &type_args)?;
             } else {
                 c.monomorphize_enum(type_name, &type_args)?;

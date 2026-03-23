@@ -51,7 +51,10 @@ pub(crate) fn check_match_exhaustiveness(
             }
         }
         Type::Enum(enum_name) => {
-            let Some(enum_info) = ctx.enums.get(enum_name) else {
+            let Some(type_info) = ctx.types.get(enum_name) else {
+                return;
+            };
+            let Some(variants) = type_info.variants() else {
                 return;
             };
 
@@ -67,8 +70,7 @@ pub(crate) fn check_match_exhaustiveness(
                 })
                 .collect();
 
-            let missing: Vec<&str> = enum_info
-                .variants
+            let missing: Vec<&str> = variants
                 .iter()
                 .filter(|v| !matched.contains(&v.name.as_str()))
                 .map(|v| v.name.as_str())
@@ -89,9 +91,19 @@ pub(crate) fn check_match_exhaustiveness(
         Type::Union(members) => {
             let member_names: Vec<String> = members.iter().map(|m| m.display()).collect();
 
-            let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+            let struct_names: Vec<String> = ctx
+                .types
+                .iter()
+                .filter(|(_, ti)| ti.is_struct())
+                .map(|(k, _)| k.clone())
+                .collect();
             let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-            let enum_name_keys: Vec<String> = ctx.enums.keys().cloned().collect();
+            let enum_name_keys: Vec<String> = ctx
+                .types
+                .iter()
+                .filter(|(_, ti)| ti.is_enum())
+                .map(|(k, _)| k.clone())
+                .collect();
             let enum_refs: Vec<&str> = enum_name_keys.iter().map(|s| s.as_str()).collect();
 
             let matched: Vec<String> = arms
@@ -145,8 +157,9 @@ pub(crate) fn resolve_variant_data(
         Type::Indirect(inner) => inner.as_ref(),
         other => other,
     };
-    let enum_info = ctx.enums.get(enum_name)?;
-    let vi = enum_info.variants.iter().find(|v| v.name == *variant)?;
+    let type_info = ctx.types.get(enum_name)?;
+    let variants = type_info.variants()?;
+    let vi = variants.iter().find(|v| v.name == *variant)?;
     let data = vi.data.clone();
 
     if let Type::GenericInstance {
@@ -154,9 +167,9 @@ pub(crate) fn resolve_variant_data(
         kind: GenericKind::Enum,
         ..
     } = effective_ty
-        && !enum_info.type_params.is_empty()
+        && !type_info.type_params.is_empty()
     {
-        let subst = build_substitution(&enum_info.type_params, type_args);
+        let subst = build_substitution(&type_info.type_params, type_args);
         return Some(substitute_variant_data(&data, &subst));
     }
     Some(data)
@@ -262,7 +275,7 @@ pub(crate) fn check_pattern(
                     );
                 }
                 None => {
-                    if ctx.enums.contains_key(&enum_name) {
+                    if ctx.is_enum(&enum_name) {
                         ctx.error(
                             format!("enum `{}` has no variant `{}`", enum_name, variant),
                             *span,
@@ -316,7 +329,7 @@ pub(crate) fn check_pattern(
                     );
                 }
                 None => {
-                    if ctx.enums.contains_key(&enum_name) {
+                    if ctx.is_enum(&enum_name) {
                         ctx.error(
                             format!("enum `{}` has no variant `{}`", enum_name, variant),
                             *span,
@@ -332,8 +345,9 @@ pub(crate) fn check_pattern(
             span,
         } => {
             let enum_name = type_path.join(".");
-            if let Some(enum_info) = ctx.enums.get(&enum_name) {
-                if let Some(vi) = enum_info.variants.iter().find(|v| v.name == *variant) {
+            if let Some(type_info) = ctx.types.get(&enum_name).filter(|ti| ti.is_enum()) {
+                let variants = type_info.variants().unwrap();
+                if let Some(vi) = variants.iter().find(|v| v.name == *variant) {
                     if !matches!(vi.data, VariantData::Unit) {
                         ctx.error(
                             format!("variant `{}.{}` requires arguments", enum_name, variant),
@@ -380,9 +394,19 @@ pub(crate) fn check_pattern(
             type_expr,
             span,
         } => {
-            let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+            let struct_names: Vec<String> = ctx
+                .types
+                .iter()
+                .filter(|(_, ti)| ti.is_struct())
+                .map(|(k, _)| k.clone())
+                .collect();
             let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-            let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
+            let enum_names: Vec<String> = ctx
+                .types
+                .iter()
+                .filter(|(_, ti)| ti.is_enum())
+                .map(|(k, _)| k.clone())
+                .collect();
             let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
             let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
 
@@ -448,9 +472,19 @@ fn check_binary_pattern(
         );
     }
 
-    let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+    let struct_names: Vec<String> = ctx
+        .types
+        .iter()
+        .filter(|(_, ti)| ti.is_struct())
+        .map(|(k, _)| k.clone())
+        .collect();
     let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-    let enum_name_keys: Vec<String> = ctx.enums.keys().cloned().collect();
+    let enum_name_keys: Vec<String> = ctx
+        .types
+        .iter()
+        .filter(|(_, ti)| ti.is_enum())
+        .map(|(k, _)| k.clone())
+        .collect();
     let enum_refs: Vec<&str> = enum_name_keys.iter().map(|s| s.as_str()).collect();
 
     let mut total_fixed_bits: u64 = 0;
@@ -688,6 +722,7 @@ pub(crate) fn collect_pattern_bindings(pat: &Pattern) -> Vec<(String, Span)> {
     bindings
 }
 
+/// Recursively walks a pattern, appending every binding name and its span to `out`.
 fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
     match pat {
         Pattern::Binding { name, span, .. } => {
@@ -721,6 +756,7 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
     }
 }
 
+/// Extracts binding identifiers from binary segment value expressions.
 fn collect_bindings_inner_expr(expr: &Expr, out: &mut Vec<(String, Span)>) {
     if let Expr::Ident { name, span } = expr
         && name != "_"

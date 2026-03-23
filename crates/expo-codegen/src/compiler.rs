@@ -223,11 +223,13 @@ impl<'ctx> Compiler<'ctx> {
                 .position(|(name, _)| name == field_name)
                 .map(|i| i as u32);
         }
-        self.type_ctx.structs.get(struct_name).and_then(|info| {
-            info.fields
-                .iter()
-                .position(|(name, _)| name == field_name)
-                .map(|i| i as u32)
+        self.type_ctx.types.get(struct_name).and_then(|info| {
+            info.fields().and_then(|fields| {
+                fields
+                    .iter()
+                    .position(|(name, _)| name == field_name)
+                    .map(|i| i as u32)
+            })
         })
     }
 
@@ -239,11 +241,13 @@ impl<'ctx> Compiler<'ctx> {
                 .find(|(name, _)| name == field_name)
                 .map(|(_, ty)| ty.clone());
         }
-        self.type_ctx.structs.get(struct_name).and_then(|info| {
-            info.fields
-                .iter()
-                .find(|(name, _)| name == field_name)
-                .map(|(_, ty)| ty.clone())
+        self.type_ctx.types.get(struct_name).and_then(|info| {
+            info.fields().and_then(|fields| {
+                fields
+                    .iter()
+                    .find(|(name, _)| name == field_name)
+                    .map(|(_, ty)| ty.clone())
+            })
         })
     }
 
@@ -281,8 +285,20 @@ impl<'ctx> Compiler<'ctx> {
     /// Resolves a type expression AST node into an Expo type, using the
     /// currently registered struct and enum names for lookup.
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Type {
-        let struct_names: Vec<&str> = self.type_ctx.structs.keys().map(|s| s.as_str()).collect();
-        let enum_names: Vec<&str> = self.type_ctx.enums.keys().map(|s| s.as_str()).collect();
+        let struct_names: Vec<&str> = self
+            .type_ctx
+            .types
+            .iter()
+            .filter(|(_, ti)| ti.is_struct())
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let enum_names: Vec<&str> = self
+            .type_ctx
+            .types
+            .iter()
+            .filter(|(_, ti)| ti.is_enum())
+            .map(|(name, _)| name.as_str())
+            .collect();
         let type_params: Vec<&str> = self.type_subst.keys().map(|s| s.as_str()).collect();
         let ty = expo_typecheck::types::resolve_type_expr_with_params(
             type_expr,
@@ -465,9 +481,9 @@ impl<'ctx> Compiler<'ctx> {
             && return_type == Type::Unknown
             && matches!(&func.return_type, Some(TypeExpr::Self_ { .. }))
         {
-            if self.type_ctx.structs.contains_key(name) {
+            if self.type_ctx.is_struct(name) {
                 return_type = Type::Struct(name.to_string());
-            } else if self.type_ctx.enums.contains_key(name) {
+            } else if self.type_ctx.is_enum(name) {
                 return_type = Type::Enum(name.to_string());
             }
         }
@@ -734,9 +750,9 @@ impl<'ctx> Compiler<'ctx> {
             && return_type == Type::Unknown
             && matches!(&func.return_type, Some(TypeExpr::Self_ { .. }))
         {
-            if self.type_ctx.structs.contains_key(target) {
+            if self.type_ctx.is_struct(target) {
                 return_type = Type::Struct(target.to_string());
-            } else if self.type_ctx.enums.contains_key(target) {
+            } else if self.type_ctx.is_enum(target) {
                 return_type = Type::Enum(target.to_string());
             }
         }
@@ -784,14 +800,14 @@ impl<'ctx> Compiler<'ctx> {
     /// cross-referencing types resolve correctly.
     fn register_types(&mut self) {
         // Pass 1: create opaque types so cross-references resolve
-        for (name, info) in &self.type_ctx.structs {
+        for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
             if !info.type_params.is_empty() {
                 continue;
             }
             let st = self.context.opaque_struct_type(name);
             self.struct_types.insert(name.clone(), st);
         }
-        for (name, info) in &self.type_ctx.enums {
+        for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
             if !info.type_params.is_empty() {
                 continue;
             }
@@ -800,13 +816,14 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         // Pass 2: set struct bodies (skip generic templates)
-        for (name, info) in &self.type_ctx.structs {
+        for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
             if !info.type_params.is_empty() {
                 continue;
             }
             let struct_type = *self.struct_types.get(name).unwrap();
             let field_types: Vec<_> = info
-                .fields
+                .fields()
+                .unwrap()
                 .iter()
                 .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
                 .collect();
@@ -814,14 +831,14 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         // Pass 3: set enum bodies (skip generic templates)
-        for (name, info) in &self.type_ctx.enums {
+        for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
             if !info.type_params.is_empty() {
                 continue;
             }
             let mut variant_payloads = Vec::new();
             let mut max_payload_size: u32 = 0;
 
-            for variant in &info.variants {
+            for variant in info.variants().unwrap() {
                 match &variant.data {
                     VariantData::Unit => {
                         variant_payloads.push((variant.name.clone(), None));
@@ -871,7 +888,8 @@ impl<'ctx> Compiler<'ctx> {
 
             let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
             let name_ptrs: Vec<_> = info
-                .variants
+                .variants()
+                .unwrap()
                 .iter()
                 .map(|v| {
                     let bytes = self.context.const_string(v.name.as_bytes(), true);
@@ -908,8 +926,8 @@ impl<'ctx> Compiler<'ctx> {
                 collect_union_types(&p.ty, &mut union_types);
             }
         }
-        for info in self.type_ctx.structs.values() {
-            for (_, ty) in &info.fields {
+        for info in self.type_ctx.types.values().filter(|ti| ti.is_struct()) {
+            for (_, ty) in info.fields().unwrap() {
                 collect_union_types(ty, &mut union_types);
             }
         }
@@ -1120,6 +1138,9 @@ pub(crate) fn llvm_field_byte_size(ty: inkwell::types::BasicTypeEnum) -> u32 {
     }
 }
 
+/// Returns a conservative in-memory byte size for layout decisions (enum
+/// payloads, etc.). Matches the codegen's assumptions for primitives and
+/// pointers; non-primitive named types are treated as pointer-sized.
 pub(crate) fn type_byte_size(ty: &Type) -> u32 {
     use expo_typecheck::types::Primitive;
     match ty {
@@ -1158,8 +1179,8 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(target, c) {
         let impls = c.type_ctx.protocol_impls.get(&base)?;
         let (_, proto_args) = impls.iter().find(|(proto, _)| proto == "Process")?;
-        let si = c.type_ctx.structs.get(&base)?;
-        let subst = expo_typecheck::types::build_substitution(&si.type_params, &type_args);
+        let ti = c.type_ctx.types.get(&base)?;
+        let subst = expo_typecheck::types::build_substitution(&ti.type_params, &type_args);
         let m = expo_typecheck::types::substitute(proto_args.get(1)?, &subst);
         let r = expo_typecheck::types::substitute(proto_args.get(2)?, &subst);
         return Some(expo_typecheck::types::process_envelope_type(&m, &r));

@@ -125,9 +125,10 @@ fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
     }
-    if let Some(info) = c.type_ctx.structs.get(name) {
-        return info
-            .fields
+    if let Some(info) = c.type_ctx.types.get(name)
+        && let Some(fields) = info.fields()
+    {
+        return fields
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
     }
@@ -136,8 +137,10 @@ fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
             .iter()
             .any(|(_, vdata)| variant_has_indirect(vdata));
     }
-    if let Some(info) = c.type_ctx.enums.get(name) {
-        return info.variants.iter().any(|v| variant_has_indirect(&v.data));
+    if let Some(info) = c.type_ctx.types.get(name)
+        && let Some(vs) = info.variants()
+    {
+        return vs.iter().any(|v| variant_has_indirect(&v.data));
     }
     false
 }
@@ -224,13 +227,15 @@ fn emit_drop_indirect_fields(c: &mut Compiler, alloca: PointerValue, ty: &Type) 
                 .collect()
         })
         .or_else(|| {
-            c.type_ctx.structs.get(&struct_name).map(|info| {
-                info.fields
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
-                    .map(|(i, (_, fty))| (i, fty.clone()))
-                    .collect()
+            c.type_ctx.types.get(&struct_name).and_then(|ti| {
+                ti.fields().map(|fields| {
+                    fields
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
+                        .map(|(i, (_, fty))| (i, fty.clone()))
+                        .collect()
+                })
             })
         });
 

@@ -171,11 +171,11 @@ pub(crate) fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo>
         Some(SymbolInfo::Function {
             name: name.to_string(),
         })
-    } else if ctx.structs.contains_key(name) {
+    } else if ctx.is_struct(name) {
         Some(SymbolInfo::Struct {
             name: name.to_string(),
         })
-    } else if ctx.enums.contains_key(name) {
+    } else if ctx.is_enum(name) {
         Some(SymbolInfo::Enum {
             name: name.to_string(),
         })

@@ -450,7 +450,7 @@ fn enum_name_from_path<'ctx>(
         Type::Union(_) => Ok(mangle_type(ty)),
         Type::Struct(name) => {
             if let Some((base, _)) = crate::generics::try_parse_mangled_name(name, c)
-                && c.type_ctx.enums.contains_key(&base)
+                && c.type_ctx.is_enum(&base)
             {
                 Ok(name.clone())
             } else if !type_path.is_empty() {
@@ -504,7 +504,7 @@ fn find_constructor_enum<'ctx>(
     }
     if let Type::Struct(name) = subject_type
         && let Some((base, _)) = crate::generics::try_parse_mangled_name(name, c)
-        && c.type_ctx.enums.contains_key(&base)
+        && c.type_ctx.is_enum(&base)
     {
         return Ok(name.clone());
     }
@@ -514,8 +514,11 @@ fn find_constructor_enum<'ctx>(
             return Ok(mangle_type(subject_type));
         }
     }
-    for (enum_name, info) in &c.type_ctx.enums {
-        if info.variants.iter().any(|v| v.name == variant_name) {
+    for (enum_name, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
+        if info
+            .variants()
+            .is_some_and(|vs| vs.iter().any(|v| v.name == variant_name))
+        {
             return Ok(enum_name.clone());
         }
     }
@@ -571,8 +574,9 @@ fn lookup_variant_data(
     enum_name: &str,
     variant: &str,
 ) -> Result<VariantData, String> {
-    if let Some(ei) = c.type_ctx.enums.get(enum_name)
-        && let Some(vi) = ei.variants.iter().find(|v| v.name == variant)
+    if let Some(ti) = c.type_ctx.types.get(enum_name)
+        && let Some(vs) = ti.variants()
+        && let Some(vi) = vs.iter().find(|v| v.name == variant)
     {
         return Ok(vi.data.clone());
     }

@@ -15,7 +15,6 @@ pub struct TypeContext {
     pub coercions: HashMap<Span, Coercion>,
     pub constants: HashMap<String, Type>,
     pub diagnostics: Vec<Diagnostic>,
-    pub enums: HashMap<String, EnumInfo>,
     pub functions: HashMap<String, FunctionSig>,
     pub generic_enum_asts: HashMap<String, EnumDecl>,
     pub generic_function_asts: HashMap<String, Function>,
@@ -23,22 +22,11 @@ pub struct TypeContext {
     pub generic_protocol_asts: HashMap<String, ProtocolDecl>,
     pub generic_struct_asts: HashMap<String, StructDecl>,
     pub imported_modules: HashMap<String, TypeContext>,
-    pub primitive_methods: HashMap<String, HashMap<String, FunctionSig>>,
     pub protocol_impls: HashMap<String, Vec<(String, Vec<Type>)>>,
     pub protocols: HashMap<String, ProtocolInfo>,
-    pub structs: HashMap<String, StructInfo>,
     pub synthesized_default_fns: HashMap<String, Vec<Function>>,
     pub type_aliases: HashMap<String, Type>,
-}
-
-/// Collected metadata for an enum declaration.
-#[derive(Clone)]
-pub struct EnumInfo {
-    pub methods: HashMap<String, FunctionSig>,
-    #[allow(dead_code)]
-    pub span: Span,
-    pub type_params: Vec<String>,
-    pub variants: Vec<VariantInfo>,
+    pub types: HashMap<String, TypeInfo>,
 }
 
 /// Whether a function in an impl block takes a `self` receiver or is static.
@@ -81,14 +69,82 @@ pub struct ProtocolInfo {
     pub type_params: Vec<String>,
 }
 
-/// Collected metadata for a struct declaration.
+/// Unified metadata for any named type: struct, enum, or primitive.
+/// Functions (Expo's term for methods) and type parameters live here
+/// regardless of the type's kind. The [`TypeKind`] discriminator carries
+/// kind-specific data (fields for structs, variants for enums).
 #[derive(Clone)]
-pub struct StructInfo {
-    pub fields: Vec<(String, Type)>,
-    pub methods: HashMap<String, FunctionSig>,
+pub struct TypeInfo {
+    pub functions: HashMap<String, FunctionSig>,
+    pub kind: TypeKind,
     #[allow(dead_code)]
     pub span: Span,
     pub type_params: Vec<String>,
+}
+
+/// What kind of named type a [`TypeInfo`] represents.
+#[derive(Clone)]
+pub enum TypeKind {
+    Struct { fields: Vec<(String, Type)> },
+    Enum { variants: Vec<VariantInfo> },
+    Primitive,
+}
+
+impl TypeInfo {
+    /// Returns `true` if this type info describes a struct.
+    pub fn is_struct(&self) -> bool {
+        matches!(self.kind, TypeKind::Struct { .. })
+    }
+
+    /// Returns `true` if this type info describes an enum.
+    pub fn is_enum(&self) -> bool {
+        matches!(self.kind, TypeKind::Enum { .. })
+    }
+
+    /// Returns the struct's fields, or `None` if this is not a struct.
+    pub fn fields(&self) -> Option<&Vec<(String, Type)>> {
+        if let TypeKind::Struct { fields } = &self.kind {
+            Some(fields)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the struct's fields, or `None` if not a struct.
+    pub fn fields_mut(&mut self) -> Option<&mut Vec<(String, Type)>> {
+        if let TypeKind::Struct { fields } = &mut self.kind {
+            Some(fields)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the enum's variants, or `None` if this is not an enum.
+    pub fn variants(&self) -> Option<&Vec<VariantInfo>> {
+        if let TypeKind::Enum { variants } = &self.kind {
+            Some(variants)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the enum's variants, or `None` if not an enum.
+    pub fn variants_mut(&mut self) -> Option<&mut Vec<VariantInfo>> {
+        if let TypeKind::Enum { variants } = &mut self.kind {
+            Some(variants)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a human-readable label for the type kind: `"struct"`, `"enum"`, or `"type"`.
+    pub fn kind_label(&self) -> &'static str {
+        match &self.kind {
+            TypeKind::Struct { .. } => "struct",
+            TypeKind::Enum { .. } => "enum",
+            TypeKind::Primitive => "type",
+        }
+    }
 }
 
 /// A single variant within an enum.
@@ -148,6 +204,16 @@ impl TypeContext {
         });
     }
 
+    /// Returns `true` if `name` is registered as a struct in the type registry.
+    pub fn is_struct(&self, name: &str) -> bool {
+        self.types.get(name).is_some_and(|ti| ti.is_struct())
+    }
+
+    /// Returns `true` if `name` is registered as an enum in the type registry.
+    pub fn is_enum(&self, name: &str) -> bool {
+        self.types.get(name).is_some_and(|ti| ti.is_enum())
+    }
+
     /// Creates an empty context with no registered types or diagnostics.
     pub fn new() -> Self {
         Self {
@@ -155,7 +221,6 @@ impl TypeContext {
             coercions: HashMap::new(),
             constants: HashMap::new(),
             diagnostics: Vec::new(),
-            enums: HashMap::new(),
             functions: HashMap::new(),
             generic_enum_asts: HashMap::new(),
             generic_function_asts: HashMap::new(),
@@ -163,12 +228,11 @@ impl TypeContext {
             generic_protocol_asts: HashMap::new(),
             generic_struct_asts: HashMap::new(),
             imported_modules: HashMap::new(),
-            primitive_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
             protocols: HashMap::new(),
-            structs: HashMap::new(),
             synthesized_default_fns: HashMap::new(),
             type_aliases: HashMap::new(),
+            types: HashMap::new(),
         }
     }
 
@@ -181,14 +245,15 @@ impl TypeContext {
                 self.functions.insert(name.clone(), sig.clone());
             }
         }
-        for (name, info) in &other.structs {
-            if !self.structs.contains_key(name) {
-                self.structs.insert(name.clone(), info.clone());
-            }
-        }
-        for (name, info) in &other.enums {
-            if !self.enums.contains_key(name) {
-                self.enums.insert(name.clone(), info.clone());
+        for (name, info) in &other.types {
+            if let Some(existing) = self.types.get_mut(name) {
+                for (fn_name, sig) in &info.functions {
+                    if !existing.functions.contains_key(fn_name) {
+                        existing.functions.insert(fn_name.clone(), sig.clone());
+                    }
+                }
+            } else {
+                self.types.insert(name.clone(), info.clone());
             }
         }
         for (mod_name, mod_ctx) in &other.imported_modules {
@@ -226,14 +291,6 @@ impl TypeContext {
         for (name, info) in &other.protocols {
             if !self.protocols.contains_key(name) {
                 self.protocols.insert(name.clone(), info.clone());
-            }
-        }
-        for (prim_name, methods) in &other.primitive_methods {
-            let entry = self.primitive_methods.entry(prim_name.clone()).or_default();
-            for (method_name, sig) in methods {
-                if !entry.contains_key(method_name) {
-                    entry.insert(method_name.clone(), sig.clone());
-                }
             }
         }
         for (type_name, impls) in &other.protocol_impls {

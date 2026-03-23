@@ -73,7 +73,7 @@ fn add_symbol_completions(
         });
     }
 
-    for (name, info) in &ctx.structs {
+    for (name, info) in ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
         let detail = if info.type_params.is_empty() {
             None
         } else {
@@ -87,7 +87,7 @@ fn add_symbol_completions(
         });
     }
 
-    for (name, info) in &ctx.enums {
+    for (name, info) in ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
         let detail = if info.type_params.is_empty() {
             None
         } else {

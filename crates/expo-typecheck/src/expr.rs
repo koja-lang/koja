@@ -878,10 +878,7 @@ fn infer_call(
             let params = sig.params.clone();
             check_call_args(name, &params, args, "", span, ctx, ce);
             return_type
-        } else if ce.env.contains_key(name)
-            || ctx.structs.contains_key(name)
-            || ctx.enums.contains_key(name)
-        {
+        } else if ce.env.contains_key(name) || ctx.types.contains_key(name) {
             for arg in args {
                 infer_expr(&arg.value, ctx, ce);
             }
@@ -919,7 +916,7 @@ fn expand_mangled_generic_type(ty: &Type, ctx: &TypeContext) -> Type {
     match ty {
         Type::Struct(name) => {
             if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
-                let kind = if ctx.structs.contains_key(&base) {
+                let kind = if ctx.types.get(&base).is_some_and(|ti| ti.is_struct()) {
                     GenericKind::Struct
                 } else {
                     GenericKind::Enum
@@ -1009,9 +1006,10 @@ fn infer_enum_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let enum_name = type_path.join(".");
-    if let Some(enum_info) = ctx.enums.get(&enum_name).cloned() {
-        if let Some(vi) = enum_info.variants.iter().find(|v| v.name == *variant) {
-            let is_generic = !enum_info.type_params.is_empty();
+    if let Some(type_info) = ctx.types.get(&enum_name).cloned().filter(|ti| ti.is_enum()) {
+        let enum_variants = type_info.variants().unwrap();
+        if let Some(vi) = enum_variants.iter().find(|v| v.name == *variant) {
+            let is_generic = !type_info.type_params.is_empty();
             let mut subst: HashMap<String, Type> = HashMap::new();
             let variant_data = vi.data.clone();
             match (data, &variant_data) {
@@ -1120,7 +1118,7 @@ fn infer_enum_construction(
                 }
             }
             if is_generic {
-                let type_args: Vec<Type> = enum_info
+                let type_args: Vec<Type> = type_info
                     .type_params
                     .iter()
                     .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Unknown))
@@ -1193,12 +1191,16 @@ fn infer_field_access(
         }
     };
 
-    let Some(struct_info) = ctx.structs.get(struct_name) else {
+    let Some(type_info) = ctx.types.get(struct_name) else {
         return Type::Unknown;
     };
 
-    let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) else {
-        let available: Vec<&str> = struct_info.fields.iter().map(|(n, _)| n.as_str()).collect();
+    let Some(fields) = type_info.fields() else {
+        return Type::Unknown;
+    };
+
+    let Some((_, field_ty)) = fields.iter().find(|(n, _)| n == field) else {
+        let available: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
         ctx.error_with_hint(
             format!("struct `{}` has no field `{}`", struct_name, field),
             format!("available fields: {}", available.join(", ")),
@@ -1208,7 +1210,7 @@ fn infer_field_access(
     };
 
     if let Some(type_args) = generic_args {
-        let subst_map: HashMap<String, Type> = struct_info
+        let subst_map: HashMap<String, Type> = type_info
             .type_params
             .iter()
             .zip(type_args.iter())
@@ -1220,7 +1222,41 @@ fn infer_field_access(
     }
 }
 
-/// Type-checks a method call, resolving module-qualified calls and struct/enum methods.
+/// Maps a receiver type to the type name used for function lookup in `ctx.types`,
+/// plus an optional generic substitution map when the receiver is a generic instance.
+fn resolve_receiver_base_name(
+    recv_ty: &Type,
+    ctx: &TypeContext,
+) -> (Option<String>, Option<HashMap<String, Type>>) {
+    match recv_ty {
+        Type::Struct(name) | Type::Enum(name) => {
+            if ctx.types.contains_key(name) {
+                (Some(name.clone()), None)
+            } else if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
+                let subst = ctx
+                    .types
+                    .get(&base)
+                    .map(|ti| build_substitution(&ti.type_params, &type_args));
+                (Some(base), subst)
+            } else {
+                (None, None)
+            }
+        }
+        Type::GenericInstance {
+            base, type_args, ..
+        } => {
+            let subst = ctx
+                .types
+                .get(base)
+                .map(|ti| build_substitution(&ti.type_params, type_args));
+            (Some(base.clone()), subst)
+        }
+        Type::Primitive(p) => (Some(p.display().to_string()), None),
+        _ => (None, None),
+    }
+}
+
+/// Type-checks a method call, resolving module-qualified calls and type functions.
 fn infer_method_call(
     receiver: &Expr,
     method: &str,
@@ -1272,35 +1308,15 @@ fn infer_method_call(
         name: type_name, ..
     } = receiver
     {
-        let static_sig_info = ctx
-            .structs
-            .get(type_name)
-            .map(|si| (&si.methods, &si.type_params))
-            .or_else(|| {
-                ctx.enums
-                    .get(type_name)
-                    .map(|ei| (&ei.methods, &ei.type_params))
+        let static_sig_info = ctx.types.get(type_name).and_then(|ti| {
+            ti.functions.get(method).and_then(|sig| {
+                if sig.kind == FunctionKind::Static {
+                    Some((sig.clone(), ti.type_params.clone()))
+                } else {
+                    None
+                }
             })
-            .and_then(|(methods, type_params)| {
-                methods.get(method).and_then(|sig| {
-                    if sig.kind == FunctionKind::Static {
-                        Some((sig.clone(), type_params.clone()))
-                    } else {
-                        None
-                    }
-                })
-            })
-            .or_else(|| {
-                ctx.primitive_methods.get(type_name).and_then(|methods| {
-                    methods.get(method).and_then(|sig| {
-                        if sig.kind == FunctionKind::Static {
-                            Some((sig.clone(), Vec::new()))
-                        } else {
-                            None
-                        }
-                    })
-                })
-            });
+        });
 
         if let Some((sig, type_params)) = static_sig_info {
             if !sig.type_params.is_empty() || !type_params.is_empty() {
@@ -1335,85 +1351,13 @@ fn infer_method_call(
         return recv_ty;
     }
 
-    let (method_sig, subst) = match &recv_ty {
-        Type::Struct(name) => {
-            let direct = ctx
-                .structs
-                .get(name)
-                .and_then(|si| si.methods.get(method))
-                .cloned();
-            if direct.is_some() {
-                (direct, None)
-            } else if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
-                let info = ctx
-                    .structs
-                    .get(&base)
-                    .map(|si| (&si.methods, &si.type_params));
-                if let Some((methods, type_params)) = info {
-                    let sig = methods.get(method).cloned();
-                    let s = build_substitution(type_params, &type_args);
-                    (sig, Some(s))
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            }
-        }
-        Type::Enum(name) => {
-            let direct = ctx
-                .enums
-                .get(name)
-                .and_then(|ei| ei.methods.get(method))
-                .cloned();
-            if direct.is_some() {
-                (direct, None)
-            } else if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
-                let info = ctx
-                    .enums
-                    .get(&base)
-                    .map(|ei| (&ei.methods, &ei.type_params));
-                if let Some((methods, type_params)) = info {
-                    let sig = methods.get(method).cloned();
-                    let s = build_substitution(type_params, &type_args);
-                    (sig, Some(s))
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            }
-        }
-        Type::GenericInstance {
-            base,
-            type_args,
-            kind,
-        } => {
-            let info_methods = match kind {
-                GenericKind::Struct => ctx
-                    .structs
-                    .get(base)
-                    .map(|si| (&si.methods, &si.type_params)),
-                GenericKind::Enum => ctx.enums.get(base).map(|ei| (&ei.methods, &ei.type_params)),
-            };
-            if let Some((methods, type_params)) = info_methods {
-                let sig = methods.get(method).cloned();
-                let s = build_substitution(type_params, type_args);
-                (sig, Some(s))
-            } else {
-                (None, None)
-            }
-        }
-        Type::Primitive(p) => {
-            let sig = ctx
-                .primitive_methods
-                .get(p.display())
-                .and_then(|m| m.get(method))
-                .cloned();
-            (sig, None)
-        }
-        _ => (None, None),
-    };
+    let (base_name, subst) = resolve_receiver_base_name(&recv_ty, ctx);
+
+    let method_sig = base_name
+        .as_deref()
+        .and_then(|name| ctx.types.get(name))
+        .and_then(|ti| ti.functions.get(method))
+        .cloned();
 
     if let Some(sig) = method_sig {
         let (return_type, params) = if let Some(ref s) = subst {
@@ -1457,86 +1401,25 @@ fn infer_method_call(
         for arg in args {
             infer_expr(&arg.value, ctx, ce);
         }
-        match &recv_ty {
-            Type::Struct(name) => {
-                let available: Vec<&str> = ctx
-                    .structs
-                    .get(name)
-                    .map(|s| s.methods.keys().map(|k| k.as_str()).collect())
-                    .unwrap_or_default();
-                let hint = if available.is_empty() {
-                    format!("struct `{}` has no functions defined", name)
-                } else {
-                    format!("available functions: {}", available.join(", "))
-                };
-                ctx.error_with_hint(
-                    format!("struct `{}` has no function `{}`", name, method),
-                    hint,
-                    span,
-                );
-                Type::Error
-            }
-            Type::Enum(name) => {
-                let available: Vec<&str> = ctx
-                    .enums
-                    .get(name)
-                    .map(|e| e.methods.keys().map(|k| k.as_str()).collect())
-                    .unwrap_or_default();
-                let hint = if available.is_empty() {
-                    format!("enum `{}` has no functions defined", name)
-                } else {
-                    format!("available functions: {}", available.join(", "))
-                };
-                ctx.error_with_hint(
-                    format!("enum `{}` has no function `{}`", name, method),
-                    hint,
-                    span,
-                );
-                Type::Error
-            }
-            Type::GenericInstance { base, kind, .. } => {
-                let kind_str = match kind {
-                    GenericKind::Struct => "struct",
-                    GenericKind::Enum => "enum",
-                };
-                let methods_map = match kind {
-                    GenericKind::Struct => ctx.structs.get(base).map(|si| &si.methods),
-                    GenericKind::Enum => ctx.enums.get(base).map(|ei| &ei.methods),
-                };
-                let available: Vec<&str> = methods_map
-                    .map(|m| m.keys().map(|k| k.as_str()).collect())
-                    .unwrap_or_default();
-                let hint = if available.is_empty() {
-                    format!("{} `{}` has no functions defined", kind_str, base)
-                } else {
-                    format!("available functions: {}", available.join(", "))
-                };
-                ctx.error_with_hint(
-                    format!("{} `{}` has no function `{}`", kind_str, base, method),
-                    hint,
-                    span,
-                );
-                Type::Error
-            }
-            Type::Primitive(p) => {
-                let available: Vec<&str> = ctx
-                    .primitive_methods
-                    .get(p.display())
-                    .map(|m| m.keys().map(|k| k.as_str()).collect())
-                    .unwrap_or_default();
-                let hint = if available.is_empty() {
-                    format!("type `{}` has no functions defined", p.display())
-                } else {
-                    format!("available functions: {}", available.join(", "))
-                };
-                ctx.error_with_hint(
-                    format!("type `{}` has no function `{}`", p.display(), method),
-                    hint,
-                    span,
-                );
-                Type::Error
-            }
-            _ => Type::Unknown,
+        if let Some(name) = &base_name {
+            let ti = ctx.types.get(name.as_str());
+            let kind_label = ti.map(|t| t.kind_label()).unwrap_or("type");
+            let available: Vec<&str> = ti
+                .map(|t| t.functions.keys().map(|k| k.as_str()).collect())
+                .unwrap_or_default();
+            let hint = if available.is_empty() {
+                format!("{kind_label} `{name}` has no functions defined")
+            } else {
+                format!("available functions: {}", available.join(", "))
+            };
+            ctx.error_with_hint(
+                format!("{kind_label} `{name}` has no function `{method}`"),
+                hint,
+                span,
+            );
+            Type::Error
+        } else {
+            Type::Unknown
         }
     }
 }
@@ -1550,8 +1433,7 @@ fn infer_struct_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let name = type_path.join(".");
-    if let Some(struct_info) = ctx.structs.get(&name) {
-        let struct_fields = struct_info.fields.clone();
+    if let Some(struct_fields) = ctx.types.get(&name).and_then(|ti| ti.fields()).cloned() {
         for fi in fields {
             let value_ty = infer_expr(&fi.value, ctx, ce);
             if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
@@ -1689,13 +1571,13 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
         return None;
     }
 
-    if let Some(prim_methods) = ctx.primitive_methods.get(&base) {
-        let get_sig = prim_methods.get("get")?;
+    let ti = ctx.types.get(&base)?;
+    let get_sig = ti.functions.get("get")?;
+
+    if type_args.is_empty() {
         return Some(get_sig.return_type.clone());
     }
 
-    let struct_info = ctx.structs.get(&base)?;
-    let get_sig = struct_info.methods.get("get")?;
-    let subst = build_substitution(&struct_info.type_params, &type_args);
+    let subst = build_substitution(&ti.type_params, &type_args);
     Some(substitute(&get_sig.return_type, &subst))
 }

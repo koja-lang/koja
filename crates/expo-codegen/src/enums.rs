@@ -29,9 +29,9 @@ pub fn compile_enum_construction<'ctx>(
 
     let is_generic = c
         .type_ctx
-        .enums
+        .types
         .get(base_name.as_str())
-        .is_some_and(|ei| !ei.type_params.is_empty());
+        .is_some_and(|ti| ti.is_enum() && !ti.type_params.is_empty());
 
     if is_generic {
         return compile_generic_enum_construction(c, base_name, variant, data, function);
@@ -82,9 +82,10 @@ fn compile_concrete_enum<'ctx>(
 
             let expected_types = c
                 .type_ctx
-                .enums
+                .types
                 .get(enum_name)
-                .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
+                .and_then(|ti| ti.variants())
+                .and_then(|vs| vs.iter().find(|v| v.name == variant))
                 .and_then(|vi| match &vi.data {
                     expo_typecheck::context::VariantData::Tuple(types) => Some(types.clone()),
                     _ => None,
@@ -128,9 +129,10 @@ fn compile_concrete_enum<'ctx>(
 
             let variant_info = c
                 .type_ctx
-                .enums
+                .types
                 .get(enum_name)
-                .and_then(|ei| ei.variants.iter().find(|v| v.name == variant))
+                .and_then(|ti| ti.variants())
+                .and_then(|vs| vs.iter().find(|v| v.name == variant))
                 .ok_or_else(|| format!("variant info not found for {enum_name}.{variant}"))?;
 
             let expected_fields = match &variant_info.data {
@@ -176,15 +178,15 @@ fn compile_generic_enum_construction<'ctx>(
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     let enum_info = c
         .type_ctx
-        .enums
+        .types
         .get(enum_name)
-        .ok_or_else(|| format!("no enum info for `{enum_name}`"))?
-        .clone();
+        .filter(|ti| ti.is_enum())
+        .cloned()
+        .ok_or_else(|| format!("no enum info for `{enum_name}`"))?;
 
     let vi = enum_info
-        .variants
-        .iter()
-        .find(|v| v.name == variant)
+        .variants()
+        .and_then(|vs| vs.iter().find(|v| v.name == variant))
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{enum_name}`"))?;
 
     let mut subst: HashMap<String, Type> = HashMap::new();

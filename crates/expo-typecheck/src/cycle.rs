@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::context::{TypeContext, VariantData};
+use crate::context::{TypeContext, TypeKind, VariantData};
 use crate::types::Type;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,45 +31,49 @@ struct Edge {
 /// that generic field types are fully resolved.
 pub fn mark_recursive_fields(ctx: &mut TypeContext) {
     let all_type_names: HashSet<String> = ctx
-        .structs
-        .keys()
-        .chain(ctx.enums.keys())
-        .cloned()
+        .types
+        .iter()
+        .filter(|(_, ti)| ti.is_struct() || ti.is_enum())
+        .map(|(n, _)| n.clone())
         .collect();
 
     let mut graph: HashMap<String, Vec<Edge>> = HashMap::new();
 
-    for (name, info) in &ctx.structs {
-        let mut edges = Vec::new();
-        for (idx, (_, field_ty)) in info.fields.iter().enumerate() {
-            for target in referenced_type_names(field_ty, &all_type_names) {
-                edges.push(Edge {
-                    target,
-                    slot: Slot::StructField(idx),
-                });
-            }
-        }
-        graph.insert(name.clone(), edges);
-    }
-
-    for (name, info) in &ctx.enums {
-        let mut edges = Vec::new();
-        for (vi, variant) in info.variants.iter().enumerate() {
-            let types: Vec<&Type> = match &variant.data {
-                VariantData::Tuple(types) => types.iter().collect(),
-                VariantData::Struct(fields) => fields.iter().map(|(_, ty)| ty).collect(),
-                VariantData::Unit => Vec::new(),
-            };
-            for (ei, ty) in types.iter().enumerate() {
-                for target in referenced_type_names(ty, &all_type_names) {
-                    edges.push(Edge {
-                        target,
-                        slot: Slot::EnumElement(vi, ei),
-                    });
+    for (name, ti) in &ctx.types {
+        match &ti.kind {
+            TypeKind::Struct { fields } => {
+                let mut edges = Vec::new();
+                for (idx, (_, field_ty)) in fields.iter().enumerate() {
+                    for target in referenced_type_names(field_ty, &all_type_names) {
+                        edges.push(Edge {
+                            target,
+                            slot: Slot::StructField(idx),
+                        });
+                    }
                 }
+                graph.insert(name.clone(), edges);
             }
+            TypeKind::Enum { variants } => {
+                let mut edges = Vec::new();
+                for (vi, variant) in variants.iter().enumerate() {
+                    let types: Vec<&Type> = match &variant.data {
+                        VariantData::Tuple(types) => types.iter().collect(),
+                        VariantData::Struct(fields) => fields.iter().map(|(_, ty)| ty).collect(),
+                        VariantData::Unit => Vec::new(),
+                    };
+                    for (ei, ty) in types.iter().enumerate() {
+                        for target in referenced_type_names(ty, &all_type_names) {
+                            edges.push(Edge {
+                                target,
+                                slot: Slot::EnumElement(vi, ei),
+                            });
+                        }
+                    }
+                }
+                graph.insert(name.clone(), edges);
+            }
+            TypeKind::Primitive => {}
         }
-        graph.insert(name.clone(), edges);
     }
 
     let mut colors: HashMap<String, Color> =
@@ -86,38 +90,40 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
     }
 
     for (type_name, slots) in &wrap_slots {
-        if let Some(info) = ctx.structs.get_mut(type_name) {
+        if let Some(ti) = ctx.types.get_mut(type_name) {
             for slot in slots {
-                if let Slot::StructField(idx) = slot
-                    && *idx < info.fields.len()
-                {
-                    let (fname, fty) = info.fields[*idx].clone();
-                    info.fields[*idx] = (fname, Type::Indirect(Box::new(fty)));
-                }
-            }
-        }
-        if let Some(info) = ctx.enums.get_mut(type_name) {
-            for slot in slots {
-                if let Slot::EnumElement(vi, ei) = slot
-                    && *vi < info.variants.len()
-                {
-                    let variant = &mut info.variants[*vi];
-                    match &mut variant.data {
-                        VariantData::Tuple(types) if *ei < types.len() => {
-                            types[*ei] = Type::Indirect(Box::new(types[*ei].clone()));
-                        }
-                        VariantData::Struct(fields) if *ei < fields.len() => {
-                            let (fname, fty) = fields[*ei].clone();
-                            fields[*ei] = (fname, Type::Indirect(Box::new(fty)));
-                        }
-                        _ => {}
+                match (&mut ti.kind, slot) {
+                    (TypeKind::Struct { fields }, Slot::StructField(idx))
+                        if *idx < fields.len() =>
+                    {
+                        let (fname, fty) = fields[*idx].clone();
+                        fields[*idx] = (fname, Type::Indirect(Box::new(fty)));
                     }
+                    (TypeKind::Enum { variants }, Slot::EnumElement(vi, ei))
+                        if *vi < variants.len() =>
+                    {
+                        let variant = &mut variants[*vi];
+                        match &mut variant.data {
+                            VariantData::Tuple(types) if *ei < types.len() => {
+                                types[*ei] = Type::Indirect(Box::new(types[*ei].clone()));
+                            }
+                            VariantData::Struct(fields) if *ei < fields.len() => {
+                                let (fname, fty) = fields[*ei].clone();
+                                fields[*ei] = (fname, Type::Indirect(Box::new(fty)));
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
     }
 }
 
+/// Three-color DFS that detects back edges (cycles). When a back edge is found,
+/// the source node's field/variant slot is recorded in `wrap_slots` so it can
+/// be wrapped in [`Type::Indirect`] later.
 fn dfs(
     node: &str,
     graph: &HashMap<String, Vec<Edge>>,
@@ -154,6 +160,7 @@ fn referenced_type_names(ty: &Type, known: &HashSet<String>) -> HashSet<String> 
     refs
 }
 
+/// Recursively collects type names from `ty` that appear in `known`, appending to `refs`.
 fn collect_refs(ty: &Type, known: &HashSet<String>, refs: &mut HashSet<String>) {
     match ty {
         Type::Struct(name) | Type::Enum(name) => {

@@ -178,14 +178,16 @@ impl<'ctx> Compiler<'ctx> {
 
         let info = self
             .type_ctx
-            .structs
+            .types
             .get(name)
+            .ok_or_else(|| format!("no struct info for generic struct `{name}`"))?;
+        let fields = info
+            .fields()
             .ok_or_else(|| format!("no struct info for generic struct `{name}`"))?;
 
         let subst = expo_typecheck::types::build_substitution(&info.type_params, type_args);
 
-        let concrete_fields: Vec<(String, Type)> = info
-            .fields
+        let concrete_fields: Vec<(String, Type)> = fields
             .iter()
             .map(|(fname, fty)| {
                 (
@@ -241,14 +243,16 @@ impl<'ctx> Compiler<'ctx> {
 
         let info = self
             .type_ctx
-            .enums
+            .types
             .get(name)
+            .ok_or_else(|| format!("no enum info for generic enum `{name}`"))?;
+        let variants = info
+            .variants()
             .ok_or_else(|| format!("no enum info for generic enum `{name}`"))?;
 
         let subst = expo_typecheck::types::build_substitution(&info.type_params, type_args);
 
-        let concrete_variants: Vec<_> = info
-            .variants
+        let concrete_variants: Vec<_> = variants
             .iter()
             .map(|vi| {
                 let data = match &vi.data {
@@ -486,15 +490,9 @@ impl<'ctx> Compiler<'ctx> {
 
         let info = self
             .type_ctx
-            .structs
+            .types
             .get(base_type)
-            .map(|si| (&si.methods, &si.type_params))
-            .or_else(|| {
-                self.type_ctx
-                    .enums
-                    .get(base_type)
-                    .map(|ei| (&ei.methods, &ei.type_params))
-            });
+            .map(|ti| (&ti.functions, &ti.type_params));
 
         let (return_type, param_types, is_static) = if let Some((methods, _)) = info {
             if let Some(sig) = methods.get(method_name) {
@@ -564,7 +562,7 @@ impl<'ctx> Compiler<'ctx> {
                 .build_store(self_alloca, fn_value.get_nth_param(0).unwrap())
                 .unwrap();
 
-            let is_enum = self.type_ctx.enums.contains_key(base_type);
+            let is_enum = self.type_ctx.is_enum(base_type);
             let self_type = if is_enum {
                 Type::Enum(mangled_type.clone())
             } else {
@@ -679,15 +677,9 @@ impl<'ctx> Compiler<'ctx> {
 
         let info = self
             .type_ctx
-            .structs
+            .types
             .get(base_type)
-            .map(|si| (&si.methods, &si.type_params))
-            .or_else(|| {
-                self.type_ctx
-                    .enums
-                    .get(base_type)
-                    .map(|ei| (&ei.methods, &ei.type_params))
-            });
+            .map(|ti| (&ti.functions, &ti.type_params));
 
         let (return_type, param_types, is_static) = if let Some((methods, _)) = info {
             if let Some(sig) = methods.get(method_name) {
@@ -757,7 +749,7 @@ impl<'ctx> Compiler<'ctx> {
                 .build_store(self_alloca, fn_value.get_nth_param(0).unwrap())
                 .unwrap();
 
-            let is_enum = self.type_ctx.enums.contains_key(base_type);
+            let is_enum = self.type_ctx.is_enum(base_type);
             let self_type = if is_enum {
                 Type::Enum(mangled_type.clone())
             } else {

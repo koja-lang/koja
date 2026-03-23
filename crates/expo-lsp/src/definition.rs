@@ -83,8 +83,9 @@ impl Backend {
 
         let def_span = match &symbol {
             SymbolInfo::Function { name } => state.ctx.functions.get(name).map(|sig| sig.span),
-            SymbolInfo::Struct { name } => state.ctx.structs.get(name).map(|info| info.span),
-            SymbolInfo::Enum { name } => state.ctx.enums.get(name).map(|info| info.span),
+            SymbolInfo::Struct { name } | SymbolInfo::Enum { name } => {
+                state.ctx.types.get(name).map(|info| info.span)
+            }
             SymbolInfo::Constant { name } => state.module.items.iter().find_map(|item| {
                 if let Item::Constant(c) = item
                     && c.name == *name
@@ -125,13 +126,11 @@ fn goto_definition_in_file(uri_str: &str, name: &str) -> Result<Option<GotoDefin
     let parsed = expo_parser::parse(&source);
     let ctx = expo_typecheck::collect_module(&parsed.module);
 
-    let span = if let Some(sig) = ctx.functions.get(name) {
-        Some(sig.span)
-    } else if let Some(info) = ctx.structs.get(name) {
-        Some(info.span)
-    } else {
-        ctx.enums.get(name).map(|info| info.span)
-    };
+    let span = ctx
+        .functions
+        .get(name)
+        .map(|sig| sig.span)
+        .or_else(|| ctx.types.get(name).map(|info| info.span));
 
     let span = match span {
         Some(s) => s,

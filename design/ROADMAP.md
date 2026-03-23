@@ -200,7 +200,7 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 - `Bits.to_binary()` → `Result<Binary, String>` (validates byte alignment)
 - Conversion methods declared as `panic("intrinsic")` in `std.kernel`, compiled to LLVM IR via intrinsic dispatch
 - String literals in `<<>>` for construction (`memcpy`) and pattern matching (`memcmp`)
-- Primitive method dispatch: `impl` blocks on primitive types (`String`, `Binary`, `Bits`, `Int`, etc.) store methods in `TypeContext.primitive_methods`, merged from stdlib, dispatched by both type checker and codegen
+- Type function dispatch: `impl` blocks on all types (structs, enums, primitives) store functions in a unified `TypeContext.types` registry via `TypeInfo`, merged from stdlib, dispatched by both type checker and codegen
 - **Done**: conversion round-trips work, `<<"hello">>` constructs a Binary from a string literal, all lang tests pass
 
 ##### A2b. String stdlib methods
@@ -613,7 +613,7 @@ Active design discussions about the type system, code organization, and function
 - **Decided**: `protocol` keyword defines behavioral contracts. `impl Protocol for Type` for conformance. Bare `impl Type` survives for direct method attachment.
 - **Implemented**: protocol declarations with function signatures, `impl Protocol for Type` blocks with completeness and signature validation, `priv fn` helpers in impl blocks, `@doc` on protocol declarations.
 - **Decided**: static dispatch via monomorphization -- no vtables, no dynamic dispatch. Consistent with the existing generic compilation model.
-- **Implemented**: `impl` blocks on primitive types (`String`, `Binary`, `Bits`, `Int`, etc.) -- methods stored in `TypeContext.primitive_methods`, separate from struct/enum methods. Currently used for conversion intrinsics (`to_binary`, `to_string`, `to_bits`) and protocol methods (`eq`, `hash`, bitwise ops). User-defined `impl` on primitives is currently possible but undocumented; a future unified method storage system may replace the separate `primitive_methods` map with a shared registry for structs, enums, and primitives alike.
+- **Implemented**: `impl` blocks on all types (structs, enums, primitives) -- functions stored in a unified `TypeContext.types` registry via `TypeInfo { functions, type_params, kind: TypeKind, span }`. `TypeKind` discriminates `Struct` (with fields), `Enum` (with variants), and `Primitive`. Previously, structs, enums, and primitives each had separate storage (`StructInfo`, `EnumInfo`, `primitive_methods`); the unified registry eliminates duplicated lookup/dispatch logic across the type checker and codegen. Used for conversion intrinsics, protocol methods, user-defined functions, and static/instance dispatch.
 - **Open**: trait bounds on generic type parameters (`fn foo<T: Display>(x: T)`) -- requires protocols, now unblocked.
 - **Open**: whether bare `impl Type` eventually migrates to inline functions in type bodies, or both coexist permanently.
 
@@ -637,6 +637,15 @@ Active design discussions about the type system, code organization, and function
 - **Decided**: enums and structs have equal capabilities -- fractal design where the same features available to `Option<T>` (a built-in enum) are available to any user-defined enum. No two-tier type system.
 - **Decided**: if types get inline functions, both structs and enums support them. An enum is semantically a one-field struct with a tagged union type -- the distinction is surface syntax, not fundamental.
 - **Open**: whether inline functions in type bodies are restricted to `self`-taking functions only (instance methods), or also allow non-`self` functions (static/factory -- which makes the type act as a namespace).
+
+### Namespace unification: modules as pseudotypes (exploration)
+
+- **Context**: the `TypeInfo` refactor unified struct/enum/primitive function storage into a single `ctx.types` registry. This eliminates duplicated dispatch logic but still treats module-qualified calls (`Module.function()`) differently from type-qualified calls (`Type.function()`).
+- **Observation**: a module file is structurally similar to a type -- it defines imports, structs, enums, and functions. A type (struct/enum/primitive) defines functions (and possibly nested types in the future). Both are namespaces that own functions.
+- **Design exploration**: treat modules as pseudotypes in the same `TypeInfo` registry, with a new `TypeKind::Module` variant. Module-qualified calls (`Http.get(url)`) and static type calls (`Option.some(x)`) would resolve through the same lookup path: `ctx.types.get(qualifier).and_then(|ti| ti.functions.get(name))`.
+- **Benefits**: single resolution path for all qualified calls, recursive namespace model (modules contain types, types contain functions), forward-compatible with nested types or module re-exports.
+- **Risks**: modules currently carry full `TypeContext` in `imported_modules` (with their own types, functions, etc.), which is richer than `TypeInfo`. Flattening this into `TypeInfo` may lose expressiveness. The `imported_modules` map also handles transitive imports and visibility scoping.
+- **Status**: not planned for immediate implementation. The current `TypeInfo` registry is designed to be forward-compatible -- adding `TypeKind::Module` later would not require re-architecture. Document here for future reference.
 
 ### FP and chaining vs `?` operator (decided, implemented)
 

@@ -40,15 +40,9 @@ pub fn compile_statement<'ctx>(
                 {
                     let type_params = c
                         .type_ctx
-                        .structs
+                        .types
                         .get(base.as_str())
-                        .map(|si| si.type_params.clone())
-                        .or_else(|| {
-                            c.type_ctx
-                                .enums
-                                .get(base.as_str())
-                                .map(|ei| ei.type_params.clone())
-                        });
+                        .map(|ti| ti.type_params.clone());
                     if let Some(tp) = type_params {
                         saved_subst = Some(c.type_subst.clone());
                         for (param, arg) in tp.iter().zip(type_args.iter()) {
@@ -299,9 +293,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             name: type_name, ..
         } = receiver.as_ref()
         {
-            let is_type_name = c.type_ctx.structs.contains_key(type_name)
-                || c.type_ctx.enums.contains_key(type_name)
-                || c.type_ctx.primitive_methods.contains_key(type_name);
+            let is_type_name = c.type_ctx.types.contains_key(type_name);
             if is_type_name {
                 return infer_static_method_return_type(c, type_name, method, args);
             }
@@ -391,44 +383,35 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
 
 /// Looks up the return type of an instance method on a given receiver type.
 fn infer_instance_method_return_type(c: &Compiler, recv_ty: &Type, method: &str) -> Option<Type> {
-    use expo_typecheck::types::GenericKind;
-
     match recv_ty {
         Type::Primitive(p) => c
             .type_ctx
-            .primitive_methods
+            .types
             .get(p.display())
-            .and_then(|m| m.get(method))
+            .and_then(|ti| ti.functions.get(method))
             .map(|sig| sig.return_type.clone()),
         Type::Struct(name) => c
             .type_ctx
-            .structs
+            .types
             .get(name)
-            .and_then(|si| si.methods.get(method))
+            .and_then(|ti| ti.functions.get(method))
             .map(|sig| sig.return_type.clone()),
         Type::Enum(name) => c
             .type_ctx
-            .enums
+            .types
             .get(name)
-            .and_then(|ei| ei.methods.get(method))
+            .and_then(|ti| ti.functions.get(method))
             .map(|sig| sig.return_type.clone()),
         Type::GenericInstance {
             base,
             type_args,
-            kind,
+            kind: _,
         } => {
-            let (methods, type_params) = match kind {
-                GenericKind::Struct => c
-                    .type_ctx
-                    .structs
-                    .get(base)
-                    .map(|si| (&si.methods, &si.type_params)),
-                GenericKind::Enum => c
-                    .type_ctx
-                    .enums
-                    .get(base)
-                    .map(|ei| (&ei.methods, &ei.type_params)),
-            }?;
+            let (methods, type_params) = c
+                .type_ctx
+                .types
+                .get(base)
+                .map(|ti| (&ti.functions, &ti.type_params))?;
             let sig = methods.get(method)?;
             let subst: std::collections::HashMap<String, Type> = type_params
                 .iter()
@@ -474,10 +457,10 @@ fn parse_mangled_type_arg(s: &str, c: &Compiler) -> Type {
             return_type,
         };
     }
-    if c.type_ctx.structs.contains_key(s) || c.mono_struct_info.contains_key(s) {
+    if c.type_ctx.is_struct(s) || c.mono_struct_info.contains_key(s) {
         return Type::Struct(s.to_string());
     }
-    if c.type_ctx.enums.contains_key(s) || c.mono_enum_variants.contains_key(s) {
+    if c.type_ctx.is_enum(s) || c.mono_enum_variants.contains_key(s) {
         return Type::Enum(s.to_string());
     }
     Type::Unknown
@@ -522,7 +505,7 @@ fn parse_mangled_enum_type(mangled: &str, c: &Compiler) -> Option<Type> {
 }
 
 fn expo_type_from_mangled_llvm_struct_name(c: &Compiler, name_str: &str) -> Option<Type> {
-    if c.type_ctx.structs.contains_key(name_str) {
+    if c.type_ctx.is_struct(name_str) {
         return Some(Type::Struct(name_str.to_string()));
     }
     if c.mono_struct_info.contains_key(name_str) {
@@ -531,7 +514,7 @@ fn expo_type_from_mangled_llvm_struct_name(c: &Compiler, name_str: &str) -> Opti
         }
         return Some(Type::Struct(name_str.to_string()));
     }
-    if c.type_ctx.enums.contains_key(name_str) {
+    if c.type_ctx.is_enum(name_str) {
         return Some(Type::Enum(name_str.to_string()));
     }
     if c.mono_enum_variants.contains_key(name_str) {
@@ -623,6 +606,8 @@ pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>
     }
 }
 
+/// Extends, truncates, or no-ops integer and float LLVM values so they match
+/// the target primitive type when storing or passing values.
 pub(crate) fn coerce_numeric<'ctx>(
     c: &Compiler<'ctx>,
     val: BasicValueEnum<'ctx>,

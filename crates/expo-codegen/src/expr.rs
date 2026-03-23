@@ -375,16 +375,16 @@ fn enum_value_to_string<'ctx>(
         .and_then(|n| n.to_str().ok())
         .ok_or("cannot determine enum type for interpolation")?;
 
-    if !c.type_ctx.enums.contains_key(enum_name) {
+    if !c.type_ctx.is_enum(enum_name) {
         return Err(format!(
             "cannot interpolate struct value `{enum_name}` (not an enum)"
         ));
     }
 
     if c.type_ctx
-        .enums
+        .types
         .get(enum_name)
-        .and_then(|ei| ei.methods.get("to_string"))
+        .and_then(|ti| ti.functions.get("to_string"))
         .is_some()
     {
         let mangled = format!("{enum_name}_to_string");
@@ -430,9 +430,10 @@ fn enum_value_to_string<'ctx>(
     let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
     let variant_count = c
         .type_ctx
-        .enums
+        .types
         .get(enum_name)
-        .map(|ei| ei.variants.len() as u32)
+        .and_then(|ti| ti.variants())
+        .map(|vs| vs.len() as u32)
         .unwrap_or(0);
     let table_type = ptr_type.array_type(variant_count);
     let zero = c.context.i32_type().const_int(0, false);
@@ -530,15 +531,9 @@ fn compile_closure<'ctx>(
         {
             let type_params = c
                 .type_ctx
-                .enums
+                .types
                 .get(base.as_str())
-                .map(|ei| &ei.type_params)
-                .or_else(|| {
-                    c.type_ctx
-                        .structs
-                        .get(base.as_str())
-                        .map(|si| &si.type_params)
-                });
+                .map(|ti| &ti.type_params);
             if let Some(tps) = type_params {
                 for (tp, ta) in tps.iter().zip(type_args.iter()) {
                     extra.insert(tp.clone(), ta.clone());
@@ -925,12 +920,12 @@ fn compile_spawn<'ctx>(
             .iter()
             .find(|(proto, _)| proto == "Process")
             .ok_or_else(|| format!("`{base}` does not implement Process"))?;
-        let si = c
+        let ti = c
             .type_ctx
-            .structs
+            .types
             .get(&base)
-            .ok_or_else(|| format!("no struct `{base}` for Process impl"))?;
-        let subst = build_substitution(&si.type_params, &type_args);
+            .ok_or_else(|| format!("no type `{base}` for Process impl"))?;
+        let subst = build_substitution(&ti.type_params, &type_args);
         let default_m_r = Type::Primitive(Primitive::String);
         let m = substitute(proto_args.get(1).unwrap_or(&default_m_r), &subst);
         let r = substitute(proto_args.get(2).unwrap_or(&default_m_r), &subst);

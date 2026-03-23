@@ -19,9 +19,19 @@ use crate::types::{Primitive, Type, resolve_type_expr};
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
 pub fn check_module(module: &Module, ctx: &mut TypeContext) {
-    let struct_names: Vec<String> = ctx.structs.keys().cloned().collect();
+    let struct_names: Vec<String> = ctx
+        .types
+        .iter()
+        .filter(|(_, ti)| ti.is_struct())
+        .map(|(n, _)| n.clone())
+        .collect();
     let struct_name_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-    let enum_names: Vec<String> = ctx.enums.keys().cloned().collect();
+    let enum_names: Vec<String> = ctx
+        .types
+        .iter()
+        .filter(|(_, ti)| ti.is_enum())
+        .map(|(n, _)| n.clone())
+        .collect();
     let enum_name_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
 
     for item in &module.items {
@@ -40,9 +50,9 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 if is_generic_impl {
                     continue;
                 }
-                let self_type = if ctx.structs.contains_key(target_name.as_str()) {
+                let self_type = if ctx.is_struct(target_name) {
                     Type::Struct(target_name.clone())
-                } else if ctx.enums.contains_key(target_name.as_str()) {
+                } else if ctx.is_enum(target_name) {
                     Type::Enum(target_name.clone())
                 } else if let Some(p) = Primitive::from_name(target_name) {
                     Type::Primitive(p)
@@ -100,6 +110,7 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
     }
 }
 
+/// Type-checks a single function body using the default message type.
 fn check_function(
     f: &Function,
     ctx: &mut TypeContext,
@@ -110,6 +121,9 @@ fn check_function(
     check_function_with_msg(f, ctx, self_type, struct_names, enum_names, None);
 }
 
+/// Type-checks a function body, building a [`CheckEnv`] from its parameters
+/// and verifying the return type against the declared signature. When
+/// `override_msg_type` is `Some`, it replaces the process mailbox type.
 fn check_function_with_msg(
     f: &Function,
     ctx: &mut TypeContext,
@@ -296,7 +310,7 @@ pub(crate) fn try_parse_mangled_generic(
 ) -> Option<(String, Vec<Type>)> {
     let sep_pos = name.find("_$")?;
     let base = &name[..sep_pos];
-    if !ctx.structs.contains_key(base) && !ctx.enums.contains_key(base) {
+    if !ctx.types.contains_key(base) {
         return None;
     }
     if !name.ends_with('$') {
