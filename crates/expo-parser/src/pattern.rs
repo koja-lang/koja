@@ -89,7 +89,7 @@ impl Parser {
                     }
                 }
                 Pattern::Literal {
-                    value: Literal::Int(text), // Reuse Int for string pattern placeholder
+                    value: Literal::String(text),
                     span: self.span_from(start),
                 }
             }

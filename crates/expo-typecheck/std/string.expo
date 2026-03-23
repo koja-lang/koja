@@ -60,4 +60,44 @@ impl String
   fn to_binary(self) -> Binary
     panic("intrinsic")
   end
+
+  @doc """
+  Returns true if the String only contains numeric characters.
+  """
+  fn digit?(self) -> Bool
+    for c in self
+      match c
+        "0" -> ()
+        "1" -> ()
+        "2" -> ()
+        "3" -> ()
+        "4" -> ()
+        "5" -> ()
+        "6" -> ()
+        "7" -> ()
+        "8" -> ()
+        "9" -> ()
+        _ -> return false
+      end
+    end
+
+    true
+  end
+
+  @doc """
+  Returns true if the String only contains whitespace characters.
+  """
+  fn whitespace?(self) -> Bool
+    for c in self
+      match c
+        " " -> ()
+        "\n" -> ()
+        "\r" -> ()
+        "\t" -> ()
+        _ -> return false
+      end
+    end
+
+    true
+  end
 end

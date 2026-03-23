@@ -570,6 +570,7 @@ impl Lexer {
                     '"' => Some('"'),
                     '\\' => Some('\\'),
                     'n' => Some('\n'),
+                    'r' => Some('\r'),
                     't' => Some('\t'),
                     '#' => Some('#'),
                     _ => None,
@@ -585,7 +586,7 @@ impl Lexer {
                     self.errors.push(Diagnostic {
                         severity: Severity::Error,
                         message: format!("unknown escape sequence '\\{next}'"),
-                        hint: Some("supported escapes: \\\\, \\\", \\n, \\t, \\#".into()),
+                        hint: Some("supported escapes: \\\\, \\\", \\n, \\r, \\t, \\#".into()),
                         span: Span::new(esc_start, self.position()),
                     });
                     text.push('\\');

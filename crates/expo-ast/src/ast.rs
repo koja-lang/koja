@@ -593,6 +593,7 @@ pub enum Literal {
     Bool(bool),
     Float(String),
     Int(String),
+    String(String),
     Unit,
 }
 

@@ -689,7 +689,11 @@ impl<'ctx> Compiler<'ctx> {
                 .first()
                 .is_some_and(|p| matches!(p, Param::Self_ { .. }))
         {
-            let self_ty = Type::Struct(type_name.to_string());
+            let self_ty = if let Some(p) = expo_typecheck::types::Primitive::from_name(type_name) {
+                Type::Primitive(p)
+            } else {
+                Type::Struct(type_name.to_string())
+            };
             if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
                 let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
                 let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();

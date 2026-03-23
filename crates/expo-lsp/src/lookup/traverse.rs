@@ -500,6 +500,7 @@ fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Opti
             Literal::Int(_) => Some("Int"),
             Literal::Float(_) => Some("Float"),
             Literal::Bool(_) => Some("Bool"),
+            Literal::String(_) => Some("String"),
             Literal::Unit => None,
         },
         Expr::Ident { name, .. } => {

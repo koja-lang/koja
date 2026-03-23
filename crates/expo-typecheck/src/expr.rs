@@ -284,6 +284,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             Literal::Bool(_) => Type::Primitive(Primitive::Bool),
             Literal::Float(_) => Type::Primitive(Primitive::F64),
             Literal::Int(_) => Type::Primitive(Primitive::I64),
+            Literal::String(_) => Type::Primitive(Primitive::String),
             Literal::Unit => Type::Unit,
         },
 

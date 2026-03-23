@@ -344,6 +344,15 @@ pub(super) fn literal_to_doc(lit: &Literal) -> Doc {
         Literal::Bool(false) => text("false"),
         Literal::Float(s) => text(s.clone()),
         Literal::Int(s) => text(s.clone()),
+        Literal::String(s) => {
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            text(format!("\"{}\"", escaped))
+        }
         Literal::Unit => text("()"),
     }
 }

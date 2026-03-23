@@ -221,6 +221,7 @@ fn compile_literal<'ctx>(
                 .const_int(if *b { 1 } else { 0 }, false)
                 .into(),
         )),
+        Literal::String(_) => unreachable!("string literals use Expr::String, not Expr::Literal"),
         Literal::Unit => Ok(None),
     }
 }

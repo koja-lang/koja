@@ -11,4 +11,9 @@ fn main
   msg = """first line
   second line"""
   print(msg)
+
+  print("123456790".digit?())
+  print("notdigit".digit?())
+  print(" \n\r\t".whitespace?())
+  print("notwhitespace ".whitespace?())
 end

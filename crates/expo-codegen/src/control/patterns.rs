@@ -361,6 +361,10 @@ fn compile_literal_for_pattern<'ctx>(
             .bool_type()
             .const_int(if *b { 1 } else { 0 }, false)
             .into()),
+        Literal::String(s) => {
+            let global = c.builder.build_global_string_ptr(s, "str_pat").unwrap();
+            Ok(global.as_pointer_value().into())
+        }
         _ => Err("unsupported literal in match pattern".to_string()),
     }
 }
@@ -613,6 +617,27 @@ fn match_values<'ctx>(
                 lit.into_float_value(),
                 "lit_feq",
             )
+            .unwrap())
+    } else if subject.is_pointer_value() && lit.is_pointer_value() {
+        let strcmp = *c.functions.get("strcmp").ok_or("strcmp not declared")?;
+        let cmp_result = c
+            .builder
+            .build_call(
+                strcmp,
+                &[
+                    subject.into_pointer_value().into(),
+                    lit.into_pointer_value().into(),
+                ],
+                "strcmp_result",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .ok_or("strcmp did not return a value")?
+            .into_int_value();
+        let zero = c.context.i32_type().const_int(0, false);
+        Ok(c.builder
+            .build_int_compare(IntPredicate::EQ, cmp_result, zero, "str_eq")
             .unwrap())
     } else {
         Err("unsupported literal pattern comparison".to_string())

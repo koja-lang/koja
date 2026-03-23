@@ -560,6 +560,9 @@ fn infer_receiver_type(c: &Compiler, expr: &Expr) -> Option<Type> {
                 Literal::Int(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::I64)),
                 Literal::Float(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::F64)),
                 Literal::Bool(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::Bool)),
+                Literal::String(_) => {
+                    Some(Type::Primitive(expo_typecheck::types::Primitive::String))
+                }
                 Literal::Unit => Some(Type::Unit),
             }
         }
