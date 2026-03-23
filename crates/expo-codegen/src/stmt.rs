@@ -133,9 +133,13 @@ pub fn compile_statement<'ctx>(
         }
 
         Statement::Return { value, .. } => {
-            crate::drop::drop_live_variables(c);
             if let Some(expr) = value {
                 let val = compile_expr(c, expr, function)?;
+                let skip = match expr {
+                    Expr::Ident { name, .. } => Some(name.as_str()),
+                    _ => None,
+                };
+                crate::drop::drop_live_variables(c, skip);
                 if let Some(v) = val {
                     let v = apply_coercion(c, v, expr)?;
                     c.builder.build_return(Some(&v)).unwrap();
@@ -143,6 +147,7 @@ pub fn compile_statement<'ctx>(
                     c.builder.build_return(None).unwrap();
                 }
             } else {
+                crate::drop::drop_live_variables(c, None);
                 c.builder.build_return(None).unwrap();
             }
             Ok(None)

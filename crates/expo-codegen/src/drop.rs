@@ -18,15 +18,20 @@ pub enum Ownership {
 }
 
 /// Emits drop calls for all live move-type variables in reverse declaration
-/// order. Called before function returns and at scope exits.
-pub fn drop_live_variables(c: &mut Compiler) {
-    let vars: Vec<(PointerValue, Type, Ownership)> = c
+/// order. Called before function returns and at scope exits. When `skip` is
+/// `Some(name)`, the variable with that name is excluded — its ownership is
+/// being transferred to the caller via `return`.
+pub fn drop_live_variables(c: &mut Compiler, skip: Option<&str>) {
+    let vars: Vec<(String, PointerValue, Type, Ownership)> = c
         .variables
         .iter()
-        .map(|(_, (ptr, ty, own))| (*ptr, ty.clone(), *own))
+        .map(|(name, (ptr, ty, own))| (name.clone(), *ptr, ty.clone(), *own))
         .collect();
 
-    for (ptr, ty, ownership) in vars.iter().rev() {
+    for (name, ptr, ty, ownership) in vars.iter().rev() {
+        if skip == Some(name.as_str()) {
+            continue;
+        }
         if matches!(ty, Type::Function { .. }) {
             emit_drop_closure(c, *ptr);
             continue;

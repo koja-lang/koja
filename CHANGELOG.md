@@ -9,12 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- String standard library -- `alpha?`, `at`, `codepoints`, `contains?`, `downcase`, `empty?`, `ends_with?`, `graphemes`, `join` (static), `replace`, `reverse`, `split`, `starts_with?`, `to_float`, `to_int`, `trim`, `trim_end`, `trim_start`, `upcase`, `whitespace?`. ASCII-only case conversion and codepoint-level iteration for now; full Unicode deferred.
 - Binary and bitstring literals -- `Binary` and `Bits` as built-in types. `<<>>` syntax for construction and pattern matching. Segment modifiers: `::N` bit-width, `::N byte`, `signed`/`unsigned`, `big`/`little`, type annotations (`: Float32`, `: Int16`). Byte-aligned totals infer `Binary`, non-byte-aligned infer `Bits`. Greedy rest capture (`rest: Binary`) in match patterns. Compile-time overflow checking.
 - `<>` concatenation operator for `Binary <> Binary`, `Bits <> Bits`, and `String <> String`. Type-checked, no cross-type mixing.
 - `Bitwise` protocol -- `band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr` as methods on all integer types.
 - String/Binary/Bits conversions -- `String.to_binary()` and `Binary.to_bits()` (zero-cost, always succeed). `Binary.to_string()` and `Bits.to_binary()` return `Result` (validate UTF-8 and byte alignment respectively).
 - String segments in binary literals -- string literals inside `<<>>` for construction and pattern matching (`<<"HTTP/1.1 ", rest: Binary>>`).
 - Methods on primitive types -- `impl` blocks can define methods on built-in types (`String`, `Binary`, `Bits`, `Int`, etc.).
+
+### Fixed
+
+- `return` of heap-owning types (`List`, `Map`, `Set`, `String`) from inside `if` blocks no longer causes a use-after-free. The codegen was dropping live variables before evaluating the return expression; now the return value is loaded first and excluded from cleanup.
 
 ## [0.7.0] - 2026-03-22
 

@@ -65,7 +65,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if !self.current_block_terminated() {
-            crate::drop::drop_live_variables(self);
+            crate::drop::drop_live_variables(self, None);
             self.builder.build_return(None).unwrap();
         }
 

@@ -321,23 +321,24 @@ impl String
       for c in self
         result = result.push(c)
       end
-    else
-      current = ""
-      i = 0
-      sep_len = separator.length()
-      len = self.length()
-      while i < len
-        if i + sep_len <= len and self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
-          result = result.push(current)
-          current = ""
-          i += sep_len
-        else
-          current = current <> self.get(i)
-          i += 1
-        end
-      end
-      result = result.push(current)
+      return result
     end
+
+    current = ""
+    i = 0
+    sep_len = separator.length()
+    len = self.length()
+    while i < len
+      if i + sep_len <= len and self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
+        result = result.push(current)
+        current = ""
+        i += sep_len
+      else
+        current = current <> self.get(i)
+        i += 1
+      end
+    end
+    result = result.push(current)
     result
   end
 
