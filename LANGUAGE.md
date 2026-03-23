@@ -2,7 +2,25 @@
 
 Expo is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
 
-See [MEMORY.md](design/MEMORY.md) for the full ownership and memory strategy. See [CONCURRENCY.md](design/CONCURRENCY.md) for the task and actor concurrency model.
+---
+
+## Table of Contents
+
+- [Lexical Structure](#lexical-structure) -- Comments, Identifiers, Keywords, Operators, Numeric Literals, Line Continuation
+- [Variables and Constants](#variables-and-constants) -- Assignment, Type Annotations, Compound Assignment, Constants
+- [Functions](#functions) -- Declaration, Private Functions, `return`, Parameters and Ownership
+- [Control Flow](#control-flow) -- `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
+- [Types](#types) -- Primitives, Unit, Strings, Structs, Enums, Union Types, Generics
+- [Pattern Matching](#pattern-matching) -- `match`, `cond`
+- [Closures and Function Types](#closures-and-function-types) -- Block Closures, Capture Semantics, Function Types
+- [Ownership and Borrowing](#ownership-and-borrowing) -- Rules, `clone()`, Drop Insertion, Copy Types
+- [Protocols](#protocols) -- Behavioral Contracts, Static Dispatch
+- [Modules and Imports](#modules-and-imports) -- File Modules, Qualified Calls, Visibility
+- [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
+- [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, Parsing, Protocols
+- [Annotations](#annotations) -- `@doc`, `@moduledoc`
+- [Planned Features](#planned-features) -- Arena Blocks, Inline Closures, Display, Struct Destructuring, Trait Bounds, `command`
+- [Tooling](#tooling) -- CLI Commands, LSP, Formatter
 
 ---
 
@@ -69,35 +87,7 @@ Newlines terminate statements. Line continuation is implicit after binary operat
 
 ---
 
-## Types
-
-### Primitive Types
-
-| Type      | Description                               |
-| --------- | ----------------------------------------- |
-| `Int`     | 64-bit signed integer (alias for `Int64`) |
-| `Int8`    | 8-bit signed integer                      |
-| `Int16`   | 16-bit signed integer                     |
-| `Int32`   | 32-bit signed integer                     |
-| `UInt8`   | 8-bit unsigned integer                    |
-| `UInt16`  | 16-bit unsigned integer                   |
-| `UInt32`  | 32-bit unsigned integer                   |
-| `UInt64`  | 64-bit unsigned integer                   |
-| `Float`   | 64-bit IEEE 754 (alias for `Float64`)     |
-| `Float32` | 32-bit IEEE 754                           |
-| `Bool`    | `true` or `false`                         |
-| `String`  | UTF-8 string                              |
-| `()`      | Unit type (empty value)                   |
-
-All primitives and `Bool` are **copy types** -- assignment duplicates the value. `String`, structs, and enums are **move types** -- assignment transfers ownership.
-
-### Unit Expression
-
-`()` is the unit value. Use `else -> ()` in `cond` for side-effect-only fallthrough.
-
----
-
-## Variables and Assignment
+## Variables and Constants
 
 Variables are declared by assignment. No `let`, `var`, or `mut` keywords.
 
@@ -142,6 +132,19 @@ Reassignment brings a variable back to live:
 ```expo
 p1 = Point{x: 3, y: 4}  # p1 is live again
 ```
+
+### Constants
+
+Module-level constants are declared with `const`. Values must be compile-time literals (int, float, string, bool):
+
+```expo
+const MAX = 100
+const PI = 3.14
+const NAME = "expo"
+const DEBUG = false
+```
+
+Constants are inlined at every usage site.
 
 ---
 
@@ -253,46 +256,6 @@ end
 
 Desugars to an indexed `while` loop using `Enumeration`'s `length` and `get` functions.
 
-### `match`
-
-Pattern matching with exhaustiveness checking:
-
-```expo
-result = match x
-  1 -> "one"
-  2 -> "two"
-  _ -> "other"
-end
-```
-
-Patterns: literals, wildcards (`_`), variable bindings, nested patterns, enum variant destructuring. Guards use `when`:
-
-```expo
-match x
-  Option.Some(v) when v > 5 -> "big"
-  Option.Some(_) -> "small"
-  Option.None -> "none"
-end
-```
-
-`match` is value-producing when all arms produce values.
-
-### `cond`
-
-Multi-branch conditional, like a chain of `if`/`else if`. Requires `else` arm:
-
-```expo
-fn classify(n: Int32) -> String
-  cond
-    n > 100 -> "big"
-    n > 10 -> "medium"
-    else -> "small"
-  end
-end
-```
-
-`cond` is value-producing when all arms (including `else`) produce values.
-
 ### Ternary
 
 ```expo
@@ -303,9 +266,37 @@ Nested ternaries are disallowed.
 
 ---
 
-## Strings
+## Types
 
-### Single-Line Strings
+### Primitive Types
+
+| Type      | Description                               |
+| --------- | ----------------------------------------- |
+| `Int`     | 64-bit signed integer (alias for `Int64`) |
+| `Int8`    | 8-bit signed integer                      |
+| `Int16`   | 16-bit signed integer                     |
+| `Int32`   | 32-bit signed integer                     |
+| `UInt8`   | 8-bit unsigned integer                    |
+| `UInt16`  | 16-bit unsigned integer                   |
+| `UInt32`  | 32-bit unsigned integer                   |
+| `UInt64`  | 64-bit unsigned integer                   |
+| `Float`   | 64-bit IEEE 754 (alias for `Float64`)     |
+| `Float32` | 32-bit IEEE 754                           |
+| `Bool`    | `true` or `false`                         |
+| `String`  | UTF-8 string                              |
+| `Binary`  | Arbitrary byte sequence                   |
+| `Bits`    | Arbitrary bit sequence                    |
+| `()`      | Unit type (empty value)                   |
+
+All numeric primitives and `Bool` are **copy types** -- assignment duplicates the value. `String`, `Binary`, `Bits`, structs, and enums are **move types** -- assignment transfers ownership.
+
+### Unit Expression
+
+`()` is the unit value. Use `else -> ()` in `cond` for side-effect-only fallthrough.
+
+### Strings
+
+#### Single-Line Strings
 
 ```expo
 "hello world"
@@ -314,9 +305,9 @@ Nested ternaries are disallowed.
 "backslash: \\"
 ```
 
-Escape sequences: `\"`, `\\`, `\n`, `\t`, `\#`.
+Escape sequences: `\"`, `\\`, `\n`, `\r`, `\t`, `\#`.
 
-### String Interpolation
+#### String Interpolation
 
 ```expo
 name = "expo"
@@ -326,7 +317,7 @@ print("1 + 2 = #{1 + 2}")
 
 Interpolation expressions are enclosed in `#{}` and can contain any expression.
 
-### Multiline Strings
+#### Multiline Strings
 
 Triple-quoted strings with automatic dedent based on closing delimiter position:
 
@@ -339,11 +330,9 @@ msg = """
 
 Multiline strings support the same escape sequences and interpolation as single-line strings.
 
----
+### Structs
 
-## Structs
-
-### Declaration
+#### Declaration
 
 ```expo
 struct Point
@@ -352,7 +341,7 @@ struct Point
 end
 ```
 
-### Construction
+#### Construction
 
 ```expo
 p = Point{x: 1, y: 2}
@@ -368,14 +357,14 @@ config = Config{
 }
 ```
 
-### Field Access
+#### Field Access
 
 ```expo
 print(p.x)
 print(p.y)
 ```
 
-### Impl Functions
+#### Impl Functions
 
 Attach functions to a type via `impl` blocks:
 
@@ -402,7 +391,7 @@ end
 list = list.push(42)  # move in, get back
 ```
 
-### Static Functions
+#### Static Functions
 
 Functions in `impl` blocks without `self` are called on the type directly:
 
@@ -416,11 +405,9 @@ end
 list: List<Int32> = List.new()
 ```
 
----
+### Enums
 
-## Enums
-
-### Variants
+#### Variants
 
 Enums support unit, tuple, and struct variants:
 
@@ -438,7 +425,7 @@ enum Shape
 end
 ```
 
-### Construction
+#### Construction
 
 ```expo
 d = Direction.North
@@ -458,20 +445,7 @@ fn opposite(dir: Direction) -> String
 end
 ```
 
-### Pattern Matching
-
-```expo
-fn area(s: Shape) -> Int32
-  match s
-    Shape.Circle(r) -> r * r * 3
-    Shape.Rect(w, h) -> w * h
-  end
-end
-```
-
----
-
-## Union Types
+### Union Types
 
 A value that can be one of several types. Use `|` between types:
 
@@ -498,11 +472,9 @@ pet: Pet = c
 
 Order doesn't matter -- `Post | Comment` and `Comment | Post` are the same type.
 
----
+### Generics
 
-## Generics
-
-### Generic Functions
+#### Generic Functions
 
 ```expo
 fn identity<T>(x: T) -> T
@@ -515,7 +487,7 @@ print(identity("hello"))
 
 Type arguments are inferred at call sites from arguments and type annotations.
 
-### Generic Structs
+#### Generic Structs
 
 ```expo
 struct Pair<A, B>
@@ -526,7 +498,7 @@ end
 p = Pair{first: 10, second: "hello"}
 ```
 
-### Generic Enums
+#### Generic Enums
 
 ```expo
 enum Option<T>
@@ -541,7 +513,7 @@ Generic enum unit variants require a type annotation for inference:
 z: Option<Int32> = Option.None
 ```
 
-### Annotation-Driven Inference
+#### Annotation-Driven Inference
 
 Type annotations on variables drive generic type inference:
 
@@ -549,42 +521,69 @@ Type annotations on variables drive generic type inference:
 list: List<Int32> = List.new()  # infers T = Int32
 ```
 
-### Implementation
+#### Implementation
 
 Generics compile via monomorphization -- the compiler generates specialized native code for each concrete type instantiation. Unused instantiations produce no binary output.
 
 ---
 
-## Protocols
+## Pattern Matching
 
-Protocols define behavioral contracts. Types implement protocols via `impl Protocol for Type`.
+### `match`
+
+Pattern matching with exhaustiveness checking:
 
 ```expo
-protocol Display
-  fn display(self) -> String
+result = match x
+  1 -> "one"
+  2 -> "two"
+  _ -> "other"
 end
+```
 
-struct Point
-  x: Int32
-  y: Int32
+Patterns: literals (integers, floats, booleans, strings), wildcards (`_`), variable bindings, nested patterns, enum variant destructuring. Guards use `when`:
+
+```expo
+match x
+  Option.Some(v) when v > 5 -> "big"
+  Option.Some(_) -> "small"
+  Option.None -> "none"
 end
+```
 
-impl Display for Point
-  fn display(self) -> String
-    "Point"
+String literals can be used as patterns:
+
+```expo
+fn classify(c: String) -> String
+  match c
+    "0" -> "zero"
+    "1" -> "one"
+    _ -> "other"
   end
 end
 ```
 
-The compiler validates completeness (all protocol functions must be implemented) and signature compatibility. `priv fn` helpers are allowed in impl blocks. `@doc` annotations are supported on protocol declarations.
+`match` is value-producing when all arms produce values.
 
-### Dispatch
+### `cond`
 
-Protocol dispatch is static via monomorphization -- no vtables, no dynamic dispatch.
+Multi-branch conditional, like a chain of `if`/`else if`. Requires `else` arm:
+
+```expo
+fn classify(n: Int32) -> String
+  cond
+    n > 100 -> "big"
+    n > 10 -> "medium"
+    else -> "small"
+  end
+end
+```
+
+`cond` is value-producing when all arms (including `else`) produce values.
 
 ---
 
-## Closures
+## Closures and Function Types
 
 ### Block Closures
 
@@ -614,9 +613,7 @@ end
 
 Captured closures use heap-allocated environment structs that are automatically freed when the closure goes out of scope.
 
----
-
-## Function Types
+### Function Types
 
 Function types are written as `fn(ParamTypes) -> ReturnType`:
 
@@ -628,7 +625,7 @@ end
 print(apply(5, fn (n: Int32) -> Int32 n * 2 end))
 ```
 
-### `move` in Function Types
+#### `move` in Function Types
 
 `fn(T) -> U` borrows `T`. `fn(move T) -> U` takes ownership of `T`:
 
@@ -675,22 +672,34 @@ a = 42
 b = a     # a is still live
 ```
 
-See [MEMORY.md](design/MEMORY.md) for the full ownership and memory strategy.
-
 ---
 
-## Constants
+## Protocols
 
-Module-level constants are declared with `const`. Values must be compile-time literals (int, float, string, bool):
+Protocols define behavioral contracts. Types implement protocols via `impl Protocol for Type`.
 
 ```expo
-const MAX = 100
-const PI = 3.14
-const NAME = "expo"
-const DEBUG = false
+protocol Display
+  fn display(self) -> String
+end
+
+struct Point
+  x: Int32
+  y: Int32
+end
+
+impl Display for Point
+  fn display(self) -> String
+    "Point"
+  end
+end
 ```
 
-Constants are inlined at every usage site.
+The compiler validates completeness (all protocol functions must be implemented) and signature compatibility. `priv fn` helpers are allowed in impl blocks. `@doc` annotations are supported on protocol declarations.
+
+### Dispatch
+
+Protocol dispatch is static via monomorphization -- no vtables, no dynamic dispatch.
 
 ---
 
@@ -713,6 +722,482 @@ Functions can be called qualified (`helper.add(3, 4)`) or unqualified (`add(3, 4
 ### Visibility
 
 All modules are importable. Access control is at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this."
+
+---
+
+## Concurrency
+
+Expo uses a message-passing actor model inspired by Erlang/Elixir. Processes have isolated memory and communicate exclusively through typed messages. Messages are moved (ownership transfer, zero-copy) -- there is no shared mutable state.
+
+### `Task<R>`
+
+The simplest way to run concurrent work. Wraps a closure, runs it in a spawned process, and returns the result:
+
+```expo
+ref = Task.async(fn -> expensive_computation() end)
+result = Task.await(ref)  # Option<R>, times out after 5000ms
+```
+
+`Task.async(fn)` spawns the closure and returns a `Ref<(), R>`. `Task.await(ref)` sends a unit message and waits for the reply.
+
+### `Process<C, M, R>` Protocol
+
+For stateful, long-lived processes, implement the `Process` protocol. `C` is the config type, `M` is the message type, `R` is the reply type.
+
+```expo
+protocol Process<C, M, R>
+  fn new(config: C) -> Self
+  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self
+  fn run(move self)
+end
+```
+
+`run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle`:
+
+```expo
+fn run(move self)
+  receive
+    pair: Pair<M, Option<ReplyTo<R>>> ->
+      self.handle(pair.first, pair.second).run()
+  end
+end
+```
+
+A complete process example:
+
+```expo
+enum CounterMsg
+  Increment
+  Decrement
+end
+
+struct Counter
+  count: Int
+end
+
+impl Process<Counter, CounterMsg, Int> for Counter
+  fn new(config: Counter) -> Self
+    config
+  end
+
+  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self
+    match msg
+      CounterMsg.Increment -> self.count += 1
+      CounterMsg.Decrement -> self.count -= 1
+    end
+    reply(from, self.count)
+    self
+  end
+end
+
+ref = spawn Counter.new(Counter{count: 0})
+ref.cast(CounterMsg.Increment)
+count = ref.call(CounterMsg.Increment, 5000)
+```
+
+### `Ref<M, R>`
+
+`spawn` returns a typed handle to the running process. `M` is the message type the process accepts; `R` is the reply type.
+
+```expo
+struct Ref<M, R>
+  id: Int
+end
+```
+
+Two ways to send messages:
+
+- `cast(msg: M)` -- fire-and-forget. The handler receives `from = Option.None`.
+- `call(msg: M, timeout: Int) -> Option<R>` -- sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Option.Some(reply)` on success, `Option.None` on timeout.
+
+```expo
+ref.cast(CounterMsg.Increment)
+result = ref.call(CounterMsg.Increment, 5000)
+```
+
+### `ReplyTo<R>` and `reply`
+
+When a process receives a `call`, the handler gets a `ReplyTo<R>` channel to send the response back. The type `R` is enforced at compile time.
+
+```expo
+struct ReplyTo<R>
+  id: Int
+end
+```
+
+- `send(reply: R)` -- sends the reply back to the caller.
+
+The `reply` convenience function handles the common pattern of replying only when a caller is present (skips silently for `cast` messages):
+
+```expo
+fn reply<R>(from: Option<ReplyTo<R>>, value: R)
+```
+
+### `spawn` and `receive`
+
+The underlying keywords that power the process model. `spawn` creates a new lightweight process and returns a `Ref`. `receive` blocks the current process until a message arrives:
+
+```expo
+receive
+  pair: Pair<M, Option<ReplyTo<R>>> ->
+    # handle the message
+end
+```
+
+In most cases you won't use `receive` directly -- the `Process` protocol's default `run` implementation handles it for you.
+
+---
+
+## Standard Library
+
+The following types and functions are auto-imported from the standard library into every module.
+
+### Built-in Functions
+
+#### `print()`
+
+Polymorphic print function. Supports all primitive types. Outputs to stdout with a trailing newline.
+
+```expo
+print(42)
+print("hello")
+print(true)       # prints "true", not "1"
+```
+
+#### `panic()`
+
+Prints a message to stderr and aborts the process:
+
+```expo
+panic("something went wrong")
+```
+
+Used internally by `unwrap()` on `Option.None` and `Result.Err`.
+
+#### `clone()`
+
+Available on all types. Produces a new owned value:
+
+```expo
+copy = original.clone()
+```
+
+### `Option<T>`
+
+```expo
+enum Option<T>
+  Some(T)
+  None
+end
+```
+
+Functions: `unwrap()`, `or(default)`, `some?()`, `none?()`, `map(fn(T) -> U)`, `then(fn(T) -> Option<U>)`.
+
+```expo
+x = Option.Some(42)
+print(x.unwrap())       # 42
+print(x.or(0))          # 42
+print(x.some?())        # true
+
+y: Option<Int> = Option.None
+print(y.or(99))          # 99
+
+mapped = x.map(fn (v: Int) -> Int v * 10 end)
+print(mapped.unwrap())   # 420
+```
+
+### `Result<T, E>`
+
+```expo
+enum Result<T, E>
+  Ok(T)
+  Err(E)
+end
+```
+
+Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `map(fn(T) -> U)`, `then(fn(T) -> Result<U, E>)`.
+
+```expo
+ok: Result<Int32, Int32> = Result.Ok(42)
+print(ok.unwrap())       # 42
+
+err: Result<Int32, Int32> = Result.Err(1)
+print(err.or(99))        # 99
+```
+
+### `Pair<A, B>`
+
+```expo
+struct Pair<A, B>
+  first: A
+  second: B
+end
+```
+
+Fields: `first`, `second`.
+
+```expo
+p = Pair{first: 10, second: "hello"}
+print(p.first)    # 10
+print(p.second)   # hello
+```
+
+### `Range`
+
+An inclusive range with `start` and `stop` endpoints.
+
+```expo
+struct Range
+  start: Int
+  stop: Int
+end
+```
+
+Used by `String.slice` for substring extraction:
+
+```expo
+greeting = "hello world"
+hello = greeting.slice(Range{start: 0, stop: 4})
+print(hello)  # "hello"
+```
+
+### `List<T>`
+
+Dynamically-sized, heap-backed collection. Compiler intrinsic backed by C's `malloc`/`realloc`/`free`.
+
+```expo
+list: List<Int32> = List.new()
+list = list.push(10)
+list = list.push(20)
+
+print(list.length())   # 2
+print(list.get(0))     # 10
+print(list.empty?())   # false
+```
+
+`push` uses `move self` semantics -- it returns the updated list. Out-of-bounds `get` panics.
+
+Functions:
+
+- `new() -> List<T>` -- creates an empty list.
+- `push(move self, item: T) -> List<T>` -- appends an element.
+- `length(self) -> Int` -- returns the number of elements.
+- `get(self, index: Int) -> T` -- returns the element at `index`. Panics if out of bounds.
+- `empty?(self) -> Bool` -- returns `true` if the list has no elements.
+- `map(self, f: fn(T) -> U) -> List<U>` -- returns a new list with `f` applied to each element.
+- `filter(self, f: fn(T) -> Bool) -> List<T>` -- returns elements for which `f` returns `true`.
+- `any?(self, f: fn(T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for at least one element.
+- `all?(self, f: fn(T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for every element. Returns `true` for an empty list.
+
+```expo
+nums = [1, 2, 3, 4, 5]
+doubled = nums.map(fn (n: Int) -> Int n * 2 end)
+evens = nums.filter(fn (n: Int) -> Bool n % 2 == 0 end)
+has_big = nums.any?(fn (n: Int) -> Bool n > 3 end)
+all_pos = nums.all?(fn (n: Int) -> Bool n > 0 end)
+```
+
+List literals (`[a, b, c]`) are backed by the `ListLiteral<T>` protocol. See [Literal Protocols](#literal-protocols).
+
+### `Map<K, V>`
+
+A generic hash map. Keys must implement `Hash` and `Equality`. Uses open addressing with linear probing.
+
+```expo
+m: Map<String, Int> = Map.new()
+m = m.put("a", 1)
+m = m.put("b", 2)
+
+print(m.get("a").unwrap())  # 1
+print(m.has?("b"))          # true
+print(m.length())           # 2
+```
+
+Functions:
+
+- `new() -> Map<K, V>` -- creates an empty map.
+- `put(move self, key: K, value: V) -> Map<K, V>` -- inserts or updates a key-value pair.
+- `get(self, key: K) -> Option<V>` -- returns `Option.Some(value)` if the key exists, `Option.None` otherwise.
+- `has?(self, key: K) -> Bool` -- returns `true` if the key exists.
+- `remove(move self, key: K) -> Map<K, V>` -- removes the entry for the key. Returns the map unchanged if the key is absent.
+- `length(self) -> Int` -- returns the number of entries.
+- `empty?(self) -> Bool` -- returns `true` if the map has no entries.
+
+Map literals (`[key: value, ...]`) are backed by the `MapLiteral<K, V>` protocol. See [Literal Protocols](#literal-protocols).
+
+### `Set<T>`
+
+A generic hash set of unique elements. Elements must implement `Hash` and `Equality`. Uses open addressing with linear probing.
+
+```expo
+s: Set<Int> = Set.new()
+s = s.insert(1)
+s = s.insert(2)
+s = s.insert(1)
+
+print(s.length())   # 2
+print(s.has?(1))     # true
+```
+
+Functions:
+
+- `new() -> Set<T>` -- creates an empty set.
+- `insert(move self, item: T) -> Set<T>` -- adds an element. Returns unchanged if already present.
+- `has?(self, item: T) -> Bool` -- returns `true` if the element exists.
+- `remove(move self, item: T) -> Set<T>` -- removes the element. Returns unchanged if absent.
+- `length(self) -> Int` -- returns the number of elements.
+- `empty?(self) -> Bool` -- returns `true` if the set has no elements.
+
+`Set<T>` implements `ListLiteral<T>`, so list literal syntax constructs a set when the target type is `Set<T>`:
+
+```expo
+names: Set<String> = ["alice", "bob", "alice"]  # Set with 2 elements
+```
+
+### String Methods
+
+`String` implements `Enumeration<String>`, so strings can be iterated character-by-character with `for`:
+
+```expo
+for c in "hello"
+  print(c)
+end
+```
+
+Functions:
+
+- `length(self) -> Int` -- returns the number of Unicode grapheme clusters (characters).
+- `get(self, index: Int) -> String` -- returns the single-character string at the given index. Panics if out of bounds.
+- `byte_length(self) -> Int` -- returns the number of bytes in the UTF-8 encoding.
+- `slice(self, range: Range) -> String` -- returns a substring spanning the given inclusive range of character indices. Clamps out-of-bounds endpoints.
+- `to_binary(self) -> Binary` -- zero-cost conversion to `Binary` (every valid UTF-8 string is a valid byte sequence).
+- `digit?(self) -> Bool` -- returns `true` if the string contains only numeric characters (`0`-`9`).
+- `whitespace?(self) -> Bool` -- returns `true` if the string contains only whitespace characters (space, `\n`, `\r`, `\t`).
+
+```expo
+s = "hello"
+print(s.length())                            # 5
+print(s.get(0))                              # "h"
+print(s.slice(Range{start: 1, stop: 3}))     # "ell"
+print("123".digit?())                        # true
+print("  \n".whitespace?())                  # true
+```
+
+`String` also implements `Equality` (content comparison via `==`) and `Hash` (FNV-1a).
+
+### Binary and Bits
+
+`Binary` represents an arbitrary byte sequence. `Bits` represents an arbitrary bit sequence. Both are move types.
+
+Conversion functions:
+
+- `String.to_binary(self) -> Binary` -- zero-cost widening from UTF-8 string to bytes.
+- `Binary.to_string(self) -> Result<String, String>` -- attempts to interpret bytes as UTF-8. Returns `Result.Err` with a diagnostic if invalid.
+- `Binary.to_bits(self) -> Bits` -- zero-cost widening from bytes to bits.
+- `Bits.to_binary(self) -> Result<Binary, String>` -- narrows bits to bytes. Returns `Result.Err` if the bit length is not divisible by 8.
+
+```expo
+bin = "hello".to_binary()
+bits = bin.to_bits()
+roundtrip = bits.to_binary().unwrap().to_string().unwrap()
+print(roundtrip)  # "hello"
+```
+
+### Parsing
+
+Static functions on `Int` and `Float` for parsing strings:
+
+- `Int.parse(input: String) -> Result<Int, String>` -- parses a string as a 64-bit signed integer.
+- `Float.parse(input: String) -> Result<Float, String>` -- parses a string as a 64-bit float.
+
+```expo
+x = Int.parse("42").unwrap()
+print(x)  # 42
+
+y = Float.parse("3.14").unwrap()
+print(y)  # 3.14
+
+err = Int.parse("nope")
+print(err.err?())  # true
+```
+
+### `Enumeration<T>` Protocol
+
+```expo
+protocol Enumeration<T>
+  fn length(self) -> Int
+  fn get(self, index: Int) -> T
+end
+```
+
+Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` and `String` implement this protocol.
+
+### `Equality` Protocol
+
+```expo
+protocol Equality
+  fn eq(self, other: Self) -> Bool
+end
+```
+
+Powers the `==` and `!=` operators. Implemented for all numeric types, `Bool`, and `String`.
+
+### `Hash` Protocol
+
+```expo
+protocol Hash
+  fn hash(self) -> Int
+end
+```
+
+Required for keys in `Map<K, V>` and elements in `Set<T>`. Implemented for all numeric types, `Bool`, and `String`. Integers use SplitMix64; strings use FNV-1a.
+
+### `Bitwise` Protocol
+
+```expo
+protocol Bitwise
+  fn band(self, other: Self) -> Self
+  fn bor(self, other: Self) -> Self
+  fn bxor(self, other: Self) -> Self
+  fn bnot(self) -> Self
+  fn bsl(self, n: Int) -> Self
+  fn bsr(self, n: Int) -> Self
+end
+```
+
+Bitwise operations are methods rather than symbolic operators. Expo reserves `<<`/`>>` for binary literals, `|` for union types, and `&` is unused. All integer types implement `Bitwise`.
+
+```expo
+flags = 0b1010
+print(flags.band(0b1100))  # 8  (0b1000)
+print(flags.bor(0b0001))   # 11 (0b1011)
+print(1.bsl(4))             # 16
+print(16.bsr(4))            # 1
+```
+
+### Literal Protocols
+
+List and map literals are backed by protocols, allowing custom types to opt into literal syntax.
+
+**`ListLiteral<T>`** -- the compiler builds a `List<T>` from `[a, b, c]` and passes it to `from_list`:
+
+```expo
+protocol ListLiteral<T>
+  fn from_list(move list: List<T>) -> Self
+end
+```
+
+`List<T>` and `Set<T>` implement `ListLiteral<T>`.
+
+**`MapLiteral<K, V>`** -- the compiler builds a `Map<K, V>` from `[k: v, ...]` and passes it to `from_map`:
+
+```expo
+protocol MapLiteral<K, V>
+  fn from_map(move map: Map<K, V>) -> Self
+end
+```
+
+`Map<K, V>` implements `MapLiteral<K, V>`.
 
 ---
 
@@ -745,161 +1230,9 @@ Doc strings support Markdown and are rendered by `expo doc`.
 
 ---
 
-## Standard Library
-
-The following types are auto-imported from `std.kernel` into every module.
-
-### `Option<T>`
-
-```expo
-enum Option<T>
-  Some(T)
-  None
-end
-```
-
-Functions: `unwrap()`, `or(default)`, `some?()`, `none?()`, `map(fn(move T) -> U)`, `then(fn(move T) -> Option<U>)`.
-
-```expo
-x = Option.Some(42)
-print(x.unwrap())       # 42
-print(x.or(0))          # 42
-print(x.some?())        # true
-
-y: Option<Int32> = Option.None
-print(y.or(99))          # 99
-
-mapped = x.map(fn (v: Int32) -> Int32 v * 10 end)
-print(mapped.unwrap())   # 420
-```
-
-### `Result<T, E>`
-
-```expo
-enum Result<T, E>
-  Ok(T)
-  Err(E)
-end
-```
-
-Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `map(fn(move T) -> U)`, `then(fn(move T) -> Result<U, E>)`.
-
-```expo
-ok: Result<Int32, Int32> = Result.Ok(42)
-print(ok.unwrap())       # 42
-
-err: Result<Int32, Int32> = Result.Err(1)
-print(err.or(99))        # 99
-```
-
-### `Pair<A, B>`
-
-```expo
-struct Pair<A, B>
-  first: A
-  second: B
-end
-```
-
-Fields: `first`, `second`.
-
-```expo
-p = Pair{first: 10, second: "hello"}
-print(p.first)    # 10
-print(p.second)   # hello
-```
-
-### `List<T>`
-
-Dynamically-sized, heap-backed collection. Compiler intrinsic backed by C's `malloc`/`realloc`/`free`.
-
-```expo
-list: List<Int32> = List.new()
-list = list.push(10)
-list = list.push(20)
-
-print(list.length())   # 2
-print(list.get(0))     # 10
-print(list.empty?())   # false
-```
-
-`push` uses `move self` semantics -- it returns the updated list. Out-of-bounds `get` panics.
-
-### `Enumeration<T>` Protocol
-
-```expo
-protocol Enumeration<T>
-  fn length(self) -> Int32
-  fn get(self, index: Int32) -> T
-end
-```
-
-Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` implements this protocol.
-
----
-
-## Built-in Functions
-
-### `print()`
-
-Polymorphic print function. Supports all primitive types. Outputs to stdout with a trailing newline.
-
-```expo
-print(42)
-print("hello")
-print(true)       # prints "true", not "1"
-```
-
-### `panic()`
-
-Prints a message to stderr and aborts the process:
-
-```expo
-panic("something went wrong")
-```
-
-Used internally by `unwrap()` on `Option.None` and `Result.Err`.
-
-### `clone()`
-
-Available on all types. Produces a new owned value:
-
-```expo
-copy = original.clone()
-```
-
----
-
 ## Planned Features
 
 The following features are designed but not yet compiled to native code. They are parsed and/or type-checked but await codegen implementation.
-
-### Tasks (Structured Concurrency)
-
-Lightweight concurrent computations. Stackless state machines with structured lifetimes -- tasks cannot outlive their spawner.
-
-```expo
-handle = spawn fn -> fetch_user(id) end
-user = handle.await()
-```
-
-Tasks can borrow from the parent scope (zero-copy reads) because structured concurrency guarantees the parent outlives the task. See [CONCURRENCY.md](design/CONCURRENCY.md).
-
-### Actors
-
-Long-lived concurrent entities with isolated memory, typed mailboxes, and supervision. The building block for stateful services.
-
-```expo
-actor Counter
-  state count: Int32 = 0
-
-  receive Increment ->
-    @count += 1
-  end
-end
-```
-
-Messages are moved (ownership transfer, zero-copy). Actors are preemptively scheduled by a work-stealing runtime. See [CONCURRENCY.md](design/CONCURRENCY.md).
 
 ### `arena` Blocks
 
@@ -926,10 +1259,6 @@ Requires closure-specific type inference from calling context. Parsed but not co
 
 Auto-derived string representation for all types. `print()` will dispatch through `Display` instead of hardcoding format specifiers per type.
 
-### Literal Protocols
-
-All literal syntax backed by protocols (`FromInt`, `FromFloat`, `FromString`, `FromList<T>`, `FromEntries<K,V>`, `FromPair<A,B>`). Any type can opt into literal construction by implementing the protocol.
-
 ### Struct Destructuring
 
 Irrefutable struct destructuring on assignment:
@@ -952,7 +1281,7 @@ end
 
 ### `command` Construct
 
-Language-native typed pipelines for backend business logic with step-ordered type safety and exhaustive data flow checking. See [ROADMAP.md](design/ROADMAP.md).
+Language-native typed pipelines for backend business logic with step-ordered type safety and exhaustive data flow checking.
 
 ---
 
