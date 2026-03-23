@@ -186,7 +186,10 @@ fn check_function_with_msg(
         check_body(&f.body[..f.body.len() - 1], ctx, &mut ce);
         if let Some(Statement::Expr(expr)) = f.body.last() {
             let actual = infer_expr(expr, ctx, &mut ce);
-            if actual.is_known() && !types_compatible(&actual, &declared_return) {
+            if actual.is_known()
+                && !types_compatible(&actual, &declared_return)
+                && !is_diverging(expr)
+            {
                 ctx.error_with_hint(
                     format!(
                         "return type mismatch: expected `{}`, found `{}`",
@@ -345,6 +348,16 @@ fn split_mangled_args(s: &str) -> Vec<String> {
         parts.push(current);
     }
     parts
+}
+
+/// Returns `true` when `expr` is a call to a diverging function (e.g. `panic`)
+/// whose return type should be treated as compatible with any declared type.
+fn is_diverging(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Call { callee, .. }
+            if matches!(callee.as_ref(), Expr::Ident { name, .. } if name == "panic")
+    )
 }
 
 /// Checks if two types are compatible, accounting for numeric coercion and

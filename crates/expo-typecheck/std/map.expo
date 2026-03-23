@@ -1,0 +1,77 @@
+@doc """
+A generic hash map from keys of type `K` to values of type `V`.
+Keys must implement `Hash` and `Equality`. Uses open addressing
+with linear probing.
+"""
+struct Map<K, V>
+end
+
+impl Map<K, V>
+  @doc """
+  Returns `true` if the map contains no entries.
+  """
+  fn empty?(self) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `Option.Some(value)` if the key exists, or `Option.None` otherwise.
+  """
+  fn get(self, key: K) -> Option<V>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `true` if the map contains the given key.
+  """
+  fn has?(self, key: K) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the number of entries in the map.
+  """
+  fn length(self) -> Int
+    panic("intrinsic")
+  end
+
+  @doc """
+  Creates a new empty map with an initial capacity of 8.
+  """
+  fn new -> Map<K, V>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Inserts or updates the given key-value pair and returns the updated map.
+  """
+  fn put(move self, key: K, value: V) -> Map<K, V>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Removes the entry for the given key and returns the updated map.
+  If the key is not present, the map is returned unchanged.
+  """
+  fn remove(move self, key: K) -> Map<K, V>
+    panic("intrinsic")
+  end
+end
+
+@doc """
+A protocol for types that can be constructed from a map literal
+`[key: value, ...]`. The compiler builds a `Map<K, V>` and passes it
+to `from_map`.
+"""
+protocol MapLiteral<K, V>
+  fn from_map(move map: Map<K, V>) -> Self
+end
+
+impl MapLiteral<K, V> for Map<K, V>
+  @doc """
+  Returns the map unchanged. `Map<K, V>` is the default type for map literals.
+  """
+  fn from_map(move map: Map<K, V>) -> Self
+    panic("intrinsic")
+  end
+end

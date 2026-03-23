@@ -1,0 +1,116 @@
+@doc """
+A dynamically-sized, heap-backed list. Owns its elements and follows
+move semantics for mutations.
+"""
+struct List<T>
+end
+
+impl Enumeration<T> for List<T>
+  @doc """
+  Returns the number of elements in the list.
+  """
+  fn length(self) -> Int
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the element at the given index. Panics if the index is out of bounds.
+  """
+  fn get(self, index: Int) -> T
+    panic("intrinsic")
+  end
+end
+
+impl List<T>
+  @doc """
+  Creates a new empty list.
+  """
+  fn new -> List<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Appends an element to the end of the list and returns the updated list.
+  """
+  fn push(move self, item: T) -> List<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `true` if the list contains no elements.
+  """
+  fn empty?(self) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns a new list with `f` applied to each element. The closure may
+  return a different type, producing a `List<U>` from a `List<T>`.
+  """
+  fn map<U>(self, f: fn(T) -> U) -> List<U>
+    result: List<U> = List.new()
+    for item in self
+      result = result.push(f(item))
+    end
+    result
+  end
+
+  @doc """
+  Returns a new list containing only the elements for which `f` returns `true`.
+  """
+  fn filter(self, f: fn(T) -> Bool) -> List<T>
+    result: List<T> = List.new()
+    for item in self
+      if f(item)
+        result = result.push(item)
+      end
+    end
+    result
+  end
+
+  @doc """
+  Returns `true` if `f` returns `true` for at least one element.
+  """
+  fn any?(self, f: fn(T) -> Bool) -> Bool
+    result = false
+    for item in self
+      if f(item)
+        result = true
+      end
+    end
+    result
+  end
+
+  @doc """
+  Returns `true` if `f` returns `true` for every element.
+  Returns `true` for an empty list.
+  """
+  fn all?(self, f: fn(T) -> Bool) -> Bool
+    result = true
+    for item in self
+      unless f(item)
+        result = false
+      end
+    end
+    result
+  end
+end
+
+@doc """
+A protocol for types that can be constructed from a list literal `[a, b, c]`.
+The compiler builds a `List<T>` from the literal elements and passes it to
+`from_list`. Implement this protocol to enable list literal syntax for
+custom collection types.
+"""
+protocol ListLiteral<T>
+  fn from_list(move list: List<T>) -> Self
+end
+
+impl ListLiteral<T> for List<T>
+  @doc """
+  Returns the list unchanged. `List<T>` is the default type for list literals.
+  """
+  fn from_list(move list: List<T>) -> Self
+    panic("intrinsic")
+  end
+end

@@ -22,13 +22,31 @@ pub const KERNEL_SOURCE: &str = include_str!("../std/kernel.expo");
 /// `Enumeration<String>` for iteration and string intrinsic methods.
 pub const STRING_SOURCE: &str = include_str!("../std/string.expo");
 
+/// The source of `std.list`, embedded at compile time. Provides
+/// `ListLiteral<T>` for list literal syntax.
+pub const LIST_SOURCE: &str = include_str!("../std/list.expo");
+
+/// The source of `std.map`, embedded at compile time. Provides
+/// `MapLiteral<K, V>` for map literal syntax.
+pub const MAP_SOURCE: &str = include_str!("../std/map.expo");
+
+/// The source of `std.set`, embedded at compile time.
+pub const SET_SOURCE: &str = include_str!("../std/set.expo");
+
 /// The source of `std.bitwise`, embedded at compile time. Provides the
 /// `Bitwise` protocol and intrinsic implementations for all integer types.
 pub const BITWISE_SOURCE: &str = include_str!("../std/bitwise.expo");
 
 /// All embedded stdlib sources in dependency order. Kernel must come first;
 /// subsequent modules may reference types defined by earlier ones.
-pub const STDLIB_SOURCES: &[&str] = &[KERNEL_SOURCE, STRING_SOURCE, BITWISE_SOURCE];
+pub const STDLIB_SOURCES: &[&str] = &[
+    KERNEL_SOURCE,
+    STRING_SOURCE,
+    LIST_SOURCE,
+    MAP_SOURCE,
+    SET_SOURCE,
+    BITWISE_SOURCE,
+];
 
 /// Merges a stdlib [`TypeContext`] into `target`, adding any types, functions,
 /// and generic ASTs that aren't already defined in the target module.

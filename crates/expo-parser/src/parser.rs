@@ -32,7 +32,11 @@ impl Parser {
     // =========================================================================
 
     pub(crate) fn peek(&self) -> &TokenKind {
-        &self.tokens[self.pos].kind
+        if let Some(ref pt) = self.pending_token {
+            pt
+        } else {
+            &self.tokens[self.pos].kind
+        }
     }
 
     pub(crate) fn peek_nth(&self, n: usize) -> &TokenKind {
@@ -47,6 +51,12 @@ impl Parser {
     }
 
     pub(crate) fn advance(&mut self) -> Token {
+        if let Some(pt) = self.pending_token.take() {
+            return Token {
+                kind: pt,
+                span: self.tokens[self.pos].span,
+            };
+        }
         let tok = self.tokens[self.pos].clone();
         if self.pos + 1 < self.tokens.len() {
             self.pos += 1;
