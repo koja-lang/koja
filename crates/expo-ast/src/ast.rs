@@ -730,4 +730,6 @@ pub enum Pattern {
     },
     /// A list pattern: `[head, tail]`.
     List { elements: Vec<Pattern>, span: Span },
+    /// An OR pattern: `1 | 2 | 3`.
+    Or { patterns: Vec<Pattern>, span: Span },
 }

@@ -292,6 +292,14 @@ pub(crate) fn compile_pattern<'ctx>(
         Pattern::Binary { segments, .. } => {
             compile_binary_pattern(c, segments, subject_ptr, function)
         }
+        Pattern::Or { patterns, .. } => {
+            let mut result = c.context.bool_type().const_int(0, false);
+            for sub in patterns {
+                let cond = compile_pattern(c, sub, subject_ptr, subject_type, function)?;
+                result = c.builder.build_or(result, cond, "or_pat").unwrap();
+            }
+            Ok(result)
+        }
     }
 }
 

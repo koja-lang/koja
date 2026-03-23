@@ -16,6 +16,22 @@ use crate::types::{
     GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute,
 };
 
+fn pattern_is_catch_all(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Wildcard { .. } | Pattern::Binding { .. } => true,
+        Pattern::Or { patterns, .. } => patterns.iter().any(pattern_is_catch_all),
+        _ => false,
+    }
+}
+
+/// Collects all leaf patterns from an arm, flattening OR patterns.
+fn flatten_pattern(pat: &Pattern) -> Vec<&Pattern> {
+    match pat {
+        Pattern::Or { patterns, .. } => patterns.iter().flat_map(flatten_pattern).collect(),
+        other => vec![other],
+    }
+}
+
 /// Checks whether a match expression covers all variants of an enum subject,
 /// emitting a diagnostic if any variants are missing and no catch-all exists.
 pub(crate) fn check_match_exhaustiveness(
@@ -28,12 +44,9 @@ pub(crate) fn check_match_exhaustiveness(
         Type::Indirect(inner) => inner.as_ref(),
         other => other,
     };
-    let has_catch_all = arms.iter().any(|arm| {
-        matches!(
-            arm.pattern,
-            Pattern::Wildcard { .. } | Pattern::Binding { .. }
-        ) && arm.guard.is_none()
-    });
+    let has_catch_all = arms
+        .iter()
+        .any(|arm| arm.guard.is_none() && pattern_is_catch_all(&arm.pattern));
     if has_catch_all {
         return;
     }
@@ -62,7 +75,8 @@ pub(crate) fn check_match_exhaustiveness(
             let matched: Vec<&str> = arms
                 .iter()
                 .filter(|arm| arm.guard.is_none())
-                .filter_map(|arm| match &arm.pattern {
+                .flat_map(|arm| flatten_pattern(&arm.pattern))
+                .filter_map(|pat| match pat {
                     Pattern::EnumUnit { variant, .. }
                     | Pattern::EnumTuple { variant, .. }
                     | Pattern::EnumStruct { variant, .. } => Some(variant.as_str()),
@@ -100,7 +114,8 @@ pub(crate) fn check_match_exhaustiveness(
             let matched: Vec<String> = arms
                 .iter()
                 .filter(|arm| arm.guard.is_none())
-                .filter_map(|arm| match &arm.pattern {
+                .flat_map(|arm| flatten_pattern(&arm.pattern))
+                .filter_map(|pat| match pat {
                     Pattern::EnumUnit { type_path, .. } => Some(type_path.join(".")),
                     Pattern::EnumTuple { type_path, .. } => Some(type_path.join(".")),
                     Pattern::EnumStruct { type_path, .. } => Some(type_path.join(".")),
@@ -425,6 +440,21 @@ pub(crate) fn check_pattern(
             check_binary_pattern(segments, subject_type, *span, ctx, env);
         }
 
+        Pattern::Or { patterns, span } => {
+            for sub in patterns {
+                let bindings = collect_pattern_bindings(sub);
+                if !bindings.is_empty() {
+                    ctx.error(
+                        "variable bindings are not allowed inside OR patterns".to_string(),
+                        bindings[0].1,
+                    );
+                    return;
+                }
+                check_pattern(sub, subject_type_raw, ctx, env);
+            }
+            let _ = span;
+        }
+
         Pattern::Wildcard { .. } => {}
     }
 }
@@ -661,6 +691,7 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
                 collect_bindings_inner_expr(&seg.value, out);
             }
         }
+        Pattern::Or { .. } => {}
         Pattern::Wildcard { .. } | Pattern::Literal { .. } | Pattern::EnumUnit { .. } => {}
     }
 }

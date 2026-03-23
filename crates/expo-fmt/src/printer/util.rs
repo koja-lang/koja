@@ -291,6 +291,10 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
                 ])
             }
         }
+        Pattern::Or { patterns, .. } => {
+            let pat_docs: Vec<Doc> = patterns.iter().map(pattern_to_doc).collect();
+            intersperse(pat_docs, text(" | "))
+        }
     }
 }
 

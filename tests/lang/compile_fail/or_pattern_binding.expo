@@ -1,0 +1,7 @@
+fn main
+  x = 5
+  match x
+    1 | n -> print(n)
+    _ -> print("other")
+  end
+end

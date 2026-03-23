@@ -137,6 +137,22 @@ impl Parser {
         }
     }
 
+    pub(crate) fn parse_or_pattern(&mut self) -> Pattern {
+        let start = self.current_span();
+        let first = self.parse_pattern();
+        if !self.at(&TokenKind::Pipe) {
+            return first;
+        }
+        let mut patterns = vec![first];
+        while self.eat(&TokenKind::Pipe).is_some() {
+            patterns.push(self.parse_pattern());
+        }
+        Pattern::Or {
+            span: self.span_from(start),
+            patterns,
+        }
+    }
+
     fn parse_type_pattern(&mut self) -> Pattern {
         let start = self.current_span();
         let first = self.expect_type_ident();

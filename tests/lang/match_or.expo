@@ -1,0 +1,54 @@
+enum Color
+  Red
+  Green
+  Blue
+end
+
+fn classify(n: Int) -> String
+  match n
+    1 | 2 | 3 -> "small"
+    4 | 5 | 6 -> "medium"
+    _ -> "large"
+  end
+end
+
+fn bracket(ch: String) -> String
+  match ch
+    "(" | ")" | "[" | "]" -> "bracket"
+    _ -> "other"
+  end
+end
+
+fn color_warmth(c: Color) -> String
+  match c
+    Color.Red -> "warm"
+    Color.Green | Color.Blue -> "cool"
+  end
+end
+
+fn or_with_guard(n: Int) -> String
+  match n
+    1 | 2 | 3 when n > 2 -> "three"
+    1 | 2 | 3 -> "small"
+    _ -> "other"
+  end
+end
+
+fn main
+  print(classify(1))
+  print(classify(2))
+  print(classify(5))
+  print(classify(99))
+
+  print(bracket("("))
+  print(bracket("]"))
+  print(bracket("x"))
+
+  print(color_warmth(Color.Red))
+  print(color_warmth(Color.Green))
+  print(color_warmth(Color.Blue))
+
+  print(or_with_guard(3))
+  print(or_with_guard(1))
+  print(or_with_guard(7))
+end

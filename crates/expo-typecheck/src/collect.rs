@@ -1321,6 +1321,11 @@ fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &str) {
                 }
             }
         }
+        Pattern::Or { patterns, .. } => {
+            for p in patterns {
+                substitute_named_in_pattern(p, from, to);
+            }
+        }
         Pattern::Wildcard { .. }
         | Pattern::Literal { .. }
         | Pattern::Binding { .. }
@@ -1557,6 +1562,11 @@ fn substitute_self_in_pattern(pat: &mut Pattern, target: &str) {
                 if let Some(sz) = &mut seg.size {
                     substitute_self_in_expr(sz, target);
                 }
+            }
+        }
+        Pattern::Or { patterns, .. } => {
+            for p in patterns {
+                substitute_self_in_pattern(p, target);
             }
         }
         Pattern::Wildcard { .. }

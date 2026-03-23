@@ -269,7 +269,9 @@ match_expr = "match" , expr ,
              { match_arm } ,
              "end" ;
 
-match_arm = pattern , [ "when" , expr ] , "->" , match_body ;
+match_arm = or_pattern , [ "when" , expr ] , "->" , match_body ;
+
+or_pattern = pattern , { "|" , pattern } ;
 
 match_body = statement
            | { statement } ;       (* multi-line arm *)

@@ -73,7 +73,7 @@ impl Parser {
 
     fn parse_match_arm(&mut self, extra_stops: &[TokenKind]) -> MatchArm {
         let start = self.current_span();
-        let pattern = self.parse_pattern();
+        let pattern = self.parse_or_pattern();
 
         let guard = if self.eat(&TokenKind::When).is_some() {
             Some(self.parse_expr_bp(BP_TERNARY + 1))

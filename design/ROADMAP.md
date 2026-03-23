@@ -124,7 +124,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 ```
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
           → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise) ✓
-          → A2a (type conversion) ✓ → A2b (string stdlib) → A2c (OR patterns) → A2d (ranges)
+          → A2a (type conversion) ✓ → A2b (string stdlib) ✓ → A2c (OR patterns) ✓ → A2d (ranges)
           → A3 (project.expo + test runner) → A4 (lexer port)
 
 Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
@@ -203,27 +203,29 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 - Type function dispatch: `impl` blocks on all types (structs, enums, primitives) store functions in a unified `TypeContext.types` registry via `TypeInfo`, merged from stdlib, dispatched by both type checker and codegen
 - **Done**: conversion round-trips work, `<<"hello">>` constructs a Binary from a string literal, all lang tests pass
 
-##### A2b. String stdlib methods
+##### A2b. String stdlib methods -- done
 
 - Core: `length()`, `byte_length()`, `empty?()`, `at()`, `contains?()`, `starts_with?()`, `ends_with?()`
 - Transform: `trim()`, `trim_start()`, `trim_end()`, `upcase()`, `downcase()`, `replace()`, `reverse()`
 - Split/join: `split()`, `join()` (on List of String)
-- Classification: `is_alpha?()`, `is_digit?()`, `is_whitespace?()` (on String -- checks all codepoints)
+- Classification: `alpha?()`, `digit?()`, `whitespace?()` (on String -- checks all codepoints)
 - Iteration: `codepoints()`, `graphemes()`
 - Parsing: `to_int()`, `to_float()`
-- **Done when**: string-heavy programs compile and work (character iteration, splitting, searching, classification)
+- **Done**: string-heavy programs compile and work (character iteration, splitting, searching, classification)
 - **Note**: A2b ships ASCII-only case conversion (`upcase`/`downcase`) and codepoint-level iteration (`codepoints`/`graphemes`). Full Unicode support is deferred but required before production HTTP microservices handling internationalized content (JSON payloads, form input, non-ASCII URLs). Specifically:
   - **Unicode case mapping tables** (UCD CaseFolding/SpecialCasing) for proper `upcase()`/`downcase()` beyond ASCII (e.g., `ß` → `SS`, Turkish dotted i)
   - **Unicode grapheme cluster segmentation** (Grapheme_Cluster_Break property tables, ~100KB+ in runtime) for `graphemes()` to correctly handle emoji sequences, combining marks, etc.
   - **Unicode-aware classification** (`alpha?`, `digit?`, `whitespace?`) currently only handles ASCII ranges; full Unicode requires General_Category property lookups
   - These tables will be embedded in `expo-runtime` when the need arises.
 
-##### A2c. OR patterns
+##### A2c. OR patterns -- done
 
 - OR patterns (`|`) in match arms -- multiple patterns sharing one arm body
 - Same-binding constraint: all alternatives must bind the same set of variables with compatible types
 - New AST variant: `Pattern::Or`
-- **Done when**: `match x 1 | 2 | 3 -> "small" ...` compiles and runs
+- Variable bindings inside OR patterns are currently disallowed (compile error); same-binding support is deferred
+- Works in both `match` and `receive` arms
+- **Done**: `match x 1 | 2 | 3 -> "small" ...` compiles and runs
 
 ##### A2d. Ranges
 
@@ -729,7 +731,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, A2b string stdlib, A2c OR patterns, A2d ranges, A3 project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges, A3 project system, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |

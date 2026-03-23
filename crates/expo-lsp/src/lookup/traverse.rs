@@ -207,6 +207,15 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Opt
                 }
             }
         }
+        Pattern::Or { patterns, span } => {
+            if span_contains(span, line, col) {
+                for sub in patterns {
+                    if let Some(info) = find_in_pattern(sub, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
         Pattern::Wildcard { .. } | Pattern::Literal { .. } | Pattern::Binding { .. } => {}
     }
     None

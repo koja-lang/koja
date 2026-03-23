@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- OR patterns in match arms -- `1 | 2 | 3 -> "small"` combines multiple patterns sharing one arm body. Works in `match` and `receive`. Variable bindings inside OR patterns are disallowed for now.
 - String standard library -- `alpha?`, `at`, `codepoints`, `contains?`, `downcase`, `empty?`, `ends_with?`, `graphemes`, `join` (static), `replace`, `reverse`, `split`, `starts_with?`, `to_float`, `to_int`, `trim`, `trim_end`, `trim_start`, `upcase`, `whitespace?`. ASCII-only case conversion and codepoint-level iteration for now; full Unicode deferred.
 - Binary and bitstring literals -- `Binary` and `Bits` as built-in types. `<<>>` syntax for construction and pattern matching. Segment modifiers: `::N` bit-width, `::N byte`, `signed`/`unsigned`, `big`/`little`, type annotations (`: Float32`, `: Int16`). Byte-aligned totals infer `Binary`, non-byte-aligned infer `Bits`. Greedy rest capture (`rest: Binary`) in match patterns. Compile-time overflow checking.
 - `<>` concatenation operator for `Binary <> Binary`, `Bits <> Bits`, and `String <> String`. Type-checked, no cross-type mixing.
