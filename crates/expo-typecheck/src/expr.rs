@@ -10,7 +10,10 @@ use std::collections::{HashMap, HashSet};
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
-use crate::check::{check_call_args, check_type, try_parse_mangled_generic, types_compatible};
+use crate::check::{
+    check_call_args, check_literal_overflow, check_type, try_parse_mangled_generic,
+    types_compatible,
+};
 use crate::context::{
     CaptureInfo, FunctionKind, FunctionSig, ParamInfo, PassMode, TypeContext, VariantData,
 };
@@ -572,7 +575,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             }
         }
 
-        _ => Type::Unknown,
+        Expr::Arena { .. } => Type::Unknown,
     }
 }
 
@@ -811,53 +814,6 @@ fn infer_binary_literal(
         Some(n) if n.is_multiple_of(8) => Type::Primitive(Primitive::Binary),
         Some(_) => Type::Primitive(Primitive::Bits),
         None => Type::Primitive(Primitive::Binary),
-    }
-}
-
-/// Checks whether a literal integer value fits in the given bit width.
-fn check_literal_overflow(
-    value_expr: &Expr,
-    bits: u64,
-    signedness: Option<BinarySignedness>,
-    span: Span,
-    ctx: &mut TypeContext,
-) {
-    if bits == 0 || bits > 64 {
-        return;
-    }
-    let Expr::Literal {
-        value: Literal::Int(n),
-        ..
-    } = value_expr
-    else {
-        return;
-    };
-    let Ok(val) = n.parse::<i128>() else {
-        return;
-    };
-
-    let is_signed = signedness == Some(BinarySignedness::Signed);
-    if is_signed {
-        let min = -(1i128 << (bits - 1));
-        let max = (1i128 << (bits - 1)) - 1;
-        if val < min || val > max {
-            ctx.error(
-                format!("{val} does not fit in {bits} signed bits (range {min}..{max})"),
-                span,
-            );
-        }
-    } else {
-        let max = if bits >= 128 {
-            i128::MAX
-        } else {
-            (1i128 << bits) - 1
-        };
-        if val < 0 || val > max {
-            ctx.error(
-                format!("{val} does not fit in {bits} unsigned bits (range 0..{max})"),
-                span,
-            );
-        }
     }
 }
 

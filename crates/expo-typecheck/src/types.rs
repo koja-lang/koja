@@ -621,3 +621,271 @@ pub fn process_envelope_type(m: &Type, r: &Type) -> Type {
         ],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- Type::union ----
+
+    #[test]
+    fn union_empty_is_unit() {
+        assert_eq!(Type::union(vec![]), Type::Unit);
+    }
+
+    #[test]
+    fn union_single_collapses() {
+        let ty = Type::Primitive(Primitive::I64);
+        assert_eq!(Type::union(vec![ty.clone()]), ty);
+    }
+
+    #[test]
+    fn union_deduplicates() {
+        let a = Type::Primitive(Primitive::I64);
+        let result = Type::union(vec![a.clone(), a.clone()]);
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn union_sorts_by_display() {
+        let a = Type::Struct("Zebra".into());
+        let b = Type::Struct("Apple".into());
+        let result = Type::union(vec![a.clone(), b.clone()]);
+        assert_eq!(result, Type::Union(vec![b, a]));
+    }
+
+    #[test]
+    fn union_flattens_nested() {
+        let a = Type::Primitive(Primitive::I64);
+        let b = Type::Primitive(Primitive::Bool);
+        let c = Type::Primitive(Primitive::F64);
+        let inner = Type::Union(vec![a.clone(), b.clone()]);
+        let result = Type::union(vec![inner, c.clone()]);
+        if let Type::Union(members) = &result {
+            assert_eq!(members.len(), 3);
+            assert!(members.contains(&a));
+            assert!(members.contains(&b));
+            assert!(members.contains(&c));
+        } else {
+            panic!("expected Union, got {:?}", result);
+        }
+    }
+
+    // ---- Type::display ----
+
+    #[test]
+    fn display_primitives() {
+        assert_eq!(Type::Primitive(Primitive::I64).display(), "Int");
+        assert_eq!(Type::Primitive(Primitive::Bool).display(), "Bool");
+        assert_eq!(Type::Primitive(Primitive::String).display(), "String");
+        assert_eq!(Type::Primitive(Primitive::F64).display(), "Float");
+    }
+
+    #[test]
+    fn display_struct_and_enum() {
+        assert_eq!(Type::Struct("Point".into()).display(), "Point");
+        assert_eq!(Type::Enum("Color".into()).display(), "Color");
+    }
+
+    #[test]
+    fn display_generic_instance() {
+        let ty = Type::GenericInstance {
+            base: "Option".into(),
+            kind: GenericKind::Enum,
+            type_args: vec![Type::Primitive(Primitive::I64)],
+        };
+        assert_eq!(ty.display(), "Option<Int>");
+    }
+
+    #[test]
+    fn display_nested_generic() {
+        let ty = Type::GenericInstance {
+            base: "Result".into(),
+            kind: GenericKind::Enum,
+            type_args: vec![
+                Type::GenericInstance {
+                    base: "List".into(),
+                    kind: GenericKind::Struct,
+                    type_args: vec![Type::Primitive(Primitive::I64)],
+                },
+                Type::Primitive(Primitive::String),
+            ],
+        };
+        assert_eq!(ty.display(), "Result<List<Int>, String>");
+    }
+
+    #[test]
+    fn display_function_type() {
+        let ty = Type::Function {
+            params: vec![Type::Primitive(Primitive::I64)],
+            return_type: Box::new(Type::Primitive(Primitive::Bool)),
+        };
+        assert_eq!(ty.display(), "fn(Int) -> Bool");
+    }
+
+    #[test]
+    fn display_union() {
+        let ty = Type::Union(vec![Type::Struct("Cat".into()), Type::Struct("Dog".into())]);
+        assert_eq!(ty.display(), "Cat | Dog");
+    }
+
+    #[test]
+    fn display_indirect_delegates() {
+        let inner = Type::Struct("Node".into());
+        let ty = Type::Indirect(Box::new(inner));
+        assert_eq!(ty.display(), "Node");
+    }
+
+    #[test]
+    fn display_unit_and_unknown() {
+        assert_eq!(Type::Unit.display(), "()");
+        assert_eq!(Type::Unknown.display(), "unknown");
+        assert_eq!(Type::Error.display(), "<error>");
+    }
+
+    // ---- Type::is_copy ----
+
+    #[test]
+    fn is_copy_numeric_primitives() {
+        assert!(Type::Primitive(Primitive::I64).is_copy());
+        assert!(Type::Primitive(Primitive::F64).is_copy());
+        assert!(Type::Primitive(Primitive::Bool).is_copy());
+        assert!(Type::Primitive(Primitive::U8).is_copy());
+    }
+
+    #[test]
+    fn is_copy_string_is_move() {
+        assert!(!Type::Primitive(Primitive::String).is_copy());
+    }
+
+    #[test]
+    fn is_copy_struct_is_move() {
+        assert!(!Type::Struct("Point".into()).is_copy());
+    }
+
+    #[test]
+    fn is_copy_unit_is_copy() {
+        assert!(Type::Unit.is_copy());
+    }
+
+    #[test]
+    fn is_copy_function_is_copy() {
+        let ty = Type::Function {
+            params: vec![],
+            return_type: Box::new(Type::Unit),
+        };
+        assert!(ty.is_copy());
+    }
+
+    #[test]
+    fn is_copy_union_of_copies() {
+        let ty = Type::Union(vec![
+            Type::Primitive(Primitive::I64),
+            Type::Primitive(Primitive::Bool),
+        ]);
+        assert!(ty.is_copy());
+    }
+
+    #[test]
+    fn is_copy_union_with_move() {
+        let ty = Type::Union(vec![
+            Type::Primitive(Primitive::I64),
+            Type::Struct("Foo".into()),
+        ]);
+        assert!(!ty.is_copy());
+    }
+
+    // ---- Type::is_known ----
+
+    #[test]
+    fn is_known_concrete_types() {
+        assert!(Type::Primitive(Primitive::I64).is_known());
+        assert!(Type::Struct("Foo".into()).is_known());
+        assert!(Type::Enum("Color".into()).is_known());
+        assert!(Type::Unit.is_known());
+    }
+
+    #[test]
+    fn is_known_unknown_and_error() {
+        assert!(!Type::Unknown.is_known());
+        assert!(!Type::Error.is_known());
+    }
+
+    #[test]
+    fn is_known_type_var() {
+        assert!(!Type::TypeVar("T".into()).is_known());
+    }
+
+    #[test]
+    fn is_known_indirect_delegates() {
+        assert!(Type::Indirect(Box::new(Type::Struct("X".into()))).is_known());
+        assert!(!Type::Indirect(Box::new(Type::Unknown)).is_known());
+    }
+
+    #[test]
+    fn is_known_union_all_known() {
+        let ty = Type::Union(vec![
+            Type::Primitive(Primitive::I64),
+            Type::Struct("Foo".into()),
+        ]);
+        assert!(ty.is_known());
+    }
+
+    #[test]
+    fn is_known_union_with_unknown() {
+        let ty = Type::Union(vec![Type::Primitive(Primitive::I64), Type::Unknown]);
+        assert!(!ty.is_known());
+    }
+
+    // ---- Type::is_numeric ----
+
+    #[test]
+    fn is_numeric_integers_and_floats() {
+        assert!(Type::Primitive(Primitive::I64).is_numeric());
+        assert!(Type::Primitive(Primitive::I32).is_numeric());
+        assert!(Type::Primitive(Primitive::U8).is_numeric());
+        assert!(Type::Primitive(Primitive::F64).is_numeric());
+        assert!(Type::Primitive(Primitive::F32).is_numeric());
+    }
+
+    #[test]
+    fn is_numeric_non_numeric() {
+        assert!(!Type::Primitive(Primitive::Bool).is_numeric());
+        assert!(!Type::Primitive(Primitive::String).is_numeric());
+        assert!(!Type::Struct("Foo".into()).is_numeric());
+    }
+
+    // ---- Primitive::display / from_name round-trip ----
+
+    #[test]
+    fn primitive_display_from_name_roundtrip() {
+        let all = [
+            Primitive::Binary,
+            Primitive::Bits,
+            Primitive::Bool,
+            Primitive::F32,
+            Primitive::F64,
+            Primitive::I8,
+            Primitive::I16,
+            Primitive::I32,
+            Primitive::I64,
+            Primitive::String,
+            Primitive::U8,
+            Primitive::U16,
+            Primitive::U32,
+            Primitive::U64,
+        ];
+        for p in &all {
+            let name = p.display();
+            let roundtrip = Primitive::from_name(name);
+            assert_eq!(roundtrip, Some(*p), "failed for {}", name);
+        }
+    }
+
+    #[test]
+    fn primitive_from_name_unknown() {
+        assert_eq!(Primitive::from_name("Void"), None);
+        assert_eq!(Primitive::from_name("int"), None);
+        assert_eq!(Primitive::from_name(""), None);
+    }
+}

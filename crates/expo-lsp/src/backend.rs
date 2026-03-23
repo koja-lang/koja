@@ -20,7 +20,6 @@ use expo_typecheck::context::TypeContext;
 pub(crate) struct DocumentState {
     pub(crate) module: Module,
     pub(crate) ctx: TypeContext,
-    #[allow(dead_code)]
     pub(crate) source: String,
     pub(crate) imported_origins: HashMap<String, String>,
     pub(crate) module_uris: HashMap<String, String>,
@@ -163,15 +162,14 @@ impl LanguageServer for Backend {
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
 
-        let uri_str = uri.as_str();
-        let path = uri_str
-            .strip_prefix("file://")
-            .ok_or_else(|| tower_lsp_server::jsonrpc::Error::invalid_params("invalid file URI"))?;
+        let docs = self.documents.read().await;
+        let state = match docs.get(uri.as_str()) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        let source = &state.source;
 
-        let source = std::fs::read_to_string(path)
-            .map_err(|_| tower_lsp_server::jsonrpc::Error::invalid_params("could not read file"))?;
-
-        match expo_fmt::format(&source) {
+        match expo_fmt::format(source) {
             expo_fmt::FormatResult::Ok(formatted) => {
                 let line_count = source.lines().count() as u32;
                 let last_line_len = source.lines().last().map_or(0, |l| l.len() as u32);

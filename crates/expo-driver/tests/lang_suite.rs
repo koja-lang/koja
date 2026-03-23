@@ -26,13 +26,27 @@ fn collect_expo_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn library_path() -> Option<String> {
+    if let Ok(val) = std::env::var("LIBRARY_PATH") {
+        return Some(val);
+    }
+    if cfg!(target_os = "macos") {
+        for candidate in ["/opt/homebrew/lib", "/usr/local/lib"] {
+            if Path::new(candidate).is_dir() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn run_expo(file: &Path) -> (String, String, i32) {
-    let output = Command::new(expo_bin())
-        .arg("run")
-        .arg(file)
-        .env("LIBRARY_PATH", "/opt/homebrew/lib")
-        .output()
-        .expect("failed to execute expo");
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("run").arg(file);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute expo");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -89,10 +103,10 @@ fn lang_tests() {
 
     for file in &files {
         let test_name = file.file_stem().unwrap().to_string_lossy().to_string();
-        let expected_path = file.with_extension("expected");
+        let expected_path = file.with_extension("stdout");
 
         if !expected_path.exists() {
-            failures.push(format!("{test_name}: missing .expected file"));
+            failures.push(format!("{test_name}: missing .stdout file"));
             continue;
         }
 
@@ -148,8 +162,8 @@ fn lang_import_tests() {
         return;
     }
 
-    let expected_path = dir.join("main.expected");
-    assert!(expected_path.exists(), "missing imports/main.expected");
+    let expected_path = dir.join("main.stdout");
+    assert!(expected_path.exists(), "missing imports/main.stdout");
 
     let (stdout, stderr, code) = run_expo(&main_file);
     assert!(
@@ -174,10 +188,10 @@ fn lang_compile_fail_tests() {
             "compile_fail/{}",
             file.file_stem().unwrap().to_string_lossy()
         );
-        let expected_path = file.with_extension("expected");
+        let expected_path = file.with_extension("stdout");
 
         if !expected_path.exists() {
-            failures.push(format!("{test_name}: missing .expected file"));
+            failures.push(format!("{test_name}: missing .stdout file"));
             continue;
         }
 

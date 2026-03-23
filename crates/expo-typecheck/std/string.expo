@@ -22,7 +22,7 @@ end
 
 impl Enumeration<String> for String
   @doc """
-  Returns the number of Unicode grapheme clusters (characters) in the string.
+  Returns the number of Unicode codepoints in the string.
   """
   fn length(self) -> Int
     panic("intrinsic")
@@ -39,6 +39,82 @@ end
 
 impl String
   @doc """
+  Returns `true` if the string contains only ASCII alphabetic
+  characters (a-z, A-Z).
+  """
+  fn alpha?(self) -> Bool
+    for c in self
+      match c
+        "a" -> ()
+        "b" -> ()
+        "c" -> ()
+        "d" -> ()
+        "e" -> ()
+        "f" -> ()
+        "g" -> ()
+        "h" -> ()
+        "i" -> ()
+        "j" -> ()
+        "k" -> ()
+        "l" -> ()
+        "m" -> ()
+        "n" -> ()
+        "o" -> ()
+        "p" -> ()
+        "q" -> ()
+        "r" -> ()
+        "s" -> ()
+        "t" -> ()
+        "u" -> ()
+        "v" -> ()
+        "w" -> ()
+        "x" -> ()
+        "y" -> ()
+        "z" -> ()
+        "A" -> ()
+        "B" -> ()
+        "C" -> ()
+        "D" -> ()
+        "E" -> ()
+        "F" -> ()
+        "G" -> ()
+        "H" -> ()
+        "I" -> ()
+        "J" -> ()
+        "K" -> ()
+        "L" -> ()
+        "M" -> ()
+        "N" -> ()
+        "O" -> ()
+        "P" -> ()
+        "Q" -> ()
+        "R" -> ()
+        "S" -> ()
+        "T" -> ()
+        "U" -> ()
+        "V" -> ()
+        "W" -> ()
+        "X" -> ()
+        "Y" -> ()
+        "Z" -> ()
+        _ -> return false
+      end
+    end
+    true
+  end
+
+  @doc """
+  Returns the single-character string at `index`, or `Option.None` if
+  the index is out of bounds.
+  """
+  fn at(self, index: Int) -> Option<String>
+    if index < 0 or index >= self.length()
+      return Option.None
+    end
+    Option.Some(self.get(index))
+  end
+
+  @doc """
   Returns the number of bytes in the string's UTF-8 encoding.
   """
   fn byte_length(self) -> Int
@@ -46,23 +122,41 @@ impl String
   end
 
   @doc """
-  Returns a substring spanning the given inclusive range of character
-  indices. Clamps out-of-bounds endpoints to the string boundaries.
+  Returns each Unicode codepoint as a single-character string in a list.
   """
-  fn slice(self, range: Range) -> String
-    panic("intrinsic")
+  fn codepoints(self) -> List<String>
+    result: List<String> = List.new()
+    for c in self
+      result = result.push(c)
+    end
+    result
   end
 
   @doc """
-  Converts a `String` to `Binary`. This is a zero-cost widening conversion:
-  every valid UTF-8 string is also a valid byte sequence.
+  Returns `true` if the string contains `other` as a substring.
   """
-  fn to_binary(self) -> Binary
-    panic("intrinsic")
+  fn contains?(self, other: String) -> Bool
+    other_len = other.length()
+    len = self.length()
+
+    cond
+      other_len == 0 -> return true
+      other_len > len -> return false
+      else -> ()
+    end
+
+    i = 0
+    while i <= len - other_len
+      if self.slice(Range{start: i, stop: i + other_len - 1}) == other
+        return true
+      end
+      i += 1
+    end
+    false
   end
 
   @doc """
-  Returns true if the String only contains numeric characters.
+  Returns `true` if the string contains only ASCII digit characters (0-9).
   """
   fn digit?(self) -> Bool
     for c in self
@@ -80,12 +174,296 @@ impl String
         _ -> return false
       end
     end
-
     true
   end
 
   @doc """
-  Returns true if the String only contains whitespace characters.
+  Returns a copy with ASCII uppercase letters converted to lowercase.
+  """
+  fn downcase(self) -> String
+    result = ""
+    for c in self
+      match c
+        "A" -> result = result <> "a"
+        "B" -> result = result <> "b"
+        "C" -> result = result <> "c"
+        "D" -> result = result <> "d"
+        "E" -> result = result <> "e"
+        "F" -> result = result <> "f"
+        "G" -> result = result <> "g"
+        "H" -> result = result <> "h"
+        "I" -> result = result <> "i"
+        "J" -> result = result <> "j"
+        "K" -> result = result <> "k"
+        "L" -> result = result <> "l"
+        "M" -> result = result <> "m"
+        "N" -> result = result <> "n"
+        "O" -> result = result <> "o"
+        "P" -> result = result <> "p"
+        "Q" -> result = result <> "q"
+        "R" -> result = result <> "r"
+        "S" -> result = result <> "s"
+        "T" -> result = result <> "t"
+        "U" -> result = result <> "u"
+        "V" -> result = result <> "v"
+        "W" -> result = result <> "w"
+        "X" -> result = result <> "x"
+        "Y" -> result = result <> "y"
+        "Z" -> result = result <> "z"
+        _ -> result = result <> c
+      end
+    end
+    result
+  end
+
+  @doc """
+  Returns `true` if the string has zero length.
+  """
+  fn empty?(self) -> Bool
+    self.length() == 0
+  end
+
+  @doc """
+  Returns `true` if the string ends with `suffix`.
+  """
+  fn ends_with?(self, suffix: String) -> Bool
+    suffix_len = suffix.length()
+    len = self.length()
+
+    cond
+      suffix_len == 0 -> return true
+      suffix_len > len -> return false
+      else -> ()
+    end
+
+    self.slice(Range{start: len - suffix_len, stop: len - 1}) == suffix
+  end
+
+  @doc """
+  Returns each grapheme cluster as a string in a list. Currently
+  equivalent to `codepoints()` -- true grapheme segmentation is
+  deferred until the runtime embeds Unicode segmentation tables.
+  """
+  fn graphemes(self) -> List<String>
+    self.codepoints()
+  end
+
+  @doc """
+  Joins a list of strings with `separator` between each element.
+  """
+  fn join(parts: List<String>, separator: String) -> String
+    result = ""
+    i = 0
+    len = parts.length()
+    while i < len
+      if i > 0
+        result = result <> separator
+      end
+      result = result <> parts.get(i)
+      i += 1
+    end
+    result
+  end
+
+  @doc """
+  Replaces all occurrences of `old` with `new`. Returns the string
+  unchanged if `old` is empty.
+  """
+  fn replace(self, old: String, new: String) -> String
+    if old.empty?()
+      return self
+    end
+    result = ""
+    i = 0
+    old_len = old.length()
+    len = self.length()
+    while i < len
+      if i + old_len <= len and self.slice(Range{start: i, stop: i + old_len - 1}) == old
+        result = result <> new
+        i += old_len
+      else
+        result = result <> self.get(i)
+        i += 1
+      end
+    end
+    result
+  end
+
+  @doc """
+  Returns a copy with the codepoints in reverse order.
+  """
+  fn reverse(self) -> String
+    result = ""
+    i = self.length() - 1
+    while i >= 0
+      result = result <> self.get(i)
+      i -= 1
+    end
+    result
+  end
+
+  @doc """
+  Returns a substring spanning the given inclusive range of character
+  indices. Clamps out-of-bounds endpoints to the string boundaries.
+  """
+  fn slice(self, range: Range) -> String
+    panic("intrinsic")
+  end
+
+  @doc """
+  Splits the string on each occurrence of `separator` and returns
+  the parts as a list. An empty separator splits into individual
+  characters.
+  """
+  fn split(self, separator: String) -> List<String>
+    result: List<String> = List.new()
+    if separator.empty?()
+      for c in self
+        result = result.push(c)
+      end
+    else
+      current = ""
+      i = 0
+      sep_len = separator.length()
+      len = self.length()
+      while i < len
+        if i + sep_len <= len and self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
+          result = result.push(current)
+          current = ""
+          i += sep_len
+        else
+          current = current <> self.get(i)
+          i += 1
+        end
+      end
+      result = result.push(current)
+    end
+    result
+  end
+
+  @doc """
+  Returns `true` if the string starts with `prefix`.
+  """
+  fn starts_with?(self, prefix: String) -> Bool
+    prefix_len = prefix.length()
+
+    cond
+      prefix_len == 0 -> return true
+      prefix_len > self.length() -> return false
+      else -> ()
+    end
+
+    self.slice(Range{start: 0, stop: prefix_len - 1}) == prefix
+  end
+
+  @doc """
+  Converts a `String` to `Binary`. This is a zero-cost widening conversion:
+  every valid UTF-8 string is also a valid byte sequence.
+  """
+  fn to_binary(self) -> Binary
+    panic("intrinsic")
+  end
+
+  @doc """
+  Parses the string as a 64-bit floating-point number.
+  """
+  fn to_float(self) -> Result<Float, String>
+    Float.parse(self)
+  end
+
+  @doc """
+  Parses the string as a 64-bit signed integer.
+  """
+  fn to_int(self) -> Result<Int, String>
+    Int.parse(self)
+  end
+
+  @doc """
+  Returns a copy with leading and trailing whitespace removed.
+  """
+  fn trim(self) -> String
+    self.trim_start().trim_end()
+  end
+
+  @doc """
+  Returns a copy with trailing whitespace removed.
+  """
+  fn trim_end(self) -> String
+    len = self.length()
+    i = len - 1
+    while i >= 0
+      match self.get(i)
+        " " -> ()
+        "\n" -> ()
+        "\r" -> ()
+        "\t" -> ()
+        _ -> return self.slice(Range{start: 0, stop: i})
+      end
+      i -= 1
+    end
+    ""
+  end
+
+  @doc """
+  Returns a copy with leading whitespace removed.
+  """
+  fn trim_start(self) -> String
+    i = 0
+    len = self.length()
+    while i < len
+      match self.get(i)
+        " " -> ()
+        "\n" -> ()
+        "\r" -> ()
+        "\t" -> ()
+        _ -> return self.slice(Range{start: i, stop: len - 1})
+      end
+      i += 1
+    end
+    ""
+  end
+
+  @doc """
+  Returns a copy with ASCII lowercase letters converted to uppercase.
+  """
+  fn upcase(self) -> String
+    result = ""
+    for c in self
+      match c
+        "a" -> result = result <> "A"
+        "b" -> result = result <> "B"
+        "c" -> result = result <> "C"
+        "d" -> result = result <> "D"
+        "e" -> result = result <> "E"
+        "f" -> result = result <> "F"
+        "g" -> result = result <> "G"
+        "h" -> result = result <> "H"
+        "i" -> result = result <> "I"
+        "j" -> result = result <> "J"
+        "k" -> result = result <> "K"
+        "l" -> result = result <> "L"
+        "m" -> result = result <> "M"
+        "n" -> result = result <> "N"
+        "o" -> result = result <> "O"
+        "p" -> result = result <> "P"
+        "q" -> result = result <> "Q"
+        "r" -> result = result <> "R"
+        "s" -> result = result <> "S"
+        "t" -> result = result <> "T"
+        "u" -> result = result <> "U"
+        "v" -> result = result <> "V"
+        "w" -> result = result <> "W"
+        "x" -> result = result <> "X"
+        "y" -> result = result <> "Y"
+        "z" -> result = result <> "Z"
+        _ -> result = result <> c
+      end
+    end
+    result
+  end
+
+  @doc """
+  Returns `true` if the string contains only whitespace characters.
   """
   fn whitespace?(self) -> Bool
     for c in self
@@ -97,7 +475,6 @@ impl String
         _ -> return false
       end
     end
-
     true
   end
 end

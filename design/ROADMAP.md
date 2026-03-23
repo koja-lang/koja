@@ -212,6 +212,11 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 - Iteration: `codepoints()`, `graphemes()`
 - Parsing: `to_int()`, `to_float()`
 - **Done when**: string-heavy programs compile and work (character iteration, splitting, searching, classification)
+- **Note**: A2b ships ASCII-only case conversion (`upcase`/`downcase`) and codepoint-level iteration (`codepoints`/`graphemes`). Full Unicode support is deferred but required before production HTTP microservices handling internationalized content (JSON payloads, form input, non-ASCII URLs). Specifically:
+  - **Unicode case mapping tables** (UCD CaseFolding/SpecialCasing) for proper `upcase()`/`downcase()` beyond ASCII (e.g., `ß` → `SS`, Turkish dotted i)
+  - **Unicode grapheme cluster segmentation** (Grapheme_Cluster_Break property tables, ~100KB+ in runtime) for `graphemes()` to correctly handle emoji sequences, combining marks, etc.
+  - **Unicode-aware classification** (`alpha?`, `digit?`, `whitespace?`) currently only handles ASCII ranges; full Unicode requires General_Category property lookups
+  - These tables will be embedded in `expo-runtime` when the need arises.
 
 ##### A2c. OR patterns
 
@@ -386,9 +391,17 @@ Build the remaining stdlib and the first-party package ecosystem. Binary/bitstri
 
 ### Stdlib (ships with the compiler, always available)
 
-- File I/O: `file.read()`, `file.write()`, `file.exists?()`
+Stdlib contains primitives that are as fundamental as integers — things the compiler or language runtime needs to function, or that virtually every program needs and whose API is stable for decades.
+
+- `std.fd` -- raw `Fd` type wrapping an OS file descriptor (an integer). Provides `read`, `write`, `close`. The lowest-level IO primitive; everything else builds on it.
+- `std.file` -- `File` struct wrapping `Fd`. `open`, `read`, `write`, `seek`, `close`. Move semantics ensure single ownership of file handles; deterministic cleanup on drop. The operations haven't changed in 50 years — safe to commit to forever.
+- `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space — reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases (redb port), large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
+- `std.io` -- `stdin`, `stdout`, `stderr` as `Fd` constants. `print` builtin dispatches through here.
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
 - `Display` protocol -- auto-derived string representations, `print()` dispatches through it
+
+The litmus test: does the compiler or language runtime need it to function, or is it a stable capability every program needs with an API that won't evolve? If yes, stdlib. If the API surface will evolve (protocols, connection management, serialization formats), it's a first-party package.
+
 - **Done when**: `config.expo` compiles (exercises strings, file reading, option handling, duration)
 
 ### Package manager
@@ -400,11 +413,15 @@ Build the remaining stdlib and the first-party package ecosystem. Binary/bitstri
 
 ### First-party packages (maintained by the Expo team, versioned independently)
 
-These are high-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline.
+These are high-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline. Networking lives here because the API surface evolves (QUIC, io_uring, TLS integration, connection pooling) — you don't want that locked into the stdlib release cycle.
 
-- HTTP server and client
-- JSON -- `JsonValue` enum, parser, serializer, convenience methods (`as_string()`, `as_int()`, etc.). No auto-derive or compiler magic; users write `from_json`/`to_json` functions in impl blocks. Decoder combinator API for API input boundaries with error accumulation (all field errors collected, not just the first).
-- TLS (thin wrapper over system TLS library)
+- `net` -- networking primitives as submodules, one package, coordinated releases. Shared types (`IpAddr`, `SocketAddr`) used across submodules.
+  - `net.tcp` -- `TcpListener` (bind + accept) and `TcpSocket` (connect + read + write + close). Both wrap `Fd` from stdlib. `TcpListener.accept()` returns a `TcpSocket` — same type for server and client connections. Socket setup uses C shims in the runtime (`socket`, `bind`, `listen`, `accept`, `connect`, `setsockopt`); read/write/close go through `std.fd`.
+  - `net.udp` -- `UdpSocket` with `bind`, `send_to`, `recv_from`. Datagram-oriented, no connections. Independent from TCP — different semantics, different API shape.
+  - `net.tls` -- `TlsSocket` wrapping a `TcpSocket` with encryption. `TlsSocket.wrap(move socket: TcpSocket, config: TlsConfig) -> Result<TlsSocket, TlsError>`. Same `read`/`write`/`close` interface. Thin wrapper over system TLS library (LibreSSL/OpenSSL/BoringSSL via C FFI). Programs that only import `net.tcp` don't pull in TLS dependencies.
+- `http` -- HTTP server and client built on `net.tcp` / `net.tls`. Request parsing, routing, response building, middleware. Server spawns a process per connection using `Process<C, M, R>`. Binary pattern matching for protocol parsing. `http.client` for outbound requests.
+- `websocket` -- WebSocket server and client built on `http` (upgrade handshake) and `net.tcp` (framed message transport). Each WebSocket connection is a process — natural fit for Expo's concurrency model. Frame parsing via binary pattern matching.
+- `json` -- `JsonValue` enum, parser, serializer, convenience methods (`as_string()`, `as_int()`, etc.). No auto-derive or compiler magic; users write `from_json`/`to_json` functions in impl blocks. Decoder combinator API for API input boundaries with error accumulation (all field errors collected, not just the first).
 - Crypto: hashing, random bytes (thin wrapper over libsodium or similar)
 - Structured logging
 - MessagePack serialization

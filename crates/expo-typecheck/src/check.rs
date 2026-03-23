@@ -19,19 +19,9 @@ use crate::types::{Primitive, Type, resolve_type_expr};
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
 pub fn check_module(module: &Module, ctx: &mut TypeContext) {
-    let struct_names: Vec<String> = ctx
-        .types
-        .iter()
-        .filter(|(_, ti)| ti.is_struct())
-        .map(|(n, _)| n.clone())
-        .collect();
+    let struct_names = ctx.struct_names();
     let struct_name_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-    let enum_names: Vec<String> = ctx
-        .types
-        .iter()
-        .filter(|(_, ti)| ti.is_enum())
-        .map(|(n, _)| n.clone())
-        .collect();
+    let enum_names = ctx.enum_names();
     let enum_name_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
 
     for item in &module.items {
@@ -438,5 +428,68 @@ pub(crate) fn record_coercion_if_needed(
                 target: target.clone(),
             },
         );
+    }
+}
+
+/// Checks whether a literal integer value (possibly negated) fits in the given
+/// bit width, emitting a diagnostic on overflow.
+pub(crate) fn check_literal_overflow(
+    value_expr: &Expr,
+    bits: u64,
+    signedness: Option<BinarySignedness>,
+    span: Span,
+    ctx: &mut TypeContext,
+) {
+    if bits == 0 || bits > 64 {
+        return;
+    }
+
+    let val = match value_expr {
+        Expr::Literal {
+            value: Literal::Int(n),
+            ..
+        } => n.parse::<i128>().ok(),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+            ..
+        } => {
+            if let Expr::Literal {
+                value: Literal::Int(n),
+                ..
+            } = operand.as_ref()
+            {
+                n.parse::<i128>().ok().map(|v| -v)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    let Some(val) = val else { return };
+
+    let is_signed = signedness == Some(BinarySignedness::Signed);
+    if is_signed {
+        let min = -(1i128 << (bits - 1));
+        let max = (1i128 << (bits - 1)) - 1;
+        if val < min || val > max {
+            ctx.error(
+                format!("{val} does not fit in {bits} signed bits (range {min}..{max})"),
+                span,
+            );
+        }
+    } else {
+        let max = if bits >= 128 {
+            i128::MAX
+        } else {
+            (1i128 << bits) - 1
+        };
+        if val < 0 || val > max {
+            ctx.error(
+                format!("{val} does not fit in {bits} unsigned bits (range 0..{max})"),
+                span,
+            );
+        }
     }
 }

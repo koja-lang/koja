@@ -698,6 +698,10 @@ impl Parser {
             let before = self.pos;
             stmts.push(self.parse_statement());
             if self.pos == before {
+                self.error(
+                    format!("unexpected token {:?}", self.peek()),
+                    self.current_span(),
+                );
                 self.advance();
             }
             self.skip_newlines();

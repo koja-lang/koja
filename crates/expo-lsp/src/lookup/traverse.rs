@@ -487,7 +487,70 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        _ => {}
+        Expr::For {
+            iterable,
+            body,
+            span,
+            ..
+        } => {
+            if span_contains(span, line, col) {
+                if let Some(info) = find_in_expr(iterable, line, col, ctx) {
+                    return Some(info);
+                }
+                if let Some(info) = find_in_body(body, line, col, ctx) {
+                    return Some(info);
+                }
+            }
+        }
+        Expr::String { parts, span, .. } => {
+            if span_contains(span, line, col) {
+                for part in parts {
+                    if let StringPart::Interpolation { expr, .. } = part
+                        && let Some(info) = find_in_expr(expr, line, col, ctx)
+                    {
+                        return Some(info);
+                    }
+                }
+            }
+        }
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+            span,
+        } => {
+            if span_contains(span, line, col) {
+                if let Some(info) = find_in_expr(condition, line, col, ctx) {
+                    return Some(info);
+                }
+                if let Some(info) = find_in_expr(then_expr, line, col, ctx) {
+                    return Some(info);
+                }
+                if let Some(info) = find_in_expr(else_expr, line, col, ctx) {
+                    return Some(info);
+                }
+            }
+        }
+        Expr::Unary { operand, span, .. } => {
+            if span_contains(span, line, col) {
+                return find_in_expr(operand, line, col, ctx);
+            }
+        }
+        Expr::BinaryLiteral { segments, span } => {
+            if span_contains(span, line, col) {
+                for seg in segments {
+                    if let Some(info) = find_in_expr(&seg.value, line, col, ctx) {
+                        return Some(info);
+                    }
+                    if let Some(sz) = &seg.size
+                        && let Some(info) = find_in_expr(sz, line, col, ctx)
+                    {
+                        return Some(info);
+                    }
+                }
+            }
+        }
+        Expr::Arena { .. } | Expr::Literal { .. } | Expr::Self_ { .. } => {}
     }
     None
 }

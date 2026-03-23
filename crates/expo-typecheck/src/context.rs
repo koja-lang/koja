@@ -46,7 +46,6 @@ pub struct FunctionSig {
     pub params: Vec<ParamInfo>,
     pub return_type: Type,
     pub kind: FunctionKind,
-    #[allow(dead_code)]
     pub span: Span,
     pub type_params: Vec<String>,
 }
@@ -64,7 +63,6 @@ pub struct ParamInfo {
 pub struct ProtocolInfo {
     pub default_bodies: HashMap<String, ProtocolMethod>,
     pub methods: HashMap<String, FunctionSig>,
-    #[allow(dead_code)]
     pub span: Span,
     pub type_params: Vec<String>,
 }
@@ -77,7 +75,6 @@ pub struct ProtocolInfo {
 pub struct TypeInfo {
     pub functions: HashMap<String, FunctionSig>,
     pub kind: TypeKind,
-    #[allow(dead_code)]
     pub span: Span,
     pub type_params: Vec<String>,
 }
@@ -212,6 +209,24 @@ impl TypeContext {
     /// Returns `true` if `name` is registered as an enum in the type registry.
     pub fn is_enum(&self, name: &str) -> bool {
         self.types.get(name).is_some_and(|ti| ti.is_enum())
+    }
+
+    /// Collects the names of all registered struct types.
+    pub fn struct_names(&self) -> Vec<String> {
+        self.types
+            .iter()
+            .filter(|(_, ti)| ti.is_struct())
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
+    /// Collects the names of all registered enum types.
+    pub fn enum_names(&self) -> Vec<String> {
+        self.types
+            .iter()
+            .filter(|(_, ti)| ti.is_enum())
+            .map(|(n, _)| n.clone())
+            .collect()
     }
 
     /// Creates an empty context with no registered types or diagnostics.

@@ -54,6 +54,10 @@ impl Parser {
             let before = self.pos;
             arms.push(self.parse_match_arm(&[]));
             if self.pos == before {
+                self.error(
+                    format!("unexpected token {:?}", self.peek()),
+                    self.current_span(),
+                );
                 self.advance();
             }
             self.skip_newlines();
@@ -108,6 +112,10 @@ impl Parser {
             let before = self.pos;
             stmts.push(self.parse_statement());
             if self.pos == before {
+                self.error(
+                    format!("unexpected token {:?}", self.peek()),
+                    self.current_span(),
+                );
                 self.advance();
             }
             self.skip_newlines();
@@ -160,6 +168,10 @@ impl Parser {
                 span: self.span_from(arm_start),
             });
             if self.pos == before {
+                self.error(
+                    format!("unexpected token {:?}", self.peek()),
+                    self.current_span(),
+                );
                 self.advance();
             }
             self.skip_newlines();
@@ -247,6 +259,10 @@ impl Parser {
             let before = self.pos;
             arms.push(self.parse_match_arm(&after_stop));
             if self.pos == before {
+                self.error(
+                    format!("unexpected token {:?}", self.peek()),
+                    self.current_span(),
+                );
                 self.advance();
             }
             self.skip_newlines();

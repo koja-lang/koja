@@ -200,12 +200,10 @@ impl Parser {
         Some(name.to_string())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn save_pos(&self) -> (usize, usize) {
         (self.pos, self.errors.len())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn restore_pos(&mut self, saved: (usize, usize)) {
         self.pos = saved.0;
         self.errors.truncate(saved.1);
@@ -213,20 +211,6 @@ impl Parser {
 
     pub(crate) fn skip_newlines(&mut self) {
         while matches!(self.peek(), TokenKind::Newline) {
-            self.advance();
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn expect_newline_or_eof(&mut self) {
-        if !matches!(self.peek(), TokenKind::Newline | TokenKind::Eof) {
-            let span = self.current_span();
-            self.error_with_hint(
-                format!("expected newline or end of file, found {:?}", self.peek()),
-                "separate statements with newlines".into(),
-                span,
-            );
-        } else if matches!(self.peek(), TokenKind::Newline) {
             self.advance();
         }
     }

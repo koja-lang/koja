@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
+use crate::check::check_literal_overflow;
 use crate::context::{TypeContext, VariantData};
 use crate::env::{VarInfo, VarState};
 use crate::types::{
@@ -91,19 +92,9 @@ pub(crate) fn check_match_exhaustiveness(
         Type::Union(members) => {
             let member_names: Vec<String> = members.iter().map(|m| m.display()).collect();
 
-            let struct_names: Vec<String> = ctx
-                .types
-                .iter()
-                .filter(|(_, ti)| ti.is_struct())
-                .map(|(k, _)| k.clone())
-                .collect();
+            let struct_names = ctx.struct_names();
             let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-            let enum_name_keys: Vec<String> = ctx
-                .types
-                .iter()
-                .filter(|(_, ti)| ti.is_enum())
-                .map(|(k, _)| k.clone())
-                .collect();
+            let enum_name_keys = ctx.enum_names();
             let enum_refs: Vec<&str> = enum_name_keys.iter().map(|s| s.as_str()).collect();
 
             let matched: Vec<String> = arms
@@ -394,24 +385,14 @@ pub(crate) fn check_pattern(
             type_expr,
             span,
         } => {
-            let struct_names: Vec<String> = ctx
-                .types
-                .iter()
-                .filter(|(_, ti)| ti.is_struct())
-                .map(|(k, _)| k.clone())
-                .collect();
+            let struct_names = ctx.struct_names();
             let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-            let enum_names: Vec<String> = ctx
-                .types
-                .iter()
-                .filter(|(_, ti)| ti.is_enum())
-                .map(|(k, _)| k.clone())
-                .collect();
+            let enum_names = ctx.enum_names();
             let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
             let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
 
             if let Type::Union(members) = subject_type {
-                if !members.iter().any(|m| m.display() == resolved.display()) {
+                if !members.contains(&resolved) {
                     ctx.error(
                         format!(
                             "type `{}` is not a member of union `{}`",
@@ -472,19 +453,9 @@ fn check_binary_pattern(
         );
     }
 
-    let struct_names: Vec<String> = ctx
-        .types
-        .iter()
-        .filter(|(_, ti)| ti.is_struct())
-        .map(|(k, _)| k.clone())
-        .collect();
+    let struct_names = ctx.struct_names();
     let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-    let enum_name_keys: Vec<String> = ctx
-        .types
-        .iter()
-        .filter(|(_, ti)| ti.is_enum())
-        .map(|(k, _)| k.clone())
-        .collect();
+    let enum_name_keys = ctx.enum_names();
     let enum_refs: Vec<&str> = enum_name_keys.iter().map(|s| s.as_str()).collect();
 
     let mut total_fixed_bits: u64 = 0;
@@ -632,7 +603,7 @@ fn check_binary_pattern(
             }
         } else if is_literal {
             if let Some(bits) = seg_bits {
-                check_pattern_literal_overflow(&seg.value, bits, seg.signedness, seg.span, ctx);
+                check_literal_overflow(&seg.value, bits, seg.signedness, seg.span, ctx);
             }
         } else if is_discard {
             // skip
@@ -648,68 +619,6 @@ fn check_binary_pattern(
             ctx.error(
                 "endianness modifier requires a size specifier (::N)".to_string(),
                 seg.span,
-            );
-        }
-    }
-}
-
-/// Checks whether a literal integer value in a pattern fits in the given bit width.
-fn check_pattern_literal_overflow(
-    value_expr: &Expr,
-    bits: u64,
-    signedness: Option<BinarySignedness>,
-    span: Span,
-    ctx: &mut TypeContext,
-) {
-    if bits == 0 || bits > 64 {
-        return;
-    }
-
-    let val = match value_expr {
-        Expr::Literal {
-            value: Literal::Int(n),
-            ..
-        } => n.parse::<i128>().ok(),
-        Expr::Unary {
-            op: UnaryOp::Neg,
-            operand,
-            ..
-        } => {
-            if let Expr::Literal {
-                value: Literal::Int(n),
-                ..
-            } = operand.as_ref()
-            {
-                n.parse::<i128>().ok().map(|v| -v)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-
-    let Some(val) = val else { return };
-
-    let is_signed = signedness == Some(BinarySignedness::Signed);
-    if is_signed {
-        let min = -(1i128 << (bits - 1));
-        let max = (1i128 << (bits - 1)) - 1;
-        if val < min || val > max {
-            ctx.error(
-                format!("{val} does not fit in {bits} signed bits (range {min}..{max})"),
-                span,
-            );
-        }
-    } else {
-        let max = if bits >= 128 {
-            i128::MAX
-        } else {
-            (1i128 << bits) - 1
-        };
-        if val < 0 || val > max {
-            ctx.error(
-                format!("{val} does not fit in {bits} unsigned bits (range 0..{max})"),
-                span,
             );
         }
     }

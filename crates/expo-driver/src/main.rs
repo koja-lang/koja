@@ -7,40 +7,71 @@ mod diagnostics;
 mod pipeline;
 mod resolve;
 
-// Ensures `expo-runtime` (and `libexpo_runtime.a`) is built before this crate's `build.rs`.
 use expo_runtime as _;
 
-use std::env;
-use std::process;
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "expo", version, about = "The Expo language compiler")]
+struct Cli {
+    /// Disable colored output
+    #[arg(long, global = true)]
+    no_color: bool,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Compile a source file to a native binary
+    Build {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Type-check a source file without compiling
+    Check {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Generate HTML documentation
+    Doc {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Format source files
+    Format {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Dump the token stream
+    Lex {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Dump the parsed AST
+    Parse {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Compile and run a source file
+    Run {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let cli = Cli::parse();
+    let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
 
-    if args.len() < 2 {
-        eprintln!("expo compiler v{}", env!("CARGO_PKG_VERSION"));
-        eprintln!("Usage: expo <command> [args]");
-        eprintln!("Commands: build, check, doc, format, lex, parse, run");
-        process::exit(1);
-    }
-
-    let color = !args.contains(&"--no-color".to_string()) && env::var("NO_COLOR").is_err();
-    let cmd_args: Vec<String> = args[2..]
-        .iter()
-        .filter(|a| *a != "--no-color")
-        .cloned()
-        .collect();
-
-    match args[1].as_str() {
-        "build" => commands::cmd_build(&cmd_args, color),
-        "check" => commands::cmd_check(&cmd_args, color),
-        "doc" => commands::cmd_doc(&cmd_args, color),
-        "format" => commands::cmd_format(&cmd_args, color),
-        "lex" => commands::cmd_lex(&cmd_args, color),
-        "parse" => commands::cmd_parse(&cmd_args, color),
-        "run" => commands::cmd_run(&cmd_args, color),
-        other => {
-            eprintln!("unknown command: {other}");
-            process::exit(1);
-        }
+    match cli.command {
+        Command::Build { args } => commands::cmd_build(&args, color),
+        Command::Check { args } => commands::cmd_check(&args, color),
+        Command::Doc { args } => commands::cmd_doc(&args, color),
+        Command::Format { args } => commands::cmd_format(&args, color),
+        Command::Lex { args } => commands::cmd_lex(&args, color),
+        Command::Parse { args } => commands::cmd_parse(&args, color),
+        Command::Run { args } => commands::cmd_run(&args, color),
     }
 }
