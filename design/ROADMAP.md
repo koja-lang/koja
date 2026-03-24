@@ -8,13 +8,14 @@ Solo developer + AI assistance. Bootstrap in Rust, self-host in Expo.
 
 ### Compiler
 
-A 10-crate Rust workspace that compiles Expo source to native binaries via LLVM:
+An 11-crate Rust workspace that compiles Expo source to native binaries via LLVM:
 
 - `expo-ast` -- tokens, spans, AST node definitions
 - `expo-lexer` -- custom tokenizer
 - `expo-parser` -- recursive descent parser (Pratt precedence for expressions)
 - `expo-typecheck` -- type inference and semantic analysis
 - `expo-codegen` -- LLVM IR generation via `inkwell`
+- `expo-stdlib` -- embedded standard library `.expo` sources with fully qualified module names
 - `expo-fmt` -- opinionated code formatter
 - `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
 - `expo-runtime` -- native process scheduler (C ABI static library linked into compiled binaries)
@@ -126,7 +127,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
           → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise) ✓
           → A2a (type conversion) ✓ → A2b (string stdlib) ✓ → A2c (OR patterns) ✓ → A2d (ranges, deferred)
-          → A3a (file I/O) ✓ → A3b (project.expo + test runner) → A4 (lexer port)
+          → A3a (file I/O) ✓ → A3b (project system) ✓ → A3c (test runner) → A4 (lexer port)
 
 Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
           B4 (scheduler/IO) -- independent, anytime
@@ -255,9 +256,21 @@ Minimal file I/O via runtime intrinsics -- just enough to read and write files f
 - `std.io` -- deferred to A3b (needs module namespacing from the project system for `io.puts()` style calls).
 - **Done when**: an Expo program can read a file from disk and print its contents
 
-##### A3b. Project system + test runner
+##### A3b. Project system -- done
 
-Minimal `project.expo` (source dirs, test dirs, project name -- no dependency resolution yet) so the toolchain knows what to compile and where to find tests. Then `@test` annotated functions with `expo test` to discover and run them. The project file also improves `expo build` for multi-module projects.
+`project.expo` config file and unified module resolution. The project file defines `name`, `version`, `src` dirs, and `entry` module. The project name doubles as the module namespace prefix (`import my_app.server` → resolves `src/server.expo`).
+
+- `project.expo` uses `Project{...}` struct literal format, parsed by the existing expression parser
+- `expo build`, `expo run`, and `expo check` detect `project.expo` when invoked with no file argument
+- Stdlib sources moved from `expo-typecheck` to a standalone `expo-stdlib` crate with fully qualified module names (`std.kernel`, `std.list`, etc.)
+- All stdlib modules are auto-imported -- inserted into the module graph before user modules, resolved through the same pipeline
+- Unified resolver dispatches by namespace: project name prefix → `src/` dirs, `std` prefix → embedded sources
+- Single-file mode (`expo run foo.expo`) is backward compatible and unchanged
+- **Done**: `expo build` and `expo run` work with a `project.expo` file; stdlib resolved through the same mechanism as project modules
+
+##### A3c. Test runner
+
+`@test` annotated functions with `expo test` to discover and run them. Depends on the project system (A3b) for test file discovery.
 
 - **Done when**: `expo test` discovers and runs `@test` functions in a project with a `project.expo` file
 
@@ -749,7 +762,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                                                                                                                                        |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges (deferred), ~~A3a file I/O~~, A3b project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges (deferred), ~~A3a file I/O~~, ~~A3b project system~~, A3c test runner, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O                                                                                                           |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                                                                                                                                     |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                                                                                                                                        |

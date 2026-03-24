@@ -9,52 +9,144 @@ use std::{env, fs, process};
 
 use crate::diagnostics::render_diagnostics;
 use crate::pipeline;
-use crate::resolve;
+use crate::project;
 
-/// `expo build <file.expo> [-o output]` -- compiles an Expo program to an executable.
+/// `expo build [file.expo] [-o output]` -- compiles an Expo program to an executable.
+///
+/// With no arguments, looks for `project.expo` in the current directory.
 pub fn cmd_build(args: &[String], color: bool) {
-    pipeline::build(args, false, color);
+    if args.is_empty() || (args.len() == 2 && args[0] == "-o") {
+        let cwd = env::current_dir().unwrap_or_else(|e| {
+            eprintln!("error: cannot determine current directory: {e}");
+            process::exit(1);
+        });
+
+        let config = match project::load_project(&cwd) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                eprintln!("error: no source file specified and no project.expo found");
+                eprintln!("Usage: expo build <file.expo> [-o output]");
+                eprintln!("  or:  create a project.expo in the current directory");
+                process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+        };
+
+        let (_, output_name) = pipeline::parse_build_args(args);
+        pipeline::build_project(&config, &cwd, output_name.as_deref(), false, color);
+    } else {
+        pipeline::build(args, false, color);
+    }
 }
 
-/// `expo run <file.expo>` -- compiles to a temporary binary, runs it, then cleans up.
+/// `expo run [file.expo] [-- args...]` -- compiles to a temporary binary, runs it, then cleans up.
+///
+/// With no arguments, looks for `project.expo` in the current directory.
 pub fn cmd_run(args: &[String], color: bool) {
-    if args.is_empty() {
-        eprintln!("Usage: expo run <file.expo>");
-        process::exit(1);
-    }
+    let separator = args.iter().position(|a| a == "--");
+    let (build_args, run_args) = match separator {
+        Some(pos) => (&args[..pos], &args[pos + 1..]),
+        None => (args, &[] as &[String]),
+    };
 
-    let path = &args[0];
-    let tmp_dir = env::temp_dir();
-    let binary = tmp_dir.join(format!(
-        "expo_run_{}",
-        Path::new(path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("out")
-    ));
-    let output = binary.to_str().unwrap().to_string();
-
-    let build_args = vec![path.clone(), "-o".to_string(), output.clone()];
-    pipeline::build(&build_args, true, color);
-
-    let status = process::Command::new(&binary).args(&args[1..]).status();
-
-    let _ = fs::remove_file(&binary);
-
-    match status {
-        Ok(s) => process::exit(s.code().unwrap_or(1)),
-        Err(e) => {
-            eprintln!("failed to run binary: {e}");
+    if build_args.is_empty() {
+        let cwd = env::current_dir().unwrap_or_else(|e| {
+            eprintln!("error: cannot determine current directory: {e}");
             process::exit(1);
+        });
+
+        let config = match project::load_project(&cwd) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                eprintln!("error: no source file specified and no project.expo found");
+                eprintln!("Usage: expo run <file.expo>");
+                eprintln!("  or:  create a project.expo in the current directory");
+                process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+        };
+
+        let tmp_dir = env::temp_dir();
+        let binary = tmp_dir.join(format!("expo_run_{}", config.name));
+        let output = binary.to_str().unwrap().to_string();
+
+        pipeline::build_project(&config, &cwd, Some(&output), true, color);
+
+        let status = process::Command::new(&binary).args(run_args).status();
+        let _ = fs::remove_file(&binary);
+
+        match status {
+            Ok(s) => process::exit(s.code().unwrap_or(1)),
+            Err(e) => {
+                eprintln!("failed to run binary: {e}");
+                process::exit(1);
+            }
+        }
+    } else {
+        let path = &build_args[0];
+        let tmp_dir = env::temp_dir();
+        let binary = tmp_dir.join(format!(
+            "expo_run_{}",
+            Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("out")
+        ));
+        let output = binary.to_str().unwrap().to_string();
+
+        let build_cmd_args = vec![path.clone(), "-o".to_string(), output.clone()];
+        pipeline::build(&build_cmd_args, true, color);
+
+        let extra_args: Vec<&String> = build_args[1..].iter().chain(run_args.iter()).collect();
+        let status = process::Command::new(&binary).args(&extra_args).status();
+        let _ = fs::remove_file(&binary);
+
+        match status {
+            Ok(s) => process::exit(s.code().unwrap_or(1)),
+            Err(e) => {
+                eprintln!("failed to run binary: {e}");
+                process::exit(1);
+            }
         }
     }
 }
 
-/// `expo check <file.expo>` -- type-checks without producing an executable.
+/// `expo check [file.expo ...]` -- type-checks without producing an executable.
+///
+/// With no arguments, looks for `project.expo` in the current directory.
 pub fn cmd_check(args: &[String], color: bool) {
     if args.is_empty() {
-        eprintln!("Usage: expo check <file.expo>");
-        process::exit(1);
+        let cwd = env::current_dir().unwrap_or_else(|e| {
+            eprintln!("error: cannot determine current directory: {e}");
+            process::exit(1);
+        });
+
+        let config = match project::load_project(&cwd) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                eprintln!("error: no source file specified and no project.expo found");
+                eprintln!("Usage: expo check <file.expo>");
+                eprintln!("  or:  create a project.expo in the current directory");
+                process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+        };
+
+        let has_errors = pipeline::check_project(&config, &cwd, color);
+        if has_errors {
+            process::exit(1);
+        }
+        println!("{}: OK", config.name);
+        return;
     }
 
     for path in args {
@@ -66,16 +158,7 @@ pub fn cmd_check(args: &[String], color: bool) {
             }
         };
 
-        let graph = match resolve::resolve_modules(&entry_path) {
-            Ok(g) => g,
-            Err(e) => {
-                eprintln!("error: {e}");
-                continue;
-            }
-        };
-
-        let stdlib = pipeline::parse_stdlib();
-        let (_, has_errors) = pipeline::typecheck_modules(&graph, &stdlib, color);
+        let has_errors = pipeline::check_single_file(&entry_path, color);
 
         if !has_errors {
             println!("{path}: OK");
@@ -230,7 +313,17 @@ pub fn cmd_format(args: &[String], color: bool) {
             }
         };
 
-        let formatted = match expo_fmt::format(&source) {
+        let is_project_file = Path::new(path)
+            .file_name()
+            .is_some_and(|n| n == "project.expo");
+
+        let result = if is_project_file {
+            expo_fmt::format_project(&source)
+        } else {
+            expo_fmt::format(&source)
+        };
+
+        let formatted = match result {
             expo_fmt::FormatResult::Ok(s) => s,
             expo_fmt::FormatResult::ParseErrors(errors) => {
                 render_diagnostics(path, &source, &errors, color);

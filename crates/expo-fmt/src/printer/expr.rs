@@ -478,12 +478,11 @@ impl<'a> Printer<'a> {
         if let Expr::Binary {
             op, left, right, ..
         } = expr
+            && std::mem::discriminant(op) == std::mem::discriminant(target_op)
         {
-            if std::mem::discriminant(op) == std::mem::discriminant(target_op) {
-                self.collect_binop_operands(left, target_op, out);
-                self.collect_binop_operands(right, target_op, out);
-                return;
-            }
+            self.collect_binop_operands(left, target_op, out);
+            self.collect_binop_operands(right, target_op, out);
+            return;
         }
         out.push(self.expr_to_doc(expr));
     }

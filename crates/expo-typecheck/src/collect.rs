@@ -491,7 +491,7 @@ pub fn collect(module: &Module) -> TypeContext {
 
 /// Synthesizes default protocol method implementations for impl blocks whose
 /// protocol info wasn't available during initial collection (e.g. stdlib
-/// protocols like `Process`). Must be called after `merge_stdlib`.
+/// protocols like `Process`). Must be called after merging the stdlib context.
 pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
     let struct_names: Vec<String> = ctx
         .types

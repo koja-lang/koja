@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Project system -- `project.expo` config file with `Project{name: "my_app", version: "0.1.0"}` struct literal format. `expo build`, `expo run`, and `expo check` detect `project.expo` in the current directory when no source file is given. Project name doubles as the module namespace prefix (`import my_app.server` resolves to `src/server.expo`). Configurable `src` dirs and `entry` module with sensible defaults.
+- `expo-stdlib` crate -- standalone crate housing all standard library `.expo` sources with fully qualified module names (`std.kernel`, `std.list`, `std.string`, etc.). Both `expo-driver` and `expo-lsp` depend on it. Stdlib modules are auto-imported into every compilation.
+- Unified module resolution -- project modules, stdlib modules, and (future) package modules resolve through the same namespace-aware resolver. `import my_app.X` dispatches to project `src/` dirs, `import std.X` resolves from embedded sources.
 - Context-driven parameter type inference for closures -- `opt.map(v -> v * 10)` infers `v: Int` from `Option<Int>`. Works for short and block closures at inline call sites, including generic methods.
 - Short closures compile to native code -- `x -> expr` closures with variable capture (copy for primitives, move for non-copy types).
 - `@doc` on type aliases -- `@doc` annotations can now precede `type Name = ...` declarations. Parser, formatter, and LSP hover all support it.
@@ -25,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Refactored `declare_builtins` in codegen -- replaced ~200 lines of repetitive add-function/insert boilerplate with a table-driven helper, organized by category (C stdlib, process runtime, string intrinsics, file I/O).
+- Stdlib sources moved from `expo-typecheck` to `expo-stdlib` -- `expo-typecheck` is now a pure checker with no embedded source files. `STDLIB_SOURCES`, `KERNEL_SOURCE`, and `merge_stdlib` removed.
+- Pipeline refactored -- `parse_stdlib()`/`typecheck_modules()` replaced by unified `typecheck_graph()` and `build_from_graph()`. Both single-file and project builds flow through the same compilation path.
 
 ### Fixed
 

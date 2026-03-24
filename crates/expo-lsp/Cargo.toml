@@ -13,6 +13,7 @@ path = "src/main.rs"
 expo-ast = { path = "../expo-ast" }
 expo-fmt = { path = "../expo-fmt" }
 expo-parser = { path = "../expo-parser" }
+expo-stdlib = { path = "../expo-stdlib" }
 expo-typecheck = { path = "../expo-typecheck" }
 tokio = { version = "1", features = ["full"] }
 tower-lsp-server = "0.23"

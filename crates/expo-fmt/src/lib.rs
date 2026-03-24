@@ -17,6 +17,39 @@ pub fn format(source: &str) -> FormatResult {
     format_width(source, 80)
 }
 
+/// Formats a `project.expo` file (a bare expression, not a full module).
+///
+/// Wraps the source in a dummy function so the parser can handle it,
+/// formats the wrapper, then extracts and un-indents the body.
+pub fn format_project(source: &str) -> FormatResult {
+    format_project_width(source, 80)
+}
+
+/// Formats a `project.expo` file, wrapping lines at `width` columns.
+pub fn format_project_width(source: &str, width: u32) -> FormatResult {
+    let wrapped = format!("fn __project__\n{source}\nend");
+    match format_width(&wrapped, width) {
+        FormatResult::Ok(formatted) => {
+            let body = formatted
+                .strip_prefix("fn __project__\n")
+                .and_then(|s| s.strip_suffix("\nend\n"))
+                .unwrap_or(&formatted);
+
+            let mut out: String = body
+                .lines()
+                .map(|line| line.strip_prefix("  ").unwrap_or(line))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            FormatResult::Ok(out)
+        }
+        err => err,
+    }
+}
+
 /// Formats Expo source code, wrapping lines at `width` columns.
 pub fn format_width(source: &str, width: u32) -> FormatResult {
     let result = expo_parser::parse(source);

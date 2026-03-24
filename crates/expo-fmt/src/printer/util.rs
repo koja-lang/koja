@@ -458,7 +458,7 @@ pub(super) fn arm_is_multiline(body: &[Statement]) -> bool {
 
 pub(super) fn pattern_is_multiline(pattern: &Pattern) -> bool {
     if let Pattern::Or { patterns, .. } = pattern {
-        let estimated_width: usize = patterns.iter().map(|p| pattern_text_len(p)).sum::<usize>()
+        let estimated_width: usize = patterns.iter().map(pattern_text_len).sum::<usize>()
             + (patterns.len().saturating_sub(1)) * 3;
         return estimated_width > 60;
     }
@@ -483,7 +483,7 @@ fn pattern_text_len(pattern: &Pattern) -> usize {
         Pattern::Binding { name, .. } => name.len(),
         Pattern::Wildcard { .. } => 1,
         Pattern::Or { patterns, .. } => {
-            patterns.iter().map(|p| pattern_text_len(p)).sum::<usize>()
+            patterns.iter().map(pattern_text_len).sum::<usize>()
                 + (patterns.len().saturating_sub(1)) * 3
         }
         _ => 10,
@@ -514,12 +514,11 @@ fn collect_binop_exprs<'a>(expr: &'a Expr, target_op: &BinOp, out: &mut Vec<&'a 
     if let Expr::Binary {
         op, left, right, ..
     } = expr
+        && std::mem::discriminant(op) == std::mem::discriminant(target_op)
     {
-        if std::mem::discriminant(op) == std::mem::discriminant(target_op) {
-            collect_binop_exprs(left, target_op, out);
-            collect_binop_exprs(right, target_op, out);
-            return;
-        }
+        collect_binop_exprs(left, target_op, out);
+        collect_binop_exprs(right, target_op, out);
+        return;
     }
     out.push(expr);
 }

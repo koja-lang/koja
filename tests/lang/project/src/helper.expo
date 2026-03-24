@@ -1,0 +1,7 @@
+fn add(a: Int, b: Int) -> Int
+  a + b
+end
+
+fn greet(name: String) -> String
+  "hello, #{name}"
+end

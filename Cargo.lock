@@ -269,6 +269,7 @@ dependencies = [
  "expo-lexer",
  "expo-parser",
  "expo-runtime",
+ "expo-stdlib",
  "expo-typecheck",
 ]
 
@@ -294,6 +295,7 @@ dependencies = [
  "expo-ast",
  "expo-fmt",
  "expo-parser",
+ "expo-stdlib",
  "expo-typecheck",
  "tokio",
  "tower-lsp-server",
@@ -313,6 +315,10 @@ version = "0.7.0"
 dependencies = [
  "cc",
 ]
+
+[[package]]
+name = "expo-stdlib"
+version = "0.7.0"
 
 [[package]]
 name = "expo-typecheck"

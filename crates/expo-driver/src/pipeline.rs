@@ -10,41 +10,16 @@ use std::{env, fs, process};
 use expo_ast::ast::{Module, Severity};
 
 use crate::diagnostics::render_diagnostics;
-use crate::resolve;
+use crate::project::ProjectConfig;
+use crate::resolve::{self, ModuleGraph};
 
-/// Parsed and type-collected standard library, ready to be merged into
-/// user module contexts.
-pub struct Stdlib {
-    pub ctx: expo_typecheck::context::TypeContext,
-    pub modules: Vec<Module>,
-}
-
-/// Parses all embedded stdlib sources (in dependency order) and collects
-/// their type information into a single merged context. Called once per
-/// compilation. Each module sees the types from all preceding modules.
-pub fn parse_stdlib() -> Stdlib {
-    let mut ctx = expo_typecheck::context::TypeContext::new();
-    let mut modules = Vec::new();
-
-    for source in expo_typecheck::STDLIB_SOURCES {
-        let parsed = expo_parser::parse(source);
-        let mut mod_ctx = expo_typecheck::collect_module(&parsed.module);
-        expo_typecheck::merge_stdlib(&ctx, &mut mod_ctx);
-        expo_typecheck::merge_stdlib(&mod_ctx, &mut ctx);
-        modules.push(parsed.module);
-    }
-
-    Stdlib { ctx, modules }
-}
-
-/// Runs the type-checking pipeline for every module in the resolved graph.
+/// Runs the type-checking pipeline for every module in a graph that includes
+/// stdlib modules. Stdlib context is accumulated as stdlib modules are processed,
+/// then merged into every subsequent module.
 ///
-/// For each module (in topological order): collects types, merges the stdlib,
-/// re-resolves generics, resolves cross-module imports, and runs the checker.
 /// Returns the per-module type contexts and whether any errors were found.
-pub fn typecheck_modules(
-    graph: &resolve::ModuleGraph,
-    stdlib: &Stdlib,
+pub fn typecheck_graph(
+    graph: &ModuleGraph,
     color: bool,
 ) -> (HashMap<String, expo_typecheck::context::TypeContext>, bool) {
     let mut module_contexts: HashMap<String, expo_typecheck::context::TypeContext> = HashMap::new();
@@ -66,16 +41,26 @@ pub fn typecheck_modules(
         return (module_contexts, true);
     }
 
+    let mut stdlib_ctx = expo_typecheck::context::TypeContext::new();
+
     for name in &graph.order {
         let rm = &graph.modules[name];
-        let mut ctx = expo_typecheck::collect_module(&rm.module);
-        expo_typecheck::merge_stdlib(&stdlib.ctx, &mut ctx);
-        expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
-        expo_typecheck::re_resolve_generics(&mut ctx);
-        expo_typecheck::mark_recursive_fields(&mut ctx);
-        expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
-        expo_typecheck::check_module(&rm.module, &mut ctx);
-        module_contexts.insert(name.clone(), ctx);
+
+        if name.starts_with("std.") {
+            let mut ctx = expo_typecheck::collect_module(&rm.module);
+            ctx.merge(&stdlib_ctx);
+            stdlib_ctx.merge(&ctx);
+            module_contexts.insert(name.clone(), ctx);
+        } else {
+            let mut ctx = expo_typecheck::collect_module(&rm.module);
+            ctx.merge(&stdlib_ctx);
+            expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
+            expo_typecheck::re_resolve_generics(&mut ctx);
+            expo_typecheck::mark_recursive_fields(&mut ctx);
+            expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
+            expo_typecheck::check_module(&rm.module, &mut ctx);
+            module_contexts.insert(name.clone(), ctx);
+        }
     }
 
     for name in &graph.order {
@@ -101,8 +86,66 @@ pub fn typecheck_modules(
     (module_contexts, has_errors)
 }
 
-/// Full build pipeline: resolve modules, type-check, merge contexts, codegen,
-/// and link into an executable.
+/// Compiles a fully resolved module graph into an executable.
+///
+/// Type-checks all modules, merges contexts, emits LLVM IR, and links.
+/// The graph must include stdlib modules (via [`resolve::insert_stdlib`]).
+pub fn build_from_graph(graph: &ModuleGraph, output: &str, quiet: bool, color: bool) {
+    let (module_contexts, has_errors) = typecheck_graph(graph, color);
+    if has_errors {
+        process::exit(1);
+    }
+
+    let mut merged_ctx = expo_typecheck::context::TypeContext::new();
+    for name in &graph.order {
+        merged_ctx.merge(&module_contexts[name]);
+    }
+
+    let modules_ast: Vec<&Module> = graph
+        .order
+        .iter()
+        .map(|name| &graph.modules[name].module)
+        .collect();
+
+    let obj_path = format!("{output}.o");
+    if let Err(diagnostics) =
+        expo_codegen::compile_modules(&modules_ast, &merged_ctx, Path::new(&obj_path))
+    {
+        let entry_rm = &graph.modules[&graph.entry];
+        render_diagnostics(
+            entry_rm.path.to_str().unwrap_or(&entry_rm.name),
+            &entry_rm.source,
+            &diagnostics,
+            color,
+        );
+        process::exit(1);
+    }
+
+    link(&obj_path, output, quiet);
+}
+
+/// Builds a project from its config: resolves modules, type-checks, compiles, links.
+pub fn build_project(
+    config: &ProjectConfig,
+    project_root: &Path,
+    output: Option<&str>,
+    quiet: bool,
+    color: bool,
+) {
+    let graph = match resolve::resolve_project_modules(config, project_root) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+    };
+
+    let output = output.unwrap_or(&config.name);
+    build_from_graph(&graph, output, quiet, color);
+}
+
+/// Full single-file build pipeline: resolve modules from an entry file,
+/// type-check, merge contexts, codegen, and link into an executable.
 ///
 /// When `quiet` is true, the "compiled: <output>" message is suppressed
 /// (used by `expo run` to avoid noise).
@@ -132,7 +175,7 @@ pub fn build(args: &[String], quiet: bool, color: bool) {
         process::exit(1);
     });
 
-    let graph = match resolve::resolve_modules(&entry_path) {
+    let mut graph = match resolve::resolve_modules(&entry_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: {e}");
@@ -140,40 +183,63 @@ pub fn build(args: &[String], quiet: bool, color: bool) {
         }
     };
 
-    let stdlib = parse_stdlib();
-    let (module_contexts, has_errors) = typecheck_modules(&graph, &stdlib, color);
-    if has_errors {
-        process::exit(1);
-    }
+    prepend_stdlib(&mut graph);
+    build_from_graph(&graph, &output, quiet, color);
+}
 
-    let mut merged_ctx = expo_typecheck::context::TypeContext::new();
-    expo_typecheck::merge_stdlib(&stdlib.ctx, &mut merged_ctx);
-    for ctx in module_contexts.values() {
-        merged_ctx.merge(ctx);
-    }
+/// Type-checks a single-file module graph (without compiling).
+pub fn check_single_file(entry_path: &Path, color: bool) -> bool {
+    let mut graph = match resolve::resolve_modules(entry_path) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return true;
+        }
+    };
 
-    let mut modules_ast: Vec<&Module> = stdlib.modules.iter().collect();
-    modules_ast.extend(graph.order.iter().map(|name| &graph.modules[name].module));
+    prepend_stdlib(&mut graph);
+    let (_, has_errors) = typecheck_graph(&graph, color);
+    has_errors
+}
 
-    let obj_path = format!("{output}.o");
-    if let Err(diagnostics) =
-        expo_codegen::compile_modules(&modules_ast, &merged_ctx, Path::new(&obj_path))
-    {
-        let entry_rm = &graph.modules[&graph.entry];
-        render_diagnostics(
-            entry_rm.path.to_str().unwrap_or(&entry_rm.name),
-            &entry_rm.source,
-            &diagnostics,
-            color,
+/// Type-checks a project module graph (without compiling).
+pub fn check_project(config: &ProjectConfig, project_root: &Path, color: bool) -> bool {
+    let graph = match resolve::resolve_project_modules(config, project_root) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return true;
+        }
+    };
+
+    let (_, has_errors) = typecheck_graph(&graph, color);
+    has_errors
+}
+
+/// Inserts stdlib modules at the front of an existing graph's order.
+/// Used for single-file mode where the graph is built without stdlib.
+fn prepend_stdlib(graph: &mut ModuleGraph) {
+    let mut stdlib_order = Vec::new();
+    for &(name, source) in expo_stdlib::SOURCES {
+        let parse_result = expo_parser::parse(source);
+        stdlib_order.push(name.to_string());
+        graph.modules.insert(
+            name.to_string(),
+            resolve::ResolvedModule {
+                name: name.to_string(),
+                path: std::path::PathBuf::from(format!("<{name}>")),
+                source: source.to_string(),
+                module: parse_result.module,
+                errors: parse_result.errors,
+            },
         );
-        process::exit(1);
     }
-
-    link(&obj_path, &output, quiet);
+    stdlib_order.append(&mut graph.order);
+    graph.order = stdlib_order;
 }
 
 /// Extracts `-o <output>` and the source file path from build arguments.
-fn parse_build_args(args: &[String]) -> (Option<String>, Option<String>) {
+pub fn parse_build_args(args: &[String]) -> (Option<String>, Option<String>) {
     let mut source_file = None;
     let mut output_name = None;
     let mut i = 0;

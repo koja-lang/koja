@@ -54,11 +54,11 @@ impl Backend {
         let mut ctx = expo_typecheck::context::TypeContext::new();
         let mut stdlib_modules = Vec::new();
 
-        for source in expo_typecheck::STDLIB_SOURCES {
+        for &(_, source) in expo_stdlib::SOURCES {
             let parsed = expo_parser::parse(source);
             let mut mod_ctx = expo_typecheck::collect_module(&parsed.module);
-            expo_typecheck::merge_stdlib(&ctx, &mut mod_ctx);
-            expo_typecheck::merge_stdlib(&mod_ctx, &mut ctx);
+            mod_ctx.merge(&ctx);
+            ctx.merge(&mod_ctx);
             stdlib_modules.push(parsed.module);
         }
 

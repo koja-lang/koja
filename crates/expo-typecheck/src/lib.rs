@@ -14,51 +14,6 @@ use context::{FunctionSig, ParamInfo, TypeContext};
 use expo_ast::ast::{Module, Param};
 use types::resolve_type_expr_with_params;
 
-/// The source of `std.kernel`, embedded at compile time. Callers parse this
-/// with `expo_parser::parse` and pass the resulting context to [`merge_stdlib`].
-pub const KERNEL_SOURCE: &str = include_str!("../std/kernel.expo");
-
-/// The source of `std.string`, embedded at compile time. Provides
-/// `Enumeration<String>` for iteration and string intrinsic methods.
-pub const STRING_SOURCE: &str = include_str!("../std/string.expo");
-
-/// The source of `std.list`, embedded at compile time. Provides
-/// `ListLiteral<T>` for list literal syntax.
-pub const LIST_SOURCE: &str = include_str!("../std/list.expo");
-
-/// The source of `std.map`, embedded at compile time. Provides
-/// `MapLiteral<K, V>` for map literal syntax.
-pub const MAP_SOURCE: &str = include_str!("../std/map.expo");
-
-/// The source of `std.set`, embedded at compile time.
-pub const SET_SOURCE: &str = include_str!("../std/set.expo");
-
-/// The source of `std.bitwise`, embedded at compile time. Provides the
-/// `Bitwise` protocol and intrinsic implementations for all integer types.
-pub const BITWISE_SOURCE: &str = include_str!("../std/bitwise.expo");
-
-/// The source of `std.fd`, embedded at compile time. Provides the raw `Fd`
-/// file descriptor type and the `File` type for reading/writing files.
-pub const FD_SOURCE: &str = include_str!("../std/fd.expo");
-
-/// All embedded stdlib sources in dependency order. Kernel must come first;
-/// subsequent modules may reference types defined by earlier ones.
-pub const STDLIB_SOURCES: &[&str] = &[
-    KERNEL_SOURCE,
-    LIST_SOURCE,
-    STRING_SOURCE,
-    MAP_SOURCE,
-    SET_SOURCE,
-    BITWISE_SOURCE,
-    FD_SOURCE,
-];
-
-/// Merges a stdlib [`TypeContext`] into `target`, adding any types, functions,
-/// and generic ASTs that aren't already defined in the target module.
-pub fn merge_stdlib(stdlib: &TypeContext, target: &mut TypeContext) {
-    target.merge(stdlib);
-}
-
 /// Runs collection and type-checking in one step, returning a populated context.
 pub fn check(module: &Module) -> TypeContext {
     let mut ctx = collect::collect(module);
@@ -77,8 +32,7 @@ pub fn collect_module(module: &Module) -> TypeContext {
 }
 
 /// Synthesizes default protocol methods for impls whose protocols were unknown
-/// during initial collection (e.g. after merging stdlib). Must be called after
-/// [`merge_stdlib`].
+/// during initial collection (e.g. after merging stdlib context).
 pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
     collect::synthesize_protocol_defaults(module, ctx);
 }
@@ -100,7 +54,8 @@ pub fn resolve_imports(
 
 /// Re-resolves generic type signatures that may have `Type::Unknown` fields,
 /// parameters, or return types because the referenced types (e.g. stdlib types)
-/// weren't known during initial collection. Must be called after merging stdlib.
+/// weren't known during initial collection. Must be called after merging
+/// the stdlib context.
 pub fn re_resolve_generics(ctx: &mut TypeContext) {
     let struct_names = ctx.struct_names();
     let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();

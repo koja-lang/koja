@@ -5,6 +5,7 @@
 mod commands;
 mod diagnostics;
 mod pipeline;
+pub mod project;
 mod resolve;
 
 use expo_runtime as _;

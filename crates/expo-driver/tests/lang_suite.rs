@@ -174,6 +174,91 @@ fn lang_import_tests() {
 }
 
 #[test]
+fn lang_project_build_test() {
+    let project_dir = lang_dir().join("project");
+    if !project_dir.exists() {
+        panic!("test fixture tests/lang/project/ not found");
+    }
+
+    let binary_path = std::env::temp_dir().join("expo_test_project_build");
+    let _ = std::fs::remove_file(&binary_path);
+
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("build")
+        .arg("-o")
+        .arg(binary_path.to_str().unwrap())
+        .current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute expo build");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "expo build failed in project dir\nstderr:\n{stderr}"
+    );
+    assert!(
+        binary_path.exists(),
+        "expected binary at {}",
+        binary_path.display()
+    );
+    let _ = std::fs::remove_file(&binary_path);
+}
+
+#[test]
+fn lang_project_run_test() {
+    let project_dir = lang_dir().join("project");
+    if !project_dir.exists() {
+        panic!("test fixture tests/lang/project/ not found");
+    }
+
+    let expected_path = project_dir.join("expected.stdout");
+    assert!(expected_path.exists(), "missing project/expected.stdout");
+
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("run").current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute expo run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert!(
+        code == 0,
+        "expo run failed in project dir with code {code}\nstderr:\n{stderr}"
+    );
+    assert_output_matches("project/run", &stdout, &expected_path);
+}
+
+#[test]
+fn lang_project_check_test() {
+    let project_dir = lang_dir().join("project");
+    if !project_dir.exists() {
+        panic!("test fixture tests/lang/project/ not found");
+    }
+
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("check").current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute expo check");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "expo check failed in project dir\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("test_project: OK"),
+        "expected 'test_project: OK' in stdout, got: {stdout}"
+    );
+}
+
+#[test]
 fn lang_compile_fail_tests() {
     let dir = lang_dir().join("compile_fail");
     if !dir.exists() {
