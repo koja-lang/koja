@@ -37,6 +37,10 @@ pub const SET_SOURCE: &str = include_str!("../std/set.expo");
 /// `Bitwise` protocol and intrinsic implementations for all integer types.
 pub const BITWISE_SOURCE: &str = include_str!("../std/bitwise.expo");
 
+/// The source of `std.fd`, embedded at compile time. Provides the raw `Fd`
+/// file descriptor type and the `File` type for reading/writing files.
+pub const FD_SOURCE: &str = include_str!("../std/fd.expo");
+
 /// All embedded stdlib sources in dependency order. Kernel must come first;
 /// subsequent modules may reference types defined by earlier ones.
 pub const STDLIB_SOURCES: &[&str] = &[
@@ -46,6 +50,7 @@ pub const STDLIB_SOURCES: &[&str] = &[
     MAP_SOURCE,
     SET_SOURCE,
     BITWISE_SOURCE,
+    FD_SOURCE,
 ];
 
 /// Merges a stdlib [`TypeContext`] into `target`, adding any types, functions,

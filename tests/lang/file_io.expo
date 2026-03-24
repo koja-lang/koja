@@ -1,0 +1,29 @@
+fn main
+  # File.read - success (read /dev/null, always exists, always empty)
+  match File.read("/dev/null")
+    Result.Ok(contents) ->
+      print(contents.empty?())
+    Result.Err(msg) ->
+      print("ERROR: " <> msg)
+  end
+
+  # File.read - error (nonexistent file)
+  match File.read("/tmp/nonexistent_expo_test_file_12345")
+    Result.Ok(_) -> print("unexpected success")
+    Result.Err(_) -> print("correctly got error")
+  end
+
+  # File.open + Fd.read
+  match File.open("/dev/null")
+    Result.Ok(_) ->
+      print("opened")
+    Result.Err(msg) ->
+      print("open failed: " <> msg)
+  end
+
+  # File.open - error
+  match File.open("/tmp/nonexistent_expo_test_file_12345")
+    Result.Ok(_) -> print("unexpected success")
+    Result.Err(_) -> print("correctly got error for open")
+  end
+end

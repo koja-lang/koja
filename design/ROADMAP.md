@@ -125,7 +125,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
           → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise) ✓
           → A2a (type conversion) ✓ → A2b (string stdlib) ✓ → A2c (OR patterns) ✓ → A2d (ranges, deferred)
-          → A3a (file I/O) → A3b (project.expo + test runner) → A4 (lexer port)
+          → A3a (file I/O) ✓ → A3b (project.expo + test runner) → A4 (lexer port)
 
 Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
           B4 (scheduler/IO) -- independent, anytime
@@ -245,13 +245,13 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 
 Prerequisites for the lexer port (A4). File I/O lets Expo programs read source files; the project system lets the toolchain manage multi-module builds and tests.
 
-##### A3a. File I/O
+##### A3a. File I/O ✓
 
 Minimal file I/O via runtime intrinsics -- just enough to read and write files from Expo code.
 
-- `std.fd` -- `Fd` type wrapping an OS file descriptor (an integer). `read`, `write`, `close` as runtime intrinsics.
-- `std.file` -- `File` struct wrapping `Fd`. `File.open(path) -> Result<File, String>`, `File.read(path) -> Result<String, String>` (convenience for read-entire-file), `File.close(move file)`. Move semantics ensure single ownership of file handles.
-- `std.io` -- `stdin`, `stdout`, `stderr` as `Fd` constants.
+- `std.fd` -- `Fd` type wrapping an OS file descriptor (an integer). `read`, `write`, `close` as runtime intrinsics. Also contains `File` struct wrapping `Fd`.
+- `File.open(path) -> Result<File, String>`, `File.read(path) -> Result<String, String>` (convenience for read-entire-file), `File.close(move self)`. Move semantics ensure single ownership of file handles.
+- `std.io` -- deferred to A3b (needs module namespacing from the project system for `io.puts()` style calls).
 - **Done when**: an Expo program can read a file from disk and print its contents
 
 ##### A3b. Project system + test runner
@@ -749,7 +749,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges (deferred), A3a file I/O, A3b project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges (deferred), ~~A3a file I/O~~, A3b project system, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |

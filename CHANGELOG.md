@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- File I/O -- `Fd` type (raw file descriptor with `read`, `write`, `close`) and `File` type (wraps `Fd` with `File.read(path)` for whole-file read, `File.open(path)` for handle-based access, `File.close(move self)`). Both return `Result<T, String>` for error handling. Runtime intrinsics use POSIX I/O and Rust's `std::fs`.
 - OR patterns in match arms -- `1 | 2 | 3 -> "small"` combines multiple patterns sharing one arm body. Works in `match` and `receive`. Variable bindings inside OR patterns are disallowed for now.
 - String standard library -- `alpha?`, `at`, `codepoints`, `contains?`, `downcase`, `empty?`, `ends_with?`, `graphemes`, `join` (static), `replace`, `reverse`, `split`, `starts_with?`, `to_float`, `to_int`, `trim`, `trim_end`, `trim_start`, `upcase`, `whitespace?`. ASCII-only case conversion and codepoint-level iteration for now; full Unicode deferred.
 - Binary and bitstring literals -- `Binary` and `Bits` as built-in types. `<<>>` syntax for construction and pattern matching. Segment modifiers: `::N` bit-width, `::N byte`, `signed`/`unsigned`, `big`/`little`, type annotations (`: Float32`, `: Int16`). Byte-aligned totals infer `Binary`, non-byte-aligned infer `Bits`. Greedy rest capture (`rest: Binary`) in match patterns. Compile-time overflow checking.
@@ -17,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - String/Binary/Bits conversions -- `String.to_binary()` and `Binary.to_bits()` (zero-cost, always succeed). `Binary.to_string()` and `Bits.to_binary()` return `Result` (validate UTF-8 and byte alignment respectively).
 - String segments in binary literals -- string literals inside `<<>>` for construction and pattern matching (`<<"HTTP/1.1 ", rest: Binary>>`).
 - Methods on primitive types -- `impl` blocks can define methods on built-in types (`String`, `Binary`, `Bits`, `Int`, etc.).
+
+### Changed
+
+- Refactored `declare_builtins` in codegen -- replaced ~200 lines of repetitive add-function/insert boilerplate with a table-driven helper, organized by category (C stdlib, process runtime, string intrinsics, file I/O).
 
 ### Fixed
 

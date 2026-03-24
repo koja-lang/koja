@@ -403,6 +403,175 @@ pub unsafe extern "C" fn expo_float_parse(ptr: *const u8, out: *mut f64) -> i64 
 }
 
 // ---------------------------------------------------------------------------
+// File I/O intrinsics
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static LAST_IO_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+fn set_last_error(e: impl std::fmt::Display) {
+    LAST_IO_ERROR.with(|cell| {
+        *cell.borrow_mut() = Some(e.to_string());
+    });
+}
+
+/// Allocates a length-prefixed Expo string from a byte slice.
+/// Layout: `[i64 bit_length][payload...\0]`, returns pointer to payload.
+unsafe fn alloc_expo_string(bytes: &[u8]) -> *const u8 {
+    let byte_len = bytes.len();
+    unsafe {
+        let layout = std::alloc::Layout::from_size_align(8 + byte_len + 1, 8).unwrap();
+        let base = std::alloc::alloc(layout);
+        let bit_len = (byte_len as i64) * 8;
+        std::ptr::copy_nonoverlapping(&bit_len as *const i64 as *const u8, base, 8);
+        let payload = base.add(8);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), payload, byte_len);
+        *payload.add(byte_len) = 0;
+        payload
+    }
+}
+
+/// Extracts the byte slice from a length-prefixed Expo string pointer.
+unsafe fn expo_string_to_slice<'a>(ptr: *const u8) -> &'a [u8] {
+    unsafe {
+        let hdr = ptr.sub(8) as *const i64;
+        let bit_len = *hdr;
+        let byte_len = (bit_len / 8) as usize;
+        std::slice::from_raw_parts(ptr, byte_len)
+    }
+}
+
+/// Returns the error message for the most recent failed I/O call.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_last_error() -> *const u8 {
+    LAST_IO_ERROR.with(|cell| {
+        let msg = cell.borrow();
+        match msg.as_deref() {
+            Some(s) => unsafe { alloc_expo_string(s.as_bytes()) },
+            None => unsafe { alloc_expo_string(b"unknown error") },
+        }
+    })
+}
+
+/// Reads up to `count` bytes from a raw file descriptor.
+/// Returns a length-prefixed string pointer, or null on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_fd_read(fd: i64, count: i64) -> *const u8 {
+    let mut buf = vec![0u8; count as usize];
+    let n = unsafe { libc_read(fd as i32, buf.as_mut_ptr(), buf.len()) };
+    if n < 0 {
+        set_last_error(std::io::Error::last_os_error());
+        return std::ptr::null();
+    }
+    buf.truncate(n as usize);
+    unsafe { alloc_expo_string(&buf) }
+}
+
+/// Writes a length-prefixed string's contents to a raw file descriptor.
+/// Returns bytes written, or -1 on error.
+///
+/// # Safety
+/// `data_ptr` must point to a valid length-prefixed Expo string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_fd_write(fd: i64, data_ptr: *const u8) -> i64 {
+    let slice = unsafe { expo_string_to_slice(data_ptr) };
+    let n = unsafe { libc_write(fd as i32, slice.as_ptr(), slice.len()) };
+    if n < 0 {
+        set_last_error(std::io::Error::last_os_error());
+        return -1;
+    }
+    n as i64
+}
+
+/// Closes a raw file descriptor. Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_fd_close(fd: i64) -> i64 {
+    let ret = unsafe { libc_close(fd as i32) };
+    if ret < 0 {
+        set_last_error(std::io::Error::last_os_error());
+        return -1;
+    }
+    0
+}
+
+/// Opens a file. `mode`: 0 = read, 1 = write (create/truncate).
+/// Returns fd on success, -1 on error.
+///
+/// # Safety
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_file_open(path_ptr: *const u8, mode: i64) -> i64 {
+    let path = unsafe { std::ffi::CStr::from_ptr(path_ptr as *const i8) };
+    let path = match path.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(e);
+            return -1;
+        }
+    };
+
+    use std::fs::OpenOptions;
+    let file = match mode {
+        0 => OpenOptions::new().read(true).open(path),
+        1 => OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path),
+        _ => {
+            set_last_error("invalid file open mode");
+            return -1;
+        }
+    };
+
+    match file {
+        Ok(f) => {
+            use std::os::fd::IntoRawFd;
+            f.into_raw_fd() as i64
+        }
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    }
+}
+
+/// Reads the entire contents of a file as a length-prefixed string.
+/// Returns null on error.
+///
+/// # Safety
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_file_read_all(path_ptr: *const u8) -> *const u8 {
+    let path = unsafe { std::ffi::CStr::from_ptr(path_ptr as *const i8) };
+    let path = match path.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(e);
+            return std::ptr::null();
+        }
+    };
+
+    match std::fs::read(path) {
+        Ok(bytes) => unsafe { alloc_expo_string(&bytes) },
+        Err(e) => {
+            set_last_error(e);
+            std::ptr::null()
+        }
+    }
+}
+
+unsafe extern "C" {
+    #[link_name = "read"]
+    fn libc_read(fd: i32, buf: *mut u8, count: usize) -> isize;
+    #[link_name = "write"]
+    fn libc_write(fd: i32, buf: *const u8, count: usize) -> isize;
+    #[link_name = "close"]
+    fn libc_close(fd: i32) -> i32;
+}
+
+// ---------------------------------------------------------------------------
 // Scheduler loop
 // ---------------------------------------------------------------------------
 

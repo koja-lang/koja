@@ -36,6 +36,10 @@ const STRING_INTRINSICS: &[&str] = &[
 
 const PARSE_INTRINSICS: &[&str] = &["Int_parse", "Float_parse"];
 
+const FD_INTRINSICS: &[&str] = &["Fd_read", "Fd_write", "Fd_close"];
+
+const FILE_INTRINSICS: &[&str] = &["File_open", "File_read"];
+
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     for prim in PRIMITIVE_TYPES {
         if mangled == format!("{prim}_hash") || mangled == format!("{prim}_eq") {
@@ -52,6 +56,8 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     if CONVERSION_INTRINSICS.contains(&mangled)
         || STRING_INTRINSICS.contains(&mangled)
         || PARSE_INTRINSICS.contains(&mangled)
+        || FD_INTRINSICS.contains(&mangled)
+        || FILE_INTRINSICS.contains(&mangled)
     {
         return true;
     }
@@ -74,6 +80,14 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
 
     if PARSE_INTRINSICS.contains(&mangled) {
         return emit_parse_intrinsic(c, fn_val, mangled);
+    }
+
+    if FD_INTRINSICS.contains(&mangled) {
+        return emit_fd_intrinsic(c, fn_val, mangled);
+    }
+
+    if FILE_INTRINSICS.contains(&mangled) {
+        return emit_file_intrinsic(c, fn_val, mangled);
     }
 
     if let Some(type_name) = mangled.strip_suffix("_hash") {
@@ -941,6 +955,356 @@ fn emit_parse_intrinsic<'ctx>(
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
         }
         _ => return Err(format!("unknown parse intrinsic: {mangled}")),
+    }
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
+}
+
+fn emit_fd_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    mangled: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    let i64_ty = c.context.i64_type();
+    let result_type = fn_val
+        .get_type()
+        .get_return_type()
+        .unwrap()
+        .into_struct_type();
+
+    match mangled {
+        "Fd_read" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd = c.builder.build_extract_value(self_val, 0, "fd").unwrap();
+            let count = fn_val.get_nth_param(1).unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_fd_read")
+                .ok_or("expo_fd_read not declared")?;
+            let ptr = c
+                .builder
+                .build_call(rt_fn, &[fd.into(), count.into()], "read_ptr")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_pointer_value();
+
+            let is_null = c.builder.build_is_null(ptr, "is_null").unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_null, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let ok_result = build_result_ok(c, ptr.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c
+                .builder
+                .build_call(err_fn, &[], "err_msg")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Fd_write" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd = c.builder.build_extract_value(self_val, 0, "fd").unwrap();
+            let data = fn_val.get_nth_param(1).unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_fd_write")
+                .ok_or("expo_fd_write not declared")?;
+            let written = c
+                .builder
+                .build_call(rt_fn, &[fd.into(), data.into()], "written")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+
+            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let is_err = c
+                .builder
+                .build_int_compare(IntPredicate::EQ, written, neg_one, "is_err")
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_err, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let ok_result = build_result_ok(c, written.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c
+                .builder
+                .build_call(err_fn, &[], "err_msg")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Fd_close" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd = c.builder.build_extract_value(self_val, 0, "fd").unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_fd_close")
+                .ok_or("expo_fd_close not declared")?;
+            let ret = c
+                .builder
+                .build_call(rt_fn, &[fd.into()], "close_ret")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+
+            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let is_err = c
+                .builder
+                .build_int_compare(IntPredicate::EQ, ret, neg_one, "is_err")
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_err, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let ok_msg = c.create_string_global(b"ok", "close_ok_msg");
+            let ok_result = build_result_ok(c, ok_msg.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c
+                .builder
+                .build_call(err_fn, &[], "err_msg")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        _ => return Err(format!("unknown fd intrinsic: {mangled}")),
+    }
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
+}
+
+fn emit_file_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    mangled: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    let i64_ty = c.context.i64_type();
+    let result_type = fn_val
+        .get_type()
+        .get_return_type()
+        .unwrap()
+        .into_struct_type();
+
+    match mangled {
+        "File_open" => {
+            let path_ptr = fn_val.get_nth_param(0).unwrap();
+            let mode = i64_ty.const_int(0, false);
+            let rt_fn = *c
+                .functions
+                .get("expo_file_open")
+                .ok_or("expo_file_open not declared")?;
+            let fd_val = c
+                .builder
+                .build_call(rt_fn, &[path_ptr.into(), mode.into()], "fd_val")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+
+            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let is_err = c
+                .builder
+                .build_int_compare(IntPredicate::EQ, fd_val, neg_one, "is_err")
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_err, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let file_struct_ty = c
+                .struct_types
+                .get("File")
+                .copied()
+                .ok_or("File struct type not found")?;
+            let alloca = c.builder.build_alloca(file_struct_ty, "file_tmp").unwrap();
+            let fd_field_ptr = c
+                .builder
+                .build_struct_gep(file_struct_ty, alloca, 0, "fd_field")
+                .unwrap();
+            let fd_struct_ty = c
+                .struct_types
+                .get("Fd")
+                .copied()
+                .ok_or("Fd struct type not found")?;
+            let fd_desc_ptr = c
+                .builder
+                .build_struct_gep(fd_struct_ty, fd_field_ptr, 0, "fd_desc")
+                .unwrap();
+            c.builder.build_store(fd_desc_ptr, fd_val).unwrap();
+            let file_val = c
+                .builder
+                .build_load(file_struct_ty, alloca, "file_val")
+                .unwrap();
+            let ok_result = build_result_ok(c, file_val, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c
+                .builder
+                .build_call(err_fn, &[], "err_msg")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "File_read" => {
+            let path_ptr = fn_val.get_nth_param(0).unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_file_read_all")
+                .ok_or("expo_file_read_all not declared")?;
+            let ptr = c
+                .builder
+                .build_call(rt_fn, &[path_ptr.into()], "read_ptr")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_pointer_value();
+
+            let is_null = c.builder.build_is_null(ptr, "is_null").unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_null, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let ok_result = build_result_ok(c, ptr.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c
+                .builder
+                .build_call(err_fn, &[], "err_msg")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        _ => return Err(format!("unknown file intrinsic: {mangled}")),
     }
 
     if let Some(bb) = saved_block {

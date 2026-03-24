@@ -311,164 +311,96 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn declare_builtins(&mut self) {
-        let i32_type = self.context.i32_type();
-        let i8_ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+        let void = self.context.void_type();
+        let i32 = self.context.i32_type();
+        let i64 = self.context.i64_type();
+        let ptr = self.context.ptr_type(inkwell::AddressSpace::default());
 
-        let printf_type = i32_type.fn_type(&[i8_ptr_type.into()], true);
-        let printf = self.module.add_function("printf", printf_type, None);
-        self.functions.insert("printf".to_string(), printf);
+        let mut decl = |name: &str, ty: inkwell::types::FunctionType<'ctx>| {
+            let f = self.module.add_function(name, ty, None);
+            self.functions.insert(name.to_string(), f);
+        };
 
-        let snprintf_type = i32_type.fn_type(
-            &[i8_ptr_type.into(), i32_type.into(), i8_ptr_type.into()],
-            true,
+        // C stdlib
+        decl("printf", i32.fn_type(&[ptr.into()], true));
+        decl(
+            "snprintf",
+            i32.fn_type(&[ptr.into(), i32.into(), ptr.into()], true),
         );
-        let snprintf = self.module.add_function("snprintf", snprintf_type, None);
-        self.functions.insert("snprintf".to_string(), snprintf);
-
-        let fprintf_type = i32_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into()], true);
-        let fprintf = self.module.add_function("fprintf", fprintf_type, None);
-        self.functions.insert("fprintf".to_string(), fprintf);
-
-        let abort_type = self.context.void_type().fn_type(&[], false);
-        let abort = self.module.add_function("abort", abort_type, None);
-        self.functions.insert("abort".to_string(), abort);
-
-        let fdopen_type = i8_ptr_type.fn_type(&[i32_type.into(), i8_ptr_type.into()], false);
-        let fdopen = self.module.add_function("fdopen", fdopen_type, None);
-        self.functions.insert("fdopen".to_string(), fdopen);
-
-        let i64_type = self.context.i64_type();
-
-        let malloc_type = i8_ptr_type.fn_type(&[i64_type.into()], false);
-        let malloc = self.module.add_function("malloc", malloc_type, None);
-        self.functions.insert("malloc".to_string(), malloc);
-
-        let realloc_type = i8_ptr_type.fn_type(&[i8_ptr_type.into(), i64_type.into()], false);
-        let realloc = self.module.add_function("realloc", realloc_type, None);
-        self.functions.insert("realloc".to_string(), realloc);
-
-        let free_type = self
-            .context
-            .void_type()
-            .fn_type(&[i8_ptr_type.into()], false);
-        let free = self.module.add_function("free", free_type, None);
-        self.functions.insert("free".to_string(), free);
-
-        let strcmp_type = i32_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into()], false);
-        let strcmp = self.module.add_function("strcmp", strcmp_type, None);
-        self.functions.insert("strcmp".to_string(), strcmp);
-
-        let strlen_type = i64_type.fn_type(&[i8_ptr_type.into()], false);
-        let strlen = self.module.add_function("strlen", strlen_type, None);
-        self.functions.insert("strlen".to_string(), strlen);
-
-        let memset_type = i8_ptr_type.fn_type(
-            &[i8_ptr_type.into(), i32_type.into(), i64_type.into()],
-            false,
+        decl("fprintf", i32.fn_type(&[ptr.into(), ptr.into()], true));
+        decl("abort", void.fn_type(&[], false));
+        decl("fdopen", ptr.fn_type(&[i32.into(), ptr.into()], false));
+        decl("malloc", ptr.fn_type(&[i64.into()], false));
+        decl("realloc", ptr.fn_type(&[ptr.into(), i64.into()], false));
+        decl("free", void.fn_type(&[ptr.into()], false));
+        decl("strcmp", i32.fn_type(&[ptr.into(), ptr.into()], false));
+        decl("strlen", i64.fn_type(&[ptr.into()], false));
+        decl(
+            "memset",
+            ptr.fn_type(&[ptr.into(), i32.into(), i64.into()], false),
         );
-        let memset = self.module.add_function("memset", memset_type, None);
-        self.functions.insert("memset".to_string(), memset);
-
-        let memcpy_type = i8_ptr_type.fn_type(
-            &[i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into()],
-            false,
+        decl(
+            "memcpy",
+            ptr.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
         );
-        let memcpy = self.module.add_function("memcpy", memcpy_type, None);
-        self.functions.insert("memcpy".to_string(), memcpy);
-
-        let spawn_type = i64_type.fn_type(
-            &[i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into()],
-            false,
+        decl(
+            "memcmp",
+            i32.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
         );
-        let spawn = self.module.add_function("expo_rt_spawn", spawn_type, None);
-        self.functions.insert("expo_rt_spawn".to_string(), spawn);
 
-        let send_type = self.context.void_type().fn_type(
-            &[i64_type.into(), i8_ptr_type.into(), i64_type.into()],
-            false,
+        // Process runtime
+        decl(
+            "expo_rt_spawn",
+            i64.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
         );
-        let send = self.module.add_function("expo_rt_send", send_type, None);
-        self.functions.insert("expo_rt_send".to_string(), send);
-
-        let receive_type = i8_ptr_type.fn_type(&[], false);
-        let receive = self
-            .module
-            .add_function("expo_rt_receive", receive_type, None);
-        self.functions
-            .insert("expo_rt_receive".to_string(), receive);
-
-        let i64_type = self.context.i64_type();
-        let receive_timeout_type = i8_ptr_type.fn_type(&[i64_type.into()], false);
-        let receive_timeout =
-            self.module
-                .add_function("expo_rt_receive_timeout", receive_timeout_type, None);
-        self.functions
-            .insert("expo_rt_receive_timeout".to_string(), receive_timeout);
-
-        let self_pid_type = i64_type.fn_type(&[], false);
-        let self_pid = self
-            .module
-            .add_function("expo_rt_self", self_pid_type, None);
-        self.functions.insert("expo_rt_self".to_string(), self_pid);
-
-        let main_done_type = self.context.void_type().fn_type(&[], false);
-        let main_done = self
-            .module
-            .add_function("expo_rt_main_done", main_done_type, None);
-        self.functions
-            .insert("expo_rt_main_done".to_string(), main_done);
-
-        let memcmp_type = i32_type.fn_type(
-            &[i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into()],
-            false,
+        decl(
+            "expo_rt_send",
+            void.fn_type(&[i64.into(), ptr.into(), i64.into()], false),
         );
-        let memcmp = self.module.add_function("memcmp", memcmp_type, None);
-        self.functions.insert("memcmp".to_string(), memcmp);
+        decl("expo_rt_receive", ptr.fn_type(&[], false));
+        decl("expo_rt_receive_timeout", ptr.fn_type(&[i64.into()], false));
+        decl("expo_rt_self", i64.fn_type(&[], false));
+        decl("expo_rt_main_done", void.fn_type(&[], false));
 
-        let utf8_validate_type = i64_type.fn_type(&[i8_ptr_type.into(), i64_type.into()], false);
-        let utf8_validate =
-            self.module
-                .add_function("expo_utf8_validate", utf8_validate_type, None);
-        self.functions
-            .insert("expo_utf8_validate".to_string(), utf8_validate);
-
-        let string_length_type = i64_type.fn_type(&[i8_ptr_type.into()], false);
-        let string_length =
-            self.module
-                .add_function("expo_string_length", string_length_type, None);
-        self.functions
-            .insert("expo_string_length".to_string(), string_length);
-
-        let string_get_type = i8_ptr_type.fn_type(&[i8_ptr_type.into(), i64_type.into()], false);
-        let string_get = self
-            .module
-            .add_function("expo_string_get", string_get_type, None);
-        self.functions
-            .insert("expo_string_get".to_string(), string_get);
-
-        let string_slice_type = i8_ptr_type.fn_type(
-            &[i8_ptr_type.into(), i64_type.into(), i64_type.into()],
-            false,
+        // String intrinsics
+        decl(
+            "expo_utf8_validate",
+            i64.fn_type(&[ptr.into(), i64.into()], false),
         );
-        let string_slice = self
-            .module
-            .add_function("expo_string_slice", string_slice_type, None);
-        self.functions
-            .insert("expo_string_slice".to_string(), string_slice);
+        decl("expo_string_length", i64.fn_type(&[ptr.into()], false));
+        decl(
+            "expo_string_get",
+            ptr.fn_type(&[ptr.into(), i64.into()], false),
+        );
+        decl(
+            "expo_string_slice",
+            ptr.fn_type(&[ptr.into(), i64.into(), i64.into()], false),
+        );
+        decl(
+            "expo_int_parse",
+            i64.fn_type(&[ptr.into(), ptr.into()], false),
+        );
+        decl(
+            "expo_float_parse",
+            i64.fn_type(&[ptr.into(), ptr.into()], false),
+        );
 
-        let int_parse_type = i64_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into()], false);
-        let int_parse = self
-            .module
-            .add_function("expo_int_parse", int_parse_type, None);
-        self.functions
-            .insert("expo_int_parse".to_string(), int_parse);
-
-        let float_parse_type = i64_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into()], false);
-        let float_parse = self
-            .module
-            .add_function("expo_float_parse", float_parse_type, None);
-        self.functions
-            .insert("expo_float_parse".to_string(), float_parse);
+        // File I/O
+        decl(
+            "expo_fd_read",
+            ptr.fn_type(&[i64.into(), i64.into()], false),
+        );
+        decl(
+            "expo_fd_write",
+            i64.fn_type(&[i64.into(), ptr.into()], false),
+        );
+        decl("expo_fd_close", i64.fn_type(&[i64.into()], false));
+        decl("expo_last_error", ptr.fn_type(&[], false));
+        decl(
+            "expo_file_open",
+            i64.fn_type(&[ptr.into(), i64.into()], false),
+        );
+        decl("expo_file_read_all", ptr.fn_type(&[ptr.into()], false));
     }
 
     fn declare_function(
