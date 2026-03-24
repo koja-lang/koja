@@ -101,8 +101,8 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **Language design** -- syntax decisions, memory model, async model, module system, all finalized through iterative design sessions
 - **EBNF grammar** -- `grammar.ebnf`, ~460 lines covering all syntax constructs
 - **Example codebase** -- 17 `.expo` files porting `auth-manager` (a real Rust microservice) into Expo pseudocode, validating the language feels right
-- **Memory strategy** -- documented in `MEMORY.md` (stack, ownership+move, explicit arena)
-- **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `CONCURRENCY.md` (processes, native runtime, supervision)
+- **Memory strategy** -- documented in `archive/20260323-MEMORY.md` (stack, ownership+move, explicit arena)
+- **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `archive/20260323-CONCURRENCY.md` (processes, native runtime, supervision)
 - **Project config format** -- `project.expo` replacing `Cargo.toml`
 
 ### Tooling (pulled forward)
@@ -133,11 +133,11 @@ Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls +
           B4 (scheduler/IO) -- independent, anytime
 ```
 
-No dependencies between tracks. B1, B2, and B3 are complete. B4 can slot in anywhere. Track A sub-milestones are sequential -- each builds on the previous. See `BITSTRINGS.md` for the full design document covering A1 and A2.
+No dependencies between tracks. B1, B2, and B3 are complete. B4 can slot in anywhere. Track A sub-milestones are sequential -- each builds on the previous. See `archive/20260323-BITSTRINGS.md` for the full design document covering A1 and A2.
 
 ### Track A: Language surface
 
-The foundation for writing real programs in Expo. `String`, `Binary`, and `Bits` are three distinct types with explicit conversion between them. `Binary` and `Bits` use `<<>>` syntax for construction and pattern matching, compiled to native shift-and-mask operations. `String` provides codepoint-aware text methods. All design decisions are finalized in `BITSTRINGS.md`.
+The foundation for writing real programs in Expo. `String`, `Binary`, and `Bits` are three distinct types with explicit conversion between them. `Binary` and `Bits` use `<<>>` syntax for construction and pattern matching, compiled to native shift-and-mask operations. `String` provides codepoint-aware text methods. All design decisions are finalized in `archive/20260323-BITSTRINGS.md`.
 
 #### A1. Binary/bitstring literals
 
@@ -247,7 +247,7 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 
 Prerequisites for the lexer port (A4). File I/O lets Expo programs read source files; the project system lets the toolchain manage multi-module builds and tests.
 
-##### A3a. File I/O ✓
+##### A3a. File I/O -- done
 
 Minimal file I/O via runtime intrinsics -- just enough to read and write files from Expo code.
 
@@ -285,7 +285,7 @@ The foundation for Expo's concurrency promise. B1–B3 form a dependency chain (
 
 #### B2. Protocol-based process model -- done
 
-Replaces the old `Process<M>` handle struct and caller-side annotations. Processes are now structs implementing a `Process<C, M, R>` protocol. See `CONCURRENCY.md` for full design exploration.
+Replaces the old `Process<M>` handle struct and caller-side annotations. Processes are now structs implementing a `Process<C, M, R>` protocol. See `archive/20260323-CONCURRENCY.md` for full design exploration.
 
 - **`Process<C, M, R>` protocol** -- three type params: C (config to construct), M (messages while running), R (replies sent back). Two required methods (`new`, `handle`), two default impls (`run` receive loop, `child_spec` supervision bridge).
   - **Implemented**: protocol declaration, `impl Process<C, M, R> for T`, type checker extracts C/M/R from `protocol_impls`, `process_msg_type` set to `Pair<M, Option<ReplyTo<R>>>` envelope type. Default `run` method synthesized from protocol. `cast` wraps in `Pair<msg, Option.None>`, `call` wraps in `Pair<msg, Option.Some(ReplyTo)>` with `expo_rt_self()` for caller PID.
@@ -330,7 +330,7 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 
 | Decision           | Recommendation                                                                                                                                                                                                                                     |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Distinct types     | `String`, `Binary`, and `Bits` are three distinct types with no subtype relationships. Explicit conversion between them: widening always succeeds (zero-cost), narrowing validates and returns `Result`. See `BITSTRINGS.md`.                      |
+| Distinct types     | `String`, `Binary`, and `Bits` are three distinct types with no subtype relationships. Explicit conversion between them: widening always succeeds (zero-cost), narrowing validates and returns `Result`. See `archive/20260323-BITSTRINGS.md`.                      |
 | No Char            | No dedicated character type. Single-codepoint `String` values serve the same purpose -- fractal design. String ranges (`"a".."z"`) and classification methods (`is_alpha?()`) work on String directly.                                             |
 | Inclusive ranges   | One range operator (`..`), always inclusive on both ends. Pattern matching is the primary use case; numeric loops are rare in idiomatic Expo. `0..n-1` for the occasional exclusive case.                                                          |
 | Erlang defaults    | Binary segments default to unsigned big-endian (network byte order). Matches Erlang and covers the primary use case: HTTP microservices and network protocol parsing.                                                                              |
@@ -361,7 +361,7 @@ Three features deferred from Phase 3 because their primary use cases are supervi
 
 - **`Pid` type** -- type-erased process ID (raw integer). Used in `ExitSignal` (which carries the crashed process's pid), registries, and `Process.monitor`. Distinct from `Ref<M, R>` (typed handle).
 - **Trait bounds on generics** -- `fn foo<T: Process<C, M, R>>(x: T)` needed for `child_spec` and generic process utilities. Parser currently only accepts bare `<T>`, needs `:` bound syntax. Touches parser, type checker, and codegen.
-- **`copy` keyword** -- third parameter modifier alongside default borrow and `move`: `fn start(copy config: Config)`. Auto-clones at the call boundary. Primary use case: `child_spec` default impl captures `copy config` in a closure for supervisor restart. `PassMode::Copy` already exists for closure captures; this extends it to parameter declarations. See `CONCURRENCY.md` for full design.
+- **`copy` keyword** -- third parameter modifier alongside default borrow and `move`: `fn start(copy config: Config)`. Auto-clones at the call boundary. Primary use case: `child_spec` default impl captures `copy config` in a closure for supervisor restart. `PassMode::Copy` already exists for closure captures; this extends it to parameter declarations. See `archive/20260323-CONCURRENCY.md` for full design.
 
 ### Preemption and priority
 
@@ -372,7 +372,7 @@ Three features deferred from Phase 3 because their primary use cases are supervi
 
 ### Supervision
 
-The API design is largely settled (see `CONCURRENCY.md`). Depends on the three prerequisites above. Implementation work:
+The API design is largely settled (see `archive/20260323-CONCURRENCY.md`). Depends on the three prerequisites above. Implementation work:
 
 - **`ExitSignal` struct** -- stdlib struct with `pid: Pid` and `reason: ExitReason`. Included in a process's M via union type (`type PoolMsg = PoolCmd | ExitSignal`). Type checker verifies M includes `ExitSignal` at `Process.monitor` call sites.
 - **`Process.monitor(ref)`** -- static function, not a protocol method. Tells the runtime to send an `ExitSignal` to the caller's mailbox when the monitored process dies.

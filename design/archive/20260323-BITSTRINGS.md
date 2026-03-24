@@ -35,7 +35,7 @@ Widening (shedding a guarantee) always succeeds. Narrowing (adding a guarantee)
 requires validation and can fail.
 
 All three types use move semantics. Assignment moves ownership; function
-parameters borrow by default. See `MEMORY.md` for the full ownership model.
+parameters borrow by default. See `archive/20260323-MEMORY.md` for the full ownership model.
 
 ### `<<>>` type inference
 
@@ -280,7 +280,7 @@ Bitwise operations are methods, not symbol operators. Expo uses `<<>>` for
 binary literals, and keeping `<<`/`>>` free of any other meaning avoids the
 collision that C-family languages have between shift operators and binary
 delimiters. All other bit-manipulation symbols (`&`, `|`, `^`, `~`) stay
-unused -- `&` doesn't exist in Expo (see `MEMORY.md`), `|` is reserved for
+unused -- `&` doesn't exist in Expo (see `archive/20260323-MEMORY.md`), `|` is reserved for
 union types, and `^` is available for a future pin operator.
 
 Instead, bitwise operations are defined by the `Bitwise` protocol:
@@ -578,5 +578,5 @@ variable-width `BinarySegment` protocol when it's designed.
 
 ---
 
-See `ROADMAP.md` Phase 3 Track A1 for implementation milestones. See `MEMORY.md`
+See `ROADMAP.md` Phase 3 Track A1 for implementation milestones. See `archive/20260323-MEMORY.md`
 for how ownership and arenas interact with binary data.

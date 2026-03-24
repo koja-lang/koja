@@ -70,7 +70,7 @@ enum_variant = TYPE_IDENT                                           (* unit *)
 
 type_params = "<" , TYPE_IDENT , { "," , TYPE_IDENT } , ">" ;
 
-type_alias_decl = "type" , TYPE_IDENT , "=" , type_expr ;
+type_alias_decl = [ annotation ] , "type" , TYPE_IDENT , "=" , type_expr ;
 
 
 (* ========================================================================== *)
@@ -87,7 +87,7 @@ protocol_method = [ annotation ] , "fn" , IDENT , [ type_params ] ,
 
 
 (* ========================================================================== *)
-(* 5. Impl blocks                                                            *)
+(* 5. Impl blocks                                                             *)
 (* ========================================================================== *)
 
 impl_block = "impl" , type_expr , [ "for" , type_expr ] ,
@@ -185,8 +185,8 @@ unary = "-" , unary
 postfix = primary , { postfix_op } ;
 
 postfix_op = "." , IDENT , "(" , [ arg_list ] , ")"        (* method call *)
-           | "." , IDENT                                    (* field access *)
-           | "(" , [ arg_list ] , ")"  ;                     (* function call *)
+           | "." , IDENT                                   (* field access *)
+           | "(" , [ arg_list ] , ")"  ;                   (* function call *)
 
 arg_list = arg , { "," , arg } ;
 
@@ -210,7 +210,7 @@ primary = literal
         | while_expr
         | arena_expr
         | receive_expr
-        | spawn_call
+        | spawn_expr
         | "(" , expr , ")" ;                                 (* grouping *)
 
 struct_construction = named_type , "{" ,
@@ -230,14 +230,14 @@ enum_construction = named_type , "." , TYPE_IDENT                     (* unit *)
 (* 9. Closures                                                                *)
 (* ========================================================================== *)
 
-(* Full closure: fn args -> body end *)
-closure = "fn" , [ closure_params ] , "->" ,
+(* Full closure: fn (args) -> ReturnType body end *)
+closure = "fn" , "(" , [ closure_params ] , ")" , [ "->" , type_expr ] ,
           { statement } ,
           "end" ;
 
 closure_params = closure_param , { "," , closure_param } ;
 
-closure_param = IDENT
+closure_param = IDENT , [ ":" , type_expr ]
               | "(" , IDENT , { "," , IDENT } , ")"     (* destructured *)
               | "_" ;
 
@@ -310,8 +310,8 @@ arena_expr = "arena" ,
 (* 12. Concurrency                                                            *)
 (* ========================================================================== *)
 
-(* spawn creates a new process from a struct implementing Process<C, M, R> *)
-spawn_call = "spawn" , named_type , "." , "new" , "(" , [ arg_list ] , ")" ;
+(* spawn creates a new process; the type checker enforces the Process<C, M, R> constraint *)
+spawn_expr = "spawn" , expr ;
 
 (* receive blocks until a message arrives or the optional timeout expires.
    Arms use the same pattern -> body syntax as match. The after clause
@@ -437,7 +437,8 @@ compound_assign = lvalue , ( "+=" | "-=" | "*=" | "/=" ) , expr ;
 annotation = "@" , IDENT , [ annotation_value ] ;
 
 annotation_value = string_lit
-                 | multiline_string_lit ;
+                 | multiline_string_lit
+                 | "false" ;
 
 
 (* ========================================================================== *)
@@ -454,7 +455,7 @@ comment = "#" , { any_char_except_newline } ;
 (* 19. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
-constant_decl = "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
+constant_decl = [ annotation ] , "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
 
 shared_decl = "shared" , IDENT , ":" , type_expr ;
 
@@ -477,8 +478,8 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, arena, break, cond, const, else, end, enum, false, fn,        *)
-(* for, if, impl, import, in, loop, match, move, not, priv, protocol,   *)
+(* after, arena, break, cond, const, else, end, enum, false, fn,         *)
+(* for, if, impl, import, in, loop, match, move, not, priv, protocol,    *)
 (* receive, return, self, shared, spawn, struct, true, type, unless,     *)
 (* when, while                                                           *)
 (*                                                                       *)

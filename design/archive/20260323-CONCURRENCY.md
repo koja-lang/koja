@@ -1,6 +1,6 @@
 # Concurrency Design — Part 2
 
-Continuation of [20260313-CONCURRENCY.md](archive/20260313-CONCURRENCY.md). This document captures design
+Continuation of [20260313-CONCURRENCY.md](20260313-CONCURRENCY.md). This document captures design
 refinements from March 2026 that simplify the ownership-at-concurrency-boundaries
 model, introduce the `copy` keyword, and unify the rules for tasks and actors.
 
@@ -330,7 +330,7 @@ usage reveals which APIs matter.
 
 ## Scheduler protocol
 
-See [ROADMAP.md](ROADMAP.md) Phase 3 Track B "Runtime" section for the full scheduler
+See [ROADMAP.md](../ROADMAP.md) Phase 3 Track B "Runtime" section for the full scheduler
 protocol design. Key points summarized here:
 
 - The runtime is a **protocol interface**, not a monolith. The scheduler, I/O
