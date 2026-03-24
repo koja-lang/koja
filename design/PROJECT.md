@@ -9,105 +9,226 @@ requires unifying how modules and types resolve.
 
 ## Type algebra
 
-### Data dimensionality: 0-D, 1-D, 2-D
+### The four algebraic types
 
-Expo has three keywords for declaring named types. They differ not in
-mechanism but in **data dimensionality**:
+Expo's type system maps to the four operations of type algebra:
 
-- **`type IO`** -- 0-D. No data. A point. Just a name with functions attached.
-- **`enum Option<T>`** -- 1-D. One axis of variation: _which_ variant. A sum type.
-- **`struct User`** -- 2-D. Multiple axes simultaneously: all fields at once. A product type.
+| Keyword  | Algebra               | Type theory | Role                |
+| -------- | --------------------- | ----------- | ------------------- |
+| `struct` | \* (multiply/product) | Product     | Combine all fields  |
+| `enum`   | + (addition/sum)      | Coproduct   | Choose one variant  |
+| `fn`     | ^ (exponential)       | Exponential | Map input to output |
+| `alias`  | = (redirect)          | --          | Name existing types |
 
-All three are types. The keyword communicates the data shape. Functions (via
-`impl`) are orthogonal -- they attach to any dimensionality. In type theory
-terms: unit, coproduct, and product.
+All three type-constructing keywords (`struct`, `enum`, `fn`) produce
+first-class types on equal footing. `Type::Function` is a type alongside
+`Type::Struct` and `Type::Enum`. Function values can be stored in variables,
+passed as arguments, and returned.
 
-This maps directly to algebraic data types:
-
-| Keyword  | Dimension | Algebra               | Role               |
-| -------- | --------- | --------------------- | ------------------ |
-| `type`   | 0-D       | 1 (identity)          | Empty namespace    |
-| `enum`   | 1-D       | + (addition/sum)      | Choose one variant |
-| `struct` | 2-D       | \* (multiply/product) | Combine all fields |
-
-Higher dimensions compose from these primitives. "3-D" (sum of products) is
-just an enum with struct variants -- already supported, no new keyword needed.
-There is no 4-D because all algebraic data types are built from `+` and `*`,
-the same way all polynomials are built from addition and multiplication.
-The keyword set is algebraically complete.
-
-This means:
-
-- `IO.puts()`, `Option.some()`, `User.new()` are all the same operation:
-  call a function owned by a type.
-- The implementation should reflect this: one registry, one resolution path.
-- The keywords exist for **human readers and documentation**, not because the
-  mechanism differs.
-
-### Named vs anonymous forms
-
-Each algebraic operation has a named (declared) form and an anonymous (inline)
-form, paralleling how functions have named and anonymous forms:
-
-| Dimension     | Named (declared) | Anonymous (inline)                   |
-| ------------- | ---------------- | ------------------------------------ |
-| 0-D           | `type IO`        | `()` (unit literal)                  |
-| 1-D (sum)     | `enum Option<T>` | `String \| Int` (union type)         |
-| 2-D (product) | `struct User`    | _(deliberately absent -- no tuples)_ |
-| Code          | `fn name(...)`   | `fn (...) -> ... end` (closure)      |
-
-The anonymous product slot (tuples) is empty **by design**. Tuples let you
-avoid naming fields, and unnamed fields degrade readability. `Pair<A, B>` with
-`.first` / `.second` covers the 2-arity case. Anything beyond that should be a
-struct with named fields.
-
-Note: tuples aren't quite the symmetric counterpart to unions anyway. A union
-uses _types_ as discriminators (`s: String`); the symmetric anonymous product
-would use _types_ as accessors, not positions. This type-indexed product breaks
-when two fields share a type, making it impractical. The hole is unfillable
-with something clean, which reinforces the decision to leave it empty.
-
-### Union types and `impl`
-
-Union types (`type Stringish = String | Int`) are the anonymous form of enums.
-The analogy is precise:
-
-    union type : enum :: closure : function
-
-A closure is an anonymous function. A union type is an anonymous sum type -- a
-sum without named variants, where existing types serve as discriminators.
-
-Currently `type Name = A | B` is a transparent alias. For union types to
-support `impl` (a roadmap requirement), they must become real entries in the
-type registry. The unified model forces this: if everything resolves through
-`ctx.types`, then union types must be proper types too.
-
-The `type` keyword handles three cases, distinguished by syntax:
-
-- `type IO` (no `=`) -- 0-D declaration (namespace for functions)
-- `type NodeId = UInt64` (single type after `=`) -- alias (transparent redirect)
-- `type Stringish = String | Int` (union after `=`) -- union type (real entry,
-  supports `impl`)
-
-### `type` as the 0-D declaration
-
-`type IO` declares a zero-dimensional type -- a named namespace for functions.
-No new keyword required; `type` already exists for aliases. The parser
-disambiguates: `type Name =` is an alias or union, `type Name` (no `=`) is a
-declaration.
+A struct with zero fields is the unit type (algebraically, the empty product
+is 1). This handles the "namespace for functions" case without a separate
+keyword:
 
 ```expo
-type IO
-
-impl IO
+struct IO
   fn puts(message: String)
-    print(message)
-    print("\n")
+    print(message <> "\n")
   end
 end
 ```
 
-`IO.puts("hello")` resolves through the same path as `List.map(items, f)`.
+`IO.puts("hello")` resolves the same way as `List.map(items, f)`.
+
+Two additional keywords name existing types without declaring new ones:
+
+- **`alias NodeId = UInt64`** -- transparent redirect. `NodeId` IS `UInt64`,
+  interchangeable everywhere.
+- **`union Pet = Cat | Dog | Fish`** -- anonymous sum of existing types.
+  A new type in the registry, supports `impl`.
+
+### Keywords
+
+Six keywords, each with exactly one job:
+
+| Keyword  | Role                                               |
+| -------- | -------------------------------------------------- |
+| `struct` | Product type (0+ fields) with inline functions     |
+| `enum`   | Sum type (declared variants) with inline functions |
+| `fn`     | Function (named or anonymous/closure)              |
+| `alias`  | Transparent type redirect                          |
+| `union`  | Anonymous sum of existing types                    |
+| `impl`   | External extension / protocol conformance          |
+
+### Inline functions
+
+Functions live inside type bodies (inspired by Swift). The type declaration
+and its core API are one unit -- you see the type and what it does together:
+
+```expo
+struct User
+  name: String
+  email: String
+
+  fn greet(self) -> String
+    "Hello, #{self.name}"
+  end
+
+  fn new(name: String, email: String) -> Self
+    User{name: name, email: email}
+  end
+end
+```
+
+```expo
+enum Option<T>
+  Some(T)
+  None
+
+  fn unwrap(self) -> T
+    match self
+      Option.Some(v) -> v
+      Option.None -> panic("unwrap on None")
+    end
+  end
+
+  fn map<U>(self, f: fn(T) -> U) -> Option<U>
+    match self
+      Option.Some(v) -> Option.Some(f(v))
+      Option.None -> Option.None
+    end
+  end
+end
+```
+
+`impl` is reserved for **external additions**: protocol conformance and
+cross-file extensions (Swift's `extension` pattern). Core functions go
+inline; `impl` extends from outside.
+
+```expo
+impl Display for User
+  fn to_string(self) -> String
+    "User(#{self.name})"
+  end
+end
+```
+
+### Type composability
+
+The three type-constructing keywords compose with each other in every
+direction:
+
+- A **struct** can hold structs, enums, and functions as fields
+- An **enum** can hold structs, enums, and functions as variant payloads
+- A **fn** can take and return structs, enums, and other functions
+
+Every type-constructor nests inside every other. This isn't accidental --
+it falls out of all three being first-class types on equal footing.
+
+The enum-with-function-payload case is especially interesting. An enum
+variant that carries a function creates a tagged callable:
+
+```expo
+enum Step<T>
+  Run(fn(T) -> Result<T, String>)
+  Validate(fn(T) -> Bool, String)
+
+  fn execute(self, data: T) -> Result<T, String>
+    match self
+      Step.Run(f) -> f(data)
+      Step.Validate(pred, msg) ->
+        if pred(data)
+          Result.Ok(data)
+        else
+          Result.Err(msg)
+        end
+    end
+  end
+end
+```
+
+This enables typed pipeline patterns (see "Command pattern" below) as
+library code rather than language primitives.
+
+### Named vs anonymous forms
+
+Each algebraic type has a named (declared) form and an anonymous (inline) form:
+
+| Algebra     | Named (declared)       | Anonymous (inline)                  | Term    |
+| ----------- | ---------------------- | ----------------------------------- | ------- |
+| Product     | `struct User`          | `{name: String, age: Int}`          | record  |
+| Sum         | `enum Option<T>`       | `union Pet = Cat \| Dog`            | union   |
+| Exponential | `fn name(...) ... end` | `x -> expr` / `fn (...) -> ... end` | closure |
+| Unit        | `struct IO` (0 fields) | `()` (unit literal)                 |         |
+
+Every type-constructor now has both forms. The algebra is complete.
+
+### Records
+
+Records are the anonymous form of structs, just as closures are the
+anonymous form of functions:
+
+    record : struct :: closure : named function
+
+Records fill the product slot that tuples occupy in other languages,
+without the readability cost of positional access. Fields are named, so
+`{x: Int, y: Int}` is self-documenting in a way `(Int, Int)` never is.
+
+```expo
+fn parse_header(raw: String) -> {name: String, value: String}
+  // ...
+end
+
+result = parse_header(line)
+print(result.name)
+```
+
+No one-off `struct HeaderPair` cluttering the module for a shape used in
+one place.
+
+**Structural, not nominal.** Records are matched by shape (field names +
+types). Two `{x: Int, y: Int}` are the same type regardless of where
+they appear. Named structs stay nominal -- `struct Point` and
+`struct Vec2` with identical fields are different types. The rule is
+clear: named = nominal, record = structural.
+
+**No methods.** Records have no body, so no inline functions. If you need
+methods, name it with `struct`. This creates a natural gradient: records
+for lightweight data, structs for API-bearing types.
+
+**`alias` as the bridge.** `alias Coordinates = {x: Float, y: Float}`
+gives a record a name without making it nominal. Still structural, but
+readable at call sites.
+
+The recursive typechecker (see COMPILER.md) handles records naturally --
+field-level analysis tracks by field name, not by a registered type name.
+A record flowing through a pipeline has the same definite assignment
+tracking as a named struct.
+
+### Union types
+
+Union types are the anonymous form of enums, just as closures are the
+anonymous form of functions:
+
+    union : enum :: closure : named function
+
+A closure is an anonymous function. A union type is an anonymous sum -- a
+sum without named variants, where existing types serve as discriminators.
+
+The `union` keyword declares a real type in the registry:
+
+```expo
+union Pet = Cat | Dog | Fish
+
+impl Display for Pet
+  fn to_string(self) -> String
+    match self
+      p: Cat -> "cat"
+      p: Dog -> "dog"
+      p: Fish -> "fish"
+    end
+  end
+end
+```
 
 ### Documentation categorization
 
@@ -115,9 +236,10 @@ Generated docs categorize by data shape, not by a generic "type" label:
 
 - **Structs**: List, Request, User (types with fields)
 - **Enums**: Option, Result (types with variants)
-- **Modules**: IO, Math, Path (types with no data shape, functions only)
+- **Modules**: IO, Math, Path (structs with no fields, functions only)
 
-The doc generator knows the difference from the type's shape in the registry.
+The doc generator infers the category from `fields.is_empty()` in the
+type registry.
 
 ---
 
@@ -140,9 +262,9 @@ namespaces that own functions. The implementation should reflect that.
 
 One registry: `ctx.types`. One resolution path.
 
-- `ctx.types["IO"]` = `TypeKind::Struct { fields: [] }` (0-D type)
-- `ctx.types["List"]` = `TypeKind::Struct { fields: [...] }` (2-D type)
-- `ctx.types["Option"]` = `TypeKind::Enum { variants: [...] }` (1-D type)
+- `ctx.types["IO"]` = `TypeKind::Struct { fields: [] }` (namespace, no fields)
+- `ctx.types["List"]` = `TypeKind::Struct { fields: [...] }` (product)
+- `ctx.types["Option"]` = `TypeKind::Enum { variants: [...] }` (sum)
 
 `imported_modules` is removed. All qualified calls resolve through:
 
@@ -155,8 +277,8 @@ Everything is PascalCase. `IO.puts()`, `List.map()`, `Option.some()`.
 ### What changes
 
 - **`TypeKind`**: no new variant needed. `TypeKind::Struct { fields: vec![] }`
-  covers the 0-D case. Alternatively, add `TypeKind::Module` purely for doc
-  generation purposes (the resolution path is identical either way).
+  covers the namespace case (empty struct = 0-D type). Doc generator infers
+  "Module" category from `fields.is_empty()`.
 - **`infer_method_call`**: the module-qualified branch is removed. One path
   through `ctx.types`.
 - **`clone_public_context` / `merge_all_public`**: currently skip constants,
@@ -177,7 +299,7 @@ The import path is a **filesystem locator**. The type name comes from the
 ```
 import std.io
   filesystem: find std/io.expo
-  source declares: type IO
+  source declares: struct IO (with inline functions)
   result: IO is registered in ctx.types
 ```
 
@@ -271,18 +393,28 @@ struct fields.
 
 ### "Code should mirror reality"
 
-The conceptual model says modules, structs, and enums are all namespaces that
-own functions. The implementation should have one registry and one resolution
+The conceptual model says structs and enums are all namespaces that own
+functions. The implementation should have one registry and one resolution
 path -- not two parallel mechanisms that happen to do the same thing.
 
-### "A module should represent one idea" (instantaneous complexity)
+### Instantaneous complexity
 
-Each type is one idea. `struct User` is the idea of a user. `enum Option<T>` is
-the idea of optional values. `type IO` is the idea of I/O operations. Files are
-containers for ideas; types are the ideas themselves.
+Software complexity exists at four scopes (see
+[Tackling Instantaneous Complexity](https://blog.codedge.io/write-better-software-tackling-instantaneous-complexity/)):
 
-The namespace boundary is the **idea** (the type), not the file, not the package.
-Files organize code on disk. Types organize code in the program.
+- A **function** should do one thing.
+- A **module** should represent one idea.
+- A **project** should have one role.
+- A **system** should have one mission.
+
+In Expo, these map to:
+
+- **Function**: `fn` -- does one thing.
+- **Module**: a file. Contains types and functions around one idea.
+  `@moduledoc` documents it. No `module` keyword -- the file IS the module.
+- **Type**: `struct` or `enum` with inline functions. The namespace boundary
+  within a module. Types are the ideas; files organize them on disk.
+- **Project**: `project.expo` defines the build unit.
 
 ### Fractal consistency
 
@@ -290,25 +422,102 @@ At every scope, the same pattern applies:
 
 - A type owns functions: `Type.function()`
 - A function does one thing
+- A file represents one idea
 - A project has one role
 
 The qualified-call syntax `Name.function()` works identically regardless of
-whether `Name` is a struct, enum, or module. No special cases.
+whether `Name` is a struct or enum. No special cases.
 
 ---
 
+## Command pattern: library, not keyword
+
+The ROADMAP (see "Future: `command` construct") proposes a `command`
+keyword for typed, composable pipelines with compile-time guarantees:
+step-ordered type safety, exhaustive data flow, automatic error types.
+
+These guarantees reduce to a single general-purpose analysis: **cross-function
+definite assignment**. If the typechecker can track which struct fields have
+been meaningfully initialized at each point in a pipeline, it can verify that
+no step reads a field before a prior step sets it.
+
+Example: a `Pipeline<T>` built from `Step<T>` enum variants (see "Type
+composability" above):
+
+```expo
+Pipeline.new(Registration{email: email, password_hash: "", user_id: 0})
+  .step(Step.Validate(r -> r.email != "", "email required"))
+  .step(Step.Run(r -> hash_password(r)))
+  .step(Step.Run(r -> create_user(r)))
+  .run()
+```
+
+If the typechecker holds all function bodies in memory (not just
+signatures), it can recursively walk into `hash_password` and
+`create_user` to determine which fields each function reads and writes.
+It can then verify that `create_user` doesn't read `password_hash`
+before `hash_password` sets it.
+
+This is the same class of analysis the typechecker already performs for
+variable move tracking (`Live`/`Moved`/`MaybeMoved`), extended to struct
+field initialization across function boundaries.
+
+The self-hosted compiler's architecture (see COMPILER.md) enables this.
+The Rust bootstrap compiler only holds function *signatures* during
+checking -- bodies are checked independently. The self-hosted compiler's
+immutable `TypeContext` with all code in memory allows the checker to
+walk into called functions and trace data flow.
+
+The key insight: this analysis benefits ALL code, not just command
+pipelines. Any function that receives a partially-initialized struct
+gets the same safety. The `command` keyword's guarantees become a
+natural consequence of a smarter typechecker, not a special-purpose
+language feature.
+
+Conclusion: `command` functionality is achievable as a stdlib construct
+(`std.command` or equivalent) backed by general-purpose definite
+assignment analysis. No dedicated keyword needed.
+
+---
+
+## Decided
+
+- **Inline functions**: functions live inside `struct` and `enum` bodies
+  (Swift model). `impl` is reserved for external extensions and protocol
+  conformance.
+- **No 0-D `type` keyword**: `struct IO` (no fields) serves as a namespace.
+  An empty product is algebraically the unit type. No separate keyword needed.
+- **`alias` replaces `type X = Y`** for transparent redirects.
+- **`union` replaces `type X = A | B`** for anonymous sums. Union types are
+  real entries in the type registry, supporting `impl`.
+- **File = module**: no `module` keyword. The file provides the module
+  boundary. `@moduledoc` documents it. One idea per file by convention.
+- **`impl` across files**: `impl Display for User` can appear in a different
+  file from `struct User`. A type is declared in one file, but `impl` blocks
+  can appear anywhere (protocol conformance, extensions from other files).
+- **Command as library, not keyword**: the `command` construct from the
+  ROADMAP is achievable as a stdlib pattern (`enum Step<T>` with function
+  payloads + `Pipeline<T>`) backed by cross-function definite assignment
+  analysis in the self-hosted typechecker. No dedicated keyword needed.
+
 ## Open questions
 
-- **`impl` across files**: can `impl IO` appear in a different file from
-  `type IO`? Currently `impl` can extend any type. This should continue to
-  work -- a type is declared in one file, but `impl` blocks can appear anywhere
-  (protocol conformance, extensions).
+- **`impl` on `alias` types**: `alias Handler = fn(Request) -> Response`.
+  Should `impl Handler` work? Function types are structural, not nominal.
+  Naming them via `alias` doesn't change their structure.
+- **`impl` on `union` types**: if all constituents of
+  `union Pet = Cat | Dog | Fish` implement `Display`, does `Pet`
+  automatically implement `Display`? Auto-forwarding is appealing but has
+  edge cases (what if only 2 of 3 implement it, what if implementations
+  conflict). The alternative is requiring an explicit `impl Display for Pet`
+  with an exhaustive match.
 - **Multiple types per file**: a file can define multiple types. When you
   `import` that file, all its public types come into scope. No restriction
-  on one-type-per-file.
+  on one-type-per-file. Tension with "one idea per file" -- is this a problem
+  in practice?
 - **Entry file**: the entry module (`main.expo`) may have top-level statements
-  (the program body). How does this interact with the "everything is a type"
-  model? The entry file is special -- it runs code, not just declares types.
+  (the program body). `fn main` is a top-level function, not attached to any
+  type. This is fine -- not everything needs a type.
 - **Circular imports**: currently banned by cycle detection. With the unified
   registry, circular type references could theoretically be handled the same
   way as recursive struct types (`Type::Indirect`), but this adds significant
@@ -316,3 +525,8 @@ whether `Name` is a struct, enum, or module. No special cases.
 - **Test runner**: `@test` annotated functions with `expo test`. Discovery
   scans `test` dirs from `project.expo`. Implementation details deferred to
   the implementation phase.
+- **Record width subtyping**: is `{foo: String, bar: Int, baz: Bool}`
+  assignable to `{foo: String, bar: Int}`? TypeScript says yes (wider records
+  are subtypes of narrower ones). Most ML-family languages say no (exact match).
+  Exact match is simpler and more predictable. Width subtyping is more flexible
+  but makes type errors harder to diagnose.

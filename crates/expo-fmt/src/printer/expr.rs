@@ -135,7 +135,9 @@ impl<'a> Printer<'a> {
                 span,
                 ..
             } => {
-                let any_multiline = arms.iter().any(|a| arm_is_multiline(&a.body));
+                let any_multiline = arms
+                    .iter()
+                    .any(|a| arm_is_multiline(&a.body) || pattern_is_multiline(&a.pattern));
                 let rendered: Vec<Doc> = arms
                     .iter()
                     .map(|arm| self.match_arm_to_doc(arm, any_multiline, span.end.line))
@@ -170,8 +172,10 @@ impl<'a> Printer<'a> {
                 span,
                 ..
             } => {
-                let any_multiline =
-                    arms.iter().any(|a| arm_is_multiline(&a.body)) || arm_is_multiline(after_body);
+                let any_multiline = arms
+                    .iter()
+                    .any(|a| arm_is_multiline(&a.body) || pattern_is_multiline(&a.pattern))
+                    || arm_is_multiline(after_body);
                 let rendered: Vec<Doc> = arms
                     .iter()
                     .map(|arm| self.match_arm_to_doc(arm, any_multiline, span.end.line))

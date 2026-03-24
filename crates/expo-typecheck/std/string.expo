@@ -45,59 +45,18 @@ impl String
   fn alpha?(self) -> Bool
     for c in self
       match c
-        "a" -> ()
-        "b" -> ()
-        "c" -> ()
-        "d" -> ()
-        "e" -> ()
-        "f" -> ()
-        "g" -> ()
-        "h" -> ()
-        "i" -> ()
-        "j" -> ()
-        "k" -> ()
-        "l" -> ()
-        "m" -> ()
-        "n" -> ()
-        "o" -> ()
-        "p" -> ()
-        "q" -> ()
-        "r" -> ()
-        "s" -> ()
-        "t" -> ()
-        "u" -> ()
-        "v" -> ()
-        "w" -> ()
-        "x" -> ()
-        "y" -> ()
-        "z" -> ()
-        "A" -> ()
-        "B" -> ()
-        "C" -> ()
-        "D" -> ()
-        "E" -> ()
-        "F" -> ()
-        "G" -> ()
-        "H" -> ()
-        "I" -> ()
-        "J" -> ()
-        "K" -> ()
-        "L" -> ()
-        "M" -> ()
-        "N" -> ()
-        "O" -> ()
-        "P" -> ()
-        "Q" -> ()
-        "R" -> ()
-        "S" -> ()
-        "T" -> ()
-        "U" -> ()
-        "V" -> ()
-        "W" -> ()
-        "X" -> ()
-        "Y" -> ()
-        "Z" -> ()
-        _ -> return false
+        "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" |
+        "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" |
+        "y" | "z" ->
+          ()
+
+        "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" |
+        "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" |
+        "Y" | "Z" ->
+          ()
+
+        _ ->
+          return false
       end
     end
     true
@@ -161,16 +120,7 @@ impl String
   fn digit?(self) -> Bool
     for c in self
       match c
-        "0" -> ()
-        "1" -> ()
-        "2" -> ()
-        "3" -> ()
-        "4" -> ()
-        "5" -> ()
-        "6" -> ()
-        "7" -> ()
-        "8" -> ()
-        "9" -> ()
+        "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" -> ()
         _ -> return false
       end
     end
@@ -278,7 +228,8 @@ impl String
     old_len = old.length()
     len = self.length()
     while i < len
-      if i + old_len <= len and self.slice(Range{start: i, stop: i + old_len - 1}) == old
+      if i + old_len <= len and
+      self.slice(Range{start: i, stop: i + old_len - 1}) == old
         result = result <> new
         i += old_len
       else
@@ -329,7 +280,8 @@ impl String
     sep_len = separator.length()
     len = self.length()
     while i < len
-      if i + sep_len <= len and self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
+      if i + sep_len <= len and
+      self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
         result = result.push(current)
         current = ""
         i += sep_len
@@ -394,10 +346,7 @@ impl String
     i = len - 1
     while i >= 0
       match self.get(i)
-        " " -> ()
-        "\n" -> ()
-        "\r" -> ()
-        "\t" -> ()
+        " " | "\n" | "\r" | "\t" -> ()
         _ -> return self.slice(Range{start: 0, stop: i})
       end
       i -= 1
@@ -413,10 +362,7 @@ impl String
     len = self.length()
     while i < len
       match self.get(i)
-        " " -> ()
-        "\n" -> ()
-        "\r" -> ()
-        "\t" -> ()
+        " " | "\n" | "\r" | "\t" -> ()
         _ -> return self.slice(Range{start: i, stop: len - 1})
       end
       i += 1
@@ -469,10 +415,7 @@ impl String
   fn whitespace?(self) -> Bool
     for c in self
       match c
-        " " -> ()
-        "\n" -> ()
-        "\r" -> ()
-        "\t" -> ()
+        " " | "\n" | "\r" | "\t" -> ()
         _ -> return false
       end
     end

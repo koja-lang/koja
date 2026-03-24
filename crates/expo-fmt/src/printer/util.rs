@@ -296,8 +296,16 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             }
         }
         Pattern::Or { patterns, .. } => {
-            let pat_docs: Vec<Doc> = patterns.iter().map(pattern_to_doc).collect();
-            intersperse(pat_docs, text(" | "))
+            let len = patterns.len();
+            let mut items: Vec<Doc> = Vec::with_capacity(len);
+            for (i, pat) in patterns.iter().enumerate() {
+                if i < len - 1 {
+                    items.push(concat(vec![pattern_to_doc(pat), text(" | ")]));
+                } else {
+                    items.push(pattern_to_doc(pat));
+                }
+            }
+            fill(items)
         }
     }
 }
@@ -446,6 +454,40 @@ pub(super) fn arm_is_multiline(body: &[Statement]) -> bool {
         return is_block_expr(expr);
     }
     false
+}
+
+pub(super) fn pattern_is_multiline(pattern: &Pattern) -> bool {
+    if let Pattern::Or { patterns, .. } = pattern {
+        let estimated_width: usize = patterns.iter().map(|p| pattern_text_len(p)).sum::<usize>()
+            + (patterns.len().saturating_sub(1)) * 3;
+        return estimated_width > 60;
+    }
+    false
+}
+
+fn pattern_text_len(pattern: &Pattern) -> usize {
+    match pattern {
+        Pattern::Literal { value, .. } => match value {
+            Literal::Int(n) => n.to_string().len(),
+            Literal::Float(f) => f.to_string().len(),
+            Literal::String(s) => s.len() + 2,
+            Literal::Bool(b) => {
+                if *b {
+                    4
+                } else {
+                    5
+                }
+            }
+            Literal::Unit => 2,
+        },
+        Pattern::Binding { name, .. } => name.len(),
+        Pattern::Wildcard { .. } => 1,
+        Pattern::Or { patterns, .. } => {
+            patterns.iter().map(|p| pattern_text_len(p)).sum::<usize>()
+                + (patterns.len().saturating_sub(1)) * 3
+        }
+        _ => 10,
+    }
 }
 
 /// Assembles a `keyword ... arms ... end` block.
