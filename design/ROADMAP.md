@@ -124,8 +124,8 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 ```
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
           → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise) ✓
-          → A2a (type conversion) ✓ → A2b (string stdlib) ✓ → A2c (OR patterns) ✓ → A2d (ranges)
-          → A3 (project.expo + test runner) → A4 (lexer port)
+          → A2a (type conversion) ✓ → A2b (string stdlib) ✓ → A2c (OR patterns) ✓ → A2d (ranges, deferred)
+          → A3a (file I/O) → A3b (project.expo + test runner) → A4 (lexer port)
 
 Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
           B4 (scheduler/IO) -- independent, anytime
@@ -227,16 +227,34 @@ Expo's `<<>>` syntax with full bit-level precision. `<<>>` infers its type from 
 - Works in both `match` and `receive` arms
 - **Done**: `match x 1 | 2 | 3 -> "small" ...` compiles and runs
 
-##### A2d. Ranges
+##### A2d. Ranges -- deferred
 
 - `..` range operator (always inclusive on both ends)
 - Range patterns in match (`0..255`, `"a".."z"`) -- `Pattern::Range` AST node, codegen as `>= start && <= end`
-- `Range` struct in `std.kernel` implementing `Enumeration<Int>` with `length()` and `get()` -- existing `for` loop codegen + LLVM inlining handles efficient iteration
-- `1..10` as expression sugar for `Range{start: 1, stop: 10}`
+- `1..10` as expression sugar for range construction
 - String ranges ordered by codepoint value, endpoints must be single-codepoint string literals
 - **Done when**: `for i in 1..10` iterates, `match c "a".."z" -> ...` compiles and runs, lexer-style `"a".."z" | "A".."Z" | "_" -> ...` works (combined with A2c)
+- **Deferred**: the current `Range{start: Int, stop: Int}` struct is a placeholder that works for `slice()` but isn't the right foundation for the `..` operator. Open design questions that need resolution before shipping:
+  - **Generic vs integer-only**: `Range<T>` would be type-safe but `Range<String>` is semantically wrong for multi-codepoint strings. Expo's "no Char type" design means single-codepoint strings serve as characters, but the type system can't enforce single-codepoint at the `Range<String>` level.
+  - **String range iteration**: `for c in "a".."z"` should yield single-codepoint strings (not integers), but integer ranges and string ranges have fundamentally different stepping behavior. Needs intrinsics (`codepoint_value`, `from_codepoint`) or a different approach.
+  - **Relationship to Enumeration**: should ranges implement `Enumeration<T>`, or should `for` loops recognize `..` as compiler-native syntax with optimized codegen (no struct allocation)?
+  - The lexer port (A4) can proceed without ranges by using OR patterns for character matching. Ranges must be resolved before v1.0.
+- **Not blocking**: A3 and A4 do not depend on ranges.
 
-#### A3. Project system + test runner
+#### A3. File I/O + project system
+
+Prerequisites for the lexer port (A4). File I/O lets Expo programs read source files; the project system lets the toolchain manage multi-module builds and tests.
+
+##### A3a. File I/O
+
+Minimal file I/O via runtime intrinsics -- just enough to read and write files from Expo code.
+
+- `std.fd` -- `Fd` type wrapping an OS file descriptor (an integer). `read`, `write`, `close` as runtime intrinsics.
+- `std.file` -- `File` struct wrapping `Fd`. `File.open(path) -> Result<File, String>`, `File.read(path) -> Result<String, String>` (convenience for read-entire-file), `File.close(move file)`. Move semantics ensure single ownership of file handles.
+- `std.io` -- `stdin`, `stdout`, `stderr` as `Fd` constants.
+- **Done when**: an Expo program can read a file from disk and print its contents
+
+##### A3b. Project system + test runner
 
 Minimal `project.expo` (source dirs, test dirs, project name -- no dependency resolution yet) so the toolchain knows what to compile and where to find tests. Then `@test` annotated functions with `expo test` to discover and run them. The project file also improves `expo build` for multi-module projects.
 
@@ -389,14 +407,14 @@ The API design is largely settled (see `CONCURRENCY.md`). Depends on the three p
 
 ## Phase 5: Stdlib + first-party packages
 
-Build the remaining stdlib and the first-party package ecosystem. Binary/bitstring and string methods already ship in Phase 3. This phase covers everything else needed to write real applications.
+Build the remaining stdlib and the first-party package ecosystem. Binary/bitstring and string methods ship in Phase 3 A2. File I/O (`std.fd`, `std.file`, `std.io`) ships in Phase 3 A3a. This phase covers everything else needed to write real applications.
 
 ### Stdlib (ships with the compiler, always available)
 
 Stdlib contains primitives that are as fundamental as integers — things the compiler or language runtime needs to function, or that virtually every program needs and whose API is stable for decades.
 
-- `std.fd` -- raw `Fd` type wrapping an OS file descriptor (an integer). Provides `read`, `write`, `close`. The lowest-level IO primitive; everything else builds on it.
-- `std.file` -- `File` struct wrapping `Fd`. `open`, `read`, `write`, `seek`, `close`. Move semantics ensure single ownership of file handles; deterministic cleanup on drop. The operations haven't changed in 50 years — safe to commit to forever.
+- `std.fd` -- shipped in Phase 3 A3a (basic `read`, `write`, `close`). Phase 5 adds any remaining operations.
+- `std.file` -- shipped in Phase 3 A3a (basic `open`, `read`, `close`). Phase 5 adds `seek`, `write` to file, and other operations as needed.
 - `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space — reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases (redb port), large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
 - `std.io` -- `stdin`, `stdout`, `stderr` as `Fd` constants. `print` builtin dispatches through here.
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
@@ -731,7 +749,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges, A3 project system, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges (deferred), A3a file I/O, A3b project system, A4 lexer port |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                       |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                          |
