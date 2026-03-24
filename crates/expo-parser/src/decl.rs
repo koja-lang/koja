@@ -404,7 +404,7 @@ impl Parser {
                     }
                 }
                 TokenKind::Type => {
-                    let alias = self.parse_type_alias();
+                    let alias = self.parse_type_alias(None);
                     members.push(ImplMember::TypeAlias(alias));
                 }
                 _ => {
@@ -431,21 +431,22 @@ impl Parser {
         })
     }
 
-    fn parse_type_alias(&mut self) -> TypeAlias {
+    fn parse_type_alias(&mut self, annotation: Option<Annotation>) -> TypeAlias {
         let start = self.current_span();
         self.advance(); // type
         let name = self.expect_type_ident();
         self.expect(&TokenKind::Eq);
         let type_expr = self.parse_type_expr();
         TypeAlias {
+            annotation,
             name,
             type_expr,
             span: self.span_from(start),
         }
     }
 
-    pub(crate) fn parse_type_alias_item(&mut self) -> Item {
-        let alias = self.parse_type_alias();
+    pub(crate) fn parse_type_alias_item(&mut self, annotation: Option<Annotation>) -> Item {
+        let alias = self.parse_type_alias(annotation);
         Item::TypeAlias(alias)
     }
 

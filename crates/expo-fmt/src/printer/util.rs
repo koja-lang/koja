@@ -105,12 +105,16 @@ pub(super) fn import_to_doc(imp: &Import) -> Doc {
 
 /// Formats a `type` alias declaration (`type Name = TypeExpr`).
 pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
-    concat(vec![
-        text("type "),
-        text(&t.name),
-        text(" = "),
-        type_expr_to_doc(&t.type_expr),
-    ])
+    let mut parts = Vec::new();
+    if let Some(ann) = &t.annotation {
+        parts.push(annotation_to_doc(ann));
+        parts.push(hardline());
+    }
+    parts.push(text("type "));
+    parts.push(text(&t.name));
+    parts.push(text(" = "));
+    parts.push(type_expr_to_doc(&t.type_expr));
+    concat(parts)
 }
 
 /// Formats a `shared` declaration (`shared Name: TypeExpr`).

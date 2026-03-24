@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `@doc` on type aliases -- `@doc` annotations can now precede `type Name = ...` declarations. Parser, formatter, and LSP hover all support it.
 - File I/O -- `Fd` type (raw file descriptor with `read`, `write`, `close`) and `File` type (wraps `Fd` with `File.read(path)` for whole-file read, `File.open(path)` for handle-based access, `File.close(move self)`). Both return `Result<T, String>` for error handling. Runtime intrinsics use POSIX I/O and Rust's `std::fs`.
 - OR patterns in match arms -- `1 | 2 | 3 -> "small"` combines multiple patterns sharing one arm body. Works in `match` and `receive`. Variable bindings inside OR patterns are disallowed for now.
 - String standard library -- `alpha?`, `at`, `codepoints`, `contains?`, `downcase`, `empty?`, `ends_with?`, `graphemes`, `join` (static), `replace`, `reverse`, `split`, `starts_with?`, `to_float`, `to_int`, `trim`, `trim_end`, `trim_start`, `upcase`, `whitespace?`. ASCII-only case conversion and codepoint-level iteration for now; full Unicode deferred.

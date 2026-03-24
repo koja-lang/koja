@@ -137,6 +137,9 @@ pub(crate) fn find_doc_for(module: &Module, name: &str) -> Option<String> {
             Item::Constant(c) if c.name == name => {
                 return span::annotation_doc(&c.annotation);
             }
+            Item::TypeAlias(t) if t.name == name => {
+                return span::annotation_doc(&t.annotation);
+            }
             Item::Impl(imp) => {
                 for member in &imp.members {
                     if let ImplMember::Function(f) = member {

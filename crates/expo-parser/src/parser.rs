@@ -302,6 +302,7 @@ impl Parser {
                         Some(self.parse_function_item(Some(annotation), Visibility::Private))
                     }
                     TokenKind::Const => Some(self.parse_constant_item(Some(annotation))),
+                    TokenKind::Type => Some(self.parse_type_alias_item(Some(annotation))),
                     _ => {
                         let span = self.current_span();
                         self.error(
@@ -312,7 +313,7 @@ impl Parser {
                     }
                 }
             }
-            TokenKind::Type => Some(self.parse_type_alias_item()),
+            TokenKind::Type => Some(self.parse_type_alias_item(None)),
             TokenKind::Shared => Some(self.parse_shared_item()),
             TokenKind::Const => Some(self.parse_constant_item(None)),
             _ => {

@@ -288,6 +288,7 @@ pub struct StructField {
 /// A type alias within an `impl` block: `type Name = TypeExpr`.
 #[derive(Debug, Clone)]
 pub struct TypeAlias {
+    pub annotation: Option<Annotation>,
     pub name: String,
     pub type_expr: TypeExpr,
     pub span: Span,
