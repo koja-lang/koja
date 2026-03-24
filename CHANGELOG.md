@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `return` of heap-owning types (`List`, `Map`, `Set`, `String`) from inside `if` blocks no longer causes a use-after-free. The codegen was dropping live variables before evaluating the return expression; now the return value is loaded first and excluded from cleanup.
+- Formatter: `|` patterns in match arms pack densely with trailing `|` at line breaks instead of producing a single overflowing line. Blank lines are inserted between arms when any pattern wraps.
+- Formatter: `or` and `and` chains in cond conditions now pack densely (fill-style) instead of cascading one-per-line after the first break. Blank lines between cond arms when any condition wraps.
 
 ## [0.7.0] - 2026-03-22
 

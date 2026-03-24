@@ -19,6 +19,24 @@ impl<'a> Printer<'a> {
             Expr::Self_ { .. } => text("self"),
 
             Expr::Binary {
+                op: op @ (BinOp::Or | BinOp::And),
+                ..
+            } => {
+                let op_str = binop_str(op);
+                let operands = self.flatten_binop_chain(expr, op);
+                let len = operands.len();
+                let mut items: Vec<Doc> = Vec::with_capacity(len);
+                for (i, doc) in operands.into_iter().enumerate() {
+                    if i < len - 1 {
+                        items.push(concat(vec![doc, text(" "), text(op_str), text(" ")]));
+                    } else {
+                        items.push(doc);
+                    }
+                }
+                fill(items)
+            }
+
+            Expr::Binary {
                 op, left, right, ..
             } => {
                 let op_str = binop_str(op);
@@ -153,8 +171,10 @@ impl<'a> Printer<'a> {
                 ..
             } => {
                 let else_multiline = else_body.as_ref().is_some_and(|b| arm_is_multiline(b));
-                let any_multiline =
-                    else_multiline || arms.iter().any(|a| arm_is_multiline(&a.body));
+                let any_multiline = else_multiline
+                    || arms
+                        .iter()
+                        .any(|a| arm_is_multiline(&a.body) || expr_or_is_multiline(&a.condition));
                 let mut rendered: Vec<Doc> = arms
                     .iter()
                     .map(|arm| self.cond_arm_to_doc(arm, any_multiline, span.end.line))
@@ -444,6 +464,28 @@ impl<'a> Printer<'a> {
             parts.push(type_expr_to_doc(ta));
         }
         concat(parts)
+    }
+
+    /// Flattens a chain of same-operator binary expressions into a list of
+    /// operand docs for fill-style packing.
+    fn flatten_binop_chain(&mut self, expr: &Expr, target_op: &BinOp) -> Vec<Doc> {
+        let mut operands = Vec::new();
+        self.collect_binop_operands(expr, target_op, &mut operands);
+        operands
+    }
+
+    fn collect_binop_operands(&mut self, expr: &Expr, target_op: &BinOp, out: &mut Vec<Doc>) {
+        if let Expr::Binary {
+            op, left, right, ..
+        } = expr
+        {
+            if std::mem::discriminant(op) == std::mem::discriminant(target_op) {
+                self.collect_binop_operands(left, target_op, out);
+                self.collect_binop_operands(right, target_op, out);
+                return;
+            }
+        }
+        out.push(self.expr_to_doc(expr));
     }
 
     /// Formats a string literal (single-line or multi-line heredoc).

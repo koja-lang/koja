@@ -490,6 +490,70 @@ fn pattern_text_len(pattern: &Pattern) -> usize {
     }
 }
 
+/// Estimates whether a chained `or` or `and` expression would exceed the page width.
+pub(super) fn expr_or_is_multiline(expr: &Expr) -> bool {
+    if let Expr::Binary {
+        op: op @ (BinOp::Or | BinOp::And),
+        ..
+    } = expr
+    {
+        let mut operands = Vec::new();
+        collect_binop_exprs(expr, op, &mut operands);
+        if operands.len() <= 1 {
+            return false;
+        }
+        let sep_len = binop_str(op).len() + 2; // " or " or " and "
+        let estimated_width: usize = operands.iter().map(|e| expr_text_len(e)).sum::<usize>()
+            + (operands.len().saturating_sub(1)) * sep_len;
+        return estimated_width > 60;
+    }
+    false
+}
+
+fn collect_binop_exprs<'a>(expr: &'a Expr, target_op: &BinOp, out: &mut Vec<&'a Expr>) {
+    if let Expr::Binary {
+        op, left, right, ..
+    } = expr
+    {
+        if std::mem::discriminant(op) == std::mem::discriminant(target_op) {
+            collect_binop_exprs(left, target_op, out);
+            collect_binop_exprs(right, target_op, out);
+            return;
+        }
+    }
+    out.push(expr);
+}
+
+fn expr_text_len(expr: &Expr) -> usize {
+    match expr {
+        Expr::Literal { value, .. } => match value {
+            Literal::Int(n) => n.to_string().len(),
+            Literal::Float(f) => f.to_string().len(),
+            Literal::String(s) => s.len() + 2,
+            Literal::Bool(b) => {
+                if *b {
+                    4
+                } else {
+                    5
+                }
+            }
+            Literal::Unit => 2,
+        },
+        Expr::Ident { name, .. } => name.len(),
+        Expr::Binary {
+            op, left, right, ..
+        } => expr_text_len(left) + expr_text_len(right) + binop_str(op).len() + 2,
+        Expr::Unary { operand, .. } => expr_text_len(operand) + 4,
+        Expr::Call { callee, args, .. } => {
+            expr_text_len(callee)
+                + args.iter().map(|a| expr_text_len(&a.value)).sum::<usize>()
+                + args.len().saturating_sub(1) * 2
+                + 2
+        }
+        _ => 10,
+    }
+}
+
 /// Assembles a `keyword ... arms ... end` block.
 ///
 /// Handles indented arm spacing (extra blank lines when `any_multiline`),

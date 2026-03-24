@@ -163,4 +163,221 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn cond_chain_with_not() {
+        assert_fmt("
+            fn f(x: Int, y: Int) -> Bool
+              cond
+                x > 0 and not x == 50 and y > 0 and not y == 50 or x == 999 or y == 999 or not x == y -> true
+                else -> false
+              end
+            end
+        ", "
+            fn f(x: Int, y: Int) -> Bool
+              cond
+                x > 0 and not x == 50 and y > 0 and not y == 50 or x == 999 or y == 999 or
+                not x == y ->
+                  true
+
+                else ->
+                  false
+              end
+            end
+        ");
+    }
+
+    #[test]
+    fn cond_and_chain_packs_like_fill() {
+        assert_fmt("
+            fn f(x: Int, y: Int) -> Bool
+              cond
+                x > 0 and x < 100 and y > 0 and y < 100 and x != y and x != 50 and y != 50 and x != 99 -> true
+                else -> false
+              end
+            end
+        ", "
+            fn f(x: Int, y: Int) -> Bool
+              cond
+                x > 0 and x < 100 and y > 0 and y < 100 and x != y and x != 50 and
+                y != 50 and x != 99 ->
+                  true
+
+                else ->
+                  false
+              end
+            end
+        ");
+    }
+
+    #[test]
+    fn short_closure_inline() {
+        assert_fmt(
+            "
+            fn apply(f: fn(Int) -> Int, x: Int) -> Int
+              f(x)
+            end
+
+            fn main
+              apply(x -> x * 2, 5)
+            end
+        ",
+            "
+            fn apply(f: fn(Int) -> Int, x: Int) -> Int
+              f(x)
+            end
+
+            fn main
+              apply(x -> x * 2, 5)
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn block_closure_formatting() {
+        assert_fmt(
+            "
+            fn main
+              f =
+                fn (x: Int, y: Int) -> Int x + y end
+            end
+        ",
+            "
+            fn main
+              f =
+                fn (x: Int, y: Int) -> Int x + y end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn binary_literal_formatting() {
+        assert_fmt(
+            "
+            fn main
+              b = <<1, 2, 3>>
+              c = <<header::8, payload::16 big>>
+            end
+        ",
+            "
+            fn main
+              b = <<1, 2, 3>>
+              c = <<header::8, payload::16 big>>
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn concat_operator() {
+        assert_fmt(
+            r#"
+            fn main
+              s = "hello" <> " " <> "world"
+            end
+        "#,
+            r#"
+            fn main
+              s = "hello" <> " " <> "world"
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn struct_construction_short_inline() {
+        assert_fmt(
+            r#"
+            fn main
+              c = Config{name: "yo", enabled: true}
+            end
+        "#,
+            r#"
+            fn main
+              c = Config{name: "yo", enabled: true}
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn struct_construction_long_multiline() {
+        assert_fmt(
+            r#"
+            fn main
+              c = Config{name: "a very long name here", enabled: true, verbose: false, timeout: 3000}
+            end
+        "#,
+            r#"
+            fn main
+              c = Config{
+                name: "a very long name here",
+                enabled: true,
+                verbose: false,
+                timeout: 3000,
+              }
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn ternary_expression() {
+        assert_fmt(
+            "
+            fn f(x: Int) -> Int
+              y = x > 0 ? x : -x
+              y
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              y = x > 0 ? x : -x
+              y
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn doc_on_type_alias() {
+        assert_fmt(
+            "
+            @doc \"A user ID.\"
+            type UserId = Int
+        ",
+            "
+            @doc \"A user ID.\"
+            type UserId = Int
+        ",
+        );
+    }
+
+    #[test]
+    fn cond_or_chain_packs_like_fill() {
+        assert_fmt(
+            r#"
+            fn f(x: String) -> String
+              cond
+                x == "alpha" or x == "bravo" or x == "charlie" or x == "delta" or x == "echo" or x == "foxtrot" or x == "golf" -> "nato"
+                else -> "other"
+              end
+            end
+        "#,
+            r#"
+            fn f(x: String) -> String
+              cond
+                x == "alpha" or x == "bravo" or x == "charlie" or x == "delta" or
+                x == "echo" or x == "foxtrot" or x == "golf" ->
+                  "nato"
+
+                else ->
+                  "other"
+              end
+            end
+        "#,
+        );
+    }
 }
