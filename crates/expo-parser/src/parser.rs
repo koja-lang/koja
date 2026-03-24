@@ -122,14 +122,6 @@ impl Parser {
                 self.advance();
                 name
             }
-            TokenKind::Or => {
-                self.advance();
-                "or".to_string()
-            }
-            TokenKind::And => {
-                self.advance();
-                "and".to_string()
-            }
             _ => {
                 let span = self.current_span();
                 self.error(
@@ -165,7 +157,6 @@ impl Parser {
     /// Used in import groups where keywords like `spawn` are valid names.
     pub(crate) fn keyword_as_ident(&mut self) -> Option<String> {
         let name = match self.peek() {
-            TokenKind::And => "and",
             TokenKind::Arena => "arena",
             TokenKind::Break => "break",
             TokenKind::Cond => "cond",
@@ -182,7 +173,6 @@ impl Parser {
             TokenKind::Match => "match",
             TokenKind::Move => "move",
             TokenKind::Not => "not",
-            TokenKind::Or => "or",
             TokenKind::Priv => "priv",
             TokenKind::Protocol => "protocol",
             TokenKind::Receive => "receive",

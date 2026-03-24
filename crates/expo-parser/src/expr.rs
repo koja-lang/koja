@@ -26,8 +26,8 @@ pub(crate) const BP_POSTFIX: u8 = 18;
 
 fn infix_bp(kind: &TokenKind) -> Option<(u8, u8)> {
     match kind {
-        TokenKind::Or => Some((BP_OR_L, BP_OR_R)),
-        TokenKind::And => Some((BP_AND_L, BP_AND_R)),
+        TokenKind::Ident(name) if name == "or" => Some((BP_OR_L, BP_OR_R)),
+        TokenKind::Ident(name) if name == "and" => Some((BP_AND_L, BP_AND_R)),
         TokenKind::EqEq
         | TokenKind::NotEq
         | TokenKind::Lt
@@ -53,9 +53,9 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
         TokenKind::Gt => BinOp::Gt,
         TokenKind::LtEq => BinOp::LtEq,
         TokenKind::GtEq => BinOp::GtEq,
-        TokenKind::And => BinOp::And,
+        TokenKind::Ident(name) if name == "and" => BinOp::And,
+        TokenKind::Ident(name) if name == "or" => BinOp::Or,
         TokenKind::LtGt => BinOp::Concat,
-        TokenKind::Or => BinOp::Or,
         _ => unreachable!("not a binary operator: {:?}", kind),
     }
 }
@@ -92,36 +92,7 @@ impl Parser {
                 match self.peek() {
                     TokenKind::Dot => {
                         self.advance(); // .
-                        let keyword_as_ident = match self.peek() {
-                            TokenKind::Or => Some("or".to_string()),
-                            TokenKind::And => Some("and".to_string()),
-                            _ => None,
-                        };
                         match self.peek().clone() {
-                            _ if keyword_as_ident.is_some() => {
-                                let name = keyword_as_ident.unwrap();
-                                self.advance();
-                                if self.at(&TokenKind::LParen) {
-                                    self.advance(); // (
-                                    let args = self.parse_arg_list();
-                                    self.expect(&TokenKind::RParen);
-                                    let span = Span::new(expr_span(&lhs).start, self.prev_end());
-                                    lhs = Expr::MethodCall {
-                                        receiver: Box::new(lhs),
-                                        method: name,
-                                        args,
-                                        span,
-                                    };
-                                } else {
-                                    let span = Span::new(expr_span(&lhs).start, self.prev_end());
-                                    lhs = Expr::FieldAccess {
-                                        receiver: Box::new(lhs),
-                                        field: name,
-                                        span,
-                                    };
-                                }
-                                continue;
-                            }
                             TokenKind::Ident(name) => {
                                 self.advance();
                                 if self.at(&TokenKind::LParen) {

@@ -220,7 +220,6 @@ impl Lexer {
         }
         match name.as_str() {
             "after" => TokenKind::After,
-            "and" => TokenKind::And,
             "arena" => TokenKind::Arena,
             "break" => TokenKind::Break,
             "cond" => TokenKind::Cond,
@@ -239,7 +238,6 @@ impl Lexer {
             "match" => TokenKind::Match,
             "move" => TokenKind::Move,
             "not" => TokenKind::Not,
-            "or" => TokenKind::Or,
             "priv" => TokenKind::Priv,
             "protocol" => TokenKind::Protocol,
             "receive" => TokenKind::Receive,
@@ -425,47 +423,48 @@ impl Lexer {
     fn continues_line(&self) -> bool {
         match self.last_token_kind() {
             None => true,
-            Some(kind) => matches!(
-                kind,
-                // Binary operators
-                TokenKind::Plus
-                    | TokenKind::Minus
-                    | TokenKind::Star
-                    | TokenKind::Slash
-                    | TokenKind::Percent
-                    | TokenKind::And
-                    | TokenKind::Or
-                    | TokenKind::Not
-                    | TokenKind::EqEq
-                    | TokenKind::NotEq
-                    | TokenKind::Lt
-                    | TokenKind::Gt
-                    | TokenKind::LtEq
-                    | TokenKind::GtEq
-                    // Assignment operators
-                    | TokenKind::Eq
-                    | TokenKind::PlusEq
-                    | TokenKind::MinusEq
-                    | TokenKind::StarEq
-                    | TokenKind::SlashEq
-                    // Punctuation that expects more
-                    | TokenKind::Arrow
-                    | TokenKind::Pipe
-                    | TokenKind::Comma
-                    | TokenKind::Dot
-                    | TokenKind::Colon
-                    | TokenKind::ColonColon
-                    | TokenKind::LtGt
-                    | TokenKind::At
-                    // Opening delimiters
-                    | TokenKind::LParen
-                    | TokenKind::LBrace
-                    | TokenKind::LBracket
-                    | TokenKind::LtLt
-                    // Keywords that start blocks
-                    | TokenKind::Import
-                    | TokenKind::Newline
-            ),
+            Some(kind) => match kind {
+                TokenKind::Ident(name) if name == "and" || name == "or" => true,
+                _ => matches!(
+                    kind,
+                    // Binary operators
+                    TokenKind::Plus
+                        | TokenKind::Minus
+                        | TokenKind::Star
+                        | TokenKind::Slash
+                        | TokenKind::Percent
+                        | TokenKind::Not
+                        | TokenKind::EqEq
+                        | TokenKind::NotEq
+                        | TokenKind::Lt
+                        | TokenKind::Gt
+                        | TokenKind::LtEq
+                        | TokenKind::GtEq
+                        // Assignment operators
+                        | TokenKind::Eq
+                        | TokenKind::PlusEq
+                        | TokenKind::MinusEq
+                        | TokenKind::StarEq
+                        | TokenKind::SlashEq
+                        // Punctuation that expects more
+                        | TokenKind::Arrow
+                        | TokenKind::Pipe
+                        | TokenKind::Comma
+                        | TokenKind::Dot
+                        | TokenKind::Colon
+                        | TokenKind::ColonColon
+                        | TokenKind::LtGt
+                        | TokenKind::At
+                        // Opening delimiters
+                        | TokenKind::LParen
+                        | TokenKind::LBrace
+                        | TokenKind::LBracket
+                        | TokenKind::LtLt
+                        // Keywords that start blocks
+                        | TokenKind::Import
+                        | TokenKind::Newline
+                ),
+            },
         }
     }
 

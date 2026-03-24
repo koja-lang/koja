@@ -44,12 +44,12 @@ x = 42  # inline comment
 ### Keywords
 
 ```
-and, arena, break, cond, const, else, end, enum, false, fn, for,
-if, impl, import, in, loop, match, move, not, or, priv, protocol,
+arena, break, cond, const, else, end, enum, false, fn, for,
+if, impl, import, in, loop, match, move, not, priv, protocol,
 receive, return, self, shared, spawn, struct, true, type, unless, when
 ```
 
-`or` and `and` are valid as function and field names after `.` (e.g. `x.or(default)`).
+`and` and `or` are operator-identifiers, not reserved keywords. They act as infix boolean operators in expressions (`a and b`, `x or y`) but can also be used freely as method names, function names, or field names (e.g., `option.or(default)`).
 
 ### Operators
 
@@ -61,7 +61,7 @@ Precedence from lowest to highest:
 | 2          | `and`                       |
 | 3          | `not` (prefix)              |
 | 4          | `==` `!=` `<` `>` `<=` `>=` |
-| 5          | `+` `-`                     |
+| 5          | `+` `-` `<>`                |
 | 6          | `*` `/` `%`                 |
 | 7          | `-` (unary negation)        |
 | 8          | `.field` `.fn()` `()`       |
@@ -1066,7 +1066,7 @@ end
 
 Functions:
 
-- `length(self) -> Int` -- returns the number of Unicode grapheme clusters (characters).
+- `length(self) -> Int` -- returns the number of Unicode codepoints.
 - `get(self, index: Int) -> String` -- returns the single-character string at the given index. Panics if out of bounds.
 - `byte_length(self) -> Int` -- returns the number of bytes in the UTF-8 encoding.
 - `slice(self, range: Range) -> String` -- returns a substring spanning the given inclusive range of character indices. Clamps out-of-bounds endpoints.

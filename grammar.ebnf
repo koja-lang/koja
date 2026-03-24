@@ -162,9 +162,11 @@ expr = ternary_expr ;
 ternary_expr = or_expr , [ "?" , or_expr , ":" , or_expr ] ;
 (* Note: else branch is or_expr, not ternary_expr -- nesting prohibited *)
 
-or_expr = and_expr , { "or" , and_expr } ;
+or_expr = and_expr , { IDENT_OR , and_expr } ;
+(* IDENT_OR = the identifier "or", recognized as an infix operator *)
 
-and_expr = not_expr , { "and" , not_expr } ;
+and_expr = not_expr , { IDENT_AND , not_expr } ;
+(* IDENT_AND = the identifier "and", recognized as an infix operator *)
 
 not_expr = "not" , not_expr
          | comparison ;
@@ -173,7 +175,7 @@ comparison = addition , [ comp_op , addition ] ;
 
 comp_op = "==" | "!=" | "<" | ">" | "<=" | ">=" ;
 
-addition = multiplication , { ( "+" | "-" ) , multiplication } ;
+addition = multiplication , { ( "+" | "-" | "<>" ) , multiplication } ;
 
 multiplication = unary , { ( "*" | "/" | "%" ) , unary } ;
 
@@ -418,7 +420,7 @@ map_lit  = "[" , ":" , "]"                                          (* empty map
 (*   2. and                                                                   *)
 (*   3. not                                                                   *)
 (*   4. ==  !=  <  >  <=  >=                                                  *)
-(*   5. +  -                                                                  *)
+(*   5. +  -  <>                                                              *)
 (*   6. *  /  %                                                               *)
 (*   7. unary -                                                               *)
 (*   8. postfix: .fn()  .field  ()                                            *)
@@ -475,7 +477,11 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, and, arena, break, cond, const, else, end, enum, false, fn,  *)
-(* for, if, impl, import, in, loop, match, move, not, or, priv, protocol,     *)
-(* receive, return, self, shared, spawn, struct, true, type, unless, when,      *)
-(* while                                                                        *)
+(* after, arena, break, cond, const, else, end, enum, false, fn,        *)
+(* for, if, impl, import, in, loop, match, move, not, priv, protocol,   *)
+(* receive, return, self, shared, spawn, struct, true, type, unless,     *)
+(* when, while                                                           *)
+(*                                                                       *)
+(* Note: `and`, `or` are operator-identifiers, not reserved keywords.    *)
+(* They are recognized as infix operators by the parser in expression    *)
+(* context but can be used as method/function names without restriction. *)

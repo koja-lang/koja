@@ -29,7 +29,6 @@ pub enum TokenKind {
 
     // Keywords
     After,
-    And,
     Arena,
     Break,
     Cond,
@@ -47,7 +46,6 @@ pub enum TokenKind {
     Match,
     Move,
     Not,
-    Or,
     Priv,
     Protocol,
     Receive,
@@ -109,7 +107,6 @@ impl TokenKind {
         matches!(
             self,
             TokenKind::After
-                | TokenKind::And
                 | TokenKind::Arena
                 | TokenKind::Break
                 | TokenKind::Cond
@@ -128,7 +125,6 @@ impl TokenKind {
                 | TokenKind::Match
                 | TokenKind::Move
                 | TokenKind::Not
-                | TokenKind::Or
                 | TokenKind::Priv
                 | TokenKind::Protocol
                 | TokenKind::Receive
