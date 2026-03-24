@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Context-driven parameter type inference for closures -- `opt.map(v -> v * 10)` infers `v: Int` from `Option<Int>`. Works for short and block closures at inline call sites, including generic methods.
+- Short closures compile to native code -- `x -> expr` closures with variable capture (copy for primitives, move for non-copy types).
 - `@doc` on type aliases -- `@doc` annotations can now precede `type Name = ...` declarations. Parser, formatter, and LSP hover all support it.
 - File I/O -- `Fd` type (raw file descriptor with `read`, `write`, `close`) and `File` type (wraps `Fd` with `File.read(path)` for whole-file read, `File.open(path)` for handle-based access, `File.close(move self)`). Both return `Result<T, String>` for error handling. Runtime intrinsics use POSIX I/O and Rust's `std::fs`.
 - OR patterns in match arms -- `1 | 2 | 3 -> "small"` combines multiple patterns sharing one arm body. Works in `match` and `receive`. Variable bindings inside OR patterns are disallowed for now.

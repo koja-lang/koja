@@ -244,7 +244,7 @@ closure_param = IDENT , [ ":" , type_expr ]
 (* Short arrow closure: (args -> expr) -- delimited by enclosing parens *)
 short_closure = closure_param_short , "->" , expr ;
 
-closure_param_short = IDENT
+closure_param_short = IDENT , [ ":" , type_expr ]
                     | "(" , IDENT , { "," , IDENT } , ")"
                     | "_" ;
 

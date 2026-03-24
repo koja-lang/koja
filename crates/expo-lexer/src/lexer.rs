@@ -911,4 +911,32 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_arrow_token() {
+        assert_eq!(
+            lex_kinds("x -> y"),
+            vec![
+                TokenKind::Ident("x".into()),
+                TokenKind::Arrow,
+                TokenKind::Ident("y".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_arrow_vs_minus() {
+        assert_eq!(
+            lex_kinds("a - b -> c"),
+            vec![
+                TokenKind::Ident("a".into()),
+                TokenKind::Minus,
+                TokenKind::Ident("b".into()),
+                TokenKind::Arrow,
+                TokenKind::Ident("c".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
 }

@@ -70,13 +70,12 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 
 - `arena` blocks (deferred post-v1)
 - Trait bounds on generic type parameters
-- Inline closures (`x -> expr`)
 
 ### Design notes
 
 - **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `PairLiteral<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
-- **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Used by `map`/`then` on `Option` and `Result`. Inline closures (`x -> expr`) are parsed but deferred.
+- **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Short closures (`x -> expr`) with full capture support and context-driven parameter type inference at inline call sites. Used by `map`/`then` on `Option` and `Result`.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 - **PascalCase primitives and type simplification** (done): Primitives renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. User-defined types (`Pair`, `User`) and language types (`Int`, `String`) are now visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction.
 - **`ref T` syntax** (parsed, deferred): Reference types use `ref T` (space, no angle brackets) instead of `ref<T>`. `ref` is a lowercase keyword modifier, consistent with the modifier pattern (`const`, `priv`, `move`, `ref`): lowercase keywords modify the thing that follows them, PascalCase names are always types. However, `ref T` is redundant in parameter position (borrow-by-default) and unsafe in return position without lifetime tracking. Deferred until a concrete use case emerges.
@@ -89,7 +88,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **Generic enum unit variants in top-level code**: `Option.None` cannot infer `T` without usage context in bare declarations -- workaround: variable type annotations (`z: Option<Int32> = Option.None`). Inside monomorphized method bodies and closures with return type annotations, generic enum construction resolves all type parameters automatically.
 - **Struct/enum constants**: `const` currently only supports primitive literals (Int, Float, String, Bool). Enum unit variants (`const DEFAULT = Color.Red`) and struct constructions with all-literal fields (`const ORIGIN = Point{x: 0, y: 0}`) would be natural extensions without requiring a full const evaluator.
 - **Type checker**: `ref T` parsed but deferred (redundant with borrow-by-default, revisit if a concrete use case emerges)
-- **Codegen**: inline closures (`x -> expr`) are parsed but not yet compiled
+- **Formatter**: `fn()` vs `fn ()` spacing inconsistency in function type syntax vs closure literal syntax -- needs a consistent formatting rule
 - **Iteration protocol**: `Enumeration<T>` requires `length()` + `get(index)`, locking `for` to index-based while loops. This precludes lazy iteration, streaming, and any non-random-access collection (maps, linked lists, generators). Pre-v1.0, replace with an `Iterator<T>` protocol using `next(move self) -> Option<Pair<T, Self>>`. Pairs with changing `get` to return `Option<T>` (see below). Codegen change is contained to `compile_for` in `loops.rs`; List/String impls wrap existing index-based access in iterator state
 - **`List.get` and `String.get` panic on OOB**: `List.get(i)` and `String.get(i)` panic instead of returning `Option<T>`. `Map.get(k)` already returns `Option<V>`. Decision: unify all `get` to return `Option`, remove `String.at()` (redundant). Blocked on a type resolution rework -- `collect` does single-pass per module and can't resolve cross-module generic return types like `Option<String>` when `Option` is defined in an earlier stdlib module. Once the resolver handles recursive/cross-module type references, this change becomes trivial (signature + codegen changes only)
 - **Generic containers of recursive types**: `List<T>` and `Map<K, V>` fail in codegen when `T`/`V` is a recursive enum (e.g., `enum Val` with a `Arr(List<Val>)` variant). Direct recursion works (`Tree.Branch(Tree, Tree)`) because `Indirect` wrapping handles the pointer indirection, but the monomorphized generic (`List_$Val$`) can't be loaded from a match binding. Blocks JSON-style data models (`Array(List<JsonValue>)`, `Object(Map<String, JsonValue>)`). Fix is in codegen type mapping -- `to_llvm_type` / variable loading needs to handle `Indirect` element types inside generic containers.
@@ -633,11 +632,10 @@ Active design discussions about the type system, code organization, and function
 - **Closure captures**: closures capture variables from the enclosing scope. Copy types (primitives) are duplicated; non-copy types (structs, enums) are moved, making the original unusable. Captured closures use a `{fn_ptr, env_ptr}` fat pointer ABI with heap-allocated environment structs that are automatically freed when the closure goes out of scope.
 - **`ref T` removed**: removed from the toolchain. Redundant with borrow-by-default params, unsafe in return position without lifetime tracking. Can be re-added if a concrete use case emerges.
 
-### Inline closures
+### Short closures
 
-- Inline closure syntax (`x -> expr`) is parsed but not compiled. Block closures (`fn (x: Int32) -> Int32 ... end`) cover all current use cases including `map`/`then` and now support variable capture.
-- Requires closure-specific type inference -- the parameter type must be inferred from the calling context (e.g. `option.map(x -> x + 1)` infers `x: Int32` from `Option<Int32>`).
-- Ergonomic sugar for later.
+- Short closure syntax (`x -> expr`) is parsed, type-checked with full capture analysis, compiled, and supports context-driven parameter type inference at inline call sites. `option.map(x -> x + 1)` infers `x: Int` from `Option<Int>`. Works for direct calls, method calls, and generic methods.
+- Remaining gap: variable-assigned short closures (`add_ten = x -> x + 10`) don't receive an expected type at the assignment site, so params remain `Unknown`. Workaround: use inline at the call site, or add explicit type annotations.
 
 ### `Self` type expression (implemented)
 
@@ -694,7 +692,7 @@ Active design discussions about the type system, code organization, and function
 - `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
 - Compiler guidance when `map` is used where `then` is needed (or vice versa).
 - **Decided**: no pipe operator (`|>`). Dot-call chaining with `move self` functions covers the same use case. The `command` construct (post-v1) will handle complex sequential data flow with stronger guarantees.
-- `map`/`then` ship in the stdlib using block closures with explicit types. Inline closures (`x -> expr`) are deferred but are not needed for core API usage.
+- `map`/`then` ship in the stdlib using block closures or short closures. Context-driven param inference allows `opt.map(x -> x + 1)` without type annotations at inline call sites.
 
 ### Stdlib design (implemented)
 

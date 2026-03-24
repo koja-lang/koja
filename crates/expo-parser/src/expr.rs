@@ -685,4 +685,74 @@ mod tests {
         assert_eq!(*op, BinOp::Mod);
         assert!(is_binop(left, BinOp::Mul));
     }
+
+    // ---- Short closures ----
+
+    #[test]
+    fn short_closure_single_param() {
+        let expr = parse_first_expr("x -> x * 2");
+        let Expr::ShortClosure { params, body, .. } = &expr else {
+            panic!("expected ShortClosure, got {:?}", expr);
+        };
+        assert_eq!(params.len(), 1);
+        assert!(
+            matches!(&params[0], ClosureParam::Name { name, type_expr: None, .. } if name == "x")
+        );
+        assert!(is_binop(body, BinOp::Mul));
+    }
+
+    #[test]
+    fn short_closure_wildcard_param() {
+        let expr = parse_first_expr("_ -> 42");
+        let Expr::ShortClosure { params, body, .. } = &expr else {
+            panic!("expected ShortClosure, got {:?}", expr);
+        };
+        assert_eq!(params.len(), 1);
+        assert!(matches!(&params[0], ClosureParam::Wildcard { .. }));
+        assert!(matches!(body.as_ref(), Expr::Literal { .. }));
+    }
+
+    #[test]
+    fn short_closure_body_is_full_expr() {
+        let expr = parse_first_expr("x -> x + 1 * 2");
+        let Expr::ShortClosure { body, .. } = &expr else {
+            panic!("expected ShortClosure, got {:?}", expr);
+        };
+        assert!(is_binop(body, BinOp::Add));
+    }
+
+    #[test]
+    fn short_closure_lower_precedence_than_arithmetic() {
+        let expr = parse_first_expr("a -> a + b");
+        let Expr::ShortClosure { params, body, .. } = &expr else {
+            panic!("expected ShortClosure, got {:?}", expr);
+        };
+        assert_eq!(params.len(), 1);
+        assert!(matches!(&params[0], ClosureParam::Name { name, .. } if name == "a"));
+        assert!(is_binop(body, BinOp::Add));
+    }
+
+    #[test]
+    fn short_closure_in_parenthesized_context() {
+        let wrapped = "fn main\n  apply(5, x -> x + 1)\nend\n";
+        let result = parse(wrapped);
+        let func = result.module.items.into_iter().find_map(|item| {
+            if let Item::Function(f) = item {
+                Some(f)
+            } else {
+                None
+            }
+        });
+        let f = func.expect("expected a function");
+        let call = f.body.into_iter().find_map(|s| {
+            if let Statement::Expr(Expr::Call { args, .. }) = s {
+                Some(args)
+            } else {
+                None
+            }
+        });
+        let args = call.expect("expected a call expression");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[1].value, Expr::ShortClosure { .. }));
+    }
 }

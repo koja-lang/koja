@@ -11,7 +11,7 @@ use expo_ast::span::Span;
 
 use crate::context::{Coercion, FunctionKind, ParamInfo, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarInfo, VarState};
-use crate::expr::{expr_span, infer_expr};
+use crate::expr::{expr_span, infer_expr, infer_expr_with_expected};
 use crate::stmt::check_body;
 use crate::types::numeric_compatible;
 use crate::types::{Primitive, Type, resolve_type_expr};
@@ -248,8 +248,8 @@ pub(crate) fn check_call_args(
         );
     } else {
         for (i, arg) in args.iter().enumerate() {
-            let arg_ty = infer_expr(&arg.value, ctx, ce);
             let param = &params[i];
+            let arg_ty = infer_expr_with_expected(&arg.value, Some(&param.ty), ctx, ce);
             if param.ty.is_known() && arg_ty.is_known() {
                 if !types_compatible(&arg_ty, &param.ty) {
                     ctx.error(

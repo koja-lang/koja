@@ -1,0 +1,30 @@
+fn apply(x: Int, f: fn(Int) -> Int) -> Int
+  f(x)
+end
+
+fn apply_str(x: String, f: fn(String) -> String) -> String
+  f(x)
+end
+
+fn main
+  # closure as inline argument with capture
+  base = 100
+  print(apply(5, fn (x: Int) -> Int x + base end))
+
+  # closure returning a string
+  prefix = "hello "
+  print(apply_str("world", fn (s: String) -> String prefix <> s end))
+
+  # chained closure calls
+  inc = fn (x: Int) -> Int x + 1 end
+  print(apply(apply(0, inc), inc))
+
+  # closure capturing multiple variables
+  a = 10
+  b = 20
+  c = 30
+  print(apply(1, fn (x: Int) -> Int x + a + b + c end))
+
+  # closure that ignores its parameter
+  print(apply(999, fn (x: Int) -> Int 42 end))
+end

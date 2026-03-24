@@ -1,0 +1,1 @@
+expected `fn(Int) -> String`, found `fn(Int) -> Int`

@@ -1,0 +1,35 @@
+fn apply(x: Int, f: fn(Int) -> Int) -> Int
+  f(x)
+end
+
+fn apply_str(s: String, f: fn(String) -> String) -> String
+  f(s)
+end
+
+fn main
+  # basic: short closure passed inline to a typed function
+  print(apply(5, x -> x * 2))
+
+  # short closure with string param inferred from context
+  print(apply_str("world", s -> "hello " <> s))
+
+  # wildcard param
+  print(apply(999, _ -> 42))
+
+  # short closure capturing a variable
+  offset = 100
+  print(apply(5, x -> x + offset))
+
+  # chained application
+  print(apply(apply(1, x -> x + 1), x -> x * 3))
+
+  # option.map with short closure
+  opt = Option.Some(7)
+  mapped = opt.map(v -> v * 10)
+  print(mapped.unwrap())
+
+  # option.map on None
+  none_opt: Option<Int> = Option.None
+  none_mapped = none_opt.map(v -> v * 10)
+  print(none_mapped.or(-1))
+end

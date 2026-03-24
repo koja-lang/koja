@@ -167,6 +167,17 @@ pub fn compile_expr<'ctx>(
             span,
         } => compile_closure(c, params, return_type, body, function, *span),
 
+        Expr::ShortClosure { params, body, span } => {
+            let body_stmts = vec![Statement::Expr((**body).clone())];
+            let ret_type = c
+                .type_ctx
+                .closure_info
+                .get(span)
+                .and_then(|ci| ci.return_type.clone())
+                .unwrap_or(Type::Unit);
+            compile_closure_core(c, params, ret_type, &body_stmts, function, *span)
+        }
+
         Expr::For {
             pattern,
             iterable,
@@ -454,7 +465,35 @@ fn enum_value_to_string<'ctx>(
 fn resolve_closure_params<'ctx>(
     c: &Compiler<'ctx>,
     params: &[ClosureParam],
+    span: expo_ast::span::Span,
 ) -> Vec<expo_typecheck::types::Type> {
+    let all_annotated = params.iter().all(|p| {
+        matches!(
+            p,
+            ClosureParam::Name {
+                type_expr: Some(_),
+                ..
+            }
+        )
+    });
+
+    if all_annotated {
+        return params
+            .iter()
+            .map(|p| match p {
+                ClosureParam::Name {
+                    type_expr: Some(te),
+                    ..
+                } => c.resolve_type_expr(te),
+                _ => unreachable!(),
+            })
+            .collect();
+    }
+
+    if let Some(ci) = c.type_ctx.closure_info.get(&span) {
+        return ci.param_types.clone();
+    }
+
     params
         .iter()
         .map(|p| match p {
@@ -475,24 +514,36 @@ fn compile_closure<'ctx>(
     params: &[ClosureParam],
     return_type: &Option<expo_ast::ast::TypeExpr>,
     body: &[Statement],
+    parent_fn: FunctionValue<'ctx>,
+    span: expo_ast::span::Span,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let ret_type = match return_type {
+        Some(te) => c.resolve_type_expr(te),
+        None => Type::Unit,
+    };
+    compile_closure_core(c, params, ret_type, body, parent_fn, span)
+}
+
+/// Core closure compilation shared by block closures and short closures.
+fn compile_closure_core<'ctx>(
+    c: &mut Compiler<'ctx>,
+    params: &[ClosureParam],
+    ret_type: Type,
+    body: &[Statement],
     _parent_fn: FunctionValue<'ctx>,
     span: expo_ast::span::Span,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let param_types = resolve_closure_params(c, params);
+    let param_types = resolve_closure_params(c, params, span);
 
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
 
-    let mut llvm_meta_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()]; // env_ptr is always the first param
+    let mut llvm_meta_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
     for ty in &param_types {
         if let Some(lt) = to_llvm_type(ty, c.context, &c.struct_types) {
             llvm_meta_params.push(lt.into());
         }
     }
 
-    let ret_type = match return_type {
-        Some(te) => c.resolve_type_expr(te),
-        None => expo_typecheck::types::Type::Unit,
-    };
     let fn_type = match to_llvm_type(&ret_type, c.context, &c.struct_types) {
         Some(ret_llvm) => ret_llvm.fn_type(&llvm_meta_params, false),
         None => c.context.void_type().fn_type(&llvm_meta_params, false),
@@ -501,7 +552,11 @@ fn compile_closure<'ctx>(
     let closure_name = format!("__closure_{}", c.closure_counter);
     c.closure_counter += 1;
 
-    let captures = c.type_ctx.closure_captures.get(&span).cloned();
+    let captures = c
+        .type_ctx
+        .closure_info
+        .get(&span)
+        .map(|ci| ci.captures.clone());
 
     // Read captured values from parent scope before saving variables
     let captured_values: Vec<(String, inkwell::values::BasicValueEnum<'ctx>, Type)> =

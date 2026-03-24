@@ -11,7 +11,7 @@ use crate::types::Type;
 /// Holds all type information gathered during collection and checking for a single module.
 #[derive(Clone)]
 pub struct TypeContext {
-    pub closure_captures: HashMap<Span, Vec<CaptureInfo>>,
+    pub closure_info: HashMap<Span, ClosureInfo>,
     pub coercions: HashMap<Span, Coercion>,
     pub constants: HashMap<String, Type>,
     pub diagnostics: Vec<Diagnostic>,
@@ -56,6 +56,14 @@ pub struct ParamInfo {
     pub mode: PassMode,
     pub name: String,
     pub ty: Type,
+}
+
+/// All type-checker metadata for a single closure (block or short).
+#[derive(Clone)]
+pub struct ClosureInfo {
+    pub captures: Vec<CaptureInfo>,
+    pub param_types: Vec<Type>,
+    pub return_type: Option<Type>,
 }
 
 /// Collected metadata for a protocol declaration.
@@ -232,7 +240,7 @@ impl TypeContext {
     /// Creates an empty context with no registered types or diagnostics.
     pub fn new() -> Self {
         Self {
-            closure_captures: HashMap::new(),
+            closure_info: HashMap::new(),
             coercions: HashMap::new(),
             constants: HashMap::new(),
             diagnostics: Vec::new(),
@@ -325,8 +333,8 @@ impl TypeContext {
                 self.type_aliases.insert(name.clone(), ty.clone());
             }
         }
-        for (span, captures) in &other.closure_captures {
-            self.closure_captures.insert(*span, captures.clone());
+        for (span, info) in &other.closure_info {
+            self.closure_info.insert(*span, info.clone());
         }
         for (span, coercion) in &other.coercions {
             self.coercions

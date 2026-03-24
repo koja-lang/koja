@@ -518,6 +518,15 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
                 return_type: Box::new(ret),
             }
         }
+        Expr::ShortClosure { span, .. } => c
+            .type_ctx
+            .closure_info
+            .get(span)
+            .map(|ci| Type::Function {
+                params: ci.param_types.clone(),
+                return_type: Box::new(ci.return_type.clone().unwrap_or(Type::Unit)),
+            })
+            .unwrap_or(Type::Unknown),
         _ => Type::Unknown,
     }
 }

@@ -15,9 +15,10 @@ use crate::check::{
     types_compatible,
 };
 use crate::context::{
-    CaptureInfo, FunctionKind, FunctionSig, ParamInfo, PassMode, TypeContext, VariantData,
+    CaptureInfo, ClosureInfo, FunctionKind, FunctionSig, ParamInfo, PassMode, TypeContext,
+    VariantData,
 };
-use crate::env::{CheckEnv, VarInfo};
+use crate::env::CheckEnv;
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
 use crate::stmt::check_body;
 use crate::types::{
@@ -44,69 +45,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
 
         Expr::Closure {
             params, body, span, ..
-        } => {
-            let parent_var_names: HashSet<String> = ce.env.keys().cloned().collect();
-
-            let mut closure_env = CheckEnv {
-                env: ce.env.clone(),
-                used_vars: HashSet::new(),
-                loop_depth: 0,
-                return_type: Type::Unknown,
-                kind: FunctionKind::Static,
-                struct_names: ce.struct_names,
-                enum_names: ce.enum_names,
-                type_hint: None,
-                process_msg_type: ce.process_msg_type.clone(),
-            };
-            let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
-
-            let param_names: HashSet<String> = params
-                .iter()
-                .filter_map(|p| {
-                    if let ClosureParam::Name { name, .. } = p {
-                        Some(name.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            check_body(body, ctx, &mut closure_env);
-            let return_type = body
-                .last()
-                .and_then(|s| match s {
-                    Statement::Expr(e) => Some(infer_expr(e, ctx, &mut closure_env)),
-                    _ => None,
-                })
-                .unwrap_or(Type::Unit);
-
-            let capture_candidates: Vec<(String, Type)> = closure_env
-                .used_vars
-                .iter()
-                .filter(|name| parent_var_names.contains(*name) && !param_names.contains(*name))
-                .filter_map(|name| ce.env.get(name).map(|info| (name.clone(), info.ty.clone())))
-                .collect();
-
-            let mut captured = Vec::new();
-            for (name, ty) in capture_candidates {
-                let mode = if ty.is_copy() {
-                    PassMode::Copy
-                } else {
-                    ce.mark_moved(&name, *span);
-                    PassMode::Move
-                };
-                captured.push(CaptureInfo { name, ty, mode });
-            }
-
-            if !captured.is_empty() {
-                ctx.closure_captures.insert(*span, captured);
-            }
-
-            Type::Function {
-                params: param_types,
-                return_type: Box::new(return_type),
-            }
-        }
+        } => infer_closure(params, None, body, *span, ctx, ce),
 
         Expr::Cond {
             arms, else_body, ..
@@ -332,23 +271,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         } => infer_method_call(receiver, method, args, *span, ctx, ce),
 
         Expr::ShortClosure { params, body, span } => {
-            let mut closure_env = CheckEnv {
-                env: HashMap::<String, VarInfo>::new(),
-                used_vars: HashSet::new(),
-                loop_depth: 0,
-                return_type: Type::Unknown,
-                kind: FunctionKind::Static,
-                struct_names: ce.struct_names,
-                enum_names: ce.enum_names,
-                type_hint: None,
-                process_msg_type: ce.process_msg_type.clone(),
-            };
-            let param_types = bind_closure_params(params, &mut closure_env, ctx, *span);
-            let return_type = infer_expr(body, ctx, &mut closure_env);
-            Type::Function {
-                params: param_types,
-                return_type: Box::new(return_type),
-            }
+            infer_short_closure(params, None, body, *span, ctx, ce)
         }
 
         Expr::Spawn { expr: inner, span } => {
@@ -855,6 +778,10 @@ fn infer_call(
     }
 }
 
+fn is_closure_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::ShortClosure { .. } | Expr::Closure { .. })
+}
+
 /// Whether an argument type should drive generic parameter unification.
 /// [`Type::is_known`] is false for [`Type::GenericInstance`], but concrete
 /// instances like `Ref<(), Int>` must still unify with `Ref<(), R>` to bind `R`.
@@ -915,10 +842,37 @@ fn infer_generic_call(
     }
 
     let mut subst = HashMap::new();
+
+    // Pass 1: infer non-closure arguments to bind type parameters
     for (i, arg) in args.iter().enumerate() {
+        if is_closure_expr(&arg.value) {
+            continue;
+        }
         let arg_ty = infer_expr(&arg.value, ctx, ce);
         let arg_ty = expand_mangled_generic_type(&arg_ty, ctx);
         let param_ty = &sig.params[i].ty;
+        if arg_ty_participates_in_unification(&arg_ty) && !unify(param_ty, &arg_ty, &mut subst) {
+            ctx.error(
+                format!(
+                    "argument `{}`: type `{}` conflicts with previous binding for type parameter",
+                    sig.params[i].name,
+                    arg_ty.display(),
+                ),
+                arg.span,
+            );
+            return Type::Error;
+        }
+    }
+
+    // Pass 2: infer closure arguments with partially-substituted expected types
+    for (i, arg) in args.iter().enumerate() {
+        if !is_closure_expr(&arg.value) {
+            continue;
+        }
+        let param_ty = &sig.params[i].ty;
+        let expected = substitute(param_ty, &subst);
+        let arg_ty = infer_expr_with_expected(&arg.value, Some(&expected), ctx, ce);
+        let arg_ty = expand_mangled_generic_type(&arg_ty, ctx);
         if arg_ty_participates_in_unification(&arg_ty) && !unify(param_ty, &arg_ty, &mut subst) {
             ctx.error(
                 format!(
@@ -1430,21 +1384,198 @@ fn infer_struct_construction(
     }
 }
 
+/// Like [`infer_expr`], but propagates an expected type into closure arguments.
+/// When the expression is a closure and `expected` is `Type::Function`, the
+/// expected parameter types are used to fill in unannotated closure parameters.
+pub(crate) fn infer_expr_with_expected(
+    expr: &Expr,
+    expected: Option<&Type>,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    let expected_params = match expected {
+        Some(Type::Function { params, .. }) => Some(params.as_slice()),
+        _ => None,
+    };
+
+    match expr {
+        Expr::ShortClosure { params, body, span } => {
+            infer_short_closure(params, expected_params, body, *span, ctx, ce)
+        }
+        Expr::Closure {
+            params, body, span, ..
+        } => infer_closure(params, expected_params, body, *span, ctx, ce),
+        _ => infer_expr(expr, ctx, ce),
+    }
+}
+
+/// Shared inference for block closures (`fn (params) -> Type ... end`).
+fn infer_closure(
+    params: &[ClosureParam],
+    expected_param_types: Option<&[Type]>,
+    body: &[Statement],
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    let parent_var_names: HashSet<String> = ce.env.keys().cloned().collect();
+
+    let mut closure_env = CheckEnv {
+        env: ce.env.clone(),
+        used_vars: HashSet::new(),
+        loop_depth: 0,
+        return_type: Type::Unknown,
+        kind: FunctionKind::Static,
+        struct_names: ce.struct_names,
+        enum_names: ce.enum_names,
+        type_hint: None,
+        process_msg_type: ce.process_msg_type.clone(),
+    };
+    let param_types =
+        bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
+
+    let param_names: HashSet<String> = params
+        .iter()
+        .filter_map(|p| {
+            if let ClosureParam::Name { name, .. } = p {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    check_body(body, ctx, &mut closure_env);
+    let return_type = body
+        .last()
+        .and_then(|s| match s {
+            Statement::Expr(e) => Some(infer_expr(e, ctx, &mut closure_env)),
+            _ => None,
+        })
+        .unwrap_or(Type::Unit);
+
+    let captured = collect_captures(&closure_env, &parent_var_names, &param_names, ce, span);
+
+    ctx.closure_info.insert(
+        span,
+        ClosureInfo {
+            captures: captured,
+            param_types: param_types.clone(),
+            return_type: None,
+        },
+    );
+
+    Type::Function {
+        params: param_types,
+        return_type: Box::new(return_type),
+    }
+}
+
+/// Shared inference for short closures (`x -> expr`).
+fn infer_short_closure(
+    params: &[ClosureParam],
+    expected_param_types: Option<&[Type]>,
+    body: &Expr,
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Type {
+    let parent_var_names: HashSet<String> = ce.env.keys().cloned().collect();
+
+    let mut closure_env = CheckEnv {
+        env: ce.env.clone(),
+        used_vars: HashSet::new(),
+        loop_depth: 0,
+        return_type: Type::Unknown,
+        kind: FunctionKind::Static,
+        struct_names: ce.struct_names,
+        enum_names: ce.enum_names,
+        type_hint: None,
+        process_msg_type: ce.process_msg_type.clone(),
+    };
+    let param_types =
+        bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
+
+    let param_names: HashSet<String> = params
+        .iter()
+        .filter_map(|p| {
+            if let ClosureParam::Name { name, .. } = p {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let return_type = infer_expr(body, ctx, &mut closure_env);
+
+    let captured = collect_captures(&closure_env, &parent_var_names, &param_names, ce, span);
+
+    ctx.closure_info.insert(
+        span,
+        ClosureInfo {
+            captures: captured,
+            param_types: param_types.clone(),
+            return_type: Some(return_type.clone()),
+        },
+    );
+
+    Type::Function {
+        params: param_types,
+        return_type: Box::new(return_type),
+    }
+}
+
+/// Collects captured variables from a closure's environment.
+fn collect_captures(
+    closure_env: &CheckEnv,
+    parent_var_names: &HashSet<String>,
+    param_names: &HashSet<String>,
+    ce: &mut CheckEnv,
+    span: Span,
+) -> Vec<CaptureInfo> {
+    let capture_candidates: Vec<(String, Type)> = closure_env
+        .used_vars
+        .iter()
+        .filter(|name| parent_var_names.contains(*name) && !param_names.contains(*name))
+        .filter_map(|name| ce.env.get(name).map(|info| (name.clone(), info.ty.clone())))
+        .collect();
+
+    let mut captured = Vec::new();
+    for (name, ty) in capture_candidates {
+        let mode = if ty.is_copy() {
+            PassMode::Copy
+        } else {
+            ce.mark_moved(&name, span);
+            PassMode::Move
+        };
+        captured.push(CaptureInfo { name, ty, mode });
+    }
+    captured
+}
+
 /// Binds closure parameters into the type-checking environment, returning their types.
+/// When `expected_param_types` is provided (from the calling context's function signature),
+/// unannotated params use the expected type instead of `Unknown`. Explicit annotations
+/// always take priority.
 fn bind_closure_params(
     params: &[ClosureParam],
+    expected_param_types: Option<&[Type]>,
     ce: &mut CheckEnv,
     ctx: &mut TypeContext,
     _closure_span: Span,
 ) -> Vec<Type> {
     let mut types = Vec::new();
-    for p in params {
+    for (i, p) in params.iter().enumerate() {
+        let expected = expected_param_types.and_then(|e| e.get(i));
         match p {
             ClosureParam::Name {
                 name, type_expr, ..
             } => {
                 let ty = if let Some(te) = type_expr {
                     resolve_type_expr(te, ce.struct_names, ce.enum_names)
+                } else if let Some(exp) = expected {
+                    exp.clone()
                 } else {
                     Type::Unknown
                 };
@@ -1463,7 +1594,8 @@ fn bind_closure_params(
                 }
             }
             ClosureParam::Wildcard { .. } => {
-                types.push(Type::Unknown);
+                let ty = expected.cloned().unwrap_or(Type::Unknown);
+                types.push(ty);
             }
         }
     }
