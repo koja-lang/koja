@@ -5,8 +5,8 @@ fn main
   list = list.append(30)
 
   print(list.length())
-  print(list.get(0))
-  print(list.get(1))
-  print(list.get(2))
+  print(list.get(0).unwrap())
+  print(list.get(1).unwrap())
+  print(list.get(2).unwrap())
   print(list.empty?())
 end

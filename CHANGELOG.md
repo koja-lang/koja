@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `List.push` renamed to `List.append` -- better reflects functional semantics (returns a new list rather than mutating in place).
+- `List.get` and `String.get` now return `Option<T>` instead of panicking on out-of-bounds. Consistent with `Map.get` which already returned `Option<V>`.
 
 - Refactored `declare_builtins` in codegen -- replaced ~200 lines of repetitive add-function/insert boilerplate with a table-driven helper, organized by category (C stdlib, process runtime, string intrinsics, file I/O).
 - Stdlib sources moved from `expo-typecheck` to `expo-stdlib` -- `expo-typecheck` is now a pure checker with no embedded source files. `STDLIB_SOURCES`, `KERNEL_SOURCE`, and `merge_stdlib` removed.

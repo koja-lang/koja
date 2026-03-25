@@ -701,29 +701,45 @@ pub fn emit_map_method<'ctx>(
             };
             let val = c.builder.build_load(val_llvm, val_ptr, "val").unwrap();
 
-            let some_tag = i8_ty.const_int(0, false);
-            let result = option_struct.get_undef();
+            let alloca_some = c
+                .builder
+                .build_alloca(option_struct, "some_alloca")
+                .unwrap();
+            let tag_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_some, 0, "tag_ptr")
+                .unwrap();
+            c.builder
+                .build_store(tag_ptr, i8_ty.const_int(0, false))
+                .unwrap();
+            let payload_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_some, 1, "payload_ptr")
+                .unwrap();
+            c.builder.build_store(payload_ptr, val).unwrap();
             let result = c
                 .builder
-                .build_insert_value(result, some_tag, 0, "tag")
-                .unwrap()
-                .into_struct_value();
-            let result = c
-                .builder
-                .build_insert_value(result, val, 1, "payload")
-                .unwrap()
-                .into_struct_value();
+                .build_load(option_struct, alloca_some, "some_val")
+                .unwrap();
             c.builder.build_return(Some(&result)).unwrap();
 
             // Not found: return None
             c.builder.position_at_end(not_found_bb);
-            let none_tag = i8_ty.const_int(1, false);
-            let result = option_struct.get_undef();
+            let alloca_none = c
+                .builder
+                .build_alloca(option_struct, "none_alloca")
+                .unwrap();
+            let tag_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_none, 0, "tag_ptr")
+                .unwrap();
+            c.builder
+                .build_store(tag_ptr, i8_ty.const_int(1, false))
+                .unwrap();
             let result = c
                 .builder
-                .build_insert_value(result, none_tag, 0, "tag")
-                .unwrap()
-                .into_struct_value();
+                .build_load(option_struct, alloca_none, "none_val")
+                .unwrap();
             c.builder.build_return(Some(&result)).unwrap();
 
             // Advance probe

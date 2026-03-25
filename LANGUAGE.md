@@ -254,7 +254,7 @@ for item in list
 end
 ```
 
-Desugars to an indexed `while` loop using `Enumeration`'s `length` and `get` functions.
+The loop variable is bound directly to each element -- no unwrapping needed.
 
 ### Ternary
 
@@ -971,11 +971,11 @@ list = list.append(10)
 list = list.append(20)
 
 print(list.length())   # 2
-print(list.get(0))     # 10
+print(list.get(0).unwrap())  # 10
 print(list.empty?())   # false
 ```
 
-`append` uses `move self` semantics -- it returns the updated list. Out-of-bounds `get` panics.
+`append` uses `move self` semantics -- it returns the updated list. `get` returns `Option<T>` (`None` for out-of-bounds).
 
 Functions:
 
@@ -983,7 +983,7 @@ Functions:
 - `append(move self, item: T) -> List<T>` -- appends an element.
 - `last(self) -> Option<T>` -- returns the last element, or `None` if empty.
 - `length(self) -> Int` -- returns the number of elements.
-- `get(self, index: Int) -> T` -- returns the element at `index`. Panics if out of bounds.
+- `get(self, index: Int) -> Option<T>` -- returns the element at `index`, or `None` if out of bounds.
 - `empty?(self) -> Bool` -- returns `true` if the list has no elements.
 - `map(self, f: fn(T) -> U) -> List<U>` -- returns a new list with `f` applied to each element.
 - `filter(self, f: fn(T) -> Bool) -> List<T>` -- returns elements for which `f` returns `true`.
@@ -1068,7 +1068,7 @@ end
 Functions:
 
 - `length(self) -> Int` -- returns the number of Unicode codepoints.
-- `get(self, index: Int) -> String` -- returns the single-character string at the given index. Panics if out of bounds.
+- `get(self, index: Int) -> Option<String>` -- returns the single-character string at the given index, or `None` if out of bounds.
 - `byte_length(self) -> Int` -- returns the number of bytes in the UTF-8 encoding.
 - `slice(self, range: Range) -> String` -- returns a substring spanning the given inclusive range of character indices. Clamps out-of-bounds endpoints.
 - `to_binary(self) -> Binary` -- zero-cost conversion to `Binary` (every valid UTF-8 string is a valid byte sequence).
@@ -1078,7 +1078,7 @@ Functions:
 ```expo
 s = "hello"
 print(s.length())                            # 5
-print(s.get(0))                              # "h"
+print(s.get(0).unwrap())                     # "h"
 print(s.slice(Range{start: 1, stop: 3}))     # "ell"
 print("123".digit?())                        # true
 print("  \n".whitespace?())                  # true
@@ -1127,11 +1127,11 @@ print(err.err?())  # true
 ```expo
 protocol Enumeration<T>
   fn length(self) -> Int
-  fn get(self, index: Int) -> T
+  fn get(self, index: Int) -> Option<T>
 end
 ```
 
-Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` and `String` implement this protocol.
+Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` and `String` implement this protocol. `get` returns `Option<T>` instead of panicking on out-of-bounds access. `for` loops unwrap the `Option` automatically.
 
 ### `Equality` Protocol
 

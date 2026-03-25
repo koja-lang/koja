@@ -1664,9 +1664,9 @@ fn substitute_self_type(mut sig: FunctionSig, self_type: &Type) -> FunctionSig {
         return sig;
     }
     let subst = HashMap::from([("Self".to_string(), self_type.clone())]);
-    sig.return_type = crate::types::substitute(&sig.return_type, &subst);
+    sig.return_type = crate::types::substitute_preserving(&sig.return_type, &subst);
     for p in &mut sig.params {
-        p.ty = crate::types::substitute(&p.ty, &subst);
+        p.ty = crate::types::substitute_preserving(&p.ty, &subst);
     }
     sig
 }

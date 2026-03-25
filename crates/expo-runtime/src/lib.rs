@@ -292,20 +292,17 @@ pub unsafe extern "C" fn expo_string_length(ptr: *const u8) -> i64 {
 /// The returned pointer uses the standard `[i64 bit_length][payload...][NUL]`
 /// layout: it points to the start of `payload`.
 ///
+/// Returns the codepoint at `index`, or null if out of bounds.
+///
 /// # Safety
 /// `ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_string_get(ptr: *const u8, index: i64) -> *const u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const i8) };
     let s = std::str::from_utf8(s.to_bytes()).unwrap();
-    let ch = s.chars().nth(index as usize).unwrap_or_else(|| {
-        eprintln!(
-            "panic: string index {} out of bounds (length {})",
-            index,
-            s.chars().count()
-        );
-        std::process::abort();
-    });
+    let Some(ch) = s.chars().nth(index as usize) else {
+        return std::ptr::null();
+    };
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
     let byte_len = encoded.len();

@@ -13,7 +13,7 @@ use crate::check::check_literal_overflow;
 use crate::context::{TypeContext, VariantData};
 use crate::env::{VarInfo, VarState};
 use crate::types::{
-    GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute,
+    GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute_preserving,
 };
 
 fn pattern_is_catch_all(pat: &Pattern) -> bool {
@@ -185,13 +185,16 @@ pub(crate) fn resolve_variant_data(
 fn substitute_variant_data(data: &VariantData, subst: &HashMap<String, Type>) -> VariantData {
     match data {
         VariantData::Unit => VariantData::Unit,
-        VariantData::Tuple(types) => {
-            VariantData::Tuple(types.iter().map(|t| substitute(t, subst)).collect())
-        }
+        VariantData::Tuple(types) => VariantData::Tuple(
+            types
+                .iter()
+                .map(|t| substitute_preserving(t, subst))
+                .collect(),
+        ),
         VariantData::Struct(fields) => VariantData::Struct(
             fields
                 .iter()
-                .map(|(n, t)| (n.clone(), substitute(t, subst)))
+                .map(|(n, t)| (n.clone(), substitute_preserving(t, subst)))
                 .collect(),
         ),
     }

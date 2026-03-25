@@ -69,14 +69,14 @@ fn main
   # split
   parts: List<String> = "a,b,c".split(",")
   print(parts.length())
-  print(parts.get(0))
-  print(parts.get(1))
-  print(parts.get(2))
+  print(parts.get(0).unwrap())
+  print(parts.get(1).unwrap())
+  print(parts.get(2).unwrap())
 
   parts = "hi".split("")
   print(parts.length())
-  print(parts.get(0))
-  print(parts.get(1))
+  print(parts.get(0).unwrap())
+  print(parts.get(1).unwrap())
 
   # join
   join_parts: List<String> = ["a", "b", "c"]
@@ -102,13 +102,13 @@ fn main
   # codepoints
   cp: List<String> = "abc".codepoints()
   print(cp.length())
-  print(cp.get(0))
-  print(cp.get(2))
+  print(cp.get(0).unwrap())
+  print(cp.get(2).unwrap())
 
   # graphemes
   cp = "hi".graphemes()
   print(cp.length())
-  print(cp.get(0))
+  print(cp.get(0).unwrap())
 
   # to_int
   match "42".to_int()

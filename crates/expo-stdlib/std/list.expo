@@ -14,9 +14,9 @@ impl Enumeration<T> for List<T>
   end
 
   @doc """
-  Returns the element at the given index. Panics if the index is out of bounds.
+  Returns the element at the given index, or `None` if out of bounds.
   """
-  fn get(self, index: Int) -> T
+  fn get(self, index: Int) -> Option<T>
     panic("intrinsic")
   end
 end
@@ -40,10 +40,7 @@ impl List<T>
   Returns the last element, or `None` if the list is empty.
   """
   fn last(self) -> Option<T>
-    if self.empty?()
-      return Option.None
-    end
-    Option.Some(self.get(self.length() - 1))
+    self.get(self.length() - 1)
   end
 
   @doc """

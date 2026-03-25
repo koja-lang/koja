@@ -180,7 +180,7 @@ Requires indexed access via `length` and `get`.
 protocol Enumeration<T>
   fn length(self) -> Int
 
-  fn get(self, index: Int) -> T
+  fn get(self, index: Int) -> Option<T>
 end
 
 @doc """

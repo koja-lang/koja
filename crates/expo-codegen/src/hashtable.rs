@@ -776,18 +776,90 @@ fn emit_string_intrinsic<'ctx>(
             c.builder.build_return(Some(&result)).unwrap();
         }
         "String_get" => {
+            let option_mangled = "Option_$String$";
+            c.ensure_types_exist(&expo_typecheck::types::Type::GenericInstance {
+                base: "Option".to_string(),
+                type_args: vec![expo_typecheck::types::Type::Primitive(
+                    expo_typecheck::types::Primitive::String,
+                )],
+                kind: expo_typecheck::types::GenericKind::Enum,
+            })?;
+            let option_struct = *c
+                .struct_types
+                .get(option_mangled)
+                .ok_or("no LLVM type for Option_$String$")?;
+
             let self_ptr = fn_val.get_nth_param(0).unwrap();
             let index = fn_val.get_nth_param(1).unwrap();
             let rt_fn = *c
                 .functions
                 .get("expo_string_get")
                 .ok_or("expo_string_get not declared")?;
-            let result = c
+            let raw_ptr = c
                 .builder
                 .build_call(rt_fn, &[self_ptr.into(), index.into()], "ch")
                 .unwrap()
                 .try_as_basic_value()
                 .left()
+                .unwrap()
+                .into_pointer_value();
+
+            let i8_ty = c.context.i8_type();
+            let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+            let is_null = c
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    raw_ptr,
+                    ptr_ty.const_null(),
+                    "is_null",
+                )
+                .unwrap();
+
+            let some_bb = c.context.append_basic_block(fn_val, "some");
+            let none_bb = c.context.append_basic_block(fn_val, "none");
+            c.builder
+                .build_conditional_branch(is_null, none_bb, some_bb)
+                .unwrap();
+
+            c.builder.position_at_end(some_bb);
+            let alloca_some = c
+                .builder
+                .build_alloca(option_struct, "some_alloca")
+                .unwrap();
+            let tag_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_some, 0, "tag_ptr")
+                .unwrap();
+            c.builder
+                .build_store(tag_ptr, i8_ty.const_int(0, false))
+                .unwrap();
+            let payload_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_some, 1, "payload_ptr")
+                .unwrap();
+            c.builder.build_store(payload_ptr, raw_ptr).unwrap();
+            let result = c
+                .builder
+                .build_load(option_struct, alloca_some, "some_val")
+                .unwrap();
+            c.builder.build_return(Some(&result)).unwrap();
+
+            c.builder.position_at_end(none_bb);
+            let alloca_none = c
+                .builder
+                .build_alloca(option_struct, "none_alloca")
+                .unwrap();
+            let tag_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_none, 0, "tag_ptr")
+                .unwrap();
+            c.builder
+                .build_store(tag_ptr, i8_ty.const_int(1, false))
+                .unwrap();
+            let result = c
+                .builder
+                .build_load(option_struct, alloca_none, "none_val")
                 .unwrap();
             c.builder.build_return(Some(&result)).unwrap();
         }

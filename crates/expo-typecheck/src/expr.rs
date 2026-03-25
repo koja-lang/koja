@@ -22,8 +22,8 @@ use crate::env::CheckEnv;
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
 use crate::stmt::check_body;
 use crate::types::{
-    GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute, unify,
-    unwrap_indirect,
+    GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute_preserving,
+    unify, unwrap_indirect,
 };
 
 /// Infers the type of an expression, emitting diagnostics for any type errors
@@ -870,7 +870,7 @@ fn infer_generic_call(
             continue;
         }
         let param_ty = &sig.params[i].ty;
-        let expected = substitute(param_ty, &subst);
+        let expected = substitute_preserving(param_ty, &subst);
         let arg_ty = infer_expr_with_expected(&arg.value, Some(&expected), ctx, ce);
         let arg_ty = expand_mangled_generic_type(&arg_ty, ctx);
         if arg_ty_participates_in_unification(&arg_ty) && !unify(param_ty, &arg_ty, &mut subst) {
@@ -902,7 +902,7 @@ fn infer_generic_call(
         }
     }
 
-    substitute(&sig.return_type, &subst)
+    substitute_preserving(&sig.return_type, &subst)
 }
 
 /// Type-checks an enum variant construction, validating variant existence and data shape.
@@ -1126,7 +1126,7 @@ fn infer_field_access(
             .zip(type_args.iter())
             .map(|(p, a)| (p.clone(), a.clone()))
             .collect();
-        substitute(field_ty, &subst_map)
+        substitute_preserving(field_ty, &subst_map)
     } else {
         field_ty.clone()
     }
@@ -1271,14 +1271,14 @@ fn infer_method_call(
 
     if let Some(sig) = method_sig {
         let (return_type, params) = if let Some(ref s) = subst {
-            let ret = substitute(&sig.return_type, s);
+            let ret = substitute_preserving(&sig.return_type, s);
             let ps: Vec<_> = sig
                 .params
                 .iter()
                 .map(|p| ParamInfo {
                     mode: p.mode,
                     name: p.name.clone(),
-                    ty: substitute(&p.ty, s),
+                    ty: substitute_preserving(&p.ty, s),
                 })
                 .collect();
             (ret, ps)
@@ -1662,10 +1662,19 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
     let ti = ctx.types.get(&base)?;
     let get_sig = ti.functions.get("get")?;
 
-    if type_args.is_empty() {
-        return Some(get_sig.return_type.clone());
-    }
+    let option_ty = if type_args.is_empty() {
+        get_sig.return_type.clone()
+    } else {
+        let subst = build_substitution(&ti.type_params, &type_args);
+        substitute_preserving(&get_sig.return_type, &subst)
+    };
 
-    let subst = build_substitution(&ti.type_params, &type_args);
-    Some(substitute(&get_sig.return_type, &subst))
+    match &option_ty {
+        Type::GenericInstance {
+            base: b,
+            type_args: ta,
+            ..
+        } if b == "Option" && !ta.is_empty() => Some(ta[0].clone()),
+        other => Some(other.clone()),
+    }
 }

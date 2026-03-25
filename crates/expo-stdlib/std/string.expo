@@ -32,7 +32,7 @@ impl Enumeration<String> for String
   Returns the single-character string at the given index. Panics if the
   index is out of bounds.
   """
-  fn get(self, index: Int) -> String
+  fn get(self, index: Int) -> Option<String>
     panic("intrinsic")
   end
 end
@@ -71,15 +71,11 @@ impl String
   end
 
   @doc """
-  Returns the single-character string at `index`, or `Option.None` if
-  the index is out of bounds.
+  Returns the single-character string at `index`, or `None` if
+  the index is out of bounds. Equivalent to `get`.
   """
   fn at(self, index: Int) -> Option<String>
-    if index < 0 or index >= self.length()
-      return Option.None
-    end
-
-    Option.Some(self.get(index))
+    self.get(index)
   end
 
   @doc """
@@ -218,7 +214,7 @@ impl String
       if i > 0
         result = result <> separator
       end
-      result = result <> parts.get(i)
+      result = result <> parts.get(i).unwrap()
       i += 1
     end
     result
@@ -242,7 +238,7 @@ impl String
         result = result <> new
         i += old_len
       else
-        result = result <> self.get(i)
+        result = result <> self.get(i).unwrap()
         i += 1
       end
     end
@@ -256,7 +252,7 @@ impl String
     result = ""
     i = self.length() - 1
     while i >= 0
-      result = result <> self.get(i)
+      result = result <> self.get(i).unwrap()
       i -= 1
     end
     result
@@ -295,7 +291,7 @@ impl String
         current = ""
         i += sep_len
       else
-        current = current <> self.get(i)
+        current = current <> self.get(i).unwrap()
         i += 1
       end
     end
@@ -354,7 +350,7 @@ impl String
     len = self.length()
     i = len - 1
     while i >= 0
-      match self.get(i)
+      match self.get(i).unwrap()
         " " | "\n" | "\r" | "\t" -> ()
         _ -> return self.slice(Range{start: 0, stop: i})
       end
@@ -370,7 +366,7 @@ impl String
     i = 0
     len = self.length()
     while i < len
-      match self.get(i)
+      match self.get(i).unwrap()
         " " | "\n" | "\r" | "\t" -> ()
         _ -> return self.slice(Range{start: i, stop: len - 1})
       end

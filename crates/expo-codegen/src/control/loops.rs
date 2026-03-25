@@ -177,13 +177,17 @@ pub fn compile_for<'ctx>(
         .build_load(iter_llvm_ty, iter_alloca, "iter_get")
         .unwrap();
     let idx_for_get = c.builder.build_load(i64_ty, idx_alloca, "idx_get").unwrap();
-    let elem_val = c
+    let option_val = c
         .builder
         .build_call(get_fn, &[iter_for_get.into(), idx_for_get.into()], "elem")
         .unwrap()
         .try_as_basic_value()
         .left()
         .ok_or("get() returned void")?;
+    let elem_val = c
+        .builder
+        .build_extract_value(option_val.into_struct_value(), 1, "payload")
+        .unwrap();
 
     if let expo_ast::ast::Pattern::Binding { name, .. } = pattern {
         let alloca = c.builder.build_alloca(elem_llvm_ty, name).unwrap();
@@ -285,11 +289,19 @@ fn resolve_enumerable_info<'ctx>(
         .functions
         .get("get")
         .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
-    let elem_expo_ty = if ti.type_params.is_empty() {
+    let option_ty = if ti.type_params.is_empty() {
         get_sig.return_type.clone()
     } else {
         let subst = expo_typecheck::types::build_substitution(&ti.type_params, &type_args);
-        expo_typecheck::types::substitute(&get_sig.return_type, &subst)
+        expo_typecheck::types::substitute_preserving(&get_sig.return_type, &subst)
+    };
+    let elem_expo_ty = match &option_ty {
+        Type::GenericInstance {
+            base: b,
+            type_args: ta,
+            ..
+        } if b == "Option" && !ta.is_empty() => ta[0].clone(),
+        other => other.clone(),
     };
 
     let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.struct_types)

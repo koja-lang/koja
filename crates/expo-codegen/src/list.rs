@@ -3,8 +3,7 @@
 //! List is a heap-backed growable array using `malloc`/`realloc`/`free`.
 //! Layout: `{ ptr: i8*, length: i64, capacity: i64 }`
 
-use expo_typecheck::types::{Primitive, Type};
-use inkwell::types::BasicType;
+use expo_typecheck::types::{GenericKind, Primitive, Type};
 
 use crate::compiler::{Compiler, EmitResult, type_byte_size};
 use crate::types::to_llvm_type;
@@ -200,13 +199,26 @@ pub fn emit_list_method<'ctx>(
         }
 
         "get" => {
-            let fn_type = elem_llvm.fn_type(&[list_struct.into(), i64_ty.into()], false);
+            let option_type_args = vec![elem_ty.clone()];
+            let option_mangled = expo_typecheck::types::mangle_name("Option", &option_type_args);
+            c.ensure_types_exist(&Type::GenericInstance {
+                base: "Option".to_string(),
+                type_args: option_type_args,
+                kind: GenericKind::Enum,
+            })?;
+            let option_struct = *c
+                .struct_types
+                .get(&option_mangled)
+                .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
+
+            let i8_ty = c.context.i8_type();
+            let fn_type = option_struct.fn_type(&[list_struct.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
             c.functions.insert(mangled_fn.to_string(), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let ok_bb = c.context.append_basic_block(fn_val, "ok");
-            let panic_bb = c.context.append_basic_block(fn_val, "panic");
+            let oob_bb = c.context.append_basic_block(fn_val, "oob");
 
             let saved_block = c.builder.get_insert_block();
             c.builder.position_at_end(entry);
@@ -230,12 +242,10 @@ pub fn emit_list_method<'ctx>(
                 .build_int_compare(inkwell::IntPredicate::ULT, index, len, "in_bounds")
                 .unwrap();
             c.builder
-                .build_conditional_branch(in_bounds, ok_bb, panic_bb)
+                .build_conditional_branch(in_bounds, ok_bb, oob_bb)
                 .unwrap();
 
-            c.builder.position_at_end(panic_bb);
-            c.emit_panic("panic: index out of bounds\n", &[]);
-
+            // In-bounds: return Some(element)
             c.builder.position_at_end(ok_bb);
             let byte_offset = c
                 .builder
@@ -250,7 +260,46 @@ pub fn emit_list_method<'ctx>(
                 .builder
                 .build_load(elem_llvm, elem_ptr, "elem_val")
                 .unwrap();
-            c.builder.build_return(Some(&val)).unwrap();
+            let alloca_some = c
+                .builder
+                .build_alloca(option_struct, "some_alloca")
+                .unwrap();
+            let tag_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_some, 0, "tag_ptr")
+                .unwrap();
+            c.builder
+                .build_store(tag_ptr, i8_ty.const_int(0, false))
+                .unwrap();
+            let payload_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_some, 1, "payload_ptr")
+                .unwrap();
+            c.builder.build_store(payload_ptr, val).unwrap();
+            let result = c
+                .builder
+                .build_load(option_struct, alloca_some, "some_val")
+                .unwrap();
+            c.builder.build_return(Some(&result)).unwrap();
+
+            // Out-of-bounds: return None
+            c.builder.position_at_end(oob_bb);
+            let alloca_none = c
+                .builder
+                .build_alloca(option_struct, "none_alloca")
+                .unwrap();
+            let tag_ptr = c
+                .builder
+                .build_struct_gep(option_struct, alloca_none, 0, "tag_ptr")
+                .unwrap();
+            c.builder
+                .build_store(tag_ptr, i8_ty.const_int(1, false))
+                .unwrap();
+            let result = c
+                .builder
+                .build_load(option_struct, alloca_none, "none_val")
+                .unwrap();
+            c.builder.build_return(Some(&result)).unwrap();
 
             if let Some(bb) = saved_block {
                 c.builder.position_at_end(bb);

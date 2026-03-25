@@ -8,8 +8,8 @@ fn main
   print(s.length())
 
   # get
-  print(s.get(0))
-  print(s.get(4))
+  print(s.get(0).unwrap())
+  print(s.get(4).unwrap())
 
   # for loop iteration (Enumeration<String>)
   for c in "abc"
@@ -52,5 +52,5 @@ fn main
   emoji = "héllo"
   print(emoji.length())
   print(emoji.byte_length())
-  print(emoji.get(1))
+  print(emoji.get(1).unwrap())
 end
