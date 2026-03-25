@@ -1,8 +1,8 @@
 fn main
   list: List<Int> = List.new()
-  list = list.push(1)
-  list = list.push(2)
-  list = list.push(3)
+  list = list.append(1)
+  list = list.append(2)
+  list = list.append(3)
 
   for item in list
     print(item)

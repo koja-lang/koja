@@ -94,7 +94,7 @@ pub fn emit_list_method<'ctx>(
             }
         }
 
-        "push" => {
+        "append" => {
             let fn_type = list_struct.fn_type(&[list_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
             c.functions.insert(mangled_fn.to_string(), fn_val);

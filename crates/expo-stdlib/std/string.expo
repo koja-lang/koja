@@ -95,7 +95,7 @@ impl String
   fn codepoints(self) -> List<String>
     result: List<String> = List.new()
     for c in self
-      result = result.push(c)
+      result = result.append(c)
     end
     result
   end
@@ -279,7 +279,7 @@ impl String
     result: List<String> = List.new()
     if separator.empty?()
       for c in self
-        result = result.push(c)
+        result = result.append(c)
       end
       return result
     end
@@ -291,7 +291,7 @@ impl String
     while i < len
       if i + sep_len <= len and
       self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
-        result = result.push(current)
+        result = result.append(current)
         current = ""
         i += sep_len
       else
@@ -299,7 +299,7 @@ impl String
         i += 1
       end
     end
-    result = result.push(current)
+    result = result.append(current)
     result
   end
 

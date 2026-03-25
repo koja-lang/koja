@@ -1,8 +1,8 @@
 fn main
   list: List<Int> = List.new()
-  list = list.push(10)
-  list = list.push(20)
-  list = list.push(30)
+  list = list.append(10)
+  list = list.append(20)
+  list = list.append(30)
 
   print(list.length())
   print(list.get(0))

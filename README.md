@@ -156,7 +156,7 @@ end
 
 ```expo
 fn main
-  list: List<Int32> = List.new().push(1).push(2).push(3)
+  list: List<Int32> = List.new().append(1).append(2).append(3)
 
   for item in list
     print(item)

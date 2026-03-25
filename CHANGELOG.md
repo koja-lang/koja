@@ -24,8 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - String/Binary/Bits conversions -- `String.to_binary()` and `Binary.to_bits()` (zero-cost, always succeed). `Binary.to_string()` and `Bits.to_binary()` return `Result` (validate UTF-8 and byte alignment respectively).
 - String segments in binary literals -- string literals inside `<<>>` for construction and pattern matching (`<<"HTTP/1.1 ", rest: Binary>>`).
 - Methods on primitive types -- `impl` blocks can define methods on built-in types (`String`, `Binary`, `Bits`, `Int`, etc.).
+- `List.last()` -- returns `Option<T>`: `Some(element)` for the last element, `None` if empty.
+- Compiler warning when the return value of a `move self` method is discarded in statement position. Suggests reassignment (`x = x.method(...)`) to capture the result.
 
 ### Changed
+
+- `List.push` renamed to `List.append` -- better reflects functional semantics (returns a new list rather than mutating in place).
 
 - Refactored `declare_builtins` in codegen -- replaced ~200 lines of repetitive add-function/insert boilerplate with a table-driven helper, organized by category (C stdlib, process runtime, string intrinsics, file I/O).
 - Stdlib sources moved from `expo-typecheck` to `expo-stdlib` -- `expo-typecheck` is now a pure checker with no embedded source files. `STDLIB_SOURCES`, `KERNEL_SOURCE`, and `merge_stdlib` removed.

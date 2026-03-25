@@ -749,16 +749,16 @@ fn compile_list_literal<'ctx>(
     if !c.functions.contains_key(&new_fn_name) {
         c.monomorphize_impl_method("List", "new", &type_args)?;
     }
-    let push_fn_name = format!("{mangled_type}_push");
-    if !c.functions.contains_key(&push_fn_name) {
-        c.monomorphize_impl_method("List", "push", &type_args)?;
+    let append_fn_name = format!("{mangled_type}_append");
+    if !c.functions.contains_key(&append_fn_name) {
+        c.monomorphize_impl_method("List", "append", &type_args)?;
     }
 
     let new_fn = *c.functions.get(&new_fn_name).ok_or("List.new not found")?;
-    let push_fn = *c
+    let append_fn = *c
         .functions
-        .get(&push_fn_name)
-        .ok_or("List.push not found")?;
+        .get(&append_fn_name)
+        .ok_or("List.append not found")?;
 
     let mut list_val = c
         .builder
@@ -772,11 +772,11 @@ fn compile_list_literal<'ctx>(
         let coerced = coerce_numeric(c, *elem, &elem_type);
         list_val = c
             .builder
-            .build_call(push_fn, &[list_val.into(), coerced.into()], "list_push")
+            .build_call(append_fn, &[list_val.into(), coerced.into()], "list_append")
             .unwrap()
             .try_as_basic_value()
             .left()
-            .ok_or("List.push returned void")?;
+            .ok_or("List.append returned void")?;
     }
 
     Ok(Some(list_val))

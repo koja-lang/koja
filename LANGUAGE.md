@@ -245,9 +245,9 @@ Iterates over any type implementing the `Enumeration<T>` protocol:
 
 ```expo
 list: List<Int32> = List.new()
-list = list.push(1)
-list = list.push(2)
-list = list.push(3)
+list = list.append(1)
+list = list.append(2)
+list = list.append(3)
 
 for item in list
   print(item)
@@ -382,13 +382,13 @@ print(p.distance_squared())
 
 ```expo
 impl List<T>
-  fn push(move self, item: T) -> List<T>
+  fn append(move self, item: T) -> List<T>
     # owns self, can mutate
     self
   end
 end
 
-list = list.push(42)  # move in, get back
+list = list.append(42)  # move in, get back
 ```
 
 #### Static Functions
@@ -967,20 +967,21 @@ Dynamically-sized, heap-backed collection. Compiler intrinsic backed by C's `mal
 
 ```expo
 list: List<Int32> = List.new()
-list = list.push(10)
-list = list.push(20)
+list = list.append(10)
+list = list.append(20)
 
 print(list.length())   # 2
 print(list.get(0))     # 10
 print(list.empty?())   # false
 ```
 
-`push` uses `move self` semantics -- it returns the updated list. Out-of-bounds `get` panics.
+`append` uses `move self` semantics -- it returns the updated list. Out-of-bounds `get` panics.
 
 Functions:
 
 - `new() -> List<T>` -- creates an empty list.
-- `push(move self, item: T) -> List<T>` -- appends an element.
+- `append(move self, item: T) -> List<T>` -- appends an element.
+- `last(self) -> Option<T>` -- returns the last element, or `None` if empty.
 - `length(self) -> Int` -- returns the number of elements.
 - `get(self, index: Int) -> T` -- returns the element at `index`. Panics if out of bounds.
 - `empty?(self) -> Bool` -- returns `true` if the list has no elements.

@@ -32,8 +32,18 @@ impl List<T>
   @doc """
   Appends an element to the end of the list and returns the updated list.
   """
-  fn push(move self, item: T) -> List<T>
+  fn append(move self, item: T) -> List<T>
     panic("intrinsic")
+  end
+
+  @doc """
+  Returns the last element, or `None` if the list is empty.
+  """
+  fn last(self) -> Option<T>
+    if self.empty?()
+      return Option.None
+    end
+    Option.Some(self.get(self.length() - 1))
   end
 
   @doc """
@@ -50,7 +60,7 @@ impl List<T>
   fn map<U>(self, f: fn(T) -> U) -> List<U>
     result: List<U> = List.new()
     for item in self
-      result = result.push(f(item))
+      result = result.append(f(item))
     end
     result
   end
@@ -62,7 +72,7 @@ impl List<T>
     result: List<T> = List.new()
     for item in self
       if f(item)
-        result = result.push(item)
+        result = result.append(item)
       end
     end
     result
