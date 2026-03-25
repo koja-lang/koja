@@ -124,7 +124,8 @@ fn goto_definition_in_file(uri_str: &str, name: &str) -> Result<Option<GotoDefin
         Err(_) => return Ok(None),
     };
     let parsed = expo_parser::parse(&source);
-    let ctx = expo_typecheck::collect_module(&parsed.module);
+    let global_names = expo_typecheck::collect_all_names(&[&parsed.module]);
+    let ctx = expo_typecheck::collect_module(&parsed.module, &global_names);
 
     let span = ctx
         .functions

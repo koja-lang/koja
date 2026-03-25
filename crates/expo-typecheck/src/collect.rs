@@ -12,34 +12,52 @@ use crate::context::{
 };
 use crate::types::{Primitive, Type, resolve_type_expr_with_params};
 
+/// Pre-collected struct and enum names across all modules in the program.
+/// Passed into [`collect`] so that type resolution sees every type name
+/// from the start, eliminating the need for re-resolution patches.
+pub struct GlobalNames {
+    pub struct_names: HashSet<String>,
+    pub enum_names: HashSet<String>,
+}
+
+/// Scans all modules for struct and enum names without resolving any types.
+/// This is the first phase of a two-phase collection: names are gathered
+/// globally, then passed into [`collect`] so cross-module type references
+/// resolve correctly on the first pass.
+pub fn collect_all_names(modules: &[&Module]) -> GlobalNames {
+    let mut names = GlobalNames {
+        struct_names: HashSet::new(),
+        enum_names: HashSet::new(),
+    };
+    for module in modules {
+        for item in &module.items {
+            match item {
+                Item::Struct(s) => {
+                    names.struct_names.insert(s.name.clone());
+                }
+                Item::Enum(e) => {
+                    names.enum_names.insert(e.name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    names
+}
+
 /// Walks all top-level items in a module and builds a [`TypeContext`] containing
 /// function signatures, struct definitions, and enum definitions.
-pub fn collect(module: &Module) -> TypeContext {
+/// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-module
+/// type references (e.g. imported struct names) resolve correctly.
+pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
     let mut ctx = TypeContext::new();
 
-    let struct_names: Vec<&str> = module
-        .items
+    let struct_names: Vec<&str> = global_names
+        .struct_names
         .iter()
-        .filter_map(|item| {
-            if let Item::Struct(s) = item {
-                Some(s.name.as_str())
-            } else {
-                None
-            }
-        })
+        .map(|s| s.as_str())
         .collect();
-
-    let enum_names: Vec<&str> = module
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Enum(e) = item {
-                Some(e.name.as_str())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let enum_names: Vec<&str> = global_names.enum_names.iter().map(|s| s.as_str()).collect();
 
     // Pre-pass: collect type aliases so they're available for resolving
     // function signatures and struct/enum fields in the main pass.
@@ -926,8 +944,21 @@ fn insert_module_or_error(
         .insert(module_name.to_string(), clone_public_context(source_ctx));
 }
 
+/// Returns `true` if two function signatures are structurally identical
+/// (ignoring source spans, which differ between direct and transitive imports).
+fn same_function(a: &FunctionSig, b: &FunctionSig) -> bool {
+    a.params == b.params && a.return_type == b.return_type && a.type_params == b.type_params
+}
+
+/// Returns `true` if two type infos are structurally identical
+/// (ignoring source spans).
+fn same_type(a: &TypeInfo, b: &TypeInfo) -> bool {
+    a.kind == b.kind && a.type_params == b.type_params
+}
+
 /// Copies all public functions, structs, and enums from `source` into `ctx`,
-/// detecting duplicate imports across modules.
+/// detecting duplicate imports across modules. Diamond imports (the same type
+/// arriving through two paths) are silently deduplicated.
 fn merge_all_public(
     ctx: &mut TypeContext,
     source: &TypeContext,
@@ -940,10 +971,14 @@ fn merge_all_public(
             continue;
         }
         if imported_names.contains(name) {
-            ctx.error(
-                format!("`{name}` is already imported from another module"),
-                span,
-            );
+            if let Some(existing) = ctx.functions.get(name)
+                && !same_function(existing, sig)
+            {
+                ctx.error(
+                    format!("`{name}` is already imported from another module"),
+                    span,
+                );
+            }
         } else if !ctx.functions.contains_key(name) {
             imported_names.insert(name.clone());
             let mut cloned = sig.clone();
@@ -953,13 +988,17 @@ fn merge_all_public(
     }
     for (name, info) in &source.types {
         if imported_names.contains(name) {
-            ctx.error(
-                format!(
-                    "{} `{name}` is already imported from another module",
-                    info.kind_label()
-                ),
-                span,
-            );
+            if let Some(existing) = ctx.types.get(name)
+                && !same_type(existing, info)
+            {
+                ctx.error(
+                    format!(
+                        "{} `{name}` is already imported from another module",
+                        info.kind_label()
+                    ),
+                    span,
+                );
+            }
         } else if !ctx.types.contains_key(name) {
             imported_names.insert(name.clone());
             ctx.types.insert(name.clone(), info.clone());
@@ -984,10 +1023,14 @@ fn merge_named(
                 span,
             );
         } else if imported_names.contains(name) {
-            ctx.error(
-                format!("`{name}` is already imported from another module"),
-                span,
-            );
+            if let Some(existing) = ctx.functions.get(name)
+                && !same_function(existing, sig)
+            {
+                ctx.error(
+                    format!("`{name}` is already imported from another module"),
+                    span,
+                );
+            }
         } else if !ctx.functions.contains_key(name) {
             imported_names.insert(name.to_string());
             let mut cloned = sig.clone();
@@ -998,13 +1041,17 @@ fn merge_named(
     }
     if let Some(info) = source.types.get(name) {
         if imported_names.contains(name) {
-            ctx.error(
-                format!(
-                    "{} `{name}` is already imported from another module",
-                    info.kind_label()
-                ),
-                span,
-            );
+            if let Some(existing) = ctx.types.get(name)
+                && !same_type(existing, info)
+            {
+                ctx.error(
+                    format!(
+                        "{} `{name}` is already imported from another module",
+                        info.kind_label()
+                    ),
+                    span,
+                );
+            }
         } else if !ctx.types.contains_key(name) {
             imported_names.insert(name.to_string());
             ctx.types.insert(name.to_string(), info.clone());

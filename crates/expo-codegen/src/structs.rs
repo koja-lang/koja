@@ -186,6 +186,7 @@ pub fn compile_method_call<'ctx>(
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     if let Expr::Ident { name, .. } = receiver
         && c.type_ctx.imported_modules.contains_key(name)
+        && !c.variables.contains_key(name)
     {
         return compile_call(c, method, args, function);
     }

@@ -29,6 +29,15 @@ impl Backend {
             let mut origins: HashMap<String, String> = HashMap::new();
             let mut mod_uris: HashMap<String, String> = HashMap::new();
 
+            // Phase 1: resolve and parse all imported dependency modules.
+            struct DepInfo {
+                module: expo_ast::ast::Module,
+                module_key: String,
+                qualifier: Option<String>,
+                dep_uri: String,
+            }
+            let mut deps: Vec<DepInfo> = Vec::new();
+
             for item in &parse_result.module.items {
                 if let Item::Import(import) = item {
                     let (resolve_path, module_key, qualifier) = match &import.target {
@@ -49,32 +58,51 @@ impl Backend {
                         && let Ok(dep_source) = std::fs::read_to_string(&dep_path)
                     {
                         let dep_parsed = expo_parser::parse(&dep_source);
-                        let dep_ctx = expo_typecheck::collect_module(&dep_parsed.module);
                         let dep_uri = format!("file://{}", dep_path.display());
-
-                        for (name, sig) in &dep_ctx.functions {
-                            if sig.visibility == expo_ast::ast::Visibility::Public {
-                                origins.insert(name.clone(), dep_uri.clone());
-                            }
-                        }
-                        for (name, ti) in &dep_ctx.types {
-                            if ti.is_struct() || ti.is_enum() {
-                                origins.insert(name.clone(), dep_uri.clone());
-                            }
-                        }
-
-                        if let Some(q) = qualifier {
-                            mod_uris.insert(q, dep_uri);
-                        }
-
-                        module_contexts.insert(module_key, dep_ctx);
+                        deps.push(DepInfo {
+                            module: dep_parsed.module,
+                            module_key,
+                            qualifier,
+                            dep_uri,
+                        });
                     }
                 }
             }
 
-            let mut ctx = expo_typecheck::collect_module(&parse_result.module);
+            // Phase 2: build global names from stdlib + deps + current module.
+            let mut all_for_names: Vec<&expo_ast::ast::Module> =
+                self.stdlib_modules.iter().collect();
+            all_for_names.push(&parse_result.module);
+            for dep in &deps {
+                all_for_names.push(&dep.module);
+            }
+            let global_names = expo_typecheck::collect_all_names(&all_for_names);
+
+            // Phase 3: collect type contexts for each dependency.
+            for dep in &deps {
+                let dep_ctx = expo_typecheck::collect_module(&dep.module, &global_names);
+
+                for (name, sig) in &dep_ctx.functions {
+                    if sig.visibility == expo_ast::ast::Visibility::Public {
+                        origins.insert(name.clone(), dep.dep_uri.clone());
+                    }
+                }
+                for (name, ti) in &dep_ctx.types {
+                    if ti.is_struct() || ti.is_enum() {
+                        origins.insert(name.clone(), dep.dep_uri.clone());
+                    }
+                }
+
+                if let Some(q) = &dep.qualifier {
+                    mod_uris.insert(q.clone(), dep.dep_uri.clone());
+                }
+
+                module_contexts.insert(dep.module_key.clone(), dep_ctx);
+            }
+
+            // Phase 4: collect and check the current module.
+            let mut ctx = expo_typecheck::collect_module(&parse_result.module, &global_names);
             ctx.merge(&self.stdlib_ctx);
-            expo_typecheck::re_resolve_generics(&mut ctx);
             expo_typecheck::mark_recursive_fields(&mut ctx);
             expo_typecheck::resolve_imports(&parse_result.module, &mut ctx, &module_contexts);
             expo_typecheck::check_module(&parse_result.module, &mut ctx);

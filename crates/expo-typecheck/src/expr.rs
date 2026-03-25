@@ -1134,7 +1134,7 @@ fn infer_field_access(
 
 /// Maps a receiver type to the type name used for function lookup in `ctx.types`,
 /// plus an optional generic substitution map when the receiver is a generic instance.
-fn resolve_receiver_base_name(
+pub(crate) fn resolve_receiver_base_name(
     recv_ty: &Type,
     ctx: &TypeContext,
 ) -> (Option<String>, Option<HashMap<String, Type>>) {

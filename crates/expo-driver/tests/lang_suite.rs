@@ -259,6 +259,33 @@ fn lang_project_check_test() {
 }
 
 #[test]
+fn lang_diamond_import_test() {
+    let project_dir = lang_dir().join("diamond");
+    if !project_dir.exists() {
+        panic!("test fixture tests/lang/diamond/ not found");
+    }
+
+    let expected_path = project_dir.join("expected.stdout");
+    assert!(expected_path.exists(), "missing diamond/expected.stdout");
+
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("run").current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute expo run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert!(
+        code == 0,
+        "expo run failed in diamond dir with code {code}\nstderr:\n{stderr}"
+    );
+    assert_output_matches("diamond/run", &stdout, &expected_path);
+}
+
+#[test]
 fn lang_compile_fail_tests() {
     let dir = lang_dir().join("compile_fail");
     if !dir.exists() {

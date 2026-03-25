@@ -41,21 +41,30 @@ pub fn typecheck_graph(
         return (module_contexts, true);
     }
 
+    // Phase 1: collect all struct/enum names across every module so that
+    // cross-module type references resolve on the first pass.
+    let all_modules: Vec<&Module> = graph
+        .order
+        .iter()
+        .map(|n| &graph.modules[n].module)
+        .collect();
+    let global_names = expo_typecheck::collect_all_names(&all_modules);
+
     let mut stdlib_ctx = expo_typecheck::context::TypeContext::new();
 
+    // Phase 2: per-module collection and type checking.
     for name in &graph.order {
         let rm = &graph.modules[name];
 
         if name.starts_with("std.") {
-            let mut ctx = expo_typecheck::collect_module(&rm.module);
+            let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
             ctx.merge(&stdlib_ctx);
             stdlib_ctx.merge(&ctx);
             module_contexts.insert(name.clone(), ctx);
         } else {
-            let mut ctx = expo_typecheck::collect_module(&rm.module);
+            let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
             ctx.merge(&stdlib_ctx);
             expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
-            expo_typecheck::re_resolve_generics(&mut ctx);
             expo_typecheck::mark_recursive_fields(&mut ctx);
             expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
             expo_typecheck::check_module(&rm.module, &mut ctx);

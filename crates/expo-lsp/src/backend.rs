@@ -56,10 +56,16 @@ impl Backend {
 
         for &(_, source) in expo_stdlib::SOURCES {
             let parsed = expo_parser::parse(source);
-            let mut mod_ctx = expo_typecheck::collect_module(&parsed.module);
+            stdlib_modules.push(parsed.module);
+        }
+
+        let stdlib_refs: Vec<&Module> = stdlib_modules.iter().collect();
+        let global_names = expo_typecheck::collect_all_names(&stdlib_refs);
+
+        for module in &stdlib_modules {
+            let mut mod_ctx = expo_typecheck::collect_module(module, &global_names);
             mod_ctx.merge(&ctx);
             ctx.merge(&mod_ctx);
-            stdlib_modules.push(parsed.module);
         }
 
         Self {

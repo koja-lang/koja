@@ -10,13 +10,16 @@ pub mod types;
 
 use std::collections::HashMap;
 
-use context::{FunctionSig, ParamInfo, TypeContext};
-use expo_ast::ast::{Module, Param};
-use types::resolve_type_expr_with_params;
+use context::TypeContext;
+use expo_ast::ast::Module;
+
+pub use collect::{GlobalNames, collect_all_names};
 
 /// Runs collection and type-checking in one step, returning a populated context.
+/// Uses module-local names only (for single-file / test usage).
 pub fn check(module: &Module) -> TypeContext {
-    let mut ctx = collect::collect(module);
+    let global = collect_all_names(&[module]);
+    let mut ctx = collect::collect(module, &global);
     check::check_module(module, &mut ctx);
     ctx
 }
@@ -27,8 +30,10 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
 }
 
 /// Walks the AST to collect type signatures for functions, structs, and enums.
-pub fn collect_module(module: &Module) -> TypeContext {
-    collect::collect(module)
+/// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-module
+/// type references resolve correctly on the first pass.
+pub fn collect_module(module: &Module, global_names: &GlobalNames) -> TypeContext {
+    collect::collect(module, global_names)
 }
 
 /// Synthesizes default protocol methods for impls whose protocols were unknown
@@ -38,7 +43,7 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
 }
 
 /// Detects recursive struct/enum fields and wraps them in [`types::Type::Indirect`]
-/// for heap-allocated indirection. Must be called after [`re_resolve_generics`].
+/// for heap-allocated indirection.
 pub fn mark_recursive_fields(ctx: &mut TypeContext) {
     cycle::mark_recursive_fields(ctx);
 }
@@ -50,95 +55,6 @@ pub fn resolve_imports(
     module_contexts: &HashMap<String, TypeContext>,
 ) {
     collect::resolve_imports(module, ctx, module_contexts);
-}
-
-/// Re-resolves generic type signatures that may have `Type::Unknown` fields,
-/// parameters, or return types because the referenced types (e.g. stdlib types)
-/// weren't known during initial collection. Must be called after merging
-/// the stdlib context.
-pub fn re_resolve_generics(ctx: &mut TypeContext) {
-    let struct_names = ctx.struct_names();
-    let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
-    let enum_names = ctx.enum_names();
-    let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
-
-    let type_aliases = ctx.type_aliases.clone();
-
-    let generic_struct_names: Vec<String> = ctx.generic_struct_asts.keys().cloned().collect();
-    for name in &generic_struct_names {
-        let decl = ctx.generic_struct_asts[name].clone();
-        let tp_refs: Vec<&str> = decl.type_params.iter().map(|s| s.as_str()).collect();
-
-        let fields: Vec<(String, types::Type)> = decl
-            .fields
-            .iter()
-            .map(|f| {
-                let ty = resolve_type_expr_with_params(
-                    &f.type_expr,
-                    &struct_refs,
-                    &enum_refs,
-                    &tp_refs,
-                    &type_aliases,
-                );
-                (f.name.clone(), ty)
-            })
-            .collect();
-
-        if let Some(ti) = ctx.types.get_mut(name)
-            && let Some(f) = ti.fields_mut()
-        {
-            *f = fields;
-        }
-    }
-
-    let fn_names: Vec<String> = ctx.generic_function_asts.keys().cloned().collect();
-    for name in &fn_names {
-        let func = ctx.generic_function_asts[name].clone();
-        let tp_refs: Vec<&str> = func.type_params.iter().map(|s| s.as_str()).collect();
-
-        let params: Vec<ParamInfo> = func
-            .params
-            .iter()
-            .filter_map(|p| match p {
-                Param::Regular {
-                    mode,
-                    name,
-                    type_expr,
-                    ..
-                } => Some(ParamInfo {
-                    mode: *mode,
-                    name: name.clone(),
-                    ty: resolve_type_expr_with_params(
-                        type_expr,
-                        &struct_refs,
-                        &enum_refs,
-                        &tp_refs,
-                        &type_aliases,
-                    ),
-                }),
-                Param::Self_ { .. } => None,
-            })
-            .collect();
-
-        let return_type = func
-            .return_type
-            .as_ref()
-            .map(|t| {
-                resolve_type_expr_with_params(t, &struct_refs, &enum_refs, &tp_refs, &type_aliases)
-            })
-            .unwrap_or(types::Type::Unit);
-
-        if let Some(sig) = ctx.functions.get_mut(&name.to_string()) {
-            *sig = FunctionSig {
-                visibility: sig.visibility,
-                params,
-                return_type,
-                kind: sig.kind,
-                span: sig.span,
-                type_params: sig.type_params.clone(),
-            };
-        }
-    }
 }
 
 #[cfg(test)]

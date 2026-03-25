@@ -33,6 +33,12 @@ struct Pair<A, B>
   second: B
 end
 
+impl Pair<A, B>
+  fn new<A, B>(first: A, second: B) -> Pair<A, B>
+    Pair{first: first, second: second}
+  end
+end
+
 @doc """
 An inclusive range from `start` to `stop`. Both endpoints are included.
 """

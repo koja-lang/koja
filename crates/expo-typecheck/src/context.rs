@@ -40,7 +40,7 @@ pub enum FunctionKind {
 }
 
 /// Resolved type signature for a function or method.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct FunctionSig {
     pub visibility: Visibility,
     pub params: Vec<ParamInfo>,
@@ -51,7 +51,7 @@ pub struct FunctionSig {
 }
 
 /// A single parameter's name, resolved type, and how ownership is transferred.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ParamInfo {
     pub mode: PassMode,
     pub name: String,
@@ -79,7 +79,7 @@ pub struct ProtocolInfo {
 /// Functions (Expo's term for methods) and type parameters live here
 /// regardless of the type's kind. The [`TypeKind`] discriminator carries
 /// kind-specific data (fields for structs, variants for enums).
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct TypeInfo {
     pub functions: HashMap<String, FunctionSig>,
     pub kind: TypeKind,
@@ -88,7 +88,7 @@ pub struct TypeInfo {
 }
 
 /// What kind of named type a [`TypeInfo`] represents.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum TypeKind {
     Struct { fields: Vec<(String, Type)> },
     Enum { variants: Vec<VariantInfo> },
@@ -153,14 +153,14 @@ impl TypeInfo {
 }
 
 /// A single variant within an enum.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct VariantInfo {
     pub data: VariantData,
     pub name: String,
 }
 
 /// The shape of data carried by an enum variant.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum VariantData {
     Struct(Vec<(String, Type)>),
     Tuple(Vec<Type>),
@@ -349,6 +349,16 @@ impl TypeContext {
             severity: Severity::Warning,
             message,
             hint: None,
+            span,
+        });
+    }
+
+    /// Records a warning diagnostic with an additional hint at the given span.
+    pub fn warning_with_hint(&mut self, message: String, hint: String, span: Span) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            message,
+            hint: Some(hint),
             span,
         });
     }

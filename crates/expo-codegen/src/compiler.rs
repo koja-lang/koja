@@ -747,6 +747,43 @@ impl<'ctx> Compiler<'ctx> {
             self.struct_types.insert(name.clone(), et);
         }
 
+        // Pass 1b: ensure all field/variant types exist (triggers monomorphization
+        // of generic instances like List<Token> before struct bodies are set).
+        // Indirect-wrapped types are skipped: they compile to pointers, so their
+        // inner generic instances can be monomorphized lazily (after struct bodies
+        // are set and sizes are known).
+        let field_types: Vec<Type> = self
+            .type_ctx
+            .types
+            .iter()
+            .filter(|(_, ti)| ti.is_struct() && ti.type_params.is_empty())
+            .flat_map(|(_, info)| info.fields().unwrap().iter().map(|(_, ty)| ty.clone()))
+            .filter(|ty| !matches!(ty, Type::Indirect(_)))
+            .collect();
+        for ty in &field_types {
+            let _ = self.ensure_types_exist(ty);
+        }
+
+        let variant_types: Vec<Type> = self
+            .type_ctx
+            .types
+            .iter()
+            .filter(|(_, ti)| ti.is_enum() && ti.type_params.is_empty())
+            .flat_map(|(_, info)| {
+                info.variants().unwrap().iter().flat_map(|v| match &v.data {
+                    VariantData::Tuple(types) => types.clone(),
+                    VariantData::Struct(fields) => {
+                        fields.iter().map(|(_, ty)| ty.clone()).collect()
+                    }
+                    VariantData::Unit => Vec::new(),
+                })
+            })
+            .filter(|ty| !matches!(ty, Type::Indirect(_)))
+            .collect();
+        for ty in &variant_types {
+            let _ = self.ensure_types_exist(ty);
+        }
+
         // Pass 2: set struct bodies (skip generic templates)
         for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
             if !info.type_params.is_empty() {

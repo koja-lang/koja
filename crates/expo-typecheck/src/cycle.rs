@@ -27,8 +27,7 @@ struct Edge {
 }
 
 /// Detects recursive struct/enum field types in `ctx` and wraps them in
-/// [`Type::Indirect`]. Must be called after [`crate::re_resolve_generics`] so
-/// that generic field types are fully resolved.
+/// [`Type::Indirect`] for heap-allocated indirection.
 pub fn mark_recursive_fields(ctx: &mut TypeContext) {
     let all_type_names: HashSet<String> = ctx
         .types
