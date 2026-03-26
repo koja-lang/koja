@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `expo build --emit-llvm` flag -- dumps the LLVM IR for a module or project to stdout instead of producing an executable. Useful for debugging codegen issues.
 - Project system -- `project.expo` config file with `Project{name: "my_app", version: "0.1.0"}` struct literal format. `expo build`, `expo run`, and `expo check` detect `project.expo` in the current directory when no source file is given. Project name doubles as the module namespace prefix (`import my_app.server` resolves to `src/server.expo`). Configurable `src` dirs and `entry` module with sensible defaults.
 - `expo-stdlib` crate -- standalone crate housing all standard library `.expo` sources with fully qualified module names (`std.kernel`, `std.list`, `std.string`, etc.). Both `expo-driver` and `expo-lsp` depend on it. Stdlib modules are auto-imported into every compilation.
 - Unified module resolution -- project modules, stdlib modules, and (future) package modules resolve through the same namespace-aware resolver. `import my_app.X` dispatches to project `src/` dirs, `import std.X` resolves from embedded sources.
@@ -38,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- List/Map/Set element stride used `type_byte_size` which returned a flat 8 for all non-primitive types, ignoring actual struct layout. `List<Token>` (36 bytes per element) was stepping through memory at 8-byte intervals, causing overlapping writes and corrupted field reads. All collection codegen now uses `llvm_field_byte_size` to compute ABI-correct element strides from the real LLVM type.
+- Enum payload sizing (`llvm_field_byte_size`) did not account for ABI alignment padding in nested structs, producing undersized payload arrays (e.g. `[33 x i8]` instead of `[36 x i8]` for `Option<Token>`). Rewrote with a proper alignment-aware layout algorithm.
+- Functions where all control-flow paths explicitly `return` (e.g. exhaustive `match` arms each returning) emitted an unreachable `ret void` fallthrough, causing LLVM verification failures for non-Unit return types. Codegen now emits `unreachable` instead.
 - `return` of heap-owning types (`List`, `Map`, `Set`, `String`) from inside `if` blocks no longer causes a use-after-free. The codegen was dropping live variables before evaluating the return expression; now the return value is loaded first and excluded from cleanup.
 - Formatter: `|` patterns in match arms pack densely with trailing `|` at line breaks instead of producing a single overflowing line. Blank lines are inserted between arms when any pattern wraps.
 - Formatter: `or` and `and` chains in cond conditions now pack densely (fill-style) instead of cascading one-per-line after the first break. Blank lines between cond arms when any condition wraps.

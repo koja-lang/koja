@@ -6,7 +6,7 @@ use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-const STACK_SIZE: usize = 64 * 1024;
+const STACK_SIZE: usize = 4 * 1024 * 1024;
 
 type ProcessFn = extern "C" fn(*const u8);
 
@@ -120,6 +120,7 @@ unsafe extern "C" fn process_trampoline() {
         };
 
         func(init_state);
+        fflush(std::ptr::null_mut());
 
         let s = sched();
         let idx = (s.current_pid - 1) as usize;
@@ -160,6 +161,9 @@ pub unsafe extern "C" fn expo_rt_spawn(
     let sp = unsafe {
         let layout = std::alloc::Layout::from_size_align(STACK_SIZE, 16).unwrap();
         let base = std::alloc::alloc(layout);
+        if base.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
         let stack_top = base.add(STACK_SIZE);
         let stack_top = ((stack_top as usize) & !15) as *mut u8;
         init_process_stack(stack_top, process_trampoline)
@@ -566,6 +570,7 @@ unsafe extern "C" {
     fn libc_write(fd: i32, buf: *const u8, count: usize) -> isize;
     #[link_name = "close"]
     fn libc_close(fd: i32) -> i32;
+    fn fflush(stream: *mut u8) -> i32;
 }
 
 // ---------------------------------------------------------------------------

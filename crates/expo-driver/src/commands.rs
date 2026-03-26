@@ -11,11 +11,16 @@ use crate::diagnostics::render_diagnostics;
 use crate::pipeline;
 use crate::project;
 
-/// `expo build [file.expo] [-o output]` -- compiles an Expo program to an executable.
+/// `expo build [file.expo] [-o output] [--emit-llvm]` -- compiles an Expo program to an executable.
 ///
 /// With no arguments, looks for `project.expo` in the current directory.
+/// With `--emit-llvm`, prints LLVM IR to stdout instead of producing a binary.
 pub fn cmd_build(args: &[String], color: bool) {
-    if args.is_empty() || (args.len() == 2 && args[0] == "-o") {
+    let build_args = pipeline::parse_build_args(args);
+    let has_source = build_args.source_file.is_some();
+    let emit_llvm = build_args.emit_llvm;
+
+    if !has_source {
         let cwd = env::current_dir().unwrap_or_else(|e| {
             eprintln!("error: cannot determine current directory: {e}");
             process::exit(1);
@@ -35,10 +40,16 @@ pub fn cmd_build(args: &[String], color: bool) {
             }
         };
 
-        let (_, output_name) = pipeline::parse_build_args(args);
-        pipeline::build_project(&config, &cwd, output_name.as_deref(), false, color);
+        pipeline::build_project(
+            &config,
+            &cwd,
+            build_args.output_name.as_deref(),
+            false,
+            color,
+            emit_llvm,
+        );
     } else {
-        pipeline::build(args, false, color);
+        pipeline::build(args, false, color, emit_llvm);
     }
 }
 
@@ -76,7 +87,7 @@ pub fn cmd_run(args: &[String], color: bool) {
         let binary = tmp_dir.join(format!("expo_run_{}", config.name));
         let output = binary.to_str().unwrap().to_string();
 
-        pipeline::build_project(&config, &cwd, Some(&output), true, color);
+        pipeline::build_project(&config, &cwd, Some(&output), true, color, false);
 
         let status = process::Command::new(&binary).args(run_args).status();
         let _ = fs::remove_file(&binary);
@@ -101,7 +112,7 @@ pub fn cmd_run(args: &[String], color: bool) {
         let output = binary.to_str().unwrap().to_string();
 
         let build_cmd_args = vec![path.clone(), "-o".to_string(), output.clone()];
-        pipeline::build(&build_cmd_args, true, color);
+        pipeline::build(&build_cmd_args, true, color, false);
 
         let extra_args: Vec<&String> = build_args[1..].iter().chain(run_args.iter()).collect();
         let status = process::Command::new(&binary).args(&extra_args).status();

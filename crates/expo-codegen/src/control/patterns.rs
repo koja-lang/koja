@@ -510,11 +510,15 @@ fn find_constructor_enum<'ctx>(
     if let Type::Enum(name) = subject_type {
         return Ok(name.clone());
     }
-    if let Type::Struct(name) = subject_type
-        && let Some((base, _)) = crate::generics::try_parse_mangled_name(name, c)
-        && c.type_ctx.is_enum(&base)
-    {
-        return Ok(name.clone());
+    if let Type::Struct(name) = subject_type {
+        if let Some((base, _)) = crate::generics::try_parse_mangled_name(name, c)
+            && c.type_ctx.is_enum(&base)
+        {
+            return Ok(name.clone());
+        }
+        if c.type_ctx.is_enum(name) {
+            return Ok(name.clone());
+        }
     }
     if let Type::Union(members) = subject_type {
         let member_mangled = mangle_type(&Type::Struct(variant_name.to_string()));

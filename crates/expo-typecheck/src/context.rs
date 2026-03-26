@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, ProtocolMethod, Severity, StructDecl,
@@ -13,20 +13,20 @@ use crate::types::Type;
 pub struct TypeContext {
     pub closure_info: HashMap<Span, ClosureInfo>,
     pub coercions: HashMap<Span, Coercion>,
-    pub constants: HashMap<String, Type>,
+    pub constants: BTreeMap<String, Type>,
     pub diagnostics: Vec<Diagnostic>,
-    pub functions: HashMap<String, FunctionSig>,
-    pub generic_enum_asts: HashMap<String, EnumDecl>,
-    pub generic_function_asts: HashMap<String, Function>,
-    pub generic_impl_asts: HashMap<String, Vec<ImplBlock>>,
-    pub generic_protocol_asts: HashMap<String, ProtocolDecl>,
-    pub generic_struct_asts: HashMap<String, StructDecl>,
-    pub imported_modules: HashMap<String, TypeContext>,
-    pub protocol_impls: HashMap<String, Vec<(String, Vec<Type>)>>,
-    pub protocols: HashMap<String, ProtocolInfo>,
-    pub synthesized_default_fns: HashMap<String, Vec<Function>>,
-    pub type_aliases: HashMap<String, Type>,
-    pub types: HashMap<String, TypeInfo>,
+    pub functions: BTreeMap<String, FunctionSig>,
+    pub generic_enum_asts: BTreeMap<String, EnumDecl>,
+    pub generic_function_asts: BTreeMap<String, Function>,
+    pub generic_impl_asts: BTreeMap<String, Vec<ImplBlock>>,
+    pub generic_protocol_asts: BTreeMap<String, ProtocolDecl>,
+    pub generic_struct_asts: BTreeMap<String, StructDecl>,
+    pub imported_modules: BTreeMap<String, TypeContext>,
+    pub protocol_impls: BTreeMap<String, Vec<(String, Vec<Type>)>>,
+    pub protocols: BTreeMap<String, ProtocolInfo>,
+    pub synthesized_default_fns: BTreeMap<String, Vec<Function>>,
+    pub type_aliases: BTreeMap<String, Type>,
+    pub types: BTreeMap<String, TypeInfo>,
 }
 
 /// Whether a function in an impl block takes a `self` receiver or is static.
@@ -69,8 +69,8 @@ pub struct ClosureInfo {
 /// Collected metadata for a protocol declaration.
 #[derive(Clone)]
 pub struct ProtocolInfo {
-    pub default_bodies: HashMap<String, ProtocolMethod>,
-    pub methods: HashMap<String, FunctionSig>,
+    pub default_bodies: BTreeMap<String, ProtocolMethod>,
+    pub methods: BTreeMap<String, FunctionSig>,
     pub span: Span,
     pub type_params: Vec<String>,
 }
@@ -81,7 +81,7 @@ pub struct ProtocolInfo {
 /// kind-specific data (fields for structs, variants for enums).
 #[derive(Clone, PartialEq)]
 pub struct TypeInfo {
-    pub functions: HashMap<String, FunctionSig>,
+    pub functions: BTreeMap<String, FunctionSig>,
     pub kind: TypeKind,
     pub span: Span,
     pub type_params: Vec<String>,
@@ -242,20 +242,20 @@ impl TypeContext {
         Self {
             closure_info: HashMap::new(),
             coercions: HashMap::new(),
-            constants: HashMap::new(),
+            constants: BTreeMap::new(),
             diagnostics: Vec::new(),
-            functions: HashMap::new(),
-            generic_enum_asts: HashMap::new(),
-            generic_function_asts: HashMap::new(),
-            generic_impl_asts: HashMap::new(),
-            generic_protocol_asts: HashMap::new(),
-            generic_struct_asts: HashMap::new(),
-            imported_modules: HashMap::new(),
-            protocol_impls: HashMap::new(),
-            protocols: HashMap::new(),
-            synthesized_default_fns: HashMap::new(),
-            type_aliases: HashMap::new(),
-            types: HashMap::new(),
+            functions: BTreeMap::new(),
+            generic_enum_asts: BTreeMap::new(),
+            generic_function_asts: BTreeMap::new(),
+            generic_impl_asts: BTreeMap::new(),
+            generic_protocol_asts: BTreeMap::new(),
+            generic_struct_asts: BTreeMap::new(),
+            imported_modules: BTreeMap::new(),
+            protocol_impls: BTreeMap::new(),
+            protocols: BTreeMap::new(),
+            synthesized_default_fns: BTreeMap::new(),
+            type_aliases: BTreeMap::new(),
+            types: BTreeMap::new(),
         }
     }
 

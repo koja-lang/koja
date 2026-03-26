@@ -6,7 +6,7 @@
 
 use expo_typecheck::types::{GenericKind, Type};
 
-use crate::compiler::{Compiler, EmitResult, type_byte_size};
+use crate::compiler::{Compiler, EmitResult};
 use crate::hashtable;
 use crate::types::to_llvm_type;
 
@@ -33,8 +33,8 @@ pub fn emit_map_method<'ctx>(
     let val_llvm = to_llvm_type(val_type, c.context, &c.struct_types)
         .ok_or_else(|| format!("no LLVM type for Map value `{val_type:?}`"))?;
 
-    let key_size = type_byte_size(key_type) as u64;
-    let val_size = type_byte_size(val_type) as u64;
+    let key_size = crate::compiler::llvm_field_byte_size(key_llvm) as u64;
+    let val_size = crate::compiler::llvm_field_byte_size(val_llvm) as u64;
     let entry_size = key_size + val_size;
 
     let hash_fn = hashtable::ensure_hash_fn(c, key_type)?;

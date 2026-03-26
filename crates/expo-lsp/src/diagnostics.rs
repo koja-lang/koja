@@ -3,7 +3,7 @@
 //! Handles parsing, import resolution, type checking, and conversion of
 //! Expo compiler diagnostics into LSP diagnostics.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use tower_lsp_server::ls_types::*;
 
@@ -25,7 +25,7 @@ impl Backend {
             .iter()
             .all(|d| !matches!(d.severity, ExpoSeverity::Error))
         {
-            let mut module_contexts: HashMap<String, TypeContext> = HashMap::new();
+            let mut module_contexts: BTreeMap<String, TypeContext> = BTreeMap::new();
             let mut origins: HashMap<String, String> = HashMap::new();
             let mut mod_uris: HashMap<String, String> = HashMap::new();
 

@@ -1,7 +1,7 @@
 //! Compilation driver: holds all LLVM state, registers types, declares and
 //! defines functions, and orchestrates emission of native object files.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::drop::Ownership;
@@ -39,7 +39,7 @@ pub struct Compiler<'ctx> {
     pub builder: Builder<'ctx>,
     pub constants: HashMap<String, BasicValueEnum<'ctx>>,
     pub functions: HashMap<String, FunctionValue<'ctx>>,
-    pub variables: HashMap<String, (PointerValue<'ctx>, Type, Ownership)>,
+    pub variables: BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>,
     pub struct_types: HashMap<String, StructType<'ctx>>,
     pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
     pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
@@ -76,7 +76,7 @@ impl<'ctx> Compiler<'ctx> {
             builder,
             constants: HashMap::new(),
             functions: HashMap::new(),
-            variables: HashMap::new(),
+            variables: BTreeMap::new(),
             struct_types: HashMap::new(),
             enum_variant_payloads: HashMap::new(),
             enum_name_tables: HashMap::new(),
@@ -639,6 +639,8 @@ impl<'ctx> Compiler<'ctx> {
         {
             let self_ty = if let Some(p) = expo_typecheck::types::Primitive::from_name(type_name) {
                 Type::Primitive(p)
+            } else if self.type_ctx.is_enum(type_name) {
+                Type::Enum(type_name.to_string())
             } else {
                 Type::Struct(type_name.to_string())
             };
@@ -921,7 +923,7 @@ impl<'ctx> Compiler<'ctx> {
                 let member_name = mangle_type(member);
                 if let Some(llvm_ty) = to_llvm_type(member, self.context, &self.struct_types) {
                     let payload = self.context.struct_type(&[llvm_ty], true);
-                    let size = type_byte_size(member);
+                    let size = llvm_field_byte_size(llvm_ty);
                     max_payload_size = max_payload_size.max(size);
                     variant_payloads.push((member_name, Some(payload)));
                 } else {
@@ -1022,15 +1024,13 @@ pub fn compile(
     compile_modules(&[module], type_ctx, output_path)
 }
 
-/// Compiles multiple Expo modules into a single native object file. Registers
-/// types, declares all functions across modules, then defines their bodies.
-pub fn compile_modules(
+/// Runs codegen for all modules: register types, declare, define.
+fn run_codegen<'ctx>(
     modules: &[&Module],
-    type_ctx: &TypeContext,
-    output_path: &Path,
-) -> Result<(), Vec<Diagnostic>> {
-    let context = Context::create();
-    let mut compiler = Compiler::new(&context, type_ctx);
+    type_ctx: &'ctx TypeContext,
+    context: &'ctx Context,
+) -> Result<Compiler<'ctx>, Vec<Diagnostic>> {
+    let mut compiler = Compiler::new(context, type_ctx);
 
     compiler.register_types();
     compiler.declare_builtins();
@@ -1068,6 +1068,19 @@ pub fn compile_modules(
         })?;
     }
 
+    Ok(compiler)
+}
+
+/// Compiles multiple Expo modules into a single native object file. Registers
+/// types, declares all functions across modules, then defines their bodies.
+pub fn compile_modules(
+    modules: &[&Module],
+    type_ctx: &TypeContext,
+    output_path: &Path,
+) -> Result<(), Vec<Diagnostic>> {
+    let context = Context::create();
+    let compiler = run_codegen(modules, type_ctx, &context)?;
+
     compiler.module.verify().map_err(|e| {
         let span = modules.first().map(|m| m.span).unwrap_or_default();
         vec![Diagnostic {
@@ -1089,43 +1102,66 @@ pub fn compile_modules(
     })
 }
 
-/// Computes the byte size of an LLVM type for enum payload sizing.
+/// Compiles multiple Expo modules and returns the LLVM IR as a string.
+/// Skips verification so IR can be inspected even when it contains errors.
+pub fn emit_llvm_ir(
+    modules: &[&Module],
+    type_ctx: &TypeContext,
+) -> Result<String, Vec<Diagnostic>> {
+    let context = Context::create();
+    let compiler = run_codegen(modules, type_ctx, &context)?;
+    Ok(compiler.module.print_to_string().to_string())
+}
+
+/// Returns the natural ABI alignment (in bytes) of an LLVM type.
+fn llvm_type_alignment(ty: inkwell::types::BasicTypeEnum) -> u32 {
+    match ty {
+        inkwell::types::BasicTypeEnum::IntType(it) => {
+            let bytes = it.get_bit_width().div_ceil(8);
+            bytes.next_power_of_two().min(8)
+        }
+        inkwell::types::BasicTypeEnum::FloatType(_) => 8,
+        inkwell::types::BasicTypeEnum::PointerType(_) => 8,
+        inkwell::types::BasicTypeEnum::StructType(st) => {
+            if st.is_packed() {
+                return 1;
+            }
+            st.get_field_types()
+                .iter()
+                .map(|f| llvm_type_alignment(*f))
+                .max()
+                .unwrap_or(1)
+        }
+        inkwell::types::BasicTypeEnum::ArrayType(at) => llvm_type_alignment(at.get_element_type()),
+        _ => 8,
+    }
+}
+
+/// Computes the ABI byte size of an LLVM type, including alignment padding
+/// for struct fields. Used for enum payload sizing.
 pub(crate) fn llvm_field_byte_size(ty: inkwell::types::BasicTypeEnum) -> u32 {
     match ty {
         inkwell::types::BasicTypeEnum::IntType(it) => it.get_bit_width().div_ceil(8),
         inkwell::types::BasicTypeEnum::FloatType(_) => 8,
         inkwell::types::BasicTypeEnum::PointerType(_) => 8,
-        inkwell::types::BasicTypeEnum::StructType(st) => st
-            .get_field_types()
-            .iter()
-            .map(|f| llvm_field_byte_size(*f))
-            .sum(),
+        inkwell::types::BasicTypeEnum::StructType(st) => {
+            let fields = st.get_field_types();
+            if st.is_packed() {
+                return fields.iter().map(|f| llvm_field_byte_size(*f)).sum();
+            }
+            let mut offset: u32 = 0;
+            let mut max_align: u32 = 1;
+            for f in &fields {
+                let align = llvm_type_alignment(*f);
+                max_align = max_align.max(align);
+                offset = (offset + align - 1) & !(align - 1);
+                offset += llvm_field_byte_size(*f);
+            }
+            (offset + max_align - 1) & !(max_align - 1)
+        }
         inkwell::types::BasicTypeEnum::ArrayType(at) => {
             llvm_field_byte_size(at.get_element_type()) * at.len()
         }
-        _ => 8,
-    }
-}
-
-/// Returns a conservative in-memory byte size for layout decisions (enum
-/// payloads, etc.). Matches the codegen's assumptions for primitives and
-/// pointers; non-primitive named types are treated as pointer-sized.
-pub(crate) fn type_byte_size(ty: &Type) -> u32 {
-    use expo_typecheck::types::Primitive;
-    match ty {
-        Type::Indirect(_) => 8,
-        Type::Primitive(p) => match p {
-            Primitive::Bool | Primitive::I8 | Primitive::U8 => 1,
-            Primitive::I16 | Primitive::U16 => 2,
-            Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
-            Primitive::I64
-            | Primitive::U64
-            | Primitive::F64
-            | Primitive::String
-            | Primitive::Binary
-            | Primitive::Bits => 8,
-        },
-        Type::Function { .. } => 16,
         _ => 8,
     }
 }

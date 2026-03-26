@@ -95,46 +95,67 @@ fn llvm_type_size<'ctx>(
     }
 }
 
-/// Compiles a field access expression (`receiver.field`). Handles both
-/// direct variable access (via pointer GEP) and expression receivers
-/// (which require a temporary alloca).
+/// Tries to resolve a field access chain to a pointer via GEP without loading
+/// intermediate struct values. Returns `(pointer, field_type)` on success.
+/// Works for `ident.field`, `self.field`, and chains like `self.span.start`.
+fn resolve_field_chain<'ctx>(
+    c: &mut Compiler<'ctx>,
+    receiver: &Expr,
+    field: &str,
+) -> Option<(PointerValue<'ctx>, Type)> {
+    let (base_ptr, base_struct_name) = match receiver {
+        Expr::Ident { name, .. } => {
+            let (ptr, ty, _) = c.variables.get(name.as_str()).cloned()?;
+            let sn = struct_name_from_type(&ty)?;
+            (ptr, sn)
+        }
+        Expr::Self_ { .. } => {
+            let (ptr, ty, _) = c.variables.get("self").cloned()?;
+            let sn = struct_name_from_type(&ty)?;
+            (ptr, sn)
+        }
+        Expr::FieldAccess {
+            receiver: inner_recv,
+            field: inner_field,
+            ..
+        } => {
+            let (inner_ptr, inner_ty) = resolve_field_chain(c, inner_recv, inner_field)?;
+            if let Type::Indirect(_) = &inner_ty {
+                return None;
+            }
+            let sn = struct_name_from_type(&inner_ty)?;
+            (inner_ptr, sn)
+        }
+        _ => return None,
+    };
+
+    let struct_type = *c.struct_types.get(&base_struct_name)?;
+    let field_idx = c.get_field_index(&base_struct_name, field)?;
+    let field_ty = c.get_field_type(&base_struct_name, field)?;
+
+    let field_ptr = c
+        .builder
+        .build_struct_gep(struct_type, base_ptr, field_idx, field)
+        .unwrap();
+
+    Some((field_ptr, field_ty))
+}
+
+/// Compiles a field access expression (`receiver.field`). Uses direct GEP
+/// chains for variable/self receivers and their nested field accesses,
+/// falling back to a temporary alloca for arbitrary expression receivers.
 pub fn compile_field_access<'ctx>(
     c: &mut Compiler<'ctx>,
     receiver: &Expr,
     field: &str,
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    if let Expr::Ident { name, .. } = receiver {
-        let (ptr, ty, _) = c
-            .variables
-            .get(name)
-            .ok_or_else(|| format!("undefined variable: {name}"))?
-            .clone();
-
-        let struct_name = struct_name_from_type(&ty)
-            .ok_or_else(|| format!("cannot access field on non-struct variable: {name}"))?;
-
-        let struct_type = *c
-            .struct_types
-            .get(&struct_name)
-            .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
-
-        let field_idx = c
-            .get_field_index(&struct_name, field)
-            .ok_or_else(|| format!("unknown field `{field}` on struct `{struct_name}`"))?;
-
-        let field_ty = c
-            .get_field_type(&struct_name, field)
-            .ok_or_else(|| format!("unknown field `{field}` on struct `{struct_name}`"))?;
-
-        let field_ptr = c
-            .builder
-            .build_struct_gep(struct_type, ptr, field_idx, &format!("{name}.{field}"))
-            .unwrap();
-
+    if let Some((field_ptr, field_ty)) = resolve_field_chain(c, receiver, field) {
         let val = load_maybe_indirect(c, field_ptr, &field_ty, field);
-        Ok(Some(val))
-    } else {
+        return Ok(Some(val));
+    }
+
+    {
         let recv_val = compile_expr(c, receiver, function)?
             .ok_or("field access on expression that produced no value")?;
 
@@ -532,6 +553,34 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
     }
 }
 
+/// Temporarily pushes type-parameter substitutions for a [`GenericInstance`]
+/// field type so that empty collection literals (`[]`, `{}`) monomorphize to
+/// the correct element type instead of falling back to `I32`.
+fn push_generic_type_subst<'ctx>(
+    c: &mut Compiler<'ctx>,
+    field_type: &Type,
+) -> Option<std::collections::HashMap<String, Type>> {
+    let ty = unwrap_indirect(field_type);
+    if let Type::GenericInstance {
+        base, type_args, ..
+    } = ty
+    {
+        let type_params = c
+            .type_ctx
+            .types
+            .get(base.as_str())
+            .map(|ti| ti.type_params.clone())?;
+        let saved = c.type_subst.clone();
+        for (param, arg) in type_params.iter().zip(type_args.iter()) {
+            let concrete = substitute(arg, &c.type_subst);
+            c.type_subst.insert(param.clone(), concrete);
+        }
+        Some(saved)
+    } else {
+        None
+    }
+}
+
 /// Compiles a struct literal (`StructName { field: value, ... }`).
 pub fn compile_struct_construction<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -585,9 +634,15 @@ pub fn compile_struct_construction<'ctx>(
                 )
             })?;
 
+        let saved_subst = push_generic_type_subst(c, &field_type);
+
         let coerce_ty = unwrap_indirect(&field_type);
         let val = compile_expr_coerced(c, &field_init.value, coerce_ty, function)?
             .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
+
+        if let Some(saved) = saved_subst {
+            c.type_subst = saved;
+        }
 
         let field_ptr = c
             .builder

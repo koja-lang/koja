@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use expo_ast::ast::{
     EnumVariantData, Expr, Function, ImplMember, ImportTarget, Item, Literal, Module, Param,
@@ -68,7 +68,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                 &struct_names,
                 &enum_names,
                 &[],
-                &std::collections::HashMap::new(),
+                &std::collections::BTreeMap::new(),
             );
             if let Some(existing) = ctx.type_aliases.get(&ta.name) {
                 if *existing != resolved {
@@ -140,7 +140,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                 ctx.types.insert(
                     e.name.clone(),
                     TypeInfo {
-                        functions: HashMap::new(),
+                        functions: BTreeMap::new(),
                         kind: TypeKind::Enum { variants },
                         span: e.span,
                         type_params: e.type_params.clone(),
@@ -249,7 +249,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                                 ctx.types
                                     .entry(target_name.clone())
                                     .or_insert_with(|| TypeInfo {
-                                        functions: HashMap::new(),
+                                        functions: BTreeMap::new(),
                                         kind: TypeKind::Primitive,
                                         span: f.span,
                                         type_params: Vec::new(),
@@ -411,8 +411,8 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
             }
             Item::Protocol(p) => {
                 let tp_refs: Vec<&str> = p.type_params.iter().map(|s| s.as_str()).collect();
-                let mut methods: HashMap<String, FunctionSig> = HashMap::new();
-                let mut default_bodies: HashMap<String, ProtocolMethod> = HashMap::new();
+                let mut methods: BTreeMap<String, FunctionSig> = BTreeMap::new();
+                let mut default_bodies: BTreeMap<String, ProtocolMethod> = BTreeMap::new();
                 for m in &p.methods {
                     if let Some(sig) = build_protocol_method_sig(
                         m,
@@ -460,7 +460,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                 ctx.types.insert(
                     s.name.clone(),
                     TypeInfo {
-                        functions: HashMap::new(),
+                        functions: BTreeMap::new(),
                         kind: TypeKind::Struct { fields },
                         span: s.span,
                         type_params: s.type_params.clone(),
@@ -659,7 +659,7 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
 pub fn resolve_imports(
     module: &Module,
     ctx: &mut TypeContext,
-    module_contexts: &HashMap<String, TypeContext>,
+    module_contexts: &BTreeMap<String, TypeContext>,
 ) {
     let mut imported_names: HashSet<String> = HashSet::new();
 
@@ -761,7 +761,7 @@ fn build_function_sig(
     f: &expo_ast::ast::Function,
     known_structs: &[&str],
     known_enums: &[&str],
-    known_type_aliases: &HashMap<String, Type>,
+    known_type_aliases: &BTreeMap<String, Type>,
 ) -> Option<FunctionSig> {
     build_function_sig_with_params(f, known_structs, known_enums, &[], known_type_aliases)
 }
@@ -773,7 +773,7 @@ fn build_function_sig_with_params(
     known_structs: &[&str],
     known_enums: &[&str],
     extra_type_params: &[&str],
-    known_type_aliases: &HashMap<String, Type>,
+    known_type_aliases: &BTreeMap<String, Type>,
 ) -> Option<FunctionSig> {
     let mut all_tp: Vec<&str> = f.type_params.iter().map(|s| s.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
@@ -845,7 +845,7 @@ fn build_protocol_method_sig(
     known_structs: &[&str],
     known_enums: &[&str],
     extra_type_params: &[&str],
-    known_type_aliases: &HashMap<String, Type>,
+    known_type_aliases: &BTreeMap<String, Type>,
 ) -> Option<FunctionSig> {
     let mut all_tp: Vec<&str> = m.type_params.iter().map(|s| s.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);

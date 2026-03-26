@@ -3,7 +3,7 @@
 //! This module contains the shared infrastructure that powers `build`, `run`,
 //! and `check`. No CLI command functions live here -- those are in [`crate::commands`].
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::{env, fs, process};
 
@@ -21,8 +21,9 @@ use crate::resolve::{self, ModuleGraph};
 pub fn typecheck_graph(
     graph: &ModuleGraph,
     color: bool,
-) -> (HashMap<String, expo_typecheck::context::TypeContext>, bool) {
-    let mut module_contexts: HashMap<String, expo_typecheck::context::TypeContext> = HashMap::new();
+) -> (BTreeMap<String, expo_typecheck::context::TypeContext>, bool) {
+    let mut module_contexts: BTreeMap<String, expo_typecheck::context::TypeContext> =
+        BTreeMap::new();
     let mut has_errors = false;
 
     for name in &graph.order {
@@ -99,7 +100,14 @@ pub fn typecheck_graph(
 ///
 /// Type-checks all modules, merges contexts, emits LLVM IR, and links.
 /// The graph must include stdlib modules (via [`resolve::insert_stdlib`]).
-pub fn build_from_graph(graph: &ModuleGraph, output: &str, quiet: bool, color: bool) {
+/// When `emit_llvm` is true, prints LLVM IR to stdout instead of linking.
+pub fn build_from_graph(
+    graph: &ModuleGraph,
+    output: &str,
+    quiet: bool,
+    color: bool,
+    emit_llvm: bool,
+) {
     let (module_contexts, has_errors) = typecheck_graph(graph, color);
     if has_errors {
         process::exit(1);
@@ -115,6 +123,23 @@ pub fn build_from_graph(graph: &ModuleGraph, output: &str, quiet: bool, color: b
         .iter()
         .map(|name| &graph.modules[name].module)
         .collect();
+
+    if emit_llvm {
+        match expo_codegen::emit_llvm_ir(&modules_ast, &merged_ctx) {
+            Ok(ir) => print!("{ir}"),
+            Err(diagnostics) => {
+                let entry_rm = &graph.modules[&graph.entry];
+                render_diagnostics(
+                    entry_rm.path.to_str().unwrap_or(&entry_rm.name),
+                    &entry_rm.source,
+                    &diagnostics,
+                    color,
+                );
+                process::exit(1);
+            }
+        }
+        return;
+    }
 
     let obj_path = format!("{output}.o");
     if let Err(diagnostics) =
@@ -140,6 +165,7 @@ pub fn build_project(
     output: Option<&str>,
     quiet: bool,
     color: bool,
+    emit_llvm: bool,
 ) {
     let graph = match resolve::resolve_project_modules(config, project_root) {
         Ok(g) => g,
@@ -150,7 +176,7 @@ pub fn build_project(
     };
 
     let output = output.unwrap_or(&config.name);
-    build_from_graph(&graph, output, quiet, color);
+    build_from_graph(&graph, output, quiet, color, emit_llvm);
 }
 
 /// Full single-file build pipeline: resolve modules from an entry file,
@@ -158,20 +184,21 @@ pub fn build_project(
 ///
 /// When `quiet` is true, the "compiled: <output>" message is suppressed
 /// (used by `expo run` to avoid noise).
-pub fn build(args: &[String], quiet: bool, color: bool) {
+pub fn build(args: &[String], quiet: bool, color: bool, emit_llvm: bool) {
     if args.is_empty() {
         eprintln!("Usage: expo build <file.expo> [-o output]");
         process::exit(1);
     }
 
-    let (source_file, output_name) = parse_build_args(args);
+    let build_args = parse_build_args(args);
+    let emit_llvm = emit_llvm || build_args.emit_llvm;
 
-    let path = source_file.unwrap_or_else(|| {
+    let path = build_args.source_file.unwrap_or_else(|| {
         eprintln!("Usage: expo build <file.expo> [-o output]");
         process::exit(1);
     });
 
-    let output = output_name.unwrap_or_else(|| {
+    let output = build_args.output_name.unwrap_or_else(|| {
         Path::new(&path)
             .file_stem()
             .and_then(|s| s.to_str())
@@ -193,7 +220,7 @@ pub fn build(args: &[String], quiet: bool, color: bool) {
     };
 
     prepend_stdlib(&mut graph);
-    build_from_graph(&graph, &output, quiet, color);
+    build_from_graph(&graph, &output, quiet, color, emit_llvm);
 }
 
 /// Type-checks a single-file module graph (without compiling).
@@ -247,10 +274,18 @@ fn prepend_stdlib(graph: &mut ModuleGraph) {
     graph.order = stdlib_order;
 }
 
-/// Extracts `-o <output>` and the source file path from build arguments.
-pub fn parse_build_args(args: &[String]) -> (Option<String>, Option<String>) {
+/// Parsed build arguments.
+pub struct BuildArgs {
+    pub source_file: Option<String>,
+    pub output_name: Option<String>,
+    pub emit_llvm: bool,
+}
+
+/// Extracts `-o <output>`, `--emit-llvm`, and the source file path from build arguments.
+pub fn parse_build_args(args: &[String]) -> BuildArgs {
     let mut source_file = None;
     let mut output_name = None;
+    let mut emit_llvm = false;
     let mut i = 0;
     while i < args.len() {
         if args[i] == "-o" {
@@ -261,12 +296,19 @@ pub fn parse_build_args(args: &[String]) -> (Option<String>, Option<String>) {
                 eprintln!("-o requires an argument");
                 process::exit(1);
             }
+        } else if args[i] == "--emit-llvm" {
+            emit_llvm = true;
+            i += 1;
         } else {
             source_file = Some(args[i].clone());
             i += 1;
         }
     }
-    (source_file, output_name)
+    BuildArgs {
+        source_file,
+        output_name,
+        emit_llvm,
+    }
 }
 
 /// Links an object file with the embedded runtime library to produce an executable.

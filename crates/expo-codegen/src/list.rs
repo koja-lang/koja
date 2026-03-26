@@ -5,7 +5,7 @@
 
 use expo_typecheck::types::{GenericKind, Primitive, Type};
 
-use crate::compiler::{Compiler, EmitResult, type_byte_size};
+use crate::compiler::{Compiler, EmitResult};
 use crate::types::to_llvm_type;
 
 pub fn monomorphize_list_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
@@ -40,7 +40,7 @@ pub fn emit_list_method<'ctx>(
     let elem_ty = &type_args[0];
     let elem_llvm = to_llvm_type(elem_ty, c.context, &c.struct_types)
         .ok_or_else(|| format!("cannot map element type `{}` to LLVM", elem_ty.display()))?;
-    let elem_size = type_byte_size(elem_ty) as u64;
+    let elem_size = crate::compiler::llvm_field_byte_size(elem_llvm) as u64;
 
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
     let i64_ty = c.context.i64_type();

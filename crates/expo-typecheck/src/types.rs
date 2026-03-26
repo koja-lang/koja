@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use expo_ast::ast::TypeExpr;
 
@@ -236,7 +236,7 @@ pub fn resolve_type_expr(
     known_structs: &[&str],
     known_enums: &[&str],
 ) -> Type {
-    resolve_type_expr_with_params(type_expr, known_structs, known_enums, &[], &HashMap::new())
+    resolve_type_expr_with_params(type_expr, known_structs, known_enums, &[], &BTreeMap::new())
 }
 
 /// Like [`resolve_type_expr`] but also resolves type parameter names (e.g. `T`, `A`)
@@ -247,7 +247,7 @@ pub fn resolve_type_expr_with_params(
     known_structs: &[&str],
     known_enums: &[&str],
     known_type_params: &[&str],
-    known_type_aliases: &HashMap<String, Type>,
+    known_type_aliases: &BTreeMap<String, Type>,
 ) -> Type {
     match type_expr {
         TypeExpr::Generic { path, args, .. } => {

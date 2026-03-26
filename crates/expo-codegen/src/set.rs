@@ -6,7 +6,7 @@
 
 use expo_typecheck::types::Type;
 
-use crate::compiler::{Compiler, EmitResult, type_byte_size};
+use crate::compiler::{Compiler, EmitResult};
 use crate::hashtable;
 use crate::types::to_llvm_type;
 
@@ -30,7 +30,7 @@ pub fn emit_set_method<'ctx>(
     let elem_llvm = to_llvm_type(elem_type, c.context, &c.struct_types)
         .ok_or_else(|| format!("no LLVM type for Set element `{elem_type:?}`"))?;
 
-    let elem_size = type_byte_size(elem_type) as u64;
+    let elem_size = crate::compiler::llvm_field_byte_size(elem_llvm) as u64;
 
     let hash_fn = hashtable::ensure_hash_fn(c, elem_type)?;
     let eq_fn = hashtable::ensure_eq_fn(c, elem_type)?;

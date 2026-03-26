@@ -9,9 +9,7 @@ use expo_typecheck::types::{GenericKind, Type};
 use inkwell::types::BasicType;
 use inkwell::values::FunctionValue;
 
-use crate::compiler::{
-    Compiler, llvm_field_byte_size, resolve_process_envelope_type, type_byte_size,
-};
+use crate::compiler::{Compiler, llvm_field_byte_size, resolve_process_envelope_type};
 use crate::expr::compile_expr;
 use crate::stmt::{apply_coercion, compile_statement};
 use crate::types::to_llvm_type;
@@ -55,7 +53,7 @@ impl<'ctx> Compiler<'ctx> {
                         let v = apply_coercion(self, v, expr)?;
                         self.builder.build_return(Some(&v)).unwrap();
                     } else {
-                        self.builder.build_return(None).unwrap();
+                        self.builder.build_unreachable().unwrap();
                     }
                 }
                 continue;
@@ -65,8 +63,12 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if !self.current_block_terminated() {
-            crate::drop::drop_live_variables(self, None);
-            self.builder.build_return(None).unwrap();
+            if *return_type == Type::Unit {
+                crate::drop::drop_live_variables(self, None);
+                self.builder.build_return(None).unwrap();
+            } else {
+                self.builder.build_unreachable().unwrap();
+            }
         }
 
         self.return_type_hint = saved_hint;
@@ -864,7 +866,7 @@ impl<'ctx> Compiler<'ctx> {
                             to_llvm_type(member, self.context, &self.struct_types)
                         {
                             let payload = self.context.struct_type(&[llvm_ty], true);
-                            let size = type_byte_size(member);
+                            let size = llvm_field_byte_size(llvm_ty);
                             max_payload_size = max_payload_size.max(size);
                             variant_payloads.push((member_name, Some(payload)));
                         } else {

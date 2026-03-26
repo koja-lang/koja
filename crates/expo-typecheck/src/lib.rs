@@ -8,7 +8,7 @@ mod pattern;
 mod stmt;
 pub mod types;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use context::TypeContext;
 use expo_ast::ast::Module;
@@ -52,7 +52,7 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
 pub fn resolve_imports(
     module: &Module,
     ctx: &mut TypeContext,
-    module_contexts: &HashMap<String, TypeContext>,
+    module_contexts: &BTreeMap<String, TypeContext>,
 ) {
     collect::resolve_imports(module, ctx, module_contexts);
 }
