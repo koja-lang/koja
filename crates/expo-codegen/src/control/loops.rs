@@ -114,8 +114,8 @@ pub fn compile_for<'ctx>(
     let (mangled_type, elem_llvm_ty, elem_expo_ty, base, type_args) =
         resolve_enumerable_info(c, &iter_ty)?;
 
-    c.monomorphize_impl_method(&base, "length", &type_args)?;
-    c.monomorphize_impl_method(&base, "get", &type_args)?;
+    c.monomorphize_impl_method(&base, "length", &type_args, &[])?;
+    c.monomorphize_impl_method(&base, "get", &type_args, &[])?;
 
     let length_fn_name = format!("{}_length", mangled_type);
     let get_fn_name = format!("{}_get", mangled_type);

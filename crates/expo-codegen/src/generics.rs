@@ -9,7 +9,7 @@ use expo_typecheck::types::{GenericKind, Type};
 use inkwell::types::BasicType;
 use inkwell::values::FunctionValue;
 
-use crate::compiler::{Compiler, llvm_field_byte_size, resolve_process_envelope_type};
+use crate::compiler::{Compiler, resolve_process_envelope_type};
 use crate::expr::compile_expr;
 use crate::stmt::{apply_coercion, compile_statement};
 use crate::types::to_llvm_type;
@@ -73,6 +73,94 @@ impl<'ctx> Compiler<'ctx> {
 
         self.return_type_hint = saved_hint;
         Ok(())
+    }
+
+    /// Shared compilation kernel for method bodies: saves/restores compiler
+    /// state, binds `self` and regular parameters, sets up process message
+    /// types, then compiles the function body. Used by both `define_function`
+    /// (non-generic methods) and `monomorphize_impl_method` (generic methods).
+    ///
+    /// `self_type` is `Some((mangled, base))` for instance/static methods.
+    /// `mangled` is the LLVM-registered type name (e.g. `List_$Token$`).
+    /// `base` is the unmangled name for `is_enum`/`is_struct` lookups.
+    /// For non-generic methods both are identical.
+    pub(crate) fn compile_method_body(
+        &mut self,
+        fn_value: FunctionValue<'ctx>,
+        func: &expo_ast::ast::Function,
+        self_type: Option<(&str, &str)>,
+        param_types: &[Type],
+        return_type: &Type,
+        subst: std::collections::HashMap<String, Type>,
+    ) -> Result<(), String> {
+        let entry = self.context.append_basic_block(fn_value, "entry");
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_block = self.builder.get_insert_block();
+        let saved_subst = std::mem::replace(&mut self.type_subst, subst);
+
+        self.builder.position_at_end(entry);
+
+        let mut param_idx = 0u32;
+
+        if func
+            .params
+            .first()
+            .is_some_and(|p| matches!(p, Param::Self_ { .. }))
+            && let Some((mangled, base)) = self_type
+        {
+            let self_ty = if let Some(p) = expo_typecheck::types::Primitive::from_name(base) {
+                Type::Primitive(p)
+            } else if self.type_ctx.is_enum(base) {
+                Type::Enum(mangled.to_string())
+            } else {
+                Type::Struct(mangled.to_string())
+            };
+            if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
+                let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
+                let param_val = fn_value.get_nth_param(param_idx).unwrap();
+                self.builder.build_store(alloca, param_val).unwrap();
+                self.variables
+                    .insert("self".to_string(), (alloca, self_ty, Ownership::Unowned));
+                param_idx += 1;
+            }
+        }
+
+        let mut type_idx = 0usize;
+        for param in func.params.iter() {
+            if let Param::Regular { name: pname, .. } = param
+                && type_idx < param_types.len()
+            {
+                let ty = &param_types[type_idx];
+                type_idx += 1;
+                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.struct_types) {
+                    let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
+                    let param_val = fn_value.get_nth_param(param_idx).unwrap();
+                    self.builder.build_store(alloca, param_val).unwrap();
+                    self.variables
+                        .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
+                    param_idx += 1;
+                }
+            }
+        }
+
+        let saved_process_msg = self.process_msg_type.take();
+        if let Some((mangled, _)) = self_type {
+            self.process_msg_type = resolve_process_envelope_type(self, mangled);
+            if let Some(env_type) = self.process_msg_type.clone() {
+                let _ = self.ensure_types_exist(&env_type);
+            }
+        }
+
+        let result = self.compile_function_body(&func.body, return_type, fn_value, false);
+
+        self.process_msg_type = saved_process_msg;
+        self.variables = saved_vars;
+        self.type_subst = saved_subst;
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+
+        result
     }
 
     /// Generates a monomorphized (specialized) version of a generic function for
@@ -295,79 +383,7 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
-        let mut variant_payloads = Vec::new();
-        let mut max_payload_size: u32 = 0;
-
-        for (vname, vdata) in &concrete_variants {
-            match vdata {
-                VariantData::Unit => {
-                    variant_payloads.push((vname.clone(), None));
-                }
-                VariantData::Tuple(types) => {
-                    let mut field_llvm: Vec<_> = types
-                        .iter()
-                        .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
-                        .collect();
-                    // ZST tuple fields (e.g. `()`) map to no LLVM type; keep a placeholder so
-                    // the tagged enum always has a tag + payload field layout (see `get_payload_ptr`).
-                    if field_llvm.is_empty() && !types.is_empty() {
-                        field_llvm.push(self.context.i8_type().into());
-                    }
-                    let payload = self.context.struct_type(&field_llvm, true);
-                    let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
-                    max_payload_size = max_payload_size.max(size);
-                    variant_payloads.push((vname.clone(), Some(payload)));
-                }
-                VariantData::Struct(fields) => {
-                    let mut field_llvm: Vec<_> = fields
-                        .iter()
-                        .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
-                        .collect();
-                    if field_llvm.is_empty() && !fields.is_empty() {
-                        field_llvm.push(self.context.i8_type().into());
-                    }
-                    let payload = self.context.struct_type(&field_llvm, true);
-                    let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
-                    max_payload_size = max_payload_size.max(size);
-                    variant_payloads.push((vname.clone(), Some(payload)));
-                }
-            }
-        }
-        let i8_type = self.context.i8_type();
-        if max_payload_size > 0 {
-            let payload_array = i8_type.array_type(max_payload_size);
-            enum_type.set_body(&[i8_type.into(), payload_array.into()], false);
-        } else {
-            enum_type.set_body(&[i8_type.into()], false);
-        }
-        self.enum_variant_payloads
-            .insert(mangled.clone(), variant_payloads);
-
-        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-        let name_ptrs: Vec<_> = concrete_variants
-            .iter()
-            .map(|(vname, _)| {
-                let bytes = self.context.const_string(vname.as_bytes(), true);
-                let g = self.module.add_global(
-                    bytes.get_type(),
-                    None,
-                    &format!("{mangled}_{vname}_name"),
-                );
-                g.set_initializer(&bytes);
-                g.set_constant(true);
-                g.as_pointer_value()
-            })
-            .collect();
-        let table_init = ptr_type.const_array(&name_ptrs);
-        let table_global = self.module.add_global(
-            table_init.get_type(),
-            None,
-            &format!("{mangled}_variant_names"),
-        );
-        table_global.set_initializer(&table_init);
-        table_global.set_constant(true);
-        self.enum_name_tables
-            .insert(mangled.clone(), table_global.as_pointer_value());
+        self.build_enum_layout(&mangled, enum_type, &concrete_variants);
 
         self.mono_enum_variants.insert(mangled, concrete_variants);
 
@@ -377,258 +393,89 @@ impl<'ctx> Compiler<'ctx> {
     /// Generates a monomorphized version of a method from a generic impl block.
     /// Finds the method AST in `generic_impl_asts`, substitutes the type
     /// parameters with concrete type args, and compiles the body.
+    ///
+    /// When `method_type_args` is non-empty, method-level type parameters
+    /// (e.g. `U` in `map<U>`) are also substituted into the mangled name
+    /// and type substitution map.
     pub fn monomorphize_impl_method(
         &mut self,
         base_type: &str,
         method_name: &str,
         type_args: &[Type],
-    ) -> Result<(), String> {
-        let mangled_type = expo_typecheck::types::mangle_name(base_type, type_args);
-        let mangled_fn = format!("{}_{}", mangled_type, method_name);
-        if self.functions.contains_key(&mangled_fn) {
-            return Ok(());
-        }
-
-        match base_type {
-            "List" => {
-                if let crate::compiler::EmitResult::Emitted = crate::list::emit_list_method(
-                    self,
-                    &mangled_type,
-                    &mangled_fn,
-                    method_name,
-                    type_args,
-                )? {
-                    return Ok(());
-                }
-            }
-            "Map" => {
-                if let crate::compiler::EmitResult::Emitted = crate::map::emit_map_method(
-                    self,
-                    &mangled_type,
-                    &mangled_fn,
-                    method_name,
-                    type_args,
-                )? {
-                    return Ok(());
-                }
-            }
-            "Set" => {
-                if let crate::compiler::EmitResult::Emitted = crate::set::emit_set_method(
-                    self,
-                    &mangled_type,
-                    &mangled_fn,
-                    method_name,
-                    type_args,
-                )? {
-                    return Ok(());
-                }
-            }
-            "Ref" => {
-                if let crate::compiler::EmitResult::Emitted = crate::process::emit_ref_method(
-                    self,
-                    &mangled_type,
-                    &mangled_fn,
-                    method_name,
-                    type_args,
-                )? {
-                    return Ok(());
-                }
-            }
-            "ReplyTo" => {
-                if let crate::compiler::EmitResult::Emitted = crate::process::emit_reply_to_method(
-                    self,
-                    &mangled_type,
-                    &mangled_fn,
-                    method_name,
-                    type_args,
-                )? {
-                    return Ok(());
-                }
-            }
-            _ => {}
-        }
-
-        let impl_blocks = self
-            .type_ctx
-            .generic_impl_asts
-            .get(base_type)
-            .ok_or_else(|| format!("no generic impl for `{base_type}`"))?
-            .clone();
-
-        let mut method_ast = None;
-        let mut impl_type_params = Vec::new();
-        for block in &impl_blocks {
-            if let expo_ast::ast::TypeExpr::Generic { args, .. } = &block.target {
-                let tp_names: Vec<String> = args
-                    .iter()
-                    .filter_map(|a| {
-                        if let expo_ast::ast::TypeExpr::Named { path, .. } = a
-                            && path.len() == 1
-                        {
-                            return Some(path[0].clone());
-                        }
-                        None
-                    })
-                    .collect();
-                for member in &block.members {
-                    if let expo_ast::ast::ImplMember::Function(f) = member
-                        && f.name == method_name
-                    {
-                        method_ast = Some(f.clone());
-                        impl_type_params = tp_names;
-                        break;
-                    }
-                }
-                if method_ast.is_some() {
-                    break;
-                }
-            }
-        }
-
-        let func_ast = method_ast
-            .ok_or_else(|| format!("method `{method_name}` not found in impl for `{base_type}`"))?;
-
-        let subst = expo_typecheck::types::build_substitution(&impl_type_params, type_args);
-
-        let info = self
-            .type_ctx
-            .types
-            .get(base_type)
-            .map(|ti| (&ti.functions, &ti.type_params));
-
-        let (return_type, param_types, is_static) = if let Some((methods, _)) = info {
-            if let Some(sig) = methods.get(method_name) {
-                let ret = expo_typecheck::types::substitute(&sig.return_type, &subst);
-                let pts: Vec<Type> = sig
-                    .params
-                    .iter()
-                    .map(|p| expo_typecheck::types::substitute(&p.ty, &subst))
-                    .collect();
-                let is_static = sig.kind == expo_typecheck::context::FunctionKind::Static;
-                (ret, pts, is_static)
-            } else {
-                return Err(format!(
-                    "no signature for method `{method_name}` on `{base_type}`"
-                ));
-            }
-        } else {
-            return Err(format!("no type info for `{base_type}`"));
-        };
-
-        self.ensure_types_exist(&return_type)?;
-        for pt in &param_types {
-            self.ensure_types_exist(pt)?;
-        }
-
-        let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
-
-        if !is_static {
-            let self_llvm_type = *self
-                .struct_types
-                .get(&mangled_type)
-                .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
-            llvm_param_types.push(self_llvm_type.into());
-        }
-
-        for ty in &param_types {
-            let lt = to_llvm_type(ty, self.context, &self.struct_types).ok_or_else(|| {
-                format!("no LLVM type for method parameter type `{ty:?}` in `{mangled_fn}`")
-            })?;
-            llvm_param_types.push(lt.into());
-        }
-
-        let fn_type = match to_llvm_type(&return_type, self.context, &self.struct_types) {
-            Some(ret) => ret.fn_type(&llvm_param_types, false),
-            None => self.context.void_type().fn_type(&llvm_param_types, false),
-        };
-
-        let fn_value = self.module.add_function(&mangled_fn, fn_type, None);
-        self.functions.insert(mangled_fn.clone(), fn_value);
-
-        let entry = self.context.append_basic_block(fn_value, "entry");
-        let saved_vars = std::mem::take(&mut self.variables);
-        let saved_block = self.builder.get_insert_block();
-        let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
-
-        self.builder.position_at_end(entry);
-
-        let mut param_idx = 0u32;
-
-        if !is_static {
-            let self_llvm_type = *self
-                .struct_types
-                .get(&mangled_type)
-                .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
-            let self_alloca = self.builder.build_alloca(self_llvm_type, "self").unwrap();
-            self.builder
-                .build_store(self_alloca, fn_value.get_nth_param(0).unwrap())
-                .unwrap();
-
-            let is_enum = self.type_ctx.is_enum(base_type);
-            let self_type = if is_enum {
-                Type::Enum(mangled_type.clone())
-            } else {
-                Type::Struct(mangled_type.clone())
-            };
-            self.variables.insert(
-                "self".to_string(),
-                (self_alloca, self_type, Ownership::Unowned),
-            );
-            param_idx = 1;
-        }
-
-        let mut type_idx = 0usize;
-        for param in func_ast.params.iter() {
-            if let Param::Regular { name: pname, .. } = param {
-                let ty = &param_types[type_idx];
-                type_idx += 1;
-                let llvm_ty =
-                    to_llvm_type(ty, self.context, &self.struct_types).ok_or_else(|| {
-                        format!("no LLVM type for parameter `{pname}` of `{mangled_fn}` ({ty:?})")
-                    })?;
-                let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
-                let param_val = fn_value.get_nth_param(param_idx).unwrap();
-                self.builder.build_store(alloca, param_val).unwrap();
-                self.variables
-                    .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
-                param_idx += 1;
-            }
-        }
-
-        let saved_process_msg = self.process_msg_type.take();
-        self.process_msg_type = resolve_process_envelope_type(self, &mangled_type);
-        if let Some(env_type) = self.process_msg_type.clone() {
-            self.ensure_types_exist(&env_type)?;
-        }
-
-        self.compile_function_body(&func_ast.body, &return_type, fn_value, false)?;
-
-        self.process_msg_type = saved_process_msg;
-
-        self.variables = saved_vars;
-        self.type_subst = saved_subst;
-        if let Some(bb) = saved_block {
-            self.builder.position_at_end(bb);
-        }
-
-        Ok(())
-    }
-
-    /// Like `monomorphize_impl_method`, but also substitutes method-level type
-    /// params (e.g. `U` in `map<U>`). The `method_type_args` correspond to the
-    /// method's own `type_params`.
-    pub fn monomorphize_impl_method_generic(
-        &mut self,
-        base_type: &str,
-        method_name: &str,
-        struct_type_args: &[Type],
         method_type_args: &[Type],
     ) -> Result<(), String> {
-        let mangled_type = expo_typecheck::types::mangle_name(base_type, struct_type_args);
-        let mangled_method = expo_typecheck::types::mangle_name(method_name, method_type_args);
-        let mangled_fn = format!("{}_{}", mangled_type, mangled_method);
+        let mangled_type = expo_typecheck::types::mangle_name(base_type, type_args);
+        let mangled_fn = if method_type_args.is_empty() {
+            format!("{}_{}", mangled_type, method_name)
+        } else {
+            let mangled_method = expo_typecheck::types::mangle_name(method_name, method_type_args);
+            format!("{}_{}", mangled_type, mangled_method)
+        };
         if self.functions.contains_key(&mangled_fn) {
             return Ok(());
+        }
+
+        if method_type_args.is_empty() {
+            match base_type {
+                "List" => {
+                    if let crate::compiler::EmitResult::Emitted = crate::list::emit_list_method(
+                        self,
+                        &mangled_type,
+                        &mangled_fn,
+                        method_name,
+                        type_args,
+                    )? {
+                        return Ok(());
+                    }
+                }
+                "Map" => {
+                    if let crate::compiler::EmitResult::Emitted = crate::map::emit_map_method(
+                        self,
+                        &mangled_type,
+                        &mangled_fn,
+                        method_name,
+                        type_args,
+                    )? {
+                        return Ok(());
+                    }
+                }
+                "Set" => {
+                    if let crate::compiler::EmitResult::Emitted = crate::set::emit_set_method(
+                        self,
+                        &mangled_type,
+                        &mangled_fn,
+                        method_name,
+                        type_args,
+                    )? {
+                        return Ok(());
+                    }
+                }
+                "Ref" => {
+                    if let crate::compiler::EmitResult::Emitted = crate::process::emit_ref_method(
+                        self,
+                        &mangled_type,
+                        &mangled_fn,
+                        method_name,
+                        type_args,
+                    )? {
+                        return Ok(());
+                    }
+                }
+                "ReplyTo" => {
+                    if let crate::compiler::EmitResult::Emitted =
+                        crate::process::emit_reply_to_method(
+                            self,
+                            &mangled_type,
+                            &mangled_fn,
+                            method_name,
+                            type_args,
+                        )?
+                    {
+                        return Ok(());
+                    }
+                }
+                _ => {}
+            }
         }
 
         let impl_blocks = self
@@ -671,8 +518,7 @@ impl<'ctx> Compiler<'ctx> {
         let func_ast = method_ast
             .ok_or_else(|| format!("method `{method_name}` not found in impl for `{base_type}`"))?;
 
-        let mut subst =
-            expo_typecheck::types::build_substitution(&impl_type_params, struct_type_args);
+        let mut subst = expo_typecheck::types::build_substitution(&impl_type_params, type_args);
         for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
             subst.insert(tp.clone(), ta.clone());
         }
@@ -732,73 +578,19 @@ impl<'ctx> Compiler<'ctx> {
         let fn_value = self.module.add_function(&mangled_fn, fn_type, None);
         self.functions.insert(mangled_fn.clone(), fn_value);
 
-        let entry = self.context.append_basic_block(fn_value, "entry");
-        let saved_vars = std::mem::take(&mut self.variables);
-        let saved_block = self.builder.get_insert_block();
-        let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
-
-        self.builder.position_at_end(entry);
-
-        let mut param_idx = 0u32;
-
-        if !is_static {
-            let self_llvm_type = *self
-                .struct_types
-                .get(&mangled_type)
-                .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
-            let self_alloca = self.builder.build_alloca(self_llvm_type, "self").unwrap();
-            self.builder
-                .build_store(self_alloca, fn_value.get_nth_param(0).unwrap())
-                .unwrap();
-
-            let is_enum = self.type_ctx.is_enum(base_type);
-            let self_type = if is_enum {
-                Type::Enum(mangled_type.clone())
-            } else {
-                Type::Struct(mangled_type.clone())
-            };
-            self.variables.insert(
-                "self".to_string(),
-                (self_alloca, self_type, Ownership::Unowned),
-            );
-            param_idx = 1;
-        }
-
-        let mut type_idx = 0usize;
-        for param in func_ast.params.iter() {
-            if let Param::Regular { name: pname, .. } = param {
-                let ty = &param_types[type_idx];
-                type_idx += 1;
-                let llvm_ty =
-                    to_llvm_type(ty, self.context, &self.struct_types).ok_or_else(|| {
-                        format!("no LLVM type for parameter `{pname}` of `{mangled_fn}` ({ty:?})")
-                    })?;
-                let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
-                let param_val = fn_value.get_nth_param(param_idx).unwrap();
-                self.builder.build_store(alloca, param_val).unwrap();
-                self.variables
-                    .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
-                param_idx += 1;
-            }
-        }
-
-        let saved_process_msg = self.process_msg_type.take();
-        self.process_msg_type = resolve_process_envelope_type(self, &mangled_type);
-        if let Some(env_type) = self.process_msg_type.clone() {
-            self.ensure_types_exist(&env_type)?;
-        }
-
-        self.compile_function_body(&func_ast.body, &return_type, fn_value, false)?;
-
-        self.process_msg_type = saved_process_msg;
-
-        self.variables = saved_vars;
-        self.type_subst = saved_subst;
-        if let Some(bb) = saved_block {
-            self.builder.position_at_end(bb);
-        }
-
-        Ok(())
+        let self_type = if is_static {
+            None
+        } else {
+            Some((mangled_type.as_str(), base_type))
+        };
+        self.compile_method_body(
+            fn_value,
+            &func_ast,
+            self_type,
+            &param_types,
+            &return_type,
+            subst,
+        )
     }
 
     /// Ensures that all concrete types referenced by `ty` have been registered.
@@ -855,33 +647,7 @@ impl<'ctx> Compiler<'ctx> {
                 if !self.struct_types.contains_key(&mangled) {
                     let opaque = self.context.opaque_struct_type(&mangled);
                     self.struct_types.insert(mangled.clone(), opaque);
-
-                    let i8_type = self.context.i8_type();
-                    let mut variant_payloads = Vec::new();
-                    let mut max_payload_size: u32 = 0;
-
-                    for member in members {
-                        let member_name = expo_typecheck::types::mangle_type(member);
-                        if let Some(llvm_ty) =
-                            to_llvm_type(member, self.context, &self.struct_types)
-                        {
-                            let payload = self.context.struct_type(&[llvm_ty], true);
-                            let size = llvm_field_byte_size(llvm_ty);
-                            max_payload_size = max_payload_size.max(size);
-                            variant_payloads.push((member_name, Some(payload)));
-                        } else {
-                            variant_payloads.push((member_name, None));
-                        }
-                    }
-
-                    if max_payload_size > 0 {
-                        let payload_array = i8_type.array_type(max_payload_size);
-                        opaque.set_body(&[i8_type.into(), payload_array.into()], false);
-                    } else {
-                        opaque.set_body(&[i8_type.into()], false);
-                    }
-
-                    self.enum_variant_payloads.insert(mangled, variant_payloads);
+                    self.build_union_layout(&mangled, opaque, members);
                 }
             }
             _ => {}

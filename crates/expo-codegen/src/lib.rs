@@ -11,6 +11,7 @@ mod list;
 mod map;
 mod ops;
 mod process;
+mod registration;
 mod set;
 mod stmt;
 mod structs;

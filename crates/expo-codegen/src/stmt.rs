@@ -701,7 +701,7 @@ fn convert_list_literal_if_needed<'ctx>(
     let target_mangled = mangle_name(&base, &type_args);
     let from_list_fn_name = format!("{target_mangled}_from_list");
     if !c.functions.contains_key(&from_list_fn_name) {
-        c.monomorphize_impl_method(&base, "from_list", &type_args)?;
+        c.monomorphize_impl_method(&base, "from_list", &type_args, &[])?;
     }
     let from_list_fn = *c
         .functions

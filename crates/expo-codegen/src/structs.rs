@@ -270,10 +270,10 @@ pub fn compile_method_call<'ctx>(
             mangled = format!("{}_{}", struct_name, method_suffix);
 
             if !c.functions.contains_key(&mangled) {
-                c.monomorphize_impl_method_generic(&base, method, &type_args, &method_type_args)?;
+                c.monomorphize_impl_method(&base, method, &type_args, &method_type_args)?;
             }
         } else if !c.functions.contains_key(&mangled) {
-            c.monomorphize_impl_method(&base, method, &type_args)?;
+            c.monomorphize_impl_method(&base, method, &type_args, &[])?;
         }
     }
 
@@ -850,7 +850,7 @@ fn compile_static_call<'ctx>(
 
     if !c.functions.contains_key(&mangled_fn) {
         if !type_args.is_empty() {
-            c.monomorphize_impl_method(type_name, method, &type_args)?;
+            c.monomorphize_impl_method(type_name, method, &type_args, &[])?;
         } else {
             return Err(format!(
                 "undefined static function `{method}` on `{type_name}`"

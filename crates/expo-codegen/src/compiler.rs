@@ -17,7 +17,7 @@ use expo_ast::ast::{
     Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, TypeExpr,
 };
 use expo_typecheck::context::{TypeContext, VariantData};
-use expo_typecheck::types::{Type, mangle_type};
+use expo_typecheck::types::Type;
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -624,60 +624,17 @@ impl<'ctx> Compiler<'ctx> {
             return Ok(());
         }
 
-        let entry = self.context.append_basic_block(fn_value, "entry");
-        self.builder.position_at_end(entry);
-
-        self.variables.clear();
-
-        let mut llvm_param_idx: u32 = 0;
-
-        if let Some(type_name) = self_type_name
-            && func
-                .params
-                .first()
-                .is_some_and(|p| matches!(p, Param::Self_ { .. }))
-        {
-            let self_ty = if let Some(p) = expo_typecheck::types::Primitive::from_name(type_name) {
-                Type::Primitive(p)
-            } else if self.type_ctx.is_enum(type_name) {
-                Type::Enum(type_name.to_string())
-            } else {
-                Type::Struct(type_name.to_string())
-            };
-            if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
-                let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
-                let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
-                self.builder.build_store(alloca, param_val).unwrap();
-                self.variables
-                    .insert("self".to_string(), (alloca, self_ty, Ownership::Unowned));
-                llvm_param_idx += 1;
-            }
-        }
-
-        for param in func.params.iter() {
-            if let Param::Regular {
-                name, type_expr, ..
-            } = param
-            {
-                let param_ty = self.resolve_type_expr(type_expr);
-                if let Some(llvm_ty) = to_llvm_type(&param_ty, self.context, &self.struct_types) {
-                    let alloca = self.builder.build_alloca(llvm_ty, name).unwrap();
-                    let param_val = fn_value.get_nth_param(llvm_param_idx).unwrap();
-                    self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables
-                        .insert(name.clone(), (alloca, param_ty, Ownership::Unowned));
-                    llvm_param_idx += 1;
+        let param_types: Vec<Type> = func
+            .params
+            .iter()
+            .filter_map(|p| {
+                if let Param::Regular { type_expr, .. } = p {
+                    Some(self.resolve_type_expr(type_expr))
+                } else {
+                    None
                 }
-            }
-        }
-
-        let saved_process_msg = self.process_msg_type.take();
-        if let Some(target) = self_type_name {
-            self.process_msg_type = resolve_process_envelope_type(self, target);
-            if let Some(env_type) = self.process_msg_type.clone() {
-                let _ = self.ensure_types_exist(&env_type);
-            }
-        }
+            })
+            .collect();
 
         let mut return_type = self.resolve_return_type(&func.return_type);
         if let Some(target) = self_type_name
@@ -691,10 +648,15 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
-        let result = self.compile_function_body(&func.body, &return_type, fn_value, false);
-
-        self.process_msg_type = saved_process_msg;
-        result
+        let self_type = self_type_name.map(|n| (n, n));
+        self.compile_method_body(
+            fn_value,
+            func,
+            self_type,
+            &param_types,
+            &return_type,
+            HashMap::new(),
+        )
     }
 
     fn define_functions(&mut self, module: &Module) -> Result<(), String> {
@@ -727,219 +689,6 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
         Ok(())
-    }
-
-    /// Translates Expo type-checked structs and enums into LLVM struct types.
-    /// Uses a two-pass approach (opaque types first, then bodies) so
-    /// cross-referencing types resolve correctly.
-    fn register_types(&mut self) {
-        // Pass 1: create opaque types so cross-references resolve
-        for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
-            if !info.type_params.is_empty() {
-                continue;
-            }
-            let st = self.context.opaque_struct_type(name);
-            self.struct_types.insert(name.clone(), st);
-        }
-        for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
-            if !info.type_params.is_empty() {
-                continue;
-            }
-            let et = self.context.opaque_struct_type(name);
-            self.struct_types.insert(name.clone(), et);
-        }
-
-        // Pass 1b: ensure all field/variant types exist (triggers monomorphization
-        // of generic instances like List<Token> before struct bodies are set).
-        // Indirect-wrapped types are skipped: they compile to pointers, so their
-        // inner generic instances can be monomorphized lazily (after struct bodies
-        // are set and sizes are known).
-        let field_types: Vec<Type> = self
-            .type_ctx
-            .types
-            .iter()
-            .filter(|(_, ti)| ti.is_struct() && ti.type_params.is_empty())
-            .flat_map(|(_, info)| info.fields().unwrap().iter().map(|(_, ty)| ty.clone()))
-            .filter(|ty| !matches!(ty, Type::Indirect(_)))
-            .collect();
-        for ty in &field_types {
-            let _ = self.ensure_types_exist(ty);
-        }
-
-        let variant_types: Vec<Type> = self
-            .type_ctx
-            .types
-            .iter()
-            .filter(|(_, ti)| ti.is_enum() && ti.type_params.is_empty())
-            .flat_map(|(_, info)| {
-                info.variants().unwrap().iter().flat_map(|v| match &v.data {
-                    VariantData::Tuple(types) => types.clone(),
-                    VariantData::Struct(fields) => {
-                        fields.iter().map(|(_, ty)| ty.clone()).collect()
-                    }
-                    VariantData::Unit => Vec::new(),
-                })
-            })
-            .filter(|ty| !matches!(ty, Type::Indirect(_)))
-            .collect();
-        for ty in &variant_types {
-            let _ = self.ensure_types_exist(ty);
-        }
-
-        // Pass 2: set struct bodies (skip generic templates)
-        for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
-            if !info.type_params.is_empty() {
-                continue;
-            }
-            let struct_type = *self.struct_types.get(name).unwrap();
-            let field_types: Vec<_> = info
-                .fields()
-                .unwrap()
-                .iter()
-                .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
-                .collect();
-            struct_type.set_body(&field_types, false);
-        }
-
-        // Pass 3: set enum bodies (skip generic templates)
-        for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
-            if !info.type_params.is_empty() {
-                continue;
-            }
-            let mut variant_payloads = Vec::new();
-            let mut max_payload_size: u32 = 0;
-
-            for variant in info.variants().unwrap() {
-                match &variant.data {
-                    VariantData::Unit => {
-                        variant_payloads.push((variant.name.clone(), None));
-                    }
-                    VariantData::Tuple(types) => {
-                        let mut field_llvm: Vec<_> = types
-                            .iter()
-                            .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
-                            .collect();
-                        if field_llvm.is_empty() && !types.is_empty() {
-                            field_llvm.push(self.context.i8_type().into());
-                        }
-                        let payload = self.context.struct_type(&field_llvm, true);
-                        let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
-                        max_payload_size = max_payload_size.max(size);
-                        variant_payloads.push((variant.name.clone(), Some(payload)));
-                    }
-                    VariantData::Struct(fields) => {
-                        let mut field_llvm: Vec<_> = fields
-                            .iter()
-                            .filter_map(|(_, ty)| {
-                                to_llvm_type(ty, self.context, &self.struct_types)
-                            })
-                            .collect();
-                        if field_llvm.is_empty() && !fields.is_empty() {
-                            field_llvm.push(self.context.i8_type().into());
-                        }
-                        let payload = self.context.struct_type(&field_llvm, true);
-                        let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
-                        max_payload_size = max_payload_size.max(size);
-                        variant_payloads.push((variant.name.clone(), Some(payload)));
-                    }
-                }
-            }
-
-            let enum_type = *self.struct_types.get(name).unwrap();
-            let i8_type = self.context.i8_type();
-            if max_payload_size > 0 {
-                let payload_array = i8_type.array_type(max_payload_size);
-                enum_type.set_body(&[i8_type.into(), payload_array.into()], false);
-            } else {
-                enum_type.set_body(&[i8_type.into()], false);
-            }
-
-            self.enum_variant_payloads
-                .insert(name.clone(), variant_payloads);
-
-            let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-            let name_ptrs: Vec<_> = info
-                .variants()
-                .unwrap()
-                .iter()
-                .map(|v| {
-                    let bytes = self.context.const_string(v.name.as_bytes(), true);
-                    let g = self.module.add_global(
-                        bytes.get_type(),
-                        None,
-                        &format!("{name}_{}_name", v.name),
-                    );
-                    g.set_initializer(&bytes);
-                    g.set_constant(true);
-                    g.as_pointer_value()
-                })
-                .collect();
-            let table_init = ptr_type.const_array(&name_ptrs);
-            let table_global = self.module.add_global(
-                table_init.get_type(),
-                None,
-                &format!("{name}_variant_names"),
-            );
-            table_global.set_initializer(&table_init);
-            table_global.set_constant(true);
-            self.enum_name_tables
-                .insert(name.clone(), table_global.as_pointer_value());
-        }
-
-        // Pass 4: register union types (tagged-union layout reusing enum infrastructure)
-        let mut union_types: Vec<Type> = Vec::new();
-        for ty in self.type_ctx.type_aliases.values() {
-            collect_union_types(ty, &mut union_types);
-        }
-        for sig in self.type_ctx.functions.values() {
-            collect_union_types(&sig.return_type, &mut union_types);
-            for p in &sig.params {
-                collect_union_types(&p.ty, &mut union_types);
-            }
-        }
-        for info in self.type_ctx.types.values().filter(|ti| ti.is_struct()) {
-            for (_, ty) in info.fields().unwrap() {
-                collect_union_types(ty, &mut union_types);
-            }
-        }
-
-        let i8_type = self.context.i8_type();
-        for union_ty in &union_types {
-            let Type::Union(members) = union_ty else {
-                continue;
-            };
-            let mangled = mangle_type(union_ty);
-            if self.struct_types.contains_key(&mangled) {
-                continue;
-            }
-
-            let opaque = self.context.opaque_struct_type(&mangled);
-            self.struct_types.insert(mangled.clone(), opaque);
-
-            let mut variant_payloads = Vec::new();
-            let mut max_payload_size: u32 = 0;
-
-            for member in members {
-                let member_name = mangle_type(member);
-                if let Some(llvm_ty) = to_llvm_type(member, self.context, &self.struct_types) {
-                    let payload = self.context.struct_type(&[llvm_ty], true);
-                    let size = llvm_field_byte_size(llvm_ty);
-                    max_payload_size = max_payload_size.max(size);
-                    variant_payloads.push((member_name, Some(payload)));
-                } else {
-                    variant_payloads.push((member_name, None));
-                }
-            }
-
-            if max_payload_size > 0 {
-                let payload_array = i8_type.array_type(max_payload_size);
-                opaque.set_body(&[i8_type.into(), payload_array.into()], false);
-            } else {
-                opaque.set_body(&[i8_type.into()], false);
-            }
-
-            self.enum_variant_payloads.insert(mangled, variant_payloads);
-        }
     }
 
     fn resolve_param_types(
@@ -1191,32 +940,4 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
         return Some(expo_typecheck::types::process_envelope_type(&m, &r));
     }
     None
-}
-
-/// Recursively collects all `Type::Union` variants reachable from `ty`.
-fn collect_union_types(ty: &Type, out: &mut Vec<Type>) {
-    match ty {
-        Type::Union(members) => {
-            out.push(ty.clone());
-            for m in members {
-                collect_union_types(m, out);
-            }
-        }
-        Type::Function {
-            params,
-            return_type,
-        } => {
-            for p in params {
-                collect_union_types(p, out);
-            }
-            collect_union_types(return_type, out);
-        }
-        Type::GenericInstance { type_args, .. } => {
-            for ta in type_args {
-                collect_union_types(ta, out);
-            }
-        }
-        Type::Indirect(inner) => collect_union_types(inner, out),
-        _ => {}
-    }
 }
