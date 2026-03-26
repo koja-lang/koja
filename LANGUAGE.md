@@ -11,15 +11,15 @@ Expo is a statically typed, compiled language targeting native binaries via LLVM
 - [Functions](#functions) -- Declaration, Private Functions, `return`, Parameters and Ownership
 - [Control Flow](#control-flow) -- `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
 - [Types](#types) -- Primitives, Unit, Strings, Structs, Enums, Union Types, Generics
-- [Pattern Matching](#pattern-matching) -- `match`, `cond`
-- [Closures and Function Types](#closures-and-function-types) -- Block Closures, Capture Semantics, Function Types
+- [Pattern Matching](#pattern-matching) -- `match`, OR Patterns, `cond`
+- [Closures and Function Types](#closures-and-function-types) -- Block Closures, Short Closures, Capture Semantics, Function Types
 - [Ownership and Borrowing](#ownership-and-borrowing) -- Rules, `clone()`, Drop Insertion, Copy Types
 - [Protocols](#protocols) -- Behavioral Contracts, Static Dispatch
 - [Modules and Imports](#modules-and-imports) -- File Modules, Qualified Calls, Visibility
 - [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
-- [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, Parsing, Protocols
+- [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
 - [Annotations](#annotations) -- `@doc`, `@moduledoc`
-- [Planned Features](#planned-features) -- Arena Blocks, Inline Closures, Display, Struct Destructuring, Trait Bounds, `command`
+- [Planned Features](#planned-features) -- Arena Blocks, Display, Struct Destructuring, Trait Bounds, `command`
 - [Tooling](#tooling) -- CLI Commands, LSP, Formatter
 
 ---
@@ -65,6 +65,8 @@ Precedence from lowest to highest:
 | 6          | `*` `/` `%`                 |
 | 7          | `-` (unary negation)        |
 | 8          | `.field` `.fn()` `()`       |
+
+`<>` concatenates `String`, `Binary`, and `Bits` values. Both operands must be the same type -- no cross-type mixing.
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 
@@ -135,13 +137,21 @@ p1 = Point{x: 3, y: 4}  # p1 is live again
 
 ### Constants
 
-Module-level constants are declared with `const`. Values must be compile-time literals (int, float, string, bool):
+Module-level constants are declared with `const`. Values can be literals (int, float, string, bool), enum unit variants, or struct literals whose fields are all constant expressions:
 
 ```expo
 const MAX = 100
 const PI = 3.14
 const NAME = "expo"
 const DEBUG = false
+const HEADING = Direction.North
+const ORIGIN = Point{x: 0, y: 0}
+```
+
+An optional type annotation is supported for generic inference:
+
+```expo
+const EMPTY: Option<Int> = Option.None
 ```
 
 Constants are inlined at every usage site.
@@ -563,6 +573,18 @@ fn classify(c: String) -> String
 end
 ```
 
+OR patterns combine multiple patterns in a single arm with `|`:
+
+```expo
+match n
+  1 | 2 | 3 -> "small"
+  4 | 5 | 6 -> "medium"
+  _ -> "large"
+end
+```
+
+Variable bindings inside OR patterns are disallowed.
+
 `match` is value-producing when all arms produce values.
 
 ### `cond`
@@ -596,6 +618,18 @@ add = fn (a: Int32, b: Int32) -> Int32
   a + b
 end
 ```
+
+### Short Closures
+
+Short closures use `param -> expr` syntax with parameter types inferred from the calling context:
+
+```expo
+option.map(x -> x + 1)
+list.filter(n -> n > 3)
+names.map(name -> name.upcase())
+```
+
+Works at inline call sites including generic methods. For multi-parameter or multi-statement closures, use the block form above.
 
 ### Capture Semantics
 
@@ -1069,19 +1103,41 @@ Functions:
 
 - `length(self) -> Int` -- returns the number of Unicode codepoints.
 - `get(self, index: Int) -> Option<String>` -- returns the single-character string at the given index, or `None` if out of bounds.
+- `alpha?(self) -> Bool` -- returns `true` if the string contains only ASCII alphabetic characters (a-z, A-Z).
+- `at(self, index: Int) -> Option<String>` -- alias for `get`.
 - `byte_length(self) -> Int` -- returns the number of bytes in the UTF-8 encoding.
-- `slice(self, range: Range) -> String` -- returns a substring spanning the given inclusive range of character indices. Clamps out-of-bounds endpoints.
-- `to_binary(self) -> Binary` -- zero-cost conversion to `Binary` (every valid UTF-8 string is a valid byte sequence).
+- `codepoints(self) -> List<String>` -- returns each Unicode codepoint as a single-character string in a list.
+- `contains?(self, other: String) -> Bool` -- returns `true` if the string contains `other` as a substring.
 - `digit?(self) -> Bool` -- returns `true` if the string contains only numeric characters (`0`-`9`).
+- `downcase(self) -> String` -- returns a copy with ASCII uppercase letters converted to lowercase.
+- `empty?(self) -> Bool` -- returns `true` if the string has zero length.
+- `ends_with?(self, suffix: String) -> Bool` -- returns `true` if the string ends with `suffix`.
+- `graphemes(self) -> List<String>` -- returns each grapheme cluster as a string in a list. Currently equivalent to `codepoints()`.
+- `join(parts: List<String>, separator: String) -> String` -- static. Joins a list of strings with `separator` between each element.
+- `replace(self, old: String, new: String) -> String` -- replaces all occurrences of `old` with `new`.
+- `reverse(self) -> String` -- returns a copy with the codepoints in reverse order.
+- `slice(self, range: Range) -> String` -- returns a substring spanning the given inclusive range of character indices. Clamps out-of-bounds endpoints.
+- `split(self, separator: String) -> List<String>` -- splits on each occurrence of `separator`. An empty separator splits into individual characters.
+- `starts_with?(self, prefix: String) -> Bool` -- returns `true` if the string starts with `prefix`.
+- `to_binary(self) -> Binary` -- zero-cost conversion to `Binary` (every valid UTF-8 string is a valid byte sequence).
+- `to_float(self) -> Result<Float, String>` -- parses the string as a 64-bit float.
+- `to_int(self) -> Result<Int, String>` -- parses the string as a 64-bit signed integer.
+- `trim(self) -> String` -- returns a copy with leading and trailing whitespace removed.
+- `trim_end(self) -> String` -- returns a copy with trailing whitespace removed.
+- `trim_start(self) -> String` -- returns a copy with leading whitespace removed.
+- `upcase(self) -> String` -- returns a copy with ASCII lowercase letters converted to uppercase.
 - `whitespace?(self) -> Bool` -- returns `true` if the string contains only whitespace characters (space, `\n`, `\r`, `\t`).
 
 ```expo
-s = "hello"
-print(s.length())                            # 5
+s = "hello world"
+print(s.length())                            # 11
 print(s.get(0).unwrap())                     # "h"
-print(s.slice(Range{start: 1, stop: 3}))     # "ell"
-print("123".digit?())                        # true
-print("  \n".whitespace?())                  # true
+print(s.contains?("world"))                  # true
+print(s.starts_with?("hello"))               # true
+print(s.split(" ").length())                 # 2
+print(s.upcase())                            # "HELLO WORLD"
+print(s.slice(Range{start: 0, stop: 4}))     # "hello"
+print("  hello  ".trim())                    # "hello"
 ```
 
 `String` also implements `Equality` (content comparison via `==`) and `Hash` (FNV-1a).
@@ -1090,7 +1146,34 @@ print("  \n".whitespace?())                  # true
 
 `Binary` represents an arbitrary byte sequence. `Bits` represents an arbitrary bit sequence. Both are move types.
 
-Conversion functions:
+#### Literals
+
+Binary and bitstring literals use `<<>>` syntax with comma-separated segments:
+
+```expo
+header = <<0x48, 0x65, 0x6C, 0x6C, 0x6F>>
+wide = <<0x0102::16>>
+le = <<0x0102::16 little>>
+neg = <<-1::8 signed>>
+msg = <<0x01, port::16>>
+```
+
+Segment modifiers: `::N` (bit width), `::N byte` (byte width), `signed`/`unsigned`, `big`/`little`, type annotations (`: Float32`, `: Int16`). Byte-aligned totals produce `Binary`, non-byte-aligned produce `Bits`. String literals can appear as segments for protocol framing.
+
+#### Pattern Matching
+
+Binary patterns destructure byte sequences in `match`:
+
+```expo
+match packet
+  <<tag::8, length::16, rest: Binary>> -> handle(tag, rest)
+  _ -> print("no match")
+end
+```
+
+Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns that don't match the data length fall through to the next arm.
+
+#### Conversion Functions
 
 - `String.to_binary(self) -> Binary` -- zero-cost widening from UTF-8 string to bytes.
 - `Binary.to_string(self) -> Result<String, String>` -- attempts to interpret bytes as UTF-8. Returns `Result.Err` with a diagnostic if invalid.
@@ -1102,6 +1185,45 @@ bin = "hello".to_binary()
 bits = bin.to_bits()
 roundtrip = bits.to_binary().unwrap().to_string().unwrap()
 print(roundtrip)  # "hello"
+```
+
+### File I/O
+
+#### `Fd`
+
+A raw file descriptor for low-level I/O:
+
+```expo
+struct Fd
+  descriptor: Int
+end
+```
+
+Functions:
+
+- `read(self, count: Int) -> Result<String, String>` -- reads up to `count` bytes.
+- `write(self, data: String) -> Result<Int, String>` -- writes data, returns bytes written.
+- `close(move self) -> Result<String, String>` -- closes the descriptor.
+
+#### `File`
+
+Higher-level file operations wrapping `Fd`:
+
+```expo
+struct File
+  fd: Fd
+end
+```
+
+Functions:
+
+- `File.open(path: String) -> Result<File, String>` -- opens a file for reading.
+- `File.read(path: String) -> Result<String, String>` -- reads an entire file as a string (opens, reads, closes).
+- `close(move self) -> Result<String, String>` -- closes the file handle.
+
+```expo
+content = File.read("config.txt").unwrap()
+print(content)
 ```
 
 ### Parsing
@@ -1245,16 +1367,6 @@ result = arena
   # only explicitly cloned values escape
 end
 ```
-
-### Inline Closures
-
-Short closure syntax with inferred parameter types:
-
-```expo
-option.map(x -> x + 1)
-```
-
-Requires closure-specific type inference from calling context. Parsed but not compiled.
 
 ### `Display` Protocol
 
