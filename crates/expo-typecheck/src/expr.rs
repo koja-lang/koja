@@ -20,7 +20,7 @@ use crate::context::{
 };
 use crate::env::CheckEnv;
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
-use crate::stmt::check_body;
+use crate::stmt::{check_body, check_statement};
 use crate::types::{
     GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute_preserving,
     unify, unwrap_indirect,
@@ -50,16 +50,23 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         Expr::Cond {
             arms, else_body, ..
         } => {
+            let mut result_type = Type::Unknown;
             for arm in arms {
                 infer_expr(&arm.condition, ctx, ce);
                 let mut child = ce.child(Type::Unknown);
-                check_body(&arm.body, ctx, &mut child);
+                let arm_ty = infer_body_type(&arm.body, ctx, &mut child);
+                if result_type == Type::Unknown && arm_ty.is_known() {
+                    result_type = arm_ty;
+                }
             }
             if let Some(body) = else_body {
                 let mut child = ce.child(Type::Unknown);
-                check_body(body, ctx, &mut child);
+                let else_ty = infer_body_type(body, ctx, &mut child);
+                if result_type == Type::Unknown && else_ty.is_known() {
+                    result_type = else_ty;
+                }
             }
-            Type::Unknown
+            result_type
         }
 
         Expr::EnumConstruction {
@@ -146,15 +153,16 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 ctx,
             );
             let mut then_ce = ce.child(Type::Unknown);
-            check_body(then_body, ctx, &mut then_ce);
+            let then_ty = infer_body_type(then_body, ctx, &mut then_ce);
             if let Some(else_stmts) = else_body {
                 let mut else_ce = ce.child(Type::Unknown);
-                check_body(else_stmts, ctx, &mut else_ce);
+                let else_ty = infer_body_type(else_stmts, ctx, &mut else_ce);
                 ce.merge_branches(&[then_ce.env, else_ce.env]);
+                if then_ty.is_known() { then_ty } else { else_ty }
             } else {
                 ce.merge_branches(&[then_ce.env]);
+                Type::Unit
             }
-            Type::Unknown
         }
 
         Expr::List { elements, span } => {
@@ -243,6 +251,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             span,
         } => {
             let subject_type = infer_expr(subject, ctx, ce);
+            let mut result_type = Type::Unknown;
             for arm in arms {
                 let mut arm_ce = ce.child(Type::Unknown);
                 let bound_vars = collect_pattern_bindings(&arm.pattern);
@@ -251,7 +260,10 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                     let guard_ty = infer_expr(guard, ctx, &mut arm_ce);
                     check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);
                 }
-                check_body(&arm.body, ctx, &mut arm_ce);
+                let arm_ty = infer_body_type(&arm.body, ctx, &mut arm_ce);
+                if result_type == Type::Unknown && arm_ty.is_known() {
+                    result_type = arm_ty;
+                }
                 for (name, name_span) in &bound_vars {
                     if !name.starts_with('_') && !arm_ce.used_vars.contains(name) {
                         ctx.warning(format!("unused variable `{name}`"), *name_span);
@@ -259,7 +271,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 }
             }
             check_match_exhaustiveness(&subject_type, arms, *span, ctx);
-            Type::Unknown
+            result_type
         }
 
         Expr::MethodCall {
@@ -499,6 +511,22 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         }
 
         Expr::Arena { .. } => Type::Unknown,
+    }
+}
+
+/// Checks a statement list and infers the type of its last expression.
+/// Non-expression trailing statements yield `Type::Unit`.
+fn infer_body_type(body: &[Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
+    if body.is_empty() {
+        return Type::Unit;
+    }
+    check_body(&body[..body.len() - 1], ctx, ce);
+    match body.last().unwrap() {
+        Statement::Expr(expr) => infer_expr(expr, ctx, ce),
+        stmt => {
+            check_statement(stmt, ctx, ce);
+            Type::Unit
+        }
     }
 }
 

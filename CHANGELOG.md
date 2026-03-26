@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Struct and enum constants -- `const HEADING = Direction.North` (enum unit variants) and `const ORIGIN = Point{x: 0, y: 0}` (struct literals with all-constant fields) now work as constant initializers. No type annotation required for non-generic types.
 - `expo build --emit-llvm` flag -- dumps the LLVM IR for a module or project to stdout instead of producing an executable. Useful for debugging codegen issues.
 - Project system -- `project.expo` config file with `Project{name: "my_app", version: "0.1.0"}` struct literal format. `expo build`, `expo run`, and `expo check` detect `project.expo` in the current directory when no source file is given. Project name doubles as the module namespace prefix (`import my_app.server` resolves to `src/server.expo`). Configurable `src` dirs and `entry` module with sensible defaults.
 - `expo-stdlib` crate -- standalone crate housing all standard library `.expo` sources with fully qualified module names (`std.kernel`, `std.list`, `std.string`, etc.). Both `expo-driver` and `expo-lsp` depend on it. Stdlib modules are auto-imported into every compilation.
@@ -39,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Block expression return type inference -- `match`, `if/else`, and `cond` now infer their result type from arm bodies instead of returning `Type::Unknown`. Functions whose last expression is a block are now correctly checked against the declared return type (previously, mismatches were silently ignored).
+- Constant type propagation in codegen -- constants referenced by name now carry their source-level type through compilation instead of being typed as `Unknown`. Enables downstream type-aware codegen (e.g., correct struct/enum handling when a constant is passed to a generic function).
 - List/Map/Set element stride used `type_byte_size` which returned a flat 8 for all non-primitive types, ignoring actual struct layout. `List<Token>` (36 bytes per element) was stepping through memory at 8-byte intervals, causing overlapping writes and corrupted field reads. All collection codegen now uses `llvm_field_byte_size` to compute ABI-correct element strides from the real LLVM type.
 - Enum payload sizing (`llvm_field_byte_size`) did not account for ABI alignment padding in nested structs, producing undersized payload arrays (e.g. `[33 x i8]` instead of `[36 x i8]` for `Option<Token>`). Rewrote with a proper alignment-aware layout algorithm.
 - Functions where all control-flow paths explicitly `return` (e.g. exhaustive `match` arms each returning) emitted an unreachable `ret void` fallthrough, causing LLVM verification failures for non-Unit return types. Codegen now emits `unreachable` instead.

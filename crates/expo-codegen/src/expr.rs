@@ -62,7 +62,13 @@ pub fn compile_expr<'ctx>(
                 let val = c.builder.build_load(llvm_ty, *ptr, name).unwrap();
                 Ok(Some(TypedValue::new(val, ty)))
             } else if let Some(val) = c.constants.get(name) {
-                Ok(Some(TypedValue::unknown(*val)))
+                let ty = c
+                    .type_ctx
+                    .constants
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(Type::Unknown);
+                Ok(Some(TypedValue::new(*val, ty)))
             } else if c.module.get_function(name).is_some() {
                 let thunk = c.get_or_create_thunk(name)?;
                 let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());

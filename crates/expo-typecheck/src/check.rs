@@ -155,6 +155,16 @@ fn check_function_with_msg(
         .as_ref()
         .map(|t| resolve_type_expr(t, struct_names, enum_names))
         .unwrap_or(Type::Unit);
+    let declared_return = if declared_return == Type::Unknown
+        && let Some(self_ty) = self_type
+        && f.return_type
+            .as_ref()
+            .is_some_and(|t| matches!(t, TypeExpr::Self_ { .. }))
+    {
+        self_ty.clone()
+    } else {
+        declared_return
+    };
 
     if f.body.is_empty() {
         return;

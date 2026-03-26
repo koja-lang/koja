@@ -14,8 +14,8 @@ pub enum EmitResult {
     NotIntrinsic,
 }
 use expo_ast::ast::{
-    Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, StringPart,
-    TypeExpr,
+    Diagnostic, EnumConstructionData, Expr, FieldInit, Function, ImplMember, Item, Literal, Module,
+    Param, Severity, StringPart, TypeExpr,
 };
 use expo_typecheck::context::{TypeContext, VariantData};
 use expo_typecheck::types::{
@@ -47,13 +47,6 @@ pub struct TypedValue<'ctx> {
 impl<'ctx> TypedValue<'ctx> {
     pub fn new(value: BasicValueEnum<'ctx>, expo_type: Type) -> Self {
         Self { value, expo_type }
-    }
-
-    pub fn unknown(value: BasicValueEnum<'ctx>) -> Self {
-        Self {
-            value,
-            expo_type: Type::Unknown,
-        }
     }
 }
 
@@ -521,12 +514,105 @@ impl<'ctx> Compiler<'ctx> {
                         self.create_string_global(combined.as_bytes(), &c.name)
                             .into()
                     }
+                    Expr::EnumConstruction {
+                        type_path,
+                        variant,
+                        data: EnumConstructionData::Unit,
+                        ..
+                    } => {
+                        let enum_name = type_path.join(".");
+                        let Some(&enum_type) = self.struct_types.get(&enum_name) else {
+                            continue;
+                        };
+                        let Some(tag) = self.get_variant_tag(&enum_name, variant) else {
+                            continue;
+                        };
+                        let tag_val = self.context.i8_type().const_int(tag as u64, false);
+                        let field_count = enum_type.count_fields();
+                        if field_count > 1 {
+                            let payload_ty = enum_type.get_field_type_at_index(1).unwrap();
+                            let zero_payload = payload_ty.const_zero();
+                            enum_type
+                                .const_named_struct(&[tag_val.into(), zero_payload])
+                                .into()
+                        } else {
+                            enum_type.const_named_struct(&[tag_val.into()]).into()
+                        }
+                    }
+                    Expr::StructConstruction {
+                        type_path, fields, ..
+                    } => {
+                        let struct_name = type_path.join(".");
+                        let Some(&struct_type) = self.struct_types.get(&struct_name) else {
+                            continue;
+                        };
+                        let Some(info) = self.type_ctx.types.get(&struct_name) else {
+                            continue;
+                        };
+                        let Some(struct_fields) = info.fields() else {
+                            continue;
+                        };
+                        match self.build_const_struct(struct_type, struct_fields, fields) {
+                            Some(val) => val,
+                            None => continue,
+                        }
+                    }
                     _ => continue,
                 };
                 self.constants.insert(c.name.clone(), val);
             }
         }
         Ok(())
+    }
+
+    fn build_const_struct(
+        &self,
+        struct_type: StructType<'ctx>,
+        struct_fields: &[(String, Type)],
+        field_inits: &[FieldInit],
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let mut values: Vec<BasicValueEnum<'ctx>> =
+            vec![self.context.i8_type().const_zero().into(); struct_fields.len()];
+        for fi in field_inits {
+            let idx = struct_fields.iter().position(|(n, _)| *n == fi.name)?;
+            let val: BasicValueEnum = match &fi.value {
+                Expr::Literal {
+                    value: Literal::Int(s),
+                    ..
+                } => {
+                    let v = crate::util::parse_int_literal(s).ok()?;
+                    self.context.i64_type().const_int(v as u64, true).into()
+                }
+                Expr::Literal {
+                    value: Literal::Float(s),
+                    ..
+                } => {
+                    let v: f64 = s.parse().ok()?;
+                    self.context.f64_type().const_float(v).into()
+                }
+                Expr::Literal {
+                    value: Literal::Bool(b),
+                    ..
+                } => self
+                    .context
+                    .bool_type()
+                    .const_int(if *b { 1 } else { 0 }, false)
+                    .into(),
+                Expr::String { parts, .. } => {
+                    let mut combined = String::new();
+                    for part in parts {
+                        if let StringPart::Literal { value, .. } = part {
+                            combined.push_str(value);
+                        }
+                    }
+                    self.create_string_global(combined.as_bytes(), &fi.name)
+                        .into()
+                }
+                _ => return None,
+            };
+            values[idx] = val;
+        }
+        Some(struct_type.const_named_struct(&values).into())
     }
 
     fn declare_functions(&mut self, module: &Module) -> Result<(), String> {

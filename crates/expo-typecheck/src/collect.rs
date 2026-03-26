@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use expo_ast::ast::{
-    EnumVariantData, Expr, Function, ImplMember, ImportTarget, Item, Literal, Module, Param,
-    Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
+    EnumConstructionData, EnumVariantData, Expr, Function, ImplMember, ImportTarget, Item, Literal,
+    Module, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
 };
 use expo_ast::span::Span;
 
@@ -373,16 +373,46 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                         Expr::Literal {
                             value: Literal::Bool(_),
                             ..
-                        } => Type::Primitive(crate::types::Primitive::Bool),
+                        } => Type::Primitive(Primitive::Bool),
                         Expr::Literal {
                             value: Literal::Int(_),
                             ..
-                        } => Type::Primitive(crate::types::Primitive::I64),
+                        } => Type::Primitive(Primitive::I64),
                         Expr::Literal {
                             value: Literal::Float(_),
                             ..
-                        } => Type::Primitive(crate::types::Primitive::F64),
-                        Expr::String { .. } => Type::Primitive(crate::types::Primitive::String),
+                        } => Type::Primitive(Primitive::F64),
+                        Expr::String { .. } => Type::Primitive(Primitive::String),
+                        Expr::EnumConstruction {
+                            type_path,
+                            data: EnumConstructionData::Unit,
+                            ..
+                        } => {
+                            let enum_name = type_path.join(".");
+                            if enum_names.contains(&enum_name.as_str()) {
+                                Type::Enum(enum_name)
+                            } else {
+                                ctx.error(
+                                    format!("constant `{}`: unknown enum `{}`", c.name, enum_name),
+                                    c.span,
+                                );
+                                Type::Error
+                            }
+                        }
+                        Expr::StructConstruction {
+                            type_path, fields, ..
+                        } if fields.iter().all(|f| is_const_expr(&f.value)) => {
+                            let name = type_path.join(".");
+                            if struct_names.contains(&name.as_str()) {
+                                Type::Struct(name)
+                            } else {
+                                ctx.error(
+                                    format!("constant `{}`: unknown struct `{}`", c.name, name),
+                                    c.span,
+                                );
+                                Type::Error
+                            }
+                        }
                         _ => {
                             ctx.error(
                                 format!(
@@ -1669,4 +1699,15 @@ fn substitute_self_type(mut sig: FunctionSig, self_type: &Type) -> FunctionSig {
         p.ty = crate::types::substitute_preserving(&p.ty, &subst);
     }
     sig
+}
+
+/// Whether an expression is valid as a compile-time constant initializer.
+fn is_const_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal { .. } => true,
+        Expr::String { parts, .. } => parts
+            .iter()
+            .all(|p| matches!(p, StringPart::Literal { .. })),
+        _ => false,
+    }
 }
