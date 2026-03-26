@@ -49,14 +49,11 @@ impl<'ctx> Compiler<'ctx> {
                 break;
             }
 
-            if is_last
-                && *return_type != Type::Unit
-                && let Statement::Expr(expr) = stmt
-            {
+            if is_last && let Statement::Expr(expr) = stmt {
                 self.tco.mark_tail();
                 let val = compile_expr(self, expr, fn_value)?.map(|tv| tv.value);
                 self.tco.clear_tail();
-                if !self.current_block_terminated() {
+                if !self.current_block_terminated() && *return_type != Type::Unit {
                     if let Some(v) = val {
                         let v = apply_coercion(self, v, expr)?;
                         self.builder.build_return(Some(&v)).unwrap();

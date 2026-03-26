@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Methods on primitive types -- `impl` blocks can define methods on built-in types (`String`, `Binary`, `Bits`, `Int`, etc.).
 - `List.last()` -- returns `Option<T>`: `Some(element)` for the last element, `None` if empty.
 - Compiler warning when the return value of a `move self` method is discarded in statement position. Suggests reassignment (`x = x.method(...)`) to capture the result.
-- Tail call optimization for self-recursive `move self -> Self` methods -- the compiler detects self-recursive calls in tail position (both implicit returns and explicit `return`) and emits LLVM `musttail`, eliminating stack growth. The `move self -> Self` recursive idiom is now safe for unbounded iteration.
+- Tail call optimization for self-recursive `move self` methods -- the compiler detects self-recursive calls in tail position (both implicit returns and explicit `return`) and rewrites them as loops, eliminating stack growth. Covers both `-> Self` and void-returning methods (e.g., `Process.run`). The `move self` recursive idiom is now safe for unbounded iteration.
 
 ### Changed
 
