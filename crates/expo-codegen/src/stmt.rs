@@ -1,10 +1,16 @@
 //! Statement compilation: let bindings, assignments, compound assignments,
 //! return, break, and expression statements.
 
-use expo_ast::ast::{AssignTarget, ClosureParam, Expr, Statement};
+use expo_ast::ast::{
+    AssignTarget, BinOp, ClosureParam, CompoundOp, Expr, Literal, Pattern, Statement, StringPart,
+};
+use expo_ast::span::Span;
 use expo_typecheck::context::Coercion;
-use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name, mangle_type};
+use expo_typecheck::types::{
+    GenericKind, Primitive, Type, mangle_name, mangle_type, substitute, substitute_preserving,
+};
 use inkwell::values::{BasicValueEnum, FunctionValue};
+use std::collections::HashMap;
 
 use crate::compiler::Compiler;
 use crate::drop::Ownership;
@@ -21,7 +27,7 @@ pub fn compile_statement<'ctx>(
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     match stmt {
         Statement::Expr(expr) => {
-            compile_expr(c, expr, function)?;
+            compile_expr(c, expr, function)?; // discard TypedValue
             Ok(None)
         }
 
@@ -46,15 +52,17 @@ pub fn compile_statement<'ctx>(
                     if let Some(tp) = type_params {
                         saved_subst = Some(c.type_subst.clone());
                         for (param, arg) in tp.iter().zip(type_args.iter()) {
-                            let concrete = expo_typecheck::types::substitute(arg, &c.type_subst);
+                            let concrete = substitute(arg, &c.type_subst);
                             c.type_subst.insert(param.clone(), concrete);
                         }
                     }
                 }
             }
 
-            let raw_val =
+            let val_tv =
                 compile_expr(c, value, function)?.ok_or("assignment value produced no value")?;
+            let raw_val = val_tv.value;
+            let compiled_type = val_tv.expo_type;
 
             if let Some(saved) = saved_subst {
                 c.type_subst = saved;
@@ -70,7 +78,7 @@ pub fn compile_statement<'ctx>(
                     } => {
                         let resolved_args: Vec<Type> = type_args
                             .iter()
-                            .map(|t| expo_typecheck::types::substitute_preserving(t, &c.type_subst))
+                            .map(|t| substitute_preserving(t, &c.type_subst))
                             .collect();
                         Type::GenericInstance {
                             base,
@@ -82,11 +90,13 @@ pub fn compile_statement<'ctx>(
                 };
                 let _ = c.ensure_types_exist(&annotated);
                 annotated
+            } else if compiled_type != Type::Unknown {
+                compiled_type
             } else {
-                infer_type_from_expr(c, value).unwrap_or_else(|| infer_type_from_llvm(c, &raw_val))
+                infer_type_from_expr(c, value).unwrap_or(Type::Unknown)
             };
 
-            let raw_val = if matches!(value, expo_ast::ast::Expr::List { .. }) {
+            let raw_val = if matches!(value, Expr::List { .. }) {
                 convert_list_literal_if_needed(c, raw_val, &ty)?
             } else {
                 raw_val
@@ -115,7 +125,7 @@ pub fn compile_statement<'ctx>(
                     }
                 }
                 AssignTarget::Pattern(pat) => {
-                    let expo_ast::ast::Pattern::Binding { name, .. } = pat else {
+                    let Pattern::Binding { name, .. } = pat else {
                         return Err(
                             "destructuring patterns not yet supported in compilation".to_string()
                         );
@@ -134,7 +144,7 @@ pub fn compile_statement<'ctx>(
 
         Statement::Return { value, .. } => {
             if let Some(expr) = value {
-                let val = compile_expr(c, expr, function)?;
+                let val = compile_expr(c, expr, function)?.map(|tv| tv.value);
                 let skip = match expr {
                     Expr::Ident { name, .. } => Some(name.as_str()),
                     _ => None,
@@ -177,42 +187,27 @@ pub fn compile_statement<'ctx>(
                 .ok_or("cannot load variable of unsupported type")?;
             let current = c.builder.build_load(llvm_ty, ptr, name).unwrap();
             let rhs = compile_expr(c, value, function)?
-                .ok_or("compound assignment value produced no value")?;
+                .ok_or("compound assignment value produced no value")?
+                .value;
 
             if current.is_int_value() && rhs.is_int_value() {
                 let l = current.into_int_value();
                 let r = rhs.into_int_value();
                 let result = match op {
-                    expo_ast::ast::CompoundOp::Add => {
-                        c.builder.build_int_add(l, r, "cadd").unwrap()
-                    }
-                    expo_ast::ast::CompoundOp::Sub => {
-                        c.builder.build_int_sub(l, r, "csub").unwrap()
-                    }
-                    expo_ast::ast::CompoundOp::Mul => {
-                        c.builder.build_int_mul(l, r, "cmul").unwrap()
-                    }
-                    expo_ast::ast::CompoundOp::Div => {
-                        c.builder.build_int_signed_div(l, r, "cdiv").unwrap()
-                    }
+                    CompoundOp::Add => c.builder.build_int_add(l, r, "cadd").unwrap(),
+                    CompoundOp::Sub => c.builder.build_int_sub(l, r, "csub").unwrap(),
+                    CompoundOp::Mul => c.builder.build_int_mul(l, r, "cmul").unwrap(),
+                    CompoundOp::Div => c.builder.build_int_signed_div(l, r, "cdiv").unwrap(),
                 };
                 c.builder.build_store(ptr, result).unwrap();
             } else if current.is_float_value() && rhs.is_float_value() {
                 let l = current.into_float_value();
                 let r = rhs.into_float_value();
                 let result = match op {
-                    expo_ast::ast::CompoundOp::Add => {
-                        c.builder.build_float_add(l, r, "cfadd").unwrap()
-                    }
-                    expo_ast::ast::CompoundOp::Sub => {
-                        c.builder.build_float_sub(l, r, "cfsub").unwrap()
-                    }
-                    expo_ast::ast::CompoundOp::Mul => {
-                        c.builder.build_float_mul(l, r, "cfmul").unwrap()
-                    }
-                    expo_ast::ast::CompoundOp::Div => {
-                        c.builder.build_float_div(l, r, "cfdiv").unwrap()
-                    }
+                    CompoundOp::Add => c.builder.build_float_add(l, r, "cfadd").unwrap(),
+                    CompoundOp::Sub => c.builder.build_float_sub(l, r, "cfsub").unwrap(),
+                    CompoundOp::Mul => c.builder.build_float_mul(l, r, "cfmul").unwrap(),
+                    CompoundOp::Div => c.builder.build_float_div(l, r, "cfdiv").unwrap(),
                 };
                 c.builder.build_store(ptr, result).unwrap();
             } else {
@@ -336,7 +331,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
                     type_expr: Some(te),
                     ..
                 } => c.resolve_type_expr(te),
-                _ => Type::Primitive(expo_typecheck::types::Primitive::I32),
+                _ => Type::Primitive(Primitive::I32),
             })
             .collect();
         let ret = match return_type {
@@ -368,7 +363,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
         return c.process_msg_type.clone();
     }
     if let Expr::Binary {
-        op: expo_ast::ast::BinOp::Concat,
+        op: BinOp::Concat,
         left,
         ..
     } = expr
@@ -377,7 +372,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             if let Expr::Ident { name, .. } = left.as_ref() {
                 c.variables.get(name).map(|(_, ty, _)| ty.clone())
             } else if matches!(left.as_ref(), Expr::BinaryLiteral { .. }) {
-                Some(Type::Primitive(expo_typecheck::types::Primitive::Binary))
+                Some(Type::Primitive(Primitive::Binary))
             } else {
                 None
             }
@@ -418,142 +413,28 @@ fn infer_instance_method_return_type(c: &Compiler, recv_ty: &Type, method: &str)
                 .get(base)
                 .map(|ti| (&ti.functions, &ti.type_params))?;
             let sig = methods.get(method)?;
-            let subst: std::collections::HashMap<String, Type> = type_params
+            let subst: HashMap<String, Type> = type_params
                 .iter()
                 .zip(type_args.iter())
                 .map(|(p, a)| (p.clone(), a.clone()))
                 .collect();
-            Some(expo_typecheck::types::substitute(&sig.return_type, &subst))
+            Some(substitute(&sig.return_type, &subst))
         }
         _ => None,
     }
-}
-
-/// Parses a mangled enum name like `Option_$i32$` and reconstructs a
-/// `GenericInstance` type so unification works in generic function calls.
-fn parse_mangled_type_arg(s: &str, c: &Compiler) -> Type {
-    use expo_typecheck::types::Primitive;
-
-    if s == "unit" {
-        return Type::Unit;
-    }
-    if let Some(p) = Primitive::from_name(s) {
-        return Type::Primitive(p);
-    }
-    if let Some(gi) = try_parse_mangled_generic(s, c) {
-        return gi;
-    }
-    if let Some(body) = s.strip_prefix("fn_")
-        && let Some(dunder_pos) = body.rfind("__")
-    {
-        let params_str = &body[..dunder_pos];
-        let return_str = &body[dunder_pos + 2..];
-        let params = if params_str.is_empty() {
-            Vec::new()
-        } else {
-            params_str
-                .split('_')
-                .map(|p| parse_mangled_type_arg(p, c))
-                .collect()
-        };
-        let return_type = Box::new(parse_mangled_type_arg(return_str, c));
-        return Type::Function {
-            params,
-            return_type,
-        };
-    }
-    if c.type_ctx.is_struct(s) || c.mono_struct_info.contains_key(s) {
-        return Type::Struct(s.to_string());
-    }
-    if c.type_ctx.is_enum(s) || c.mono_enum_variants.contains_key(s) {
-        return Type::Enum(s.to_string());
-    }
-    Type::Unknown
-}
-
-fn try_parse_mangled_generic(mangled: &str, c: &Compiler) -> Option<Type> {
-    use expo_typecheck::types::GenericKind;
-
-    let sep = mangled.find("_$")?;
-    let base = &mangled[..sep];
-    if !mangled.ends_with('$') {
-        return None;
-    }
-    let kind = if c.type_ctx.generic_enum_asts.contains_key(base) {
-        GenericKind::Enum
-    } else if c.type_ctx.generic_struct_asts.contains_key(base) {
-        GenericKind::Struct
-    } else {
-        return None;
-    };
-    let inner = &mangled[sep + 2..mangled.len() - 1];
-    let type_args: Vec<Type> = inner
-        .split('.')
-        .map(|s| parse_mangled_type_arg(s, c))
-        .collect();
-    Some(Type::GenericInstance {
-        base: base.to_string(),
-        type_args,
-        kind,
-    })
-}
-
-fn parse_mangled_enum_type(mangled: &str, c: &Compiler) -> Option<Type> {
-    let gi = try_parse_mangled_generic(mangled, c)?;
-    match &gi {
-        Type::GenericInstance {
-            kind: expo_typecheck::types::GenericKind::Enum,
-            ..
-        } => Some(gi),
-        _ => None,
-    }
-}
-
-fn expo_type_from_mangled_llvm_struct_name(c: &Compiler, name_str: &str) -> Option<Type> {
-    if c.type_ctx.is_struct(name_str) {
-        return Some(Type::Struct(name_str.to_string()));
-    }
-    if c.mono_struct_info.contains_key(name_str) {
-        if let Some(gi) = try_parse_mangled_generic(name_str, c) {
-            return Some(gi);
-        }
-        return Some(Type::Struct(name_str.to_string()));
-    }
-    if c.type_ctx.is_enum(name_str) {
-        return Some(Type::Enum(name_str.to_string()));
-    }
-    if c.mono_enum_variants.contains_key(name_str) {
-        if let Some(gi) = parse_mangled_enum_type(name_str, c) {
-            return Some(gi);
-        }
-        return Some(Type::Enum(name_str.to_string()));
-    }
-    for ty in c.type_ctx.type_aliases.values() {
-        if let Type::Union(_) = ty
-            && mangle_type(ty) == name_str
-        {
-            return Some(ty.clone());
-        }
-    }
-    None
 }
 
 /// Infers the Expo type of a receiver expression without compiling it.
 fn infer_receiver_type(c: &Compiler, expr: &Expr) -> Option<Type> {
     match expr {
-        Expr::String { .. } => Some(Type::Primitive(expo_typecheck::types::Primitive::String)),
-        Expr::Literal { value, .. } => {
-            use expo_ast::ast::Literal;
-            match value {
-                Literal::Int(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::I64)),
-                Literal::Float(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::F64)),
-                Literal::Bool(_) => Some(Type::Primitive(expo_typecheck::types::Primitive::Bool)),
-                Literal::String(_) => {
-                    Some(Type::Primitive(expo_typecheck::types::Primitive::String))
-                }
-                Literal::Unit => Some(Type::Unit),
-            }
-        }
+        Expr::String { .. } => Some(Type::Primitive(Primitive::String)),
+        Expr::Literal { value, .. } => match value {
+            Literal::Int(_) => Some(Type::Primitive(Primitive::I64)),
+            Literal::Float(_) => Some(Type::Primitive(Primitive::F64)),
+            Literal::Bool(_) => Some(Type::Primitive(Primitive::Bool)),
+            Literal::String(_) => Some(Type::Primitive(Primitive::String)),
+            Literal::Unit => Some(Type::Unit),
+        },
         Expr::Ident { name, .. } => c.variables.get(name).map(|(_, ty, _)| ty.clone()),
         Expr::MethodCall {
             receiver, method, ..
@@ -572,42 +453,6 @@ fn infer_receiver_type(c: &Compiler, expr: &Expr) -> Option<Type> {
             }
         }
         _ => None,
-    }
-}
-
-/// Reconstructs an Expo type from an LLVM value by inspecting bit widths and
-/// struct names. Used when assigning to a new variable without a type annotation.
-pub fn infer_type_from_llvm<'ctx>(c: &Compiler<'ctx>, val: &BasicValueEnum<'ctx>) -> Type {
-    use expo_typecheck::types::Primitive;
-
-    if val.is_int_value() {
-        match val.into_int_value().get_type().get_bit_width() {
-            1 => Type::Primitive(Primitive::Bool),
-            8 => Type::Primitive(Primitive::I8),
-            16 => Type::Primitive(Primitive::I16),
-            32 => Type::Primitive(Primitive::I32),
-            64 => Type::Primitive(Primitive::I64),
-            _ => Type::Unknown,
-        }
-    } else if val.is_float_value() {
-        Type::Primitive(Primitive::F64)
-    } else if val.is_struct_value() {
-        let sv = val.into_struct_value();
-        let st = sv.get_type();
-        if let Some(name) = st.get_name()
-            && let Ok(name_str) = name.to_str()
-            && let Some(ty) = expo_type_from_mangled_llvm_struct_name(c, name_str)
-        {
-            return ty;
-        }
-        Type::Unknown
-    } else if val.is_pointer_value() {
-        // LLVM opaque pointers do not expose a pointee struct type; heap strings and
-        // other pointers both look like `ptr`. Call sites that need a precise type
-        // should get it from `infer_type_from_expr` instead of LLVM inspection.
-        Type::Primitive(Primitive::String)
-    } else {
-        Type::Unknown
     }
 }
 
@@ -793,7 +638,7 @@ pub(crate) fn apply_coercion<'ctx>(
     }
 }
 
-fn expr_span(expr: &Expr) -> expo_ast::span::Span {
+fn expr_span(expr: &Expr) -> Span {
     match expr {
         Expr::Arena { span, .. }
         | Expr::Binary { span, .. }
@@ -847,7 +692,7 @@ fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
         Expr::String { parts, .. } => {
             let has_interpolation = parts
                 .iter()
-                .any(|p| matches!(p, expo_ast::ast::StringPart::Interpolation { .. }));
+                .any(|p| matches!(p, StringPart::Interpolation { .. }));
             if has_interpolation {
                 Ownership::Owned
             } else {
@@ -863,7 +708,7 @@ fn is_concat_expr(expr: &Expr) -> bool {
     matches!(
         expr,
         Expr::Binary {
-            op: expo_ast::ast::BinOp::Concat,
+            op: BinOp::Concat,
             ..
         }
     )

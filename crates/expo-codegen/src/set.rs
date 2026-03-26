@@ -4,7 +4,7 @@
 //! with linear probing. Layout matches the shared hashtable struct:
 //! `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`
 
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Type, mangle_name};
 
 use crate::compiler::{Compiler, EmitResult};
 use crate::hashtable;
@@ -806,8 +806,7 @@ pub fn emit_set_method<'ctx>(
         }
 
         "from_list" => {
-            let list_mangled =
-                expo_typecheck::types::mangle_name("List", std::slice::from_ref(elem_type));
+            let list_mangled = mangle_name("List", std::slice::from_ref(elem_type));
             c.monomorphize_struct("List", std::slice::from_ref(elem_type))?;
             let list_struct = *c
                 .struct_types

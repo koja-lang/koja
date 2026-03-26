@@ -103,6 +103,7 @@ pub(crate) fn compile_binary_pattern<'ctx>(
         if string_segment_bit_width(seg).is_some() {
             let str_ptr = compile_expr(c, &seg.value, function)?
                 .ok_or("string segment produced no value")?
+                .value
                 .into_pointer_value();
             let buf_ptr = unsafe {
                 c.builder
@@ -163,6 +164,7 @@ pub(crate) fn compile_binary_pattern<'ctx>(
         if is_literal {
             let lit_val = compile_expr(c, &seg.value, function)?
                 .ok_or("literal segment produced no value")?
+                .value
                 .into_int_value();
             let lit_i64 = if lit_val.get_type().get_bit_width() < 64 {
                 c.builder

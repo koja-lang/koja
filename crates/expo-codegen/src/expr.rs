@@ -1,15 +1,19 @@
 //! Expression compilation: translates Expo expressions (literals, variables,
 //! binary/unary ops, calls, closures, string interpolation, etc.) into LLVM IR.
 
-use expo_ast::ast::{ClosureParam, Expr, Literal, Statement, StringPart};
+use expo_ast::ast::{ClosureParam, Expr, Literal, MatchArm, Statement, StringPart, TypeExpr};
+use expo_ast::span::Span;
 
-use expo_typecheck::types::{Primitive, Type, build_substitution, mangle_name, substitute};
+use expo_typecheck::types::{
+    GenericKind, Primitive, Type, build_substitution, mangle_name, substitute,
+};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
+use std::collections::HashMap;
 
 use crate::binary::construction::compile_binary_literal;
 use crate::calls::compile_call;
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::control::{
     compile_cond, compile_for, compile_if, compile_loop, compile_match, compile_ternary,
     compile_unless, compile_while,
@@ -17,7 +21,7 @@ use crate::control::{
 use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
 use crate::ops::{compile_binary, compile_unary};
-use crate::stmt::{apply_coercion, coerce_numeric, infer_type_from_llvm};
+use crate::stmt::{apply_coercion, coerce_numeric};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
 
@@ -29,10 +33,10 @@ pub fn compile_expr_coerced<'ctx>(
     expected: &Type,
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let val = compile_expr(c, expr, function)?;
-    match val {
-        Some(v) => {
-            let v = coerce_numeric(c, v, expected);
+    let tv = compile_expr(c, expr, function)?;
+    match tv {
+        Some(tv) => {
+            let v = coerce_numeric(c, tv.value, expected);
             let v = apply_coercion(c, v, expr)?;
             Ok(Some(v))
         }
@@ -46,18 +50,19 @@ pub fn compile_expr<'ctx>(
     c: &mut Compiler<'ctx>,
     expr: &Expr,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     match expr {
         Expr::Literal { value, .. } => compile_literal(c, value),
 
         Expr::Ident { name, .. } => {
             if let Some((ptr, ty, _)) = c.variables.get(name) {
-                let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)
+                let ty = ty.clone();
+                let llvm_ty = to_llvm_type(&ty, c.context, &c.struct_types)
                     .ok_or_else(|| format!("cannot load variable of unsupported type: {name}"))?;
                 let val = c.builder.build_load(llvm_ty, *ptr, name).unwrap();
-                Ok(Some(val))
+                Ok(Some(TypedValue::new(val, ty)))
             } else if let Some(val) = c.constants.get(name) {
-                Ok(Some(*val))
+                Ok(Some(TypedValue::unknown(*val)))
             } else if c.module.get_function(name).is_some() {
                 let thunk = c.get_or_create_thunk(name)?;
                 let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
@@ -77,7 +82,16 @@ pub fn compile_expr<'ctx>(
                     .build_insert_value(fat_ptr, null_env, 1, "insert_env")
                     .unwrap()
                     .into_struct_value();
-                Ok(Some(fat_ptr.into()))
+                let fn_type = c
+                    .type_ctx
+                    .functions
+                    .get(name)
+                    .map(|sig| Type::Function {
+                        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                        return_type: Box::new(sig.return_type.clone()),
+                    })
+                    .unwrap_or(Type::Unknown);
+                Ok(Some(TypedValue::new(fat_ptr.into(), fn_type)))
             } else {
                 Err(format!("undefined variable: {name}"))
             }
@@ -131,10 +145,11 @@ pub fn compile_expr<'ctx>(
 
         Expr::Self_ { .. } => {
             if let Some((ptr, ty, _)) = c.variables.get("self") {
-                let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)
+                let ty = ty.clone();
+                let llvm_ty = to_llvm_type(&ty, c.context, &c.struct_types)
                     .ok_or("cannot load self of unsupported type")?;
                 let val = c.builder.build_load(llvm_ty, *ptr, "self").unwrap();
-                Ok(Some(val))
+                Ok(Some(TypedValue::new(val, ty)))
             } else {
                 Err("self used outside of impl method".to_string())
             }
@@ -211,27 +226,29 @@ pub fn compile_expr<'ctx>(
     }
 }
 
-fn compile_literal<'ctx>(
-    c: &Compiler<'ctx>,
-    lit: &Literal,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+fn compile_literal<'ctx>(c: &Compiler<'ctx>, lit: &Literal) -> ExprResult<'ctx> {
     match lit {
         Literal::Int(s) => {
             let val = crate::util::parse_int_literal(s)?;
-            Ok(Some(
+            Ok(Some(TypedValue::new(
                 c.context.i64_type().const_int(val as u64, true).into(),
-            ))
+                Type::Primitive(Primitive::I64),
+            )))
         }
         Literal::Float(s) => {
             let val: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
-            Ok(Some(c.context.f64_type().const_float(val).into()))
+            Ok(Some(TypedValue::new(
+                c.context.f64_type().const_float(val).into(),
+                Type::Primitive(Primitive::F64),
+            )))
         }
-        Literal::Bool(b) => Ok(Some(
+        Literal::Bool(b) => Ok(Some(TypedValue::new(
             c.context
                 .bool_type()
                 .const_int(if *b { 1 } else { 0 }, false)
                 .into(),
-        )),
+            Type::Primitive(Primitive::Bool),
+        ))),
         Literal::String(_) => unreachable!("string literals use Expr::String, not Expr::Literal"),
         Literal::Unit => Ok(None),
     }
@@ -241,7 +258,7 @@ fn compile_string<'ctx>(
     c: &mut Compiler<'ctx>,
     parts: &[StringPart],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let has_interpolation = parts
         .iter()
         .any(|p| matches!(p, StringPart::Interpolation { .. }));
@@ -254,7 +271,10 @@ fn compile_string<'ctx>(
             }
         }
         let payload_ptr = c.create_string_global(combined.as_bytes(), "str");
-        return Ok(Some(payload_ptr.into()));
+        return Ok(Some(TypedValue::new(
+            payload_ptr.into(),
+            Type::Primitive(Primitive::String),
+        )));
     }
 
     let snprintf = *c.functions.get("snprintf").ok_or("snprintf not declared")?;
@@ -275,7 +295,8 @@ fn compile_string<'ctx>(
             }
             StringPart::Interpolation { expr, .. } => {
                 let val = compile_expr(c, expr, function)?
-                    .ok_or("interpolated expression produced no value")?;
+                    .ok_or("interpolated expression produced no value")?
+                    .value;
 
                 if val.is_int_value() && val.into_int_value().get_type().get_bit_width() == 1 {
                     let str_ptr = crate::util::bool_to_string_ptr(c, val.into_int_value());
@@ -368,7 +389,10 @@ fn compile_string<'ctx>(
         .build_call(snprintf, &write_args_meta, "interp_write")
         .unwrap();
 
-    Ok(Some(payload.into()))
+    Ok(Some(TypedValue::new(
+        payload.into(),
+        Type::Primitive(Primitive::String),
+    )))
 }
 
 /// Converts an enum value to a string pointer for interpolation. Calls
@@ -465,8 +489,8 @@ fn enum_value_to_string<'ctx>(
 fn resolve_closure_params<'ctx>(
     c: &Compiler<'ctx>,
     params: &[ClosureParam],
-    span: expo_ast::span::Span,
-) -> Vec<expo_typecheck::types::Type> {
+    span: Span,
+) -> Vec<Type> {
     let all_annotated = params.iter().all(|p| {
         matches!(
             p,
@@ -501,7 +525,7 @@ fn resolve_closure_params<'ctx>(
                 type_expr: Some(te),
                 ..
             } => c.resolve_type_expr(te),
-            _ => expo_typecheck::types::Type::Primitive(expo_typecheck::types::Primitive::I32),
+            _ => Type::Primitive(Primitive::I32),
         })
         .collect()
 }
@@ -512,11 +536,11 @@ fn resolve_closure_params<'ctx>(
 fn compile_closure<'ctx>(
     c: &mut Compiler<'ctx>,
     params: &[ClosureParam],
-    return_type: &Option<expo_ast::ast::TypeExpr>,
+    return_type: &Option<TypeExpr>,
     body: &[Statement],
     parent_fn: FunctionValue<'ctx>,
-    span: expo_ast::span::Span,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    span: Span,
+) -> ExprResult<'ctx> {
     let ret_type = match return_type {
         Some(te) => c.resolve_type_expr(te),
         None => Type::Unit,
@@ -531,8 +555,8 @@ fn compile_closure_core<'ctx>(
     ret_type: Type,
     body: &[Statement],
     _parent_fn: FunctionValue<'ctx>,
-    span: expo_ast::span::Span,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    span: Span,
+) -> ExprResult<'ctx> {
     let param_types = resolve_closure_params(c, params, span);
 
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
@@ -579,7 +603,7 @@ fn compile_closure_core<'ctx>(
     let saved_vars = std::mem::take(&mut c.variables);
     let saved_block = c.builder.get_insert_block();
     let saved_subst = {
-        let mut extra = std::collections::HashMap::<String, Type>::new();
+        let mut extra = HashMap::<String, Type>::new();
         if let Type::GenericInstance {
             base, type_args, ..
         } = &ret_type
@@ -647,10 +671,10 @@ fn compile_closure_core<'ctx>(
         }
     }
 
-    let last_val = crate::control::compile_body_as_value(c, body, closure_fn)?;
+    let last_tv = crate::control::compile_body_as_value(c, body, closure_fn)?;
     if !c.current_block_terminated() {
-        match last_val {
-            Some(v) => c.builder.build_return(Some(&v)).unwrap(),
+        match last_tv {
+            Some(tv) => c.builder.build_return(Some(&tv.value)).unwrap(),
             None => c.builder.build_return(None).unwrap(),
         };
     }
@@ -715,15 +739,19 @@ fn compile_closure_core<'ctx>(
         .unwrap()
         .into_struct_value();
 
-    Ok(Some(fat_ptr.into()))
+    let closure_type = Type::Function {
+        params: param_types.clone(),
+        return_type: Box::new(ret_type),
+    };
+    Ok(Some(TypedValue::new(fat_ptr.into(), closure_type)))
 }
 
 fn compile_list_literal<'ctx>(
     c: &mut Compiler<'ctx>,
     elements: &[Expr],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let compiled: Vec<BasicValueEnum<'ctx>> = elements
+) -> ExprResult<'ctx> {
+    let compiled: Vec<TypedValue<'ctx>> = elements
         .iter()
         .map(|e| {
             compile_expr(c, e, function)
@@ -734,9 +762,9 @@ fn compile_list_literal<'ctx>(
     let elem_type = if let Some(subst) = c.type_subst.get("T") {
         subst.clone()
     } else if let Some(first) = compiled.first() {
-        infer_type_from_llvm(c, first)
+        first.expo_type.clone()
     } else {
-        Type::Primitive(expo_typecheck::types::Primitive::I32)
+        Type::Primitive(Primitive::I32)
     };
     let type_args = vec![elem_type.clone()];
     let mangled_type = mangle_name("List", &type_args);
@@ -769,7 +797,7 @@ fn compile_list_literal<'ctx>(
         .ok_or("List.new returned void")?;
 
     for elem in &compiled {
-        let coerced = coerce_numeric(c, *elem, &elem_type);
+        let coerced = coerce_numeric(c, elem.value, &elem_type);
         list_val = c
             .builder
             .build_call(append_fn, &[list_val.into(), coerced.into()], "list_append")
@@ -779,24 +807,26 @@ fn compile_list_literal<'ctx>(
             .ok_or("List.append returned void")?;
     }
 
-    Ok(Some(list_val))
+    let list_type = Type::GenericInstance {
+        base: "List".to_string(),
+        kind: GenericKind::Struct,
+        type_args: vec![elem_type],
+    };
+    Ok(Some(TypedValue::new(list_val, list_type)))
 }
 
 fn compile_map_literal<'ctx>(
     c: &mut Compiler<'ctx>,
     entries: &[(Expr, Expr)],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let (key_type, val_type) =
         if let (Some(k_subst), Some(v_subst)) = (c.type_subst.get("K"), c.type_subst.get("V")) {
             (k_subst.clone(), v_subst.clone())
         } else if let Some((first_k, first_v)) = entries.first() {
-            let k_val = compile_expr(c, first_k, function)?.ok_or("map key produced no value")?;
-            let v_val = compile_expr(c, first_v, function)?.ok_or("map value produced no value")?;
-            (
-                infer_type_from_llvm(c, &k_val),
-                infer_type_from_llvm(c, &v_val),
-            )
+            let k_tv = compile_expr(c, first_k, function)?.ok_or("map key produced no value")?;
+            let v_tv = compile_expr(c, first_v, function)?.ok_or("map value produced no value")?;
+            (k_tv.expo_type, v_tv.expo_type)
         } else {
             return Err("empty map literal requires a type annotation".to_string());
         };
@@ -829,8 +859,12 @@ fn compile_map_literal<'ctx>(
         .ok_or("Map.new returned void")?;
 
     for (key_expr, val_expr) in entries {
-        let key = compile_expr(c, key_expr, function)?.ok_or("map key produced no value")?;
-        let val = compile_expr(c, val_expr, function)?.ok_or("map value produced no value")?;
+        let key = compile_expr(c, key_expr, function)?
+            .ok_or("map key produced no value")?
+            .value;
+        let val = compile_expr(c, val_expr, function)?
+            .ok_or("map value produced no value")?
+            .value;
         let key = coerce_numeric(c, key, &key_type);
         let val = coerce_numeric(c, val, &val_type);
         map_val = c
@@ -842,14 +876,19 @@ fn compile_map_literal<'ctx>(
             .ok_or("Map.put returned void")?;
     }
 
-    Ok(Some(map_val))
+    let map_type = Type::GenericInstance {
+        base: "Map".to_string(),
+        kind: GenericKind::Struct,
+        type_args: vec![key_type, val_type],
+    };
+    Ok(Some(TypedValue::new(map_val, map_type)))
 }
 
 fn compile_spawn<'ctx>(
     c: &mut Compiler<'ctx>,
     expr: &Expr,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let type_name = match expr {
         Expr::MethodCall { receiver, .. }
         | Expr::Call {
@@ -869,7 +908,8 @@ fn compile_spawn<'ctx>(
     };
 
     let init_value = compile_expr(c, expr, function)?
-        .ok_or_else(|| format!("{type_name}.new() did not produce a value"))?;
+        .ok_or_else(|| format!("{type_name}.new() did not produce a value"))?
+        .value;
 
     let struct_type = init_value.get_type().into_struct_type();
     let state_alloca = c.builder.build_alloca(struct_type, "spawn_state").unwrap();
@@ -1025,16 +1065,21 @@ fn compile_spawn<'ctx>(
         .unwrap()
         .into_struct_value();
 
-    Ok(Some(sv.into()))
+    let ref_type = Type::GenericInstance {
+        base: "Ref".to_string(),
+        kind: GenericKind::Struct,
+        type_args: type_args.clone(),
+    };
+    Ok(Some(TypedValue::new(sv.into(), ref_type)))
 }
 
 fn compile_receive<'ctx>(
     c: &mut Compiler<'ctx>,
-    arms: &[expo_ast::ast::MatchArm],
+    arms: &[MatchArm],
     after_timeout: Option<&Expr>,
     after_body: &[Statement],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let has_after = after_timeout.is_some();
 
     let raw_ptr = if let Some(timeout_expr) = after_timeout {
@@ -1044,7 +1089,8 @@ fn compile_receive<'ctx>(
             .ok_or("expo_rt_receive_timeout not declared")?;
 
         let timeout_val = compile_expr(c, timeout_expr, function)?
-            .ok_or("after timeout expression produced no value")?;
+            .ok_or("after timeout expression produced no value")?
+            .value;
 
         c.builder
             .build_call(receive_timeout_fn, &[timeout_val.into()], "receive_msg")
@@ -1144,14 +1190,14 @@ fn compile_receive<'ctx>(
             c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
         c.builder.position_at_end(merge_bb);
-        return Ok(Some(subject_val));
+        let ty = c
+            .process_msg_type
+            .clone()
+            .unwrap_or(Type::Primitive(Primitive::String));
+        return Ok(Some(TypedValue::new(subject_val, ty)));
     }
 
-    let subject_type = if let Some(mt) = &c.process_msg_type {
-        mt.clone()
-    } else {
-        crate::stmt::infer_type_from_llvm(c, &subject_val)
-    };
+    let subject_type = c.process_msg_type.clone().unwrap_or(Type::Unknown);
 
     let subject_alloca = c
         .builder
@@ -1186,8 +1232,9 @@ fn compile_receive<'ctx>(
         )?;
 
         let final_cond = if let Some(guard) = &arm.guard {
-            let guard_val =
-                compile_expr(c, guard, function)?.ok_or("receive guard produced no value")?;
+            let guard_val = compile_expr(c, guard, function)?
+                .ok_or("receive guard produced no value")?
+                .value;
             c.builder
                 .build_and(condition, guard_val.into_int_value(), "guard_and")
                 .unwrap()
@@ -1200,15 +1247,15 @@ fn compile_receive<'ctx>(
             .unwrap();
 
         c.builder.position_at_end(body_bb);
-        let arm_val = crate::control::compile_body_as_value(c, &arm.body, function)?;
+        let arm_tv = crate::control::compile_body_as_value(c, &arm.body, function)?;
         let arm_terminated = c.current_block_terminated();
         if !arm_terminated {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
             reachable_arm_count += 1;
         }
         let arm_end_bb = c.builder.get_insert_block().unwrap();
-        if let Some(val) = arm_val {
-            incoming.push((val, arm_end_bb));
+        if let Some(tv) = arm_tv {
+            incoming.push((tv.value, arm_end_bb));
         }
 
         c.variables = saved_vars;
@@ -1232,7 +1279,7 @@ fn compile_receive<'ctx>(
                 .map(|(v, bb)| (v as &dyn inkwell::values::BasicValue, *bb))
                 .collect();
             phi.add_incoming(&refs);
-            return Ok(Some(phi.as_basic_value()));
+            return Ok(Some(TypedValue::new(phi.as_basic_value(), subject_type)));
         }
     }
 

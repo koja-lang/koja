@@ -1,7 +1,9 @@
 //! Struct compilation: field access, struct construction (both regular and
 //! generic), and method calls on struct instances.
 
-use expo_ast::ast::{ClosureParam, Expr};
+use std::collections::HashMap;
+
+use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit};
 use expo_typecheck::context::TypeInfo;
 use expo_typecheck::types::{
     GenericKind, Type, build_substitution, mangle_name, substitute, unify, unwrap_indirect,
@@ -10,10 +12,10 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 
 use crate::calls::{compile_call, invoke_closure_fat_ptr};
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::try_parse_mangled_name;
-use crate::stmt::infer_type_from_llvm;
+
 use crate::types::to_llvm_type;
 
 /// Loads a value from `field_ptr`. When `field_type` is [`Type::Indirect`],
@@ -149,15 +151,19 @@ pub fn compile_field_access<'ctx>(
     receiver: &Expr,
     field: &str,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     if let Some((field_ptr, field_ty)) = resolve_field_chain(c, receiver, field) {
         let val = load_maybe_indirect(c, field_ptr, &field_ty, field);
-        return Ok(Some(val));
+        return Ok(Some(TypedValue::new(
+            val,
+            unwrap_indirect(&field_ty).clone(),
+        )));
     }
 
     {
         let recv_val = compile_expr(c, receiver, function)?
-            .ok_or("field access on expression that produced no value")?;
+            .ok_or("field access on expression that produced no value")?
+            .value;
 
         if !recv_val.is_struct_value() {
             return Err("field access on non-struct value".to_string());
@@ -192,7 +198,10 @@ pub fn compile_field_access<'ctx>(
             .unwrap();
 
         let val = load_maybe_indirect(c, field_ptr, &field_ty, field);
-        Ok(Some(val))
+        Ok(Some(TypedValue::new(
+            val,
+            unwrap_indirect(&field_ty).clone(),
+        )))
     }
 }
 
@@ -202,9 +211,9 @@ pub fn compile_method_call<'ctx>(
     c: &mut Compiler<'ctx>,
     receiver: &Expr,
     method: &str,
-    args: &[expo_ast::ast::Arg],
+    args: &[Arg],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     if let Expr::Ident { name, .. } = receiver
         && c.type_ctx.imported_modules.contains_key(name)
         && !c.variables.contains_key(name)
@@ -219,14 +228,15 @@ pub fn compile_method_call<'ctx>(
         }
     }
 
-    let recv_val = compile_expr(c, receiver, function)?
+    let recv_tv = compile_expr(c, receiver, function)?
         .ok_or("method call on expression that produced no value")?;
+    let recv_val = recv_tv.value;
 
     if method == "clone" && args.is_empty() {
-        return Ok(Some(recv_val));
+        return Ok(Some(recv_tv));
     }
 
-    let struct_name = resolve_struct_name(c, receiver, &recv_val)?;
+    let struct_name = resolve_struct_name(c, receiver, &recv_val, &recv_tv.expo_type)?;
 
     let base = try_parse_mangled_name(&struct_name, c)
         .map(|(b, _)| b)
@@ -245,7 +255,8 @@ pub fn compile_method_call<'ctx>(
         } = inner.clone()
         {
             let field_val = compile_field_access(c, receiver, method, function)?
-                .ok_or_else(|| format!("field `{method}` produced no value"))?;
+                .ok_or_else(|| format!("field `{method}` produced no value"))?
+                .value;
             let fat = field_val.into_struct_value();
             return invoke_closure_fat_ptr(
                 c,
@@ -260,12 +271,14 @@ pub fn compile_method_call<'ctx>(
     }
 
     let mut mangled = format!("{}_{}", struct_name, method);
+    let mut resolved_method_type_args: Vec<Type> = Vec::new();
 
     if let Some((base, type_args)) = try_parse_mangled_name(&struct_name, c) {
         let method_type_params = lookup_method_type_params(c, &base, method);
 
         if !method_type_params.is_empty() {
             let method_type_args = infer_method_type_args(c, &base, method, &type_args, args)?;
+            resolved_method_type_args = method_type_args.clone();
             let method_suffix = mangle_name(method, &method_type_args);
             mangled = format!("{}_{}", struct_name, method_suffix);
 
@@ -282,29 +295,37 @@ pub fn compile_method_call<'ctx>(
         .get(&mangled)
         .ok_or_else(|| format!("undefined method `{method}` on `{struct_name}`"))?;
 
-    let method_param_types: Vec<Type> = c
-        .type_ctx
-        .functions
-        .get(&mangled)
-        .map(|sig| sig.params.iter().skip(1).map(|p| p.ty.clone()).collect())
-        .or_else(|| {
-            let (base, type_args) = try_parse_mangled_name(&struct_name, c)?;
-            let lookup = c
-                .type_ctx
-                .types
-                .get(&base)
-                .map(|ti| (&ti.functions, &ti.type_params));
-            let (methods, type_params) = lookup?;
-            let sig = methods.get(method)?;
-            let subst = build_substitution(type_params, &type_args);
-            Some(
-                sig.params
-                    .iter()
-                    .map(|p| substitute(&p.ty, &subst))
-                    .collect(),
-            )
-        })
-        .unwrap_or_default();
+    let (method_param_types, return_type) = if let Some(sig) = c.type_ctx.functions.get(&mangled) {
+        (
+            sig.params.iter().skip(1).map(|p| p.ty.clone()).collect(),
+            sig.return_type.clone(),
+        )
+    } else if let Some((base_name, ta)) = try_parse_mangled_name(&struct_name, c)
+        && let Some(ti) = c.type_ctx.types.get(&base_name)
+        && let Some(sig) = ti.functions.get(method)
+    {
+        let mut subst = build_substitution(&ti.type_params, &ta);
+        let method_tp = &sig.type_params;
+        for (mp, ma) in method_tp.iter().zip(resolved_method_type_args.iter()) {
+            subst.insert(mp.clone(), ma.clone());
+        }
+        (
+            sig.params
+                .iter()
+                .map(|p| substitute(&p.ty, &subst))
+                .collect(),
+            substitute(&sig.return_type, &subst),
+        )
+    } else if let Some(ti) = c.type_ctx.types.get(&base)
+        && let Some(sig) = ti.functions.get(method)
+    {
+        (
+            sig.params.iter().skip(1).map(|p| p.ty.clone()).collect(),
+            sig.return_type.clone(),
+        )
+    } else {
+        (Vec::new(), Type::Unknown)
+    };
 
     let mut llvm_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
     llvm_args.push(recv_val.into());
@@ -313,8 +334,6 @@ pub fn compile_method_call<'ctx>(
         let val = if i < method_param_types.len() {
             let expected = &method_param_types[i];
             if matches!(expected, Type::Unit) {
-                // Ref.call<Unit, R> and similar use an i8 placeholder at the LLVM ABI
-                // (see process.rs); `()` has no value from compile_expr.
                 c.context.i8_type().const_int(0, false).into()
             } else {
                 compile_expr_coerced(c, &arg.value, expected, function)?
@@ -323,6 +342,7 @@ pub fn compile_method_call<'ctx>(
         } else {
             compile_expr(c, &arg.value, function)?
                 .ok_or_else(|| "method argument produced no value".to_string())?
+                .value
         };
         llvm_args.push(val.into());
     }
@@ -332,7 +352,10 @@ pub fn compile_method_call<'ctx>(
         .build_call(callee, &llvm_args, &format!("{mangled}_ret"))
         .unwrap();
 
-    Ok(result.try_as_basic_value().left())
+    Ok(result
+        .try_as_basic_value()
+        .left()
+        .map(|v| TypedValue::new(v, return_type)))
 }
 
 fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<String> {
@@ -350,7 +373,7 @@ fn infer_method_type_args(
     base_type: &str,
     method: &str,
     struct_type_args: &[Type],
-    args: &[expo_ast::ast::Arg],
+    args: &[Arg],
 ) -> Result<Vec<Type>, String> {
     let (methods, type_params) = c
         .type_ctx
@@ -363,21 +386,21 @@ fn infer_method_type_args(
         .get(method)
         .ok_or_else(|| format!("no method `{method}` on `{base_type}`"))?;
 
-    let struct_subst = expo_typecheck::types::build_substitution(type_params, struct_type_args);
+    let struct_subst = build_substitution(type_params, struct_type_args);
     let substituted_params: Vec<_> = sig
         .params
         .iter()
-        .map(|p| expo_typecheck::types::substitute(&p.ty, &struct_subst))
+        .map(|p| substitute(&p.ty, &struct_subst))
         .collect();
 
-    let mut method_subst = std::collections::HashMap::new();
+    let mut method_subst = HashMap::new();
     for (i, arg) in args.iter().enumerate() {
         if i >= substituted_params.len() {
             break;
         }
         let arg_type = expand_mangled_arg_type(c, &infer_arg_expo_type(c, &arg.value));
         if arg_type != Type::Unknown {
-            expo_typecheck::types::unify(&substituted_params[i], &arg_type, &mut method_subst);
+            unify(&substituted_params[i], &arg_type, &mut method_subst);
         }
     }
 
@@ -433,7 +456,7 @@ fn infer_static_struct_type_args_from_args(
     c: &Compiler,
     type_name: &str,
     method: &str,
-    args: &[expo_ast::ast::Arg],
+    args: &[Arg],
     type_params: &[String],
 ) -> Result<Vec<Type>, String> {
     if type_params.is_empty() {
@@ -448,7 +471,7 @@ fn infer_static_struct_type_args_from_args(
     let sig = methods
         .get(method)
         .ok_or_else(|| format!("no method `{method}` on `{type_name}`"))?;
-    let mut subst = std::collections::HashMap::new();
+    let mut subst = HashMap::new();
     for (i, arg) in args.iter().enumerate() {
         if i >= sig.params.len() {
             break;
@@ -477,7 +500,7 @@ pub fn infer_static_method_return_type(
     c: &Compiler,
     type_name: &str,
     method: &str,
-    args: &[expo_ast::ast::Arg],
+    args: &[Arg],
 ) -> Option<Type> {
     let (methods, type_params) = c
         .type_ctx
@@ -559,7 +582,7 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
 fn push_generic_type_subst<'ctx>(
     c: &mut Compiler<'ctx>,
     field_type: &Type,
-) -> Option<std::collections::HashMap<String, Type>> {
+) -> Option<HashMap<String, Type>> {
     let ty = unwrap_indirect(field_type);
     if let Type::GenericInstance {
         base, type_args, ..
@@ -585,9 +608,9 @@ fn push_generic_type_subst<'ctx>(
 pub fn compile_struct_construction<'ctx>(
     c: &mut Compiler<'ctx>,
     type_path: &[String],
-    fields: &[expo_ast::ast::FieldInit],
+    fields: &[FieldInit],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let struct_name = type_path
         .first()
         .ok_or("empty type path in struct construction")?;
@@ -655,22 +678,27 @@ pub fn compile_struct_construction<'ctx>(
         .builder
         .build_load(struct_type, alloca, struct_name)
         .unwrap();
-    Ok(Some(struct_val))
+    Ok(Some(TypedValue::new(
+        struct_val,
+        Type::Struct(struct_name.clone()),
+    )))
 }
 
 /// For generic struct literals, infer the field expression type for unification.
-/// Handles `config.work` and similar when `infer_type_from_llvm` cannot see through closures.
 fn concrete_type_for_field_init<'ctx>(
     c: &Compiler<'ctx>,
     expr: &Expr,
-    field_val: &BasicValueEnum<'ctx>,
+    compiled_type: &Type,
 ) -> Type {
+    if *compiled_type != Type::Unknown {
+        return compiled_type.clone();
+    }
     match expr {
         Expr::Ident { name, .. } => c
             .variables
             .get(name)
             .map(|(_, ty, _)| ty.clone())
-            .unwrap_or_else(|| infer_type_from_llvm(c, field_val)),
+            .unwrap_or(Type::Unknown),
         Expr::FieldAccess {
             receiver, field, ..
         } => {
@@ -681,10 +709,10 @@ fn concrete_type_for_field_init<'ctx>(
             {
                 substitute(&ft, &c.type_subst)
             } else {
-                infer_type_from_llvm(c, field_val)
+                Type::Unknown
             }
         }
-        _ => infer_type_from_llvm(c, field_val),
+        _ => Type::Unknown,
     }
 }
 
@@ -692,24 +720,24 @@ fn compile_generic_struct_construction<'ctx>(
     c: &mut Compiler<'ctx>,
     struct_name: &str,
     info: TypeInfo,
-    fields: &[expo_ast::ast::FieldInit],
+    fields: &[FieldInit],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let struct_fields = info
         .fields()
         .ok_or_else(|| format!("internal: generic construction expected struct `{struct_name}`"))?;
-    let mut compiled_fields: Vec<(String, BasicValueEnum<'ctx>)> = Vec::new();
+    let mut compiled_fields: Vec<(String, BasicValueEnum<'ctx>, Type)> = Vec::new();
     for field_init in fields {
-        let val = compile_expr(c, &field_init.value, function)?
+        let tv = compile_expr(c, &field_init.value, function)?
             .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
-        compiled_fields.push((field_init.name.clone(), val));
+        compiled_fields.push((field_init.name.clone(), tv.value, tv.expo_type));
     }
 
-    let mut subst = std::collections::HashMap::new();
-    for (i, (field_init_name, field_val)) in compiled_fields.iter().enumerate() {
+    let mut subst = HashMap::new();
+    for (i, (field_init_name, _field_val, compiled_type)) in compiled_fields.iter().enumerate() {
         if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| n == field_init_name) {
-            let concrete = concrete_type_for_field_init(c, &fields[i].value, field_val);
-            if !expo_typecheck::types::unify(field_ty, &concrete, &mut subst) {
+            let concrete = concrete_type_for_field_init(c, &fields[i].value, compiled_type);
+            if !unify(field_ty, &concrete, &mut subst) {
                 return Err(format!(
                     "type mismatch for field `{field_init_name}` in generic struct `{struct_name}`"
                 ));
@@ -717,18 +745,13 @@ fn compile_generic_struct_construction<'ctx>(
         }
     }
 
-    let type_args: Vec<expo_typecheck::types::Type> = info
+    let type_args: Vec<Type> = info
         .type_params
         .iter()
-        .map(|tp| {
-            subst
-                .get(tp)
-                .cloned()
-                .unwrap_or(expo_typecheck::types::Type::Unknown)
-        })
+        .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Unknown))
         .collect();
 
-    let mangled = expo_typecheck::types::mangle_name(struct_name, &type_args);
+    let mangled = mangle_name(struct_name, &type_args);
 
     if !c.struct_types.contains_key(&mangled) {
         c.monomorphize_struct(struct_name, &type_args)?;
@@ -744,7 +767,7 @@ fn compile_generic_struct_construction<'ctx>(
         .build_alloca(struct_type, &format!("{mangled}_tmp"))
         .unwrap();
 
-    for (field_name, field_val) in &compiled_fields {
+    for (field_name, field_val, _) in &compiled_fields {
         let field_idx = c
             .get_field_index(&mangled, field_name)
             .ok_or_else(|| format!("unknown field `{field_name}` in struct `{struct_name}`"))?;
@@ -761,14 +784,24 @@ fn compile_generic_struct_construction<'ctx>(
     }
 
     let struct_val = c.builder.build_load(struct_type, alloca, &mangled).unwrap();
-    Ok(Some(struct_val))
+    let result_type = Type::GenericInstance {
+        base: struct_name.to_string(),
+        kind: GenericKind::Struct,
+        type_args: type_args.clone(),
+    };
+    Ok(Some(TypedValue::new(struct_val, result_type)))
 }
 
 fn resolve_struct_name<'ctx>(
     c: &Compiler<'ctx>,
     receiver: &Expr,
     recv_val: &BasicValueEnum<'ctx>,
+    recv_type: &Type,
 ) -> Result<String, String> {
+    if let Some(sn) = struct_name_from_type(recv_type) {
+        return Ok(sn);
+    }
+
     if let Expr::Ident { name, .. } = receiver
         && let Some((_, ty, _)) = c.variables.get(name)
         && let Some(sn) = struct_name_from_type(ty)
@@ -784,11 +817,6 @@ fn resolve_struct_name<'ctx>(
         {
             return Ok(s.to_string());
         }
-    }
-
-    let inferred = crate::stmt::infer_type_from_llvm(c, recv_val);
-    if let Some(sn) = struct_name_from_type(&inferred) {
-        return Ok(sn);
     }
 
     Err("cannot determine struct type for method call".to_string())
@@ -810,9 +838,9 @@ fn compile_static_call<'ctx>(
     c: &mut Compiler<'ctx>,
     type_name: &str,
     method: &str,
-    args: &[expo_ast::ast::Arg],
+    args: &[Arg],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let type_params = c.type_ctx.types.get(type_name).map(|ti| &ti.type_params);
 
     let mut type_args: Vec<Type> = if let Some(tp) = type_params
@@ -863,10 +891,28 @@ fn compile_static_call<'ctx>(
         .get(&mangled_fn)
         .ok_or_else(|| format!("undefined static function `{method}` on `{mangled_type}`"))?;
 
+    let return_type = c
+        .type_ctx
+        .functions
+        .get(&mangled_fn)
+        .map(|sig| sig.return_type.clone())
+        .or_else(|| {
+            let ti = c.type_ctx.types.get(type_name)?;
+            let sig = ti.functions.get(method)?;
+            if !type_args.is_empty() {
+                let subst = build_substitution(&ti.type_params, &type_args);
+                Some(substitute(&sig.return_type, &subst))
+            } else {
+                Some(sig.return_type.clone())
+            }
+        })
+        .unwrap_or(Type::Unknown);
+
     let mut llvm_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
     for arg in args {
         let val = compile_expr(c, &arg.value, function)?
-            .ok_or_else(|| "static call argument produced no value".to_string())?;
+            .ok_or_else(|| "static call argument produced no value".to_string())?
+            .value;
         llvm_args.push(val.into());
     }
 
@@ -875,5 +921,8 @@ fn compile_static_call<'ctx>(
         .build_call(callee, &llvm_args, &format!("{mangled_fn}_ret"))
         .unwrap();
 
-    Ok(result.try_as_basic_value().left())
+    Ok(result
+        .try_as_basic_value()
+        .left()
+        .map(|v| TypedValue::new(v, return_type)))
 }

@@ -6,7 +6,7 @@ use expo_typecheck::types::{Primitive, Type};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
 
 /// Compiles a binary operation. Dispatches on operand types (float vs int)
@@ -17,14 +17,22 @@ pub fn compile_binary<'ctx>(
     left: &Expr,
     right: &Expr,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     if matches!(op, BinOp::Concat) {
         return compile_concat(c, left, right, function);
     }
 
-    let lhs = compile_expr(c, left, function)?.ok_or("left side of binary op produced no value")?;
-    let rhs =
-        compile_expr(c, right, function)?.ok_or("right side of binary op produced no value")?;
+    let lhs = compile_expr(c, left, function)?
+        .ok_or("left side of binary op produced no value")?
+        .value;
+    let rhs = compile_expr(c, right, function)?
+        .ok_or("right side of binary op produced no value")?
+        .value;
+
+    let is_comparison = matches!(
+        op,
+        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+    );
 
     if lhs.is_float_value() && rhs.is_float_value() {
         let l = lhs.into_float_value();
@@ -67,7 +75,12 @@ pub fn compile_binary<'ctx>(
                 .into(),
             _ => return Err(format!("unsupported float binary op: {:?}", op)),
         };
-        Ok(Some(result))
+        let ty = if is_comparison {
+            Type::Primitive(Primitive::Bool)
+        } else {
+            Type::Primitive(Primitive::F64)
+        };
+        Ok(Some(TypedValue::new(result, ty)))
     } else if lhs.is_int_value() && rhs.is_int_value() {
         let mut l = lhs.into_int_value();
         let mut r = rhs.into_int_value();
@@ -129,7 +142,12 @@ pub fn compile_binary<'ctx>(
             }
             BinOp::Concat => unreachable!("handled by early return"),
         };
-        Ok(Some(result))
+        let ty = if is_comparison || is_bool {
+            Type::Primitive(Primitive::Bool)
+        } else {
+            Type::Primitive(Primitive::I64)
+        };
+        Ok(Some(TypedValue::new(result, ty)))
     } else if lhs.is_pointer_value() && rhs.is_pointer_value() {
         let l = lhs.into_pointer_value();
         let r = rhs.into_pointer_value();
@@ -154,7 +172,10 @@ pub fn compile_binary<'ctx>(
                     .builder
                     .build_int_compare(pred, cmp_result, zero, "str_cmp")
                     .unwrap();
-                Ok(Some(result.into()))
+                Ok(Some(TypedValue::new(
+                    result.into(),
+                    Type::Primitive(Primitive::Bool),
+                )))
             }
             _ => Err(format!("unsupported string binary op: {:?}", op)),
         }
@@ -169,17 +190,23 @@ fn compile_concat<'ctx>(
     left: &Expr,
     right: &Expr,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let lhs_ty = concat_operand_type(c, left);
-    let lhs = compile_expr(c, left, function)?.ok_or("left side of <> produced no value")?;
-    let rhs = compile_expr(c, right, function)?.ok_or("right side of <> produced no value")?;
+    let lhs = compile_expr(c, left, function)?
+        .ok_or("left side of <> produced no value")?
+        .value;
+    let rhs = compile_expr(c, right, function)?
+        .ok_or("right side of <> produced no value")?
+        .value;
 
-    match &lhs_ty {
+    let result_ty = lhs_ty.clone();
+    let inner = match &lhs_ty {
         Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits) => {
             compile_binary_concat(c, lhs, rhs)
         }
         _ => compile_string_concat(c, lhs, rhs),
-    }
+    }?;
+    Ok(inner.map(|v| TypedValue::new(v, result_ty)))
 }
 
 fn concat_operand_type(c: &Compiler, expr: &Expr) -> Type {
@@ -415,37 +442,42 @@ pub fn compile_unary<'ctx>(
     op: &UnaryOp,
     operand: &Expr,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let val = compile_expr(c, operand, function)?.ok_or("unary operand produced no value")?;
+) -> ExprResult<'ctx> {
+    let tv = compile_expr(c, operand, function)?.ok_or("unary operand produced no value")?;
+    let val = tv.value;
+    let operand_type = tv.expo_type;
 
     match op {
         UnaryOp::Neg => {
             if val.is_int_value() {
-                Ok(Some(
+                Ok(Some(TypedValue::new(
                     c.builder
                         .build_int_neg(val.into_int_value(), "neg")
                         .unwrap()
                         .into(),
-                ))
+                    operand_type,
+                )))
             } else if val.is_float_value() {
-                Ok(Some(
+                Ok(Some(TypedValue::new(
                     c.builder
                         .build_float_neg(val.into_float_value(), "fneg")
                         .unwrap()
                         .into(),
-                ))
+                    operand_type,
+                )))
             } else {
                 Err("cannot negate non-numeric value".to_string())
             }
         }
         UnaryOp::Not => {
             if val.is_int_value() {
-                Ok(Some(
+                Ok(Some(TypedValue::new(
                     c.builder
                         .build_not(val.into_int_value(), "not")
                         .unwrap()
                         .into(),
-                ))
+                    Type::Primitive(Primitive::Bool),
+                )))
             } else {
                 Err("cannot apply 'not' to non-integer value".to_string())
             }

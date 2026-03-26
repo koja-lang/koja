@@ -6,12 +6,12 @@ use crate::binary::patterns::compile_binary_pattern;
 use crate::drop::Ownership;
 use expo_ast::ast::{Expr, FieldPattern, Literal, MatchArm, Pattern};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{Type, mangle_type, unwrap_indirect};
+use expo_typecheck::types::{GenericKind, Type, mangle_name, mangle_type, unwrap_indirect};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
 use crate::structs::load_maybe_indirect;
 use crate::types::to_llvm_type;
@@ -26,11 +26,16 @@ pub fn compile_match<'ctx>(
     subject: &Expr,
     arms: &[MatchArm],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let subject_val =
+) -> ExprResult<'ctx> {
+    let subject_tv =
         compile_expr(c, subject, function)?.ok_or("match subject produced no value")?;
+    let subject_val = subject_tv.value;
 
-    let subject_type = infer_subject_type(c, subject, &subject_val);
+    let subject_type = if subject_tv.expo_type != Type::Unknown {
+        subject_tv.expo_type
+    } else {
+        infer_subject_type(c, subject)
+    };
 
     let subject_alloca = c
         .builder
@@ -42,6 +47,7 @@ pub fn compile_match<'ctx>(
     let fallthrough_bb = c.context.append_basic_block(function, "match_none");
     let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
         Vec::new();
+    let mut arm_expo_type: Option<Type> = None;
 
     let mut reachable_arm_count = 0usize;
 
@@ -61,8 +67,9 @@ pub fn compile_match<'ctx>(
         let condition = compile_pattern(c, &arm.pattern, subject_alloca, &subject_type, function)?;
 
         let final_cond = if let Some(guard) = &arm.guard {
-            let guard_val =
-                compile_expr(c, guard, function)?.ok_or("match guard produced no value")?;
+            let guard_val = compile_expr(c, guard, function)?
+                .ok_or("match guard produced no value")?
+                .value;
             c.builder
                 .build_and(condition, guard_val.into_int_value(), "guard_and")
                 .unwrap()
@@ -75,15 +82,18 @@ pub fn compile_match<'ctx>(
             .unwrap();
 
         c.builder.position_at_end(body_bb);
-        let arm_val = compile_body_as_value(c, &arm.body, function)?;
+        let arm_tv = compile_body_as_value(c, &arm.body, function)?;
         let arm_terminated = c.current_block_terminated();
         if !arm_terminated {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
             reachable_arm_count += 1;
         }
         let arm_end_bb = c.builder.get_insert_block().unwrap();
-        if let Some(val) = arm_val {
-            incoming.push((val, arm_end_bb));
+        if let Some(tv) = arm_tv {
+            if arm_expo_type.is_none() {
+                arm_expo_type = Some(tv.expo_type.clone());
+            }
+            incoming.push((tv.value, arm_end_bb));
         }
 
         c.variables = saved_vars;
@@ -105,21 +115,17 @@ pub fn compile_match<'ctx>(
             for (v, bb) in &incoming {
                 phi.add_incoming(&[(v, *bb)]);
             }
-            return Ok(Some(phi.as_basic_value()));
+            let result_type = arm_expo_type.unwrap_or(Type::Unknown);
+            return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
         }
     }
 
     Ok(None)
 }
 
-/// Reconstructs the Expo type from an LLVM value, since LLVM IR discards
-/// source-level type information. Checks variable bindings first, then
-/// falls back to inspecting the LLVM type.
-fn infer_subject_type<'ctx>(
-    c: &Compiler<'ctx>,
-    subject: &Expr,
-    val: &BasicValueEnum<'ctx>,
-) -> Type {
+/// Infers the Expo type for a match subject from variable bindings when
+/// the TypedValue carries `Type::Unknown`.
+fn infer_subject_type(c: &Compiler, subject: &Expr) -> Type {
     if let Expr::Ident { name, .. } = subject
         && let Some((_, ty, _)) = c.variables.get(name)
     {
@@ -130,7 +136,7 @@ fn infer_subject_type<'ctx>(
     {
         return ty.clone();
     }
-    crate::stmt::infer_type_from_llvm(c, val)
+    Type::Unknown
 }
 
 /// Recursively compiles a match pattern into a boolean condition. As a side
@@ -451,9 +457,9 @@ fn enum_name_from_path<'ctx>(
         Type::GenericInstance {
             base,
             type_args,
-            kind: expo_typecheck::types::GenericKind::Enum,
+            kind: GenericKind::Enum,
             ..
-        } => Ok(expo_typecheck::types::mangle_name(base, type_args)),
+        } => Ok(mangle_name(base, type_args)),
         Type::Enum(name) => Ok(name.clone()),
         Type::Union(_) => Ok(mangle_type(ty)),
         Type::Struct(name) => {
@@ -501,11 +507,11 @@ fn find_constructor_enum<'ctx>(
     if let Type::GenericInstance {
         base,
         type_args,
-        kind: expo_typecheck::types::GenericKind::Enum,
+        kind: GenericKind::Enum,
         ..
     } = subject_type
     {
-        return Ok(expo_typecheck::types::mangle_name(base, type_args));
+        return Ok(mangle_name(base, type_args));
     }
     if let Type::Enum(name) = subject_type {
         return Ok(name.clone());

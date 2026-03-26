@@ -1,9 +1,10 @@
 //! Conditional compilation: if/else, unless, cond, and ternary expressions.
 
 use expo_ast::ast::{CondArm, Expr, Statement};
+use expo_typecheck::types::Type;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
 
@@ -17,7 +18,7 @@ pub fn compile_cond<'ctx>(
     arms: &[CondArm],
     else_body: &Option<Vec<Statement>>,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     if arms.is_empty() && else_body.is_none() {
         return Ok(None);
     }
@@ -26,10 +27,12 @@ pub fn compile_cond<'ctx>(
     let fallthrough_bb = c.context.append_basic_block(function, "cond_none");
     let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
         Vec::new();
+    let mut branch_expo_type: Option<Type> = None;
 
     for (i, arm) in arms.iter().enumerate() {
-        let cond_val =
-            compile_expr(c, &arm.condition, function)?.ok_or("cond arm produced no value")?;
+        let cond_val = compile_expr(c, &arm.condition, function)?
+            .ok_or("cond arm produced no value")?
+            .value;
         let cond_int = coerce_to_bool(c, cond_val, "cond arm condition")?;
 
         let body_bb = c
@@ -47,13 +50,16 @@ pub fn compile_cond<'ctx>(
             .unwrap();
 
         c.builder.position_at_end(body_bb);
-        let arm_val = compile_body_as_value(c, &arm.body, function)?;
+        let arm_tv = compile_body_as_value(c, &arm.body, function)?;
         if !c.current_block_terminated() {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
         let arm_end_bb = c.builder.get_insert_block().unwrap();
-        if let Some(val) = arm_val {
-            incoming.push((val, arm_end_bb));
+        if let Some(tv) = arm_tv {
+            if branch_expo_type.is_none() {
+                branch_expo_type = Some(tv.expo_type.clone());
+            }
+            incoming.push((tv.value, arm_end_bb));
         }
 
         if next_bb != merge_bb && next_bb != fallthrough_bb {
@@ -63,13 +69,16 @@ pub fn compile_cond<'ctx>(
 
     c.builder.position_at_end(fallthrough_bb);
     if let Some(body) = else_body {
-        let else_val = compile_body_as_value(c, body, function)?;
+        let else_tv = compile_body_as_value(c, body, function)?;
         if !c.current_block_terminated() {
             c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
         let else_end_bb = c.builder.get_insert_block().unwrap();
-        if let Some(val) = else_val {
-            incoming.push((val, else_end_bb));
+        if let Some(tv) = else_tv {
+            if branch_expo_type.is_none() {
+                branch_expo_type = Some(tv.expo_type.clone());
+            }
+            incoming.push((tv.value, else_end_bb));
         }
     } else {
         c.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -85,7 +94,8 @@ pub fn compile_cond<'ctx>(
             for (v, bb) in &incoming {
                 phi.add_incoming(&[(v, *bb)]);
             }
-            return Ok(Some(phi.as_basic_value()));
+            let result_type = branch_expo_type.unwrap_or(Type::Unknown);
+            return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
         }
     }
 
@@ -100,8 +110,10 @@ pub fn compile_if<'ctx>(
     then_body: &[Statement],
     else_body: &Option<Vec<Statement>>,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let cond_val = compile_expr(c, condition, function)?.ok_or("if condition produced no value")?;
+) -> ExprResult<'ctx> {
+    let cond_val = compile_expr(c, condition, function)?
+        .ok_or("if condition produced no value")?
+        .value;
     let cond_int = coerce_to_bool(c, cond_val, "if condition")?;
 
     let then_bb = c.context.append_basic_block(function, "then");
@@ -113,14 +125,14 @@ pub fn compile_if<'ctx>(
         .unwrap();
 
     c.builder.position_at_end(then_bb);
-    let then_val = compile_body_as_value(c, then_body, function)?;
+    let then_tv = compile_body_as_value(c, then_body, function)?;
     if !c.current_block_terminated() {
         c.builder.build_unconditional_branch(merge_bb).unwrap();
     }
     let then_end_bb = c.builder.get_insert_block().unwrap();
 
     c.builder.position_at_end(else_bb);
-    let else_val = if let Some(else_stmts) = else_body {
+    let else_tv = if let Some(else_stmts) = else_body {
         compile_body_as_value(c, else_stmts, function)?
     } else {
         None
@@ -132,12 +144,16 @@ pub fn compile_if<'ctx>(
 
     c.builder.position_at_end(merge_bb);
 
-    if let (Some(tv), Some(ev)) = (&then_val, &else_val)
-        && tv.get_type() == ev.get_type()
+    if let (Some(then_tv), Some(else_tv)) = (&then_tv, &else_tv)
+        && then_tv.value.get_type() == else_tv.value.get_type()
     {
-        let phi = c.builder.build_phi(tv.get_type(), "ifval").unwrap();
-        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
-        return Ok(Some(phi.as_basic_value()));
+        let phi = c
+            .builder
+            .build_phi(then_tv.value.get_type(), "ifval")
+            .unwrap();
+        phi.add_incoming(&[(&then_tv.value, then_end_bb), (&else_tv.value, else_end_bb)]);
+        let result_type = then_tv.expo_type.clone();
+        return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
     }
 
     Ok(None)
@@ -150,9 +166,10 @@ pub fn compile_unless<'ctx>(
     condition: &Expr,
     body: &[Statement],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let cond_val =
-        compile_expr(c, condition, function)?.ok_or("unless condition produced no value")?;
+) -> ExprResult<'ctx> {
+    let cond_val = compile_expr(c, condition, function)?
+        .ok_or("unless condition produced no value")?
+        .value;
     let cond_int = coerce_to_bool(c, cond_val, "unless condition")?;
     let negated = c.builder.build_not(cond_int, "unless_neg").unwrap();
 
@@ -186,9 +203,10 @@ pub fn compile_ternary<'ctx>(
     then_expr: &Expr,
     else_expr: &Expr,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let cond_val =
-        compile_expr(c, condition, function)?.ok_or("ternary condition produced no value")?;
+) -> ExprResult<'ctx> {
+    let cond_val = compile_expr(c, condition, function)?
+        .ok_or("ternary condition produced no value")?
+        .value;
     let cond_int = coerce_to_bool(c, cond_val, "ternary condition")?;
 
     let then_bb = c.context.append_basic_block(function, "tern_then");
@@ -200,14 +218,14 @@ pub fn compile_ternary<'ctx>(
         .unwrap();
 
     c.builder.position_at_end(then_bb);
-    let then_val = compile_expr(c, then_expr, function)?;
+    let then_tv = compile_expr(c, then_expr, function)?;
     if !c.current_block_terminated() {
         c.builder.build_unconditional_branch(merge_bb).unwrap();
     }
     let then_end_bb = c.builder.get_insert_block().unwrap();
 
     c.builder.position_at_end(else_bb);
-    let else_val = compile_expr(c, else_expr, function)?;
+    let else_tv = compile_expr(c, else_expr, function)?;
     if !c.current_block_terminated() {
         c.builder.build_unconditional_branch(merge_bb).unwrap();
     }
@@ -215,12 +233,18 @@ pub fn compile_ternary<'ctx>(
 
     c.builder.position_at_end(merge_bb);
 
-    if let (Some(tv), Some(ev)) = (&then_val, &else_val)
-        && tv.get_type() == ev.get_type()
+    if let (Some(ttv), Some(etv)) = (&then_tv, &else_tv)
+        && ttv.value.get_type() == etv.value.get_type()
     {
-        let phi = c.builder.build_phi(tv.get_type(), "ternval").unwrap();
-        phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
-        return Ok(Some(phi.as_basic_value()));
+        let phi = c
+            .builder
+            .build_phi(ttv.value.get_type(), "ternval")
+            .unwrap();
+        phi.add_incoming(&[(&ttv.value, then_end_bb), (&etv.value, else_end_bb)]);
+        return Ok(Some(TypedValue::new(
+            phi.as_basic_value(),
+            ttv.expo_type.clone(),
+        )));
     }
 
     Ok(None)

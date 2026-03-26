@@ -3,11 +3,14 @@
 //! distinguish each instantiation.
 
 use crate::drop::Ownership;
-use expo_ast::ast::{Param, Statement};
-use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{GenericKind, Type};
+use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr};
+use expo_typecheck::context::{FunctionKind, VariantData};
+use expo_typecheck::types::{
+    GenericKind, Primitive, Type, build_substitution, mangle_name, mangle_type, substitute,
+};
 use inkwell::types::BasicType;
 use inkwell::values::FunctionValue;
+use std::collections::HashMap;
 
 use crate::compiler::{Compiler, resolve_process_envelope_type};
 use crate::expr::compile_expr;
@@ -47,7 +50,7 @@ impl<'ctx> Compiler<'ctx> {
                 && *return_type != Type::Unit
                 && let Statement::Expr(expr) = stmt
             {
-                let val = compile_expr(self, expr, fn_value)?;
+                let val = compile_expr(self, expr, fn_value)?.map(|tv| tv.value);
                 if !self.current_block_terminated() {
                     if let Some(v) = val {
                         let v = apply_coercion(self, v, expr)?;
@@ -87,11 +90,11 @@ impl<'ctx> Compiler<'ctx> {
     pub(crate) fn compile_method_body(
         &mut self,
         fn_value: FunctionValue<'ctx>,
-        func: &expo_ast::ast::Function,
+        func: &Function,
         self_type: Option<(&str, &str)>,
         param_types: &[Type],
         return_type: &Type,
-        subst: std::collections::HashMap<String, Type>,
+        subst: HashMap<String, Type>,
     ) -> Result<(), String> {
         let entry = self.context.append_basic_block(fn_value, "entry");
         let saved_vars = std::mem::take(&mut self.variables);
@@ -108,7 +111,7 @@ impl<'ctx> Compiler<'ctx> {
             .is_some_and(|p| matches!(p, Param::Self_ { .. }))
             && let Some((mangled, base)) = self_type
         {
-            let self_ty = if let Some(p) = expo_typecheck::types::Primitive::from_name(base) {
+            let self_ty = if let Some(p) = Primitive::from_name(base) {
                 Type::Primitive(p)
             } else if self.type_ctx.is_enum(base) {
                 Type::Enum(mangled.to_string())
@@ -173,7 +176,7 @@ impl<'ctx> Compiler<'ctx> {
             .ok_or_else(|| format!("no generic function `{name}` to monomorphize"))?
             .clone();
 
-        let mangled = expo_typecheck::types::mangle_name(name, type_args);
+        let mangled = mangle_name(name, type_args);
         if self.functions.contains_key(&mangled) {
             return Ok(());
         }
@@ -184,14 +187,14 @@ impl<'ctx> Compiler<'ctx> {
             .get(name)
             .ok_or_else(|| format!("no signature for generic function `{name}`"))?;
 
-        let subst = expo_typecheck::types::build_substitution(&sig.type_params, type_args);
+        let subst = build_substitution(&sig.type_params, type_args);
 
-        let return_type = expo_typecheck::types::substitute(&sig.return_type, &subst);
+        let return_type = substitute(&sig.return_type, &subst);
 
         let param_types: Vec<Type> = sig
             .params
             .iter()
-            .map(|p| expo_typecheck::types::substitute(&p.ty, &subst))
+            .map(|p| substitute(&p.ty, &subst))
             .collect();
 
         self.ensure_types_exist(&return_type)?;
@@ -248,7 +251,7 @@ impl<'ctx> Compiler<'ctx> {
     /// the given concrete type arguments. Creates the LLVM struct type with
     /// concrete field types and registers it under the mangled name.
     pub fn monomorphize_struct(&mut self, name: &str, type_args: &[Type]) -> Result<(), String> {
-        let mangled = expo_typecheck::types::mangle_name(name, type_args);
+        let mangled = mangle_name(name, type_args);
         if self.struct_types.contains_key(&mangled) {
             return Ok(());
         }
@@ -275,16 +278,11 @@ impl<'ctx> Compiler<'ctx> {
             .fields()
             .ok_or_else(|| format!("no struct info for generic struct `{name}`"))?;
 
-        let subst = expo_typecheck::types::build_substitution(&info.type_params, type_args);
+        let subst = build_substitution(&info.type_params, type_args);
 
         let concrete_fields: Vec<(String, Type)> = fields
             .iter()
-            .map(|(fname, fty)| {
-                (
-                    fname.clone(),
-                    expo_typecheck::types::substitute(fty, &subst),
-                )
-            })
+            .map(|(fname, fty)| (fname.clone(), substitute(fty, &subst)))
             .collect();
 
         let st = self.context.opaque_struct_type(&mangled);
@@ -326,7 +324,7 @@ impl<'ctx> Compiler<'ctx> {
     /// the given concrete type arguments. Creates the LLVM tagged union type
     /// with concrete variant payloads and registers it under the mangled name.
     pub fn monomorphize_enum(&mut self, name: &str, type_args: &[Type]) -> Result<(), String> {
-        let mangled = expo_typecheck::types::mangle_name(name, type_args);
+        let mangled = mangle_name(name, type_args);
         if self.struct_types.contains_key(&mangled) {
             return Ok(());
         }
@@ -340,23 +338,20 @@ impl<'ctx> Compiler<'ctx> {
             .variants()
             .ok_or_else(|| format!("no enum info for generic enum `{name}`"))?;
 
-        let subst = expo_typecheck::types::build_substitution(&info.type_params, type_args);
+        let subst = build_substitution(&info.type_params, type_args);
 
         let concrete_variants: Vec<_> = variants
             .iter()
             .map(|vi| {
                 let data = match &vi.data {
                     VariantData::Unit => VariantData::Unit,
-                    VariantData::Tuple(types) => VariantData::Tuple(
-                        types
-                            .iter()
-                            .map(|t| expo_typecheck::types::substitute(t, &subst))
-                            .collect(),
-                    ),
+                    VariantData::Tuple(types) => {
+                        VariantData::Tuple(types.iter().map(|t| substitute(t, &subst)).collect())
+                    }
                     VariantData::Struct(fields) => VariantData::Struct(
                         fields
                             .iter()
-                            .map(|(n, t)| (n.clone(), expo_typecheck::types::substitute(t, &subst)))
+                            .map(|(n, t)| (n.clone(), substitute(t, &subst)))
                             .collect(),
                     ),
                 };
@@ -404,11 +399,11 @@ impl<'ctx> Compiler<'ctx> {
         type_args: &[Type],
         method_type_args: &[Type],
     ) -> Result<(), String> {
-        let mangled_type = expo_typecheck::types::mangle_name(base_type, type_args);
+        let mangled_type = mangle_name(base_type, type_args);
         let mangled_fn = if method_type_args.is_empty() {
             format!("{}_{}", mangled_type, method_name)
         } else {
-            let mangled_method = expo_typecheck::types::mangle_name(method_name, method_type_args);
+            let mangled_method = mangle_name(method_name, method_type_args);
             format!("{}_{}", mangled_type, mangled_method)
         };
         if self.functions.contains_key(&mangled_fn) {
@@ -488,11 +483,11 @@ impl<'ctx> Compiler<'ctx> {
         let mut method_ast = None;
         let mut impl_type_params = Vec::new();
         for block in &impl_blocks {
-            if let expo_ast::ast::TypeExpr::Generic { args, .. } = &block.target {
+            if let TypeExpr::Generic { args, .. } = &block.target {
                 let tp_names: Vec<String> = args
                     .iter()
                     .filter_map(|a| {
-                        if let expo_ast::ast::TypeExpr::Named { path, .. } = a
+                        if let TypeExpr::Named { path, .. } = a
                             && path.len() == 1
                         {
                             return Some(path[0].clone());
@@ -501,7 +496,7 @@ impl<'ctx> Compiler<'ctx> {
                     })
                     .collect();
                 for member in &block.members {
-                    if let expo_ast::ast::ImplMember::Function(f) = member
+                    if let ImplMember::Function(f) = member
                         && f.name == method_name
                     {
                         method_ast = Some(f.clone());
@@ -518,7 +513,7 @@ impl<'ctx> Compiler<'ctx> {
         let func_ast = method_ast
             .ok_or_else(|| format!("method `{method_name}` not found in impl for `{base_type}`"))?;
 
-        let mut subst = expo_typecheck::types::build_substitution(&impl_type_params, type_args);
+        let mut subst = build_substitution(&impl_type_params, type_args);
         for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
             subst.insert(tp.clone(), ta.clone());
         }
@@ -531,13 +526,13 @@ impl<'ctx> Compiler<'ctx> {
 
         let (return_type, param_types, is_static) = if let Some((methods, _)) = info {
             if let Some(sig) = methods.get(method_name) {
-                let ret = expo_typecheck::types::substitute(&sig.return_type, &subst);
+                let ret = substitute(&sig.return_type, &subst);
                 let pts: Vec<Type> = sig
                     .params
                     .iter()
-                    .map(|p| expo_typecheck::types::substitute(&p.ty, &subst))
+                    .map(|p| substitute(&p.ty, &subst))
                     .collect();
-                let is_static = sig.kind == expo_typecheck::context::FunctionKind::Static;
+                let is_static = sig.kind == FunctionKind::Static;
                 (ret, pts, is_static)
             } else {
                 return Err(format!(
@@ -619,7 +614,7 @@ impl<'ctx> Compiler<'ctx> {
                 for arg in type_args {
                     self.ensure_types_exist(arg)?;
                 }
-                let mangled = expo_typecheck::types::mangle_name(base, type_args);
+                let mangled = mangle_name(base, type_args);
                 if !self.struct_types.contains_key(&mangled) {
                     match kind {
                         GenericKind::Struct => self.monomorphize_struct(base, type_args)?,
@@ -643,7 +638,7 @@ impl<'ctx> Compiler<'ctx> {
                 for m in members {
                     self.ensure_types_exist(m)?;
                 }
-                let mangled = expo_typecheck::types::mangle_type(ty);
+                let mangled = mangle_type(ty);
                 if !self.struct_types.contains_key(&mangled) {
                     let opaque = self.context.opaque_struct_type(&mangled);
                     self.struct_types.insert(mangled.clone(), opaque);
@@ -714,7 +709,6 @@ fn split_mangled_args(s: &str) -> Vec<String> {
 }
 
 fn parse_mangled_type(s: &str) -> Type {
-    use expo_typecheck::types::Primitive;
     if s == "unit" {
         return Type::Unit;
     }

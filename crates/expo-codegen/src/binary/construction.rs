@@ -2,9 +2,10 @@
 //! LLVM IR that allocates a length-prefixed buffer and packs segment values.
 
 use expo_ast::ast::{BinaryEndianness, BinarySegment};
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use expo_typecheck::types::{Primitive, Type};
+use inkwell::values::FunctionValue;
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
 
 use super::{is_float_segment, segment_bit_width, string_segment_bit_width};
@@ -17,7 +18,7 @@ pub(crate) fn compile_binary_literal<'ctx>(
     c: &mut Compiler<'ctx>,
     segments: &[BinarySegment],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let i8_type = c.context.i8_type();
     let i64_type = c.context.i64_type();
 
@@ -67,6 +68,7 @@ pub(crate) fn compile_binary_literal<'ctx>(
         if string_segment_bit_width(seg).is_some() {
             let str_ptr = compile_expr(c, &seg.value, function)?
                 .ok_or("string segment produced no value")?
+                .value
                 .into_pointer_value();
             let dest = unsafe {
                 c.builder
@@ -95,7 +97,8 @@ pub(crate) fn compile_binary_literal<'ctx>(
         }
 
         let value = compile_expr(c, &seg.value, function)?
-            .ok_or("binary segment value produced no value")?;
+            .ok_or("binary segment value produced no value")?
+            .value;
 
         let is_float = is_float_segment(seg);
         let is_little = matches!(seg.endianness, Some(BinaryEndianness::Little));
@@ -174,5 +177,8 @@ pub(crate) fn compile_binary_literal<'ctx>(
         byte_offset += num_bytes;
     }
 
-    Ok(Some(payload_ptr.into()))
+    Ok(Some(TypedValue::new(
+        payload_ptr.into(),
+        Type::Primitive(Primitive::Binary),
+    )))
 }

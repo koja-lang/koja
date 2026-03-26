@@ -5,6 +5,8 @@ mod conditionals;
 mod loops;
 mod patterns;
 
+use expo_ast::ast::Statement;
+
 pub use conditionals::{compile_cond, compile_if, compile_ternary, compile_unless};
 pub use loops::{compile_for, compile_loop, compile_while};
 pub use patterns::compile_match;
@@ -13,7 +15,7 @@ pub(crate) use patterns::compile_pattern;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, TypedValue};
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
 
@@ -21,16 +23,16 @@ use crate::stmt::compile_statement;
 /// Non-expression statements produce no value; only a trailing `Expr` is captured.
 pub(crate) fn compile_body_as_value<'ctx>(
     c: &mut Compiler<'ctx>,
-    body: &[expo_ast::ast::Statement],
+    body: &[Statement],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let mut val: Option<BasicValueEnum> = None;
+) -> Result<Option<TypedValue<'ctx>>, String> {
+    let mut val: Option<TypedValue> = None;
     for (i, stmt) in body.iter().enumerate() {
         if c.current_block_terminated() {
             break;
         }
         if i == body.len() - 1
-            && let expo_ast::ast::Statement::Expr(expr) = stmt
+            && let Statement::Expr(expr) = stmt
         {
             val = compile_expr(c, expr, function)?;
             continue;

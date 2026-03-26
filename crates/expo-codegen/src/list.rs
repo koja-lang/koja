@@ -3,7 +3,7 @@
 //! List is a heap-backed growable array using `malloc`/`realloc`/`free`.
 //! Layout: `{ ptr: i8*, length: i64, capacity: i64 }`
 
-use expo_typecheck::types::{GenericKind, Primitive, Type};
+use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name};
 
 use crate::compiler::{Compiler, EmitResult};
 use crate::types::to_llvm_type;
@@ -200,7 +200,7 @@ pub fn emit_list_method<'ctx>(
 
         "get" => {
             let option_type_args = vec![elem_ty.clone()];
-            let option_mangled = expo_typecheck::types::mangle_name("Option", &option_type_args);
+            let option_mangled = mangle_name("Option", &option_type_args);
             c.ensure_types_exist(&Type::GenericInstance {
                 base: "Option".to_string(),
                 type_args: option_type_args,

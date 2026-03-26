@@ -2,12 +2,12 @@
 //! into indexed while loops over Enumeration types).
 
 use crate::drop::Ownership;
-use expo_ast::ast::{Expr, Statement};
-use expo_typecheck::types::Type;
+use expo_ast::ast::{Expr, Pattern, Statement};
+use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute_preserving};
 use inkwell::IntPredicate;
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use inkwell::values::FunctionValue;
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, ExprResult};
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
 use crate::types::to_llvm_type;
@@ -19,7 +19,7 @@ pub fn compile_loop<'ctx>(
     c: &mut Compiler<'ctx>,
     body: &[Statement],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let loop_header = c.context.append_basic_block(function, "loop_header");
     let loop_body = c.context.append_basic_block(function, "loop_body");
     let loop_exit = c.context.append_basic_block(function, "loop_exit");
@@ -55,7 +55,7 @@ pub fn compile_while<'ctx>(
     condition: &Expr,
     body: &[Statement],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let while_header = c.context.append_basic_block(function, "while_header");
     let while_body = c.context.append_basic_block(function, "while_body");
     let while_exit = c.context.append_basic_block(function, "while_exit");
@@ -63,8 +63,9 @@ pub fn compile_while<'ctx>(
     c.builder.build_unconditional_branch(while_header).unwrap();
 
     c.builder.position_at_end(while_header);
-    let cond_val =
-        compile_expr(c, condition, function)?.ok_or("while condition produced no value")?;
+    let cond_val = compile_expr(c, condition, function)?
+        .ok_or("while condition produced no value")?
+        .value;
     let cond_int = coerce_to_bool(c, cond_val, "while condition")?;
     c.builder
         .build_conditional_branch(cond_int, while_body, while_exit)
@@ -94,14 +95,15 @@ pub fn compile_while<'ctx>(
 ///   idx = 0; len = iterable.length(); while idx < len { elem = iterable.get(idx); body; idx += 1 }
 pub fn compile_for<'ctx>(
     c: &mut Compiler<'ctx>,
-    pattern: &expo_ast::ast::Pattern,
+    pattern: &Pattern,
     iterable: &Expr,
     body: &[Statement],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let iter_val = compile_expr(c, iterable, function)?.ok_or("for iterable produced no value")?;
+) -> ExprResult<'ctx> {
+    let iter_tv = compile_expr(c, iterable, function)?.ok_or("for iterable produced no value")?;
+    let iter_val = iter_tv.value;
 
-    let iter_ty = crate::stmt::infer_type_from_llvm(c, &iter_val);
+    let iter_ty = iter_tv.expo_type;
     let iter_llvm_ty = iter_val.get_type();
 
     let iter_alloca = c.builder.build_alloca(iter_llvm_ty, "for_iter").unwrap();
@@ -189,7 +191,7 @@ pub fn compile_for<'ctx>(
         .build_extract_value(option_val.into_struct_value(), 1, "payload")
         .unwrap();
 
-    if let expo_ast::ast::Pattern::Binding { name, .. } = pattern {
+    if let Pattern::Binding { name, .. } = pattern {
         let alloca = c.builder.build_alloca(elem_llvm_ty, name).unwrap();
         c.builder.build_store(alloca, elem_val).unwrap();
         c.variables.insert(
@@ -292,8 +294,8 @@ fn resolve_enumerable_info<'ctx>(
     let option_ty = if ti.type_params.is_empty() {
         get_sig.return_type.clone()
     } else {
-        let subst = expo_typecheck::types::build_substitution(&ti.type_params, &type_args);
-        expo_typecheck::types::substitute_preserving(&get_sig.return_type, &subst)
+        let subst = build_substitution(&ti.type_params, &type_args);
+        substitute_preserving(&get_sig.return_type, &subst)
     };
     let elem_expo_ty = match &option_ty {
         Type::GenericInstance {
@@ -306,7 +308,7 @@ fn resolve_enumerable_info<'ctx>(
 
     let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.struct_types)
         .ok_or("cannot resolve element LLVM type")?;
-    let mangled = expo_typecheck::types::mangle_name(&base, &type_args);
+    let mangled = mangle_name(&base, &type_args);
 
     Ok((mangled, elem_llvm, elem_expo_ty, base, type_args))
 }

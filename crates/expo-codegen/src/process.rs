@@ -3,7 +3,7 @@
 //! Both types are represented as a bare i64 (the pid) at runtime.
 //! `Ref<M, R>` supports `cast` and `call`; `ReplyTo<R>` supports `send`.
 
-use expo_typecheck::types::{Primitive, Type};
+use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name, process_envelope_type};
 use inkwell::AddressSpace;
 use inkwell::types::BasicType;
 
@@ -142,7 +142,7 @@ pub fn emit_ref_method<'ctx>(
                     .ok_or_else(|| format!("no LLVM type for message `{msg_type:?}`"))?
             };
 
-            let envelope_type = expo_typecheck::types::process_envelope_type(msg_type, reply_type);
+            let envelope_type = process_envelope_type(msg_type, reply_type);
             c.ensure_types_exist(&envelope_type)?;
             let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.struct_types)
                 .ok_or("no LLVM type for Pair envelope")?
@@ -170,10 +170,10 @@ pub fn emit_ref_method<'ctx>(
 
             let option_reply_type = Type::GenericInstance {
                 base: "Option".to_string(),
-                kind: expo_typecheck::types::GenericKind::Enum,
+                kind: GenericKind::Enum,
                 type_args: vec![Type::GenericInstance {
                     base: "ReplyTo".to_string(),
-                    kind: expo_typecheck::types::GenericKind::Struct,
+                    kind: GenericKind::Struct,
                     type_args: vec![reply_type.clone()],
                 }],
             };
@@ -270,8 +270,7 @@ pub fn emit_ref_method<'ctx>(
                     .ok_or_else(|| format!("no LLVM type for reply `{reply_type:?}`"))?
             };
 
-            let option_reply_mangled =
-                expo_typecheck::types::mangle_name("Option", std::slice::from_ref(reply_type));
+            let option_reply_mangled = mangle_name("Option", std::slice::from_ref(reply_type));
             if !c.struct_types.contains_key(&option_reply_mangled) {
                 c.monomorphize_enum("Option", std::slice::from_ref(reply_type))?;
             }
@@ -280,7 +279,7 @@ pub fn emit_ref_method<'ctx>(
                 .get(&option_reply_mangled)
                 .ok_or("Option struct not found for call reply")?;
 
-            let envelope_type = expo_typecheck::types::process_envelope_type(msg_type, reply_type);
+            let envelope_type = process_envelope_type(msg_type, reply_type);
             c.ensure_types_exist(&envelope_type)?;
             let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.struct_types)
                 .ok_or("no LLVM type for Pair envelope")?
@@ -288,7 +287,7 @@ pub fn emit_ref_method<'ctx>(
 
             let reply_to_type = Type::GenericInstance {
                 base: "ReplyTo".to_string(),
-                kind: expo_typecheck::types::GenericKind::Struct,
+                kind: GenericKind::Struct,
                 type_args: vec![reply_type.clone()],
             };
             c.ensure_types_exist(&reply_to_type)?;
@@ -298,7 +297,7 @@ pub fn emit_ref_method<'ctx>(
 
             let option_from_type = Type::GenericInstance {
                 base: "Option".to_string(),
-                kind: expo_typecheck::types::GenericKind::Enum,
+                kind: GenericKind::Enum,
                 type_args: vec![reply_to_type],
             };
             c.ensure_types_exist(&option_from_type)?;

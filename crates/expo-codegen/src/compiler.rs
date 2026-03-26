@@ -14,10 +14,14 @@ pub enum EmitResult {
     NotIntrinsic,
 }
 use expo_ast::ast::{
-    Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, TypeExpr,
+    Diagnostic, Expr, Function, ImplMember, Item, Literal, Module, Param, Severity, StringPart,
+    TypeExpr,
 };
 use expo_typecheck::context::{TypeContext, VariantData};
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{
+    Type, build_substitution, process_envelope_type, resolve_type_expr_with_params, substitute,
+    substitute_preserving,
+};
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -30,6 +34,31 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 
 use crate::types::{to_llvm_metadata_type, to_llvm_type};
+
+/// An LLVM value paired with its Expo source-level type. Threaded through
+/// `compile_expr` so downstream code never needs to reverse-engineer the
+/// type from LLVM bit widths or struct names.
+#[derive(Debug, Clone)]
+pub struct TypedValue<'ctx> {
+    pub value: BasicValueEnum<'ctx>,
+    pub expo_type: Type,
+}
+
+impl<'ctx> TypedValue<'ctx> {
+    pub fn new(value: BasicValueEnum<'ctx>, expo_type: Type) -> Self {
+        Self { value, expo_type }
+    }
+
+    pub fn unknown(value: BasicValueEnum<'ctx>) -> Self {
+        Self {
+            value,
+            expo_type: Type::Unknown,
+        }
+    }
+}
+
+/// Shorthand for the return type of `compile_expr` and related functions.
+pub type ExprResult<'ctx> = Result<Option<TypedValue<'ctx>>, String>;
 
 /// Holds all LLVM state needed to compile an Expo module: the LLVM context,
 /// module, builder, declared functions, variable bindings, and type mappings.
@@ -300,14 +329,14 @@ impl<'ctx> Compiler<'ctx> {
             .map(|(name, _)| name.as_str())
             .collect();
         let type_params: Vec<&str> = self.type_subst.keys().map(|s| s.as_str()).collect();
-        let ty = expo_typecheck::types::resolve_type_expr_with_params(
+        let ty = resolve_type_expr_with_params(
             type_expr,
             &struct_names,
             &enum_names,
             &type_params,
             &self.type_ctx.type_aliases,
         );
-        expo_typecheck::types::substitute_preserving(&ty, &self.type_subst)
+        substitute_preserving(&ty, &self.type_subst)
     }
 
     fn declare_builtins(&mut self) {
@@ -485,7 +514,7 @@ impl<'ctx> Compiler<'ctx> {
                     Expr::String { parts, .. } => {
                         let mut combined = String::new();
                         for part in parts {
-                            if let expo_ast::ast::StringPart::Literal { value, .. } = part {
+                            if let StringPart::Literal { value, .. } = part {
                                 combined.push_str(value);
                             }
                         }
@@ -928,16 +957,16 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
     {
         let m = args.get(1)?;
         let r = args.get(2)?;
-        return Some(expo_typecheck::types::process_envelope_type(m, r));
+        return Some(process_envelope_type(m, r));
     }
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(target, c) {
         let impls = c.type_ctx.protocol_impls.get(&base)?;
         let (_, proto_args) = impls.iter().find(|(proto, _)| proto == "Process")?;
         let ti = c.type_ctx.types.get(&base)?;
-        let subst = expo_typecheck::types::build_substitution(&ti.type_params, &type_args);
-        let m = expo_typecheck::types::substitute(proto_args.get(1)?, &subst);
-        let r = expo_typecheck::types::substitute(proto_args.get(2)?, &subst);
-        return Some(expo_typecheck::types::process_envelope_type(&m, &r));
+        let subst = build_substitution(&ti.type_params, &type_args);
+        let m = substitute(proto_args.get(1)?, &subst);
+        let r = substitute(proto_args.get(2)?, &subst);
+        return Some(process_envelope_type(&m, &r));
     }
     None
 }

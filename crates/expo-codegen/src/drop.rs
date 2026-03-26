@@ -4,7 +4,8 @@
 
 use inkwell::values::PointerValue;
 
-use expo_typecheck::types::{Primitive, Type};
+use expo_typecheck::context::VariantData;
+use expo_typecheck::types::{Primitive, Type, mangle_name};
 
 use crate::compiler::Compiler;
 
@@ -116,7 +117,7 @@ fn has_indirect_fields(c: &Compiler, ty: &Type) -> bool {
         Type::GenericInstance {
             base, type_args, ..
         } => {
-            let mangled = expo_typecheck::types::mangle_name(base, type_args);
+            let mangled = mangle_name(base, type_args);
             has_indirect_fields_by_name(c, &mangled)
         }
         Type::Struct(name) | Type::Enum(name) => has_indirect_fields_by_name(c, name),
@@ -150,15 +151,11 @@ fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
     false
 }
 
-fn variant_has_indirect(vdata: &expo_typecheck::context::VariantData) -> bool {
+fn variant_has_indirect(vdata: &VariantData) -> bool {
     match vdata {
-        expo_typecheck::context::VariantData::Tuple(types) => {
-            types.iter().any(|t| matches!(t, Type::Indirect(_)))
-        }
-        expo_typecheck::context::VariantData::Struct(fields) => {
-            fields.iter().any(|(_, t)| matches!(t, Type::Indirect(_)))
-        }
-        expo_typecheck::context::VariantData::Unit => false,
+        VariantData::Tuple(types) => types.iter().any(|t| matches!(t, Type::Indirect(_))),
+        VariantData::Struct(fields) => fields.iter().any(|(_, t)| matches!(t, Type::Indirect(_))),
+        VariantData::Unit => false,
     }
 }
 
@@ -212,7 +209,7 @@ fn emit_drop_indirect_fields(c: &mut Compiler, alloca: PointerValue, ty: &Type) 
     let struct_name = match ty {
         Type::GenericInstance {
             base, type_args, ..
-        } => expo_typecheck::types::mangle_name(base, type_args),
+        } => mangle_name(base, type_args),
         Type::Struct(n) | Type::Enum(n) => n.clone(),
         _ => return,
     };
@@ -271,7 +268,7 @@ fn emit_drop_list(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
     let mangled = match ty {
         Type::GenericInstance {
             base, type_args, ..
-        } => expo_typecheck::types::mangle_name(base, type_args),
+        } => mangle_name(base, type_args),
         Type::Struct(name) => name.clone(),
         _ => return,
     };
@@ -303,7 +300,7 @@ fn emit_drop_hash_collection(c: &mut Compiler, alloca: PointerValue, ty: &Type) 
     let mangled = match ty {
         Type::GenericInstance {
             base, type_args, ..
-        } => expo_typecheck::types::mangle_name(base, type_args),
+        } => mangle_name(base, type_args),
         Type::Struct(name) => name.clone(),
         _ => return,
     };

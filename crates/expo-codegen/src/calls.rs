@@ -1,14 +1,15 @@
 //! Function call compilation: regular calls, method calls, and generic call
 //! dispatch including type inference and monomorphization triggers.
 
-use expo_ast::ast::Arg;
-use expo_typecheck::types::{Type, mangle_name, unwrap_indirect};
-use inkwell::types::BasicType;
-use inkwell::values::{BasicValueEnum, FunctionValue, StructValue};
+use std::collections::HashMap;
 
-use crate::compiler::Compiler;
+use expo_ast::ast::{Arg, FieldInit};
+use expo_typecheck::types::{Type, mangle_name, substitute, unify, unwrap_indirect};
+use inkwell::types::BasicType;
+use inkwell::values::{FunctionValue, StructValue};
+
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::{compile_expr, compile_expr_coerced};
-use crate::stmt::infer_type_from_llvm;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
 
@@ -21,7 +22,7 @@ pub fn invoke_closure_fat_ptr<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
     label: &str,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
     let fn_ptr = c
         .builder
@@ -49,7 +50,7 @@ pub fn invoke_closure_fat_ptr<'ctx>(
         let val = if i < params.len() {
             compile_expr_coerced(c, &arg.value, &params[i], function)?
         } else {
-            compile_expr(c, &arg.value, function)?
+            compile_expr(c, &arg.value, function)?.map(|tv| tv.value)
         }
         .ok_or_else(|| format!("argument to {label} produced no value"))?;
         compiled_args.push(val.into());
@@ -60,7 +61,10 @@ pub fn invoke_closure_fat_ptr<'ctx>(
         .build_indirect_call(fn_type, fn_ptr, &compiled_args, &format!("call_{label}"))
         .unwrap();
 
-    Ok(call_val.try_as_basic_value().left())
+    Ok(call_val
+        .try_as_basic_value()
+        .left()
+        .map(|v| TypedValue::new(v, return_type.clone())))
 }
 
 /// Compiles a function call by name. Handles struct constructors, builtins
@@ -71,7 +75,7 @@ pub fn compile_call<'ctx>(
     name: &str,
     args: &[Arg],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     if c.struct_types.contains_key(name) {
         return compile_call_as_struct(c, name, args, function);
     }
@@ -84,19 +88,18 @@ pub fn compile_call<'ctx>(
         }
         _ => {
             if let Some(callee) = c.functions.get(name).copied() {
-                let param_types: Vec<Type> = c
-                    .type_ctx
-                    .functions
-                    .get(name)
-                    .map(|sig| sig.params.iter().map(|p| p.ty.clone()).collect())
+                let sig = c.type_ctx.functions.get(name);
+                let param_types: Vec<Type> = sig
+                    .map(|s| s.params.iter().map(|p| p.ty.clone()).collect())
                     .unwrap_or_default();
+                let ret_type = sig.map(|s| s.return_type.clone()).unwrap_or(Type::Unknown);
 
                 let mut compiled_args = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
                     let val = if i < param_types.len() {
                         compile_expr_coerced(c, &arg.value, &param_types[i], function)?
                     } else {
-                        compile_expr(c, &arg.value, function)?
+                        compile_expr(c, &arg.value, function)?.map(|tv| tv.value)
                     }
                     .ok_or_else(|| format!("argument to {name} produced no value"))?;
                     compiled_args.push(val.into());
@@ -107,7 +110,10 @@ pub fn compile_call<'ctx>(
                     .build_call(callee, &compiled_args, &format!("call_{name}"))
                     .unwrap();
 
-                Ok(result.try_as_basic_value().left())
+                Ok(result
+                    .try_as_basic_value()
+                    .left()
+                    .map(|v| TypedValue::new(v, ret_type)))
             } else if let Some((var_ptr, raw_ty, _)) = c.variables.get(name).cloned() {
                 let ty = unwrap_indirect(&raw_ty);
                 let Type::Function {
@@ -151,14 +157,14 @@ fn compile_generic_call<'ctx>(
     name: &str,
     args: &[Arg],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let mut compiled_args = Vec::new();
     let mut arg_types = Vec::new();
     for arg in args {
-        let val = compile_expr(c, &arg.value, function)?
+        let tv = compile_expr(c, &arg.value, function)?
             .ok_or_else(|| format!("argument to {name} produced no value"))?;
-        arg_types.push(infer_type_from_llvm(c, &val));
-        compiled_args.push(val);
+        arg_types.push(tv.expo_type);
+        compiled_args.push(tv.value);
     }
 
     let sig = c
@@ -167,9 +173,9 @@ fn compile_generic_call<'ctx>(
         .get(name)
         .ok_or_else(|| format!("no signature for generic function `{name}`"))?;
 
-    let mut subst = std::collections::HashMap::new();
+    let mut subst = HashMap::new();
     for (param, arg_ty) in sig.params.iter().zip(arg_types.iter()) {
-        if !expo_typecheck::types::unify(&param.ty, arg_ty, &mut subst) {
+        if !unify(&param.ty, arg_ty, &mut subst) {
             return Err(format!(
                 "type mismatch for argument `{}` in generic call to `{name}`",
                 param.name
@@ -197,12 +203,25 @@ fn compile_generic_call<'ctx>(
     let call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
         compiled_args.iter().map(|v| (*v).into()).collect();
 
+    let ret_type = {
+        let subst_map: HashMap<String, Type> = sig
+            .type_params
+            .iter()
+            .zip(type_args.iter())
+            .map(|(p, a)| (p.clone(), a.clone()))
+            .collect();
+        substitute(&sig.return_type, &subst_map)
+    };
+
     let result = c
         .builder
         .build_call(callee, &call_args, &format!("call_{mangled}"))
         .unwrap();
 
-    Ok(result.try_as_basic_value().left())
+    Ok(result
+        .try_as_basic_value()
+        .left()
+        .map(|v| TypedValue::new(v, ret_type)))
 }
 
 fn compile_call_as_struct<'ctx>(
@@ -210,10 +229,10 @@ fn compile_call_as_struct<'ctx>(
     name: &str,
     args: &[Arg],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let fields: Vec<expo_ast::ast::FieldInit> = args
+) -> ExprResult<'ctx> {
+    let fields: Vec<FieldInit> = args
         .iter()
-        .map(|arg| expo_ast::ast::FieldInit {
+        .map(|arg| FieldInit {
             name: arg
                 .name
                 .clone()
@@ -230,13 +249,14 @@ fn compile_print<'ctx>(
     c: &mut Compiler<'ctx>,
     args: &[Arg],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     if args.len() != 1 {
         return Err("print expects exactly 1 argument".to_string());
     }
 
-    let val =
-        compile_expr(c, &args[0].value, function)?.ok_or("argument to print produced no value")?;
+    let val = compile_expr(c, &args[0].value, function)?
+        .ok_or("argument to print produced no value")?
+        .value;
 
     let printf = *c.functions.get("printf").ok_or("printf not declared")?;
 
@@ -278,13 +298,14 @@ fn compile_panic<'ctx>(
     c: &mut Compiler<'ctx>,
     args: &[Arg],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     if args.len() != 1 {
         return Err("panic expects exactly 1 argument".to_string());
     }
 
-    let val =
-        compile_expr(c, &args[0].value, function)?.ok_or("argument to panic produced no value")?;
+    let val = compile_expr(c, &args[0].value, function)?
+        .ok_or("argument to panic produced no value")?
+        .value;
 
     c.emit_panic("panic: %s\n", &[val]);
 
@@ -296,13 +317,14 @@ fn compile_print_builtin<'ctx>(
     name: &str,
     args: &[Arg],
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     if args.len() != 1 {
         return Err(format!("{name} expects exactly 1 argument"));
     }
 
     let val = compile_expr(c, &args[0].value, function)?
-        .ok_or_else(|| format!("argument to {name} produced no value"))?;
+        .ok_or_else(|| format!("argument to {name} produced no value"))?
+        .value;
 
     let printf = *c.functions.get("printf").ok_or("printf not declared")?;
 

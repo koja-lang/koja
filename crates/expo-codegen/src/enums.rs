@@ -4,12 +4,13 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::EnumConstructionData;
-use expo_typecheck::types::{Type, unwrap_indirect};
+use expo_typecheck::context::VariantData;
+use expo_typecheck::types::{GenericKind, Type, mangle_name, unify, unwrap_indirect};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::{compile_expr, compile_expr_coerced};
-use crate::stmt::infer_type_from_llvm;
+
 use crate::structs::store_maybe_indirect;
 
 /// Compiles an enum variant construction (`EnumName.Variant(...)` or
@@ -22,7 +23,7 @@ pub fn compile_enum_construction<'ctx>(
     variant: &str,
     data: &EnumConstructionData,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let base_name = type_path
         .first()
         .ok_or("empty type path in enum construction")?;
@@ -46,7 +47,7 @@ fn compile_concrete_enum<'ctx>(
     variant: &str,
     data: &EnumConstructionData,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let enum_type = *c
         .struct_types
         .get(enum_name)
@@ -87,7 +88,7 @@ fn compile_concrete_enum<'ctx>(
                 .and_then(|ti| ti.variants())
                 .and_then(|vs| vs.iter().find(|v| v.name == variant))
                 .and_then(|vi| match &vi.data {
-                    expo_typecheck::context::VariantData::Tuple(types) => Some(types.clone()),
+                    VariantData::Tuple(types) => Some(types.clone()),
                     _ => None,
                 });
 
@@ -97,7 +98,7 @@ fn compile_concrete_enum<'ctx>(
                 let val = if let Some(ct) = coerce_ty {
                     compile_expr_coerced(c, expr, ct, function)?
                 } else {
-                    compile_expr(c, expr, function)?
+                    compile_expr(c, expr, function)?.map(|tv| tv.value)
                 }
                 .ok_or_else(|| format!("enum field {i} produced no value"))?;
                 let field_ptr = c
@@ -136,7 +137,7 @@ fn compile_concrete_enum<'ctx>(
                 .ok_or_else(|| format!("variant info not found for {enum_name}.{variant}"))?;
 
             let expected_fields = match &variant_info.data {
-                expo_typecheck::context::VariantData::Struct(f) => f,
+                VariantData::Struct(f) => f,
                 _ => return Err(format!("{enum_name}.{variant} is not a struct variant")),
             };
 
@@ -166,7 +167,10 @@ fn compile_concrete_enum<'ctx>(
     }
 
     let enum_val = c.builder.build_load(enum_type, alloca, enum_name).unwrap();
-    Ok(Some(enum_val))
+    Ok(Some(TypedValue::new(
+        enum_val,
+        Type::Enum(enum_name.to_string()),
+    )))
 }
 
 fn compile_generic_enum_construction<'ctx>(
@@ -175,7 +179,7 @@ fn compile_generic_enum_construction<'ctx>(
     variant: &str,
     data: &EnumConstructionData,
     function: FunctionValue<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+) -> ExprResult<'ctx> {
     let enum_info = c
         .type_ctx
         .types
@@ -193,18 +197,15 @@ fn compile_generic_enum_construction<'ctx>(
     let mut compiled_values: Vec<BasicValueEnum<'ctx>> = Vec::new();
 
     match (data, &vi.data) {
-        (
-            EnumConstructionData::Tuple(exprs),
-            expo_typecheck::context::VariantData::Tuple(expected),
-        ) => {
+        (EnumConstructionData::Tuple(exprs), VariantData::Tuple(expected)) => {
             for (i, expr) in exprs.iter().enumerate() {
-                let val = compile_expr(c, expr, function)?
+                let tv = compile_expr(c, expr, function)?
                     .ok_or_else(|| format!("enum field {i} produced no value"))?;
-                let concrete = infer_type_from_llvm(c, &val);
+                let concrete = tv.expo_type.clone();
                 if i < expected.len() {
-                    expo_typecheck::types::unify(&expected[i], &concrete, &mut subst);
+                    unify(&expected[i], &concrete, &mut subst);
                 }
-                compiled_values.push(val);
+                compiled_values.push(tv.value);
             }
         }
         (EnumConstructionData::Unit, _) => {}
@@ -249,7 +250,7 @@ fn compile_generic_enum_construction<'ctx>(
         }
     }
 
-    let mangled = expo_typecheck::types::mangle_name(enum_name, &type_args);
+    let mangled = mangle_name(enum_name, &type_args);
 
     if !c.struct_types.contains_key(&mangled) {
         c.monomorphize_enum(enum_name, &type_args)?;
@@ -291,7 +292,7 @@ fn compile_generic_enum_construction<'ctx>(
             .get(&mangled)
             .and_then(|vs| vs.iter().find(|(n, _)| n == variant))
             .and_then(|(_, vdata)| match vdata {
-                expo_typecheck::context::VariantData::Tuple(types) => Some(types.clone()),
+                VariantData::Tuple(types) => Some(types.clone()),
                 _ => None,
             });
 
@@ -317,5 +318,10 @@ fn compile_generic_enum_construction<'ctx>(
     }
 
     let enum_val = c.builder.build_load(enum_type, alloca, &mangled).unwrap();
-    Ok(Some(enum_val))
+    let result_type = Type::GenericInstance {
+        base: enum_name.to_string(),
+        kind: GenericKind::Enum,
+        type_args: type_args.clone(),
+    };
+    Ok(Some(TypedValue::new(enum_val, result_type)))
 }

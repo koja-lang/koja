@@ -4,7 +4,7 @@
 //! protocol methods on primitive types, plus shared helpers for probing,
 //! resizing, and calling hash/eq on arbitrary key types.
 
-use expo_typecheck::types::{Primitive, Type};
+use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name};
 use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
 
@@ -346,7 +346,7 @@ pub fn type_display_name(ty: &Type) -> String {
         Type::Struct(name) => name.clone(),
         Type::GenericInstance {
             base, type_args, ..
-        } => expo_typecheck::types::mangle_name(base, type_args),
+        } => mangle_name(base, type_args),
         _ => format!("{ty:?}"),
     }
 }
@@ -777,12 +777,10 @@ fn emit_string_intrinsic<'ctx>(
         }
         "String_get" => {
             let option_mangled = "Option_$String$";
-            c.ensure_types_exist(&expo_typecheck::types::Type::GenericInstance {
+            c.ensure_types_exist(&Type::GenericInstance {
                 base: "Option".to_string(),
-                type_args: vec![expo_typecheck::types::Type::Primitive(
-                    expo_typecheck::types::Primitive::String,
-                )],
-                kind: expo_typecheck::types::GenericKind::Enum,
+                type_args: vec![Type::Primitive(Primitive::String)],
+                kind: GenericKind::Enum,
             })?;
             let option_struct = *c
                 .struct_types
