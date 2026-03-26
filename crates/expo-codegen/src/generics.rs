@@ -2,15 +2,18 @@
 //! for concrete type arguments, and manages the mangled-name encoding used to
 //! distinguish each instantiation.
 
-use crate::drop::Ownership;
+use std::collections::HashMap;
+use std::mem;
+
 use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr};
 use expo_typecheck::context::{FunctionKind, VariantData};
 use expo_typecheck::types::{
     GenericKind, Primitive, Type, build_substitution, mangle_name, mangle_type, substitute,
 };
 use inkwell::types::BasicType;
-use inkwell::values::FunctionValue;
-use std::collections::HashMap;
+use inkwell::values::{FunctionValue, PointerValue};
+
+use crate::drop::Ownership;
 
 use crate::compiler::{Compiler, resolve_process_envelope_type};
 use crate::expr::compile_expr;
@@ -28,7 +31,7 @@ impl<'ctx> Compiler<'ctx> {
         fn_value: FunctionValue<'ctx>,
         _is_main: bool,
     ) -> Result<(), String> {
-        let saved_hint = std::mem::replace(
+        let saved_hint = mem::replace(
             &mut self.return_type_hint,
             if *return_type != Type::Unit {
                 Some(return_type.clone())
@@ -50,7 +53,9 @@ impl<'ctx> Compiler<'ctx> {
                 && *return_type != Type::Unit
                 && let Statement::Expr(expr) = stmt
             {
+                self.tco.mark_tail();
                 let val = compile_expr(self, expr, fn_value)?.map(|tv| tv.value);
+                self.tco.clear_tail();
                 if !self.current_block_terminated() {
                     if let Some(v) = val {
                         let v = apply_coercion(self, v, expr)?;
@@ -97,13 +102,14 @@ impl<'ctx> Compiler<'ctx> {
         subst: HashMap<String, Type>,
     ) -> Result<(), String> {
         let entry = self.context.append_basic_block(fn_value, "entry");
-        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_vars = mem::take(&mut self.variables);
         let saved_block = self.builder.get_insert_block();
-        let saved_subst = std::mem::replace(&mut self.type_subst, subst);
+        let saved_subst = mem::replace(&mut self.type_subst, subst);
 
         self.builder.position_at_end(entry);
 
         let mut param_idx = 0u32;
+        let mut param_allocas: Vec<PointerValue<'ctx>> = Vec::new();
 
         if func
             .params
@@ -124,6 +130,7 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.build_store(alloca, param_val).unwrap();
                 self.variables
                     .insert("self".to_string(), (alloca, self_ty, Ownership::Unowned));
+                param_allocas.push(alloca);
                 param_idx += 1;
             }
         }
@@ -141,10 +148,17 @@ impl<'ctx> Compiler<'ctx> {
                     self.builder.build_store(alloca, param_val).unwrap();
                     self.variables
                         .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
+                    param_allocas.push(alloca);
                     param_idx += 1;
                 }
             }
         }
+
+        let loop_header = self.context.append_basic_block(fn_value, "tco_loop");
+        self.builder
+            .build_unconditional_branch(loop_header)
+            .unwrap();
+        self.builder.position_at_end(loop_header);
 
         let saved_process_msg = self.process_msg_type.take();
         if let Some((mangled, _)) = self_type {
@@ -154,8 +168,15 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
+        let saved_fn = self
+            .tco
+            .enter_fn(fn_value.get_name().to_str().unwrap_or("").to_string());
+        let saved_loop = self.tco.set_loop(loop_header, param_allocas);
+
         let result = self.compile_function_body(&func.body, return_type, fn_value, false);
 
+        self.tco.leave_fn(saved_fn);
+        self.tco.restore_loop(saved_loop);
         self.process_msg_type = saved_process_msg;
         self.variables = saved_vars;
         self.type_subst = saved_subst;
@@ -217,9 +238,9 @@ impl<'ctx> Compiler<'ctx> {
         self.functions.insert(mangled.clone(), fn_value);
 
         let entry = self.context.append_basic_block(fn_value, "entry");
-        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_vars = mem::take(&mut self.variables);
         let saved_block = self.builder.get_insert_block();
-        let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
+        let saved_subst = mem::replace(&mut self.type_subst, subst.clone());
 
         self.builder.position_at_end(entry);
 
@@ -695,7 +716,7 @@ fn split_mangled_args(s: &str) -> Vec<String> {
             current.push('$');
             i += 1;
         } else if bytes[i] == b'.' && depth == 0 {
-            parts.push(std::mem::take(&mut current));
+            parts.push(mem::take(&mut current));
             i += 1;
         } else {
             current.push(bytes[i] as char);

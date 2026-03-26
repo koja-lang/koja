@@ -144,17 +144,21 @@ pub fn compile_statement<'ctx>(
 
         Statement::Return { value, .. } => {
             if let Some(expr) = value {
+                c.tco.mark_tail();
                 let val = compile_expr(c, expr, function)?.map(|tv| tv.value);
-                let skip = match expr {
-                    Expr::Ident { name, .. } => Some(name.as_str()),
-                    _ => None,
-                };
-                crate::drop::drop_live_variables(c, skip);
-                if let Some(v) = val {
-                    let v = apply_coercion(c, v, expr)?;
-                    c.builder.build_return(Some(&v)).unwrap();
-                } else {
-                    c.builder.build_return(None).unwrap();
+                c.tco.clear_tail();
+                if !c.current_block_terminated() {
+                    let skip = match expr {
+                        Expr::Ident { name, .. } => Some(name.as_str()),
+                        _ => None,
+                    };
+                    crate::drop::drop_live_variables(c, skip);
+                    if let Some(v) = val {
+                        let v = apply_coercion(c, v, expr)?;
+                        c.builder.build_return(Some(&v)).unwrap();
+                    } else {
+                        c.builder.build_return(None).unwrap();
+                    }
                 }
             } else {
                 crate::drop::drop_live_variables(c, None);

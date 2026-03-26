@@ -1,0 +1,18 @@
+struct Counter
+  n: Int
+end
+
+impl Counter
+  fn count_down(move self) -> Self
+    if self.n <= 0
+      return self
+    end
+    Counter{n: self.n - 1}.count_down()
+  end
+end
+
+fn main
+  c = Counter{n: 100000}
+  result = c.count_down()
+  print(result.n)
+end

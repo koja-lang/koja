@@ -6,7 +6,7 @@ use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-const STACK_SIZE: usize = 4 * 1024 * 1024;
+const STACK_SIZE: usize = 512 * 1024;
 
 type ProcessFn = extern "C" fn(*const u8);
 

@@ -214,6 +214,8 @@ pub fn compile_method_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
+    let was_tail = c.tco.save_tail();
+
     if let Expr::Ident { name, .. } = receiver
         && c.type_ctx.imported_modules.contains_key(name)
         && !c.variables.contains_key(name)
@@ -345,6 +347,20 @@ pub fn compile_method_call<'ctx>(
                 .value
         };
         llvm_args.push(val.into());
+    }
+
+    c.tco.restore_tail(was_tail);
+
+    let is_tail = c.tco.is_self_tail_call(&mangled, was_tail);
+
+    if is_tail && let Some(loop_header) = c.tco.loop_header {
+        crate::drop::drop_live_variables(c, Some("self"));
+        for (arg, alloca) in llvm_args.iter().zip(c.tco.param_allocas.iter()) {
+            let val: BasicValueEnum = (*arg).try_into().unwrap();
+            c.builder.build_store(*alloca, val).unwrap();
+        }
+        c.builder.build_unconditional_branch(loop_header).unwrap();
+        return Ok(None);
     }
 
     let result = c

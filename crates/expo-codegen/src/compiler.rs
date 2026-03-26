@@ -2,6 +2,7 @@
 //! defines functions, and orchestrates emission of native object files.
 
 use std::collections::{BTreeMap, HashMap};
+use std::mem;
 use std::path::Path;
 
 use crate::drop::Ownership;
@@ -53,6 +54,94 @@ impl<'ctx> TypedValue<'ctx> {
 /// Shorthand for the return type of `compile_expr` and related functions.
 pub type ExprResult<'ctx> = Result<Option<TypedValue<'ctx>>, String>;
 
+/// Tracks state needed to detect and rewrite self-recursive tail calls
+/// as loops. Isolated as a struct so it can move independently when
+/// `Compiler` is broken into smaller pieces.
+pub struct TailCallCtx<'ctx> {
+    /// Mangled name of the function currently being compiled.
+    current_fn: Option<String>,
+    /// Whether the current expression is in tail position.
+    tail_position: bool,
+    /// Loop header block for the current function. When a self-recursive
+    /// tail call is detected, codegen stores new arguments into the
+    /// parameter allocas and branches here instead of emitting a call.
+    pub loop_header: Option<BasicBlock<'ctx>>,
+    /// Parameter allocas in call order (self first, then regular params).
+    pub param_allocas: Vec<PointerValue<'ctx>>,
+}
+
+impl<'ctx> TailCallCtx<'ctx> {
+    pub fn new() -> Self {
+        Self {
+            current_fn: None,
+            tail_position: false,
+            loop_header: None,
+            param_allocas: Vec::new(),
+        }
+    }
+
+    /// Set the current function name at method-body entry. Returns the
+    /// previous value so the caller can restore it on exit.
+    pub fn enter_fn(&mut self, name: String) -> Option<String> {
+        self.current_fn.replace(name)
+    }
+
+    /// Restore the previous function name when leaving a method body.
+    pub fn leave_fn(&mut self, saved: Option<String>) {
+        self.current_fn = saved;
+    }
+
+    /// Set the loop header and parameter allocas for the current function.
+    /// Returns the previous values for restoration on exit.
+    pub fn set_loop(
+        &mut self,
+        header: BasicBlock<'ctx>,
+        allocas: Vec<PointerValue<'ctx>>,
+    ) -> (Option<BasicBlock<'ctx>>, Vec<PointerValue<'ctx>>) {
+        let saved_header = self.loop_header.replace(header);
+        let saved_allocas = mem::replace(&mut self.param_allocas, allocas);
+        (saved_header, saved_allocas)
+    }
+
+    /// Restore the previous loop header and parameter allocas.
+    pub fn restore_loop(&mut self, saved: (Option<BasicBlock<'ctx>>, Vec<PointerValue<'ctx>>)) {
+        self.loop_header = saved.0;
+        self.param_allocas = saved.1;
+    }
+
+    /// Mark the current compile position as tail position.
+    pub fn mark_tail(&mut self) {
+        self.tail_position = true;
+    }
+
+    /// Clear the tail-position flag.
+    pub fn clear_tail(&mut self) {
+        self.tail_position = false;
+    }
+
+    /// Save and clear the tail-position flag. The flag is cleared so that
+    /// subexpressions (receiver, arguments) don't inherit it. The returned
+    /// value must be passed to `restore_tail` and `is_self_tail_call`.
+    pub fn save_tail(&mut self) -> bool {
+        mem::replace(&mut self.tail_position, false)
+    }
+
+    /// Restore the tail-position flag after subexpression compilation.
+    /// This ensures sibling code paths (other match arms, if/else branches)
+    /// still see the flag.
+    pub fn restore_tail(&mut self, was_tail: bool) {
+        if was_tail {
+            self.tail_position = true;
+        }
+    }
+
+    /// Check whether `callee` is a self-recursive call that should be
+    /// rewritten as a loop jump. `was_tail` should come from `save_tail`.
+    pub fn is_self_tail_call(&self, callee: &str, was_tail: bool) -> bool {
+        was_tail && self.current_fn.as_deref() == Some(callee)
+    }
+}
+
 /// Holds all LLVM state needed to compile an Expo module: the LLVM context,
 /// module, builder, declared functions, variable bindings, and type mappings.
 pub struct Compiler<'ctx> {
@@ -85,6 +174,8 @@ pub struct Compiler<'ctx> {
     /// they can't be inferred from arguments (e.g. `Option.None` inside
     /// a method with its own type parameters like `map<U>`).
     pub return_type_hint: Option<Type>,
+    /// Self-recursive tail call optimization state.
+    pub tco: TailCallCtx<'ctx>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -112,6 +203,7 @@ impl<'ctx> Compiler<'ctx> {
             process_msg_type: None,
             fn_ref_thunks: HashMap::new(),
             return_type_hint: None,
+            tco: TailCallCtx::new(),
         }
     }
 
