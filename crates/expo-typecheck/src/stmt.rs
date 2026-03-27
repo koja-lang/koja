@@ -10,7 +10,7 @@ use crate::check::{record_coercion_if_needed, types_compatible};
 use crate::context::{FunctionKind, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarState};
 use crate::expr::{expr_span, infer_expr, resolve_receiver_base_name};
-use crate::types::{Type, resolve_type_expr};
+use crate::types::{GenericKind, Type, resolve_type_expr};
 
 /// Checks all statements in a body sequentially.
 pub(crate) fn check_body(stmts: &[Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) {
@@ -148,7 +148,7 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
                 );
                 return;
             }
-            let target_type = ce.get_type(target_name).cloned().unwrap_or_else(|| {
+            let root_type = ce.get_type(target_name).cloned().unwrap_or_else(|| {
                 ctx.error_with_hint(
                     format!("unknown variable `{}`", target_name),
                     "check the spelling or make sure it is defined before this line".into(),
@@ -156,6 +156,32 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
                 );
                 Type::Error
             });
+
+            let target_type = if target.segments.len() > 1 {
+                let mut ty = root_type;
+                for seg in &target.segments[1..] {
+                    ty = resolve_field_type(&ty, seg, ctx).unwrap_or(Type::Error);
+                }
+                ty
+            } else {
+                root_type
+            };
+
+            if target.segments.len() > 1
+                && target.segments[0] == "self"
+                && ce.kind != FunctionKind::Instance(PassMode::Move)
+            {
+                ctx.error_with_hint(
+                    format!(
+                        "cannot mutate `{}` -- `self` is borrowed (read-only)",
+                        target.segments.join(".")
+                    ),
+                    "use `move self` and return the modified value to mutate".into(),
+                    *span,
+                );
+                return;
+            }
+
             let value_type = infer_expr(value, ctx, ce);
             if target_type.is_known() && value_type.is_known() && !target_type.is_numeric() {
                 ctx.error(
@@ -225,4 +251,24 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
             }
         }
     }
+}
+
+/// Resolves the type of a struct field by name, returning `None` if the
+/// type is not a struct or the field doesn't exist.
+fn resolve_field_type(ty: &Type, field: &str, ctx: &TypeContext) -> Option<Type> {
+    let struct_name = match ty {
+        Type::Struct(n) => n.as_str(),
+        Type::GenericInstance {
+            base,
+            kind: GenericKind::Struct,
+            ..
+        } => base.as_str(),
+        _ => return None,
+    };
+    let ti = ctx.types.get(struct_name)?;
+    let fields = ti.fields()?;
+    fields
+        .iter()
+        .find(|(n, _)| n == field)
+        .map(|(_, t)| t.clone())
 }

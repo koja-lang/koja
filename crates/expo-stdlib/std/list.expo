@@ -23,53 +23,14 @@ end
 
 impl List<T>
   @doc """
-  Creates a new empty list.
+  Returns `true` if `f` returns `true` for every element.
+  Returns `true` for an empty list.
   """
-  fn new -> List<T>
-    panic("intrinsic")
-  end
-
-  @doc """
-  Appends an element to the end of the list and returns the updated list.
-  """
-  fn append(move self, item: T) -> List<T>
-    panic("intrinsic")
-  end
-
-  @doc """
-  Returns the last element, or `None` if the list is empty.
-  """
-  fn last(self) -> Option<T>
-    self.get(self.length() - 1)
-  end
-
-  @doc """
-  Returns `true` if the list contains no elements.
-  """
-  fn empty?(self) -> Bool
-    panic("intrinsic")
-  end
-
-  @doc """
-  Returns a new list with `f` applied to each element. The closure may
-  return a different type, producing a `List<U>` from a `List<T>`.
-  """
-  fn map<U>(self, f: fn(T) -> U) -> List<U>
-    result: List<U> = List.new()
+  fn all?(self, f: fn(T) -> Bool) -> Bool
+    result = true
     for item in self
-      result = result.append(f(item))
-    end
-    result
-  end
-
-  @doc """
-  Returns a new list containing only the elements for which `f` returns `true`.
-  """
-  fn filter(self, f: fn(T) -> Bool) -> List<T>
-    result: List<T> = List.new()
-    for item in self
-      if f(item)
-        result = result.append(item)
+      unless f(item)
+        result = false
       end
     end
     result
@@ -89,17 +50,135 @@ impl List<T>
   end
 
   @doc """
-  Returns `true` if `f` returns `true` for every element.
-  Returns `true` for an empty list.
+  Appends an element to the end of the list and returns the updated list.
   """
-  fn all?(self, f: fn(T) -> Bool) -> Bool
-    result = true
+  fn append(move self, item: T) -> List<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Appends all elements of `other` to the end of this list and returns the
+  combined list.
+  """
+  fn concat(move self, other: List<T>) -> List<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `true` if the list contains no elements.
+  """
+  fn empty?(self) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns a new list containing only the elements for which `f` returns `true`.
+  """
+  fn filter(self, f: fn(T) -> Bool) -> List<T>
+    result: List<T> = List.new()
     for item in self
-      unless f(item)
-        result = false
+      if f(item)
+        result = result.append(item)
       end
     end
     result
+  end
+
+  @doc """
+  Returns the first element for which `f` returns `true`, or `None`.
+  """
+  fn find(self, f: fn(T) -> Bool) -> Option<T>
+    for item in self
+      if f(item)
+        return Option.Some(item)
+      end
+    end
+    Option.None
+  end
+
+  @doc """
+  Returns the first element, or `None` if the list is empty.
+  """
+  fn first(self) -> Option<T>
+    self.get(0)
+  end
+
+  @doc """
+  Returns the last element, or `None` if the list is empty.
+  """
+  fn last(self) -> Option<T>
+    self.get(self.length() - 1)
+  end
+
+  @doc """
+  Returns a new list with `f` applied to each element. The closure may
+  return a different type, producing a `List<U>` from a `List<T>`.
+  """
+  fn map<U>(self, f: fn(T) -> U) -> List<U>
+    result: List<U> = List.new()
+    for item in self
+      result = result.append(f(item))
+    end
+    result
+  end
+
+  @doc """
+  Creates a new empty list.
+  """
+  fn new -> List<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Removes the last element. Returns a pair of the removed element (or `None`
+  if empty) and the remaining list.
+  """
+  fn pop(move self) -> Pair<Option<T>, List<T>>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Reduces the list to a single value by applying `f` to the accumulator
+  and each element. `initial` is the starting accumulator value.
+  """
+  fn reduce<U>(self, initial: U, f: fn(U, T) -> U) -> U
+    acc = initial
+    for item in self
+      acc = f(acc, item)
+    end
+    acc
+  end
+
+  @doc """
+  Replaces the element at `index` with `value` and returns the updated list.
+  Out-of-bounds indices are a no-op (returns the list unchanged).
+  """
+  fn replace_at(move self, index: Int, value: T) -> List<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns a new list with the elements in reverse order.
+  """
+  fn reverse(self) -> List<T>
+    result: List<T> = List.new()
+    i = self.length() - 1
+    while i >= 0
+      match self.get(i)
+        Option.Some(item) -> result = result.append(item)
+        Option.None -> ()
+      end
+      i = i - 1
+    end
+    result
+  end
+
+  @doc """
+  Returns a new list containing `count` elements starting at `start`.
+  Clamps to bounds -- never panics.
+  """
+  fn slice(self, start: Int, count: Int) -> List<T>
+    panic("intrinsic")
   end
 end
 

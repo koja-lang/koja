@@ -9,7 +9,7 @@ use expo_typecheck::context::Coercion;
 use expo_typecheck::types::{
     GenericKind, Primitive, Type, mangle_name, mangle_type, substitute, substitute_preserving,
 };
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
 use crate::compiler::Compiler;
@@ -176,23 +176,25 @@ pub fn compile_statement<'ctx>(
         Statement::CompoundAssign {
             target, op, value, ..
         } => {
-            if target.segments.len() != 1 {
-                return Err("compound assignment to fields not yet supported".to_string());
-            }
-            let name = &target.segments[0];
+            let (ptr, target_ty) = if target.segments.len() == 1 {
+                let name = &target.segments[0];
+                let (ptr, var_ty, _) = c
+                    .variables
+                    .get(name)
+                    .ok_or_else(|| format!("undefined variable: {name}"))?
+                    .clone();
+                (ptr, var_ty)
+            } else {
+                resolve_field_ptr(c, &target.segments)?
+            };
 
-            let (ptr, var_ty, _) = c
-                .variables
-                .get(name)
-                .ok_or_else(|| format!("undefined variable: {name}"))?
-                .clone();
-
-            let llvm_ty = to_llvm_type(&var_ty, c.context, &c.struct_types)
+            let llvm_ty = to_llvm_type(&target_ty, c.context, &c.struct_types)
                 .ok_or("cannot load variable of unsupported type")?;
-            let current = c.builder.build_load(llvm_ty, ptr, name).unwrap();
+            let current = c.builder.build_load(llvm_ty, ptr, "cur").unwrap();
             let rhs = compile_expr(c, value, function)?
                 .ok_or("compound assignment value produced no value")?
                 .value;
+            let rhs = coerce_numeric(c, rhs, &target_ty);
 
             if current.is_int_value() && rhs.is_int_value() {
                 let l = current.into_int_value();
@@ -223,11 +225,12 @@ pub fn compile_statement<'ctx>(
     }
 }
 
-fn compile_field_assignment<'ctx>(
-    c: &mut Compiler<'ctx>,
+/// Walks a dotted field path (`self.span.start.line`) and returns the LLVM
+/// pointer to the final field plus its Expo type.
+fn resolve_field_ptr<'ctx>(
+    c: &Compiler<'ctx>,
     segments: &[String],
-    val: BasicValueEnum<'ctx>,
-) -> Result<(), String> {
+) -> Result<(PointerValue<'ctx>, Type), String> {
     let var_name = &segments[0];
     let (mut ptr, ty, _) = c
         .variables
@@ -278,7 +281,17 @@ fn compile_field_assignment<'ctx>(
         current_type = field_ty;
     }
 
-    c.builder.build_store(ptr, val).unwrap();
+    Ok((ptr, current_type))
+}
+
+fn compile_field_assignment<'ctx>(
+    c: &mut Compiler<'ctx>,
+    segments: &[String],
+    val: BasicValueEnum<'ctx>,
+) -> Result<(), String> {
+    let (ptr, field_ty) = resolve_field_ptr(c, segments)?;
+    let store_val = coerce_numeric(c, val, &field_ty);
+    c.builder.build_store(ptr, store_val).unwrap();
     Ok(())
 }
 
@@ -690,7 +703,7 @@ fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
         };
     }
     if !matches!(ty, Type::Primitive(Primitive::String)) {
-        return Ownership::Unowned;
+        return Ownership::Owned;
     }
     match expr {
         Expr::String { parts, .. } => {

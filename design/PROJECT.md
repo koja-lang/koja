@@ -463,7 +463,7 @@ variable move tracking (`Live`/`Moved`/`MaybeMoved`), extended to struct
 field initialization across function boundaries.
 
 The self-hosted compiler's architecture (see COMPILER.md) enables this.
-The Rust bootstrap compiler only holds function *signatures* during
+The Rust bootstrap compiler only holds function _signatures_ during
 checking -- bodies are checked independently. The self-hosted compiler's
 immutable `TypeContext` with all code in memory allows the checker to
 walk into called functions and trace data flow.
@@ -530,3 +530,62 @@ assignment analysis. No dedicated keyword needed.
   are subtypes of narrower ones). Most ML-family languages say no (exact match).
   Exact match is simpler and more predictable. Width subtyping is more flexible
   but makes type errors harder to diagnose.
+
+---
+
+## JSON decoding: pipeline pattern over `mapN` combinators
+
+JSON decoding typically uses `mapN` combinators (`map2`, `map3`, ..., `map8`)
+to combine N decoders of different types into one result. This has an arity
+problem: you need a separate function for each parameter count.
+
+Expo can avoid `mapN` entirely by leveraging `JsonValue` as the
+heterogeneous carrier. The key insight: `JsonValue` (an enum) already holds
+String, Int, Float, Bool, etc. in a type-safe way. There's no need to
+extract typed values during the validation phase. Validate the structure
+first, extract typed values once at construction time.
+
+This collapses JSON decoding into the `Step<T>` pipeline pattern where
+`T = Decoder` (a struct carrying the source JSON object + accumulated
+errors). Every step has the same type signature (`Decoder -> Decoder`),
+so there's no arity explosion:
+
+```expo
+Decoder.from(json)
+  .require("name", JsonType.String)
+  .require("age", JsonType.Number)
+  .require("email", JsonType.String)
+  .validate("age", fn (v) -> v.as_int() > 0, "must be positive")
+  .validate("email", fn (v) -> valid_email?(v.as_string()), "invalid format")
+  .build(fn (obj) ->
+    User{
+      name: obj.get("name").unwrap().as_string(),
+      age: obj.get("age").unwrap().as_int(),
+      email: obj.get("email").unwrap().as_string(),
+    }
+  end)
+```
+
+How it works:
+
+- `.require(field, type)` checks the field exists and has the expected JSON
+  type. Passes through on success, appends a `DecodeError` on failure.
+- `.validate(field, check, msg)` runs a domain validation predicate on an
+  already-validated field. Appends an error on failure.
+- `.build(construct)` returns `Result<T, List<DecodeError>>`. The construct
+  closure only runs if all validations passed, so `unwrap()` / `as_string()`
+  calls are guaranteed safe.
+
+Error accumulation is natural: every step is independent, so all field
+errors are collected in one pass. A single API response surfaces every
+problem at once (missing fields, wrong types, domain violations).
+
+The trade-off: the `build` closure uses `unwrap()` which the compiler
+can't statically verify. This is the same safety model as Ecto changesets
+-- validation ensures correctness, construction trusts it. The invariant
+is easy to maintain because validation and construction are adjacent in
+the same pipeline.
+
+No new language features required. Uses enums, closures, `move self`
+method chaining, generics, and `Result` -- all of which exist today
+(pending the recursive enum codegen fix for `JsonValue` itself).

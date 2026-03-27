@@ -34,7 +34,9 @@ pub fn drop_live_variables(c: &mut Compiler, skip: Option<&str>) {
             continue;
         }
         if matches!(ty, Type::Function { .. }) {
-            emit_drop_closure(c, *ptr);
+            if *ownership == Ownership::Owned {
+                emit_drop_closure(c, *ptr);
+            }
             continue;
         }
         if ty.is_copy() {
@@ -77,7 +79,9 @@ pub fn drop_live_variables(c: &mut Compiler, skip: Option<&str>) {
                 .unwrap();
             continue;
         }
-        emit_drop(c, *ptr, ty);
+        if *ownership == Ownership::Owned {
+            emit_drop(c, *ptr, ty);
+        }
     }
 }
 

@@ -1,0 +1,88 @@
+fn main
+  list = [10, 20, 30, 40, 50]
+
+  # first
+  match list.first()
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+
+  # pop non-empty
+  pair = list.pop()
+  match pair.first
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+  print(pair.second.length())
+
+  # pop until empty
+  rest = pair.second
+  rest = rest.pop().second
+  rest = rest.pop().second
+  rest = rest.pop().second
+  empty_pair = rest.pop()
+  match empty_pair.first
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+
+  # replace_at in bounds
+  updated = [1, 2, 3].replace_at(1, 99)
+  match updated.get(1)
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+
+  # replace_at out of bounds (no-op)
+  same = [1, 2, 3].replace_at(10, 99)
+  print(same.length())
+
+  # slice
+  sliced = [10, 20, 30, 40, 50].slice(1, 3)
+  print(sliced.length())
+  match sliced.first()
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+  match sliced.last()
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+
+  # slice clamped
+  clamped = [1, 2, 3].slice(1, 100)
+  print(clamped.length())
+
+  # concat
+  combined = [1, 2].concat([3, 4, 5])
+  print(combined.length())
+  match combined.last()
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+
+  # reverse
+  rev = [1, 2, 3].reverse()
+  match rev.first()
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+  match rev.last()
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+
+  # find
+  match [10, 20, 30].find(fn (x: Int) -> Bool x > 15 end)
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+  match [10, 20, 30].find(fn (x: Int) -> Bool x > 100 end)
+    Option.Some(v) -> print(v)
+    Option.None -> print(-1)
+  end
+
+  # reduce
+  sum = [1, 2, 3, 4].reduce(0, fn (acc: Int, x: Int) -> Int acc + x end)
+  print(sum)
+end

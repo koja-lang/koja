@@ -1,4 +1,5 @@
 fn main
+  # List.new + append
   list: List<Int> = List.new()
   list = list.append(10)
   list = list.append(20)
@@ -9,4 +10,26 @@ fn main
   print(list.get(1).unwrap())
   print(list.get(2).unwrap())
   print(list.empty?())
+
+  # literal syntax
+  nums = [10, 20, 30]
+  print(nums.length())
+  print(nums.get(0).unwrap())
+  print(nums.get(1).unwrap())
+  print(nums.get(2).unwrap())
+
+  # empty literal
+  empty: List<Int> = []
+  print(empty.length())
+  print(empty.empty?())
+
+  # string list
+  words = ["hello", "world"]
+  print(words.get(0).unwrap())
+  print(words.get(1).unwrap())
+
+  # single-element literal
+  single = [42]
+  print(single.length())
+  print(single.get(0).unwrap())
 end

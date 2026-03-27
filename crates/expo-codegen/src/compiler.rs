@@ -215,6 +215,29 @@ impl<'ctx> Compiler<'ctx> {
             .map(|(name, _)| name.clone())
     }
 
+    /// Emits an `alloca` in the current function's entry block so that
+    /// the allocation happens exactly once, even when the call-site is
+    /// inside a loop.
+    pub fn build_entry_alloca(
+        &self,
+        ty: impl inkwell::types::BasicType<'ctx>,
+        name: &str,
+    ) -> inkwell::values::PointerValue<'ctx> {
+        let current_bb = self.builder.get_insert_block().unwrap();
+        let fn_val = current_bb.get_parent().unwrap();
+        let entry_bb = fn_val.get_first_basic_block().unwrap();
+
+        if let Some(first_instr) = entry_bb.get_first_instruction() {
+            self.builder.position_before(&first_instr);
+        } else {
+            self.builder.position_at_end(entry_bb);
+        }
+
+        let alloca = self.builder.build_alloca(ty, name).unwrap();
+        self.builder.position_at_end(current_bb);
+        alloca
+    }
+
     /// Returns true if the current basic block already has a terminator
     /// instruction (branch, return, etc.).
     pub fn current_block_terminated(&self) -> bool {

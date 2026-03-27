@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `List.last()` -- returns `Option<T>`: `Some(element)` for the last element, `None` if empty.
 - Compiler warning when the return value of a `move self` method is discarded in statement position. Suggests reassignment (`x = x.method(...)`) to capture the result.
 - Tail call optimization for self-recursive `move self` methods -- the compiler detects self-recursive calls in tail position (both implicit returns and explicit `return`) and rewrites them as loops, eliminating stack growth. Covers both `-> Self` and void-returning methods (e.g., `Process.run`). The `move self` recursive idiom is now safe for unbounded iteration.
+- `List<T>` methods -- `first`, `pop`, `replace_at`, `slice`, `concat`, `reverse`, `find`, `reduce`. `pop` returns `Pair<Option<T>, List<T>>` (element + remaining list). `replace_at` writes at an index. `slice` and `concat` use memcpy for bulk operations. `reverse`, `find`, and `reduce` are pure Expo. `reduce` accepts a generic accumulator type via `<U>`.
 
 ### Changed
 
@@ -47,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enum payload sizing (`llvm_field_byte_size`) did not account for ABI alignment padding in nested structs, producing undersized payload arrays (e.g. `[33 x i8]` instead of `[36 x i8]` for `Option<Token>`). Rewrote with a proper alignment-aware layout algorithm.
 - Functions where all control-flow paths explicitly `return` (e.g. exhaustive `match` arms each returning) emitted an unreachable `ret void` fallthrough, causing LLVM verification failures for non-Unit return types. Codegen now emits `unreachable` instead.
 - `return` of heap-owning types (`List`, `Map`, `Set`, `String`) from inside `if` blocks no longer causes a use-after-free. The codegen was dropping live variables before evaluating the return expression; now the return value is loaded first and excluded from cleanup.
+- Struct construction inside a TCO loop (e.g. `Counter{n: self.n - 1}.count_down()`) emitted an `alloca` in the loop body, growing the stack each iteration and crashing with SIGBUS on deep recursion. Allocas for struct temporaries are now hoisted to the function entry block.
+- Assigning to a sub-word struct field (e.g. `UInt32`) stored an `i64` value into an `i32` slot, clobbering the adjacent field. Field assignments and compound assignments now coerce the value to the target field's type width before storing.
+- Compound assignments (`+=`, `-=`, etc.) on struct fields (`self.pos += 1`) were rejected by the type checker and unsupported in codegen. Both now resolve the full dotted field path to determine the correct target type.
 - Formatter: `|` patterns in match arms pack densely with trailing `|` at line breaks instead of producing a single overflowing line. Blank lines are inserted between arms when any pattern wraps.
 - Formatter: `or` and `and` chains in cond conditions now pack densely (fill-style) instead of cascading one-per-line after the first break. Blank lines between cond arms when any condition wraps.
 

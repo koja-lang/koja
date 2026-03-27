@@ -47,7 +47,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - `match`
 - `cond`
 - Ternary (`? :`)
-- Compound assignment (`+=`, `-=`, `*=`, `/=`)
+- Compound assignment (`+=`, `-=`, `*=`, `/=`) on variables and struct fields (e.g., `self.pos += 1`)
 - String interpolation
 - Protocols (`protocol` keyword, `impl Protocol for Type` conformance)
 - Closures (block form, with variable capture -- copy for primitives, move for structs/enums)
@@ -93,7 +93,6 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **Generic containers of recursive types**: `List<T>` and `Map<K, V>` fail in codegen when `T`/`V` is a recursive enum (e.g., `enum Val` with a `Arr(List<Val>)` variant). Direct recursion works (`Tree.Branch(Tree, Tree)`) because `Indirect` wrapping handles the pointer indirection, but the monomorphized generic (`List_$Val$`) can't be loaded from a match binding. Blocks JSON-style data models (`Array(List<JsonValue>)`, `Object(Map<String, JsonValue>)`). Fix is in codegen type mapping -- `to_llvm_type` / variable loading needs to handle `Indirect` element types inside generic containers.
 - **Closure `move` params**: `ClosureParam` has no `PassMode` field -- `fn (move x: T) -> U ... end` doesn't parse. `Type::Function` also doesn't carry param modes, so the type checker can't enforce `fn(move T) -> U` vs `fn(T) -> U` contracts. Both need fixing: add `mode` to `ClosureParam`, parse `move` in closure params, and add param modes to `Type::Function` for type-level enforcement.
 - ~~**Tail call optimization**~~: **Done.** Self-recursive `move self` methods are rewritten as loops when a self-call appears in tail position (implicit returns and explicit `return`). Covers both `-> Self` and void-returning methods (e.g., the default `Process.run` server loop). Eliminates stack growth for the language's core recursive idiom. General TCO (mutual recursion, arbitrary tail calls) remains future work.
-- **List mutation methods**: `List<T>` has no `pop`/`remove_last`, `replace_at`, or `set` methods. Elements retrieved via `get` or `last` are copies, so mutating them has no effect on the list. Blocks natural patterns like tracking brace depth in an interpolation stack (`string_stack.last()` returns a copy). Fix: add `pop` (returns `Option<Pair<T, List<T>>>` or similar) and `replace_at(index, value)` as intrinsics in `std.list` with codegen in `list.rs`. Surfaced by the self-hosted lexer port.
 - **Identifier priming for keyword/builtin collisions**: (for self-hosting) `IDENT` and `TYPE_IDENT` cannot use reserved words or built-in type names as identifiers. Trailing prime notation (`'`) would allow `end'` as a field name and `Self'` or `String'` as enum variant names without ambiguity. Grammar change: append `[ "'" ]` to both `IDENT` and `TYPE_IDENT` rules (trailing-only, single prime). Surfaced by the `expo-ast` self-hosting port: `Span.end` had to become `Span.stop`, and enum variants like `Self`, `String`, `Bool`, `Int`, `Float` needed descriptive renames (`SelfReceiver`, `StringVal`, `BoolLit`, etc.). Leading `'` stays invalid, so `'wrongstring'` is always a syntax error.
 
 ### Design artifacts

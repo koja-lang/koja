@@ -3,8 +3,9 @@
 
 use std::collections::HashMap;
 
+use expo_ast::ast::PassMode;
 use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit};
-use expo_typecheck::context::TypeInfo;
+use expo_typecheck::context::{FunctionKind, TypeInfo};
 use expo_typecheck::types::{
     GenericKind, Type, build_substitution, mangle_name, substitute, unify, unwrap_indirect,
 };
@@ -368,6 +369,23 @@ pub fn compile_method_call<'ctx>(
         .build_call(callee, &llvm_args, &format!("{mangled}_ret"))
         .unwrap();
 
+    if let Some(ti) = c.type_ctx.types.get(&base)
+        && let Some(sig) = ti.functions.get(method)
+        && sig.kind == FunctionKind::Instance(PassMode::Move)
+    {
+        let recv_name = match receiver {
+            Expr::Ident { name, .. } => Some(name.as_str()),
+            Expr::Self_ { .. } => Some("self"),
+            _ => None,
+        };
+        if let Some(name) = recv_name
+            && let Some((ptr, ty, _)) = c.variables.get(name)
+        {
+            let entry = (*ptr, ty.clone(), crate::drop::Ownership::Unowned);
+            c.variables.insert(name.to_string(), entry);
+        }
+    }
+
     Ok(result
         .try_as_basic_value()
         .left()
@@ -655,10 +673,7 @@ pub fn compile_struct_construction<'ctx>(
         .fields()
         .ok_or_else(|| format!("internal: `{struct_name}` is not a struct"))?;
 
-    let alloca = c
-        .builder
-        .build_alloca(struct_type, &format!("{struct_name}_tmp"))
-        .unwrap();
+    let alloca = c.build_entry_alloca(struct_type, &format!("{struct_name}_tmp"));
 
     for field_init in fields {
         let (field_idx, field_type) = struct_fields
@@ -778,10 +793,7 @@ fn compile_generic_struct_construction<'ctx>(
         .get(&mangled)
         .ok_or_else(|| format!("monomorphized struct `{mangled}` not found"))?;
 
-    let alloca = c
-        .builder
-        .build_alloca(struct_type, &format!("{mangled}_tmp"))
-        .unwrap();
+    let alloca = c.build_entry_alloca(struct_type, &format!("{mangled}_tmp"));
 
     for (field_name, field_val, _) in &compiled_fields {
         let field_idx = c
