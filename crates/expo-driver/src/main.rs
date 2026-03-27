@@ -40,32 +40,48 @@ enum Command {
     },
     /// Type-check a source file without compiling
     Check {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Source files (omit to use project.expo)
+        files: Vec<String>,
     },
     /// Generate HTML documentation
     Doc {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Source files or directories (omit to use project.expo)
+        files: Vec<String>,
+
+        /// Output directory for generated HTML
+        #[arg(short, long, default_value = "doc")]
+        output: String,
     },
     /// Format source files
     Format {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Source files to format
+        files: Vec<String>,
+
+        /// Check if files need formatting (exit 1 if so)
+        #[arg(long)]
+        check: bool,
+
+        /// Write formatted output back to files
+        #[arg(long = "write")]
+        write_back: bool,
     },
     /// Dump the token stream
     Lex {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Source files to lex
+        files: Vec<String>,
     },
     /// Dump the parsed AST
     Parse {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Source files to parse
+        files: Vec<String>,
     },
     /// Compile and run a source file
     Run {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        /// Source file (omit to use project.expo)
+        file: Option<String>,
+
+        /// Arguments passed to the compiled program
+        #[arg(last = true)]
         args: Vec<String>,
     },
 }
@@ -80,11 +96,15 @@ fn main() {
             output,
             emit_llvm,
         } => commands::cmd_build(file, output, emit_llvm, color),
-        Command::Check { args } => commands::cmd_check(&args, color),
-        Command::Doc { args } => commands::cmd_doc(&args, color),
-        Command::Format { args } => commands::cmd_format(&args, color),
-        Command::Lex { args } => commands::cmd_lex(&args, color),
-        Command::Parse { args } => commands::cmd_parse(&args, color),
-        Command::Run { args } => commands::cmd_run(&args, color),
+        Command::Check { files } => commands::cmd_check(files, color),
+        Command::Doc { files, output } => commands::cmd_doc(files, output, color),
+        Command::Format {
+            files,
+            check,
+            write_back,
+        } => commands::cmd_format(files, check, write_back, color),
+        Command::Lex { files } => commands::cmd_lex(files, color),
+        Command::Parse { files } => commands::cmd_parse(files, color),
+        Command::Run { file, args } => commands::cmd_run(file, args, color),
     }
 }

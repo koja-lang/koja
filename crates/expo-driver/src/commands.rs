@@ -50,14 +50,36 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, 
 /// `expo run [file.expo] [-- args...]` -- compiles to a temporary binary, runs it, then cleans up.
 ///
 /// With no arguments, looks for `project.expo` in the current directory.
-pub fn cmd_run(args: &[String], color: bool) {
-    let separator = args.iter().position(|a| a == "--");
-    let (build_args, run_args) = match separator {
-        Some(pos) => (&args[..pos], &args[pos + 1..]),
-        None => (args, &[] as &[String]),
-    };
+pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
+    if let Some(path) = file {
+        let tmp_dir = env::temp_dir();
+        let binary = tmp_dir.join(format!(
+            "expo_run_{}",
+            Path::new(&path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("out")
+        ));
+        let output = binary.to_str().unwrap().to_string();
 
-    if build_args.is_empty() {
+        let args = pipeline::BuildArgs {
+            source_file: Some(path),
+            output_name: Some(output),
+            emit_llvm: false,
+        };
+        pipeline::build(args, true, color);
+
+        let status = process::Command::new(&binary).args(&run_args).status();
+        let _ = fs::remove_file(&binary);
+
+        match status {
+            Ok(s) => process::exit(s.code().unwrap_or(1)),
+            Err(e) => {
+                eprintln!("failed to run binary: {e}");
+                process::exit(1);
+            }
+        }
+    } else {
         let cwd = env::current_dir().unwrap_or_else(|e| {
             eprintln!("error: cannot determine current directory: {e}");
             process::exit(1);
@@ -83,37 +105,7 @@ pub fn cmd_run(args: &[String], color: bool) {
 
         pipeline::build_project(&config, &cwd, Some(&output), true, color, false);
 
-        let status = process::Command::new(&binary).args(run_args).status();
-        let _ = fs::remove_file(&binary);
-
-        match status {
-            Ok(s) => process::exit(s.code().unwrap_or(1)),
-            Err(e) => {
-                eprintln!("failed to run binary: {e}");
-                process::exit(1);
-            }
-        }
-    } else {
-        let path = &build_args[0];
-        let tmp_dir = env::temp_dir();
-        let binary = tmp_dir.join(format!(
-            "expo_run_{}",
-            Path::new(path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("out")
-        ));
-        let output = binary.to_str().unwrap().to_string();
-
-        let args = pipeline::BuildArgs {
-            source_file: Some(path.clone()),
-            output_name: Some(output.clone()),
-            emit_llvm: false,
-        };
-        pipeline::build(args, true, color);
-
-        let extra_args: Vec<&String> = build_args[1..].iter().chain(run_args.iter()).collect();
-        let status = process::Command::new(&binary).args(&extra_args).status();
+        let status = process::Command::new(&binary).args(&run_args).status();
         let _ = fs::remove_file(&binary);
 
         match status {
@@ -129,8 +121,8 @@ pub fn cmd_run(args: &[String], color: bool) {
 /// `expo check [file.expo ...]` -- type-checks without producing an executable.
 ///
 /// With no arguments, looks for `project.expo` in the current directory.
-pub fn cmd_check(args: &[String], color: bool) {
-    if args.is_empty() {
+pub fn cmd_check(files: Vec<String>, color: bool) {
+    if files.is_empty() {
         let cwd = env::current_dir().unwrap_or_else(|e| {
             eprintln!("error: cannot determine current directory: {e}");
             process::exit(1);
@@ -158,7 +150,7 @@ pub fn cmd_check(args: &[String], color: bool) {
         return;
     }
 
-    for path in args {
+    for path in &files {
         let entry_path = match Path::new(path).canonicalize() {
             Ok(p) => p,
             Err(e) => {
@@ -175,50 +167,58 @@ pub fn cmd_check(args: &[String], color: bool) {
     }
 }
 
-/// `expo doc <file.expo ...> [-o output_dir]` -- generates HTML documentation.
-pub fn cmd_doc(args: &[String], color: bool) {
-    if args.is_empty() {
-        eprintln!("Usage: expo doc <file.expo ...> [-o output_dir]");
-        process::exit(1);
-    }
+/// `expo doc [file.expo ...] [-o output_dir]` -- generates HTML documentation.
+///
+/// With no arguments, looks for `project.expo` in the current directory.
+pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
+    let mut collected: Vec<(String, String)> = Vec::new();
 
-    let mut inputs = Vec::new();
-    let mut output_dir = "doc".to_string();
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "-o" {
-            if i + 1 < args.len() {
-                output_dir = args[i + 1].clone();
-                i += 2;
-            } else {
-                eprintln!("-o requires an argument");
+    if files.is_empty() {
+        let cwd = env::current_dir().unwrap_or_else(|e| {
+            eprintln!("error: cannot determine current directory: {e}");
+            process::exit(1);
+        });
+
+        let config = match project::load_project(&cwd) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                eprintln!("error: no source file specified and no project.expo found");
+                eprintln!("Usage: expo doc <file.expo ...> [-o output_dir]");
+                eprintln!("  or:  create a project.expo in the current directory");
                 process::exit(1);
             }
-        } else {
-            inputs.push(args[i].clone());
-            i += 1;
-        }
-    }
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+        };
 
-    let mut files: Vec<(String, String)> = Vec::new();
-    for input in &inputs {
-        let p = Path::new(input);
-        if p.is_dir() {
-            collect_expo_files(p, p, &mut files);
-        } else {
-            let name = Path::new(input)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            files.push((input.clone(), name));
+        for src_dir in &config.src {
+            let dir = cwd.join(src_dir);
+            if dir.is_dir() {
+                collect_expo_files_with_prefix(&dir, &dir, &config.name, &mut collected);
+            }
+        }
+    } else {
+        for input in &files {
+            let p = Path::new(input);
+            if p.is_dir() {
+                collect_expo_files(p, p, &mut collected);
+            } else {
+                let name = Path::new(input)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                collected.push((input.clone(), name));
+            }
         }
     }
-    files.sort_by(|a, b| a.1.cmp(&b.1));
+    collected.sort_by(|a, b| a.1.cmp(&b.1));
 
     let mut doc_modules = Vec::new();
 
-    for (path, module_name) in &files {
+    for (path, module_name) in &collected {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -243,7 +243,7 @@ pub fn cmd_doc(args: &[String], color: bool) {
         return;
     }
 
-    let out_path = Path::new(&output_dir);
+    let out_path = Path::new(&output);
     if let Err(e) = fs::create_dir_all(out_path) {
         eprintln!("error creating output directory: {e}");
         process::exit(1);
@@ -301,16 +301,48 @@ fn collect_expo_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) 
     }
 }
 
+/// Like [`collect_expo_files`], but prefixes each module name with a project name
+/// (e.g. `src/lexer.expo` becomes `myproject.lexer`).
+fn collect_expo_files_with_prefix(
+    dir: &Path,
+    root: &Path,
+    prefix: &str,
+    out: &mut Vec<(String, String)>,
+) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error reading directory {}: {e}", dir.display());
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_expo_files_with_prefix(&path, root, prefix, out);
+        } else if path.extension().is_some_and(|ext| ext == "expo") {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .with_extension("")
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            let module_name = format!("{prefix}.{relative}");
+            if let Some(s) = path.to_str() {
+                out.push((s.to_string(), module_name));
+            }
+        }
+    }
+}
+
 /// `expo format <file.expo> [--check] [--write]` -- formats Expo source files.
-pub fn cmd_format(args: &[String], color: bool) {
-    if args.is_empty() {
+pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
+    if files.is_empty() {
         eprintln!("Usage: expo format <file.expo> [--check] [--write]");
         process::exit(1);
     }
-
-    let check = args.contains(&"--check".to_string());
-    let write = args.contains(&"--write".to_string());
-    let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
 
     let mut has_diff = false;
     for path in &files {
@@ -369,13 +401,13 @@ pub fn cmd_format(args: &[String], color: bool) {
 }
 
 /// `expo parse <file.expo>` -- parses and reports item count or errors.
-pub fn cmd_parse(args: &[String], color: bool) {
-    if args.is_empty() {
+pub fn cmd_parse(files: Vec<String>, color: bool) {
+    if files.is_empty() {
         eprintln!("Usage: expo parse <file.expo>");
         process::exit(1);
     }
 
-    for path in args {
+    for path in &files {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -395,13 +427,13 @@ pub fn cmd_parse(args: &[String], color: bool) {
 }
 
 /// `expo lex <file.expo>` -- lexes and prints every token with its position.
-pub fn cmd_lex(args: &[String], color: bool) {
-    if args.is_empty() {
+pub fn cmd_lex(files: Vec<String>, color: bool) {
+    if files.is_empty() {
         eprintln!("Usage: expo lex <file.expo>");
         process::exit(1);
     }
 
-    for path in args {
+    for path in &files {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {

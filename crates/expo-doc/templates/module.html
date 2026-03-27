@@ -11,6 +11,34 @@
 </head>
 <body>
 
+<div class="theme-toggle" role="radiogroup" aria-label="Color theme">
+  <button id="theme-light" title="Light" aria-label="Light theme">☀</button>
+  <button id="theme-auto" title="Auto" aria-label="Auto theme" class="active">⬤</button>
+  <button id="theme-dark" title="Dark" aria-label="Dark theme">☽</button>
+</div>
+<script>
+(function() {
+  var root = document.documentElement;
+  var stored = localStorage.getItem('expo-doc-theme') || 'auto';
+  if (stored !== 'auto') root.setAttribute('data-theme', stored);
+  setActive(stored);
+  document.getElementById('theme-light').onclick = function() { set('light'); };
+  document.getElementById('theme-auto').onclick  = function() { set('auto'); };
+  document.getElementById('theme-dark').onclick  = function() { set('dark'); };
+  function set(t) {
+    localStorage.setItem('expo-doc-theme', t);
+    if (t === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', t);
+    setActive(t);
+  }
+  function setActive(t) {
+    document.querySelectorAll('.theme-toggle button').forEach(function(b) {
+      b.classList.toggle('active', b.id === 'theme-' + t);
+    });
+  }
+})();
+</script>
+
 {% include "sidebar.html" %}
 
 <main class="content">
@@ -20,8 +48,33 @@
   <div class="moduledoc">{{ doc|md }}</div>
   {% endif %}
 
+  {% if !constants.is_empty() %}
+  <h2 class="section-heading">Constants</h2>
+
+  <div class="summary">
+    {% for c in constants %}
+    <div class="summary-row">
+      <div class="summary-name"><a href="#const-{{ c.name }}">{{ c.name }}</a></div>
+      {% if let Some(doc) = c.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% for c in constants %}
+  <div class="detail" id="const-{{ c.name }}">
+    <div class="detail-signature">
+      <a class="anchor" href="#const-{{ c.name }}">#</a>const {{ c.name }}
+    </div>
+
+    {% if let Some(doc) = c.doc %}
+    <div class="detail-doc">{{ doc|md }}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+
   {% if !structs.is_empty() %}
-  <h2 class="section-heading">Types — Structs</h2>
+  <h2 class="section-heading">Structs</h2>
 
   <div class="summary">
     {% for s in structs %}
@@ -61,7 +114,7 @@
   {% endif %}
 
   {% if !enums.is_empty() %}
-  <h2 class="section-heading">Types — Enums</h2>
+  <h2 class="section-heading">Enums</h2>
 
   <div class="summary">
     {% for e in enums %}
@@ -107,31 +160,6 @@
 
   {% for f in functions %}
   {% include "function_detail.html" %}
-  {% endfor %}
-  {% endif %}
-
-  {% if !constants.is_empty() %}
-  <h2 class="section-heading">Constants</h2>
-
-  <div class="summary">
-    {% for c in constants %}
-    <div class="summary-row">
-      <div class="summary-name"><a href="#const-{{ c.name }}">{{ c.name }}</a></div>
-      {% if let Some(doc) = c.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-
-  {% for c in constants %}
-  <div class="detail" id="const-{{ c.name }}">
-    <div class="detail-signature">
-      <a class="anchor" href="#const-{{ c.name }}">#</a>const {{ c.name }}
-    </div>
-
-    {% if let Some(doc) = c.doc %}
-    <div class="detail-doc">{{ doc|md }}</div>
-    {% endif %}
-  </div>
   {% endfor %}
   {% endif %}
 </main>

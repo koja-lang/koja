@@ -116,7 +116,7 @@ pub fn compile_statement<'ctx>(
                             let ownership = ownership_for_expr(value, &ty);
                             let alloca_ty = to_llvm_type(&ty, c.context, &c.struct_types)
                                 .unwrap_or(val.get_type());
-                            let alloca = c.builder.build_alloca(alloca_ty, name).unwrap();
+                            let alloca = c.build_entry_alloca(alloca_ty, name);
                             c.builder.build_store(alloca, val).unwrap();
                             c.variables.insert(name.clone(), (alloca, ty, ownership));
                         }
@@ -134,7 +134,7 @@ pub fn compile_statement<'ctx>(
                     let ownership = ownership_for_expr(value, &ty);
                     let alloca_ty =
                         to_llvm_type(&ty, c.context, &c.struct_types).unwrap_or(val.get_type());
-                    let alloca = c.builder.build_alloca(alloca_ty, name).unwrap();
+                    let alloca = c.build_entry_alloca(alloca_ty, name);
                     c.builder.build_store(alloca, val).unwrap();
                     c.variables.insert(name.clone(), (alloca, ty, ownership));
                 }

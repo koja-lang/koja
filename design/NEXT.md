@@ -1,0 +1,80 @@
+# Roadmap Reorganization Notes
+
+Notes for updating `ROADMAP.md`. Not yet applied.
+
+---
+
+## Phase 3: Close with A4
+
+Phase 3 has accumulated a huge amount of completed work -- binary/bitstring system (A1a-A1e), string stdlib and type conversions (A2a-A2c), file I/O (A3a), project system (A3b), union types (B1), full process model (B2), Task (B3). Time to close it out.
+
+### Changes
+
+- **Remove A3c (test runner)** from Phase 3. Move to Phase 4 Track A.
+- **Remove B4 (scheduler + I/O)** from Phase 3. Move to Phase 4 Track B.
+- **A4 (lexer port)** is the sole remaining item. The validation milestone: Expo can write its own lexer, compiled by the Rust bootstrap, producing identical token output to the Rust lexer for all `.expo` test files.
+- A2d (ranges) stays deferred, not blocking.
+
+---
+
+## Phase 4: Merge current Phases 4 + 5
+
+Combine "Reliability" (current Phase 4) and "Stdlib + first-party packages" (current Phase 5) into a single phase with two independent tracks. Same structure that worked for Phase 3.
+
+### Track A: Stdlib + Ecosystem
+
+Making the language useful for real programs. No dependency on the multi-threaded scheduler.
+
+- A3c test runner (`@test` functions, `expo test`)
+- `Display` protocol (auto-derived string representations, `print` dispatches through it)
+- `time.DateTime`, `time.Duration`
+- File I/O extensions (`std.fd`, `std.file` additions)
+- Package manager (`project.expo` dependencies, resolution, lock file)
+- First-party packages: json, crypto, logging, MessagePack, UUID, regex, URL parsing
+- Networking: `net.tcp`, `net.udp`, `net.tls`, `http`, `websocket`
+
+Most of Track A can proceed without Track B. The convergence point is the HTTP server -- it needs both `net.tcp` (Track A) and the multi-threaded scheduler (Track B) to handle real load.
+
+### Track B: Runtime + Reliability
+
+Making concurrency production-grade. Sequential within the track.
+
+- B4: Multi-threaded scheduler + I/O reactor (kqueue/epoll, timer wheel, SIGTERM)
+- Preemption + priority (yield checks at call preambles and loop back-edges; needs scheduler)
+- Supervision prerequisites -- these are compiler/language features, can start in parallel with B4:
+  - `Pid` type (type-erased process ID)
+  - Trait bounds on generic type parameters
+  - `copy` keyword (third parameter modifier)
+- Supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`, `Supervisor`)
+- Process discovery (global registration, `Registry` stdlib process)
+- Shared data (`shared_map`)
+
+### Why merge
+
+- Track A and Track B are mostly independent. Stdlib/ecosystem work doesn't block on the scheduler.
+- Removes an artificial phase boundary -- there's no hard dependency between current Phases 4 and 5.
+- Supervision prerequisites (Pid, trait bounds, copy) are compiler features that can start in parallel with B4.
+- The phase is "done" when both tracks converge at the HTTP server handling real traffic.
+
+---
+
+## Renumbering
+
+| Old | New | Name |
+|-----|-----|------|
+| Phase 4 + 5 (merged) | Phase 4 | Stdlib + Ecosystem / Runtime + Reliability |
+| Phase 6 | Phase 5 | Tooling maturity |
+| Phase 7 | Phase 6 | Self-hosting |
+| Phase 8 | Phase 7 | Validation |
+
+---
+
+## Summary table (after reorg)
+
+| Phase | Focus |
+|-------|-------|
+| 3 | Language surface -- closes with A4 lexer port |
+| 4 | Two tracks: stdlib/ecosystem (A) + runtime/reliability (B) |
+| 5 | Tooling maturity (docs, LSP, REPL) |
+| 6 | Self-hosting (parser port, ExpoIR, full compiler, retire bootstrap) |
+| 7 | Validation (auth-manager-expo, second project) |
