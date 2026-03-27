@@ -15,12 +15,15 @@ use crate::project;
 ///
 /// With no arguments, looks for `project.expo` in the current directory.
 /// With `--emit-llvm`, prints LLVM IR to stdout instead of producing a binary.
-pub fn cmd_build(args: &[String], color: bool) {
-    let build_args = pipeline::parse_build_args(args);
-    let has_source = build_args.source_file.is_some();
-    let emit_llvm = build_args.emit_llvm;
-
-    if !has_source {
+pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, color: bool) {
+    if let Some(source) = file {
+        let args = pipeline::BuildArgs {
+            source_file: Some(source),
+            output_name: output,
+            emit_llvm,
+        };
+        pipeline::build(args, false, color);
+    } else {
         let cwd = env::current_dir().unwrap_or_else(|e| {
             eprintln!("error: cannot determine current directory: {e}");
             process::exit(1);
@@ -40,16 +43,7 @@ pub fn cmd_build(args: &[String], color: bool) {
             }
         };
 
-        pipeline::build_project(
-            &config,
-            &cwd,
-            build_args.output_name.as_deref(),
-            false,
-            color,
-            emit_llvm,
-        );
-    } else {
-        pipeline::build(args, false, color, emit_llvm);
+        pipeline::build_project(&config, &cwd, output.as_deref(), false, color, emit_llvm);
     }
 }
 
@@ -111,8 +105,12 @@ pub fn cmd_run(args: &[String], color: bool) {
         ));
         let output = binary.to_str().unwrap().to_string();
 
-        let build_cmd_args = vec![path.clone(), "-o".to_string(), output.clone()];
-        pipeline::build(&build_cmd_args, true, color, false);
+        let args = pipeline::BuildArgs {
+            source_file: Some(path.clone()),
+            output_name: Some(output.clone()),
+            emit_llvm: false,
+        };
+        pipeline::build(args, true, color);
 
         let extra_args: Vec<&String> = build_args[1..].iter().chain(run_args.iter()).collect();
         let status = process::Command::new(&binary).args(&extra_args).status();

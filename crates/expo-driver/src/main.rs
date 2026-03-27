@@ -27,8 +27,16 @@ struct Cli {
 enum Command {
     /// Compile a source file to a native binary
     Build {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Source file (omit to use project.expo)
+        file: Option<String>,
+
+        /// Output binary name
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Print LLVM IR to stdout instead of producing a binary
+        #[arg(long)]
+        emit_llvm: bool,
     },
     /// Type-check a source file without compiling
     Check {
@@ -67,7 +75,11 @@ fn main() {
     let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
 
     match cli.command {
-        Command::Build { args } => commands::cmd_build(&args, color),
+        Command::Build {
+            file,
+            output,
+            emit_llvm,
+        } => commands::cmd_build(file, output, emit_llvm, color),
         Command::Check { args } => commands::cmd_check(&args, color),
         Command::Doc { args } => commands::cmd_doc(&args, color),
         Command::Format { args } => commands::cmd_format(&args, color),
