@@ -43,7 +43,7 @@ impl Parser {
         self.tokens
             .get(self.pos + n)
             .map(|t| &t.kind)
-            .unwrap_or(&TokenKind::Eof)
+            .unwrap_or(&TokenKind::EndOfFile)
     }
 
     pub(crate) fn current_span(&self) -> Span {
@@ -69,7 +69,7 @@ impl Parser {
     }
 
     pub(crate) fn at_eof(&self) -> bool {
-        matches!(self.peek(), TokenKind::Eof)
+        matches!(self.peek(), TokenKind::EndOfFile)
     }
 
     pub(crate) fn eat(&mut self, kind: &TokenKind) -> Option<Token> {

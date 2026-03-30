@@ -98,7 +98,7 @@ pub enum TokenKind {
 
     // Structural
     Newline,
-    Eof,
+    EndOfFile,
 }
 
 impl TokenKind {

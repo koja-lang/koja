@@ -29,7 +29,7 @@ impl Parser {
 
         let value = if matches!(
             self.peek(),
-            TokenKind::Newline | TokenKind::End | TokenKind::Eof
+            TokenKind::Newline | TokenKind::End | TokenKind::EndOfFile
         ) {
             None
         } else {

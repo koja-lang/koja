@@ -96,8 +96,10 @@ impl Parser {
         let mut stmts = Vec::new();
 
         let peek = self.peek();
-        if !matches!(peek, TokenKind::End | TokenKind::Eof | TokenKind::Newline)
-            && !extra_stops.contains(peek)
+        if !matches!(
+            peek,
+            TokenKind::End | TokenKind::EndOfFile | TokenKind::Newline
+        ) && !extra_stops.contains(peek)
         {
             stmts.push(self.parse_statement());
         }
@@ -133,7 +135,7 @@ impl Parser {
         while i < self.tokens.len() {
             match &self.tokens[i].kind {
                 TokenKind::Arrow if depth == 0 => return true,
-                TokenKind::Newline | TokenKind::End | TokenKind::Eof if depth == 0 => {
+                TokenKind::Newline | TokenKind::End | TokenKind::EndOfFile if depth == 0 => {
                     return false;
                 }
                 TokenKind::LParen | TokenKind::LBrace | TokenKind::LBracket => {

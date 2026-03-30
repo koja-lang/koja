@@ -10,7 +10,7 @@ pub struct LexResult {
     pub comments: Vec<Comment>,
     /// Lexical errors (unterminated strings, unknown escapes, etc.).
     pub errors: Vec<Diagnostic>,
-    /// The token stream, always terminated by `TokenKind::Eof`.
+    /// The token stream, always terminated by `TokenKind::EndOfFile`.
     pub tokens: Vec<Token>,
 }
 
@@ -604,7 +604,7 @@ impl Lexer {
         }
 
         self.tokens.push(Token {
-            kind: TokenKind::Eof,
+            kind: TokenKind::EndOfFile,
             span: Span::new(self.cursor.position(), self.cursor.position()),
         });
     }
@@ -637,7 +637,7 @@ mod tests {
                 TokenKind::Ident("x".into()),
                 TokenKind::Arrow,
                 TokenKind::Ident("y".into()),
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -652,21 +652,25 @@ mod tests {
                 TokenKind::Ident("b".into()),
                 TokenKind::Arrow,
                 TokenKind::Ident("c".into()),
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
 
     #[test]
     fn test_empty_source() {
-        assert_eq!(lex_kinds(""), vec![TokenKind::Eof]);
+        assert_eq!(lex_kinds(""), vec![TokenKind::EndOfFile]);
     }
 
     #[test]
     fn test_empty_string() {
         assert_eq!(
             lex_kinds(r#""""#),
-            vec![TokenKind::StringStart, TokenKind::StringEnd, TokenKind::Eof,]
+            vec![
+                TokenKind::StringStart,
+                TokenKind::StringEnd,
+                TokenKind::EndOfFile,
+            ]
         );
     }
 
@@ -678,7 +682,7 @@ mod tests {
                 TokenKind::StringStart,
                 TokenKind::StringFragment("path\\file".into()),
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -691,7 +695,7 @@ mod tests {
                 TokenKind::StringStart,
                 TokenKind::StringFragment("use #{name}".into()),
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -704,7 +708,7 @@ mod tests {
                 TokenKind::StringStart,
                 TokenKind::StringFragment("hello\nworld".into()),
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -717,7 +721,7 @@ mod tests {
                 TokenKind::StringStart,
                 TokenKind::StringFragment("say \"hello\"".into()),
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -730,7 +734,7 @@ mod tests {
                 TokenKind::StringStart,
                 TokenKind::StringFragment("col1\tcol2".into()),
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -743,7 +747,7 @@ mod tests {
                 TokenKind::StringStart,
                 TokenKind::StringFragment("color #fff".into()),
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -759,7 +763,7 @@ mod tests {
                 TokenKind::InterpolEnd,
                 TokenKind::StringFragment(" done".into()),
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -775,7 +779,7 @@ mod tests {
                 TokenKind::Ident("name".into()),
                 TokenKind::InterpolEnd,
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -794,7 +798,7 @@ mod tests {
                 TokenKind::Ident("b".into()),
                 TokenKind::InterpolEnd,
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -814,7 +818,7 @@ mod tests {
                 TokenKind::RBrace,
                 TokenKind::InterpolEnd,
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -828,7 +832,7 @@ mod tests {
                 TokenKind::MultilineStringStart,
                 TokenKind::StringFragment("hello\nworld".into()),
                 TokenKind::MultilineStringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -845,7 +849,7 @@ mod tests {
                 TokenKind::Ident("name".into()),
                 TokenKind::InterpolEnd,
                 TokenKind::MultilineStringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -858,7 +862,7 @@ mod tests {
                 TokenKind::StringStart,
                 TokenKind::StringFragment("hello".into()),
                 TokenKind::StringEnd,
-                TokenKind::Eof,
+                TokenKind::EndOfFile,
             ]
         );
     }
@@ -872,6 +876,6 @@ mod tests {
 
     #[test]
     fn test_whitespace_only() {
-        assert_eq!(lex_kinds("   \t  "), vec![TokenKind::Eof]);
+        assert_eq!(lex_kinds("   \t  "), vec![TokenKind::EndOfFile]);
     }
 }

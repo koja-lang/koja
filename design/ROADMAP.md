@@ -96,6 +96,7 @@ Seven commands: `expo build`, `expo run`, `expo check`, `expo format`, `expo doc
 - **Identifier priming for keyword/builtin collisions**: (for self-hosting) `IDENT` and `TYPE_IDENT` cannot use reserved words or built-in type names as identifiers. Trailing prime notation (`'`) would allow `end'` as a field name and `Self'` or `String'` as enum variant names without ambiguity. Grammar change: append `[ "'" ]` to both `IDENT` and `TYPE_IDENT` rules (trailing-only, single prime). Surfaced by the `expo-ast` self-hosting port: `Span.end` had to become `Span.stop`, and enum variants like `Self`, `String`, `Bool`, `Int`, `Float` needed descriptive renames (`SelfReceiver`, `StringVal`, `BoolLit`, etc.). Leading `'` stays invalid, so `'wrongstring'` is always a syntax error.
 - **Nested enum pattern matching with literal payloads**: matching a nested variant with a literal payload (e.g., `Some(TokenKind.Ident("and"))`) causes a segfault at runtime. The workaround is to bind the payload and check it in the body: `Some(TokenKind.Ident(name)) -> name == "and"`. Surfaced during the self-hosted lexer port (`continues_line?`).
 - **Nested enum equality codegen**: comparing `Option<SomeEnum>` with `==` generates invalid LLVM IR (phi node predecessors mismatch) when the inner enum has many variants. The workaround is to use `match` instead of `==` for `Option<Enum>` comparisons. Surfaced during the self-hosted lexer port (`lex_newline` duplicate newline check).
+- **Integer literal type coercion at call sites**: integer literals in function call arguments default to `i64` and are not coerced to match the parameter type (e.g., passing `1` to a `UInt32` parameter generates `i64 1` in LLVM IR, causing a type mismatch verification error). Variable annotations work (`x: UInt32 = 1`), but call-site coercion does not. Workaround: avoid small-integer parameters with literal arguments, or bind to an annotated variable first. Surfaced during the self-hosted lexer port (`Cursor.peek_at`).
 
 ### Design artifacts
 
@@ -128,7 +129,7 @@ Phase 2 proved the core language works. Phase 3 makes it real on two fronts simu
 Track A:  A1a (lexer/parser/AST) ✓ → A1b (types + type checker) ✓ → A1c (codegen: construction) ✓
           → A1d (codegen: pattern matching) ✓ → A1e (concat + bitwise) ✓
           → A2a (type conversion) ✓ → A2b (string stdlib) ✓ → A2c (OR patterns) ✓ → A2d (ranges, deferred)
-          → A3a (file I/O) ✓ → A3b (project system) ✓ → A3c (test runner) → A4 (lexer port)
+          → A3a (file I/O) ✓ → A3b (project system) ✓ → A3c (test runner) → A4 (lexer port) ✓
 
 Track B:  B1 (union types) ✓ → B2 (Process<C,M,R> protocol + default impls + Ref + cast/call) ✓ → B3 (Task) ✓
           B4 (scheduler/IO) -- independent, anytime
@@ -275,11 +276,18 @@ Minimal file I/O via runtime intrinsics -- just enough to read and write files f
 
 - **Done when**: `expo test` discovers and runs `@test` functions in a project with a `project.expo` file
 
-#### A4. Lexer port (validation milestone)
+#### A4. Lexer port (validation milestone) -- done
 
 Write the Expo lexer in Expo, compiled by the Rust bootstrap. Validate by comparing token output against the Rust lexer for all test files. This exercises binary pattern matching, string processing, enums, pattern matching, lists, structs, and file I/O. This is validation, not self-hosting -- the Rust compiler remains the real compiler.
 
-- **Done when**: the Expo-written lexer produces identical token output to the Rust lexer for all `.expo` test files
+- Implemented in `self-hosted/src/lexer.expo` with `Cursor`, `Token`, `TokenKind`, `Span` types in `self-hosted/src/ast/` and `self-hosted/src/lexer/cursor.expo`
+- Full token dispatch via recursive `run()`, with shared `lex_single()` method for single-token handling
+- String handling: `lex_string_body` loop with `lex_interpolation` for `#{...}`, `lex_interp_body` for interpolated expressions (uses call stack as interpolation nesting stack -- no explicit string stack needed), escape sequence mapping via `escape_char()`, multiline `"""` strings
+- Number handling: decimal, hex (`0x`), binary (`0b`) prefixes with `_` separator support, float detection
+- Line continuation: `continues_line?` and `next_nonws_continues?` for method chaining across newlines
+- Comment extraction, `TypeIdent` vs `Ident` distinction, unexpected character diagnostics
+- Token output verified identical to Rust lexer (`expo lex`) on test files
+- **Done when**: the Expo-written lexer produces identical token output to the Rust lexer for all `.expo` test files ✓
 
 ### Track B: Runtime maturity
 
@@ -353,7 +361,7 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 | Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code. |
 | Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with process lifecycle management.                                                                                                   |
 | Typed mailboxes    | Processes declare message type M via protocol impl. `send` and `receive` are type-checked at compile time. Union types enable multi-source mailboxes (e.g., `PoolCmd \| ExitSignal`).                                                              |
-| Validation target  | The lexer port (A4) validates the language surface without requiring external dependencies (no network, no database, no JSON). The Rust compiler remains authoritative; the Expo lexer is compiled by it.                                          |
+| Validation target  | The lexer port (A4) validated the language surface without requiring external dependencies (no network, no database, no JSON). The Rust compiler remains authoritative; the Expo lexer is compiled by it. ✓ Complete -- token output matches the Rust lexer. |
 
 ### Risks
 
@@ -763,7 +771,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase        | Milestone                                                                                                                                                                                                                                                                                             |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges (deferred), ~~A3a file I/O~~, ~~A3b project system~~, A3c test runner, A4 lexer port |
+| Surface (3A) | ~~A1a lexer/parser/AST~~, ~~A1b types+checker~~, ~~A1c codegen construction~~, ~~A1d codegen patterns~~, ~~A1e concat+bitwise~~, ~~A2a type conversion~~, ~~A2b string stdlib~~, ~~A2c OR patterns~~, A2d ranges (deferred), ~~A3a file I/O~~, ~~A3b project system~~, A3c test runner, ~~A4 lexer port~~ |
 | Runtime (3B) | ~~Union types~~, ~~`Process<C,M,R>` protocol~~, ~~`Ref<M,R>`~~, ~~`receive...after`~~, ~~default impls~~, ~~`cast`/`call` pair envelope~~, ~~`Task`~~, scheduler + I/O                                                                                                                                |
 | Reliability  | `Pid`, trait bounds, `copy` keyword, supervision (`ChildSpec`, `ExitSignal`, `Process.monitor`), process discovery, preemption, `shared_map`                                                                                                                                                          |
 | Stdlib       | File I/O, time, `Display` protocol, package manager, first-party packages                                                                                                                                                                                                                             |

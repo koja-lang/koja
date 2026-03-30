@@ -335,7 +335,7 @@ impl Parser {
                 self.advance();
                 let value = if matches!(
                     self.peek(),
-                    TokenKind::Newline | TokenKind::End | TokenKind::Eof | TokenKind::RParen
+                    TokenKind::Newline | TokenKind::End | TokenKind::EndOfFile | TokenKind::RParen
                 ) {
                     None
                 } else {
