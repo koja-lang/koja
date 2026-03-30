@@ -5,55 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.8.0] - 2026-03-30
 
 ### Added
 
-- Enum `==` and `!=` -- structural comparison for enum values (including generic instances such as `Option<String>`): tags are compared first, then tuple or struct payloads field-wise (primitives, strings, and nested enums). Enables expressions like `peek() == Option.Some(".")` in addition to `match` on options.
-- Struct and enum constants -- `const HEADING = Direction.North` (enum unit variants) and `const ORIGIN = Point{x: 0, y: 0}` (struct literals with all-constant fields) now work as constant initializers. No type annotation required for non-generic types.
-- `expo build --emit-llvm` flag -- dumps the LLVM IR for a module or project to stdout instead of producing an executable. Useful for debugging codegen issues.
-- Project system -- `project.expo` config file with `Project{name: "my_app", version: "0.1.0"}` struct literal format. `expo build`, `expo run`, and `expo check` detect `project.expo` in the current directory when no source file is given. Project name doubles as the module namespace prefix (`import my_app.server` resolves to `src/server.expo`). Configurable `src` dirs and `entry` module with sensible defaults.
-- `expo-stdlib` crate -- standalone crate housing all standard library `.expo` sources with fully qualified module names (`std.kernel`, `std.list`, `std.string`, etc.). Both `expo-driver` and `expo-lsp` depend on it. Stdlib modules are auto-imported into every compilation.
-- Unified module resolution -- project modules, stdlib modules, and (future) package modules resolve through the same namespace-aware resolver. `import my_app.X` dispatches to project `src/` dirs, `import std.X` resolves from embedded sources.
-- Context-driven parameter type inference for closures -- `opt.map(v -> v * 10)` infers `v: Int` from `Option<Int>`. Works for short and block closures at inline call sites, including generic methods.
-- Short closures compile to native code -- `x -> expr` closures with variable capture (copy for primitives, move for non-copy types).
-- `@doc` on type aliases -- `@doc` annotations can now precede `type Name = ...` declarations. Parser, formatter, and LSP hover all support it.
-- File I/O -- `Fd` type (raw file descriptor with `read`, `write`, `close`) and `File` type (wraps `Fd` with `File.read(path)` for whole-file read, `File.open(path)` for handle-based access, `File.close(move self)`). Both return `Result<T, String>` for error handling. Runtime intrinsics use POSIX I/O and Rust's `std::fs`.
-- OR patterns in match arms -- `1 | 2 | 3 -> "small"` combines multiple patterns sharing one arm body. Works in `match` and `receive`. Variable bindings inside OR patterns are disallowed for now.
-- String standard library -- `alpha?`, `at`, `codepoints`, `contains?`, `downcase`, `empty?`, `ends_with?`, `graphemes`, `join` (static), `replace`, `reverse`, `split`, `starts_with?`, `to_float`, `to_int`, `trim`, `trim_end`, `trim_start`, `upcase`, `whitespace?`. ASCII-only case conversion and codepoint-level iteration for now; full Unicode deferred.
-- Binary and bitstring literals -- `Binary` and `Bits` as built-in types. `<<>>` syntax for construction and pattern matching. Segment modifiers: `::N` bit-width, `::N byte`, `signed`/`unsigned`, `big`/`little`, type annotations (`: Float32`, `: Int16`). Byte-aligned totals infer `Binary`, non-byte-aligned infer `Bits`. Greedy rest capture (`rest: Binary`) in match patterns. Compile-time overflow checking.
-- `<>` concatenation operator for `Binary <> Binary`, `Bits <> Bits`, and `String <> String`. Type-checked, no cross-type mixing.
-- `Bitwise` protocol -- `band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr` as methods on all integer types.
-- String/Binary/Bits conversions -- `String.to_binary()` and `Binary.to_bits()` (zero-cost, always succeed). `Binary.to_string()` and `Bits.to_binary()` return `Result` (validate UTF-8 and byte alignment respectively).
-- String segments in binary literals -- string literals inside `<<>>` for construction and pattern matching (`<<"HTTP/1.1 ", rest: Binary>>`).
-- Methods on primitive types -- `impl` blocks can define methods on built-in types (`String`, `Binary`, `Bits`, `Int`, etc.).
-- `List.last()` -- returns `Option<T>`: `Some(element)` for the last element, `None` if empty.
-- Compiler warning when the return value of a `move self` method is discarded in statement position. Suggests reassignment (`x = x.method(...)`) to capture the result.
-- Tail call optimization for self-recursive `move self` methods -- the compiler detects self-recursive calls in tail position (both implicit returns and explicit `return`) and rewrites them as loops, eliminating stack growth. Covers both `-> Self` and void-returning methods (e.g., `Process.run`). The `move self` recursive idiom is now safe for unbounded iteration.
-- `List<T>` methods -- `first`, `pop`, `replace_at`, `slice`, `concat`, `reverse`, `find`, `reduce`. `pop` returns `Pair<Option<T>, List<T>>` (element + remaining list). `replace_at` writes at an index. `slice` and `concat` use memcpy for bulk operations. `reverse`, `find`, and `reduce` are pure Expo. `reduce` accepts a generic accumulator type via `<U>`.
+- Project system -- `project.expo` config file defines `name`, `version`, source dirs, and entry module. `expo build`, `expo run`, and `expo check` detect it automatically. The project name is the module namespace (`import my_app.server` resolves `src/server.expo`).
+- File I/O -- `File.read(path)` reads an entire file, `File.open(path)` returns a handle for streaming access, `File.close(move self)` releases it. Lower-level `Fd` type for raw descriptor operations. All return `Result<T, String>`.
+- String standard library -- `alpha?`, `at`, `codepoints`, `contains?`, `downcase`, `empty?`, `ends_with?`, `graphemes`, `join`, `replace`, `reverse`, `split`, `starts_with?`, `to_float`, `to_int`, `trim`, `trim_end`, `trim_start`, `upcase`, `whitespace?`.
+- Binary and bitstring literals -- `Binary` and `Bits` types with `<<>>` syntax for construction and pattern matching. Segment modifiers for bit-width, endianness, signedness, and type annotations. String segments in binary literals (`<<"HTTP/1.1 ", rest: Binary>>`). `<>` concatenation for `Binary`, `Bits`, and `String`. `Bitwise` protocol (`band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr`) on all integer types.
+- String/Binary/Bits conversions -- `to_binary()`, `to_bits()`, `to_string()` with validation where needed.
+- OR patterns in match arms -- `1 | 2 | 3 -> "small"` combines multiple patterns sharing one body. Works in `match` and `receive`.
+- Enum `==` and `!=` -- structural equality for enum values, including generic enums like `Option<String>`. Enables `peek() == Option.Some(".")` as an alternative to `match`.
+- Tail call optimization -- self-recursive `move self` methods are rewritten as loops, eliminating stack growth. The `move self` recursive idiom is now safe for unbounded iteration.
+- Closure type inference -- `opt.map(v -> v * 10)` infers parameter types from context. Short closures (`x -> expr`) compile to native code with variable capture.
+- `List<T>` methods -- `first`, `pop`, `replace_at`, `slice`, `concat`, `reverse`, `find`, `reduce`.
+- Struct and enum constants -- `const HEADING = Direction.North` and `const ORIGIN = Point{x: 0, y: 0}` work as constant initializers.
+- `@doc` on type aliases -- `@doc` annotations on `type Name = ...` declarations, with formatter and LSP support.
+- `List.last()` -- returns `Option<T>`.
+- Methods on primitive types -- `impl` blocks on built-in types (`String`, `Int`, etc.).
+- Warning when the return value of a `move self` method is discarded. Suggests reassignment to capture the result.
+- `expo build --emit-llvm` -- dumps LLVM IR to stdout instead of producing an executable.
+- Self-hosted lexer -- the Expo lexer rewritten in Expo, compiled by the Rust bootstrap. Produces identical token output to the Rust lexer, validating the language for real-world use.
 
 ### Changed
 
-- `List.push` renamed to `List.append` -- better reflects functional semantics (returns a new list rather than mutating in place).
-- `List.get` and `String.get` now return `Option<T>` instead of panicking on out-of-bounds. Consistent with `Map.get` which already returned `Option<V>`.
-
-- Refactored `declare_builtins` in codegen -- replaced ~200 lines of repetitive add-function/insert boilerplate with a table-driven helper, organized by category (C stdlib, process runtime, string intrinsics, file I/O).
-- Stdlib sources moved from `expo-typecheck` to `expo-stdlib` -- `expo-typecheck` is now a pure checker with no embedded source files. `STDLIB_SOURCES`, `KERNEL_SOURCE`, and `merge_stdlib` removed.
-- Pipeline refactored -- `parse_stdlib()`/`typecheck_modules()` replaced by unified `typecheck_graph()` and `build_from_graph()`. Both single-file and project builds flow through the same compilation path.
+- `List.push` renamed to `List.append` -- better reflects functional semantics (returns a new list).
+- `List.get` and `String.get` now return `Option<T>` instead of panicking on out-of-bounds.
+- `Eof` token renamed to `EndOfFile` in `expo lex` output.
 
 ### Fixed
 
-- Block expression return type inference -- `match`, `if/else`, and `cond` now infer their result type from arm bodies instead of returning `Type::Unknown`. Functions whose last expression is a block are now correctly checked against the declared return type (previously, mismatches were silently ignored).
-- Constant type propagation in codegen -- constants referenced by name now carry their source-level type through compilation instead of being typed as `Unknown`. Enables downstream type-aware codegen (e.g., correct struct/enum handling when a constant is passed to a generic function).
-- List/Map/Set element stride used `type_byte_size` which returned a flat 8 for all non-primitive types, ignoring actual struct layout. `List<Token>` (36 bytes per element) was stepping through memory at 8-byte intervals, causing overlapping writes and corrupted field reads. All collection codegen now uses `llvm_field_byte_size` to compute ABI-correct element strides from the real LLVM type.
-- Enum payload sizing (`llvm_field_byte_size`) did not account for ABI alignment padding in nested structs, producing undersized payload arrays (e.g. `[33 x i8]` instead of `[36 x i8]` for `Option<Token>`). Rewrote with a proper alignment-aware layout algorithm.
-- Functions where all control-flow paths explicitly `return` (e.g. exhaustive `match` arms each returning) emitted an unreachable `ret void` fallthrough, causing LLVM verification failures for non-Unit return types. Codegen now emits `unreachable` instead.
-- `return` of heap-owning types (`List`, `Map`, `Set`, `String`) from inside `if` blocks no longer causes a use-after-free. The codegen was dropping live variables before evaluating the return expression; now the return value is loaded first and excluded from cleanup.
-- Struct construction inside a TCO loop (e.g. `Counter{n: self.n - 1}.count_down()`) emitted an `alloca` in the loop body, growing the stack each iteration and crashing with SIGBUS on deep recursion. Allocas for struct temporaries are now hoisted to the function entry block.
-- Assigning to a sub-word struct field (e.g. `UInt32`) stored an `i64` value into an `i32` slot, clobbering the adjacent field. Field assignments and compound assignments now coerce the value to the target field's type width before storing.
-- Compound assignments (`+=`, `-=`, etc.) on struct fields (`self.pos += 1`) were rejected by the type checker and unsupported in codegen. Both now resolve the full dotted field path to determine the correct target type.
-- Formatter: `|` patterns in match arms pack densely with trailing `|` at line breaks instead of producing a single overflowing line. Blank lines are inserted between arms when any pattern wraps.
-- Formatter: `or` and `and` chains in cond conditions now pack densely (fill-style) instead of cascading one-per-line after the first break. Blank lines between cond arms when any condition wraps.
+- Block expressions (`match`, `if/else`, `cond`) now correctly return values and type-check against declared return types.
+- Collections (`List`, `Map`, `Set`) of structs larger than 8 bytes no longer corrupt memory.
+- Enum payloads containing nested structs are correctly sized with proper alignment.
+- `return` from inside `if` blocks no longer causes a use-after-free for heap-owning types (`List`, `String`, etc.).
+- Struct construction inside tail-recursive loops no longer grows the stack on each iteration.
+- Assigning to smaller-than-64-bit struct fields (e.g. `UInt32`) no longer clobbers adjacent fields.
+- Compound assignments on struct fields (`self.pos += 1`) now work correctly.
+- Constants referenced by name carry their correct type through compilation.
+- Functions where all branches explicitly `return` no longer produce invalid code at the end of the function body.
+- Formatter: OR patterns in match arms wrap cleanly across lines instead of overflowing.
+- Formatter: `or`/`and` chains in cond conditions pack densely instead of cascading one-per-line.
 
 ## [0.7.0] - 2026-03-22
 
