@@ -7,4 +7,4 @@ license.workspace = true
 [dependencies]
 askama = "0.15"
 expo-ast = { path = "../expo-ast" }
-pulldown-cmark = "0.12"
+pulldown-cmark = "0.13"
