@@ -1,0 +1,27 @@
+<div class="theme-toggle" role="radiogroup" aria-label="Color theme">
+  <button id="theme-light" title="Light" aria-label="Light theme">☀</button>
+  <button id="theme-auto" title="Auto" aria-label="Auto theme" class="active">⬤</button>
+  <button id="theme-dark" title="Dark" aria-label="Dark theme">☽</button>
+</div>
+<script>
+(function() {
+  var root = document.documentElement;
+  var stored = localStorage.getItem('expo-doc-theme') || 'auto';
+  if (stored !== 'auto') root.setAttribute('data-theme', stored);
+  setActive(stored);
+  document.getElementById('theme-light').onclick = function() { set('light'); };
+  document.getElementById('theme-auto').onclick  = function() { set('auto'); };
+  document.getElementById('theme-dark').onclick  = function() { set('dark'); };
+  function set(t) {
+    localStorage.setItem('expo-doc-theme', t);
+    if (t === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', t);
+    setActive(t);
+  }
+  function setActive(t) {
+    document.querySelectorAll('.theme-toggle button').forEach(function(b) {
+      b.classList.toggle('active', b.id === 'theme-' + t);
+    });
+  }
+})();
+</script>

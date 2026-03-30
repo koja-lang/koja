@@ -1,1 +1,1 @@
-Project{name: "test_project", version: "0.1.0"}
+Project{name: "test_project", entry: "main", version: "0.1.0"}

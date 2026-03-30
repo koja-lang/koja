@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{ e.name }} — {{ module_name }} — Expo Docs</title>
+  {% include "head.html" %}
+</head>
+<body>
+
+{% include "theme_toggle.html" %}
+{% include "sidebar.html" %}
+
+<main class="content">
+  <div class="page-header">
+    <span class="type-chip chip-enum">enum</span>
+    <h1>{{ e.name }}</h1>
+  </div>
+  <p class="breadcrumb"><a href="../{{ module_name }}.html">{{ module_name }}</a></p>
+
+  {% if let Some(doc) = e.doc %}
+  <div class="detail-doc">{{ doc|md }}</div>
+  {% endif %}
+
+  {% if !e.variants.is_empty() %}
+  <h2 class="section-heading">Variants</h2>
+  <ul class="fields-list">
+    {% for v in e.variants %}
+    <li><span class="field-name">{{ v }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if !e.functions.is_empty() %}
+  <h2 class="section-heading">Functions</h2>
+  <div class="summary">
+    {% for f in e.functions %}
+    <div class="summary-row">
+      <div class="summary-name"><a href="#fn-{{ f.name }}">{{ f.name }}</a></div>
+      {% if let Some(doc) = f.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% for f in e.functions %}
+  {% include "function_detail.html" %}
+  {% endfor %}
+  {% endif %}
+</main>
+
+</body>
+</html>

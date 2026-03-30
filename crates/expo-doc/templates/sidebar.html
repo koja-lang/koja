@@ -5,50 +5,18 @@
   <ul>
     {% for m in all_modules %}
     <li>
-      <a href="{{ m }}.html"{% if m == name %} class="active"{% endif %}>{{ m }}</a>
-      {% if m == name %}
-      <div class="sidebar-items">
-        {% if !constants.is_empty() %}
-        <details class="sidebar-group" open>
-          <summary>Constants</summary>
-          <ul>
-            {% for c in constants %}
-            <li><a href="#const-{{ c.name }}">{{ c.name }}</a></li>
-            {% endfor %}
-          </ul>
-        </details>
-        {% endif %}
-        {% if !structs.is_empty() %}
-        <details class="sidebar-group" open>
-          <summary>Structs</summary>
-          <ul>
-            {% for s in structs %}
-            <li><a href="#struct-{{ s.name }}">{{ s.name }}</a></li>
-            {% endfor %}
-          </ul>
-        </details>
-        {% endif %}
-        {% if !enums.is_empty() %}
-        <details class="sidebar-group" open>
-          <summary>Enums</summary>
-          <ul>
-            {% for e in enums %}
-            <li><a href="#enum-{{ e.name }}">{{ e.name }}</a></li>
-            {% endfor %}
-          </ul>
-        </details>
-        {% endif %}
-        {% if !functions.is_empty() %}
-        <details class="sidebar-group" open>
-          <summary>Functions</summary>
-          <ul>
-            {% for f in functions %}
-            <li><a href="#fn-{{ f.name }}">{{ f.name }}</a></li>
-            {% endfor %}
-          </ul>
-        </details>
-        {% endif %}
-      </div>
+      <a href="{% if is_item_page %}../{% endif %}{{ m.name }}.html"{% if m.name == *module_name %} class="active"{% endif %}>{{ m.name }}</a>
+      {% if m.name == *module_name %}
+      <ul class="sidebar-items">
+        {% for item in m.items %}
+        <li>
+          <a class="sidebar-item{% if let Some(active) = active_item %}{% if item.name == *active %} active{% endif %}{% endif %}" href="{% if is_item_page %}{% else %}{{ module_name }}/{% endif %}{{ item.name }}.html">
+            <span class="sidebar-item-name">{{ item.name }}</span>
+            <span class="type-chip chip-{{ item.kind }}">{{ item.kind }}</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
       {% endif %}
     </li>
     {% endfor %}

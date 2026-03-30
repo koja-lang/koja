@@ -1,0 +1,541 @@
+# Files Are Transparent, Types Are the Namespace
+
+Design notes for rethinking how Expo organizes code. The current model
+(file = module, per-file imports) inherits assumptions from languages
+that needed them for runtime or compilation reasons Expo doesn't have.
+This document works through the reasoning and proposes a simpler model.
+
+---
+
+## The problem
+
+Expo's current model: one `.expo` file = one module. `import` brings
+names from other files into scope. Module names are derived from file
+paths (`std/string.expo` → `std.string`).
+
+This creates a redundant layer for the common case. `std.string` is a
+module that exists only to hold `String`. `std.list` exists only to hold
+`List`. In generated docs, these modules have exactly one item in the
+sidebar. The module name mirrors the type name (just cased differently)
+and adds no information.
+
+The design docs already say: "Types are the ideas; files organize them
+on disk." But the current implementation treats files as semantic
+boundaries (modules with names, import targets, doc pages), not as
+organizational conveniences.
+
+---
+
+## Why do languages have imports?
+
+Working through each historical reason and whether it applies to Expo:
+
+### Compilation speed
+
+In C, `#include` literally pastes header files. Without it, the compiler
+reads everything for every compilation unit. But that's a 1970s
+constraint. Swift compiles entire modules (thousands of files) at once.
+Go compiles entire packages at once. Modern compilers handle whole-module
+compilation on modern hardware. For Expo's target scale, this isn't a
+concern -- and even for large projects, the boundary is the package, not
+the file.
+
+**Not a reason for Expo.**
+
+### Separate compilation
+
+Imports create a dependency graph so the compiler knows to compile
+`string.expo` before `server.expo`. But with a two-pass approach (gather
+all type declarations, then check all function bodies), no dependency
+graph between files is needed. Every file sees everything. This is how
+Swift and Go work.
+
+**Not a reason for Expo.**
+
+### Name resolution
+
+If everything is in scope, won't names collide? In C, yes -- everything
+is a flat global namespace and it's chaos. But Expo has types as
+namespaces. `List.map()` and `Map.get()` don't conflict because `map`
+and `get` are scoped to their types. Type names themselves are PascalCase
+and descriptive -- `Server`, `Config`, `Handler`. Within a project,
+collisions are rare and caught immediately by the compiler.
+
+**Solved by types-as-namespaces.**
+
+### Readability
+
+"The import list tells you what this file depends on." But do developers
+actually read import lists? Or do they let the IDE manage them? In Go,
+`goimports` auto-manages. In Rust, rust-analyzer does it. In Java, IDEs
+collapse the import block by default. Import lists are ceremony that
+tooling manages because humans don't want to.
+
+The readability argument breaks down further: seeing `Server.start()` in
+code communicates what `Server` is whether or not there's an
+`import my_app.server` at the top. The type name IS the documentation.
+
+**Not a real benefit in practice.**
+
+### Encapsulation
+
+"If you can't import it, you can't use it." Expo already rejected this
+approach: "No private modules... Use `@moduledoc false` to signal
+'internal, don't depend on this' -- a documentation-level convention,
+not a compiler wall. This matches Elixir's approach." Elixir proves this
+works at scale. The community consensus is: if you use internal modules,
+expect them to break. No compiler enforcement needed.
+
+**Already decided against.**
+
+### Circular dependency prevention
+
+Imports create a DAG, preventing cycles. But circular type references
+are legitimate: `User` has a `List<Post>`, `Post` has a `User` author.
+Import-based DAGs force restructuring code around a compiler limitation,
+not a design limitation. Multi-pass compilation handles circular
+references naturally.
+
+**Solved by multi-pass compilation.**
+
+### Package management
+
+"Declare what external code you use." This is real -- but it's a
+project-level concern, not a per-file concern. `project.expo` declares
+dependencies. That's where external packages belong.
+
+**Belongs in `project.expo`, not in source files.**
+
+### Conclusion
+
+For intra-project imports: no remaining justification. Every problem
+they solve is better solved by another mechanism (types-as-namespaces,
+multi-pass compilation, convention-based privacy, IDE tooling).
+Intra-project imports are pure ceremony.
+
+For inter-package imports: the declaration belongs in `project.expo`.
+Per-file `import` statements are only needed as an optional
+disambiguation tool when two packages export the same type name.
+
+---
+
+## How other languages structure modules
+
+A survey of approaches, from fine-grained to coarse:
+
+### File = module (Python, OCaml, current Expo)
+
+Every file is a namespace boundary. Fine-grained but creates many small
+modules. Single-type files are redundant (the module is just a wrapper
+around the type).
+
+### Explicit module declarations (Rust, Elixir, Java)
+
+Modules/packages are declared independently of files. Flexible but more
+ceremony. In Elixir's case, the module IS the namespace and the type --
+`defmodule String do defstruct ... end` unifies them. The tradeoff is
+multiple module definitions per file (considered bad practice) or one
+file per module (many files).
+
+### Directory = package (Go)
+
+All `.go` files in a directory share one namespace. No imports between
+files in the same directory. Uppercase = exported, lowercase = private.
+Coarser than file-level but still tied to directory structure.
+
+### Package = module (Swift)
+
+All `.swift` files in a target share one namespace. Files are purely
+organizational. Types are the namespace boundary. `import` is for
+external frameworks only. Access control: `private` (file), `internal`
+(module, default), `public` (external).
+
+### File = struct (Zig)
+
+Each `.zig` file IS a struct. `@import("file.zig")` returns the
+file-as-struct. No separate module concept -- structs all the way down.
+The most radical version of "types are the ideas."
+
+### Why Elixir is the way it is
+
+Elixir's module-centric structure is a hard constraint from the BEAM VM,
+not a deliberate design choice. The BEAM was built for telecom switches
+that needed hot code swapping. The module is the atomic unit of live code
+replacement -- you push a new `.beam` file and the VM swaps it in while
+keeping the old version alive for running processes.
+
+Module = compilation unit = deployment unit = hot-swap unit. They're the
+same thing because the VM requires it. Erlang has no user-defined types,
+so functions can't "belong to a type" -- they belong to modules because
+modules are the only namespace the VM provides. `defstruct` is Elixir's
+addition: under the hood, a struct is just a map with a `__struct__` key
+set to the module atom. It's a convention on maps, not a real type.
+
+Expo compiles to native code via LLVM. There is no VM imposing a module
+structure. No hot code swapping constraint dictating what the compilation
+unit must be. Expo is free to decouple: namespace → types, compilation
+unit → the project, file organization → whatever makes sense for humans,
+deployment unit → the binary.
+
+---
+
+## Proposed model
+
+### Files are transparent
+
+The project (`project.expo`) defines the compilation unit. All `.expo`
+files in `src/` are collected into one flat type namespace. Files have no
+semantic meaning beyond grouping source text for human convenience.
+Splitting or merging files is always a refactor with zero semantic
+impact.
+
+The compiler doesn't care about files. It ingests a set of source files
+and produces a set of types.
+
+### Types are the only namespace
+
+Types (`struct`, `enum`, `protocol`) are the namespace boundaries.
+Functions live on types. `Server.start()`, `Config.load()`,
+`Option.unwrap()` -- the type name is the qualifier. No module names, no
+dotted file paths in user code.
+
+Top-level functions (like `fn main()`) exist in a flat project-wide
+scope. Since most functions are methods on types, top-level name
+collisions are rare.
+
+### No intra-project imports
+
+Every public type is visible in every file within the same project. No
+`import my_app.server` to use `Server`. No dependency ordering between
+files. The compiler resolves all types in a gather-then-check pass:
+
+1. **Gather**: scan all files, collect all type declarations (names,
+   type params, fields/variants). No function bodies yet.
+2. **Resolve**: build the full type registry from all gathered
+   declarations. Detect name conflicts (two types with the same name →
+   compile error).
+3. **Check**: type-check all function bodies against the full registry.
+
+Circular type references between files work naturally -- the gather pass
+sees both types before either is checked.
+
+### External packages
+
+Dependencies are declared in `project.expo`:
+
+```expo
+Project{
+  name: "my_app",
+  src: ["src"],
+  deps: [
+    "json",
+    "http",
+  ],
+}
+```
+
+All public types from declared dependencies are available in the project.
+No per-file `import` statements in the common case. The compiler resolves
+types from all declared dependencies the same way it resolves types from
+project source files.
+
+When two packages export the same type name, disambiguation uses either
+package-qualified access or an aliased import:
+
+```expo
+// Package-qualified access
+json.Parser.new()   // the Parser from the json package
+Parser.new()        // your own Parser (local types take precedence)
+
+// Or explicit alias (only needed for conflicts)
+import json.{Parser as JsonParser}
+```
+
+`import` in source files is reserved for this disambiguation case. It is
+not required for normal usage -- it's an escape hatch, not ceremony.
+
+### Stdlib
+
+The stdlib is a package called `std`, automatically available in every
+project. Its source files (`kernel.expo`, `string.expo`, `list.expo`,
+etc.) are internal organization. There is no `std.string` module. There
+is `String`, a type that happens to be defined in the `std` package.
+
+All stdlib types are available without `import`:
+
+- `Option<T>`, `Result<T, E>`, `Pair<A, B>` (from `kernel.expo`)
+- `String` (methods from `string.expo`)
+- `List<T>` (from `list.expo`)
+- `Map<K, V>` (from `map.expo`)
+- `Set<T>` (from `set.expo`)
+- `Fd`, `File` (from `fd.expo`)
+- `Bitwise` protocol (from `bitwise.expo`)
+
+No distinction between "kernel types" and "other stdlib types." The
+stdlib is one package; all of it is available.
+
+---
+
+## Access control
+
+Two levels, matching Elixir's simplicity:
+
+- **No keyword** = public. Visible everywhere (within the project and
+  to importers of the package).
+- **`priv fn`** = private. For functions inside a type body, private to
+  that type (only callable from the type's own methods). For top-level
+  functions in a file, private to that file (the only place files have
+  semantic meaning -- a convenience for helper functions).
+
+No package-private tier. No `internal` keyword. If something shouldn't
+be depended on, exclude it from documentation with `@doc false`. This is
+convention, not enforcement -- the same approach Elixir uses
+successfully at scale.
+
+---
+
+## What a project looks like
+
+```expo
+// project.expo
+Project{name: "my_app", src: ["src"]}
+```
+
+```expo
+// src/main.expo
+fn main()
+  config = Config.load("config.json")
+  server = Server.new(config)
+  server.start()
+end
+```
+
+```expo
+// src/server.expo
+@doc "HTTP server with connection management."
+struct Server
+  config: Config
+  connections: List<Connection>
+
+  fn new(config: Config) -> Self
+    Server{config: config, connections: []}
+  end
+
+  fn start(self)
+    // ...
+  end
+
+  priv fn bind(self)
+    // only callable from Server's own methods
+  end
+end
+```
+
+```expo
+// src/config.expo
+@doc "Application configuration."
+struct Config
+  port: Int
+  host: String
+
+  fn load(path: String) -> Self
+    // ...
+  end
+end
+```
+
+No imports between files. `Config` in `config.expo` is visible in
+`server.expo` and `main.expo`. Splitting `server.expo` into
+`server.expo` and `connection.expo` has zero semantic impact.
+
+---
+
+## What docs look like
+
+Since there are no modules (just packages and types), documentation is
+type-centric:
+
+```
+std
+
+  Types
+    Fd                STRUCT
+    File              STRUCT
+    List              STRUCT
+    Map               STRUCT
+    Option            ENUM
+    Pair              STRUCT
+    Range             STRUCT
+    Ref               STRUCT
+    Result            ENUM
+    Set               STRUCT
+    String            STRUCT
+    Task              STRUCT
+
+  Protocols
+    Bitwise
+    Enumeration
+    Equality
+    Hash
+    ListLiteral
+    MapLiteral
+    Process
+```
+
+Click `String` -- see its methods directly. No intermediate module page.
+No sparse sidebars. The navigational unit matches the meaningful unit.
+
+For user projects, docs would show the project name at the top with its
+types and protocols listed. Types that have `@doc false` are excluded.
+
+---
+
+## What changes from the current model
+
+### Removed
+
+- **File-as-module identity.** Files no longer have names that appear in
+  user code or documentation. No `std.string`, no `my_app.server`.
+- **Intra-project imports.** No `import my_app.server` to use `Server`.
+  All types are visible within the project.
+- **Module-level documentation.** `@moduledoc` on files loses its
+  current meaning. Type-level `@doc` and a project-level description
+  in `project.expo` replace it.
+- **Dependency ordering between files.** The compiler no longer needs
+  to determine which file to compile first. All files are processed
+  together.
+- **Module names in docs.** Documentation is organized by types and
+  protocols, not by files.
+
+### Kept
+
+- **Type syntax**: `struct`, `enum`, `protocol`, `impl` unchanged.
+- **Function syntax**: `fn`, `priv fn` unchanged.
+- **Inline functions in types**: types own their functions, `impl` for
+  external extensions.
+- **`@doc` and `@doc false`**: documentation annotations on types and
+  functions.
+- **`project.expo`**: project configuration. Gets simpler (no module
+  naming rules).
+- **External package imports**: `import` as a disambiguation tool for
+  name conflicts between packages.
+
+### Changed
+
+- **Compiler pipeline**: adds a gather pass before type checking.
+  Scan all files for type declarations, build the full registry, then
+  check bodies. Replaces the current dependency-ordered per-file
+  compilation.
+- **`import` keyword**: changes from "bring a file's exports into
+  scope" to "disambiguate a name conflict between external packages."
+  Optional in the common case.
+- **Stdlib organization**: `expo-stdlib` embeds files as before, but
+  they're compiled as one unit. No per-file module names.
+
+---
+
+## Compiler implementation: gather-then-check
+
+The current compiler processes files in dependency order, each building
+its own type context. The new model replaces this with:
+
+### Phase 1: Gather
+
+Walk all `.expo` files in the project's `src` directories. For each
+file, extract:
+
+- Type declarations: struct names, enum names, their fields/variants,
+  type parameters
+- Protocol declarations: name, required methods
+- Top-level function signatures: name, parameters, return type
+- `impl` block targets: which type is being extended, which protocol
+  (if any)
+
+No function bodies are analyzed. This is fast -- it's just declarations.
+
+### Phase 2: Resolve
+
+Build the full type registry from all gathered declarations:
+
+- Register all types (structs, enums, protocols) in `ctx.types`
+- Attach `impl` block methods to their target types
+- Detect duplicate type names (compile error)
+- Resolve type references in field types, function signatures, etc.
+
+### Phase 3: Check
+
+Type-check all function bodies against the complete registry. Every
+function can reference any type in the project or in declared
+dependencies. Circular type references are naturally handled because the
+registry is complete before checking begins.
+
+This is how Swift's type checker works. The gather pass is lightweight
+(declarations only), and the check pass has full visibility into all
+types.
+
+---
+
+## Open questions
+
+- **`@moduledoc` replacement**: files currently use `@moduledoc` for
+  file-level documentation. With files being transparent, this
+  annotation needs a new purpose or removal. One option: `@moduledoc`
+  becomes `@doc` on the project (in `project.expo`). Another: drop it
+  entirely and rely on type-level `@doc`. A third: keep it as prose
+  documentation associated with the file, surfaced in docs as a
+  "guide" page rather than an API page.
+
+- **Single-file mode**: `expo run foo.expo` currently works for quick
+  scripts without a `project.expo`. This should continue to work. A
+  single file is trivially a project with one source file.
+
+- **Subdirectories**: `src/handlers/auth.expo` defines types in the
+  flat project namespace. The directory structure is for human
+  organization only (like Swift). No dotted names derived from paths.
+
+- **Large projects**: at what project size does the flat namespace
+  become unwieldy? Swift handles this with access control
+  (`internal` vs `public`). Expo's current two-tier (`priv` vs
+  public) may be sufficient for the target audience. Monitor this as
+  real projects are built.
+
+- **Package-qualified access syntax**: `json.Parser` reuses the
+  existing dot syntax for qualifying a type by its package name. This
+  conflicts with nothing because package names are lowercase and type
+  names are PascalCase -- `json.Parser` is unambiguous.
+
+- **Facade / re-export**: should packages be able to define an explicit
+  public surface that's separate from their internal organization?
+  E.g., a package with many internal types that exports only a curated
+  subset. Not needed immediately, but worth considering for the
+  package ecosystem.
+
+---
+
+## Summary
+
+The current file-as-module model inherits assumptions from languages
+constrained by their runtimes (Elixir/BEAM), compilation models
+(C/C++), or historical convention. Expo compiles to native code with
+no VM, no hot code swapping, and no separate compilation requirement.
+
+The proposed model:
+
+1. **Files are transparent** -- purely organizational, zero semantic
+   meaning.
+2. **Types are the only namespace** -- `struct`, `enum`, `protocol`
+   own functions. No module-level namespaces.
+3. **No intra-project imports** -- every type is visible everywhere
+   within the project.
+4. **Dependencies in `project.expo`** -- external packages declared
+   once, not per-file.
+5. **`import` is optional disambiguation** -- only needed when two
+   packages export the same type name.
+6. **Two-tier access control** -- `priv fn` and public. Convention
+   handles the rest.
+
+This is less machinery than the current model. It removes concepts
+(file-as-module, intra-project imports, module names, dependency
+ordering between files) rather than adding them. The result aligns
+with the principle already stated in the design docs: types are the
+ideas, files organize them on disk.

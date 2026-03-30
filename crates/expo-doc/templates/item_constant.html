@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{ c.name }} — {{ module_name }} — Expo Docs</title>
+  {% include "head.html" %}
+</head>
+<body>
+
+{% include "theme_toggle.html" %}
+{% include "sidebar.html" %}
+
+<main class="content">
+  <div class="page-header">
+    <span class="type-chip chip-const">const</span>
+    <h1>{{ c.name }}</h1>
+  </div>
+  <p class="breadcrumb"><a href="../{{ module_name }}.html">{{ module_name }}</a></p>
+
+  {% if let Some(doc) = c.doc %}
+  <div class="detail-doc">{{ doc|md }}</div>
+  {% endif %}
+</main>
+
+</body>
+</html>

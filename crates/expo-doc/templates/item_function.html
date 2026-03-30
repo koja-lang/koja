@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{ f.name }} — {{ module_name }} — Expo Docs</title>
+  {% include "head.html" %}
+</head>
+<body>
+
+{% include "theme_toggle.html" %}
+{% include "sidebar.html" %}
+
+<main class="content">
+  <div class="page-header">
+    <span class="type-chip chip-fn">fn</span>
+    <h1>{{ f.name }}</h1>
+  </div>
+  <p class="breadcrumb"><a href="../{{ module_name }}.html">{{ module_name }}</a></p>
+
+  <div class="detail-signature">
+    fn {{ f.name }}{% if !f.type_params.is_empty() %}&lt;{{ f.type_params.join(", ") }}&gt;{% endif %}({% for p in f.params %}{% if !loop.first %}, {% endif %}{{ p.name }}{% if !p.type_name.is_empty() %}: {{ p.type_name }}{% endif %}{% endfor %}){% if let Some(ret) = f.return_type %} -&gt; {{ ret }}{% endif %}
+  </div>
+
+  {% if let Some(doc) = f.doc %}
+  <div class="detail-doc">{{ doc|md }}</div>
+  {% endif %}
+</main>
+
+</body>
+</html>

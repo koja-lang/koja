@@ -8,4 +8,7 @@ mod render;
 mod style;
 
 pub use extract::{DocModule, extract_module};
-pub use render::{render_index, render_module};
+pub use render::{
+    render_constant, render_enum, render_function, render_index, render_module, render_protocol,
+    render_struct,
+};

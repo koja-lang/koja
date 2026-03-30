@@ -15,7 +15,7 @@ pub struct ProjectConfig {
     pub name: String,
     pub version: String,
     pub src: Vec<String>,
-    pub entry: String,
+    pub entry: Option<String>,
 }
 
 /// Attempts to load a `project.expo` file from the given directory.
@@ -119,7 +119,7 @@ fn try_extract_project(stmt: &Statement) -> Option<Result<ProjectConfig, String>
         name,
         version,
         src: src.unwrap_or_else(|| vec!["src".to_string()]),
-        entry: entry.unwrap_or_else(|| "main".to_string()),
+        entry,
     }))
 }
 

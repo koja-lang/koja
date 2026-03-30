@@ -249,26 +249,50 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
         process::exit(1);
     }
 
-    let all_module_names: Vec<String> = doc_modules.iter().map(|m| m.name.clone()).collect();
-
     for m in &doc_modules {
-        let html = expo_doc::render_module(m, &all_module_names);
+        let html = expo_doc::render_module(m, &doc_modules);
         let file_path = out_path.join(format!("{}.html", m.name));
-        if let Err(e) = fs::write(&file_path, &html) {
-            eprintln!("error writing {}: {e}", file_path.display());
+        write_doc_file(&file_path, &html);
+
+        let module_dir = out_path.join(&m.name);
+        if let Err(e) = fs::create_dir_all(&module_dir) {
+            eprintln!("error creating directory {}: {e}", module_dir.display());
             process::exit(1);
         }
-        println!("  {}", file_path.display());
+
+        for c in &m.constants {
+            let html = expo_doc::render_constant(m, c, &doc_modules);
+            write_doc_file(&module_dir.join(format!("{}.html", c.name)), &html);
+        }
+        for e in &m.enums {
+            let html = expo_doc::render_enum(m, e, &doc_modules);
+            write_doc_file(&module_dir.join(format!("{}.html", e.name)), &html);
+        }
+        for f in &m.functions {
+            let html = expo_doc::render_function(m, f, &doc_modules);
+            write_doc_file(&module_dir.join(format!("{}.html", f.name)), &html);
+        }
+        for p in &m.protocols {
+            let html = expo_doc::render_protocol(m, p, &doc_modules);
+            write_doc_file(&module_dir.join(format!("{}.html", p.name)), &html);
+        }
+        for s in &m.structs {
+            let html = expo_doc::render_struct(m, s, &doc_modules);
+            write_doc_file(&module_dir.join(format!("{}.html", s.name)), &html);
+        }
     }
 
     let index_html = expo_doc::render_index(&doc_modules);
-    let index_path = out_path.join("index.html");
-    if let Err(e) = fs::write(&index_path, &index_html) {
-        eprintln!("error writing {}: {e}", index_path.display());
+    write_doc_file(&out_path.join("index.html"), &index_html);
+    println!("docs generated: {}", out_path.display());
+}
+
+fn write_doc_file(path: &Path, content: &str) {
+    if let Err(e) = fs::write(path, content) {
+        eprintln!("error writing {}: {e}", path.display());
         process::exit(1);
     }
-    println!("  {}", index_path.display());
-    println!("docs generated: {}", out_path.display());
+    println!("  {}", path.display());
 }
 
 /// Recursively collects `.expo` files from a directory, building module names

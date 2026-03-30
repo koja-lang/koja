@@ -206,7 +206,12 @@ pub fn resolve_project_modules(
 ) -> Result<ModuleGraph, String> {
     let src_roots: Vec<PathBuf> = config.src.iter().map(|s| project_root.join(s)).collect();
 
-    let entry_fqn = format!("{}.{}", config.name, config.entry);
+    let entry = config
+        .entry
+        .as_deref()
+        .ok_or("project.expo has no `entry` field; required for build/run/check")?;
+
+    let entry_fqn = format!("{}.{}", config.name, entry);
 
     let mut graph = ModuleGraph {
         entry: entry_fqn.clone(),
@@ -216,7 +221,7 @@ pub fn resolve_project_modules(
 
     insert_stdlib(&mut graph);
 
-    let entry_path = resolve_project_import_path(&config.entry, &src_roots)?;
+    let entry_path = resolve_project_import_path(entry, &src_roots)?;
 
     let mut visiting: Vec<String> = Vec::new();
     let mut visited: HashSet<String> = graph.modules.keys().cloned().collect();

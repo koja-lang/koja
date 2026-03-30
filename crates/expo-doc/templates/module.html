@@ -1,167 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ name }} — Expo Docs</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
-  <style>{{ css|safe }}</style>
+  <title>{{ module_name }} — Expo Docs</title>
+  {% include "head.html" %}
 </head>
 <body>
 
-<div class="theme-toggle" role="radiogroup" aria-label="Color theme">
-  <button id="theme-light" title="Light" aria-label="Light theme">☀</button>
-  <button id="theme-auto" title="Auto" aria-label="Auto theme" class="active">⬤</button>
-  <button id="theme-dark" title="Dark" aria-label="Dark theme">☽</button>
-</div>
-<script>
-(function() {
-  var root = document.documentElement;
-  var stored = localStorage.getItem('expo-doc-theme') || 'auto';
-  if (stored !== 'auto') root.setAttribute('data-theme', stored);
-  setActive(stored);
-  document.getElementById('theme-light').onclick = function() { set('light'); };
-  document.getElementById('theme-auto').onclick  = function() { set('auto'); };
-  document.getElementById('theme-dark').onclick  = function() { set('dark'); };
-  function set(t) {
-    localStorage.setItem('expo-doc-theme', t);
-    if (t === 'auto') root.removeAttribute('data-theme');
-    else root.setAttribute('data-theme', t);
-    setActive(t);
-  }
-  function setActive(t) {
-    document.querySelectorAll('.theme-toggle button').forEach(function(b) {
-      b.classList.toggle('active', b.id === 'theme-' + t);
-    });
-  }
-})();
-</script>
-
+{% include "theme_toggle.html" %}
 {% include "sidebar.html" %}
 
 <main class="content">
-  <h1>{{ name }}</h1>
+  <h1>{{ module_name }}</h1>
 
   {% if let Some(doc) = moduledoc %}
   <div class="moduledoc">{{ doc|md }}</div>
   {% endif %}
 
-  {% if !constants.is_empty() %}
-  <h2 class="section-heading">Constants</h2>
-
-  <div class="summary">
-    {% for c in constants %}
-    <div class="summary-row">
-      <div class="summary-name"><a href="#const-{{ c.name }}">{{ c.name }}</a></div>
-      {% if let Some(doc) = c.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
+  <div class="item-list">
+    {% for item in items %}
+    <div class="item-row">
+      <span class="type-chip chip-{{ item.kind }}">{{ item.kind }}</span>
+      <a class="item-name" href="{{ module_name }}/{{ item.name }}.html">{{ item.name }}</a>
+      {% if let Some(doc) = item.doc %}<span class="item-brief">{{ doc|brief }}</span>{% endif %}
     </div>
     {% endfor %}
   </div>
-
-  {% for c in constants %}
-  <div class="detail" id="const-{{ c.name }}">
-    <div class="detail-signature">
-      <a class="anchor" href="#const-{{ c.name }}">#</a>const {{ c.name }}
-    </div>
-
-    {% if let Some(doc) = c.doc %}
-    <div class="detail-doc">{{ doc|md }}</div>
-    {% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  {% if !structs.is_empty() %}
-  <h2 class="section-heading">Structs</h2>
-
-  <div class="summary">
-    {% for s in structs %}
-    <div class="summary-row">
-      <div class="summary-name"><a href="#struct-{{ s.name }}">{{ s.name }}</a></div>
-      {% if let Some(doc) = s.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-
-  {% for s in structs %}
-  <div class="detail" id="struct-{{ s.name }}">
-    <div class="detail-signature">
-      <a class="anchor" href="#struct-{{ s.name }}">#</a>struct {{ s.name }}{% if !s.type_params.is_empty() %}&lt;{{ s.type_params.join(", ") }}&gt;{% endif %}
-    </div>
-
-    {% if let Some(doc) = s.doc %}
-    <div class="detail-doc">{{ doc|md }}</div>
-    {% endif %}
-
-    {% if !s.fields.is_empty() %}
-    <ul class="fields-list">
-      {% for f in s.fields %}
-      <li><span class="field-name">{{ f.name }}</span> <span class="field-type">{{ f.type_name }}</span></li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-
-    {% if !s.functions.is_empty() %}
-    <h3 class="impl-functions-heading">Functions</h3>
-    {% for f in s.functions %}
-    {% include "function_detail.html" %}
-    {% endfor %}
-    {% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  {% if !enums.is_empty() %}
-  <h2 class="section-heading">Enums</h2>
-
-  <div class="summary">
-    {% for e in enums %}
-    <div class="summary-row">
-      <div class="summary-name"><a href="#enum-{{ e.name }}">{{ e.name }}</a></div>
-      {% if let Some(doc) = e.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-
-  {% for e in enums %}
-  <div class="detail" id="enum-{{ e.name }}">
-    <div class="detail-signature">
-      <a class="anchor" href="#enum-{{ e.name }}">#</a>enum {{ e.name }}
-    </div>
-
-    {% if let Some(doc) = e.doc %}
-    <div class="detail-doc">{{ doc|md }}</div>
-    {% endif %}
-
-    {% if !e.variants.is_empty() %}
-    <ul class="fields-list">
-      {% for v in e.variants %}
-      <li><span class="field-name">{{ v }}</span></li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  {% if !functions.is_empty() %}
-  <h2 class="section-heading">Functions</h2>
-
-  <div class="summary">
-    {% for f in functions %}
-    <div class="summary-row">
-      <div class="summary-name"><a href="#fn-{{ f.name }}">{{ f.name }}</a></div>
-      {% if let Some(doc) = f.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-
-  {% for f in functions %}
-  {% include "function_detail.html" %}
-  {% endfor %}
-  {% endif %}
 </main>
 
 </body>
