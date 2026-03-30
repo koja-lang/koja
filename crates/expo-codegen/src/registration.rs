@@ -20,14 +20,14 @@ impl<'ctx> Compiler<'ctx> {
                 continue;
             }
             let st = self.context.opaque_struct_type(name);
-            self.struct_types.insert(name.clone(), st);
+            self.types.structs.insert(name.clone(), st);
         }
         for (name, info) in self.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
             if !info.type_params.is_empty() {
                 continue;
             }
             let et = self.context.opaque_struct_type(name);
-            self.struct_types.insert(name.clone(), et);
+            self.types.structs.insert(name.clone(), et);
         }
 
         // Pass 1b: ensure all field/variant types exist (triggers monomorphization
@@ -72,12 +72,12 @@ impl<'ctx> Compiler<'ctx> {
             if !info.type_params.is_empty() {
                 continue;
             }
-            let struct_type = *self.struct_types.get(name).unwrap();
+            let struct_type = *self.types.structs.get(name).unwrap();
             let field_types: Vec<_> = info
                 .fields()
                 .unwrap()
                 .iter()
-                .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
+                .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.types.structs))
                 .collect();
             struct_type.set_body(&field_types, false);
         }
@@ -87,7 +87,7 @@ impl<'ctx> Compiler<'ctx> {
             if !info.type_params.is_empty() {
                 continue;
             }
-            let enum_type = *self.struct_types.get(name).unwrap();
+            let enum_type = *self.types.structs.get(name).unwrap();
             let variants: Vec<_> = info
                 .variants()
                 .unwrap()
@@ -119,12 +119,12 @@ impl<'ctx> Compiler<'ctx> {
                 continue;
             };
             let mangled = mangle_type(union_ty);
-            if self.struct_types.contains_key(&mangled) {
+            if self.types.structs.contains_key(&mangled) {
                 continue;
             }
 
             let opaque = self.context.opaque_struct_type(&mangled);
-            self.struct_types.insert(mangled.clone(), opaque);
+            self.types.structs.insert(mangled.clone(), opaque);
 
             self.build_union_layout(&mangled, opaque, members);
         }
@@ -150,7 +150,7 @@ impl<'ctx> Compiler<'ctx> {
                 VariantData::Tuple(types) => {
                     let mut field_llvm: Vec<_> = types
                         .iter()
-                        .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
+                        .filter_map(|ty| to_llvm_type(ty, self.context, &self.types.structs))
                         .collect();
                     if field_llvm.is_empty() && !types.is_empty() {
                         field_llvm.push(self.context.i8_type().into());
@@ -163,7 +163,7 @@ impl<'ctx> Compiler<'ctx> {
                 VariantData::Struct(fields) => {
                     let mut field_llvm: Vec<_> = fields
                         .iter()
-                        .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.struct_types))
+                        .filter_map(|(_, ty)| to_llvm_type(ty, self.context, &self.types.structs))
                         .collect();
                     if field_llvm.is_empty() && !fields.is_empty() {
                         field_llvm.push(self.context.i8_type().into());
@@ -184,7 +184,8 @@ impl<'ctx> Compiler<'ctx> {
             enum_type.set_body(&[i8_type.into()], false);
         }
 
-        self.enum_variant_payloads
+        self.types
+            .enum_variant_payloads
             .insert(name.to_string(), variant_payloads);
 
         let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
@@ -208,7 +209,8 @@ impl<'ctx> Compiler<'ctx> {
         );
         table_global.set_initializer(&table_init);
         table_global.set_constant(true);
-        self.enum_name_tables
+        self.types
+            .enum_name_tables
             .insert(name.to_string(), table_global.as_pointer_value());
     }
 
@@ -227,7 +229,7 @@ impl<'ctx> Compiler<'ctx> {
 
         for member in members {
             let member_name = mangle_type(member);
-            if let Some(llvm_ty) = to_llvm_type(member, self.context, &self.struct_types) {
+            if let Some(llvm_ty) = to_llvm_type(member, self.context, &self.types.structs) {
                 let payload = self.context.struct_type(&[llvm_ty], true);
                 let size = llvm_field_byte_size(llvm_ty);
                 max_payload_size = max_payload_size.max(size);
@@ -244,7 +246,8 @@ impl<'ctx> Compiler<'ctx> {
             opaque.set_body(&[i8_type.into()], false);
         }
 
-        self.enum_variant_payloads
+        self.types
+            .enum_variant_payloads
             .insert(name.to_string(), variant_payloads);
     }
 }

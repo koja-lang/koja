@@ -206,7 +206,8 @@ pub(crate) fn compile_binary_pattern<'ctx>(
             let llvm_ty = bind_val.get_type();
             let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
             c.builder.build_store(alloca, bind_val).unwrap();
-            c.variables
+            c.fn_state
+                .variables
                 .insert(name.clone(), (alloca, binding_ty, Ownership::Unowned));
         }
 
@@ -298,7 +299,8 @@ fn compile_greedy_rest<'ctx>(
         Type::Primitive(Primitive::Binary)
     };
 
-    c.variables
+    c.fn_state
+        .variables
         .insert(name, (alloca, rest_ty, Ownership::Owned));
 
     Ok(())

@@ -55,9 +55,9 @@ pub fn compile_expr<'ctx>(
         Expr::Literal { value, .. } => compile_literal(c, value),
 
         Expr::Ident { name, .. } => {
-            if let Some((ptr, ty, _)) = c.variables.get(name) {
+            if let Some((ptr, ty, _)) = c.fn_state.variables.get(name) {
                 let ty = ty.clone();
-                let llvm_ty = to_llvm_type(&ty, c.context, &c.struct_types)
+                let llvm_ty = to_llvm_type(&ty, c.context, &c.types.structs)
                     .ok_or_else(|| format!("cannot load variable of unsupported type: {name}"))?;
                 let val = c.builder.build_load(llvm_ty, *ptr, name).unwrap();
                 Ok(Some(TypedValue::new(val, ty)))
@@ -150,9 +150,9 @@ pub fn compile_expr<'ctx>(
         } => compile_while(c, condition, body, function),
 
         Expr::Self_ { .. } => {
-            if let Some((ptr, ty, _)) = c.variables.get("self") {
+            if let Some((ptr, ty, _)) = c.fn_state.variables.get("self") {
                 let ty = ty.clone();
-                let llvm_ty = to_llvm_type(&ty, c.context, &c.struct_types)
+                let llvm_ty = to_llvm_type(&ty, c.context, &c.types.structs)
                     .ok_or("cannot load self of unsupported type")?;
                 let val = c.builder.build_load(llvm_ty, *ptr, "self").unwrap();
                 Ok(Some(TypedValue::new(val, ty)))
@@ -427,10 +427,12 @@ fn enum_value_to_string<'ctx>(
     }
 
     let enum_type = *c
-        .struct_types
+        .types
+        .structs
         .get(enum_name)
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
     let table_ptr = *c
+        .types
         .enum_name_tables
         .get(enum_name)
         .ok_or_else(|| format!("no name table for enum: {enum_name}"))?;
@@ -553,18 +555,18 @@ fn compile_closure_core<'ctx>(
 
     let mut llvm_meta_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
     for ty in &param_types {
-        if let Some(lt) = to_llvm_type(ty, c.context, &c.struct_types) {
+        if let Some(lt) = to_llvm_type(ty, c.context, &c.types.structs) {
             llvm_meta_params.push(lt.into());
         }
     }
 
-    let fn_type = match to_llvm_type(&ret_type, c.context, &c.struct_types) {
+    let fn_type = match to_llvm_type(&ret_type, c.context, &c.types.structs) {
         Some(ret_llvm) => ret_llvm.fn_type(&llvm_meta_params, false),
         None => c.context.void_type().fn_type(&llvm_meta_params, false),
     };
 
-    let closure_name = format!("__closure_{}", c.closure_counter);
-    c.closure_counter += 1;
+    let closure_name = format!("__closure_{}", c.fn_state.closure_counter);
+    c.fn_state.closure_counter += 1;
 
     let captures = c
         .type_ctx
@@ -577,8 +579,8 @@ fn compile_closure_core<'ctx>(
         if let Some(ref caps) = captures {
             caps.iter()
                 .filter_map(|cap| {
-                    let (ptr, ty, _) = c.variables.get(&cap.name)?;
-                    let llvm_ty = to_llvm_type(ty, c.context, &c.struct_types)?;
+                    let (ptr, ty, _) = c.fn_state.variables.get(&cap.name)?;
+                    let llvm_ty = to_llvm_type(ty, c.context, &c.types.structs)?;
                     let val = c.builder.build_load(llvm_ty, *ptr, &cap.name).unwrap();
                     Some((cap.name.clone(), val, ty.clone()))
                 })
@@ -590,7 +592,7 @@ fn compile_closure_core<'ctx>(
     let closure_fn = c.module.add_function(&closure_name, fn_type, None);
     let entry = c.context.append_basic_block(closure_fn, "entry");
 
-    let saved_vars = std::mem::take(&mut c.variables);
+    let saved_vars = std::mem::take(&mut c.fn_state.variables);
     let saved_block = c.builder.get_insert_block();
     let saved_subst = {
         let mut extra = HashMap::<String, Type>::new();
@@ -612,9 +614,9 @@ fn compile_closure_core<'ctx>(
         if extra.is_empty() {
             None
         } else {
-            let mut merged = c.type_subst.clone();
+            let mut merged = c.fn_state.type_subst.clone();
             merged.extend(extra);
-            Some(std::mem::replace(&mut c.type_subst, merged))
+            Some(std::mem::replace(&mut c.fn_state.type_subst, merged))
         }
     };
 
@@ -624,11 +626,12 @@ fn compile_closure_core<'ctx>(
     for (i, param) in params.iter().enumerate() {
         if let ClosureParam::Name { name, .. } = param {
             let ty = &param_types[i];
-            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.struct_types) {
+            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.types.structs) {
                 let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
                 let param_val = closure_fn.get_nth_param((i + 1) as u32).unwrap();
                 c.builder.build_store(alloca, param_val).unwrap();
-                c.variables
+                c.fn_state
+                    .variables
                     .insert(name.clone(), (alloca, ty.clone(), Ownership::Unowned));
             }
         }
@@ -639,12 +642,12 @@ fn compile_closure_core<'ctx>(
         let env_ptr = closure_fn.get_nth_param(0).unwrap().into_pointer_value();
         let env_field_types: Vec<inkwell::types::BasicTypeEnum> = captured_values
             .iter()
-            .filter_map(|(_, _, ty)| to_llvm_type(ty, c.context, &c.struct_types))
+            .filter_map(|(_, _, ty)| to_llvm_type(ty, c.context, &c.types.structs))
             .collect();
         let env_struct_ty = c.context.struct_type(&env_field_types, false);
 
         for (i, (name, _, ty)) in captured_values.iter().enumerate() {
-            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.struct_types) {
+            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.types.structs) {
                 let field_ptr = c
                     .builder
                     .build_struct_gep(env_struct_ty, env_ptr, i as u32, &format!("cap_{name}"))
@@ -655,7 +658,8 @@ fn compile_closure_core<'ctx>(
                     .unwrap();
                 let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
                 c.builder.build_store(alloca, val).unwrap();
-                c.variables
+                c.fn_state
+                    .variables
                     .insert(name.clone(), (alloca, ty.clone(), Ownership::Unowned));
             }
         }
@@ -669,9 +673,9 @@ fn compile_closure_core<'ctx>(
         };
     }
 
-    c.variables = saved_vars;
+    c.fn_state.variables = saved_vars;
     if let Some(old) = saved_subst {
-        c.type_subst = old;
+        c.fn_state.type_subst = old;
     }
     if let Some(bb) = saved_block {
         c.builder.position_at_end(bb);
@@ -681,7 +685,7 @@ fn compile_closure_core<'ctx>(
     let env_ptr_val = if !captured_values.is_empty() {
         let env_field_types: Vec<inkwell::types::BasicTypeEnum> = captured_values
             .iter()
-            .filter_map(|(_, _, ty)| to_llvm_type(ty, c.context, &c.struct_types))
+            .filter_map(|(_, _, ty)| to_llvm_type(ty, c.context, &c.types.structs))
             .collect();
         let env_struct_ty = c.context.struct_type(&env_field_types, false);
         let env_size = env_struct_ty.size_of().unwrap();
@@ -745,7 +749,7 @@ fn compile_list_literal<'ctx>(
         })
         .collect::<Result<_, _>>()?;
 
-    let elem_type = if let Some(subst) = c.type_subst.get("T") {
+    let elem_type = if let Some(subst) = c.fn_state.type_subst.get("T") {
         subst.clone()
     } else if let Some(first) = compiled.first() {
         first.expo_type.clone()
@@ -755,7 +759,7 @@ fn compile_list_literal<'ctx>(
     let type_args = vec![elem_type.clone()];
     let mangled_type = mangle_name("List", &type_args);
 
-    if !c.struct_types.contains_key(&mangled_type) {
+    if !c.types.structs.contains_key(&mangled_type) {
         c.monomorphize_struct("List", &type_args)?;
     }
 
@@ -798,21 +802,23 @@ fn compile_map_literal<'ctx>(
     entries: &[(Expr, Expr)],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let (key_type, val_type) =
-        if let (Some(k_subst), Some(v_subst)) = (c.type_subst.get("K"), c.type_subst.get("V")) {
-            (k_subst.clone(), v_subst.clone())
-        } else if let Some((first_k, first_v)) = entries.first() {
-            let k_tv = compile_expr(c, first_k, function)?.ok_or("map key produced no value")?;
-            let v_tv = compile_expr(c, first_v, function)?.ok_or("map value produced no value")?;
-            (k_tv.expo_type, v_tv.expo_type)
-        } else {
-            return Err("empty map literal requires a type annotation".to_string());
-        };
+    let (key_type, val_type) = if let (Some(k_subst), Some(v_subst)) = (
+        c.fn_state.type_subst.get("K"),
+        c.fn_state.type_subst.get("V"),
+    ) {
+        (k_subst.clone(), v_subst.clone())
+    } else if let Some((first_k, first_v)) = entries.first() {
+        let k_tv = compile_expr(c, first_k, function)?.ok_or("map key produced no value")?;
+        let v_tv = compile_expr(c, first_v, function)?.ok_or("map value produced no value")?;
+        (k_tv.expo_type, v_tv.expo_type)
+    } else {
+        return Err("empty map literal requires a type annotation".to_string());
+    };
 
     let type_args = vec![key_type.clone(), val_type.clone()];
     let mangled_type = mangle_name("Map", &type_args);
 
-    if !c.struct_types.contains_key(&mangled_type) {
+    if !c.types.structs.contains_key(&mangled_type) {
         c.monomorphize_struct("Map", &type_args)?;
     }
 
@@ -900,9 +906,14 @@ fn compile_spawn<'ctx>(
         .build_int_cast(state_size, c.context.i64_type(), "state_size")
         .unwrap();
 
-    let mangled_state = c.mangled_name_for_struct_type(struct_type).ok_or_else(|| {
-        format!("could not resolve mangled struct name for spawn state (receiver `{type_name}`)")
-    })?;
+    let mangled_state = c
+        .types
+        .mangled_name_for_struct_type(struct_type)
+        .ok_or_else(|| {
+            format!(
+                "could not resolve mangled struct name for spawn state (receiver `{type_name}`)"
+            )
+        })?;
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&mangled_state, c) {
         c.monomorphize_impl_method(&base, "run", &type_args, &[])?;
     }
@@ -1016,11 +1027,12 @@ fn compile_spawn<'ctx>(
 
     let type_args = vec![msg_type, reply_type];
     let mangled = mangle_name("Ref", &type_args);
-    if !c.struct_types.contains_key(&mangled) {
+    if !c.types.structs.contains_key(&mangled) {
         c.monomorphize_struct("Ref", &type_args)?;
     }
     let ref_struct = *c
-        .struct_types
+        .types
+        .structs
         .get(&mangled)
         .ok_or("Ref struct type not found")?;
 
@@ -1113,7 +1125,7 @@ fn compile_receive<'ctx>(
         }
     }
 
-    let msg_type = c.process_msg_type.clone();
+    let msg_type = c.fn_state.process_msg_type.clone();
     let is_string = msg_type
         .as_ref()
         .is_none_or(|t| matches!(t, Type::Primitive(Primitive::String)));
@@ -1133,7 +1145,7 @@ fn compile_receive<'ctx>(
         payload.into()
     } else {
         let msg_ty = msg_type.unwrap();
-        let llvm_ty = crate::types::to_llvm_type(&msg_ty, c.context, &c.struct_types)
+        let llvm_ty = crate::types::to_llvm_type(&msg_ty, c.context, &c.types.structs)
             .ok_or_else(|| format!("no LLVM type for receive message `{msg_ty:?}`"))?;
         let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
         let typed_ptr = c
@@ -1149,13 +1161,14 @@ fn compile_receive<'ctx>(
         }
         c.builder.position_at_end(merge_bb);
         let ty = c
+            .fn_state
             .process_msg_type
             .clone()
             .unwrap_or(Type::Primitive(Primitive::String));
         return Ok(Some(TypedValue::new(subject_val, ty)));
     }
 
-    let subject_type = c.process_msg_type.clone().unwrap_or(Type::Unknown);
+    let subject_type = c.fn_state.process_msg_type.clone().unwrap_or(Type::Unknown);
 
     let subject_alloca = c
         .builder
@@ -1179,7 +1192,7 @@ fn compile_receive<'ctx>(
             fallthrough_bb
         };
 
-        let saved_vars = c.variables.clone();
+        let saved_vars = c.fn_state.variables.clone();
 
         let condition = crate::control::compile_pattern(
             c,
@@ -1216,7 +1229,7 @@ fn compile_receive<'ctx>(
             incoming.push((tv.value, arm_end_bb));
         }
 
-        c.variables = saved_vars;
+        c.fn_state.variables = saved_vars;
         c.builder.position_at_end(next_bb);
     }
 

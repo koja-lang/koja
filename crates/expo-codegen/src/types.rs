@@ -12,21 +12,21 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
 pub fn to_llvm_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
-    struct_types: &HashMap<String, StructType<'ctx>>,
+    structs: &HashMap<String, StructType<'ctx>>,
 ) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
         Type::Indirect(_) => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
         Type::Primitive(p) => Some(primitive_to_llvm(p, context)),
-        Type::Struct(name) | Type::Enum(name) => struct_types.get(name).map(|st| (*st).into()),
+        Type::Struct(name) | Type::Enum(name) => structs.get(name).map(|st| (*st).into()),
         Type::Union(_) => {
             let mangled = mangle_type(ty);
-            struct_types.get(&mangled).map(|st| (*st).into())
+            structs.get(&mangled).map(|st| (*st).into())
         }
         Type::GenericInstance {
             base, type_args, ..
         } => {
             let mangled = mangle_name(base, type_args);
-            struct_types.get(&mangled).map(|st| (*st).into())
+            structs.get(&mangled).map(|st| (*st).into())
         }
         Type::Function { .. } => {
             let ptr_ty = context.ptr_type(inkwell::AddressSpace::default());
@@ -46,9 +46,9 @@ pub fn to_llvm_type<'ctx>(
 pub fn to_llvm_metadata_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
-    struct_types: &HashMap<String, StructType<'ctx>>,
+    structs: &HashMap<String, StructType<'ctx>>,
 ) -> Option<BasicMetadataTypeEnum<'ctx>> {
-    to_llvm_type(ty, context, struct_types).map(|t| t.into())
+    to_llvm_type(ty, context, structs).map(|t| t.into())
 }
 
 /// Converts a type name like `"Int32"` or `"String"` to its Expo `Type`.

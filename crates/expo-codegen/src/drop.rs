@@ -24,6 +24,7 @@ pub enum Ownership {
 /// being transferred to the caller via `return`.
 pub fn drop_live_variables<'ctx>(c: &mut Compiler<'ctx>, skip: Option<&str>) {
     let vars: Vec<(String, PointerValue<'ctx>, Type, Ownership)> = c
+        .fn_state
         .variables
         .iter()
         .map(|(name, (ptr, ty, own))| (name.clone(), *ptr, ty.clone(), *own))
@@ -128,7 +129,7 @@ fn has_indirect_fields(c: &Compiler, ty: &Type) -> bool {
 }
 
 fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
-    if let Some(fields) = c.mono_struct_info.get(name) {
+    if let Some(fields) = c.types.mono_struct_info.get(name) {
         return fields
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
@@ -140,7 +141,7 @@ fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
     }
-    if let Some(variants) = c.mono_enum_variants.get(name) {
+    if let Some(variants) = c.types.mono_enum_variants.get(name) {
         return variants
             .iter()
             .any(|(_, vdata)| variant_has_indirect(vdata));
@@ -214,11 +215,12 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
         _ => return,
     };
 
-    let Some(struct_type) = c.struct_types.get(&struct_name).copied() else {
+    let Some(struct_type) = c.types.structs.get(&struct_name).copied() else {
         return;
     };
 
     let fields: Option<Vec<(usize, Type)>> = c
+        .types
         .mono_struct_info
         .get(&struct_name)
         .map(|fs| {
@@ -270,7 +272,7 @@ fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: 
         Type::Struct(name) => name.clone(),
         _ => return,
     };
-    let Some(list_struct) = c.struct_types.get(&mangled).copied() else {
+    let Some(list_struct) = c.types.structs.get(&mangled).copied() else {
         return;
     };
 
@@ -300,7 +302,7 @@ fn emit_drop_hash_collection<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
         Type::Struct(name) => name.clone(),
         _ => return,
     };
-    let Some(coll_struct) = c.struct_types.get(&mangled).copied() else {
+    let Some(coll_struct) = c.types.structs.get(&mangled).copied() else {
         return;
     };
 

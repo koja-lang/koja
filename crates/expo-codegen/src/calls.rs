@@ -36,11 +36,11 @@ pub fn invoke_closure_fat_ptr<'ctx>(
 
     let mut llvm_call_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
     for p in params {
-        if let Some(lt) = to_llvm_type(p, c.context, &c.struct_types) {
+        if let Some(lt) = to_llvm_type(p, c.context, &c.types.structs) {
             llvm_call_params.push(lt.into());
         }
     }
-    let fn_type = match to_llvm_type(return_type, c.context, &c.struct_types) {
+    let fn_type = match to_llvm_type(return_type, c.context, &c.types.structs) {
         Some(ret) => ret.fn_type(&llvm_call_params, false),
         None => c.context.void_type().fn_type(&llvm_call_params, false),
     };
@@ -76,7 +76,7 @@ pub fn compile_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    if c.struct_types.contains_key(name) {
+    if c.types.structs.contains_key(name) {
         return compile_call_as_struct(c, name, args, function);
     }
 
@@ -107,7 +107,7 @@ pub fn compile_call<'ctx>(
 
                 Ok(c.call(callee, &compiled_args, &format!("call_{name}"))
                     .map(|v| TypedValue::new(v, ret_type)))
-            } else if let Some((var_ptr, raw_ty, _)) = c.variables.get(name).cloned() {
+            } else if let Some((var_ptr, raw_ty, _)) = c.fn_state.variables.get(name).cloned() {
                 let ty = unwrap_indirect(&raw_ty);
                 let Type::Function {
                     params,

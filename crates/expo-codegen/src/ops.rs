@@ -207,7 +207,7 @@ fn compile_concat<'ctx>(
 
 fn concat_operand_type(c: &Compiler, expr: &Expr) -> Type {
     if let Expr::Ident { name, .. } = expr
-        && let Some((_, ty, _)) = c.variables.get(name)
+        && let Some((_, ty, _)) = c.fn_state.variables.get(name)
     {
         return ty.clone();
     }

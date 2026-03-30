@@ -13,8 +13,8 @@ pub fn monomorphize_list_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
     let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = c.context.i64_type();
     st.set_body(&[ptr_type.into(), i64_type.into(), i64_type.into()], false);
-    c.struct_types.insert(mangled.to_string(), st);
-    c.mono_struct_info.insert(
+    c.types.structs.insert(mangled.to_string(), st);
+    c.types.mono_struct_info.insert(
         mangled.to_string(),
         vec![
             ("ptr".to_string(), Type::Primitive(Primitive::String)),
@@ -33,12 +33,13 @@ pub fn emit_list_method<'ctx>(
     type_args: &[Type],
 ) -> Result<EmitResult, String> {
     let list_struct = *c
-        .struct_types
+        .types
+        .structs
         .get(mangled_type)
         .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
     let elem_ty = &type_args[0];
-    let elem_llvm = to_llvm_type(elem_ty, c.context, &c.struct_types)
+    let elem_llvm = to_llvm_type(elem_ty, c.context, &c.types.structs)
         .ok_or_else(|| format!("cannot map element type `{}` to LLVM", elem_ty.display()))?;
     let elem_size = crate::compiler::llvm_field_byte_size(elem_llvm) as u64;
 
@@ -197,7 +198,8 @@ pub fn emit_list_method<'ctx>(
                 kind: GenericKind::Enum,
             })?;
             let option_struct = *c
-                .struct_types
+                .types
+                .structs
                 .get(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
@@ -371,7 +373,8 @@ pub fn emit_list_method<'ctx>(
             })?;
             let option_mangled = mangle_name("Option", &option_type_args);
             let option_struct = *c
-                .struct_types
+                .types
+                .structs
                 .get(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
@@ -393,7 +396,8 @@ pub fn emit_list_method<'ctx>(
             })?;
             let pair_mangled = mangle_name("Pair", &pair_type_args);
             let pair_struct = *c
-                .struct_types
+                .types
+                .structs
                 .get(&pair_mangled)
                 .ok_or_else(|| format!("no LLVM type for {pair_mangled}"))?;
 

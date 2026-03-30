@@ -50,10 +50,10 @@ pub fn compile_statement<'ctx>(
                         .get(base.as_str())
                         .map(|ti| ti.type_params.clone());
                     if let Some(tp) = type_params {
-                        saved_subst = Some(c.type_subst.clone());
+                        saved_subst = Some(c.fn_state.type_subst.clone());
                         for (param, arg) in tp.iter().zip(type_args.iter()) {
-                            let concrete = substitute(arg, &c.type_subst);
-                            c.type_subst.insert(param.clone(), concrete);
+                            let concrete = substitute(arg, &c.fn_state.type_subst);
+                            c.fn_state.type_subst.insert(param.clone(), concrete);
                         }
                     }
                 }
@@ -65,7 +65,7 @@ pub fn compile_statement<'ctx>(
             let compiled_type = val_tv.expo_type;
 
             if let Some(saved) = saved_subst {
-                c.type_subst = saved;
+                c.fn_state.type_subst = saved;
             }
 
             let ty = if let Some(te) = type_annotation {
@@ -78,7 +78,7 @@ pub fn compile_statement<'ctx>(
                     } => {
                         let resolved_args: Vec<Type> = type_args
                             .iter()
-                            .map(|t| substitute_preserving(t, &c.type_subst))
+                            .map(|t| substitute_preserving(t, &c.fn_state.type_subst))
                             .collect();
                         Type::GenericInstance {
                             base,
@@ -109,16 +109,18 @@ pub fn compile_statement<'ctx>(
                 AssignTarget::LValue(lvalue) => {
                     if lvalue.segments.len() == 1 {
                         let name = &lvalue.segments[0];
-                        if let Some((ptr, var_ty, _)) = c.variables.get(name).cloned() {
+                        if let Some((ptr, var_ty, _)) = c.fn_state.variables.get(name).cloned() {
                             let store_val = coerce_numeric(c, val, &var_ty);
                             c.builder.build_store(ptr, store_val).unwrap();
                         } else {
                             let ownership = ownership_for_expr(value, &ty);
-                            let alloca_ty = to_llvm_type(&ty, c.context, &c.struct_types)
+                            let alloca_ty = to_llvm_type(&ty, c.context, &c.types.structs)
                                 .unwrap_or(val.get_type());
                             let alloca = c.build_entry_alloca(alloca_ty, name);
                             c.builder.build_store(alloca, val).unwrap();
-                            c.variables.insert(name.clone(), (alloca, ty, ownership));
+                            c.fn_state
+                                .variables
+                                .insert(name.clone(), (alloca, ty, ownership));
                         }
                     } else {
                         compile_field_assignment(c, &lvalue.segments, val)?;
@@ -133,10 +135,12 @@ pub fn compile_statement<'ctx>(
 
                     let ownership = ownership_for_expr(value, &ty);
                     let alloca_ty =
-                        to_llvm_type(&ty, c.context, &c.struct_types).unwrap_or(val.get_type());
+                        to_llvm_type(&ty, c.context, &c.types.structs).unwrap_or(val.get_type());
                     let alloca = c.build_entry_alloca(alloca_ty, name);
                     c.builder.build_store(alloca, val).unwrap();
-                    c.variables.insert(name.clone(), (alloca, ty, ownership));
+                    c.fn_state
+                        .variables
+                        .insert(name.clone(), (alloca, ty, ownership));
                 }
             }
             Ok(None)
@@ -144,9 +148,9 @@ pub fn compile_statement<'ctx>(
 
         Statement::Return { value, .. } => {
             if let Some(expr) = value {
-                c.tco.mark_tail();
+                c.fn_state.tco.mark_tail();
                 let val = compile_expr(c, expr, function)?.map(|tv| tv.value);
-                c.tco.clear_tail();
+                c.fn_state.tco.clear_tail();
                 if !c.current_block_terminated() {
                     let skip = match expr {
                         Expr::Ident { name, .. } => Some(name.as_str()),
@@ -168,7 +172,11 @@ pub fn compile_statement<'ctx>(
         }
 
         Statement::Break { .. } => {
-            let exit_block = c.loop_exit_stack.last().ok_or("break outside of loop")?;
+            let exit_block = c
+                .fn_state
+                .loop_exit_stack
+                .last()
+                .ok_or("break outside of loop")?;
             c.builder.build_unconditional_branch(*exit_block).unwrap();
             Ok(None)
         }
@@ -179,6 +187,7 @@ pub fn compile_statement<'ctx>(
             let (ptr, target_ty) = if target.segments.len() == 1 {
                 let name = &target.segments[0];
                 let (ptr, var_ty, _) = c
+                    .fn_state
                     .variables
                     .get(name)
                     .ok_or_else(|| format!("undefined variable: {name}"))?
@@ -188,7 +197,7 @@ pub fn compile_statement<'ctx>(
                 resolve_field_ptr(c, &target.segments)?
             };
 
-            let llvm_ty = to_llvm_type(&target_ty, c.context, &c.struct_types)
+            let llvm_ty = to_llvm_type(&target_ty, c.context, &c.types.structs)
                 .ok_or("cannot load variable of unsupported type")?;
             let current = c.builder.build_load(llvm_ty, ptr, "cur").unwrap();
             let rhs = compile_expr(c, value, function)?
@@ -233,6 +242,7 @@ fn resolve_field_ptr<'ctx>(
 ) -> Result<(PointerValue<'ctx>, Type), String> {
     let var_name = &segments[0];
     let (mut ptr, ty, _) = c
+        .fn_state
         .variables
         .get(var_name)
         .ok_or_else(|| format!("undefined variable: {var_name}"))?
@@ -256,7 +266,8 @@ fn resolve_field_ptr<'ctx>(
         };
 
         let struct_type = *c
-            .struct_types
+            .types
+            .structs
             .get(&struct_name)
             .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
@@ -315,7 +326,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
                 return infer_static_method_return_type(c, type_name, method, args);
             }
 
-            if let Some((_, recv_ty, _)) = c.variables.get(type_name)
+            if let Some((_, recv_ty, _)) = c.fn_state.variables.get(type_name)
                 && matches!(recv_ty, Type::Primitive(_))
             {
                 let ret = infer_instance_method_return_type(c, recv_ty, method);
@@ -377,7 +388,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
         return Some(sig.return_type.clone());
     }
     if matches!(expr, Expr::Receive { .. }) {
-        return c.process_msg_type.clone();
+        return c.fn_state.process_msg_type.clone();
     }
     if let Expr::Binary {
         op: BinOp::Concat,
@@ -387,7 +398,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
     {
         return infer_type_from_expr(c, left).or_else(|| {
             if let Expr::Ident { name, .. } = left.as_ref() {
-                c.variables.get(name).map(|(_, ty, _)| ty.clone())
+                c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone())
             } else if matches!(left.as_ref(), Expr::BinaryLiteral { .. }) {
                 Some(Type::Primitive(Primitive::Binary))
             } else {
@@ -452,7 +463,7 @@ fn infer_receiver_type(c: &Compiler, expr: &Expr) -> Option<Type> {
             Literal::String(_) => Some(Type::Primitive(Primitive::String)),
             Literal::Unit => Some(Type::Unit),
         },
-        Expr::Ident { name, .. } => c.variables.get(name).map(|(_, ty, _)| ty.clone()),
+        Expr::Ident { name, .. } => c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone()),
         Expr::MethodCall {
             receiver, method, ..
         } => {
@@ -606,7 +617,8 @@ pub(crate) fn compile_union_wrap<'ctx>(
         })? as u64;
 
     let union_llvm_ty = *c
-        .struct_types
+        .types
+        .structs
         .get(&union_mangled)
         .ok_or_else(|| format!("union type {} not registered", union_mangled))?;
 

@@ -49,11 +49,13 @@ fn compile_concrete_enum<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let enum_type = *c
-        .struct_types
+        .types
+        .structs
         .get(enum_name)
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
     let tag = c
+        .types
         .get_variant_tag(enum_name, variant)
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{enum_name}`"))?;
 
@@ -73,6 +75,7 @@ fn compile_concrete_enum<'ctx>(
         EnumConstructionData::Unit => {}
         EnumConstructionData::Tuple(exprs) => {
             let payload_type = c
+                .types
                 .get_variant_payload_type(enum_name, variant)
                 .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
 
@@ -120,6 +123,7 @@ fn compile_concrete_enum<'ctx>(
         }
         EnumConstructionData::Struct(fields) => {
             let payload_type = c
+                .types
                 .get_variant_payload_type(enum_name, variant)
                 .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
 
@@ -223,13 +227,13 @@ fn compile_generic_enum_construction<'ctx>(
             subst
                 .get(tp)
                 .cloned()
-                .or_else(|| c.type_subst.get(tp).cloned())
+                .or_else(|| c.fn_state.type_subst.get(tp).cloned())
                 .unwrap_or(Type::Unknown)
         })
         .collect();
 
     if subst.is_empty()
-        && let Some(ref hint) = c.return_type_hint
+        && let Some(ref hint) = c.fn_state.return_type_hint
     {
         match hint {
             Type::GenericInstance {
@@ -252,16 +256,18 @@ fn compile_generic_enum_construction<'ctx>(
 
     let mangled = mangle_name(enum_name, &type_args);
 
-    if !c.struct_types.contains_key(&mangled) {
+    if !c.types.structs.contains_key(&mangled) {
         c.monomorphize_enum(enum_name, &type_args)?;
     }
 
     let enum_type = *c
-        .struct_types
+        .types
+        .structs
         .get(&mangled)
         .ok_or_else(|| format!("monomorphized enum `{mangled}` not found"))?;
 
     let tag = c
+        .types
         .get_variant_tag(&mangled, variant)
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{mangled}`"))?;
 
@@ -279,6 +285,7 @@ fn compile_generic_enum_construction<'ctx>(
 
     if !compiled_values.is_empty() {
         let payload_type = c
+            .types
             .get_variant_payload_type(&mangled, variant)
             .ok_or_else(|| format!("no payload type for {mangled}.{variant}"))?;
 
@@ -288,6 +295,7 @@ fn compile_generic_enum_construction<'ctx>(
             .unwrap();
 
         let mono_elem_types: Option<Vec<Type>> = c
+            .types
             .mono_enum_variants
             .get(&mangled)
             .and_then(|vs| vs.iter().find(|(n, _)| n == variant))

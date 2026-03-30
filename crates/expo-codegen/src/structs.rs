@@ -35,13 +35,13 @@ pub(crate) fn load_maybe_indirect<'ctx>(
             .unwrap()
             .into_pointer_value();
         let _ = c.ensure_types_exist(inner);
-        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.struct_types)
+        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.types.structs)
             .expect("indirect inner type must have LLVM representation");
         c.builder
             .build_load(inner_llvm_ty, heap_ptr, &format!("{label}_deref"))
             .unwrap()
     } else {
-        let llvm_ty = to_llvm_type(field_type, c.context, &c.struct_types)
+        let llvm_ty = to_llvm_type(field_type, c.context, &c.types.structs)
             .unwrap_or_else(|| c.context.i8_type().into());
         c.builder.build_load(llvm_ty, field_ptr, label).unwrap()
     }
@@ -59,7 +59,7 @@ pub(crate) fn store_maybe_indirect<'ctx>(
 ) {
     if let Type::Indirect(inner) = field_type {
         let _ = c.ensure_types_exist(inner);
-        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.struct_types)
+        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.types.structs)
             .expect("indirect inner type must have LLVM representation");
         let size = llvm_type_size(inner_llvm_ty, c);
         let malloc_fn = *c.functions.get("malloc").expect("malloc not declared");
@@ -107,12 +107,12 @@ fn resolve_field_chain<'ctx>(
 ) -> Option<(PointerValue<'ctx>, Type)> {
     let (base_ptr, base_struct_name) = match receiver {
         Expr::Ident { name, .. } => {
-            let (ptr, ty, _) = c.variables.get(name.as_str()).cloned()?;
+            let (ptr, ty, _) = c.fn_state.variables.get(name.as_str()).cloned()?;
             let sn = struct_name_from_type(&ty)?;
             (ptr, sn)
         }
         Expr::Self_ { .. } => {
-            let (ptr, ty, _) = c.variables.get("self").cloned()?;
+            let (ptr, ty, _) = c.fn_state.variables.get("self").cloned()?;
             let sn = struct_name_from_type(&ty)?;
             (ptr, sn)
         }
@@ -131,7 +131,7 @@ fn resolve_field_chain<'ctx>(
         _ => return None,
     };
 
-    let struct_type = *c.struct_types.get(&base_struct_name)?;
+    let struct_type = *c.types.structs.get(&base_struct_name)?;
     let field_idx = c.get_field_index(&base_struct_name, field)?;
     let field_ty = c.get_field_type(&base_struct_name, field)?;
 
@@ -177,7 +177,8 @@ pub fn compile_field_access<'ctx>(
             .ok_or("cannot determine struct type for field access")?;
 
         let struct_type = *c
-            .struct_types
+            .types
+            .structs
             .get(&struct_name)
             .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
@@ -214,11 +215,11 @@ pub fn compile_method_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let was_tail = c.tco.save_tail();
+    let was_tail = c.fn_state.tco.save_tail();
 
     if let Expr::Ident { name, .. } = receiver
         && c.type_ctx.imported_modules.contains_key(name)
-        && !c.variables.contains_key(name)
+        && !c.fn_state.variables.contains_key(name)
     {
         return compile_call(c, method, args, function);
     }
@@ -349,13 +350,13 @@ pub fn compile_method_call<'ctx>(
         llvm_args.push(val.into());
     }
 
-    c.tco.restore_tail(was_tail);
+    c.fn_state.tco.restore_tail(was_tail);
 
-    let is_tail = c.tco.is_self_tail_call(&mangled, was_tail);
+    let is_tail = c.fn_state.tco.is_self_tail_call(&mangled, was_tail);
 
-    if is_tail && let Some(loop_header) = c.tco.loop_header {
+    if is_tail && let Some(loop_header) = c.fn_state.tco.loop_header {
         crate::drop::drop_live_variables(c, Some("self"));
-        for (arg, alloca) in llvm_args.iter().zip(c.tco.param_allocas.iter()) {
+        for (arg, alloca) in llvm_args.iter().zip(c.fn_state.tco.param_allocas.iter()) {
             let val: BasicValueEnum = (*arg).try_into().unwrap();
             c.builder.build_store(*alloca, val).unwrap();
         }
@@ -375,10 +376,10 @@ pub fn compile_method_call<'ctx>(
             _ => None,
         };
         if let Some(name) = recv_name
-            && let Some((ptr, ty, _)) = c.variables.get(name)
+            && let Some((ptr, ty, _)) = c.fn_state.variables.get(name)
         {
             let entry = (*ptr, ty.clone(), crate::drop::Ownership::Unowned);
-            c.variables.insert(name.to_string(), entry);
+            c.fn_state.variables.insert(name.to_string(), entry);
         }
     }
 
@@ -547,6 +548,7 @@ pub fn infer_static_method_return_type(
 fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
     match expr {
         Expr::Ident { name, .. } => c
+            .fn_state
             .variables
             .get(name)
             .map(|(_, ty, _)| ty.clone())
@@ -620,10 +622,10 @@ fn push_generic_type_subst<'ctx>(
             .types
             .get(base.as_str())
             .map(|ti| ti.type_params.clone())?;
-        let saved = c.type_subst.clone();
+        let saved = c.fn_state.type_subst.clone();
         for (param, arg) in type_params.iter().zip(type_args.iter()) {
-            let concrete = substitute(arg, &c.type_subst);
-            c.type_subst.insert(param.clone(), concrete);
+            let concrete = substitute(arg, &c.fn_state.type_subst);
+            c.fn_state.type_subst.insert(param.clone(), concrete);
         }
         Some(saved)
     } else {
@@ -651,7 +653,8 @@ pub fn compile_struct_construction<'ctx>(
     }
 
     let struct_type = *c
-        .struct_types
+        .types
+        .structs
         .get(struct_name)
         .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
@@ -688,7 +691,7 @@ pub fn compile_struct_construction<'ctx>(
             .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
 
         if let Some(saved) = saved_subst {
-            c.type_subst = saved;
+            c.fn_state.type_subst = saved;
         }
 
         let field_ptr = c
@@ -719,6 +722,7 @@ fn concrete_type_for_field_init<'ctx>(
     }
     match expr {
         Expr::Ident { name, .. } => c
+            .fn_state
             .variables
             .get(name)
             .map(|(_, ty, _)| ty.clone())
@@ -727,11 +731,11 @@ fn concrete_type_for_field_init<'ctx>(
             receiver, field, ..
         } => {
             if let Expr::Ident { name, .. } = receiver.as_ref()
-                && let Some((_, recv_ty, _)) = c.variables.get(name)
+                && let Some((_, recv_ty, _)) = c.fn_state.variables.get(name)
                 && let Some(sn) = struct_name_from_type(recv_ty)
                 && let Some(ft) = c.get_field_type(&sn, field)
             {
-                substitute(&ft, &c.type_subst)
+                substitute(&ft, &c.fn_state.type_subst)
             } else {
                 Type::Unknown
             }
@@ -777,12 +781,13 @@ fn compile_generic_struct_construction<'ctx>(
 
     let mangled = mangle_name(struct_name, &type_args);
 
-    if !c.struct_types.contains_key(&mangled) {
+    if !c.types.structs.contains_key(&mangled) {
         c.monomorphize_struct(struct_name, &type_args)?;
     }
 
     let struct_type = *c
-        .struct_types
+        .types
+        .structs
         .get(&mangled)
         .ok_or_else(|| format!("monomorphized struct `{mangled}` not found"))?;
 
@@ -824,7 +829,7 @@ fn resolve_struct_name<'ctx>(
     }
 
     if let Expr::Ident { name, .. } = receiver
-        && let Some((_, ty, _)) = c.variables.get(name)
+        && let Some((_, ty, _)) = c.fn_state.variables.get(name)
         && let Some(sn) = struct_name_from_type(ty)
     {
         return Ok(sn);
@@ -868,7 +873,7 @@ fn compile_static_call<'ctx>(
         && !tp.is_empty()
     {
         tp.iter()
-            .filter_map(|name| c.type_subst.get(name).cloned())
+            .filter_map(|name| c.fn_state.type_subst.get(name).cloned())
             .collect()
     } else {
         Vec::new()
@@ -885,7 +890,7 @@ fn compile_static_call<'ctx>(
         type_name.to_string()
     } else {
         let m = mangle_name(type_name, &type_args);
-        if !c.struct_types.contains_key(&m) {
+        if !c.types.structs.contains_key(&m) {
             if c.type_ctx.is_struct(type_name) {
                 c.monomorphize_struct(type_name, &type_args)?;
             } else {

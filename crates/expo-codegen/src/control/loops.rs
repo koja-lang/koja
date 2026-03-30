@@ -30,7 +30,7 @@ pub fn compile_loop<'ctx>(
     c.builder.build_unconditional_branch(loop_body).unwrap();
 
     c.builder.position_at_end(loop_body);
-    c.loop_exit_stack.push(loop_exit);
+    c.fn_state.loop_exit_stack.push(loop_exit);
 
     for stmt in body {
         if c.current_block_terminated() {
@@ -43,7 +43,7 @@ pub fn compile_loop<'ctx>(
         c.builder.build_unconditional_branch(loop_header).unwrap();
     }
 
-    c.loop_exit_stack.pop();
+    c.fn_state.loop_exit_stack.pop();
     c.builder.position_at_end(loop_exit);
 
     Ok(None)
@@ -72,7 +72,7 @@ pub fn compile_while<'ctx>(
         .unwrap();
 
     c.builder.position_at_end(while_body);
-    c.loop_exit_stack.push(while_exit);
+    c.fn_state.loop_exit_stack.push(while_exit);
 
     for stmt in body {
         if c.current_block_terminated() {
@@ -85,7 +85,7 @@ pub fn compile_while<'ctx>(
         c.builder.build_unconditional_branch(while_header).unwrap();
     }
 
-    c.loop_exit_stack.pop();
+    c.fn_state.loop_exit_stack.pop();
     c.builder.position_at_end(while_exit);
 
     Ok(None)
@@ -108,7 +108,7 @@ pub fn compile_for<'ctx>(
 
     let iter_alloca = c.builder.build_alloca(iter_llvm_ty, "for_iter").unwrap();
     c.builder.build_store(iter_alloca, iter_val).unwrap();
-    c.variables.insert(
+    c.fn_state.variables.insert(
         "__for_iter".to_string(),
         (iter_alloca, iter_ty.clone(), Ownership::Unowned),
     );
@@ -168,7 +168,7 @@ pub fn compile_for<'ctx>(
         .unwrap();
 
     c.builder.position_at_end(body_bb);
-    c.loop_exit_stack.push(exit_bb);
+    c.fn_state.loop_exit_stack.push(exit_bb);
 
     let iter_for_get = c
         .builder
@@ -186,7 +186,7 @@ pub fn compile_for<'ctx>(
     if let Pattern::Binding { name, .. } = pattern {
         let alloca = c.builder.build_alloca(elem_llvm_ty, name).unwrap();
         c.builder.build_store(alloca, elem_val).unwrap();
-        c.variables.insert(
+        c.fn_state.variables.insert(
             name.clone(),
             (alloca, elem_expo_ty.clone(), Ownership::Unowned),
         );
@@ -213,8 +213,8 @@ pub fn compile_for<'ctx>(
         c.builder.build_unconditional_branch(header_bb).unwrap();
     }
 
-    c.loop_exit_stack.pop();
-    c.variables.remove("__for_iter");
+    c.fn_state.loop_exit_stack.pop();
+    c.fn_state.variables.remove("__for_iter");
     c.builder.position_at_end(exit_bb);
 
     Ok(None)
@@ -298,7 +298,7 @@ fn resolve_enumerable_info<'ctx>(
         other => other.clone(),
     };
 
-    let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.struct_types)
+    let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.types.structs)
         .ok_or("cannot resolve element LLVM type")?;
     let mangled = mangle_name(&base, &type_args);
 

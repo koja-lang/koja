@@ -32,7 +32,7 @@ impl<'ctx> Compiler<'ctx> {
         _is_main: bool,
     ) -> Result<(), String> {
         let saved_hint = mem::replace(
-            &mut self.return_type_hint,
+            &mut self.fn_state.return_type_hint,
             if *return_type != Type::Unit {
                 Some(return_type.clone())
             } else {
@@ -50,9 +50,9 @@ impl<'ctx> Compiler<'ctx> {
             }
 
             if is_last && let Statement::Expr(expr) = stmt {
-                self.tco.mark_tail();
+                self.fn_state.tco.mark_tail();
                 let val = compile_expr(self, expr, fn_value)?.map(|tv| tv.value);
-                self.tco.clear_tail();
+                self.fn_state.tco.clear_tail();
                 if !self.current_block_terminated() && *return_type != Type::Unit {
                     if let Some(v) = val {
                         let v = apply_coercion(self, v, expr)?;
@@ -76,7 +76,7 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
-        self.return_type_hint = saved_hint;
+        self.fn_state.return_type_hint = saved_hint;
         Ok(())
     }
 
@@ -99,9 +99,9 @@ impl<'ctx> Compiler<'ctx> {
         subst: HashMap<String, Type>,
     ) -> Result<(), String> {
         let entry = self.context.append_basic_block(fn_value, "entry");
-        let saved_vars = mem::take(&mut self.variables);
+        let saved_vars = mem::take(&mut self.fn_state.variables);
         let saved_block = self.builder.get_insert_block();
-        let saved_subst = mem::replace(&mut self.type_subst, subst);
+        let saved_subst = mem::replace(&mut self.fn_state.type_subst, subst);
 
         self.builder.position_at_end(entry);
 
@@ -121,11 +121,12 @@ impl<'ctx> Compiler<'ctx> {
             } else {
                 Type::Struct(mangled.to_string())
             };
-            if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.struct_types) {
+            if let Some(llvm_ty) = to_llvm_type(&self_ty, self.context, &self.types.structs) {
                 let alloca = self.builder.build_alloca(llvm_ty, "self").unwrap();
                 let param_val = fn_value.get_nth_param(param_idx).unwrap();
                 self.builder.build_store(alloca, param_val).unwrap();
-                self.variables
+                self.fn_state
+                    .variables
                     .insert("self".to_string(), (alloca, self_ty, Ownership::Unowned));
                 param_allocas.push(alloca);
                 param_idx += 1;
@@ -139,11 +140,12 @@ impl<'ctx> Compiler<'ctx> {
             {
                 let ty = &param_types[type_idx];
                 type_idx += 1;
-                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.struct_types) {
+                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.types.structs) {
                     let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
                     let param_val = fn_value.get_nth_param(param_idx).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables
+                    self.fn_state
+                        .variables
                         .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
                     param_allocas.push(alloca);
                     param_idx += 1;
@@ -157,26 +159,27 @@ impl<'ctx> Compiler<'ctx> {
             .unwrap();
         self.builder.position_at_end(loop_header);
 
-        let saved_process_msg = self.process_msg_type.take();
+        let saved_process_msg = self.fn_state.process_msg_type.take();
         if let Some((mangled, _)) = self_type {
-            self.process_msg_type = resolve_process_envelope_type(self, mangled);
-            if let Some(env_type) = self.process_msg_type.clone() {
+            self.fn_state.process_msg_type = resolve_process_envelope_type(self, mangled);
+            if let Some(env_type) = self.fn_state.process_msg_type.clone() {
                 let _ = self.ensure_types_exist(&env_type);
             }
         }
 
         let saved_fn = self
+            .fn_state
             .tco
             .enter_fn(fn_value.get_name().to_str().unwrap_or("").to_string());
-        let saved_loop = self.tco.set_loop(loop_header, param_allocas);
+        let saved_loop = self.fn_state.tco.set_loop(loop_header, param_allocas);
 
         let result = self.compile_function_body(&func.body, return_type, fn_value, false);
 
-        self.tco.leave_fn(saved_fn);
-        self.tco.restore_loop(saved_loop);
-        self.process_msg_type = saved_process_msg;
-        self.variables = saved_vars;
-        self.type_subst = saved_subst;
+        self.fn_state.tco.leave_fn(saved_fn);
+        self.fn_state.tco.restore_loop(saved_loop);
+        self.fn_state.process_msg_type = saved_process_msg;
+        self.fn_state.variables = saved_vars;
+        self.fn_state.type_subst = saved_subst;
         if let Some(bb) = saved_block {
             self.builder.position_at_end(bb);
         }
@@ -222,11 +225,11 @@ impl<'ctx> Compiler<'ctx> {
 
         let llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = param_types
             .iter()
-            .filter_map(|ty| to_llvm_type(ty, self.context, &self.struct_types))
+            .filter_map(|ty| to_llvm_type(ty, self.context, &self.types.structs))
             .map(|t| t.into())
             .collect();
 
-        let fn_type = match to_llvm_type(&return_type, self.context, &self.struct_types) {
+        let fn_type = match to_llvm_type(&return_type, self.context, &self.types.structs) {
             Some(ret) => ret.fn_type(&llvm_param_types, false),
             None => self.context.void_type().fn_type(&llvm_param_types, false),
         };
@@ -235,20 +238,21 @@ impl<'ctx> Compiler<'ctx> {
         self.functions.insert(mangled.clone(), fn_value);
 
         let entry = self.context.append_basic_block(fn_value, "entry");
-        let saved_vars = mem::take(&mut self.variables);
+        let saved_vars = mem::take(&mut self.fn_state.variables);
         let saved_block = self.builder.get_insert_block();
-        let saved_subst = mem::replace(&mut self.type_subst, subst.clone());
+        let saved_subst = mem::replace(&mut self.fn_state.type_subst, subst.clone());
 
         self.builder.position_at_end(entry);
 
         for (i, param) in func_ast.params.iter().enumerate() {
             if let Param::Regular { name: pname, .. } = param {
                 let ty = &param_types[i];
-                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.struct_types) {
+                if let Some(llvm_ty) = to_llvm_type(ty, self.context, &self.types.structs) {
                     let alloca = self.builder.build_alloca(llvm_ty, pname).unwrap();
                     let param_val = fn_value.get_nth_param(i as u32).unwrap();
                     self.builder.build_store(alloca, param_val).unwrap();
-                    self.variables
+                    self.fn_state
+                        .variables
                         .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
                 }
             }
@@ -256,8 +260,8 @@ impl<'ctx> Compiler<'ctx> {
 
         self.compile_function_body(&func_ast.body, &return_type, fn_value, false)?;
 
-        self.variables = saved_vars;
-        self.type_subst = saved_subst;
+        self.fn_state.variables = saved_vars;
+        self.fn_state.type_subst = saved_subst;
         if let Some(bb) = saved_block {
             self.builder.position_at_end(bb);
         }
@@ -270,7 +274,7 @@ impl<'ctx> Compiler<'ctx> {
     /// concrete field types and registers it under the mangled name.
     pub fn monomorphize_struct(&mut self, name: &str, type_args: &[Type]) -> Result<(), String> {
         let mangled = mangle_name(name, type_args);
-        if self.struct_types.contains_key(&mangled) {
+        if self.types.structs.contains_key(&mangled) {
             return Ok(());
         }
 
@@ -304,7 +308,7 @@ impl<'ctx> Compiler<'ctx> {
             .collect();
 
         let st = self.context.opaque_struct_type(&mangled);
-        self.struct_types.insert(mangled.clone(), st);
+        self.types.structs.insert(mangled.clone(), st);
 
         let mut deferred_indirect = Vec::new();
         for (_, fty) in &concrete_fields {
@@ -321,7 +325,7 @@ impl<'ctx> Compiler<'ctx> {
         let field_llvm_types: Vec<_> = concrete_fields
             .iter()
             .map(|(_, ty)| {
-                to_llvm_type(ty, self.context, &self.struct_types).unwrap_or_else(|| {
+                to_llvm_type(ty, self.context, &self.types.structs).unwrap_or_else(|| {
                     // Placeholder for ZST / missing LLVM mapping; keeps field indices aligned.
                     self.context.i8_type().into()
                 })
@@ -333,7 +337,7 @@ impl<'ctx> Compiler<'ctx> {
             self.ensure_types_exist(ty)?;
         }
 
-        self.mono_struct_info.insert(mangled, concrete_fields);
+        self.types.mono_struct_info.insert(mangled, concrete_fields);
 
         Ok(())
     }
@@ -343,7 +347,7 @@ impl<'ctx> Compiler<'ctx> {
     /// with concrete variant payloads and registers it under the mangled name.
     pub fn monomorphize_enum(&mut self, name: &str, type_args: &[Type]) -> Result<(), String> {
         let mangled = mangle_name(name, type_args);
-        if self.struct_types.contains_key(&mangled) {
+        if self.types.structs.contains_key(&mangled) {
             return Ok(());
         }
 
@@ -378,7 +382,7 @@ impl<'ctx> Compiler<'ctx> {
             .collect();
 
         let enum_type = self.context.opaque_struct_type(&mangled);
-        self.struct_types.insert(mangled.clone(), enum_type);
+        self.types.structs.insert(mangled.clone(), enum_type);
 
         for (_, vdata) in &concrete_variants {
             match vdata {
@@ -398,7 +402,9 @@ impl<'ctx> Compiler<'ctx> {
 
         self.build_enum_layout(&mangled, enum_type, &concrete_variants);
 
-        self.mono_enum_variants.insert(mangled, concrete_variants);
+        self.types
+            .mono_enum_variants
+            .insert(mangled, concrete_variants);
 
         Ok(())
     }
@@ -570,20 +576,21 @@ impl<'ctx> Compiler<'ctx> {
 
         if !is_static {
             let self_llvm_type = *self
-                .struct_types
+                .types
+                .structs
                 .get(&mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
             llvm_param_types.push(self_llvm_type.into());
         }
 
         for ty in &param_types {
-            let lt = to_llvm_type(ty, self.context, &self.struct_types).ok_or_else(|| {
+            let lt = to_llvm_type(ty, self.context, &self.types.structs).ok_or_else(|| {
                 format!("no LLVM type for method parameter type `{ty:?}` in `{mangled_fn}`")
             })?;
             llvm_param_types.push(lt.into());
         }
 
-        let fn_type = match to_llvm_type(&return_type, self.context, &self.struct_types) {
+        let fn_type = match to_llvm_type(&return_type, self.context, &self.types.structs) {
             Some(ret) => ret.fn_type(&llvm_param_types, false),
             None => self.context.void_type().fn_type(&llvm_param_types, false),
         };
@@ -611,14 +618,14 @@ impl<'ctx> Compiler<'ctx> {
     pub(crate) fn ensure_types_exist(&mut self, ty: &Type) -> Result<(), String> {
         match ty {
             Type::Struct(name) => {
-                if !self.struct_types.contains_key(name)
+                if !self.types.structs.contains_key(name)
                     && let Some((base, type_args)) = parse_mangled_name(name, self)
                 {
                     self.monomorphize_struct(&base, &type_args)?;
                 }
             }
             Type::Enum(name) => {
-                if !self.struct_types.contains_key(name)
+                if !self.types.structs.contains_key(name)
                     && let Some((base, type_args)) = parse_mangled_name(name, self)
                 {
                     self.monomorphize_enum(&base, &type_args)?;
@@ -633,7 +640,7 @@ impl<'ctx> Compiler<'ctx> {
                     self.ensure_types_exist(arg)?;
                 }
                 let mangled = mangle_name(base, type_args);
-                if !self.struct_types.contains_key(&mangled) {
+                if !self.types.structs.contains_key(&mangled) {
                     match kind {
                         GenericKind::Struct => self.monomorphize_struct(base, type_args)?,
                         GenericKind::Enum => self.monomorphize_enum(base, type_args)?,
@@ -657,9 +664,9 @@ impl<'ctx> Compiler<'ctx> {
                     self.ensure_types_exist(m)?;
                 }
                 let mangled = mangle_type(ty);
-                if !self.struct_types.contains_key(&mangled) {
+                if !self.types.structs.contains_key(&mangled) {
                     let opaque = self.context.opaque_struct_type(&mangled);
-                    self.struct_types.insert(mangled.clone(), opaque);
+                    self.types.structs.insert(mangled.clone(), opaque);
                     self.build_union_layout(&mangled, opaque, members);
                 }
             }

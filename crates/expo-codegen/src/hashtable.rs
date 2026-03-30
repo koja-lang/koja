@@ -126,8 +126,8 @@ pub fn monomorphize_hashtable_struct<'ctx>(
         ],
         false,
     );
-    c.struct_types.insert(mangled.to_string(), st);
-    c.mono_struct_info.insert(
+    c.types.structs.insert(mangled.to_string(), st);
+    c.types.mono_struct_info.insert(
         mangled.to_string(),
         vec![
             (
@@ -753,7 +753,8 @@ fn emit_string_intrinsic<'ctx>(
                 kind: GenericKind::Enum,
             })?;
             let option_struct = *c
-                .struct_types
+                .types
+                .structs
                 .get(option_mangled)
                 .ok_or("no LLVM type for Option_$String$")?;
 
@@ -1195,7 +1196,8 @@ fn emit_file_intrinsic<'ctx>(
 
             c.builder.position_at_end(ok_bb);
             let file_struct_ty = c
-                .struct_types
+                .types
+                .structs
                 .get("File")
                 .copied()
                 .ok_or("File struct type not found")?;
@@ -1205,7 +1207,8 @@ fn emit_file_intrinsic<'ctx>(
                 .build_struct_gep(file_struct_ty, alloca, 0, "fd_field")
                 .unwrap();
             let fd_struct_ty = c
-                .struct_types
+                .types
+                .structs
                 .get("Fd")
                 .copied()
                 .ok_or("Fd struct type not found")?;

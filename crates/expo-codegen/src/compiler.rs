@@ -142,6 +142,85 @@ impl<'ctx> TailCallCtx<'ctx> {
     }
 }
 
+/// LLVM struct types, enum payloads, name tables, and monomorphisation info.
+/// Populated during type registration / monomorphisation and read during body
+/// compilation. Mirrors the read-only `TypeContext` pattern from COMPILER.md.
+pub struct TypeRegistry<'ctx> {
+    pub structs: HashMap<String, StructType<'ctx>>,
+    pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
+    pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
+    pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
+    pub mono_enum_variants: HashMap<String, Vec<(String, VariantData)>>,
+}
+
+impl<'ctx> TypeRegistry<'ctx> {
+    pub fn new() -> Self {
+        Self {
+            structs: HashMap::new(),
+            enum_variant_payloads: HashMap::new(),
+            enum_name_tables: HashMap::new(),
+            mono_struct_info: HashMap::new(),
+            mono_enum_variants: HashMap::new(),
+        }
+    }
+
+    /// Maps an LLVM struct type back to the Expo mangled name (e.g. `Task_$Int$`).
+    pub fn mangled_name_for_struct_type(&self, st: StructType<'ctx>) -> Option<String> {
+        self.structs
+            .iter()
+            .find(|(_, registered)| **registered == st)
+            .map(|(name, _)| name.clone())
+    }
+
+    /// Returns the LLVM struct type for an enum variant's payload, if it has one.
+    pub fn get_variant_payload_type(
+        &self,
+        enum_name: &str,
+        variant_name: &str,
+    ) -> Option<StructType<'ctx>> {
+        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
+            vs.iter()
+                .find(|(name, _)| name == variant_name)
+                .and_then(|(_, pt)| *pt)
+        })
+    }
+
+    /// Returns the tag index (0-based) for an enum variant.
+    pub fn get_variant_tag(&self, enum_name: &str, variant_name: &str) -> Option<u8> {
+        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
+            vs.iter()
+                .position(|(name, _)| name == variant_name)
+                .map(|i| i as u8)
+        })
+    }
+}
+
+/// Per-function ephemeral state that is set/reset at each `define_function`
+/// call. Extends the pattern established by `TailCallCtx`.
+pub struct FnState<'ctx> {
+    pub variables: BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>,
+    pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
+    pub process_msg_type: Option<Type>,
+    pub return_type_hint: Option<Type>,
+    pub type_subst: HashMap<String, Type>,
+    pub tco: TailCallCtx<'ctx>,
+    pub closure_counter: usize,
+}
+
+impl<'ctx> FnState<'ctx> {
+    pub fn new() -> Self {
+        Self {
+            variables: BTreeMap::new(),
+            loop_exit_stack: Vec::new(),
+            process_msg_type: None,
+            return_type_hint: None,
+            type_subst: HashMap::new(),
+            tco: TailCallCtx::new(),
+            closure_counter: 0,
+        }
+    }
+}
+
 /// Holds all LLVM state needed to compile an Expo module: the LLVM context,
 /// module, builder, declared functions, variable bindings, and type mappings.
 pub struct Compiler<'ctx> {
@@ -150,32 +229,15 @@ pub struct Compiler<'ctx> {
     pub builder: Builder<'ctx>,
     pub constants: HashMap<String, BasicValueEnum<'ctx>>,
     pub functions: HashMap<String, FunctionValue<'ctx>>,
-    pub variables: BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>,
-    pub struct_types: HashMap<String, StructType<'ctx>>,
-    pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
-    pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
-    pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
     pub type_ctx: &'ctx TypeContext,
-    pub closure_counter: usize,
     pub generic_fn_asts: HashMap<String, Function>,
-    pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
-    pub mono_enum_variants: HashMap<String, Vec<(String, VariantData)>>,
-    /// Active type substitution during monomorphized body compilation.
-    /// Maps type parameter names (e.g. "T", "U") to concrete types.
-    pub type_subst: HashMap<String, Type>,
-    /// The message type M for the current process function, used by `receive`
-    /// codegen to determine the LLVM type to load from the mailbox pointer.
-    pub process_msg_type: Option<Type>,
     /// Cache of generated thunk wrappers for bare function references.
     /// Maps original function name to the thunk `FunctionValue`.
     pub fn_ref_thunks: HashMap<String, FunctionValue<'ctx>>,
-    /// Return type of the function currently being compiled. Used by
-    /// generic enum construction to resolve unit variant type args when
-    /// they can't be inferred from arguments (e.g. `Option.None` inside
-    /// a method with its own type parameters like `map<U>`).
-    pub return_type_hint: Option<Type>,
-    /// Self-recursive tail call optimization state.
-    pub tco: TailCallCtx<'ctx>,
+    /// Type registry: LLVM struct types, enum payloads, and monomorphisation data.
+    pub types: TypeRegistry<'ctx>,
+    /// Per-function ephemeral state (variables, loops, TCO, etc.).
+    pub fn_state: FnState<'ctx>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -189,30 +251,12 @@ impl<'ctx> Compiler<'ctx> {
             builder,
             constants: HashMap::new(),
             functions: HashMap::new(),
-            variables: BTreeMap::new(),
-            struct_types: HashMap::new(),
-            enum_variant_payloads: HashMap::new(),
-            enum_name_tables: HashMap::new(),
-            loop_exit_stack: Vec::new(),
             type_ctx,
-            closure_counter: 0,
             generic_fn_asts: HashMap::new(),
-            mono_struct_info: HashMap::new(),
-            mono_enum_variants: HashMap::new(),
-            type_subst: HashMap::new(),
-            process_msg_type: None,
             fn_ref_thunks: HashMap::new(),
-            return_type_hint: None,
-            tco: TailCallCtx::new(),
+            types: TypeRegistry::new(),
+            fn_state: FnState::new(),
         }
-    }
-
-    /// Maps an LLVM struct type back to the Expo mangled name (e.g. `Task_$Int$`).
-    pub fn mangled_name_for_struct_type(&self, st: StructType<'ctx>) -> Option<String> {
-        self.struct_types
-            .iter()
-            .find(|(_, registered)| **registered == st)
-            .map(|(name, _)| name.clone())
     }
 
     /// Emits an `alloca` in the current function's entry block so that
@@ -373,7 +417,7 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Returns the LLVM struct field index for the given struct and field name.
     pub fn get_field_index(&self, struct_name: &str, field_name: &str) -> Option<u32> {
-        if let Some(fields) = self.mono_struct_info.get(struct_name) {
+        if let Some(fields) = self.types.mono_struct_info.get(struct_name) {
             return fields
                 .iter()
                 .position(|(name, _)| name == field_name)
@@ -391,7 +435,7 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Returns the Expo type of a struct field.
     pub fn get_field_type(&self, struct_name: &str, field_name: &str) -> Option<Type> {
-        if let Some(fields) = self.mono_struct_info.get(struct_name) {
+        if let Some(fields) = self.types.mono_struct_info.get(struct_name) {
             return fields
                 .iter()
                 .find(|(name, _)| name == field_name)
@@ -404,28 +448,6 @@ impl<'ctx> Compiler<'ctx> {
                     .find(|(name, _)| name == field_name)
                     .map(|(_, ty)| ty.clone())
             })
-        })
-    }
-
-    /// Returns the LLVM struct type for an enum variant's payload, if it has one.
-    pub fn get_variant_payload_type(
-        &self,
-        enum_name: &str,
-        variant_name: &str,
-    ) -> Option<StructType<'ctx>> {
-        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
-            vs.iter()
-                .find(|(name, _)| name == variant_name)
-                .and_then(|(_, pt)| *pt)
-        })
-    }
-
-    /// Returns the tag index (0-based) for an enum variant.
-    pub fn get_variant_tag(&self, enum_name: &str, variant_name: &str) -> Option<u8> {
-        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
-            vs.iter()
-                .position(|(name, _)| name == variant_name)
-                .map(|i| i as u8)
         })
     }
 
@@ -455,7 +477,12 @@ impl<'ctx> Compiler<'ctx> {
             .filter(|(_, ti)| ti.is_enum())
             .map(|(name, _)| name.as_str())
             .collect();
-        let type_params: Vec<&str> = self.type_subst.keys().map(|s| s.as_str()).collect();
+        let type_params: Vec<&str> = self
+            .fn_state
+            .type_subst
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
         let ty = resolve_type_expr_with_params(
             type_expr,
             &struct_names,
@@ -463,7 +490,7 @@ impl<'ctx> Compiler<'ctx> {
             &type_params,
             &self.type_ctx.type_aliases,
         );
-        substitute_preserving(&ty, &self.type_subst)
+        substitute_preserving(&ty, &self.fn_state.type_subst)
     }
 
     fn declare_builtins(&mut self) {
@@ -583,11 +610,11 @@ impl<'ctx> Compiler<'ctx> {
                 .first()
                 .is_some_and(|p| matches!(p, Param::Self_ { .. }))
         {
-            if let Some(st) = self.struct_types.get(name) {
+            if let Some(st) = self.types.structs.get(name) {
                 param_types.push((*st).into());
             } else {
                 let prim_ty = crate::types::primitive_name_to_type(name);
-                if let Some(llvm_ty) = to_llvm_type(&prim_ty, self.context, &self.struct_types) {
+                if let Some(llvm_ty) = to_llvm_type(&prim_ty, self.context, &self.types.structs) {
                     param_types.push(llvm_ty.into());
                 }
             }
@@ -603,7 +630,7 @@ impl<'ctx> Compiler<'ctx> {
         let fn_type = if func.name == "main" && self_type_name.is_none() {
             self.context.i32_type().fn_type(&param_types, false)
         } else {
-            match to_llvm_type(&return_type, self.context, &self.struct_types) {
+            match to_llvm_type(&return_type, self.context, &self.types.structs) {
                 Some(ret_ty) => ret_ty.fn_type(&param_types, false),
                 None => self.context.void_type().fn_type(&param_types, false),
             }
@@ -655,10 +682,10 @@ impl<'ctx> Compiler<'ctx> {
                         ..
                     } => {
                         let enum_name = type_path.join(".");
-                        let Some(&enum_type) = self.struct_types.get(&enum_name) else {
+                        let Some(&enum_type) = self.types.structs.get(&enum_name) else {
                             continue;
                         };
-                        let Some(tag) = self.get_variant_tag(&enum_name, variant) else {
+                        let Some(tag) = self.types.get_variant_tag(&enum_name, variant) else {
                             continue;
                         };
                         let tag_val = self.context.i8_type().const_int(tag as u64, false);
@@ -677,7 +704,7 @@ impl<'ctx> Compiler<'ctx> {
                         type_path, fields, ..
                     } => {
                         let struct_name = type_path.join(".");
-                        let Some(&struct_type) = self.struct_types.get(&struct_name) else {
+                        let Some(&struct_type) = self.types.structs.get(&struct_name) else {
                             continue;
                         };
                         let Some(info) = self.type_ctx.types.get(&struct_name) else {
@@ -840,7 +867,7 @@ impl<'ctx> Compiler<'ctx> {
                 .insert("__expo_user_main".to_string(), user_main);
             let um_entry = self.context.append_basic_block(user_main, "entry");
             self.builder.position_at_end(um_entry);
-            self.variables.clear();
+            self.fn_state.variables.clear();
             self.compile_function_body(&func.body, &Type::Unit, user_main, false)?;
 
             let main_entry = self.context.append_basic_block(fn_value, "entry");
@@ -946,7 +973,7 @@ impl<'ctx> Compiler<'ctx> {
         for param in params {
             if let Param::Regular { type_expr, .. } = param {
                 let ty = self.resolve_type_expr(type_expr);
-                if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context, &self.struct_types)
+                if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context, &self.types.structs)
                 {
                     types.push(llvm_ty);
                 }
