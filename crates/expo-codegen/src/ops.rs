@@ -7,6 +7,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
+use crate::enums::{compile_enum_struct_eq, enum_mangled_name};
 use crate::expr::compile_expr;
 
 /// Compiles a binary operation. Dispatches on operand types (float vs int)
@@ -22,12 +23,12 @@ pub fn compile_binary<'ctx>(
         return compile_concat(c, left, right, function);
     }
 
-    let lhs = compile_expr(c, left, function)?
-        .ok_or("left side of binary op produced no value")?
-        .value;
-    let rhs = compile_expr(c, right, function)?
-        .ok_or("right side of binary op produced no value")?
-        .value;
+    let lhs_tv =
+        compile_expr(c, left, function)?.ok_or("left side of binary op produced no value")?;
+    let rhs_tv =
+        compile_expr(c, right, function)?.ok_or("right side of binary op produced no value")?;
+    let lhs = lhs_tv.value;
+    let rhs = rhs_tv.value;
 
     let is_comparison = matches!(
         op,
@@ -175,6 +176,21 @@ pub fn compile_binary<'ctx>(
             }
             _ => Err(format!("unsupported string binary op: {:?}", op)),
         }
+    } else if lhs.is_struct_value()
+        && rhs.is_struct_value()
+        && matches!(op, BinOp::Eq | BinOp::NotEq)
+        && enum_mangled_name(&lhs_tv.expo_type).is_some()
+    {
+        let eq = compile_enum_struct_eq(c, lhs, rhs, &lhs_tv.expo_type, function)?;
+        let result = if matches!(op, BinOp::NotEq) {
+            c.builder.build_not(eq, "enum_ne").unwrap()
+        } else {
+            eq
+        };
+        Ok(Some(TypedValue::new(
+            result.into(),
+            Type::Primitive(Primitive::Bool),
+        )))
     } else {
         Err("mismatched types in binary operation".to_string())
     }

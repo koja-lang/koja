@@ -549,7 +549,7 @@ fn find_constructor_enum<'ctx>(
     Err(format!("no enum found with variant `{variant_name}`"))
 }
 
-fn get_payload_ptr<'ctx>(
+pub(crate) fn get_payload_ptr<'ctx>(
     c: &mut Compiler<'ctx>,
     subject_ptr: PointerValue<'ctx>,
     enum_name: &str,
@@ -595,7 +595,7 @@ fn get_tuple_variant_types(
     }
 }
 
-fn lookup_variant_data(
+pub(crate) fn lookup_variant_data(
     c: &Compiler<'_>,
     enum_name: &str,
     variant: &str,
@@ -614,8 +614,8 @@ fn lookup_variant_data(
     Err(format!("variant not found: {enum_name}.{variant}"))
 }
 
-fn match_values<'ctx>(
-    c: &Compiler<'ctx>,
+pub(crate) fn match_values<'ctx>(
+    c: &mut Compiler<'ctx>,
     subject: &BasicValueEnum<'ctx>,
     lit: &BasicValueEnum<'ctx>,
 ) -> Result<IntValue<'ctx>, String> {

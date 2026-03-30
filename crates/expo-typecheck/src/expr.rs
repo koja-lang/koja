@@ -785,6 +785,22 @@ fn infer_call(
             let params = sig.params.clone();
             check_call_args(name, &params, args, "", span, ctx, ce);
             return_type
+        } else if let Some(Type::Function {
+            params,
+            return_type,
+        }) = ce.get_type(name).cloned()
+        {
+            let param_infos: Vec<ParamInfo> = params
+                .iter()
+                .enumerate()
+                .map(|(i, ty)| ParamInfo {
+                    mode: PassMode::Borrow,
+                    name: format!("_{i}"),
+                    ty: ty.clone(),
+                })
+                .collect();
+            check_call_args(name, &param_infos, args, "", span, ctx, ce);
+            *return_type
         } else if ce.env.contains_key(name) || ctx.types.contains_key(name) {
             for arg in args {
                 infer_expr(&arg.value, ctx, ce);

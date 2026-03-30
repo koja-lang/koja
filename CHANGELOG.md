@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Enum `==` and `!=` -- structural comparison for enum values (including generic instances such as `Option<String>`): tags are compared first, then tuple or struct payloads field-wise (primitives, strings, and nested enums). Enables expressions like `peek() == Option.Some(".")` in addition to `match` on options.
 - Struct and enum constants -- `const HEADING = Direction.North` (enum unit variants) and `const ORIGIN = Point{x: 0, y: 0}` (struct literals with all-constant fields) now work as constant initializers. No type annotation required for non-generic types.
 - `expo build --emit-llvm` flag -- dumps the LLVM IR for a module or project to stdout instead of producing an executable. Useful for debugging codegen issues.
 - Project system -- `project.expo` config file with `Project{name: "my_app", version: "0.1.0"}` struct literal format. `expo build`, `expo run`, and `expo check` detect `project.expo` in the current directory when no source file is given. Project name doubles as the module namespace prefix (`import my_app.server` resolves to `src/server.expo`). Configurable `src` dirs and `entry` module with sensible defaults.

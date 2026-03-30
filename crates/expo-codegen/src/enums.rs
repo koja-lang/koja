@@ -1,17 +1,17 @@
-//! Enum variant construction: compiles `EnumName.Variant(...)` expressions
-//! into tagged unions with optional tuple or struct payloads.
+//! Enum codegen: variant construction and structural equality.
 
 use std::collections::HashMap;
 
 use expo_ast::ast::EnumConstructionData;
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{GenericKind, Type, mangle_name, unify, unwrap_indirect};
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use inkwell::IntPredicate;
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
+use crate::control::{get_payload_ptr, lookup_variant_data, match_values};
 use crate::expr::{compile_expr, compile_expr_coerced};
-
-use crate::structs::store_maybe_indirect;
+use crate::structs::{load_maybe_indirect, store_maybe_indirect};
 
 /// Compiles an enum variant construction (`EnumName.Variant(...)` or
 /// `EnumName.Variant { ... }`). Sets the tag byte and populates the payload
@@ -332,4 +332,193 @@ fn compile_generic_enum_construction<'ctx>(
         type_args: type_args.clone(),
     };
     Ok(Some(TypedValue::new(enum_val, result_type)))
+}
+
+// ---------------------------------------------------------------------------
+// Enum equality
+// ---------------------------------------------------------------------------
+
+/// Resolves the mangled LLVM enum name from an Expo type.
+pub(crate) fn enum_mangled_name(ty: &Type) -> Option<String> {
+    match unwrap_indirect(ty) {
+        Type::Enum(name) => Some(name.clone()),
+        Type::GenericInstance {
+            base,
+            kind: GenericKind::Enum,
+            type_args,
+            ..
+        } => Some(mangle_name(base, type_args)),
+        _ => None,
+    }
+}
+
+fn variant_field_types(data: &VariantData) -> Vec<Type> {
+    match data {
+        VariantData::Unit => Vec::new(),
+        VariantData::Tuple(types) => types.clone(),
+        VariantData::Struct(fields) => fields.iter().map(|(_, t)| t.clone()).collect(),
+    }
+}
+
+fn compile_typed_value_eq<'ctx>(
+    c: &mut Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    ty: &Type,
+    function: FunctionValue<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    if enum_mangled_name(ty).is_some() {
+        return compile_enum_struct_eq(c, lhs, rhs, ty, function);
+    }
+    match_values(c, &lhs, &rhs)
+}
+
+/// Structural `==` for two enum LLVM struct values (tag + optional payload).
+pub(crate) fn compile_enum_struct_eq<'ctx>(
+    c: &mut Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    ty: &Type,
+    function: FunctionValue<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    let mangled = enum_mangled_name(ty)
+        .ok_or_else(|| "compile_enum_struct_eq called with non-enum type".to_string())?;
+
+    let variant_names: Vec<String> = c
+        .types
+        .enum_variant_payloads
+        .get(&mangled)
+        .ok_or_else(|| format!("enum variant payloads not found for `{mangled}`"))?
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    let enum_type = *c
+        .types
+        .structs
+        .get(&mangled)
+        .ok_or_else(|| format!("unknown enum LLVM type: {mangled}"))?;
+
+    let lhs_ptr = c.builder.build_alloca(enum_type, "enum_eq_l").unwrap();
+    let rhs_ptr = c.builder.build_alloca(enum_type, "enum_eq_r").unwrap();
+    c.builder
+        .build_store(lhs_ptr, lhs.into_struct_value())
+        .unwrap();
+    c.builder
+        .build_store(rhs_ptr, rhs.into_struct_value())
+        .unwrap();
+
+    let i8_ty = c.context.i8_type();
+    let tag_l = c
+        .builder
+        .build_load(
+            i8_ty,
+            c.builder
+                .build_struct_gep(enum_type, lhs_ptr, 0, "tag_l_ptr")
+                .unwrap(),
+            "tag_l",
+        )
+        .unwrap()
+        .into_int_value();
+    let tag_r = c
+        .builder
+        .build_load(
+            i8_ty,
+            c.builder
+                .build_struct_gep(enum_type, rhs_ptr, 0, "tag_r_ptr")
+                .unwrap(),
+            "tag_r",
+        )
+        .unwrap()
+        .into_int_value();
+
+    let parent_fn = c.builder.get_insert_block().unwrap().get_parent().unwrap();
+    let bb_tags_diff = c.context.append_basic_block(parent_fn, "enum_eq_tags_diff");
+    let bb_tags_same = c.context.append_basic_block(parent_fn, "enum_eq_tags_same");
+    let merge_bb = c.context.append_basic_block(parent_fn, "enum_eq_merge");
+
+    let tags_match = c
+        .builder
+        .build_int_compare(IntPredicate::EQ, tag_l, tag_r, "tags_match")
+        .unwrap();
+    c.builder
+        .build_conditional_branch(tags_match, bb_tags_same, bb_tags_diff)
+        .unwrap();
+
+    c.builder.position_at_end(bb_tags_diff);
+    let false_val = c.context.bool_type().const_int(0, false);
+    c.builder.build_unconditional_branch(merge_bb).unwrap();
+
+    c.builder.position_at_end(bb_tags_same);
+    let i1_ty = c.context.bool_type();
+
+    let mut variant_bbs = Vec::with_capacity(variant_names.len());
+    let mut switch_cases = Vec::with_capacity(variant_names.len());
+    for i in 0..variant_names.len() {
+        let bb = c
+            .context
+            .append_basic_block(parent_fn, &format!("enum_eq_v{i}"));
+        variant_bbs.push(bb);
+        switch_cases.push((i8_ty.const_int(i as u64, false), bb));
+    }
+
+    let bb_default = c.context.append_basic_block(parent_fn, "enum_eq_bad_tag");
+    c.builder
+        .build_switch(tag_l, bb_default, &switch_cases)
+        .unwrap();
+
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+        vec![(false_val.into(), bb_tags_diff)];
+
+    for (i, vname) in variant_names.iter().enumerate() {
+        c.builder.position_at_end(variant_bbs[i]);
+
+        let vdata = lookup_variant_data(c, &mangled, vname)?;
+        let eq_val = match &vdata {
+            VariantData::Unit => i1_ty.const_int(1, false),
+            VariantData::Tuple(_) | VariantData::Struct(_) => {
+                let fields = variant_field_types(&vdata);
+                let (payload_type, lp) = get_payload_ptr(c, lhs_ptr, &mangled, vname)?;
+                let (_pt, rp) = get_payload_ptr(c, rhs_ptr, &mangled, vname)?;
+
+                let mut acc: Option<IntValue<'ctx>> = None;
+                for (fi, fty) in fields.iter().enumerate() {
+                    let lf = c
+                        .builder
+                        .build_struct_gep(payload_type, lp, fi as u32, &format!("eq_lf{fi}"))
+                        .unwrap();
+                    let rf = c
+                        .builder
+                        .build_struct_gep(payload_type, rp, fi as u32, &format!("eq_rf{fi}"))
+                        .unwrap();
+                    let lv = load_maybe_indirect(c, lf, fty, &format!("eq_lv{fi}"));
+                    let rv = load_maybe_indirect(c, rf, fty, &format!("eq_rv{fi}"));
+                    let cmp = compile_typed_value_eq(c, lv, rv, fty, function)?;
+                    acc = Some(match acc {
+                        None => cmp,
+                        Some(prev) => c
+                            .builder
+                            .build_and(prev, cmp, &format!("eq_and{fi}"))
+                            .unwrap(),
+                    });
+                }
+                acc.unwrap_or_else(|| i1_ty.const_int(1, false))
+            }
+        };
+
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+        incoming.push((eq_val.into(), variant_bbs[i]));
+    }
+
+    c.builder.position_at_end(bb_default);
+    c.builder.build_unconditional_branch(merge_bb).unwrap();
+    incoming.push((false_val.into(), bb_default));
+
+    c.builder.position_at_end(merge_bb);
+    let phi = c.builder.build_phi(i1_ty, "enum_eq_phi").unwrap();
+    for (v, bb) in &incoming {
+        phi.add_incoming(&[(v, *bb)]);
+    }
+
+    Ok(phi.as_basic_value().into_int_value())
 }
