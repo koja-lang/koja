@@ -64,11 +64,7 @@ pub(crate) fn store_maybe_indirect<'ctx>(
         let size = llvm_type_size(inner_llvm_ty, c);
         let malloc_fn = *c.functions.get("malloc").expect("malloc not declared");
         let heap_ptr = c
-            .builder
-            .build_call(malloc_fn, &[size.into()], &format!("{label}_malloc"))
-            .unwrap()
-            .try_as_basic_value()
-            .left()
+            .call(malloc_fn, &[size.into()], &format!("{label}_malloc"))
             .unwrap()
             .into_pointer_value();
         c.builder.build_store(heap_ptr, val).unwrap();
@@ -93,6 +89,9 @@ fn llvm_type_size<'ctx>(
             .size_of()
             .unwrap_or_else(|| c.context.i64_type().const_int(8, false)),
         BasicTypeEnum::VectorType(vt) => vt
+            .size_of()
+            .unwrap_or_else(|| c.context.i64_type().const_int(8, false)),
+        BasicTypeEnum::ScalableVectorType(svt) => svt
             .size_of()
             .unwrap_or_else(|| c.context.i64_type().const_int(8, false)),
     }
@@ -364,10 +363,7 @@ pub fn compile_method_call<'ctx>(
         return Ok(None);
     }
 
-    let result = c
-        .builder
-        .build_call(callee, &llvm_args, &format!("{mangled}_ret"))
-        .unwrap();
+    let result = c.call(callee, &llvm_args, &format!("{mangled}_ret"));
 
     if let Some(ti) = c.type_ctx.types.get(&base)
         && let Some(sig) = ti.functions.get(method)
@@ -386,10 +382,7 @@ pub fn compile_method_call<'ctx>(
         }
     }
 
-    Ok(result
-        .try_as_basic_value()
-        .left()
-        .map(|v| TypedValue::new(v, return_type)))
+    Ok(result.map(|v| TypedValue::new(v, return_type)))
 }
 
 fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<String> {
@@ -944,13 +937,6 @@ fn compile_static_call<'ctx>(
         llvm_args.push(val.into());
     }
 
-    let result = c
-        .builder
-        .build_call(callee, &llvm_args, &format!("{mangled_fn}_ret"))
-        .unwrap();
-
-    Ok(result
-        .try_as_basic_value()
-        .left()
+    Ok(c.call(callee, &llvm_args, &format!("{mangled_fn}_ret"))
         .map(|v| TypedValue::new(v, return_type)))
 }

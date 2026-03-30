@@ -62,13 +62,7 @@ pub fn emit_list_method<'ctx>(
                 .build_int_mul(initial_cap, i64_ty.const_int(elem_size, false), "alloc_sz")
                 .unwrap();
             let malloc = *c.functions.get("malloc").expect("malloc not declared");
-            let raw_ptr = c
-                .builder
-                .build_call(malloc, &[alloc_size.into()], "buf")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap();
+            let raw_ptr = c.call(malloc, &[alloc_size.into()], "buf").unwrap();
 
             let result = list_struct.get_undef();
             let result = c
@@ -142,11 +136,7 @@ pub fn emit_list_method<'ctx>(
                 .unwrap();
             let realloc = *c.functions.get("realloc").expect("realloc not declared");
             let new_ptr = c
-                .builder
-                .build_call(realloc, &[buf_ptr.into(), new_size.into()], "new_buf")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(realloc, &[buf_ptr.into(), new_size.into()], "new_buf")
                 .unwrap();
             c.builder.build_unconditional_branch(store_bb).unwrap();
 
@@ -702,13 +692,7 @@ pub fn emit_list_method<'ctx>(
                 )
                 .unwrap();
             let malloc = *c.functions.get("malloc").expect("malloc not declared");
-            let new_buf = c
-                .builder
-                .build_call(malloc, &[alloc_bytes.into()], "new_buf")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap();
+            let new_buf = c.call(malloc, &[alloc_bytes.into()], "new_buf").unwrap();
 
             let src_offset = c
                 .builder
@@ -720,13 +704,11 @@ pub fn emit_list_method<'ctx>(
                     .unwrap()
             };
             let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
-            c.builder
-                .build_call(
-                    memcpy,
-                    &[new_buf.into(), src_ptr.into(), alloc_bytes.into()],
-                    "cpy",
-                )
-                .unwrap();
+            c.call_void(
+                memcpy,
+                &[new_buf.into(), src_ptr.into(), alloc_bytes.into()],
+                "cpy",
+            );
 
             let result = list_struct.get_undef();
             let result = c
@@ -749,11 +731,7 @@ pub fn emit_list_method<'ctx>(
             // Empty slice: return a fresh empty list
             c.builder.position_at_end(empty_bb);
             let empty_alloc = c
-                .builder
-                .build_call(malloc, &[i64_ty.const_int(0, false).into()], "empty_buf")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(malloc, &[i64_ty.const_int(0, false).into()], "empty_buf")
                 .unwrap();
             let empty_result = list_struct.get_undef();
             let empty_result = c
@@ -846,11 +824,7 @@ pub fn emit_list_method<'ctx>(
                 .unwrap();
             let realloc = *c.functions.get("realloc").expect("realloc not declared");
             let new_ptr = c
-                .builder
-                .build_call(realloc, &[self_ptr.into(), new_size.into()], "new_buf")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(realloc, &[self_ptr.into(), new_size.into()], "new_buf")
                 .unwrap();
             c.builder.build_unconditional_branch(copy_bb).unwrap();
 
@@ -878,13 +852,11 @@ pub fn emit_list_method<'ctx>(
                 .build_int_mul(other_len, i64_ty.const_int(elem_size, false), "copy_bytes")
                 .unwrap();
             let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
-            c.builder
-                .build_call(
-                    memcpy,
-                    &[dst_ptr.into(), other_ptr.into(), copy_bytes.into()],
-                    "cpy",
-                )
-                .unwrap();
+            c.call_void(
+                memcpy,
+                &[dst_ptr.into(), other_ptr.into(), copy_bytes.into()],
+                "cpy",
+            );
 
             let result = list_struct.get_undef();
             let result = c

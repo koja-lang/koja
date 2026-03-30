@@ -571,11 +571,7 @@ fn convert_list_literal_if_needed<'ctx>(
         .ok_or_else(|| format!("{base} does not implement ListLiteral (no from_list)"))?;
 
     let result = c
-        .builder
-        .build_call(from_list_fn, &[list_val.into()], "from_list")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(from_list_fn, &[list_val.into()], "from_list")
         .ok_or("from_list returned void")?;
 
     Ok(result)

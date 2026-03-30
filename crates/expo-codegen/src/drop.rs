@@ -22,8 +22,8 @@ pub enum Ownership {
 /// order. Called before function returns and at scope exits. When `skip` is
 /// `Some(name)`, the variable with that name is excluded — its ownership is
 /// being transferred to the caller via `return`.
-pub fn drop_live_variables(c: &mut Compiler, skip: Option<&str>) {
-    let vars: Vec<(String, PointerValue, Type, Ownership)> = c
+pub fn drop_live_variables<'ctx>(c: &mut Compiler<'ctx>, skip: Option<&str>) {
+    let vars: Vec<(String, PointerValue<'ctx>, Type, Ownership)> = c
         .variables
         .iter()
         .map(|(name, (ptr, ty, own))| (name.clone(), *ptr, ty.clone(), *own))
@@ -74,9 +74,7 @@ pub fn drop_live_variables(c: &mut Compiler, skip: Option<&str>) {
                     )
                     .unwrap()
             };
-            c.builder
-                .build_call(free_fn, &[base_ptr.into()], "drop_free_heap")
-                .unwrap();
+            c.call_void(free_fn, &[base_ptr.into()], "drop_free_heap");
             continue;
         }
         if *ownership == Ownership::Owned {
@@ -163,7 +161,7 @@ fn variant_has_indirect(vdata: &VariantData) -> bool {
     }
 }
 
-fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
+fn emit_drop<'ctx>(c: &mut Compiler<'ctx>, ptr: PointerValue<'ctx>, ty: &Type) {
     if !needs_heap_drop(c, ty) {
         return;
     }
@@ -195,15 +193,13 @@ fn emit_drop(c: &mut Compiler, ptr: PointerValue, ty: &Type) {
             "drop_load",
         )
         .unwrap();
-    c.builder
-        .build_call(free, &[val.into()], "drop_free")
-        .unwrap();
+    c.call_void(free, &[val.into()], "drop_free");
 }
 
 /// Frees heap pointers for each [`Type::Indirect`] field in a struct.
 /// Handles the first level of indirection; deeper recursive nodes are freed
 /// when they themselves go out of scope or are explicitly dropped.
-fn emit_drop_indirect_fields(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
+fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
     let free_fn = *c
         .functions
         .get("free")
@@ -260,15 +256,13 @@ fn emit_drop_indirect_fields(c: &mut Compiler, alloca: PointerValue, ty: &Type) 
                 .builder
                 .build_load(ptr_ty, field_ptr, &format!("drop_heap_{idx}"))
                 .unwrap();
-            c.builder
-                .build_call(free_fn, &[heap_ptr.into()], &format!("drop_free_{idx}"))
-                .unwrap();
+            c.call_void(free_fn, &[heap_ptr.into()], &format!("drop_free_{idx}"));
         }
     }
 }
 
 /// Drops a List value: extracts the data pointer (field 0) and frees it.
-fn emit_drop_list(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
+fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
     let mangled = match ty {
         Type::GenericInstance {
             base, type_args, ..
@@ -294,13 +288,11 @@ fn emit_drop_list(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
         .functions
         .get("free")
         .expect("free not declared in builtins");
-    c.builder
-        .build_call(free, &[data_ptr.into()], "drop_list_free")
-        .unwrap();
+    c.call_void(free, &[data_ptr.into()], "drop_list_free");
 }
 
 /// Drops a Map or Set value: frees entries_ptr (field 0) and states_ptr (field 1).
-fn emit_drop_hash_collection(c: &mut Compiler, alloca: PointerValue, ty: &Type) {
+fn emit_drop_hash_collection<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
     let mangled = match ty {
         Type::GenericInstance {
             base, type_args, ..
@@ -330,16 +322,12 @@ fn emit_drop_hash_collection(c: &mut Compiler, alloca: PointerValue, ty: &Type) 
         .functions
         .get("free")
         .expect("free not declared in builtins");
-    c.builder
-        .build_call(free, &[entries_ptr.into()], "drop_free_entries")
-        .unwrap();
-    c.builder
-        .build_call(free, &[states_ptr.into()], "drop_free_states")
-        .unwrap();
+    c.call_void(free, &[entries_ptr.into()], "drop_free_entries");
+    c.call_void(free, &[states_ptr.into()], "drop_free_states");
 }
 
 /// Drops a closure fat pointer: extracts env_ptr, null-checks, and frees.
-fn emit_drop_closure(c: &mut Compiler, alloca: PointerValue) {
+fn emit_drop_closure<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>) {
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
     let closure_struct_ty = c
         .context
@@ -372,9 +360,7 @@ fn emit_drop_closure(c: &mut Compiler, alloca: PointerValue) {
         .functions
         .get("free")
         .expect("free not declared in builtins");
-    c.builder
-        .build_call(free, &[env_ptr.into()], "free_env")
-        .unwrap();
+    c.call_void(free, &[env_ptr.into()], "free_env");
     c.builder.build_unconditional_branch(cont_bb).unwrap();
 
     c.builder.position_at_end(cont_bb);

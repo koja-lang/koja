@@ -238,6 +238,30 @@ impl<'ctx> Compiler<'ctx> {
         alloca
     }
 
+    /// Call a function, ignoring the return value.
+    pub fn call_void(
+        &self,
+        function: FunctionValue<'ctx>,
+        args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) {
+        self.builder.build_call(function, args, name).unwrap();
+    }
+
+    /// Call a function, returning its value or `None` if it returned void.
+    pub fn call(
+        &self,
+        function: FunctionValue<'ctx>,
+        args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        self.builder
+            .build_call(function, args, name)
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+    }
+
     /// Returns true if the current basic block already has a terminator
     /// instruction (branch, return, etc.).
     pub fn current_block_terminated(&self) -> bool {
@@ -264,7 +288,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let mut thunk_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
         for i in 0..target_ty.count_param_types() {
-            thunk_params.push(target_ty.get_param_types()[i as usize].into());
+            thunk_params.push(target_ty.get_param_types()[i as usize]);
         }
         let thunk_fn_type = match target_ty.get_return_type() {
             Some(ret) => ret.fn_type(&thunk_params, false),
@@ -283,12 +307,7 @@ impl<'ctx> Compiler<'ctx> {
             forward_args.push(thunk_fn.get_nth_param(i).unwrap().into());
         }
 
-        let call_val = self
-            .builder
-            .build_call(target_fn, &forward_args, "fwd")
-            .unwrap();
-
-        match call_val.try_as_basic_value().left() {
+        match self.call(target_fn, &forward_args, "fwd") {
             Some(ret) => self.builder.build_return(Some(&ret)).unwrap(),
             None => self.builder.build_return(None).unwrap(),
         };
@@ -834,19 +853,17 @@ impl<'ctx> Compiler<'ctx> {
             let user_main_ptr = user_main.as_global_value().as_pointer_value();
             let null_ptr = ptr_ty.const_null();
             let zero_i64 = self.context.i64_type().const_int(0, false);
-            self.builder
-                .build_call(
-                    spawn_fn,
-                    &[user_main_ptr.into(), null_ptr.into(), zero_i64.into()],
-                    "",
-                )
-                .unwrap();
+            self.call_void(
+                spawn_fn,
+                &[user_main_ptr.into(), null_ptr.into(), zero_i64.into()],
+                "",
+            );
 
             let main_done = *self
                 .functions
                 .get("expo_rt_main_done")
                 .ok_or("expo_rt_main_done not declared")?;
-            self.builder.build_call(main_done, &[], "").unwrap();
+            self.call_void(main_done, &[], "");
 
             let zero_i32 = self.context.i32_type().const_int(0, false);
             self.builder.build_return(Some(&zero_i32)).unwrap();
@@ -964,15 +981,11 @@ impl<'ctx> Compiler<'ctx> {
             .build_global_string_ptr("w", "panic_mode")
             .unwrap();
         let stderr = self
-            .builder
-            .build_call(
+            .call(
                 fdopen,
                 &[fd_val.into(), mode.as_pointer_value().into()],
                 "panic_stderr",
             )
-            .unwrap()
-            .try_as_basic_value()
-            .left()
             .expect("fdopen returned no value");
 
         let fmt_ptr = self
@@ -985,11 +998,9 @@ impl<'ctx> Compiler<'ctx> {
         for arg in args {
             fprintf_args.push((*arg).into());
         }
-        self.builder
-            .build_call(fprintf, &fprintf_args, "panic_fprintf")
-            .unwrap();
+        self.call_void(fprintf, &fprintf_args, "panic_fprintf");
 
-        self.builder.build_call(abort, &[], "panic_abort").unwrap();
+        self.call_void(abort, &[], "panic_abort");
         self.builder.build_unreachable().unwrap();
     }
 }

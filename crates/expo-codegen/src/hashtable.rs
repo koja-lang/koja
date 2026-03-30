@@ -169,33 +169,23 @@ pub fn emit_hashtable_new<'ctx>(
         .unwrap();
     let malloc = *c.functions.get("malloc").unwrap();
     let entries_ptr = c
-        .builder
-        .build_call(malloc, &[entries_bytes.into()], "entries")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(malloc, &[entries_bytes.into()], "entries")
         .unwrap()
         .into_pointer_value();
     let states_ptr = c
-        .builder
-        .build_call(malloc, &[cap.into()], "states")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(malloc, &[cap.into()], "states")
         .unwrap()
         .into_pointer_value();
     let memset = *c.functions.get("memset").unwrap();
-    c.builder
-        .build_call(
-            memset,
-            &[
-                states_ptr.into(),
-                i32_ty.const_int(0, false).into(),
-                cap.into(),
-            ],
-            "clear_states",
-        )
-        .unwrap();
+    c.call_void(
+        memset,
+        &[
+            states_ptr.into(),
+            i32_ty.const_int(0, false).into(),
+            cap.into(),
+        ],
+        "clear_states",
+    );
 
     let result = collection_struct.get_undef();
     let result = c
@@ -407,15 +397,11 @@ fn emit_eq_intrinsic<'ctx>(
     let result: inkwell::values::IntValue<'ctx> = if type_name == "String" {
         let strcmp = *c.functions.get("strcmp").expect("strcmp not declared");
         let cmp_result = c
-            .builder
-            .build_call(
+            .call(
                 strcmp,
                 &[self_val.into(), other_val.into()],
                 "strcmp_result",
             )
-            .unwrap()
-            .try_as_basic_value()
-            .left()
             .unwrap()
             .into_int_value();
         c.builder
@@ -539,15 +525,11 @@ fn emit_conversion_intrinsic<'ctx>(
                 .get("expo_utf8_validate")
                 .ok_or("expo_utf8_validate not declared")?;
             let is_valid = c
-                .builder
-                .build_call(
+                .call(
                     validate_fn,
                     &[self_ptr.into(), byte_count.into()],
                     "utf8_ok",
                 )
-                .unwrap()
-                .try_as_basic_value()
-                .left()
                 .unwrap()
                 .into_int_value();
 
@@ -576,11 +558,7 @@ fn emit_conversion_intrinsic<'ctx>(
                 .build_int_add(byte_count, i64_ty.const_int(9, false), "alloc_sz")
                 .unwrap();
             let new_base = c
-                .builder
-                .build_call(malloc_fn, &[alloc_size.into()], "new_base")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(malloc_fn, &[alloc_size.into()], "new_base")
                 .unwrap()
                 .into_pointer_value();
             c.builder.build_store(new_base, bit_length).unwrap();
@@ -594,13 +572,11 @@ fn emit_conversion_intrinsic<'ctx>(
                     )
                     .unwrap()
             };
-            c.builder
-                .build_call(
-                    memcpy_fn,
-                    &[new_payload.into(), self_ptr.into(), byte_count.into()],
-                    "cpy",
-                )
-                .unwrap();
+            c.call_void(
+                memcpy_fn,
+                &[new_payload.into(), self_ptr.into(), byte_count.into()],
+                "cpy",
+            );
             let nul_ptr = unsafe {
                 c.builder
                     .build_in_bounds_gep(i8_ty, new_payload, &[byte_count], "nul")
@@ -766,13 +742,7 @@ fn emit_string_intrinsic<'ctx>(
                 .functions
                 .get("expo_string_length")
                 .ok_or("expo_string_length not declared")?;
-            let result = c
-                .builder
-                .build_call(rt_fn, &[self_ptr.into()], "len")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap();
+            let result = c.call(rt_fn, &[self_ptr.into()], "len").unwrap();
             c.builder.build_return(Some(&result)).unwrap();
         }
         "String_get" => {
@@ -794,11 +764,7 @@ fn emit_string_intrinsic<'ctx>(
                 .get("expo_string_get")
                 .ok_or("expo_string_get not declared")?;
             let raw_ptr = c
-                .builder
-                .build_call(rt_fn, &[self_ptr.into(), index.into()], "ch")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(rt_fn, &[self_ptr.into(), index.into()], "ch")
                 .unwrap()
                 .into_pointer_value();
 
@@ -895,15 +861,11 @@ fn emit_string_intrinsic<'ctx>(
                 .get("expo_string_slice")
                 .ok_or("expo_string_slice not declared")?;
             let result = c
-                .builder
-                .build_call(
+                .call(
                     rt_fn,
                     &[self_ptr.into(), start.into(), stop.into()],
                     "sliced",
                 )
-                .unwrap()
-                .try_as_basic_value()
-                .left()
                 .unwrap();
             c.builder.build_return(Some(&result)).unwrap();
         }
@@ -941,11 +903,7 @@ fn emit_parse_intrinsic<'ctx>(
                 .get("expo_int_parse")
                 .ok_or("expo_int_parse not declared")?;
             let ok = c
-                .builder
-                .build_call(rt_fn, &[input_ptr.into(), out_alloca.into()], "ok")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(rt_fn, &[input_ptr.into(), out_alloca.into()], "ok")
                 .unwrap()
                 .into_int_value();
 
@@ -987,11 +945,7 @@ fn emit_parse_intrinsic<'ctx>(
                 .get("expo_float_parse")
                 .ok_or("expo_float_parse not declared")?;
             let ok = c
-                .builder
-                .build_call(rt_fn, &[input_ptr.into(), out_alloca.into()], "ok")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(rt_fn, &[input_ptr.into(), out_alloca.into()], "ok")
                 .unwrap()
                 .into_int_value();
 
@@ -1059,11 +1013,7 @@ fn emit_fd_intrinsic<'ctx>(
                 .get("expo_fd_read")
                 .ok_or("expo_fd_read not declared")?;
             let ptr = c
-                .builder
-                .build_call(rt_fn, &[fd.into(), count.into()], "read_ptr")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(rt_fn, &[fd.into(), count.into()], "read_ptr")
                 .unwrap()
                 .into_pointer_value();
 
@@ -1087,13 +1037,7 @@ fn emit_fd_intrinsic<'ctx>(
                 .functions
                 .get("expo_last_error")
                 .ok_or("expo_last_error not declared")?;
-            let err_msg = c
-                .builder
-                .build_call(err_fn, &[], "err_msg")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap();
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
             let err_result = build_result_err(c, err_msg, result_type);
             c.builder.build_unconditional_branch(merge_bb).unwrap();
             let err_end = c.builder.get_insert_block().unwrap();
@@ -1112,11 +1056,7 @@ fn emit_fd_intrinsic<'ctx>(
                 .get("expo_fd_write")
                 .ok_or("expo_fd_write not declared")?;
             let written = c
-                .builder
-                .build_call(rt_fn, &[fd.into(), data.into()], "written")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(rt_fn, &[fd.into(), data.into()], "written")
                 .unwrap()
                 .into_int_value();
 
@@ -1144,13 +1084,7 @@ fn emit_fd_intrinsic<'ctx>(
                 .functions
                 .get("expo_last_error")
                 .ok_or("expo_last_error not declared")?;
-            let err_msg = c
-                .builder
-                .build_call(err_fn, &[], "err_msg")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap();
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
             let err_result = build_result_err(c, err_msg, result_type);
             c.builder.build_unconditional_branch(merge_bb).unwrap();
             let err_end = c.builder.get_insert_block().unwrap();
@@ -1168,11 +1102,7 @@ fn emit_fd_intrinsic<'ctx>(
                 .get("expo_fd_close")
                 .ok_or("expo_fd_close not declared")?;
             let ret = c
-                .builder
-                .build_call(rt_fn, &[fd.into()], "close_ret")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(rt_fn, &[fd.into()], "close_ret")
                 .unwrap()
                 .into_int_value();
 
@@ -1201,13 +1131,7 @@ fn emit_fd_intrinsic<'ctx>(
                 .functions
                 .get("expo_last_error")
                 .ok_or("expo_last_error not declared")?;
-            let err_msg = c
-                .builder
-                .build_call(err_fn, &[], "err_msg")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap();
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
             let err_result = build_result_err(c, err_msg, result_type);
             c.builder.build_unconditional_branch(merge_bb).unwrap();
             let err_end = c.builder.get_insert_block().unwrap();
@@ -1251,11 +1175,7 @@ fn emit_file_intrinsic<'ctx>(
                 .get("expo_file_open")
                 .ok_or("expo_file_open not declared")?;
             let fd_val = c
-                .builder
-                .build_call(rt_fn, &[path_ptr.into(), mode.into()], "fd_val")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(rt_fn, &[path_ptr.into(), mode.into()], "fd_val")
                 .unwrap()
                 .into_int_value();
 
@@ -1307,13 +1227,7 @@ fn emit_file_intrinsic<'ctx>(
                 .functions
                 .get("expo_last_error")
                 .ok_or("expo_last_error not declared")?;
-            let err_msg = c
-                .builder
-                .build_call(err_fn, &[], "err_msg")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap();
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
             let err_result = build_result_err(c, err_msg, result_type);
             c.builder.build_unconditional_branch(merge_bb).unwrap();
             let err_end = c.builder.get_insert_block().unwrap();
@@ -1330,11 +1244,7 @@ fn emit_file_intrinsic<'ctx>(
                 .get("expo_file_read_all")
                 .ok_or("expo_file_read_all not declared")?;
             let ptr = c
-                .builder
-                .build_call(rt_fn, &[path_ptr.into()], "read_ptr")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(rt_fn, &[path_ptr.into()], "read_ptr")
                 .unwrap()
                 .into_pointer_value();
 
@@ -1358,13 +1268,7 @@ fn emit_file_intrinsic<'ctx>(
                 .functions
                 .get("expo_last_error")
                 .ok_or("expo_last_error not declared")?;
-            let err_msg = c
-                .builder
-                .build_call(err_fn, &[], "err_msg")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap();
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
             let err_result = build_result_err(c, err_msg, result_type);
             c.builder.build_unconditional_branch(merge_bb).unwrap();
             let err_end = c.builder.get_insert_block().unwrap();

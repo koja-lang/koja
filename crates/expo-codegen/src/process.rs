@@ -90,9 +90,7 @@ fn build_send_body<'ctx>(
             .builder
             .build_int_add(byte_count, i64_ty.const_int(9, false), "msg_len")
             .unwrap();
-        c.builder
-            .build_call(send_fn, &[pid.into(), base_ptr.into(), msg_len.into()], "")
-            .unwrap();
+        c.call_void(send_fn, &[pid.into(), base_ptr.into(), msg_len.into()], "");
     } else {
         let msg_val = fn_val.get_nth_param(1).unwrap();
         let ptr_ty = c.context.ptr_type(AddressSpace::default());
@@ -105,9 +103,7 @@ fn build_send_body<'ctx>(
         let msg_len = msg_llvm
             .size_of()
             .ok_or("cannot compute message byte size")?;
-        c.builder
-            .build_call(send_fn, &[pid.into(), msg_ptr.into(), msg_len.into()], "")
-            .unwrap();
+        c.call_void(send_fn, &[pid.into(), msg_ptr.into(), msg_len.into()], "");
     }
 
     Ok(())
@@ -220,9 +216,7 @@ pub fn emit_ref_method<'ctx>(
             let msg_len = envelope_llvm
                 .size_of()
                 .ok_or("cannot compute envelope byte size")?;
-            c.builder
-                .build_call(send_fn, &[pid.into(), msg_ptr.into(), msg_len.into()], "")
-                .unwrap();
+            c.call_void(send_fn, &[pid.into(), msg_ptr.into(), msg_len.into()], "");
 
             c.builder.build_return(None).unwrap();
 
@@ -327,11 +321,7 @@ pub fn emit_ref_method<'ctx>(
                 .get("expo_rt_self")
                 .ok_or("expo_rt_self not declared")?;
             let caller_pid = c
-                .builder
-                .build_call(self_fn, &[], "caller_pid")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(self_fn, &[], "caller_pid")
                 .ok_or("expo_rt_self did not return a value")?
                 .into_int_value();
 
@@ -402,13 +392,11 @@ pub fn emit_ref_method<'ctx>(
             let msg_len = envelope_llvm
                 .size_of()
                 .ok_or("cannot compute envelope byte size")?;
-            c.builder
-                .build_call(
-                    send_fn,
-                    &[target_pid.into(), msg_ptr.into(), msg_len.into()],
-                    "",
-                )
-                .unwrap();
+            c.call_void(
+                send_fn,
+                &[target_pid.into(), msg_ptr.into(), msg_len.into()],
+                "",
+            );
 
             let timeout_val = fn_val.get_nth_param(2).unwrap().into_int_value();
 
@@ -418,11 +406,7 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("expo_rt_receive_timeout not declared")?;
 
             let raw_ptr = c
-                .builder
-                .build_call(receive_timeout_fn, &[timeout_val.into()], "receive_reply")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(receive_timeout_fn, &[timeout_val.into()], "receive_reply")
                 .ok_or("expo_rt_receive_timeout did not return a value")?
                 .into_pointer_value();
 

@@ -130,33 +130,23 @@ pub fn emit_map_method<'ctx>(
                 .unwrap();
             let malloc = *c.functions.get("malloc").unwrap();
             let new_entries_ptr = c
-                .builder
-                .build_call(malloc, &[new_entries_bytes.into()], "new_entries")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(malloc, &[new_entries_bytes.into()], "new_entries")
                 .unwrap()
                 .into_pointer_value();
             let new_states_ptr = c
-                .builder
-                .build_call(malloc, &[new_cap.into()], "new_states")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(malloc, &[new_cap.into()], "new_states")
                 .unwrap()
                 .into_pointer_value();
             let memset = *c.functions.get("memset").unwrap();
-            c.builder
-                .build_call(
-                    memset,
-                    &[
-                        new_states_ptr.into(),
-                        i32_ty.const_int(0, false).into(),
-                        new_cap.into(),
-                    ],
-                    "clear_new_states",
-                )
-                .unwrap();
+            c.call_void(
+                memset,
+                &[
+                    new_states_ptr.into(),
+                    i32_ty.const_int(0, false).into(),
+                    new_cap.into(),
+                ],
+                "clear_new_states",
+            );
 
             // Rehash loop
             let rehash_bb = c.context.append_basic_block(fn_val, "rehash");
@@ -221,11 +211,7 @@ pub fn emit_map_method<'ctx>(
                 .unwrap();
 
             let old_hash = c
-                .builder
-                .build_call(hash_fn, &[old_key.into()], "old_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[old_key.into()], "old_hash")
                 .unwrap()
                 .into_int_value();
             let new_mask = c
@@ -294,17 +280,15 @@ pub fn emit_map_method<'ctx>(
             };
 
             let memcpy = *c.functions.get("memcpy").unwrap();
-            c.builder
-                .build_call(
-                    memcpy,
-                    &[
-                        new_entry_ptr.into(),
-                        old_entry_ptr.into(),
-                        i64_ty.const_int(entry_size, false).into(),
-                    ],
-                    "rehash_copy",
-                )
-                .unwrap();
+            c.call_void(
+                memcpy,
+                &[
+                    new_entry_ptr.into(),
+                    old_entry_ptr.into(),
+                    i64_ty.const_int(entry_size, false).into(),
+                ],
+                "rehash_copy",
+            );
             c.builder
                 .build_store(new_state_at, i8_ty.const_int(1, false))
                 .unwrap();
@@ -321,12 +305,8 @@ pub fn emit_map_method<'ctx>(
             // Free old buffers
             c.builder.position_at_end(rehash_done);
             let free = *c.functions.get("free").unwrap();
-            c.builder
-                .build_call(free, &[entries_ptr.into()], "free_old_entries")
-                .unwrap();
-            c.builder
-                .build_call(free, &[states_ptr.into()], "free_old_states")
-                .unwrap();
+            c.call_void(free, &[entries_ptr.into()], "free_old_entries");
+            c.call_void(free, &[states_ptr.into()], "free_old_states");
             c.builder.build_unconditional_branch(probe_bb).unwrap();
 
             c.builder.position_at_end(no_resize_bb);
@@ -349,11 +329,7 @@ pub fn emit_map_method<'ctx>(
             let final_cap = phi_cap.as_basic_value().into_int_value();
 
             let hash_val = c
-                .builder
-                .build_call(hash_fn, &[key_val.into()], "key_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[key_val.into()], "key_hash")
                 .unwrap()
                 .into_int_value();
             let mask = c
@@ -429,11 +405,7 @@ pub fn emit_map_method<'ctx>(
                 .build_load(key_llvm, e_ptr, "existing_key")
                 .unwrap();
             let keys_equal = c
-                .builder
-                .build_call(eq_fn, &[key_val.into(), existing_key.into()], "keys_eq")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(eq_fn, &[key_val.into(), existing_key.into()], "keys_eq")
                 .unwrap()
                 .into_int_value();
             c.builder
@@ -596,11 +568,7 @@ pub fn emit_map_method<'ctx>(
                 .into_int_value();
 
             let hash_val = c
-                .builder
-                .build_call(hash_fn, &[key_val.into()], "key_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[key_val.into()], "key_hash")
                 .unwrap()
                 .into_int_value();
             let mask = c
@@ -676,11 +644,7 @@ pub fn emit_map_method<'ctx>(
                 .build_load(key_llvm, e_ptr, "existing_key")
                 .unwrap();
             let keys_equal = c
-                .builder
-                .build_call(eq_fn, &[key_val.into(), existing_key.into()], "keys_eq")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(eq_fn, &[key_val.into(), existing_key.into()], "keys_eq")
                 .unwrap()
                 .into_int_value();
             c.builder
@@ -786,11 +750,7 @@ pub fn emit_map_method<'ctx>(
                 .into_int_value();
 
             let hash_val = c
-                .builder
-                .build_call(hash_fn, &[key_val.into()], "key_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[key_val.into()], "key_hash")
                 .unwrap()
                 .into_int_value();
             let mask = c
@@ -866,11 +826,7 @@ pub fn emit_map_method<'ctx>(
                 .build_load(key_llvm, e_ptr, "existing_key")
                 .unwrap();
             let keys_equal = c
-                .builder
-                .build_call(eq_fn, &[key_val.into(), existing_key.into()], "keys_eq")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(eq_fn, &[key_val.into(), existing_key.into()], "keys_eq")
                 .unwrap()
                 .into_int_value();
             c.builder
@@ -935,11 +891,7 @@ pub fn emit_map_method<'ctx>(
                 .into_int_value();
 
             let hash_val = c
-                .builder
-                .build_call(hash_fn, &[key_val.into()], "key_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[key_val.into()], "key_hash")
                 .unwrap()
                 .into_int_value();
             let mask = c
@@ -1015,11 +967,7 @@ pub fn emit_map_method<'ctx>(
                 .build_load(key_llvm, e_ptr, "existing_key")
                 .unwrap();
             let keys_equal = c
-                .builder
-                .build_call(eq_fn, &[key_val.into(), existing_key.into()], "keys_eq")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(eq_fn, &[key_val.into(), existing_key.into()], "keys_eq")
                 .unwrap()
                 .into_int_value();
             c.builder

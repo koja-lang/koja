@@ -643,8 +643,7 @@ fn match_values<'ctx>(
     } else if subject.is_pointer_value() && lit.is_pointer_value() {
         let strcmp = *c.functions.get("strcmp").ok_or("strcmp not declared")?;
         let cmp_result = c
-            .builder
-            .build_call(
+            .call(
                 strcmp,
                 &[
                     subject.into_pointer_value().into(),
@@ -652,9 +651,6 @@ fn match_values<'ctx>(
                 ],
                 "strcmp_result",
             )
-            .unwrap()
-            .try_as_basic_value()
-            .left()
             .ok_or("strcmp did not return a value")?
             .into_int_value();
         let zero = c.context.i32_type().const_int(0, false);

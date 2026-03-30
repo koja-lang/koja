@@ -337,13 +337,8 @@ fn compile_string<'ctx>(
     size_args.extend_from_slice(&interp_values);
     let size_args_meta: Vec<_> = size_args.iter().map(|v| (*v).into()).collect();
 
-    let size_call = c
-        .builder
-        .build_call(snprintf, &size_args_meta, "interp_len")
-        .unwrap();
-    let needed = size_call
-        .try_as_basic_value()
-        .left()
+    let needed = c
+        .call(snprintf, &size_args_meta, "interp_len")
         .ok_or("snprintf did not return a value")?
         .into_int_value();
 
@@ -362,11 +357,7 @@ fn compile_string<'ctx>(
         .build_int_add(needed_i64, i64_type.const_int(9, false), "interp_alloc_sz")
         .unwrap();
     let base_ptr = c
-        .builder
-        .build_call(malloc_fn, &[alloc_size.into()], "interp_base")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(malloc_fn, &[alloc_size.into()], "interp_base")
         .ok_or("malloc did not return a value")?
         .into_pointer_value();
 
@@ -391,9 +382,7 @@ fn compile_string<'ctx>(
     write_args.extend_from_slice(&interp_values);
     let write_args_meta: Vec<_> = write_args.iter().map(|v| (*v).into()).collect();
 
-    c.builder
-        .build_call(snprintf, &write_args_meta, "interp_write")
-        .unwrap();
+    c.call_void(snprintf, &write_args_meta, "interp_write");
 
     Ok(Some(TypedValue::new(
         payload.into(),
@@ -430,13 +419,8 @@ fn enum_value_to_string<'ctx>(
     {
         let mangled = format!("{enum_name}_to_string");
         if let Some(to_string_fn) = c.functions.get(&mangled) {
-            let result = c
-                .builder
-                .build_call(*to_string_fn, &[val.into()], "to_str_ret")
-                .unwrap();
-            return result
-                .try_as_basic_value()
-                .left()
+            return c
+                .call(*to_string_fn, &[val.into()], "to_str_ret")
                 .map(|v| v.into_pointer_value())
                 .ok_or("to_string did not return a value".to_string());
         }
@@ -707,11 +691,7 @@ fn compile_closure_core<'ctx>(
             .get("malloc")
             .expect("malloc not declared in builtins");
         let raw_ptr = c
-            .builder
-            .build_call(malloc, &[env_size.into()], "env_alloc")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
+            .call(malloc, &[env_size.into()], "env_alloc")
             .unwrap()
             .into_pointer_value();
 
@@ -795,21 +775,13 @@ fn compile_list_literal<'ctx>(
         .ok_or("List.append not found")?;
 
     let mut list_val = c
-        .builder
-        .build_call(new_fn, &[], "list_new")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(new_fn, &[], "list_new")
         .ok_or("List.new returned void")?;
 
     for elem in &compiled {
         let coerced = coerce_numeric(c, elem.value, &elem_type);
         list_val = c
-            .builder
-            .build_call(append_fn, &[list_val.into(), coerced.into()], "list_append")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
+            .call(append_fn, &[list_val.into(), coerced.into()], "list_append")
             .ok_or("List.append returned void")?;
     }
 
@@ -857,11 +829,7 @@ fn compile_map_literal<'ctx>(
     let put_fn = *c.functions.get(&put_fn_name).ok_or("Map.put not found")?;
 
     let mut map_val = c
-        .builder
-        .build_call(new_fn, &[], "map_new")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(new_fn, &[], "map_new")
         .ok_or("Map.new returned void")?;
 
     for (key_expr, val_expr) in entries {
@@ -874,11 +842,7 @@ fn compile_map_literal<'ctx>(
         let key = coerce_numeric(c, key, &key_type);
         let val = coerce_numeric(c, val, &val_type);
         map_val = c
-            .builder
-            .build_call(put_fn, &[map_val.into(), key.into(), val.into()], "map_put")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
+            .call(put_fn, &[map_val.into(), key.into(), val.into()], "map_put")
             .ok_or("Map.put returned void")?;
     }
 
@@ -976,7 +940,7 @@ fn compile_spawn<'ctx>(
             .build_load(struct_type, typed_ptr, "loaded_state")
             .unwrap();
 
-        c.builder.build_call(run_fn, &[loaded.into()], "").unwrap();
+        c.call_void(run_fn, &[loaded.into()], "");
         c.builder.build_return(None).unwrap();
 
         if let Some(bb) = saved_block {
@@ -994,15 +958,11 @@ fn compile_spawn<'ctx>(
         .ok_or("expo_rt_spawn not declared")?;
 
     let pid = c
-        .builder
-        .build_call(
+        .call(
             spawn_fn,
             &[wrapper_ptr.into(), state_ptr.into(), state_size_i64.into()],
             "spawn_pid",
         )
-        .unwrap()
-        .try_as_basic_value()
-        .left()
         .ok_or("expo_rt_spawn did not return a value")?
         .into_int_value();
 
@@ -1098,11 +1058,7 @@ fn compile_receive<'ctx>(
             .ok_or("after timeout expression produced no value")?
             .value;
 
-        c.builder
-            .build_call(receive_timeout_fn, &[timeout_val.into()], "receive_msg")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
+        c.call(receive_timeout_fn, &[timeout_val.into()], "receive_msg")
             .ok_or("expo_rt_receive_timeout did not return a value")?
     } else {
         let receive_fn = *c
@@ -1110,11 +1066,7 @@ fn compile_receive<'ctx>(
             .get("expo_rt_receive")
             .ok_or("expo_rt_receive not declared")?;
 
-        c.builder
-            .build_call(receive_fn, &[], "receive_msg")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
+        c.call(receive_fn, &[], "receive_msg")
             .ok_or("expo_rt_receive did not return a value")?
     };
 

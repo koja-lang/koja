@@ -117,8 +117,7 @@ pub(crate) fn compile_binary_pattern<'ctx>(
             };
             let memcmp = *c.functions.get("memcmp").expect("memcmp not declared");
             let cmp_result = c
-                .builder
-                .build_call(
+                .call(
                     memcmp,
                     &[
                         buf_ptr.into(),
@@ -127,9 +126,6 @@ pub(crate) fn compile_binary_pattern<'ctx>(
                     ],
                     "str_pat_cmp",
                 )
-                .unwrap()
-                .try_as_basic_value()
-                .left()
                 .unwrap()
                 .into_int_value();
             let cmp = c
@@ -258,11 +254,7 @@ fn compile_greedy_rest<'ctx>(
         .unwrap();
     let malloc = *c.functions.get("malloc").expect("malloc not declared");
     let base_ptr = c
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "rest_alloc")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(malloc, &[alloc_size.into()], "rest_alloc")
         .unwrap()
         .into_pointer_value();
 
@@ -286,13 +278,11 @@ fn compile_greedy_rest<'ctx>(
     };
 
     let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
-    c.builder
-        .build_call(
-            memcpy,
-            &[rest_payload.into(), src_ptr.into(), remaining_bytes.into()],
-            "rest_cpy",
-        )
-        .unwrap();
+    c.call_void(
+        memcpy,
+        &[rest_payload.into(), src_ptr.into(), remaining_bytes.into()],
+        "rest_cpy",
+    );
 
     let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
     let alloca = c.builder.build_alloca(ptr_type, &name).unwrap();

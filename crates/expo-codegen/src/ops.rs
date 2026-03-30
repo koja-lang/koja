@@ -155,11 +155,7 @@ pub fn compile_binary<'ctx>(
             BinOp::Eq | BinOp::NotEq => {
                 let strcmp = *c.functions.get("strcmp").ok_or("strcmp not declared")?;
                 let cmp_result = c
-                    .builder
-                    .build_call(strcmp, &[l.into(), r.into()], "strcmp_result")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
+                    .call(strcmp, &[l.into(), r.into()], "strcmp_result")
                     .ok_or("strcmp did not return a value")?
                     .into_int_value();
                 let zero = c.context.i32_type().const_int(0, false);
@@ -284,11 +280,7 @@ fn compile_string_concat<'ctx>(
         .unwrap();
 
     let base_ptr = c
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "cat_base")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(malloc, &[alloc_size.into()], "cat_base")
         .unwrap()
         .into_pointer_value();
 
@@ -300,26 +292,22 @@ fn compile_string_concat<'ctx>(
             .unwrap()
     };
 
-    c.builder
-        .build_call(
-            memcpy,
-            &[payload.into(), l_ptr.into(), l_bytes.into()],
-            "cat_cpy1",
-        )
-        .unwrap();
+    c.call_void(
+        memcpy,
+        &[payload.into(), l_ptr.into(), l_bytes.into()],
+        "cat_cpy1",
+    );
 
     let mid = unsafe {
         c.builder
             .build_in_bounds_gep(i8_type, payload, &[l_bytes], "cat_mid")
             .unwrap()
     };
-    c.builder
-        .build_call(
-            memcpy,
-            &[mid.into(), r_ptr.into(), r_bytes.into()],
-            "cat_cpy2",
-        )
-        .unwrap();
+    c.call_void(
+        memcpy,
+        &[mid.into(), r_ptr.into(), r_bytes.into()],
+        "cat_cpy2",
+    );
 
     let end = unsafe {
         c.builder
@@ -396,11 +384,7 @@ fn compile_binary_concat<'ctx>(
         .unwrap();
 
     let base_ptr = c
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "cat_base")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(malloc, &[alloc_size.into()], "cat_base")
         .unwrap()
         .into_pointer_value();
 
@@ -412,26 +396,22 @@ fn compile_binary_concat<'ctx>(
             .unwrap()
     };
 
-    c.builder
-        .build_call(
-            memcpy,
-            &[payload.into(), l_ptr.into(), l_bytes.into()],
-            "cat_cpy1",
-        )
-        .unwrap();
+    c.call_void(
+        memcpy,
+        &[payload.into(), l_ptr.into(), l_bytes.into()],
+        "cat_cpy1",
+    );
 
     let mid = unsafe {
         c.builder
             .build_in_bounds_gep(i8_type, payload, &[l_bytes], "cat_mid")
             .unwrap()
     };
-    c.builder
-        .build_call(
-            memcpy,
-            &[mid.into(), r_ptr.into(), r_bytes.into()],
-            "cat_cpy2",
-        )
-        .unwrap();
+    c.call_void(
+        memcpy,
+        &[mid.into(), r_ptr.into(), r_bytes.into()],
+        "cat_cpy2",
+    );
 
     Ok(Some(payload.into()))
 }

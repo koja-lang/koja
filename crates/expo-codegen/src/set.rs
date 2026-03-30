@@ -116,33 +116,23 @@ pub fn emit_set_method<'ctx>(
                 .unwrap();
             let malloc = *c.functions.get("malloc").unwrap();
             let new_entries_ptr = c
-                .builder
-                .build_call(malloc, &[new_entries_bytes.into()], "new_entries")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(malloc, &[new_entries_bytes.into()], "new_entries")
                 .unwrap()
                 .into_pointer_value();
             let new_states_ptr = c
-                .builder
-                .build_call(malloc, &[new_cap.into()], "new_states")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(malloc, &[new_cap.into()], "new_states")
                 .unwrap()
                 .into_pointer_value();
             let memset = *c.functions.get("memset").unwrap();
-            c.builder
-                .build_call(
-                    memset,
-                    &[
-                        new_states_ptr.into(),
-                        i32_ty.const_int(0, false).into(),
-                        new_cap.into(),
-                    ],
-                    "clear_new_states",
-                )
-                .unwrap();
+            c.call_void(
+                memset,
+                &[
+                    new_states_ptr.into(),
+                    i32_ty.const_int(0, false).into(),
+                    new_cap.into(),
+                ],
+                "clear_new_states",
+            );
 
             let rehash_bb = c.context.append_basic_block(fn_val, "rehash");
             let rehash_body = c.context.append_basic_block(fn_val, "rehash_body");
@@ -204,11 +194,7 @@ pub fn emit_set_method<'ctx>(
                 .build_load(elem_llvm, old_entry_ptr, "old_key")
                 .unwrap();
             let old_hash = c
-                .builder
-                .build_call(hash_fn, &[old_key.into()], "old_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[old_key.into()], "old_hash")
                 .unwrap()
                 .into_int_value();
             let new_mask = c
@@ -290,12 +276,8 @@ pub fn emit_set_method<'ctx>(
 
             c.builder.position_at_end(rehash_done);
             let free = *c.functions.get("free").unwrap();
-            c.builder
-                .build_call(free, &[entries_ptr.into()], "free_old_entries")
-                .unwrap();
-            c.builder
-                .build_call(free, &[states_ptr.into()], "free_old_states")
-                .unwrap();
+            c.call_void(free, &[entries_ptr.into()], "free_old_entries");
+            c.call_void(free, &[states_ptr.into()], "free_old_states");
             c.builder.build_unconditional_branch(probe_bb).unwrap();
 
             c.builder.position_at_end(no_resize_bb);
@@ -318,11 +300,7 @@ pub fn emit_set_method<'ctx>(
             let final_cap = phi_cap.as_basic_value().into_int_value();
 
             let hash_val = c
-                .builder
-                .build_call(hash_fn, &[item_val.into()], "item_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[item_val.into()], "item_hash")
                 .unwrap()
                 .into_int_value();
             let mask = c
@@ -394,11 +372,7 @@ pub fn emit_set_method<'ctx>(
             };
             let existing = c.builder.build_load(elem_llvm, e_ptr, "existing").unwrap();
             let keys_equal = c
-                .builder
-                .build_call(eq_fn, &[item_val.into(), existing.into()], "eq")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(eq_fn, &[item_val.into(), existing.into()], "eq")
                 .unwrap()
                 .into_int_value();
             c.builder
@@ -515,11 +489,7 @@ pub fn emit_set_method<'ctx>(
                 .into_int_value();
 
             let hash_val = c
-                .builder
-                .build_call(hash_fn, &[item_val.into()], "item_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[item_val.into()], "item_hash")
                 .unwrap()
                 .into_int_value();
             let mask = c
@@ -591,11 +561,7 @@ pub fn emit_set_method<'ctx>(
             };
             let existing = c.builder.build_load(elem_llvm, e_ptr, "existing").unwrap();
             let keys_equal = c
-                .builder
-                .build_call(eq_fn, &[item_val.into(), existing.into()], "eq")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(eq_fn, &[item_val.into(), existing.into()], "eq")
                 .unwrap()
                 .into_int_value();
             c.builder
@@ -660,11 +626,7 @@ pub fn emit_set_method<'ctx>(
                 .into_int_value();
 
             let hash_val = c
-                .builder
-                .build_call(hash_fn, &[item_val.into()], "item_hash")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(hash_fn, &[item_val.into()], "item_hash")
                 .unwrap()
                 .into_int_value();
             let mask = c
@@ -736,11 +698,7 @@ pub fn emit_set_method<'ctx>(
             };
             let existing = c.builder.build_load(elem_llvm, e_ptr, "existing").unwrap();
             let keys_equal = c
-                .builder
-                .build_call(eq_fn, &[item_val.into(), existing.into()], "eq")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(eq_fn, &[item_val.into(), existing.into()], "eq")
                 .unwrap()
                 .into_int_value();
             c.builder
@@ -839,14 +797,7 @@ pub fn emit_set_method<'ctx>(
             let new_fn_name = format!("{mangled_type}_new");
             let _ = emit_set_method(c, mangled_type, &new_fn_name, "new", type_args)?;
             let new_fn = *c.functions.get(&new_fn_name).unwrap();
-            let init_set = c
-                .builder
-                .build_call(new_fn, &[], "init_set")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap()
-                .into_struct_value();
+            let init_set = c.call(new_fn, &[], "init_set").unwrap().into_struct_value();
 
             let set_alloca = c.builder.build_alloca(set_struct, "set_acc").unwrap();
             c.builder.build_store(set_alloca, init_set).unwrap();
@@ -887,11 +838,7 @@ pub fn emit_set_method<'ctx>(
                 .build_load(set_struct, set_alloca, "cur_set")
                 .unwrap();
             let new_set = c
-                .builder
-                .build_call(insert_fn, &[current_set.into(), elem_val.into()], "new_set")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
+                .call(insert_fn, &[current_set.into(), elem_val.into()], "new_set")
                 .unwrap();
             c.builder.build_store(set_alloca, new_set).unwrap();
 

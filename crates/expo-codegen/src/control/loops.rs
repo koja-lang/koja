@@ -138,11 +138,7 @@ pub fn compile_for<'ctx>(
         .build_load(iter_llvm_ty, iter_alloca, "iter_load")
         .unwrap();
     let len_val = c
-        .builder
-        .build_call(length_fn, &[iter_loaded.into()], "len")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(length_fn, &[iter_loaded.into()], "len")
         .ok_or("length() returned void")?
         .into_int_value();
 
@@ -180,11 +176,7 @@ pub fn compile_for<'ctx>(
         .unwrap();
     let idx_for_get = c.builder.build_load(i64_ty, idx_alloca, "idx_get").unwrap();
     let option_val = c
-        .builder
-        .build_call(get_fn, &[iter_for_get.into(), idx_for_get.into()], "elem")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(get_fn, &[iter_for_get.into(), idx_for_get.into()], "elem")
         .ok_or("get() returned void")?;
     let elem_val = c
         .builder

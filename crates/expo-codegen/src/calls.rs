@@ -63,7 +63,7 @@ pub fn invoke_closure_fat_ptr<'ctx>(
 
     Ok(call_val
         .try_as_basic_value()
-        .left()
+        .basic()
         .map(|v| TypedValue::new(v, return_type.clone())))
 }
 
@@ -105,14 +105,7 @@ pub fn compile_call<'ctx>(
                     compiled_args.push(val.into());
                 }
 
-                let result = c
-                    .builder
-                    .build_call(callee, &compiled_args, &format!("call_{name}"))
-                    .unwrap();
-
-                Ok(result
-                    .try_as_basic_value()
-                    .left()
+                Ok(c.call(callee, &compiled_args, &format!("call_{name}"))
                     .map(|v| TypedValue::new(v, ret_type)))
             } else if let Some((var_ptr, raw_ty, _)) = c.variables.get(name).cloned() {
                 let ty = unwrap_indirect(&raw_ty);
@@ -213,14 +206,7 @@ fn compile_generic_call<'ctx>(
         substitute(&sig.return_type, &subst_map)
     };
 
-    let result = c
-        .builder
-        .build_call(callee, &call_args, &format!("call_{mangled}"))
-        .unwrap();
-
-    Ok(result
-        .try_as_basic_value()
-        .left()
+    Ok(c.call(callee, &call_args, &format!("call_{mangled}"))
         .map(|v| TypedValue::new(v, ret_type)))
 }
 
@@ -268,13 +254,11 @@ fn compile_print<'ctx>(
             .builder
             .build_global_string_ptr("%s\n", "fmt_print_bool")
             .unwrap();
-        c.builder
-            .build_call(
-                printf,
-                &[fmt.as_pointer_value().into(), str_ptr.into()],
-                "printf_call",
-            )
-            .unwrap();
+        c.call_void(
+            printf,
+            &[fmt.as_pointer_value().into(), str_ptr.into()],
+            "printf_call",
+        );
     } else {
         let spec = crate::util::printf_format_spec(&val)?;
         let fmt_str = &format!("{spec}\n");
@@ -282,13 +266,11 @@ fn compile_print<'ctx>(
             .builder
             .build_global_string_ptr(fmt_str, "fmt_print")
             .unwrap();
-        c.builder
-            .build_call(
-                printf,
-                &[fmt.as_pointer_value().into(), val.into()],
-                "printf_call",
-            )
-            .unwrap();
+        c.call_void(
+            printf,
+            &[fmt.as_pointer_value().into(), val.into()],
+            "printf_call",
+        );
     }
 
     Ok(None)
@@ -334,13 +316,11 @@ fn compile_print_builtin<'ctx>(
             .builder
             .build_global_string_ptr("%s\n", "fmt_print_bool")
             .unwrap();
-        c.builder
-            .build_call(
-                printf,
-                &[fmt.as_pointer_value().into(), str_ptr.into()],
-                "printf_call",
-            )
-            .unwrap();
+        c.call_void(
+            printf,
+            &[fmt.as_pointer_value().into(), str_ptr.into()],
+            "printf_call",
+        );
         return Ok(None);
     }
 
@@ -357,13 +337,11 @@ fn compile_print_builtin<'ctx>(
         .build_global_string_ptr(fmt_str, &format!("fmt_{name}"))
         .unwrap();
 
-    c.builder
-        .build_call(
-            printf,
-            &[fmt.as_pointer_value().into(), val.into()],
-            "printf_call",
-        )
-        .unwrap();
+    c.call_void(
+        printf,
+        &[fmt.as_pointer_value().into(), val.into()],
+        "printf_call",
+    );
 
     Ok(None)
 }

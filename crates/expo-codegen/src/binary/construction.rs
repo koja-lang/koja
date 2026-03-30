@@ -37,11 +37,7 @@ pub(crate) fn compile_binary_literal<'ctx>(
     let alloc_size = i64_type.const_int(8 + total_bytes, false);
     let malloc = *c.functions.get("malloc").expect("malloc not declared");
     let base_ptr = c
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "bin_alloc")
-        .unwrap()
-        .try_as_basic_value()
-        .left()
+        .call(malloc, &[alloc_size.into()], "bin_alloc")
         .unwrap()
         .into_pointer_value();
 
@@ -81,17 +77,15 @@ pub(crate) fn compile_binary_literal<'ctx>(
                     .unwrap()
             };
             let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
-            c.builder
-                .build_call(
-                    memcpy,
-                    &[
-                        dest.into(),
-                        str_ptr.into(),
-                        i64_type.const_int(num_bytes, false).into(),
-                    ],
-                    "str_seg_cpy",
-                )
-                .unwrap();
+            c.call_void(
+                memcpy,
+                &[
+                    dest.into(),
+                    str_ptr.into(),
+                    i64_type.const_int(num_bytes, false).into(),
+                ],
+                "str_seg_cpy",
+            );
             byte_offset += num_bytes;
             continue;
         }

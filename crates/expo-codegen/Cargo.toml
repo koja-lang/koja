@@ -8,4 +8,4 @@ version.workspace = true
 [dependencies]
 expo-ast = { path = "../expo-ast" }
 expo-typecheck = { path = "../expo-typecheck" }
-inkwell = { version = "0.5", features = ["llvm18-0"] }
+inkwell = { version = "0.8", features = ["llvm18-1"] }
