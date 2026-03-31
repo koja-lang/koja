@@ -113,9 +113,10 @@ they solve is better solved by another mechanism (types-as-namespaces,
 multi-pass compilation, convention-based privacy, IDE tooling).
 Intra-project imports are pure ceremony.
 
-For inter-package imports: the declaration belongs in `project.expo`.
-Per-file `import` statements are only needed as an optional
-disambiguation tool when two packages export the same type name.
+For inter-package dependencies: the declaration belongs in
+`project.expo`. Package types are accessed via their package qualifier
+(`json.Parser`), and `type` aliasing creates local short names when
+desired. No per-file `import` statements at all.
 
 ---
 
@@ -221,47 +222,70 @@ sees both types before either is checked.
 
 ### External packages
 
-Dependencies are declared in `project.expo`:
+Dependencies are declared in `project.expo`. Packages are distributed
+via git -- no centralized registry. The `name` field sets the local
+namespace used to access the package's types in code:
 
 ```expo
 Project{
   name: "my_app",
   src: ["src"],
   deps: [
-    "json",
-    "http",
+    Dep{name: "json", git: "github.com/expo-pkg/json"},
+    Dep{name: "http", git: "github.com/expo-pkg/http"},
   ],
 }
 ```
 
-All public types from declared dependencies are available in the project.
-No per-file `import` statements in the common case. The compiler resolves
-types from all declared dependencies the same way it resolves types from
-project source files.
+Package types are always accessed through their package qualifier:
+`json.Parser`, `http.Request`, `http.Response`. The package name is
+lowercase, functioning like a variable that holds an entire namespace.
+Casing disambiguates at a glance:
 
-When two packages export the same type name, disambiguation uses either
-package-qualified access or an aliased import:
+- `json.Parser` -- `lowercase.PascalCase` → package.Type
+- `Option.Some` -- `PascalCase.PascalCase` → Type.Variant
+- `String.length()` -- `PascalCase.snake_case()` → Type.method
+
+To use a package type without the qualifier, create a `type` alias:
 
 ```expo
-// Package-qualified access
-json.Parser.new()   // the Parser from the json package
-Parser.new()        // your own Parser (local types take precedence)
+type Parser = json.Parser
+type Request = http.Request
 
-// Or explicit alias (only needed for conflicts)
-import json.{Parser as JsonParser}
+// Now use unqualified
+parser = Parser.new(source)
+req = Request.get("/api/users")
 ```
 
-`import` in source files is reserved for this disambiguation case. It is
-not required for normal usage -- it's an escape hatch, not ceremony.
+This is the same `type` alias syntax used for shortening complex types
+(`type Ints = List<Int>`). One concept, no new keywords.
+
+Since packages are git-distributed, the consumer controls the local
+name. If two packages both want `http`, rename one in `project.expo`:
+
+```expo
+deps: [
+  Dep{name: "http", git: "github.com/expo-pkg/http"},
+  Dep{name: "fasthttp", git: "github.com/someone/http"},
+],
+```
+
+No conflict, no ambiguity. The `name` field is the namespace, and the
+user has final say over it.
+
+There is no `import` keyword. Package types are qualified by their
+package name, and `type` aliasing is the only mechanism for creating
+local short names. If a user writes `import json.Parser`, the compiler
+suggests: *"Use `type Parser = json.Parser` to create a local name."*
 
 ### Stdlib
 
-The stdlib is a package called `std`, automatically available in every
-project. Its source files (`kernel.expo`, `string.expo`, `list.expo`,
-etc.) are internal organization. There is no `std.string` module. There
-is `String`, a type that happens to be defined in the `std` package.
+The stdlib is the one exception to qualified-by-default. Its types are
+available unqualified because stdlib is effectively part of the language
+-- every Expo program uses `String`, `Option`, `List`. Requiring
+`std.String` everywhere would be pure noise.
 
-All stdlib types are available without `import`:
+Unqualified stdlib types:
 
 - `Option<T>`, `Result<T, E>`, `Pair<A, B>` (from `kernel.expo`)
 - `String` (methods from `string.expo`)
@@ -271,8 +295,9 @@ All stdlib types are available without `import`:
 - `Fd`, `File` (from `fd.expo`)
 - `Bitwise` protocol (from `bitwise.expo`)
 
-No distinction between "kernel types" and "other stdlib types." The
-stdlib is one package; all of it is available.
+The `std.` prefix is available for disambiguation in the unlikely case
+that a project defines its own type with the same name as a stdlib type
+(e.g., a custom `List` wrapper could coexist with `std.List`).
 
 ---
 
@@ -398,6 +423,11 @@ types and protocols listed. Types that have `@doc false` are excluded.
   user code or documentation. No `std.string`, no `my_app.server`.
 - **Intra-project imports.** No `import my_app.server` to use `Server`.
   All types are visible within the project.
+- **`import` keyword.** No remaining use case. Package types are
+  qualified by their package name (`json.Parser`), and `type` aliasing
+  creates local short names. The compiler gives a helpful error if
+  someone tries `import`: *"Use `type Parser = json.Parser` to create
+  a local name for a package type."*
 - **Module-level documentation.** `@moduledoc` on files loses its
   current meaning. Type-level `@doc` and a project-level description
   in `project.expo` replace it.
@@ -415,10 +445,10 @@ types and protocols listed. Types that have `@doc false` are excluded.
   external extensions.
 - **`@doc` and `@doc false`**: documentation annotations on types and
   functions.
-- **`project.expo`**: project configuration. Gets simpler (no module
-  naming rules).
-- **External package imports**: `import` as a disambiguation tool for
-  name conflicts between packages.
+- **`project.expo`**: project configuration, including dependency
+  declarations with git URLs and local package names.
+- **`type` aliases**: now also serve as the mechanism for creating
+  unqualified names for package types.
 
 ### Changed
 
@@ -426,9 +456,6 @@ types and protocols listed. Types that have `@doc false` are excluded.
   Scan all files for type declarations, build the full registry, then
   check bodies. Replaces the current dependency-ordered per-file
   compilation.
-- **`import` keyword**: changes from "bring a file's exports into
-  scope" to "disambiguate a name conflict between external packages."
-  Optional in the common case.
 - **Stdlib organization**: `expo-stdlib` embeds files as before, but
   they're compiled as one unit. No per-file module names.
 
@@ -499,16 +526,33 @@ types.
   public) may be sufficient for the target audience. Monitor this as
   real projects are built.
 
-- **Package-qualified access syntax**: `json.Parser` reuses the
-  existing dot syntax for qualifying a type by its package name. This
-  conflicts with nothing because package names are lowercase and type
-  names are PascalCase -- `json.Parser` is unambiguous.
-
 - **Facade / re-export**: should packages be able to define an explicit
   public surface that's separate from their internal organization?
   E.g., a package with many internal types that exports only a curated
   subset. Not needed immediately, but worth considering for the
   package ecosystem.
+
+- **Package name shadowing**: a local variable named `json` would
+  appear to shadow the `json` package namespace. However, casing
+  conventions may resolve this naturally: `json.Parser` (PascalCase
+  after dot) is always package.Type, while `json.name` (lowercase
+  after dot) is always variable.field. The compiler can disambiguate
+  without shadowing rules -- but only if packages never expose
+  top-level functions (which would be `json.parse()`,
+  indistinguishable from a method call on a variable). This ties into
+  the broader question below.
+
+- **Removing top-level functions**: if all functions are scoped to
+  types (no free `fn` outside a type body), then the casing
+  convention becomes airtight -- `lowercase.PascalCase` is always
+  package.Type, `lowercase.lowercase()` is always variable.method,
+  with no ambiguity possible. This would eliminate the package name
+  shadowing concern entirely. The main design question is where
+  `fn main()` lives: special-cased entry point, method on a
+  project-level type, or something else. Utility functions that don't
+  belong to a domain type (e.g., `max`, `min`) would live on the
+  relevant primitive type or a stdlib utility type. Separate design
+  doc needed.
 
 ---
 
@@ -528,14 +572,21 @@ The proposed model:
 3. **No intra-project imports** -- every type is visible everywhere
    within the project.
 4. **Dependencies in `project.expo`** -- external packages declared
-   once, not per-file.
-5. **`import` is optional disambiguation** -- only needed when two
-   packages export the same type name.
-6. **Two-tier access control** -- `priv fn` and public. Convention
+   once via git URLs, with user-controlled local names.
+5. **Package types are qualified by default** -- `json.Parser`,
+   `http.Request`. Casing disambiguates: `lowercase.PascalCase` is
+   always package.Type.
+6. **`type` aliasing to unqualify** -- `type Parser = json.Parser`.
+   One mechanism for both type aliasing and package type shortening.
+   No `import` keyword.
+7. **Stdlib is the exception** -- stdlib types are unqualified because
+   they're part of the language. `std.` prefix available for the rare
+   disambiguation case.
+8. **Two-tier access control** -- `priv fn` and public. Convention
    handles the rest.
 
 This is less machinery than the current model. It removes concepts
-(file-as-module, intra-project imports, module names, dependency
-ordering between files) rather than adding them. The result aligns
-with the principle already stated in the design docs: types are the
-ideas, files organize them on disk.
+(file-as-module, intra-project imports, module names, the `import`
+keyword, dependency ordering between files) rather than adding them.
+The result aligns with the principle already stated in the design docs:
+types are the ideas, files organize them on disk.
