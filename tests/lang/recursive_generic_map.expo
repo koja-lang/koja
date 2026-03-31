@@ -1,0 +1,26 @@
+enum JsonValue
+  Null
+  JBool(Bool)
+  JInt(Int)
+  JStr(String)
+  JArr(List<JsonValue>)
+  JObj(Map<String, JsonValue>)
+end
+
+fn main
+  obj: Map<String, JsonValue> = ["name": JsonValue.JStr("Expo"), "version": JsonValue.JInt(1)]
+  v = JsonValue.JObj(obj)
+  match v
+    JsonValue.JObj(m) ->
+      result = m.get("name")
+      match result
+        Option.Some(name) ->
+          match name
+            JsonValue.JStr(s) -> print(s)
+            _ -> print("not a string")
+          end
+        Option.None -> print("missing")
+      end
+    _ -> print("not an object")
+  end
+end

@@ -587,5 +587,6 @@ is easy to maintain because validation and construction are adjacent in
 the same pipeline.
 
 No new language features required. Uses enums, closures, `move self`
-method chaining, generics, and `Result` -- all of which exist today
-(pending the recursive enum codegen fix for `JsonValue` itself).
+method chaining, generics, and `Result` -- all of which exist today.
+Recursive enums inside generic containers (`List<JsonValue>`,
+`Map<String, JsonValue>`) compile and run correctly.
