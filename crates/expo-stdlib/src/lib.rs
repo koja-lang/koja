@@ -11,6 +11,7 @@ pub const MAP: &str = include_str!("../std/map.expo");
 pub const SET: &str = include_str!("../std/set.expo");
 pub const BITWISE: &str = include_str!("../std/bitwise.expo");
 pub const FD: &str = include_str!("../std/fd.expo");
+pub const SOCKET: &str = include_str!("../std/socket.expo");
 pub const IO: &str = include_str!("../std/io.expo");
 pub const SYSTEM: &str = include_str!("../std/system.expo");
 pub const TIME: &str = include_str!("../std/time.expo");
@@ -28,6 +29,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std.set", SET),
     ("std.bitwise", BITWISE),
     ("std.fd", FD),
+    ("std.socket", SOCKET),
     ("std.io", IO),
     ("std.system", SYSTEM),
     ("std.time", TIME),

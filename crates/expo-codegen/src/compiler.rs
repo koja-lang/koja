@@ -606,14 +606,33 @@ impl<'ctx> Compiler<'ctx> {
         decl("expo_cwd", ptr.fn_type(&[], false));
         decl("expo_hostname", ptr.fn_type(&[], false));
 
+        // Debug formatting
+        decl(
+            "expo_format_binary",
+            ptr.fn_type(&[ptr.into(), i64.into()], false),
+        );
+
         // Time
         decl("expo_time_now_millis", i64.fn_type(&[], false));
 
         // Socket I/O
-        decl("expo_socket_create", i64.fn_type(&[], false));
+        decl("expo_socket_create", i64.fn_type(&[i64.into()], false));
         decl(
             "expo_socket_bind",
-            i64.fn_type(&[i64.into(), i64.into()], false),
+            i64.fn_type(&[i64.into(), ptr.into(), i64.into()], false),
+        );
+        decl(
+            "expo_socket_connect",
+            i64.fn_type(&[i64.into(), ptr.into(), i64.into()], false),
+        );
+        decl("expo_socket_resolve", ptr.fn_type(&[ptr.into()], false));
+        decl(
+            "expo_socket_send_to",
+            i64.fn_type(&[i64.into(), ptr.into(), ptr.into(), i64.into()], false),
+        );
+        decl(
+            "expo_socket_recv_from",
+            ptr.fn_type(&[i64.into(), i64.into()], false),
         );
         decl(
             "expo_socket_listen",

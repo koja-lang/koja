@@ -1,0 +1,132 @@
+@moduledoc """
+POSIX socket primitives and network address types.
+"""
+
+enum SocketKind
+  Stream
+  Datagram
+end
+
+struct IPAddress
+  bytes: Binary
+end
+
+impl IPAddress
+  @doc """
+  Constructs an IPv4 address from four octets.
+  """
+  fn v4(a: Int, b: Int, c: Int, d: Int) -> IPAddress
+    IPAddress{bytes: <<a, b, c, d>>}
+  end
+
+  @doc """
+  Returns the IPv4 loopback address (127.0.0.1).
+  """
+  fn loopback() -> IPAddress
+    IPAddress{bytes: <<127, 0, 0, 1>>}
+  end
+
+  @doc """
+  Returns the IPv4 wildcard address (0.0.0.0).
+  """
+  fn any() -> IPAddress
+    IPAddress{bytes: <<0, 0, 0, 0>>}
+  end
+
+  @doc """
+  Returns true if this is an IPv4 address (4 bytes).
+  """
+  fn v4?(self) -> Bool
+    self.bytes.byte_size() == 4
+  end
+
+  @doc """
+  Returns true if this is an IPv6 address (16 bytes).
+  """
+  fn v6?(self) -> Bool
+    self.bytes.byte_size() == 16
+  end
+end
+
+struct SocketAddress
+  ip: IPAddress
+  port: Int
+end
+
+struct Socket
+  fd: Fd
+end
+
+impl Socket
+  @doc """
+  Creates a socket of the given kind (Stream or Datagram).
+  """
+  fn create(kind: SocketKind) -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Binds the socket to the given address and port.
+  """
+  fn bind(move self, addr: SocketAddress) -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Connects the socket to the given address and port.
+  """
+  fn connect(move self, addr: SocketAddress) -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Resolves a hostname to a list of IP addresses via DNS.
+  """
+  fn resolve(hostname: String) -> Result<List<IPAddress>, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Sends data to the given address (for unconnected datagram sockets).
+  Returns the number of bytes sent.
+  """
+  fn send_to(self, data: String, addr: SocketAddress) -> Result<Int, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Receives data and the sender's address (for unconnected datagram sockets).
+  Returns a pair of (data, sender address).
+  """
+  fn recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Starts listening for incoming connections with the given backlog.
+  """
+  fn listen(move self, backlog: Int) -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Accepts an incoming connection. Returns the client file descriptor.
+  """
+  fn accept(self) -> Result<Fd, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Sets the SO_REUSEADDR option on the socket.
+  """
+  fn set_reuse_addr(move self) -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Closes the socket.
+  """
+  fn close(move self) -> Result<String, String>
+    self.fd.close()
+  end
+end

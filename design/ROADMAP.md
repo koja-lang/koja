@@ -158,15 +158,16 @@ Two independent tracks. Track A makes the language useful for real programs. Tra
 
 ### Track A: Stdlib + Ecosystem
 
-#### Test runner -- **Done**
+#### Test runner -- **DONE**
 
 `expo test` discovers `@test`-annotated functions across `src/` and `test/` directories, generates a synthetic test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure -- the test name is printed before each call so you always know which one failed. `project.expo` gains an optional `test` field (default `["test"]`). Validated with 17 tests in the `json` package (encoder and decoder coverage).
 
-#### Stdlib
+#### Stdlib -- **DONE**
 
 Stdlib contains primitives that are as fundamental as integers -- things the compiler or language runtime needs to function, or that virtually every program needs and whose API is stable for decades.
 
-- `std.fd` -- shipped in Phase 3 A3a (basic `read`, `write`, `close`). Extended with `Socket` type for TCP networking (`create`, `bind`, `listen`, `accept`, `set_reuse_addr`, `close`) via POSIX socket syscall shims in the runtime.
+- `std.fd` -- **DONE** shipped in Phase 3 A3a (basic `read`, `write`, `close`). `Fd`, `FileMode`, `File` remain here. Socket types moved to `std.socket`.
+- `std.socket` -- **DONE** POSIX socket primitives. `SocketKind` enum (`Stream`, `Datagram`), `IPAddress` struct (Binary-backed with `v4`, `loopback`, `any`, `v4?`, `v6?` helpers), `SocketAddress` struct. `Socket` with full POSIX surface: `create`, `bind`, `connect`, `resolve` (DNS via `getaddrinfo`), `send_to`, `recv_from`, `listen`, `accept`, `set_reuse_addr`, `close`. Enables first-party `net.tcp`/`net.udp` packages to be built entirely in pure Expo.
 - `std.file` -- **DONE** `FileMode` enum (`Read`, `Write`, `Append`). `File.open(path, mode)` opens with explicit mode. `File.write(path, content)` for one-shot writes. `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)` for path-based operations. Handle-level writes via `file.fd.write(data)`. `seek` deferred until embedded database work.
 - `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space -- reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases, large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
 - `std.io` -- **DONE** `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
@@ -188,9 +189,9 @@ The litmus test: does the compiler or language runtime need it to function, or i
 
 High-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline. Networking lives here because the API surface evolves (QUIC, io_uring, TLS integration, connection pooling) -- you don't want that locked into the stdlib release cycle.
 
-- `net` -- networking primitives as submodules, one package, coordinated releases. Shared types (`IpAddr`, `SocketAddr`) used across submodules. Low-level `Socket` type already exists in `std.fd` with POSIX syscall shims (`socket`, `bind`, `listen`, `accept`, `setsockopt`) -- `net.tcp` wraps it with a higher-level API.
-  - `net.tcp` -- `TcpListener` (bind + accept) and `TcpSocket` (connect + read + write + close). Both wrap `Fd` from stdlib. `TcpListener.accept()` returns a `TcpSocket` -- same type for server and client connections. Socket setup uses C shims in the runtime (already implemented); read/write/close go through `std.fd`.
-  - `net.udp` -- `UdpSocket` with `bind`, `send_to`, `recv_from`. Datagram-oriented, no connections. Independent from TCP -- different semantics, different API shape.
+- `net` -- networking primitives as submodules, one package, coordinated releases. Built entirely in pure Expo on top of `std.socket` -- no compiler intrinsics needed. Shared types (`IPAddress`, `SocketAddress`) from `std.socket` used across submodules.
+  - `net.tcp` -- `TcpListener` (bind + accept) and `TcpSocket` (connect + read + write + close). Both wrap `Socket`/`Fd` from stdlib. `TcpListener.accept()` returns a `TcpSocket` -- same type for server and client connections. Uses `Socket.create(SocketKind.Stream)` + `Socket.resolve` for DNS.
+  - `net.udp` -- `UdpSocket` with `bind`, `send_to`, `recv_from`. Datagram-oriented, no connections. Uses `Socket.create(SocketKind.Datagram)`. Independent from TCP -- different semantics, different API shape.
   - `net.tls` -- `TlsSocket` wrapping a `TcpSocket` with encryption. `TlsSocket.wrap(move socket: TcpSocket, config: TlsConfig) -> Result<TlsSocket, TlsError>`. Same `read`/`write`/`close` interface. Thin wrapper over system TLS library (LibreSSL/OpenSSL/BoringSSL via C FFI). Programs that only import `net.tcp` don't pull in TLS dependencies.
 - `http` -- HTTP server and client built on `net.tcp` / `net.tls`. Request parsing, routing, response building, middleware. Server spawns a process per connection using `Process<C, M, R>`. Binary pattern matching for protocol parsing. `http.client` for outbound requests.
 - `websocket` -- WebSocket server and client built on `http` (upgrade handshake) and `net.tcp` (framed message transport). Each WebSocket connection is a process -- natural fit for Expo's concurrency model. Frame parsing via binary pattern matching.
@@ -576,7 +577,7 @@ Active design discussions about the type system, code organization, and function
 | Tooling   | Formatter, `expo run`, VSCode extension, LSP, documentation generator                                                 |
 | Core      | Generics, ownership, protocols, closures, collections, processes                                                      |
 | Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
-| Phase 4A  | Test runner, TCP socket support, `Debug` protocol, `std.io`, `std.file` (FileMode, write, exists?, delete, rename)    |
+| Phase 4A  | Test runner, `std.socket` (POSIX surface), `Debug` protocol, `std.io`, `std.file`, `std.system`, `std.time`           |
 
 For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md) and [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md).
 

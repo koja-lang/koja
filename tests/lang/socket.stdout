@@ -1,0 +1,10 @@
+stream ok
+datagram ok
+true
+false
+true
+true
+bind ok
+connect refused ok
+resolve ok
+true

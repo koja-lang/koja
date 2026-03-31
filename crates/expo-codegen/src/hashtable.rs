@@ -26,6 +26,7 @@ const CONVERSION_INTRINSICS: &[&str] = &[
     "String_to_binary",
     "Binary_to_bits",
     "Binary_to_string",
+    "Binary_byte_size",
     "Bits_to_binary",
 ];
 
@@ -38,7 +39,7 @@ const STRING_INTRINSICS: &[&str] = &[
 
 const DEBUG_TYPES: &[&str] = &[
     "Bool", "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64", "Float",
-    "Float32",
+    "Float32", "Binary", "Bits",
 ];
 
 const PARSE_INTRINSICS: &[&str] = &["Int_parse", "Float_parse"];
@@ -57,9 +58,13 @@ const FILE_INTRINSICS: &[&str] = &[
 const SOCKET_INTRINSICS: &[&str] = &[
     "Socket_create",
     "Socket_bind",
+    "Socket_connect",
     "Socket_listen",
     "Socket_accept",
     "Socket_set_reuse_addr",
+    "Socket_resolve",
+    "Socket_send_to",
+    "Socket_recv_from",
 ];
 
 const SYSTEM_INTRINSICS: &[&str] = &[
@@ -660,6 +665,28 @@ fn emit_conversion_intrinsic<'ctx>(
             let phi = c.builder.build_phi(result_type, "result").unwrap();
             phi.add_incoming(&[(&ok_result, valid_end), (&err_result, invalid_end)]);
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Binary_byte_size" => {
+            let self_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
+            let i8_ty = c.context.i8_type();
+            let i64_ty = c.context.i64_type();
+
+            let neg8 = i64_ty.const_int((-8i64) as u64, true);
+            let hdr_ptr = unsafe {
+                c.builder
+                    .build_gep(i8_ty, self_ptr, &[neg8], "hdr")
+                    .unwrap()
+            };
+            let bit_length = c
+                .builder
+                .build_load(i64_ty, hdr_ptr, "bit_len")
+                .unwrap()
+                .into_int_value();
+            let byte_count = c
+                .builder
+                .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "bytes")
+                .unwrap();
+            c.builder.build_return(Some(&byte_count)).unwrap();
         }
         "Bits_to_binary" => {
             let self_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
@@ -1516,11 +1543,25 @@ fn emit_socket_intrinsic<'ctx>(
 
     match mangled {
         "Socket_create" => {
+            let kind_enum = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let kind_tag = c
+                .builder
+                .build_extract_value(kind_enum, 0, "kind_tag")
+                .unwrap()
+                .into_int_value();
+            let kind = c
+                .builder
+                .build_int_z_extend(kind_tag, i64_ty, "kind")
+                .unwrap();
+
             let rt_fn = *c
                 .functions
                 .get("expo_socket_create")
                 .ok_or("expo_socket_create not declared")?;
-            let fd_val = c.call(rt_fn, &[], "fd_val").unwrap().into_int_value();
+            let fd_val = c
+                .call(rt_fn, &[kind.into()], "fd_val")
+                .unwrap()
+                .into_int_value();
 
             let neg_one = i64_ty.const_int((-1i64) as u64, true);
             let is_err = c
@@ -1585,7 +1626,7 @@ fn emit_socket_intrinsic<'ctx>(
             phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
         }
-        "Socket_bind" | "Socket_listen" | "Socket_set_reuse_addr" => {
+        "Socket_bind" | "Socket_connect" | "Socket_listen" | "Socket_set_reuse_addr" => {
             let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
             let fd_inner = c
                 .builder
@@ -1598,9 +1639,23 @@ fn emit_socket_intrinsic<'ctx>(
 
             let (rt_name, args): (&str, Vec<inkwell::values::BasicMetadataValueEnum>) =
                 match mangled {
-                    "Socket_bind" => {
-                        let port = fn_val.get_nth_param(1).unwrap();
-                        ("expo_socket_bind", vec![fd.into(), port.into()])
+                    "Socket_bind" | "Socket_connect" => {
+                        let addr_val = fn_val.get_nth_param(1).unwrap().into_struct_value();
+                        let ip_struct = c
+                            .builder
+                            .build_extract_value(addr_val, 0, "ip_struct")
+                            .unwrap();
+                        let ip_bytes = c
+                            .builder
+                            .build_extract_value(ip_struct.into_struct_value(), 0, "ip_bytes")
+                            .unwrap();
+                        let port = c.builder.build_extract_value(addr_val, 1, "port").unwrap();
+                        let rt = if mangled == "Socket_bind" {
+                            "expo_socket_bind"
+                        } else {
+                            "expo_socket_connect"
+                        };
+                        (rt, vec![fd.into(), ip_bytes.into(), port.into()])
                     }
                     "Socket_listen" => {
                         let backlog = fn_val.get_nth_param(1).unwrap();
@@ -1702,6 +1757,351 @@ fn emit_socket_intrinsic<'ctx>(
                 .build_load(fd_struct_ty, alloca, "fd_val")
                 .unwrap();
             let ok_result = build_result_ok(c, fd_val, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Socket_resolve" => {
+            let hostname_ptr = fn_val.get_nth_param(0).unwrap();
+            let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+
+            let rt_fn = *c
+                .functions
+                .get("expo_socket_resolve")
+                .ok_or("expo_socket_resolve not declared")?;
+            let result_ptr = c
+                .call(rt_fn, &[hostname_ptr.into()], "resolve_buf")
+                .unwrap()
+                .into_pointer_value();
+
+            let null_ptr = ptr_ty.const_null();
+            let is_null = c
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    c.builder
+                        .build_ptr_to_int(result_ptr, i64_ty, "ptr_int")
+                        .unwrap(),
+                    c.builder
+                        .build_ptr_to_int(null_ptr, i64_ty, "null_int")
+                        .unwrap(),
+                    "is_null",
+                )
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_null, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+
+            let count = c
+                .builder
+                .build_load(i64_ty, result_ptr, "count")
+                .unwrap()
+                .into_int_value();
+
+            let list_type_name = "List_$IPAddress$";
+            let list_struct = *c
+                .types
+                .structs
+                .get(list_type_name)
+                .ok_or(format!("{list_type_name} struct type not found"))?;
+
+            let ip_struct_ty = c
+                .types
+                .structs
+                .get("IPAddress")
+                .copied()
+                .ok_or("IPAddress struct type not found")?;
+            let ip_size = crate::compiler::llvm_field_byte_size(ip_struct_ty.into()) as u64;
+            let alloc_size = c
+                .builder
+                .build_int_mul(count, i64_ty.const_int(ip_size, false), "alloc_sz")
+                .unwrap();
+            let malloc_fn = *c.functions.get("malloc").ok_or("malloc not declared")?;
+            let list_buf = c
+                .call(malloc_fn, &[alloc_size.into()], "list_buf")
+                .unwrap()
+                .into_pointer_value();
+
+            let i8_ty = c.context.i8_type();
+            let ptrs_start = unsafe {
+                c.builder
+                    .build_gep(
+                        i8_ty,
+                        result_ptr,
+                        &[i64_ty.const_int(8, false)],
+                        "ptrs_start",
+                    )
+                    .unwrap()
+            };
+            let memcpy_fn = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+            c.call_void(
+                memcpy_fn,
+                &[list_buf.into(), ptrs_start.into(), alloc_size.into()],
+                "cpy",
+            );
+
+            let free_fn = *c.functions.get("free").ok_or("free not declared")?;
+            c.call_void(free_fn, &[result_ptr.into()], "free_buf");
+
+            let list_val = list_struct.get_undef();
+            let list_val = c
+                .builder
+                .build_insert_value(list_val, list_buf, 0, "with_ptr")
+                .unwrap()
+                .into_struct_value();
+            let list_val = c
+                .builder
+                .build_insert_value(list_val, count, 1, "with_len")
+                .unwrap()
+                .into_struct_value();
+            let list_val = c
+                .builder
+                .build_insert_value(list_val, count, 2, "with_cap")
+                .unwrap()
+                .into_struct_value();
+
+            let ok_result = build_result_ok(c, list_val.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Socket_send_to" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd_inner = c
+                .builder
+                .build_extract_value(self_val, 0, "fd_struct")
+                .unwrap();
+            let fd = c
+                .builder
+                .build_extract_value(fd_inner.into_struct_value(), 0, "fd")
+                .unwrap();
+
+            let data_ptr = fn_val.get_nth_param(1).unwrap();
+            let addr_val = fn_val.get_nth_param(2).unwrap().into_struct_value();
+            let ip_struct = c
+                .builder
+                .build_extract_value(addr_val, 0, "ip_struct")
+                .unwrap();
+            let ip_bytes = c
+                .builder
+                .build_extract_value(ip_struct.into_struct_value(), 0, "ip_bytes")
+                .unwrap();
+            let port = c.builder.build_extract_value(addr_val, 1, "port").unwrap();
+
+            let rt_fn = *c
+                .functions
+                .get("expo_socket_send_to")
+                .ok_or("expo_socket_send_to not declared")?;
+            let ret = c
+                .call(
+                    rt_fn,
+                    &[fd.into(), data_ptr.into(), ip_bytes.into(), port.into()],
+                    "sent",
+                )
+                .unwrap()
+                .into_int_value();
+
+            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let is_err = c
+                .builder
+                .build_int_compare(IntPredicate::EQ, ret, neg_one, "is_err")
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_err, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let ok_result = build_result_ok(c, ret.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Socket_recv_from" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd_inner = c
+                .builder
+                .build_extract_value(self_val, 0, "fd_struct")
+                .unwrap();
+            let fd = c
+                .builder
+                .build_extract_value(fd_inner.into_struct_value(), 0, "fd")
+                .unwrap();
+            let count_val = fn_val.get_nth_param(1).unwrap();
+
+            let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+
+            let rt_fn = *c
+                .functions
+                .get("expo_socket_recv_from")
+                .ok_or("expo_socket_recv_from not declared")?;
+            let result_ptr = c
+                .call(rt_fn, &[fd.into(), count_val.into()], "recv_buf")
+                .unwrap()
+                .into_pointer_value();
+
+            let null_ptr = ptr_ty.const_null();
+            let is_null = c
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    c.builder
+                        .build_ptr_to_int(result_ptr, i64_ty, "ptr_int")
+                        .unwrap(),
+                    c.builder
+                        .build_ptr_to_int(null_ptr, i64_ty, "null_int")
+                        .unwrap(),
+                    "is_null",
+                )
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_null, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+
+            let data_ptr = c
+                .builder
+                .build_load(ptr_ty, result_ptr, "data_ptr")
+                .unwrap();
+
+            let i8_ty = c.context.i8_type();
+            let ip_field_ptr = unsafe {
+                c.builder
+                    .build_gep(i8_ty, result_ptr, &[i64_ty.const_int(8, false)], "ip_field")
+                    .unwrap()
+            };
+            let ip_bin_ptr = c
+                .builder
+                .build_load(ptr_ty, ip_field_ptr, "ip_bin")
+                .unwrap();
+
+            let port_field_ptr = unsafe {
+                c.builder
+                    .build_gep(
+                        i8_ty,
+                        result_ptr,
+                        &[i64_ty.const_int(16, false)],
+                        "port_field",
+                    )
+                    .unwrap()
+            };
+            let recv_port = c
+                .builder
+                .build_load(i64_ty, port_field_ptr, "port")
+                .unwrap();
+
+            let free_fn = *c.functions.get("free").ok_or("free not declared")?;
+            c.call_void(free_fn, &[result_ptr.into()], "free_buf");
+
+            let ip_struct_ty = c
+                .types
+                .structs
+                .get("IPAddress")
+                .copied()
+                .ok_or("IPAddress struct type not found")?;
+            let ip_val = ip_struct_ty.get_undef();
+            let ip_val = c
+                .builder
+                .build_insert_value(ip_val, ip_bin_ptr, 0, "ip_with_bytes")
+                .unwrap()
+                .into_struct_value();
+
+            let sa_struct_ty = c
+                .types
+                .structs
+                .get("SocketAddress")
+                .copied()
+                .ok_or("SocketAddress struct type not found")?;
+            let sa_val = sa_struct_ty.get_undef();
+            let sa_val = c
+                .builder
+                .build_insert_value(sa_val, ip_val, 0, "sa_with_ip")
+                .unwrap()
+                .into_struct_value();
+            let sa_val = c
+                .builder
+                .build_insert_value(sa_val, recv_port, 1, "sa_with_port")
+                .unwrap()
+                .into_struct_value();
+
+            let pair_type_name = "Pair_$String.SocketAddress$";
+            let pair_struct = *c
+                .types
+                .structs
+                .get(pair_type_name)
+                .ok_or(format!("{pair_type_name} struct type not found"))?;
+            let pair_val = pair_struct.get_undef();
+            let pair_val = c
+                .builder
+                .build_insert_value(pair_val, data_ptr, 0, "pair_with_data")
+                .unwrap()
+                .into_struct_value();
+            let pair_val = c
+                .builder
+                .build_insert_value(pair_val, sa_val, 1, "pair_with_addr")
+                .unwrap()
+                .into_struct_value();
+
+            let ok_result = build_result_ok(c, pair_val.into(), result_type);
             c.builder.build_unconditional_branch(merge_bb).unwrap();
             let ok_end = c.builder.get_insert_block().unwrap();
 
@@ -1980,6 +2380,18 @@ fn emit_debug_format_intrinsic<'ctx>(
                 self_val
             };
             let result = emit_snprintf_to_string(c, "%f", val);
+            c.builder.build_return(Some(&result)).unwrap();
+        }
+        "Binary" | "Bits" => {
+            let i64_ty = c.context.i64_type();
+            let is_bits = i64_ty.const_int(if type_name == "Bits" { 1 } else { 0 }, false);
+            let rt_fn = *c
+                .functions
+                .get("expo_format_binary")
+                .ok_or("expo_format_binary not declared")?;
+            let result = c
+                .call(rt_fn, &[self_val.into(), is_bits.into()], "bin_fmt")
+                .unwrap();
             c.builder.build_return(Some(&result)).unwrap();
         }
         _ => return Err(format!("unknown debug format intrinsic type: {type_name}")),

@@ -1,0 +1,61 @@
+fn main
+  # Create a stream socket
+  match Socket.create(SocketKind.Stream)
+    Result.Ok(s) ->
+      print("stream ok")
+      s.close()
+    Result.Err(msg) -> print("stream err: " <> msg)
+  end
+
+  # Create a datagram socket
+  match Socket.create(SocketKind.Datagram)
+    Result.Ok(s) ->
+      print("datagram ok")
+      s.close()
+    Result.Err(msg) -> print("datagram err: " <> msg)
+  end
+
+  # IPAddress helpers
+  any_addr = IPAddress.any()
+  print(any_addr.v4?())
+  print(any_addr.v6?())
+
+  lo = IPAddress.loopback()
+  print(lo.v4?())
+
+  custom = IPAddress.v4(10, 0, 0, 1)
+  print(custom.v4?())
+
+  # Bind stream socket to any:0
+  match Socket.create(SocketKind.Stream)
+    Result.Ok(s) ->
+      match s.bind(SocketAddress{ip: IPAddress.any(), port: 0})
+        Result.Ok(bound) ->
+          print("bind ok")
+          bound.close()
+        Result.Err(msg) -> print("bind err: " <> msg)
+      end
+    Result.Err(msg) -> print("create for bind err: " <> msg)
+  end
+
+  # Connect to loopback:1 should fail (connection refused)
+  match Socket.create(SocketKind.Stream)
+    Result.Ok(s) ->
+      match s.connect(SocketAddress{ip: IPAddress.loopback(), port: 1})
+        Result.Ok(conn) ->
+          print("connect unexpected success")
+          conn.close()
+        Result.Err(_) ->
+          print("connect refused ok")
+      end
+    Result.Err(msg) -> print("create for connect err: " <> msg)
+  end
+
+  # Resolve localhost
+  match Socket.resolve("localhost")
+    Result.Ok(addrs) ->
+      print("resolve ok")
+      print(addrs.length() > 0)
+    Result.Err(msg) -> print("resolve err: " <> msg)
+  end
+end

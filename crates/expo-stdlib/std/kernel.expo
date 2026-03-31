@@ -492,6 +492,13 @@ end
 
 impl Binary
   @doc """
+  Returns the number of bytes in the binary.
+  """
+  fn byte_size(self) -> Int
+    panic("intrinsic")
+  end
+
+  @doc """
   Converts a `Binary` to `Bits`. This is a zero-cost widening conversion:
   every byte-aligned binary is also a valid bitstring.
   """

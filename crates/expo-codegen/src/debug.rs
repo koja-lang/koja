@@ -6,7 +6,7 @@ use expo_typecheck::types::{Primitive, Type};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
 
 use crate::compiler::Compiler;
-use crate::hashtable::type_display_name;
+use crate::hashtable::{emit_primitive_intrinsic, is_primitive_intrinsic, type_display_name};
 
 /// Calls `{Type}_format(val)` and returns the resulting string pointer.
 /// Synthesizes the format function on demand for enums and structs if it
@@ -31,6 +31,13 @@ pub fn call_format<'ctx>(
             synthesize_enum_format(c, &type_name)?;
         } else if c.type_ctx.is_struct(&type_name) {
             synthesize_struct_format(c, &type_name)?;
+        } else if is_primitive_intrinsic(&fn_name) {
+            let param_ty = val.get_type();
+            let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+            let ft = ptr_ty.fn_type(&[param_ty.into()], false);
+            let fv = c.module.add_function(&fn_name, ft, None);
+            c.functions.insert(fn_name.clone(), fv);
+            emit_primitive_intrinsic(c, &fn_name)?;
         } else {
             return Err(format!("no format function for type `{type_name}`"));
         }
