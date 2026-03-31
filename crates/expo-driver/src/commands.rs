@@ -361,6 +361,31 @@ fn collect_expo_files_with_prefix(
     }
 }
 
+/// `expo test` -- discovers `@test` functions, compiles a test harness, and runs it.
+///
+/// Requires a `project.expo` in the current directory.
+pub fn cmd_test(color: bool) {
+    let cwd = env::current_dir().unwrap_or_else(|e| {
+        eprintln!("error: cannot determine current directory: {e}");
+        process::exit(1);
+    });
+
+    let config = match project::load_project(&cwd) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            eprintln!("error: no project.expo found");
+            eprintln!("Usage: expo test (run from a directory containing project.expo)");
+            process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+    };
+
+    pipeline::test_project(&config, &cwd, color);
+}
+
 /// `expo format <file.expo> [--check] [--write]` -- formats Expo source files.
 pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
     if files.is_empty() {

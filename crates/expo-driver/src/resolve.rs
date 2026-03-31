@@ -402,6 +402,91 @@ fn extract_project_imports(
         .collect()
 }
 
+/// Builds a [`ModuleGraph`] for running tests.
+///
+/// Like [`resolve_project_modules`], but also scans `test` directories and
+/// includes all source + test files in the graph. The project's entry module
+/// (which contains `fn main`) is excluded since the test harness replaces it.
+/// The `entry` field is left empty -- the caller inserts a generated harness.
+pub fn resolve_test_project_modules(
+    config: &ProjectConfig,
+    project_root: &Path,
+) -> Result<ModuleGraph, String> {
+    let src_roots: Vec<PathBuf> = config.src.iter().map(|s| project_root.join(s)).collect();
+    let test_roots: Vec<PathBuf> = config.test.iter().map(|s| project_root.join(s)).collect();
+
+    let all_roots: Vec<PathBuf> = src_roots.iter().chain(test_roots.iter()).cloned().collect();
+
+    let entry_fqn = config
+        .entry
+        .as_ref()
+        .map(|e| format!("{}.{}", config.name, e));
+
+    let mut graph = ModuleGraph {
+        entry: String::new(),
+        modules: HashMap::new(),
+        order: Vec::new(),
+    };
+
+    insert_stdlib(&mut graph);
+
+    let mut visiting: Vec<String> = Vec::new();
+    let mut visited: HashSet<String> = graph.modules.keys().cloned().collect();
+
+    if let Some(ref skip) = entry_fqn {
+        visited.insert(skip.clone());
+    }
+
+    for root in &all_roots {
+        if !root.is_dir() {
+            continue;
+        }
+        let files = collect_expo_files_recursive(root);
+        for file_path in files {
+            let relative_module = file_path
+                .strip_prefix(root)
+                .unwrap_or(&file_path)
+                .with_extension("")
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            let fqn = format!("{}.{}", config.name, relative_module);
+            if visited.contains(&fqn) {
+                continue;
+            }
+            resolve_project_recursive(
+                &fqn,
+                &file_path,
+                config,
+                &all_roots,
+                &mut graph,
+                &mut visiting,
+                &mut visited,
+            )?;
+        }
+    }
+
+    Ok(graph)
+}
+
+fn collect_expo_files_recursive(dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return result,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            result.extend(collect_expo_files_recursive(&path));
+        } else if path.extension().is_some_and(|ext| ext == "expo") {
+            result.push(path);
+        }
+    }
+    result
+}
+
 /// Checks if a fully qualified module name resolves to a file in project mode.
 fn can_resolve_project(fqn: &str, project_name: &str, src_roots: &[PathBuf]) -> bool {
     let Some(relative_module) = strip_project_prefix(fqn, project_name) else {

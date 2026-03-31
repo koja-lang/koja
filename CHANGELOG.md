@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Test runner -- `expo test` discovers `@test`-annotated functions in `src/` and `test/` directories, generates a test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure with the test name printed before each call. `project.expo` gains an optional `test` field (default `["test"]`).
+- TCP socket support -- `Socket` type in `std.fd` with `create`, `bind`, `listen`, `accept`, `set_reuse_addr`, and `close`. Wraps POSIX socket syscalls via runtime shims. Returns `Result<Socket, String>` / `Result<Fd, String>` for error handling. Sufficient for basic TCP servers (demonstrated with an HTTP/JSON server in the `json` package).
+
 ### Fixed
 
 - Generic enum variants where not all type parameters are inferrable from the payload (e.g., `Result.Ok(value)` in a function returning `Result<T, String>`) no longer fail with an LLVM type mismatch.

@@ -84,6 +84,8 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Run tests (requires project.expo)
+    Test,
 }
 
 fn main() {
@@ -106,5 +108,6 @@ fn main() {
         Command::Lex { files } => commands::cmd_lex(files, color),
         Command::Parse { files } => commands::cmd_parse(files, color),
         Command::Run { file, args } => commands::cmd_run(file, args, color),
+        Command::Test => commands::cmd_test(color),
     }
 }

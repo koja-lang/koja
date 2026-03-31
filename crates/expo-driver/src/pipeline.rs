@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::{env, fs, process};
 
-use expo_ast::ast::{Module, Severity};
+use expo_ast::ast::{AnnotationValue, Item, Module, Severity};
 
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
@@ -264,6 +264,151 @@ fn prepend_stdlib(graph: &mut ModuleGraph) {
     }
     stdlib_order.append(&mut graph.order);
     graph.order = stdlib_order;
+}
+
+/// A discovered `@test` function: its fully qualified module name, function name,
+/// and human-readable description (from `@test "..."` or the function name itself).
+struct TestCase {
+    fn_name: String,
+    description: String,
+}
+
+/// Discovers `@test` functions, generates a test harness, compiles and runs it.
+pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
+    let mut graph = match resolve::resolve_test_project_modules(config, project_root) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+    };
+
+    let tests = discover_tests(&graph, &config.name);
+
+    if tests.is_empty() {
+        println!("no tests found");
+        return;
+    }
+
+    let harness_source = generate_harness(&tests, &graph);
+    let harness_name = format!("{}.__test_harness__", config.name);
+
+    let parse_result = expo_parser::parse(&harness_source);
+    if !parse_result.errors.is_empty() {
+        eprintln!("internal error: generated test harness failed to parse");
+        for d in &parse_result.errors {
+            eprintln!("  {}", d.message);
+        }
+        process::exit(1);
+    }
+
+    graph.order.push(harness_name.clone());
+    graph.modules.insert(
+        harness_name.clone(),
+        resolve::ResolvedModule {
+            name: harness_name.clone(),
+            path: std::path::PathBuf::from("<test_harness>"),
+            source: harness_source,
+            module: parse_result.module,
+            errors: parse_result.errors,
+        },
+    );
+    graph.entry = harness_name;
+
+    let tmp_dir = env::temp_dir();
+    let binary = tmp_dir.join(format!("expo_test_{}", config.name));
+    let output = binary.to_str().unwrap().to_string();
+
+    build_from_graph(&graph, &output, true, color, false);
+
+    let status = process::Command::new(&binary).status();
+    let _ = fs::remove_file(&binary);
+
+    match status {
+        Ok(s) => process::exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("failed to run test binary: {e}");
+            process::exit(1);
+        }
+    }
+}
+
+/// Walks the module graph and collects all functions annotated with `@test`.
+fn discover_tests(graph: &ModuleGraph, _project_name: &str) -> Vec<TestCase> {
+    let mut tests = Vec::new();
+
+    for name in &graph.order {
+        if name.starts_with("std.") {
+            continue;
+        }
+
+        let rm = &graph.modules[name];
+        for item in &rm.module.items {
+            if let Item::Function(func) = item
+                && let Some(ref ann) = func.annotation
+                && ann.name == "test"
+            {
+                let description = match &ann.value {
+                    Some(AnnotationValue::String(s)) => s.clone(),
+                    _ => func.name.clone(),
+                };
+                tests.push(TestCase {
+                    fn_name: func.name.clone(),
+                    description,
+                });
+            }
+        }
+    }
+
+    tests
+}
+
+/// Generates the Expo source for a test harness module.
+///
+/// The harness imports every module that contains tests, then calls each test
+/// function sequentially. It prints the test description before calling, and
+/// "ok" after it returns. If a test panics, the process aborts and the last
+/// printed description identifies the failing test.
+fn generate_harness(tests: &[TestCase], graph: &ModuleGraph) -> String {
+    let mut imports: Vec<String> = Vec::new();
+    let mut seen_modules = std::collections::HashSet::new();
+
+    for rm in graph.modules.values() {
+        if rm.name.starts_with("std.") {
+            continue;
+        }
+        if seen_modules.insert(rm.name.clone()) {
+            imports.push(format!("import {}", rm.name));
+        }
+    }
+
+    imports.sort();
+
+    let total = tests.len();
+    let mut body = String::new();
+    body.push_str(&format!("  print(\"running {} tests\")\n", total));
+
+    for test in tests {
+        let escaped_desc = test.description.replace('\\', "\\\\").replace('"', "\\\"");
+        body.push_str(&format!("  print(\"test {} ...\")\n", escaped_desc));
+        body.push_str(&format!("  {}()\n", test.fn_name));
+        body.push_str("  print(\"  ok\")\n");
+    }
+
+    body.push_str("  print(\"\")\n");
+    body.push_str(&format!("  print(\"{} passed, 0 failed\")\n", total));
+
+    let mut source = String::new();
+    for imp in &imports {
+        source.push_str(imp);
+        source.push('\n');
+    }
+    source.push('\n');
+    source.push_str("fn main\n");
+    source.push_str(&body);
+    source.push_str("end\n");
+
+    source
 }
 
 /// Parsed build arguments.

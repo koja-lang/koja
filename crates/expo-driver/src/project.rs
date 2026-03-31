@@ -15,6 +15,7 @@ pub struct ProjectConfig {
     pub name: String,
     pub version: String,
     pub src: Vec<String>,
+    pub test: Vec<String>,
     pub entry: Option<String>,
 }
 
@@ -84,6 +85,7 @@ fn try_extract_project(stmt: &Statement) -> Option<Result<ProjectConfig, String>
     let mut name: Option<String> = None;
     let mut version: Option<String> = None;
     let mut src: Option<Vec<String>> = None;
+    let mut test: Option<Vec<String>> = None;
     let mut entry: Option<String> = None;
 
     for field in fields {
@@ -91,6 +93,7 @@ fn try_extract_project(stmt: &Statement) -> Option<Result<ProjectConfig, String>
             "name" => name = extract_string(&field.value),
             "version" => version = extract_string(&field.value),
             "src" => src = extract_string_list(&field.value),
+            "test" => test = extract_string_list(&field.value),
             "entry" => entry = extract_string(&field.value),
             other => {
                 return Some(Err(format!("project.expo: unknown field `{other}`")));
@@ -119,6 +122,7 @@ fn try_extract_project(stmt: &Statement) -> Option<Result<ProjectConfig, String>
         name,
         version,
         src: src.unwrap_or_else(|| vec!["src".to_string()]),
+        test: test.unwrap_or_else(|| vec!["test".to_string()]),
         entry,
     }))
 }
