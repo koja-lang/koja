@@ -40,6 +40,14 @@ const FD_INTRINSICS: &[&str] = &["Fd_read", "Fd_write", "Fd_close"];
 
 const FILE_INTRINSICS: &[&str] = &["File_open", "File_read"];
 
+const SOCKET_INTRINSICS: &[&str] = &[
+    "Socket_create",
+    "Socket_bind",
+    "Socket_listen",
+    "Socket_accept",
+    "Socket_set_reuse_addr",
+];
+
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     for prim in PRIMITIVE_TYPES {
         if mangled == format!("{prim}_hash") || mangled == format!("{prim}_eq") {
@@ -58,6 +66,7 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
         || PARSE_INTRINSICS.contains(&mangled)
         || FD_INTRINSICS.contains(&mangled)
         || FILE_INTRINSICS.contains(&mangled)
+        || SOCKET_INTRINSICS.contains(&mangled)
     {
         return true;
     }
@@ -88,6 +97,10 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
 
     if FILE_INTRINSICS.contains(&mangled) {
         return emit_file_intrinsic(c, fn_val, mangled);
+    }
+
+    if SOCKET_INTRINSICS.contains(&mangled) {
+        return emit_socket_intrinsic(c, fn_val, mangled);
     }
 
     if let Some(type_name) = mangled.strip_suffix("_hash") {
@@ -1282,6 +1295,237 @@ fn emit_file_intrinsic<'ctx>(
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
         }
         _ => return Err(format!("unknown file intrinsic: {mangled}")),
+    }
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
+}
+
+fn emit_socket_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    mangled: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    let i64_ty = c.context.i64_type();
+    let result_type = fn_val
+        .get_type()
+        .get_return_type()
+        .unwrap()
+        .into_struct_type();
+
+    match mangled {
+        "Socket_create" => {
+            let rt_fn = *c
+                .functions
+                .get("expo_socket_create")
+                .ok_or("expo_socket_create not declared")?;
+            let fd_val = c.call(rt_fn, &[], "fd_val").unwrap().into_int_value();
+
+            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let is_err = c
+                .builder
+                .build_int_compare(IntPredicate::EQ, fd_val, neg_one, "is_err")
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_err, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let socket_struct_ty = c
+                .types
+                .structs
+                .get("Socket")
+                .copied()
+                .ok_or("Socket struct type not found")?;
+            let alloca = c
+                .builder
+                .build_alloca(socket_struct_ty, "sock_tmp")
+                .unwrap();
+            let fd_field_ptr = c
+                .builder
+                .build_struct_gep(socket_struct_ty, alloca, 0, "fd_field")
+                .unwrap();
+            let fd_struct_ty = c
+                .types
+                .structs
+                .get("Fd")
+                .copied()
+                .ok_or("Fd struct type not found")?;
+            let fd_desc_ptr = c
+                .builder
+                .build_struct_gep(fd_struct_ty, fd_field_ptr, 0, "fd_desc")
+                .unwrap();
+            c.builder.build_store(fd_desc_ptr, fd_val).unwrap();
+            let sock_val = c
+                .builder
+                .build_load(socket_struct_ty, alloca, "sock_val")
+                .unwrap();
+            let ok_result = build_result_ok(c, sock_val, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Socket_bind" | "Socket_listen" | "Socket_set_reuse_addr" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd_inner = c
+                .builder
+                .build_extract_value(self_val, 0, "fd_struct")
+                .unwrap();
+            let fd = c
+                .builder
+                .build_extract_value(fd_inner.into_struct_value(), 0, "fd")
+                .unwrap();
+
+            let (rt_name, args): (&str, Vec<inkwell::values::BasicMetadataValueEnum>) =
+                match mangled {
+                    "Socket_bind" => {
+                        let port = fn_val.get_nth_param(1).unwrap();
+                        ("expo_socket_bind", vec![fd.into(), port.into()])
+                    }
+                    "Socket_listen" => {
+                        let backlog = fn_val.get_nth_param(1).unwrap();
+                        ("expo_socket_listen", vec![fd.into(), backlog.into()])
+                    }
+                    "Socket_set_reuse_addr" => ("expo_socket_setsockopt_reuse", vec![fd.into()]),
+                    _ => unreachable!(),
+                };
+
+            let rt_fn = *c
+                .functions
+                .get(rt_name)
+                .ok_or(format!("{rt_name} not declared"))?;
+            let ret = c.call(rt_fn, &args, "ret").unwrap().into_int_value();
+
+            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let is_err = c
+                .builder
+                .build_int_compare(IntPredicate::EQ, ret, neg_one, "is_err")
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_err, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let ok_result = build_result_ok(c, self_val.into(), result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Socket_accept" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd_inner = c
+                .builder
+                .build_extract_value(self_val, 0, "fd_struct")
+                .unwrap();
+            let fd = c
+                .builder
+                .build_extract_value(fd_inner.into_struct_value(), 0, "fd")
+                .unwrap();
+
+            let rt_fn = *c
+                .functions
+                .get("expo_socket_accept")
+                .ok_or("expo_socket_accept not declared")?;
+            let client_fd = c
+                .call(rt_fn, &[fd.into()], "client_fd")
+                .unwrap()
+                .into_int_value();
+
+            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let is_err = c
+                .builder
+                .build_int_compare(IntPredicate::EQ, client_fd, neg_one, "is_err")
+                .unwrap();
+
+            let ok_bb = c.context.append_basic_block(fn_val, "ok");
+            let err_bb = c.context.append_basic_block(fn_val, "err");
+            let merge_bb = c.context.append_basic_block(fn_val, "merge");
+
+            c.builder
+                .build_conditional_branch(is_err, err_bb, ok_bb)
+                .unwrap();
+
+            c.builder.position_at_end(ok_bb);
+            let fd_struct_ty = c
+                .types
+                .structs
+                .get("Fd")
+                .copied()
+                .ok_or("Fd struct type not found")?;
+            let alloca = c.builder.build_alloca(fd_struct_ty, "fd_tmp").unwrap();
+            let fd_desc_ptr = c
+                .builder
+                .build_struct_gep(fd_struct_ty, alloca, 0, "fd_desc")
+                .unwrap();
+            c.builder.build_store(fd_desc_ptr, client_fd).unwrap();
+            let fd_val = c
+                .builder
+                .build_load(fd_struct_ty, alloca, "fd_val")
+                .unwrap();
+            let ok_result = build_result_ok(c, fd_val, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let ok_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(err_bb);
+            let err_fn = *c
+                .functions
+                .get("expo_last_error")
+                .ok_or("expo_last_error not declared")?;
+            let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
+            let err_result = build_result_err(c, err_msg, result_type);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+            let err_end = c.builder.get_insert_block().unwrap();
+
+            c.builder.position_at_end(merge_bb);
+            let phi = c.builder.build_phi(result_type, "result").unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        _ => return Err(format!("unknown socket intrinsic: {mangled}")),
     }
 
     if let Some(bb) = saved_block {

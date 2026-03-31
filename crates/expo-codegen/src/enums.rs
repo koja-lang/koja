@@ -232,7 +232,7 @@ fn compile_generic_enum_construction<'ctx>(
         })
         .collect();
 
-    let has_unknown = type_args.iter().any(|t| *t == Type::Unknown);
+    let has_unknown = type_args.contains(&Type::Unknown);
     if has_unknown && let Some(ref hint) = c.fn_state.return_type_hint {
         let hint_args = match hint {
             Type::GenericInstance {

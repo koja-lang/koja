@@ -584,6 +584,22 @@ impl<'ctx> Compiler<'ctx> {
             i64.fn_type(&[ptr.into(), i64.into()], false),
         );
         decl("expo_file_read_all", ptr.fn_type(&[ptr.into()], false));
+
+        // Socket I/O
+        decl("expo_socket_create", i64.fn_type(&[], false));
+        decl(
+            "expo_socket_bind",
+            i64.fn_type(&[i64.into(), i64.into()], false),
+        );
+        decl(
+            "expo_socket_listen",
+            i64.fn_type(&[i64.into(), i64.into()], false),
+        );
+        decl("expo_socket_accept", i64.fn_type(&[i64.into()], false));
+        decl(
+            "expo_socket_setsockopt_reuse",
+            i64.fn_type(&[i64.into()], false),
+        );
     }
 
     fn declare_function(

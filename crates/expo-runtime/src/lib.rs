@@ -563,6 +563,93 @@ pub unsafe extern "C" fn expo_file_read_all(path_ptr: *const u8) -> *const u8 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Socket operations
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+struct SockaddrIn {
+    sin_len: u8,
+    sin_family: u8,
+    sin_port: u16,
+    sin_addr: u32,
+    sin_zero: [u8; 8],
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_socket_create() -> i64 {
+    let fd = unsafe {
+        libc_socket(2 /* AF_INET */, 1 /* SOCK_STREAM */, 0)
+    };
+    if fd < 0 {
+        set_last_error(std::io::Error::last_os_error());
+        return -1;
+    }
+    fd as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_socket_bind(fd: i64, port: i64) -> i64 {
+    let addr = SockaddrIn {
+        sin_len: std::mem::size_of::<SockaddrIn>() as u8,
+        sin_family: 2, // AF_INET
+        sin_port: (port as u16).to_be(),
+        sin_addr: 0, // INADDR_ANY
+        sin_zero: [0; 8],
+    };
+    let ret = unsafe {
+        libc_bind(
+            fd as i32,
+            &addr as *const SockaddrIn as *const u8,
+            std::mem::size_of::<SockaddrIn>() as u32,
+        )
+    };
+    if ret < 0 {
+        set_last_error(std::io::Error::last_os_error());
+        return -1;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_socket_listen(fd: i64, backlog: i64) -> i64 {
+    let ret = unsafe { libc_listen(fd as i32, backlog as i32) };
+    if ret < 0 {
+        set_last_error(std::io::Error::last_os_error());
+        return -1;
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_socket_accept(fd: i64) -> i64 {
+    let client = unsafe { libc_accept(fd as i32, std::ptr::null_mut(), std::ptr::null_mut()) };
+    if client < 0 {
+        set_last_error(std::io::Error::last_os_error());
+        return -1;
+    }
+    client as i64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_socket_setsockopt_reuse(fd: i64) -> i64 {
+    let optval: i32 = 1;
+    let ret = unsafe {
+        libc_setsockopt(
+            fd as i32,
+            0xFFFF, // SOL_SOCKET
+            0x0004, // SO_REUSEADDR
+            &optval as *const i32 as *const u8,
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    if ret < 0 {
+        set_last_error(std::io::Error::last_os_error());
+        return -1;
+    }
+    0
+}
+
 unsafe extern "C" {
     #[link_name = "read"]
     fn libc_read(fd: i32, buf: *mut u8, count: usize) -> isize;
@@ -570,6 +657,16 @@ unsafe extern "C" {
     fn libc_write(fd: i32, buf: *const u8, count: usize) -> isize;
     #[link_name = "close"]
     fn libc_close(fd: i32) -> i32;
+    #[link_name = "socket"]
+    fn libc_socket(domain: i32, sock_type: i32, protocol: i32) -> i32;
+    #[link_name = "bind"]
+    fn libc_bind(fd: i32, addr: *const u8, addrlen: u32) -> i32;
+    #[link_name = "listen"]
+    fn libc_listen(fd: i32, backlog: i32) -> i32;
+    #[link_name = "accept"]
+    fn libc_accept(fd: i32, addr: *mut u8, addrlen: *mut u32) -> i32;
+    #[link_name = "setsockopt"]
+    fn libc_setsockopt(fd: i32, level: i32, optname: i32, optval: *const u8, optlen: u32) -> i32;
     fn fflush(stream: *mut u8) -> i32;
 }
 

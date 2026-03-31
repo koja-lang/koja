@@ -59,3 +59,51 @@ impl File
     self.fd.close()
   end
 end
+
+struct Socket
+  fd: Fd
+end
+
+impl Socket
+  @doc """
+  Creates a TCP socket (AF_INET, SOCK_STREAM).
+  """
+  fn create() -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Binds the socket to the given port on all interfaces (0.0.0.0).
+  """
+  fn bind(move self, port: Int) -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Starts listening for incoming connections with the given backlog.
+  """
+  fn listen(move self, backlog: Int) -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Accepts an incoming connection. Returns the client file descriptor.
+  """
+  fn accept(self) -> Result<Fd, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Sets the SO_REUSEADDR option on the socket.
+  """
+  fn set_reuse_addr(move self) -> Result<Socket, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Closes the socket.
+  """
+  fn close(move self) -> Result<String, String>
+    self.fd.close()
+  end
+end
