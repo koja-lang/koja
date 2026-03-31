@@ -1,6 +1,14 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+
+fn worker_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().min(4))
+        .unwrap_or(4)
+}
 
 fn lang_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -99,48 +107,65 @@ fn lang_tests() {
         dir.display()
     );
 
-    let mut failures = Vec::new();
+    let queue = Mutex::new(VecDeque::from_iter(files.iter()));
+    let failures = Mutex::new(Vec::new());
 
-    for file in &files {
-        let test_name = file.file_stem().unwrap().to_string_lossy().to_string();
-        let expected_path = file.with_extension("stdout");
+    std::thread::scope(|s| {
+        for _ in 0..worker_count() {
+            s.spawn(|| {
+                loop {
+                    let file = queue.lock().unwrap().pop_front();
+                    let Some(file) = file else { break };
 
-        if !expected_path.exists() {
-            failures.push(format!("{test_name}: missing .stdout file"));
-            continue;
-        }
+                    let test_name = file.file_stem().unwrap().to_string_lossy().to_string();
+                    let expected_path = file.with_extension("stdout");
 
-        let (stdout, stderr, code) = run_expo(file);
+                    if !expected_path.exists() {
+                        failures
+                            .lock()
+                            .unwrap()
+                            .push(format!("{test_name}: missing .stdout file"));
+                        continue;
+                    }
 
-        if code != 0 {
-            failures.push(format!(
-                "{test_name}: exited with code {code}\nstderr:\n{stderr}"
-            ));
-            continue;
-        }
+                    let (stdout, stderr, code) = run_expo(file);
 
-        let expected = fs::read_to_string(&expected_path).unwrap();
-        if stdout != expected {
-            let actual_lines: Vec<&str> = stdout.lines().collect();
-            let expected_lines: Vec<&str> = expected.lines().collect();
-            let mut diff = String::new();
-            let max = actual_lines.len().max(expected_lines.len());
-            for i in 0..max {
-                let a = actual_lines.get(i).unwrap_or(&"<missing>");
-                let e = expected_lines.get(i).unwrap_or(&"<missing>");
-                if a != e {
-                    diff.push_str(&format!(
-                        "  line {}: expected {:?}, got {:?}\n",
-                        i + 1,
-                        e,
-                        a
-                    ));
+                    if code != 0 {
+                        failures.lock().unwrap().push(format!(
+                            "{test_name}: exited with code {code}\nstderr:\n{stderr}"
+                        ));
+                        continue;
+                    }
+
+                    let expected = fs::read_to_string(&expected_path).unwrap();
+                    if stdout != expected {
+                        let actual_lines: Vec<&str> = stdout.lines().collect();
+                        let expected_lines: Vec<&str> = expected.lines().collect();
+                        let mut diff = String::new();
+                        let max = actual_lines.len().max(expected_lines.len());
+                        for i in 0..max {
+                            let a = actual_lines.get(i).unwrap_or(&"<missing>");
+                            let e = expected_lines.get(i).unwrap_or(&"<missing>");
+                            if a != e {
+                                diff.push_str(&format!(
+                                    "  line {}: expected {:?}, got {:?}\n",
+                                    i + 1,
+                                    e,
+                                    a
+                                ));
+                            }
+                        }
+                        failures
+                            .lock()
+                            .unwrap()
+                            .push(format!("{test_name}: output mismatch\n{diff}"));
+                    }
                 }
-            }
-            failures.push(format!("{test_name}: output mismatch\n{diff}"));
+            });
         }
-    }
+    });
 
+    let failures = failures.into_inner().unwrap();
     if !failures.is_empty() {
         panic!(
             "\n{} test(s) failed:\n\n{}",
@@ -293,40 +318,54 @@ fn lang_compile_fail_tests() {
     }
 
     let files = collect_expo_files(&dir);
-    let mut failures = Vec::new();
+    let queue = Mutex::new(VecDeque::from_iter(files.iter()));
+    let failures = Mutex::new(Vec::new());
 
-    for file in &files {
-        let test_name = format!(
-            "compile_fail/{}",
-            file.file_stem().unwrap().to_string_lossy()
-        );
-        let expected_path = file.with_extension("stdout");
+    std::thread::scope(|s| {
+        for _ in 0..worker_count() {
+            s.spawn(|| {
+                loop {
+                    let file = queue.lock().unwrap().pop_front();
+                    let Some(file) = file else { break };
 
-        if !expected_path.exists() {
-            failures.push(format!("{test_name}: missing .stdout file"));
-            continue;
+                    let test_name = format!(
+                        "compile_fail/{}",
+                        file.file_stem().unwrap().to_string_lossy()
+                    );
+                    let expected_path = file.with_extension("stdout");
+
+                    if !expected_path.exists() {
+                        failures
+                            .lock()
+                            .unwrap()
+                            .push(format!("{test_name}: missing .stdout file"));
+                        continue;
+                    }
+
+                    let (_stdout, stderr, code) = run_expo(file);
+
+                    if code == 0 {
+                        failures.lock().unwrap().push(format!(
+                            "{test_name}: expected compilation failure but succeeded"
+                        ));
+                        continue;
+                    }
+
+                    let expected = fs::read_to_string(&expected_path).unwrap();
+                    let pattern = expected.trim();
+                    if !stderr.contains(pattern) {
+                        failures.lock().unwrap().push(format!(
+                            "{test_name}: stderr does not contain expected pattern\n\
+                         expected pattern: {pattern:?}\n\
+                         actual stderr:\n{stderr}"
+                        ));
+                    }
+                }
+            });
         }
+    });
 
-        let (_stdout, stderr, code) = run_expo(file);
-
-        if code == 0 {
-            failures.push(format!(
-                "{test_name}: expected compilation failure but succeeded"
-            ));
-            continue;
-        }
-
-        let expected = fs::read_to_string(&expected_path).unwrap();
-        let pattern = expected.trim();
-        if !stderr.contains(pattern) {
-            failures.push(format!(
-                "{test_name}: stderr does not contain expected pattern\n\
-                 expected pattern: {pattern:?}\n\
-                 actual stderr:\n{stderr}"
-            ));
-        }
-    }
-
+    let failures = failures.into_inner().unwrap();
     if !failures.is_empty() {
         panic!(
             "\n{} compile_fail test(s) failed:\n\n{}",

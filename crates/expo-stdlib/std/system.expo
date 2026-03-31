@@ -1,0 +1,41 @@
+@moduledoc """
+System-level operations for interacting with the OS environment.
+
+Provides access to environment variables, the current working directory,
+and the machine hostname. Deliberately excludes `argv` and `exit` --
+those map onto `main`'s `Process<C, M, R>` protocol.
+"""
+
+struct System
+end
+
+impl System
+  @doc """
+  Returns the value of the environment variable `key`, or `Option.None`
+  if the variable is not set.
+  """
+  fn get_env(key: String) -> Option<String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Sets the environment variable `key` to `value`.
+  """
+  fn set_env(key: String, value: String)
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the current working directory as an absolute path.
+  """
+  fn cwd() -> Result<String, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the system hostname.
+  """
+  fn hostname() -> String
+    panic("intrinsic")
+  end
+end

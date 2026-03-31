@@ -1,0 +1,13 @@
+fn main
+  # DateTime.now returns a positive millis value
+  t = DateTime.now()
+  print(t.timestamp_millis() > 0)
+
+  # Duration.from_secs
+  d = Duration.from_secs(5)
+  print(d.millis())
+
+  # Duration.from_millis
+  d2 = Duration.from_millis(1500)
+  print(d2.millis())
+end

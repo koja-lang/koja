@@ -597,6 +597,18 @@ impl<'ctx> Compiler<'ctx> {
             i64.fn_type(&[ptr.into(), ptr.into()], false),
         );
 
+        // System
+        decl("expo_get_env", ptr.fn_type(&[ptr.into()], false));
+        decl(
+            "expo_set_env",
+            void.fn_type(&[ptr.into(), ptr.into()], false),
+        );
+        decl("expo_cwd", ptr.fn_type(&[], false));
+        decl("expo_hostname", ptr.fn_type(&[], false));
+
+        // Time
+        decl("expo_time_now_millis", i64.fn_type(&[], false));
+
         // Socket I/O
         decl("expo_socket_create", i64.fn_type(&[], false));
         decl(

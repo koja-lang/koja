@@ -1,0 +1,53 @@
+@moduledoc """
+Wall-clock time and duration types.
+
+`DateTime` wraps an epoch-millisecond timestamp. `Duration` represents
+a span of time in milliseconds. Duration is pure Expo with no intrinsics.
+"""
+
+struct DateTime
+  millis: Int
+end
+
+impl DateTime
+  @doc """
+  Returns the current wall-clock time as a `DateTime`.
+  """
+  fn now() -> DateTime
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns the number of milliseconds since the Unix epoch.
+  """
+  fn timestamp_millis(self) -> Int
+    self.millis
+  end
+end
+
+struct Duration
+  millis: Int
+end
+
+impl Duration
+  @doc """
+  Creates a `Duration` from a number of seconds.
+  """
+  fn from_secs(secs: Int) -> Duration
+    Duration{millis: secs * 1000}
+  end
+
+  @doc """
+  Creates a `Duration` from a number of milliseconds.
+  """
+  fn from_millis(ms: Int) -> Duration
+    Duration{millis: ms}
+  end
+
+  @doc """
+  Returns the total number of milliseconds in the duration.
+  """
+  fn millis(self) -> Int
+    self.millis
+  end
+end

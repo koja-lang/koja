@@ -12,6 +12,8 @@ pub const SET: &str = include_str!("../std/set.expo");
 pub const BITWISE: &str = include_str!("../std/bitwise.expo");
 pub const FD: &str = include_str!("../std/fd.expo");
 pub const IO: &str = include_str!("../std/io.expo");
+pub const SYSTEM: &str = include_str!("../std/system.expo");
+pub const TIME: &str = include_str!("../std/time.expo");
 
 /// All stdlib sources in dependency order. Kernel must come first;
 /// subsequent modules may reference types defined by earlier ones.
@@ -27,4 +29,6 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std.bitwise", BITWISE),
     ("std.fd", FD),
     ("std.io", IO),
+    ("std.system", SYSTEM),
+    ("std.time", TIME),
 ];

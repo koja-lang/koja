@@ -14,10 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Debug` protocol (`std.debug`) -- `format(self) -> String` returns a string representation, `inspect(move self) -> Self` prints and returns the value for tap-style chaining. Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation (`"#{value}"`) now dispatch through `Debug.format()` instead of hardcoded printf specifiers.
 - `std.io` module -- `IO.puts`, `IO.warn`, `IO.write`, and `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive byte-by-byte `STDIN.read(1)`.
 - `FileMode` enum (`Read`, `Write`, `Append`) and updated `File.open(path, mode)` for explicit open modes. New path-based file operations: `File.write(path, content)`, `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)`. Append mode support via `OpenOptions`. Handle-level writes via `file.fd.write(data)`.
+- `System` type (`std.system`) -- `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Environment variable access, working directory, and hostname via runtime intrinsics.
+- `DateTime` and `Duration` types (`std.time`) -- `DateTime.now()` for wall-clock time, `DateTime.timestamp_millis()` for epoch millis. `Duration.from_secs()`, `Duration.from_millis()`, and `Duration.millis()` for time spans. `Duration` is pure Expo; only `DateTime.now()` requires a runtime shim.
 
 ### Fixed
 
 - Generic enum variants where not all type parameters are inferrable from the payload (e.g., `Result.Ok(value)` in a function returning `Result<T, String>`) no longer fail with an LLVM type mismatch.
+- Static method calls as bare statements (e.g., `System.set_env(key, value)`) no longer emit a spurious "unknown variable" error. The discarded-move-self warning now skips static calls.
 
 ## [0.8.0] - 2026-03-30
 

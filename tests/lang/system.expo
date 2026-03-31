@@ -1,0 +1,23 @@
+fn main
+  # set_env + get_env roundtrip
+  System.set_env("EXPO_TEST_VAR", "hello")
+  match System.get_env("EXPO_TEST_VAR")
+    Option.Some(val) -> print(val)
+    Option.None -> print("missing")
+  end
+
+  # get_env for unset variable
+  match System.get_env("EXPO_DEFINITELY_UNSET_VAR_999")
+    Option.Some(_) -> print("unexpected")
+    Option.None -> print("none")
+  end
+
+  # cwd returns a non-empty string
+  match System.cwd()
+    Result.Ok(dir) -> print(dir.length() > 0)
+    Result.Err(msg) -> print("cwd failed: " <> msg)
+  end
+
+  # hostname returns a non-empty string
+  print(System.hostname().length() > 0)
+end

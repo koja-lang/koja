@@ -422,7 +422,8 @@ pub struct BuildArgs {
 /// Links an object file with the embedded runtime library to produce an executable.
 fn link(obj_path: &str, output: &str, quiet: bool) {
     let runtime_lib_bytes: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
-    let tmp_dir = env::temp_dir();
+    let tmp_dir = env::temp_dir().join(format!("expo-link-{}", process::id()));
+    fs::create_dir_all(&tmp_dir).expect("failed to create temp dir for linking");
     let tmp_lib = tmp_dir.join("libexpo_runtime.a");
     fs::write(&tmp_lib, runtime_lib_bytes).expect("failed to write embedded runtime library");
     let tmp_dir_str = tmp_dir.to_string_lossy();
@@ -431,7 +432,7 @@ fn link(obj_path: &str, output: &str, quiet: bool) {
         .args([obj_path, "-lexpo_runtime", "-L", &tmp_dir_str, "-o", output])
         .status();
 
-    let _ = fs::remove_file(&tmp_lib);
+    let _ = fs::remove_dir_all(&tmp_dir);
 
     match status {
         Ok(s) if s.success() => {

@@ -171,8 +171,8 @@ Stdlib contains primitives that are as fundamental as integers -- things the com
 - `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space -- reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases, large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
 - `std.io` -- **DONE** `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
 - `std.debug` -- **DONE** `Debug` protocol with `format(self) -> String` and `inspect(move self) -> Self` (tap-style). Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation dispatch through `Debug.format()`.
-- `System` type -- `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Genuinely global OS state operations not tied to any process's C/M/R types. Thin wrappers over C stdlib calls via runtime intrinsics.
-- `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
+- `std.system` -- **DONE** `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Genuinely global OS state operations not tied to any process's C/M/R types. Thin wrappers over C stdlib calls via runtime intrinsics.
+- `std.time` -- **DONE** `DateTime.now() -> DateTime`, `DateTime.timestamp_millis(self) -> Int` for wall-clock time. `Duration.from_secs(Int) -> Duration`, `Duration.from_millis(Int) -> Duration`, `Duration.millis(self) -> Int` for time spans. `Duration` is pure Expo (no intrinsics). Only `DateTime.now()` requires a runtime shim.
 
 The litmus test: does the compiler or language runtime need it to function, or is it a stable capability every program needs with an API that won't evolve? If yes, stdlib. If the API surface will evolve (protocols, connection management, serialization formats), it's a first-party package.
 
@@ -582,13 +582,13 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 ### Remaining
 
-| Phase | Milestone                                                                                                       |
-| ----- | --------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, `System` type, time, package manager, first-party packages |
-| 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`                              |
-| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                          |
-| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                      |
-| 6B    | auth-manager-expo runs for real, second project                                                                 |
+| Phase | Milestone                                                                                                                               |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, first-party packages |
+| 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`                                                      |
+| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                  |
+| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                              |
+| 6B    | auth-manager-expo runs for real, second project                                                                                         |
 
 ---
 

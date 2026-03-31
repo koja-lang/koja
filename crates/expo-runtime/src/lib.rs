@@ -666,6 +666,89 @@ pub unsafe extern "C" fn expo_file_rename(src_ptr: *const u8, dst_ptr: *const u8
 }
 
 // ---------------------------------------------------------------------------
+// System operations
+// ---------------------------------------------------------------------------
+
+/// Returns the value of environment variable `key` as a leaked C string,
+/// or null if the variable is not set.
+///
+/// # Safety
+/// `key_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_get_env(key_ptr: *const u8) -> *const u8 {
+    let key = unsafe { std::ffi::CStr::from_ptr(key_ptr as *const i8) };
+    let key = match key.to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null(),
+    };
+    match std::env::var(key) {
+        Ok(val) => {
+            let c = std::ffi::CString::new(val).unwrap();
+            c.into_raw() as *const u8
+        }
+        Err(_) => std::ptr::null(),
+    }
+}
+
+/// Sets the environment variable `key` to `value`.
+///
+/// # Safety
+/// Both pointers must point to valid NUL-terminated UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_set_env(key_ptr: *const u8, val_ptr: *const u8) {
+    let key = unsafe { std::ffi::CStr::from_ptr(key_ptr as *const i8) };
+    let val = unsafe { std::ffi::CStr::from_ptr(val_ptr as *const i8) };
+    if let (Ok(k), Ok(v)) = (key.to_str(), val.to_str()) {
+        unsafe { std::env::set_var(k, v) };
+    }
+}
+
+/// Returns the current working directory as a leaked C string, or null on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_cwd() -> *const u8 {
+    match std::env::current_dir() {
+        Ok(path) => {
+            let s = path.to_string_lossy().into_owned();
+            let c = std::ffi::CString::new(s).unwrap();
+            c.into_raw() as *const u8
+        }
+        Err(e) => {
+            set_last_error(e);
+            std::ptr::null()
+        }
+    }
+}
+
+/// Returns the system hostname as a leaked C string.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_hostname() -> *const u8 {
+    let mut buf = [0u8; 256];
+    let ret = unsafe { libc_gethostname(buf.as_mut_ptr() as *mut i8, buf.len()) };
+    if ret != 0 {
+        let c = std::ffi::CString::new("unknown").unwrap();
+        return c.into_raw() as *const u8;
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(0);
+    let s = String::from_utf8_lossy(&buf[..len]).into_owned();
+    let c = std::ffi::CString::new(s).unwrap();
+    c.into_raw() as *const u8
+}
+
+// ---------------------------------------------------------------------------
+// Time operations
+// ---------------------------------------------------------------------------
+
+/// Returns the current wall-clock time as milliseconds since the Unix epoch.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_time_now_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
 // Socket operations
 // ---------------------------------------------------------------------------
 
@@ -770,6 +853,8 @@ unsafe extern "C" {
     #[link_name = "setsockopt"]
     fn libc_setsockopt(fd: i32, level: i32, optname: i32, optval: *const u8, optlen: u32) -> i32;
     fn fflush(stream: *mut u8) -> i32;
+    #[link_name = "gethostname"]
+    fn libc_gethostname(name: *mut i8, len: usize) -> i32;
 }
 
 // ---------------------------------------------------------------------------

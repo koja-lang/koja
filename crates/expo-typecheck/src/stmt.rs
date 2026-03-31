@@ -203,26 +203,32 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
                 ..
             } = expr
             {
-                let recv_ty = infer_expr(receiver, ctx, ce);
-                let recv_ty = match &recv_ty {
-                    Type::Indirect(inner) => inner.as_ref().clone(),
-                    other => other.clone(),
-                };
-                let (base_name, _) = resolve_receiver_base_name(&recv_ty, ctx);
-                if let Some(base) = base_name
-                    && let Some(ti) = ctx.types.get(&base)
-                    && let Some(sig) = ti.functions.get(method.as_str())
-                    && sig.kind == FunctionKind::Instance(PassMode::Move)
-                    && sig.return_type != Type::Unit
-                {
-                    ctx.warning_with_hint(
-                        format!(
-                            "return value of `{method}` discarded; \
-                             method consumes its receiver via `move self`"
-                        ),
-                        format!("assign the result: `x = x.{method}(...)`"),
-                        *span,
-                    );
+                let is_static = matches!(
+                    receiver.as_ref(),
+                    Expr::Ident { name, .. } if ctx.types.contains_key(name.as_str())
+                );
+                if !is_static {
+                    let recv_ty = infer_expr(receiver, ctx, ce);
+                    let recv_ty = match &recv_ty {
+                        Type::Indirect(inner) => inner.as_ref().clone(),
+                        other => other.clone(),
+                    };
+                    let (base_name, _) = resolve_receiver_base_name(&recv_ty, ctx);
+                    if let Some(base) = base_name
+                        && let Some(ti) = ctx.types.get(&base)
+                        && let Some(sig) = ti.functions.get(method.as_str())
+                        && sig.kind == FunctionKind::Instance(PassMode::Move)
+                        && sig.return_type != Type::Unit
+                    {
+                        ctx.warning_with_hint(
+                            format!(
+                                "return value of `{method}` discarded; \
+                                 method consumes its receiver via `move self`"
+                            ),
+                            format!("assign the result: `x = x.{method}(...)`"),
+                            *span,
+                        );
+                    }
                 }
             }
         }
