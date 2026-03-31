@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TCP socket support -- `Socket` type in `std.fd` with `create`, `bind`, `listen`, `accept`, `set_reuse_addr`, and `close`. Wraps POSIX socket syscalls via runtime shims. Returns `Result<Socket, String>` / `Result<Fd, String>` for error handling. Sufficient for basic TCP servers (demonstrated with an HTTP/JSON server in the `json` package).
 - `Debug` protocol (`std.debug`) -- `format(self) -> String` returns a string representation, `inspect(move self) -> Self` prints and returns the value for tap-style chaining. Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation (`"#{value}"`) now dispatch through `Debug.format()` instead of hardcoded printf specifiers.
 - `std.io` module -- `IO.puts`, `IO.warn`, `IO.write`, and `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive byte-by-byte `STDIN.read(1)`.
+- `FileMode` enum (`Read`, `Write`, `Append`) and updated `File.open(path, mode)` for explicit open modes. New path-based file operations: `File.write(path, content)`, `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)`. Append mode support via `OpenOptions`. Handle-level writes via `file.fd.write(data)`.
 
 ### Fixed
 
@@ -23,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Project system -- `project.expo` config file defines `name`, `version`, source dirs, and entry module. `expo build`, `expo run`, and `expo check` detect it automatically. The project name is the module namespace (`import my_app.server` resolves `src/server.expo`).
-- File I/O -- `File.read(path)` reads an entire file, `File.open(path)` returns a handle for streaming access, `File.close(move self)` releases it. Lower-level `Fd` type for raw descriptor operations. All return `Result<T, String>`.
+- File I/O -- `File.read(path)` reads an entire file, `File.open(path, mode)` returns a handle for streaming access, `File.close(move self)` releases it. Lower-level `Fd` type for raw descriptor operations. All return `Result<T, String>`.
 - String standard library -- `alpha?`, `at`, `codepoints`, `contains?`, `downcase`, `empty?`, `ends_with?`, `graphemes`, `join`, `replace`, `reverse`, `split`, `starts_with?`, `to_float`, `to_int`, `trim`, `trim_end`, `trim_start`, `upcase`, `whitespace?`.
 - Binary and bitstring literals -- `Binary` and `Bits` types with `<<>>` syntax for construction and pattern matching. Segment modifiers for bit-width, endianness, signedness, and type annotations. String segments in binary literals (`<<"HTTP/1.1 ", rest: Binary>>`). `<>` concatenation for `Binary`, `Bits`, and `String`. `Bitwise` protocol (`band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr`) on all integer types.
 - String/Binary/Bits conversions -- `to_binary()`, `to_bits()`, `to_string()` with validation where needed.

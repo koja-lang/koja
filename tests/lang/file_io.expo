@@ -13,8 +13,8 @@ fn main
     Result.Err(_) -> print("correctly got error")
   end
 
-  # File.open + Fd.read
-  match File.open("/dev/null")
+  # File.open with FileMode.Read
+  match File.open("/dev/null", FileMode.Read)
     Result.Ok(_) ->
       print("opened")
     Result.Err(msg) ->
@@ -22,8 +22,74 @@ fn main
   end
 
   # File.open - error
-  match File.open("/tmp/nonexistent_expo_test_file_12345")
+  match File.open("/tmp/nonexistent_expo_test_file_12345", FileMode.Read)
     Result.Ok(_) -> print("unexpected success")
     Result.Err(_) -> print("correctly got error for open")
+  end
+
+  # File.write + File.read roundtrip
+  match File.write("/tmp/expo_test_write.txt", "hello from expo")
+    Result.Ok(_) ->
+      match File.read("/tmp/expo_test_write.txt")
+        Result.Ok(contents) -> print(contents)
+        Result.Err(msg) -> print("read back failed: " <> msg)
+      end
+    Result.Err(msg) -> print("write failed: " <> msg)
+  end
+
+  # File.exists? - true
+  print(File.exists?("/dev/null"))
+
+  # File.exists? - false
+  print(File.exists?("/tmp/nonexistent_expo_test_file_99999"))
+
+  # File.delete
+  match File.delete("/tmp/expo_test_write.txt")
+    Result.Ok(_) ->
+      print(File.exists?("/tmp/expo_test_write.txt"))
+    Result.Err(msg) -> print("delete failed: " <> msg)
+  end
+
+  # File.rename
+  match File.write("/tmp/expo_test_rename_src.txt", "rename me")
+    Result.Ok(_) ->
+      match File.rename("/tmp/expo_test_rename_src.txt", "/tmp/expo_test_rename_dst.txt")
+        Result.Ok(_) ->
+          print(File.exists?("/tmp/expo_test_rename_src.txt"))
+          match File.read("/tmp/expo_test_rename_dst.txt")
+            Result.Ok(contents) -> print(contents)
+            Result.Err(msg) -> print("read renamed failed: " <> msg)
+          end
+          File.delete("/tmp/expo_test_rename_dst.txt")
+        Result.Err(msg) -> print("rename failed: " <> msg)
+      end
+    Result.Err(msg) -> print("write for rename failed: " <> msg)
+  end
+
+  # File.open with FileMode.Write + handle-level write via fd
+  match File.open("/tmp/expo_test_handle_write.txt", FileMode.Write)
+    Result.Ok(file) ->
+      file.fd.write("handle write")
+      match File.read("/tmp/expo_test_handle_write.txt")
+        Result.Ok(contents) -> print(contents)
+        Result.Err(msg) -> print("read handle write failed: " <> msg)
+      end
+    Result.Err(msg) -> print("open for write failed: " <> msg)
+  end
+
+  # File.open with FileMode.Append
+  match File.open("/tmp/expo_test_handle_write.txt", FileMode.Append)
+    Result.Ok(file) ->
+      file.fd.write(" appended")
+      match File.read("/tmp/expo_test_handle_write.txt")
+        Result.Ok(contents) -> print(contents)
+        Result.Err(msg) -> print("read appended failed: " <> msg)
+      end
+    Result.Err(msg) -> print("open for append failed: " <> msg)
+  end
+
+  # Cleanup
+  match File.delete("/tmp/expo_test_handle_write.txt")
+    _ -> ()
   end
 end

@@ -496,7 +496,7 @@ pub extern "C" fn expo_fd_close(fd: i64) -> i64 {
     0
 }
 
-/// Opens a file. `mode`: 0 = read, 1 = write (create/truncate).
+/// Opens a file. `mode`: 0 = read, 1 = write (create/truncate), 2 = append.
 /// Returns fd on success, -1 on error.
 ///
 /// # Safety
@@ -520,6 +520,7 @@ pub unsafe extern "C" fn expo_file_open(path_ptr: *const u8, mode: i64) -> i64 {
             .create(true)
             .truncate(true)
             .open(path),
+        2 => OpenOptions::new().append(true).create(true).open(path),
         _ => {
             set_last_error("invalid file open mode");
             return -1;
@@ -559,6 +560,107 @@ pub unsafe extern "C" fn expo_file_read_all(path_ptr: *const u8) -> *const u8 {
         Err(e) => {
             set_last_error(e);
             std::ptr::null()
+        }
+    }
+}
+
+/// Writes `content` to the file at `path`, creating or truncating it.
+/// Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// Both pointers must point to valid NUL-terminated UTF-8 strings.
+/// `content_ptr` must be a length-prefixed Expo string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_file_write_all(path_ptr: *const u8, content_ptr: *const u8) -> i64 {
+    let path = unsafe { std::ffi::CStr::from_ptr(path_ptr as *const i8) };
+    let path = match path.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(e);
+            return -1;
+        }
+    };
+    let data = unsafe { expo_string_to_slice(content_ptr) };
+    match std::fs::write(path, data) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    }
+}
+
+/// Returns 1 if the file at `path` exists, 0 otherwise.
+///
+/// # Safety
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_file_exists(path_ptr: *const u8) -> i64 {
+    let path = unsafe { std::ffi::CStr::from_ptr(path_ptr as *const i8) };
+    let path = match path.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(e);
+            return 0;
+        }
+    };
+    if std::path::Path::new(path).exists() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Deletes the file at `path`. Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_file_delete(path_ptr: *const u8) -> i64 {
+    let path = unsafe { std::ffi::CStr::from_ptr(path_ptr as *const i8) };
+    let path = match path.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(e);
+            return -1;
+        }
+    };
+    match std::fs::remove_file(path) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    }
+}
+
+/// Renames `src` to `dst`. Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// Both pointers must point to valid NUL-terminated UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_file_rename(src_ptr: *const u8, dst_ptr: *const u8) -> i64 {
+    let src = unsafe { std::ffi::CStr::from_ptr(src_ptr as *const i8) };
+    let dst = unsafe { std::ffi::CStr::from_ptr(dst_ptr as *const i8) };
+    let src = match src.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(e);
+            return -1;
+        }
+    };
+    let dst = match dst.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(e);
+            return -1;
+        }
+    };
+    match std::fs::rename(src, dst) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e);
+            -1
         }
     }
 }

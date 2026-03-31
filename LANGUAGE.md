@@ -706,6 +706,35 @@ a = 42
 b = a     # a is still live
 ```
 
+### Field Access
+
+Field access is always a borrow -- it never moves the struct or the field. You can read fields freely without consuming the owner:
+
+```expo
+struct Wrapper
+  name: String
+  count: Int
+end
+
+w = Wrapper{name: "hello", count: 1}
+print(w.name)    # borrows name
+print(w.count)   # borrows count
+print(w.name)    # w is still live -- no move occurred
+```
+
+This extends to chained access and method calls. Calling a borrow-`self` method through a field borrows the field through the struct:
+
+```expo
+w.name.length()   # borrows name, calls length -- w is still live
+```
+
+To mutate a field, use reassignment. The right-hand side borrows the field, transforms it, and the result is written back:
+
+```expo
+w.name = w.name.upcase()
+print(w.name)              # "HELLO"
+```
+
 ---
 
 ## Protocols
@@ -1217,8 +1246,12 @@ end
 
 Functions:
 
-- `File.open(path: String) -> Result<File, String>` -- opens a file for reading.
+- `File.open(path: String, mode: FileMode) -> Result<File, String>` -- opens a file with the given mode (`FileMode.Read`, `FileMode.Write`, `FileMode.Append`).
 - `File.read(path: String) -> Result<String, String>` -- reads an entire file as a string (opens, reads, closes).
+- `File.write(path: String, content: String) -> Result<String, String>` -- writes content to a file (creates or truncates).
+- `File.exists?(path: String) -> Bool` -- returns true if the file exists.
+- `File.delete(path: String) -> Result<String, String>` -- deletes a file.
+- `File.rename(source: String, destination: String) -> Result<String, String>` -- renames (moves) a file.
 - `close(move self) -> Result<String, String>` -- closes the file handle.
 
 ```expo

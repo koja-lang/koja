@@ -31,15 +31,26 @@ impl Fd
   end
 end
 
+enum FileMode
+  Read
+  Write
+  Append
+end
+
 struct File
   fd: Fd
 end
 
 impl File
   @doc """
-  Opens a file for reading. Returns a File handle or an error message.
+  Opens a file with the given mode. Returns a File handle or an error message.
+
+  Modes:
+  - FileMode.Read    — open for reading (file must exist)
+  - FileMode.Write   — open for writing (create/truncate)
+  - FileMode.Append  — open for appending (create if needed)
   """
-  fn open(path: String) -> Result<File, String>
+  fn open(path: String, mode: FileMode) -> Result<File, String>
     panic("intrinsic")
   end
 
@@ -49,6 +60,37 @@ impl File
   Returns the file contents or an error message.
   """
   fn read(path: String) -> Result<String, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Writes content to the file at the given path, creating or truncating it.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn write(path: String, content: String) -> Result<String, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns true if a file exists at the given path.
+  """
+  fn exists?(path: String) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Deletes the file at the given path.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn delete(path: String) -> Result<String, String>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Renames (moves) a file from source to destination.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn rename(source: String, destination: String) -> Result<String, String>
     panic("intrinsic")
   end
 

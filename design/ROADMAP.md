@@ -158,7 +158,7 @@ Two independent tracks. Track A makes the language useful for real programs. Tra
 
 ### Track A: Stdlib + Ecosystem
 
-#### Test runner -- done
+#### Test runner -- **Done**
 
 `expo test` discovers `@test`-annotated functions across `src/` and `test/` directories, generates a synthetic test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure -- the test name is printed before each call so you always know which one failed. `project.expo` gains an optional `test` field (default `["test"]`). Validated with 17 tests in the `json` package (encoder and decoder coverage).
 
@@ -167,10 +167,10 @@ Two independent tracks. Track A makes the language useful for real programs. Tra
 Stdlib contains primitives that are as fundamental as integers -- things the compiler or language runtime needs to function, or that virtually every program needs and whose API is stable for decades.
 
 - `std.fd` -- shipped in Phase 3 A3a (basic `read`, `write`, `close`). Extended with `Socket` type for TCP networking (`create`, `bind`, `listen`, `accept`, `set_reuse_addr`, `close`) via POSIX socket syscall shims in the runtime.
-- `std.file` -- shipped in Phase 3 A3a (basic `open`, `read`, `close`). Add `seek`, `write` to file, and other operations as needed.
+- `std.file` -- **DONE** `FileMode` enum (`Read`, `Write`, `Append`). `File.open(path, mode)` opens with explicit mode. `File.write(path, content)` for one-shot writes. `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)` for path-based operations. Handle-level writes via `file.fd.write(data)`. `seek` deferred until embedded database work.
 - `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space -- reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases, large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
-- `std.io` -- shipped. `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
-- `std.debug` -- shipped. `Debug` protocol with `format(self) -> String` and `inspect(move self) -> Self` (tap-style). Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation dispatch through `Debug.format()`.
+- `std.io` -- **DONE** `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
+- `std.debug` -- **DONE** `Debug` protocol with `format(self) -> String` and `inspect(move self) -> Self` (tap-style). Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation dispatch through `Debug.format()`.
 - `System` type -- `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Genuinely global OS state operations not tied to any process's C/M/R types. Thin wrappers over C stdlib calls via runtime intrinsics.
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
 
@@ -576,7 +576,7 @@ Active design discussions about the type system, code organization, and function
 | Tooling   | Formatter, `expo run`, VSCode extension, LSP, documentation generator                                                 |
 | Core      | Generics, ownership, protocols, closures, collections, processes                                                      |
 | Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
-| Phase 4A  | Test runner, TCP socket support, `Debug` protocol, `std.io`                                                           |
+| Phase 4A  | Test runner, TCP socket support, `Debug` protocol, `std.io`, `std.file` (FileMode, write, exists?, delete, rename)    |
 
 For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md) and [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md).
 
@@ -584,7 +584,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase | Milestone                                                                                                       |
 | ----- | --------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, `System` type, time, package manager, first-party packages |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, `System` type, time, package manager, first-party packages |
 | 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`                              |
 | 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                          |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                      |
