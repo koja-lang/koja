@@ -232,25 +232,25 @@ fn compile_generic_enum_construction<'ctx>(
         })
         .collect();
 
-    if subst.is_empty()
-        && let Some(ref hint) = c.fn_state.return_type_hint
-    {
-        match hint {
+    let has_unknown = type_args.iter().any(|t| *t == Type::Unknown);
+    if has_unknown && let Some(ref hint) = c.fn_state.return_type_hint {
+        let hint_args = match hint {
             Type::GenericInstance {
                 base,
-                type_args: hint_args,
+                type_args: ha,
                 ..
-            } if base == enum_name => {
-                type_args = hint_args.clone();
-            }
-            Type::Enum(n) | Type::Struct(n) => {
-                if let Some((base, hint_args)) = crate::generics::try_parse_mangled_name(n, c)
-                    && base == enum_name
-                {
-                    type_args = hint_args;
+            } if base == enum_name => Some(ha.clone()),
+            Type::Enum(n) | Type::Struct(n) => crate::generics::try_parse_mangled_name(n, c)
+                .filter(|(base, _)| base == enum_name)
+                .map(|(_, ha)| ha),
+            _ => None,
+        };
+        if let Some(ha) = hint_args {
+            for (i, ta) in type_args.iter_mut().enumerate() {
+                if *ta == Type::Unknown && i < ha.len() {
+                    *ta = ha[i].clone();
                 }
             }
-            _ => {}
         }
     }
 
