@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem;
 use std::path::Path;
 
+use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
+use crate::util::parse_int_literal;
 
 /// Result of attempting to emit an intrinsic method for a built-in type.
 /// `NotIntrinsic` signals the caller to fall through to body compilation.
@@ -663,7 +665,7 @@ impl<'ctx> Compiler<'ctx> {
                         value: Literal::Int(s),
                         ..
                     } => {
-                        let v = crate::util::parse_int_literal(s)?;
+                        let v = parse_int_literal(s)?;
                         self.context.i64_type().const_int(v as u64, true).into()
                     }
                     Expr::Literal {
@@ -757,7 +759,7 @@ impl<'ctx> Compiler<'ctx> {
                     value: Literal::Int(s),
                     ..
                 } => {
-                    let v = crate::util::parse_int_literal(s).ok()?;
+                    let v = parse_int_literal(s).ok()?;
                     self.context.i64_type().const_int(v as u64, true).into()
                 }
                 Expr::Literal {
@@ -1089,6 +1091,16 @@ fn run_codegen<'ctx>(
             }]
         })?;
     }
+
+    synthesize_all_formats(&mut compiler).map_err(|e| {
+        let span = modules.first().map(|m| m.span).unwrap_or_default();
+        vec![Diagnostic {
+            severity: Severity::Error,
+            message: e,
+            hint: None,
+            span,
+        }]
+    })?;
 
     for module in modules {
         compiler.define_functions(module).map_err(|e| {

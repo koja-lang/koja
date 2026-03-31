@@ -1,0 +1,88 @@
+@moduledoc """
+The Debug protocol provides string representations of values for
+developer-facing output. All types get a compiler-derived implementation.
+
+  - `format(self) -> String` returns the string representation
+  - `inspect(move self) -> Self` prints and returns self for chaining
+"""
+
+protocol Debug
+  fn format(self) -> String
+
+  fn inspect(move self) -> Self
+    print(self.format())
+    self
+  end
+end
+
+impl Debug for Int
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for Int8
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for Int16
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for Int32
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for UInt8
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for UInt16
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for UInt32
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for UInt64
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for Float
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for Float32
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for Bool
+  fn format(self) -> String
+    panic("intrinsic")
+  end
+end
+
+impl Debug for String
+  fn format(self) -> String
+    self
+  end
+end

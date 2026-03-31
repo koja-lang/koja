@@ -9,6 +9,7 @@ use inkwell::types::BasicType;
 use inkwell::values::{FunctionValue, StructValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
+use crate::debug::call_format;
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
@@ -81,11 +82,10 @@ pub fn compile_call<'ctx>(
     }
 
     match name {
-        "print" => compile_print(c, args, function),
-        "panic" => compile_panic(c, args, function),
-        "print_Int32" | "print_Int" | "print_Bool" | "print_Float" | "print_String" => {
-            compile_print_builtin(c, name, args, function)
+        "print" | "print_Int32" | "print_Int" | "print_Bool" | "print_Float" | "print_String" => {
+            compile_print(c, args, function)
         }
+        "panic" => compile_panic(c, args, function),
         _ => {
             if let Some(callee) = c.functions.get(name).copied() {
                 let sig = c.type_ctx.functions.get(name);
@@ -240,38 +240,21 @@ fn compile_print<'ctx>(
         return Err("print expects exactly 1 argument".to_string());
     }
 
-    let val = compile_expr(c, &args[0].value, function)?
-        .ok_or("argument to print produced no value")?
-        .value;
+    let tv =
+        compile_expr(c, &args[0].value, function)?.ok_or("argument to print produced no value")?;
+
+    let str_ptr = call_format(c, tv.value, &tv.expo_type)?;
 
     let printf = *c.functions.get("printf").ok_or("printf not declared")?;
-
-    let is_bool = val.is_int_value() && val.into_int_value().get_type().get_bit_width() == 1;
-
-    if is_bool {
-        let str_ptr = crate::util::bool_to_string_ptr(c, val.into_int_value());
-        let fmt = c
-            .builder
-            .build_global_string_ptr("%s\n", "fmt_print_bool")
-            .unwrap();
-        c.call_void(
-            printf,
-            &[fmt.as_pointer_value().into(), str_ptr.into()],
-            "printf_call",
-        );
-    } else {
-        let spec = crate::util::printf_format_spec(&val)?;
-        let fmt_str = &format!("{spec}\n");
-        let fmt = c
-            .builder
-            .build_global_string_ptr(fmt_str, "fmt_print")
-            .unwrap();
-        c.call_void(
-            printf,
-            &[fmt.as_pointer_value().into(), val.into()],
-            "printf_call",
-        );
-    }
+    let fmt = c
+        .builder
+        .build_global_string_ptr("%s\n", "fmt_print")
+        .unwrap();
+    c.call_void(
+        printf,
+        &[fmt.as_pointer_value().into(), str_ptr.into()],
+        "printf_call",
+    );
 
     Ok(None)
 }
@@ -290,58 +273,6 @@ fn compile_panic<'ctx>(
         .value;
 
     c.emit_panic("panic: %s\n", &[val]);
-
-    Ok(None)
-}
-
-fn compile_print_builtin<'ctx>(
-    c: &mut Compiler<'ctx>,
-    name: &str,
-    args: &[Arg],
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    if args.len() != 1 {
-        return Err(format!("{name} expects exactly 1 argument"));
-    }
-
-    let val = compile_expr(c, &args[0].value, function)?
-        .ok_or_else(|| format!("argument to {name} produced no value"))?
-        .value;
-
-    let printf = *c.functions.get("printf").ok_or("printf not declared")?;
-
-    if name == "print_Bool" {
-        let str_ptr = crate::util::bool_to_string_ptr(c, val.into_int_value());
-        let fmt = c
-            .builder
-            .build_global_string_ptr("%s\n", "fmt_print_bool")
-            .unwrap();
-        c.call_void(
-            printf,
-            &[fmt.as_pointer_value().into(), str_ptr.into()],
-            "printf_call",
-        );
-        return Ok(None);
-    }
-
-    let fmt_str = match name {
-        "print_Int32" => "%d\n",
-        "print_Int" => "%lld\n",
-        "print_Float" => "%f\n",
-        "print_String" => "%s\n",
-        _ => return Err(format!("unknown print builtin: {name}")),
-    };
-
-    let fmt = c
-        .builder
-        .build_global_string_ptr(fmt_str, &format!("fmt_{name}"))
-        .unwrap();
-
-    c.call_void(
-        printf,
-        &[fmt.as_pointer_value().into(), val.into()],
-        "printf_call",
-    );
 
     Ok(None)
 }

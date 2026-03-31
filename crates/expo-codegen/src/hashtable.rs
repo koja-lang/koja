@@ -9,6 +9,8 @@ use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
+use crate::debug::snprintf_to_expo_string;
+use crate::util::bool_to_string_ptr;
 
 const PRIMITIVE_TYPES: &[&str] = &[
     "Bool", "Int", "Int8", "Int16", "Int32", "String", "UInt8", "UInt16", "UInt32", "UInt64",
@@ -32,6 +34,11 @@ const STRING_INTRINSICS: &[&str] = &[
     "String_get",
     "String_byte_length",
     "String_slice",
+];
+
+const DEBUG_TYPES: &[&str] = &[
+    "Bool", "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64", "Float",
+    "Float32",
 ];
 
 const PARSE_INTRINSICS: &[&str] = &["Int_parse", "Float_parse"];
@@ -59,6 +66,11 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
             if mangled == format!("{prim}_{op}") {
                 return true;
             }
+        }
+    }
+    for prim in DEBUG_TYPES {
+        if mangled == format!("{prim}_format") {
+            return true;
         }
     }
     if CONVERSION_INTRINSICS.contains(&mangled)
@@ -101,6 +113,10 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
 
     if SOCKET_INTRINSICS.contains(&mangled) {
         return emit_socket_intrinsic(c, fn_val, mangled);
+    }
+
+    if let Some(type_name) = mangled.strip_suffix("_format") {
+        return emit_debug_format_intrinsic(c, fn_val, type_name);
     }
 
     if let Some(type_name) = mangled.strip_suffix("_hash") {
@@ -1532,6 +1548,68 @@ fn emit_socket_intrinsic<'ctx>(
         c.builder.position_at_end(bb);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Debug format intrinsics
+// ---------------------------------------------------------------------------
+
+fn emit_debug_format_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    type_name: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    let self_val = fn_val.get_nth_param(0).unwrap();
+
+    match type_name {
+        "Bool" => {
+            let str_ptr = bool_to_string_ptr(c, self_val.into_int_value());
+            c.builder.build_return(Some(&str_ptr)).unwrap();
+        }
+        "Int" | "Int8" | "Int16" | "Int32" | "UInt8" | "UInt16" | "UInt32" | "UInt64" => {
+            let fmt_spec = match type_name {
+                "Int" | "UInt64" => "%lld",
+                "Int32" | "UInt32" => "%d",
+                "Int16" | "UInt16" => "%hd",
+                "Int8" | "UInt8" => "%hhd",
+                _ => "%lld",
+            };
+            let result = emit_snprintf_to_string(c, fmt_spec, self_val);
+            c.builder.build_return(Some(&result)).unwrap();
+        }
+        "Float" | "Float32" => {
+            let f64_ty = c.context.f64_type();
+            let val = if type_name == "Float32" {
+                let ext = c
+                    .builder
+                    .build_float_ext(self_val.into_float_value(), f64_ty, "f64_ext")
+                    .unwrap();
+                ext.into()
+            } else {
+                self_val
+            };
+            let result = emit_snprintf_to_string(c, "%f", val);
+            c.builder.build_return(Some(&result)).unwrap();
+        }
+        _ => return Err(format!("unknown debug format intrinsic type: {type_name}")),
+    }
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
+}
+
+fn emit_snprintf_to_string<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fmt_spec: &str,
+    val: inkwell::values::BasicValueEnum<'ctx>,
+) -> inkwell::values::BasicValueEnum<'ctx> {
+    snprintf_to_expo_string(c, fmt_spec, &[val.into()], "dbg").into()
 }
 
 /// SplitMix64 finalizer: produces well-distributed hash from any i64 input.

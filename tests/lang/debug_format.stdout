@@ -1,0 +1,16 @@
+42
+true
+false
+hello
+3.140000
+Red
+Green
+Blue
+Point
+Circle(5)
+Square(10)
+User{name: alice, age: 30}
+user: User{name: alice, age: 30}
+42
+true
+hello

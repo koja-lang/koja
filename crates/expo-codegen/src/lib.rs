@@ -2,6 +2,7 @@ mod binary;
 mod calls;
 mod compiler;
 mod control;
+mod debug;
 mod drop;
 mod enums;
 mod expr;

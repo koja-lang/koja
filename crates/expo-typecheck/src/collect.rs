@@ -1094,6 +1094,49 @@ fn merge_named(
     );
 }
 
+/// Auto-derives `Debug` protocol methods (`format`, `inspect`) on all struct
+/// and enum types that don't already have them. Must be called after merging
+/// the stdlib context so the `Debug` protocol definition is available.
+pub fn auto_derive_debug(ctx: &mut TypeContext) {
+    let type_names: Vec<String> = ctx
+        .types
+        .iter()
+        .filter(|(_, ti)| ti.is_struct() || ti.is_enum())
+        .map(|(n, _)| n.clone())
+        .collect();
+
+    let format_sig = FunctionSig {
+        visibility: Visibility::Public,
+        params: vec![],
+        return_type: Type::Primitive(Primitive::String),
+        kind: FunctionKind::Instance(PassMode::Borrow),
+        span: Span::zero(),
+        type_params: Vec::new(),
+    };
+
+    let inspect_sig = FunctionSig {
+        visibility: Visibility::Public,
+        params: vec![],
+        return_type: Type::Unknown,
+        kind: FunctionKind::Instance(PassMode::Move),
+        span: Span::zero(),
+        type_params: Vec::new(),
+    };
+
+    for name in &type_names {
+        if let Some(ti) = ctx.types.get_mut(name) {
+            if !ti.functions.contains_key("format") {
+                ti.functions
+                    .insert("format".to_string(), format_sig.clone());
+            }
+            if !ti.functions.contains_key("inspect") {
+                ti.functions
+                    .insert("inspect".to_string(), inspect_sig.clone());
+            }
+        }
+    }
+}
+
 /// Converts a `ProtocolMethod` with a default body into a `Function` AST node
 /// suitable for compilation as `{target_type}_{method_name}`.
 /// `type_param_map` maps protocol type params to concrete type names (e.g., `T` -> `String`).

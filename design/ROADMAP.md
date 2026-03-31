@@ -52,7 +52,7 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 - Protocols (`protocol` keyword, `impl Protocol for Type` conformance)
 - Closures (block form, with variable capture -- copy for primitives, move for structs/enums)
 - Function type syntax (`fn(T) -> U`) for closure-accepting parameters
-- `print` builtin
+- `print` builtin (dispatches through `Debug.format()` for all types)
 - `panic` builtin (prints to stderr, aborts)
 - Lightweight processes -- structs implement `Process<C, M, R>` protocol. `spawn T.new(config)` creates a process and returns `Ref<M, R>`. `receive` blocks for messages with optional `after timeout` clause. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime` cooperative scheduler.
 - **`Task<R>`** -- `Task.async(fn () -> R)` / `Task.await` for one-off async work on top of processes (`Ref<(), R>` + `call`); see `std.kernel` and `tests/lang/task.expo`.
@@ -134,18 +134,18 @@ Union types (B1), protocol-based process model with `Process<C, M, R>`, `Ref<M, 
 
 ### Key decisions (Phase 3)
 
-| Decision           | Recommendation                                                                                                                                                                                                                                     |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Distinct types     | `String`, `Binary`, and `Bits` are three distinct types with no subtype relationships. Explicit conversion between them: widening always succeeds (zero-cost), narrowing validates and returns `Result`. See `archive/20260323-BITSTRINGS.md`.     |
-| No Char            | No dedicated character type. Single-codepoint `String` values serve the same purpose -- fractal design. String ranges (`"a".."z"`) and classification methods (`is_alpha?()`) work on String directly.                                             |
-| Inclusive ranges   | One range operator (`..`), always inclusive on both ends. Pattern matching is the primary use case; numeric loops are rare in idiomatic Expo. `0..n-1` for the occasional exclusive case.                                                          |
-| Erlang defaults    | Binary segments default to unsigned big-endian (network byte order). Matches Erlang and covers the primary use case: HTTP microservices and network protocol parsing.                                                                              |
-| Bitwise protocol   | Bitwise operations are methods (`band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr`) on a `Bitwise` protocol, not symbol operators. Frees `<<`/`>>` for binary literals and `&`/`\|`/`^` for other uses.                                                   |
-| One primitive      | Processes are the sole concurrency primitive. `Task` is a kernel struct built on `Process<C, M, R>`, not a separate primitive. GenServer-like actor patterns are the `Process` protocol itself.                                                    |
-| Process protocol   | `Process<C, M, R>` with three type params. Config (C) separates public args from private state via `new`. Fixed reply type (R) per process -- same as a service contract. Union types for heterogeneous replies.                                   |
-| Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code. |
-| Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with process lifecycle management.                                                                                                   |
-| Typed mailboxes    | Processes declare message type M via protocol impl. `send` and `receive` are type-checked at compile time. Union types enable multi-source mailboxes (e.g., `PoolCmd \| ExitSignal`).                                                              |
+| Decision           | Recommendation                                                                                                                                                                                                                                               |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Distinct types     | `String`, `Binary`, and `Bits` are three distinct types with no subtype relationships. Explicit conversion between them: widening always succeeds (zero-cost), narrowing validates and returns `Result`. See `archive/20260323-BITSTRINGS.md`.               |
+| No Char            | No dedicated character type. Single-codepoint `String` values serve the same purpose -- fractal design. String ranges (`"a".."z"`) and classification methods (`is_alpha?()`) work on String directly.                                                       |
+| Inclusive ranges   | One range operator (`..`), always inclusive on both ends. Pattern matching is the primary use case; numeric loops are rare in idiomatic Expo. `0..n-1` for the occasional exclusive case.                                                                    |
+| Erlang defaults    | Binary segments default to unsigned big-endian (network byte order). Matches Erlang and covers the primary use case: HTTP microservices and network protocol parsing.                                                                                        |
+| Bitwise protocol   | Bitwise operations are methods (`band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr`) on a `Bitwise` protocol, not symbol operators. Frees `<<`/`>>` for binary literals and `&`/`\|`/`^` for other uses.                                                             |
+| One primitive      | Processes are the sole concurrency primitive. `Task` is a kernel struct built on `Process<C, M, R>`, not a separate primitive. GenServer-like actor patterns are the `Process` protocol itself.                                                              |
+| Process protocol   | `Process<C, M, R>` with three type params. Config (C) separates public args from private state via `new`. Fixed reply type (R) per process -- same as a service contract. Union types for heterogeneous replies.                                             |
+| Scheduler protocol | Define the runtime as a protocol interface before implementing any backend. The native scheduler is the first implementation, not a special case. Enables WASM targets, test runtimes, and third-party custom runtimes without changing user code.           |
+| Native runtime     | A runtime library linked into the binary, not a VM. No bytecode, no GC. Similar to Go's runtime or Tokio, but with process lifecycle management.                                                                                                             |
+| Typed mailboxes    | Processes declare message type M via protocol impl. `send` and `receive` are type-checked at compile time. Union types enable multi-source mailboxes (e.g., `PoolCmd \| ExitSignal`).                                                                        |
 | Validation target  | The lexer port (A4) validated the language surface without requiring external dependencies (no network, no database, no JSON). The Rust compiler remains authoritative; the Expo lexer is compiled by it. ✓ Complete -- token output matches the Rust lexer. |
 
 For detailed sub-milestone breakdowns (A1a-A1e, A2a-A2c, A3a-A3b, A4, B1-B3), see [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md).
@@ -169,10 +169,10 @@ Stdlib contains primitives that are as fundamental as integers -- things the com
 - `std.fd` -- shipped in Phase 3 A3a (basic `read`, `write`, `close`). Extended with `Socket` type for TCP networking (`create`, `bind`, `listen`, `accept`, `set_reuse_addr`, `close`) via POSIX socket syscall shims in the runtime.
 - `std.file` -- shipped in Phase 3 A3a (basic `open`, `read`, `close`). Add `seek`, `write` to file, and other operations as needed.
 - `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space -- reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases, large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
-- `std.io` -- `stdin`, `stdout`, `stderr` as `Fd` constants. `print` builtin dispatches through here.
+- `std.io` -- shipped. `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
+- `std.debug` -- shipped. `Debug` protocol with `format(self) -> String` and `inspect(move self) -> Self` (tap-style). Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation dispatch through `Debug.format()`.
 - `System` type -- `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Genuinely global OS state operations not tied to any process's C/M/R types. Thin wrappers over C stdlib calls via runtime intrinsics.
 - `time.DateTime`, `time.Duration` with `.now()`, `.timestamp_millis()`, `.from_secs()`
-- `Display` protocol -- auto-derived string representations, `print()` dispatches through it
 
 The litmus test: does the compiler or language runtime need it to function, or is it a stable capability every program needs with an API that won't evolve? If yes, stdlib. If the API surface will evolve (protocols, connection management, serialization formats), it's a first-party package.
 
@@ -535,12 +535,12 @@ Active design discussions about the type system, code organization, and function
 - No `map_err` yet. No `or_else` -- `or` is implicitly lazy.
 - Monomorphization ensures zero binary bloat for unused stdlib types. Only instantiations that are actually called get compiled.
 
-### `Display` protocol and `print`
+### `Debug` protocol and `print` (decided, implemented)
 
-- **Planned**: a `Display` protocol that types implement to provide a string representation. `print()` dispatches through `Display` rather than hardcoding printf format specifiers per LLVM type.
-- **Auto-derived**: all structs and enums get a default `impl Display` generated by the compiler. Enums print as `VariantName` (unit) or `VariantName(value)` (tuple payload). Structs print as `TypeName{field: value, ...}`. Users can override with their own `impl Display for MyType`.
-- **Unblocked**: protocol system is now implemented -- `Display` can be built.
-- **Current limitation**: `print()` only supports primitives (`Int`, `Float`, `Bool`, `String`). Printing a struct or enum value is a compile error. Workaround: match on enum variants and print primitive values, or use string interpolation with primitive fields.
+- **Done**: `Debug` protocol in `std.debug` with `format(self) -> String` (required) and `inspect(move self) -> Self` (default impl, tap-style debugging). Named `Debug` rather than `Display` to reflect developer-facing output (not user-facing presentation).
+- **Auto-derived**: all structs and enums get a compiler-synthesized `format` implementation. Enums print as `VariantName` (unit) or `VariantName(value)` (tuple payload). Structs print as `TypeName{field: value, ...}`. Primitives use codegen intrinsics. Users can override with their own `impl Debug for MyType`.
+- **`print` and interpolation**: `print(value)` and `"#{value}"` dispatch through `Debug.format()` instead of hardcoded printf format specifiers. Any type can be printed or interpolated.
+- **`std.io`**: `IO.puts`, `IO.warn`, `IO.write` accept `String` only -- callers use interpolation or `.format()` for non-string types. `IO.gets` reads a line from stdin.
 
 ### ExpoIR and codegen backend protocol
 
@@ -570,25 +570,25 @@ Active design discussions about the type system, code organization, and function
 
 ### Done
 
-| Phase     | Milestone                                                                    |
-| --------- | ---------------------------------------------------------------------------- |
-| Bootstrap | Lexer, parser, type system, LLVM codegen -- native binaries from Expo source |
-| Tooling   | Formatter, `expo run`, VSCode extension, LSP, documentation generator        |
-| Core      | Generics, ownership, protocols, closures, collections, processes             |
+| Phase     | Milestone                                                                                                             |
+| --------- | --------------------------------------------------------------------------------------------------------------------- |
+| Bootstrap | Lexer, parser, type system, LLVM codegen -- native binaries from Expo source                                          |
+| Tooling   | Formatter, `expo run`, VSCode extension, LSP, documentation generator                                                 |
+| Core      | Generics, ownership, protocols, closures, collections, processes                                                      |
 | Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
-| Phase 4A  | Test runner, TCP socket support                                              |
+| Phase 4A  | Test runner, TCP socket support, `Debug` protocol, `std.io`                                                           |
 
 For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md) and [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md).
 
 ### Remaining
 
-| Phase | Milestone                                                                                     |
-| ----- | --------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, `System` type, `Display` protocol, time, package manager, first-party packages |
-| 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`             |
-| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                        |
-| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                    |
-| 6B    | auth-manager-expo runs for real, second project                                               |
+| Phase | Milestone                                                                                                       |
+| ----- | --------------------------------------------------------------------------------------------------------------- |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, `System` type, time, package manager, first-party packages |
+| 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`                              |
+| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                          |
+| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                      |
+| 6B    | auth-manager-expo runs for real, second project                                                                 |
 
 ---
 

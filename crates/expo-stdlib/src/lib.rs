@@ -4,12 +4,14 @@
 //! [`SOURCES`] provides all modules in dependency order (kernel first).
 
 pub const KERNEL: &str = include_str!("../std/kernel.expo");
+pub const DEBUG: &str = include_str!("../std/debug.expo");
 pub const LIST: &str = include_str!("../std/list.expo");
 pub const STRING: &str = include_str!("../std/string.expo");
 pub const MAP: &str = include_str!("../std/map.expo");
 pub const SET: &str = include_str!("../std/set.expo");
 pub const BITWISE: &str = include_str!("../std/bitwise.expo");
 pub const FD: &str = include_str!("../std/fd.expo");
+pub const IO: &str = include_str!("../std/io.expo");
 
 /// All stdlib sources in dependency order. Kernel must come first;
 /// subsequent modules may reference types defined by earlier ones.
@@ -17,10 +19,12 @@ pub const FD: &str = include_str!("../std/fd.expo");
 /// Each entry is `(fully_qualified_module_name, source_text)`.
 pub const SOURCES: &[(&str, &str)] = &[
     ("std.kernel", KERNEL),
+    ("std.debug", DEBUG),
     ("std.list", LIST),
     ("std.string", STRING),
     ("std.map", MAP),
     ("std.set", SET),
     ("std.bitwise", BITWISE),
     ("std.fd", FD),
+    ("std.io", IO),
 ];

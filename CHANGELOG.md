@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Test runner -- `expo test` discovers `@test`-annotated functions in `src/` and `test/` directories, generates a test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure with the test name printed before each call. `project.expo` gains an optional `test` field (default `["test"]`).
 - TCP socket support -- `Socket` type in `std.fd` with `create`, `bind`, `listen`, `accept`, `set_reuse_addr`, and `close`. Wraps POSIX socket syscalls via runtime shims. Returns `Result<Socket, String>` / `Result<Fd, String>` for error handling. Sufficient for basic TCP servers (demonstrated with an HTTP/JSON server in the `json` package).
+- `Debug` protocol (`std.debug`) -- `format(self) -> String` returns a string representation, `inspect(move self) -> Self` prints and returns the value for tap-style chaining. Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation (`"#{value}"`) now dispatch through `Debug.format()` instead of hardcoded printf specifiers.
+- `std.io` module -- `IO.puts`, `IO.warn`, `IO.write`, and `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive byte-by-byte `STDIN.read(1)`.
 
 ### Fixed
 

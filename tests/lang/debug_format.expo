@@ -1,0 +1,41 @@
+struct User
+  name: String
+  age: Int
+end
+
+enum Color
+  Red
+  Green
+  Blue
+end
+
+enum Shape
+  Circle(Int)
+  Square(Int)
+  Point
+end
+
+fn main
+  print(42.format())
+  print(true.format())
+  print(false.format())
+  print("hello".format())
+  print(3.140000.format())
+
+  print(Color.Red.format())
+  print(Color.Green.format())
+  print(Color.Blue.format())
+
+  print(Shape.Point.format())
+  print(Shape.Circle(5).format())
+  print(Shape.Square(10).format())
+
+  u = User{name: "alice", age: 30}
+  print(u.format())
+
+  print("user: #{u}")
+
+  print(42)
+  print(true)
+  print("hello")
+end

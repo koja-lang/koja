@@ -1,0 +1,62 @@
+@moduledoc """
+Standard I/O operations.
+
+Provides `IO.puts`, `IO.warn`, `IO.write`, and `IO.gets` for common
+console I/O. For low-level access, use `STDIN`, `STDOUT`, and `STDERR`
+directly as `Fd` values.
+"""
+
+import std.fd
+
+struct IO
+end
+
+const STDIN: Fd = Fd{descriptor: 0}
+const STDOUT: Fd = Fd{descriptor: 1}
+const STDERR: Fd = Fd{descriptor: 2}
+
+impl IO
+  @doc """
+  Writes a string to stdout followed by a newline.
+  """
+  fn puts(message: String)
+    STDOUT.write(message)
+    STDOUT.write("\n")
+  end
+
+  @doc """
+  Writes a string to stderr followed by a newline.
+  """
+  fn warn(message: String)
+    STDERR.write(message)
+    STDERR.write("\n")
+  end
+
+  @doc """
+  Writes a string to stdout without a trailing newline.
+  """
+  fn write(message: String)
+    STDOUT.write(message)
+  end
+
+  @doc """
+  Prints a prompt and reads a line from stdin (up to the newline).
+  Returns the line without the trailing newline character.
+  """
+  fn gets(prompt: String) -> String
+    IO.write(prompt)
+    IO.gets_loop("")
+  end
+
+  priv fn gets_loop(acc: String) -> String
+    match STDIN.read(1)
+      Result.Ok(char) ->
+        if char == "\n"
+          acc
+        else
+          IO.gets_loop(acc <> char)
+        end
+      Result.Err(_) -> acc
+    end
+  end
+end

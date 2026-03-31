@@ -15,6 +15,7 @@ use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
 use crate::structs::load_maybe_indirect;
 use crate::types::to_llvm_type;
+use crate::util::parse_int_literal;
 
 use super::compile_body_as_value;
 
@@ -365,7 +366,7 @@ fn compile_literal_for_pattern<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, String> {
     match lit {
         Literal::Int(s) => {
-            let val = crate::util::parse_int_literal(s)?;
+            let val = parse_int_literal(s)?;
             Ok(c.context.i64_type().const_int(val as u64, true).into())
         }
         Literal::Float(s) => {

@@ -65,6 +65,7 @@ pub fn typecheck_graph(
         } else {
             let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
             ctx.merge(&stdlib_ctx);
+            expo_typecheck::auto_derive_debug(&mut ctx);
             expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
             expo_typecheck::mark_recursive_fields(&mut ctx);
             expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);

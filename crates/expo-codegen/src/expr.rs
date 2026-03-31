@@ -18,12 +18,14 @@ use crate::control::{
     compile_cond, compile_for, compile_if, compile_loop, compile_match, compile_ternary,
     compile_unless, compile_while,
 };
+use crate::debug::call_format;
 use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
 use crate::ops::{compile_binary, compile_unary};
 use crate::stmt::{apply_coercion, coerce_numeric};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
+use crate::util::{parse_int_literal, printf_format_spec};
 
 /// Compiles an expression and coerces the result to the expected type.
 /// Use when the target type is known (e.g. function arguments, struct fields).
@@ -235,7 +237,7 @@ pub fn compile_expr<'ctx>(
 fn compile_literal<'ctx>(c: &Compiler<'ctx>, lit: &Literal) -> ExprResult<'ctx> {
     match lit {
         Literal::Int(s) => {
-            let val = crate::util::parse_int_literal(s)?;
+            let val = parse_int_literal(s)?;
             Ok(Some(TypedValue::new(
                 c.context.i64_type().const_int(val as u64, true).into(),
                 Type::Primitive(Primitive::I64),
@@ -300,23 +302,22 @@ fn compile_string<'ctx>(
                 }
             }
             StringPart::Interpolation { expr, .. } => {
-                let val = compile_expr(c, expr, function)?
-                    .ok_or("interpolated expression produced no value")?
-                    .value;
+                let tv = compile_expr(c, expr, function)?
+                    .ok_or("interpolated expression produced no value")?;
+                let val = tv.value;
 
-                if val.is_int_value() && val.into_int_value().get_type().get_bit_width() == 1 {
-                    let str_ptr = crate::util::bool_to_string_ptr(c, val.into_int_value());
-                    fmt_string.push_str("%s");
-                    interp_values.push(str_ptr.into());
-                } else if let Ok(spec) = crate::util::printf_format_spec(&val) {
-                    fmt_string.push_str(spec);
+                let is_bool =
+                    val.is_int_value() && val.into_int_value().get_type().get_bit_width() == 1;
+                let is_plain_printf =
+                    !val.is_struct_value() && !is_bool && printf_format_spec(&val).is_ok();
+
+                if is_plain_printf {
+                    fmt_string.push_str(printf_format_spec(&val).unwrap());
                     interp_values.push(val);
-                } else if val.is_struct_value() {
-                    let str_ptr = enum_value_to_string(c, val, function)?;
+                } else {
+                    let str_ptr = call_format(c, val, &tv.expo_type)?;
                     fmt_string.push_str("%s");
                     interp_values.push(str_ptr.into());
-                } else {
-                    return Err("cannot interpolate value of unsupported type".to_string());
                 }
             }
         }
@@ -388,94 +389,6 @@ fn compile_string<'ctx>(
         payload.into(),
         Type::Primitive(Primitive::String),
     )))
-}
-
-/// Converts an enum value to a string pointer for interpolation. Calls
-/// `to_string` if the enum defines one, otherwise looks up the variant
-/// name from the enum's global name table.
-fn enum_value_to_string<'ctx>(
-    c: &mut Compiler<'ctx>,
-    val: BasicValueEnum<'ctx>,
-    _function: FunctionValue<'ctx>,
-) -> Result<inkwell::values::PointerValue<'ctx>, String> {
-    let sv = val.into_struct_value();
-    let st = sv.get_type();
-    let enum_name = st
-        .get_name()
-        .and_then(|n| n.to_str().ok())
-        .ok_or("cannot determine enum type for interpolation")?;
-
-    if !c.type_ctx.is_enum(enum_name) {
-        return Err(format!(
-            "cannot interpolate struct value `{enum_name}` (not an enum)"
-        ));
-    }
-
-    if c.type_ctx
-        .types
-        .get(enum_name)
-        .and_then(|ti| ti.functions.get("to_string"))
-        .is_some()
-    {
-        let mangled = format!("{enum_name}_to_string");
-        if let Some(to_string_fn) = c.functions.get(&mangled) {
-            return c
-                .call(*to_string_fn, &[val.into()], "to_str_ret")
-                .map(|v| v.into_pointer_value())
-                .ok_or("to_string did not return a value".to_string());
-        }
-    }
-
-    let enum_type = *c
-        .types
-        .structs
-        .get(enum_name)
-        .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
-    let table_ptr = *c
-        .types
-        .enum_name_tables
-        .get(enum_name)
-        .ok_or_else(|| format!("no name table for enum: {enum_name}"))?;
-
-    let alloca = c.builder.build_alloca(enum_type, "interp_enum").unwrap();
-    c.builder.build_store(alloca, val).unwrap();
-    let tag_ptr = c
-        .builder
-        .build_struct_gep(enum_type, alloca, 0, "interp_tag_ptr")
-        .unwrap();
-    let tag = c
-        .builder
-        .build_load(c.context.i8_type(), tag_ptr, "interp_tag")
-        .unwrap()
-        .into_int_value();
-
-    let tag_i32 = c
-        .builder
-        .build_int_z_extend(tag, c.context.i32_type(), "tag_ext")
-        .unwrap();
-
-    let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
-    let variant_count = c
-        .type_ctx
-        .types
-        .get(enum_name)
-        .and_then(|ti| ti.variants())
-        .map(|vs| vs.len() as u32)
-        .unwrap_or(0);
-    let table_type = ptr_type.array_type(variant_count);
-    let zero = c.context.i32_type().const_int(0, false);
-    let name_ptr_ptr = unsafe {
-        c.builder
-            .build_in_bounds_gep(table_type, table_ptr, &[zero, tag_i32], "name_ptr_ptr")
-            .unwrap()
-    };
-    let name_ptr = c
-        .builder
-        .build_load(ptr_type, name_ptr_ptr, "variant_name")
-        .unwrap()
-        .into_pointer_value();
-
-    Ok(name_ptr)
 }
 
 fn resolve_closure_params<'ctx>(
