@@ -3,7 +3,7 @@ use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
 
-use super::{build_result_err, build_result_ok};
+use super::{STRING_HEADER_BYTES, build_result_err, build_result_ok};
 
 pub fn emit_socket_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -329,7 +329,7 @@ pub fn emit_socket_intrinsic<'ctx>(
                     .build_gep(
                         i8_ty,
                         result_ptr,
-                        &[i64_ty.const_int(8, false)],
+                        &[i64_ty.const_int(STRING_HEADER_BYTES, false)],
                         "ptrs_start",
                     )
                     .unwrap()

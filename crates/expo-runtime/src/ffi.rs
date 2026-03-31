@@ -1,5 +1,16 @@
 //! Raw libc and platform FFI declarations used by the runtime.
 
+/// IPv4 address family.
+pub const AF_INET: i32 = 2;
+/// Stream (TCP) socket type.
+pub const SOCK_STREAM: i32 = 1;
+/// Datagram (UDP) socket type.
+pub const SOCK_DGRAM: i32 = 2;
+/// Socket-level option group for `setsockopt`.
+pub const SOL_SOCKET: i32 = 0xFFFF;
+/// Allow local address reuse (`setsockopt` option).
+pub const SO_REUSEADDR: i32 = 0x0004;
+
 /// BSD/POSIX `sockaddr_in` for IPv4 socket addresses.
 #[repr(C)]
 pub struct SockaddrIn {

@@ -2,6 +2,7 @@ use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
+use crate::intrinsics::STRING_HEADER_BYTES;
 
 pub fn emit_hash_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -191,10 +192,10 @@ fn emit_fnv1a_hash<'ctx>(
     let offset_basis = i64_ty.const_int(0xcbf29ce484222325, false);
     let fnv_prime = i64_ty.const_int(0x100000001b3, false);
 
-    let neg8 = i64_ty.const_int((-8i64) as u64, true);
+    let neg_hdr = i64_ty.const_int(-(STRING_HEADER_BYTES as i64) as u64, true);
     let hdr_ptr = unsafe {
         c.builder
-            .build_gep(i8_ty, str_ptr, &[neg8], "hdr_ptr")
+            .build_gep(i8_ty, str_ptr, &[neg_hdr], "hdr_ptr")
             .unwrap()
     };
     let bit_length = c

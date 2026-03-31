@@ -7,6 +7,17 @@ mod system;
 
 use crate::compiler::Compiler;
 
+/// Tag value for `Result.Ok` in the tagged-union layout.
+pub(crate) const RESULT_OK_TAG: u64 = 0;
+/// Tag value for `Result.Err` in the tagged-union layout.
+pub(crate) const RESULT_ERR_TAG: u64 = 1;
+/// Tag value for `Option.Some` in the tagged-union layout.
+pub(crate) const OPTION_SOME_TAG: u64 = 0;
+/// Tag value for `Option.None` in the tagged-union layout.
+pub(crate) const OPTION_NONE_TAG: u64 = 1;
+/// Size in bytes of the length header prepended to String/Binary payloads.
+pub(crate) const STRING_HEADER_BYTES: u64 = 8;
+
 use self::format::emit_debug_format_intrinsic;
 use self::hash::{emit_bitwise_intrinsic, emit_eq_intrinsic, emit_hash_intrinsic};
 use self::io::{emit_fd_intrinsic, emit_file_intrinsic};
@@ -178,7 +189,7 @@ pub(crate) fn build_result_ok<'ctx>(
         .build_struct_gep(result_type, alloca, 0, "ok_tag_ptr")
         .unwrap();
     c.builder
-        .build_store(tag_ptr, c.context.i8_type().const_int(0, false))
+        .build_store(tag_ptr, c.context.i8_type().const_int(RESULT_OK_TAG, false))
         .unwrap();
     if result_type.count_fields() > 1 {
         let payload_ptr = c
@@ -202,7 +213,10 @@ pub(crate) fn build_result_err<'ctx>(
         .build_struct_gep(result_type, alloca, 0, "err_tag_ptr")
         .unwrap();
     c.builder
-        .build_store(tag_ptr, c.context.i8_type().const_int(1, false))
+        .build_store(
+            tag_ptr,
+            c.context.i8_type().const_int(RESULT_ERR_TAG, false),
+        )
         .unwrap();
     if result_type.count_fields() > 1 {
         let payload_ptr = c

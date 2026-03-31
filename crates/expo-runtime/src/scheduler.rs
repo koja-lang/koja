@@ -1,7 +1,10 @@
 //! Cooperative coroutine scheduler for Expo lightweight processes.
 
+use std::alloc;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
+use std::ptr;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::ffi::{expo_context_switch, fflush};
@@ -69,7 +72,7 @@ impl Scheduler {
             processes: Vec::new(),
             next_id: 1,
             current_pid: -1,
-            scheduler_sp: std::ptr::null_mut(),
+            scheduler_sp: ptr::null_mut(),
         }
     }
 }
@@ -88,7 +91,7 @@ static SCHED: Global = Global(UnsafeCell::new(None));
 unsafe fn init_process_stack(stack_top: *mut u8, entry: unsafe extern "C" fn()) -> *mut u8 {
     unsafe {
         let sp = stack_top.sub(INIT_FRAME_SIZE);
-        std::ptr::write_bytes(sp, 0, INIT_FRAME_SIZE);
+        ptr::write_bytes(sp, 0, INIT_FRAME_SIZE);
         let ret_slot = sp.add(RET_ADDR_OFFSET) as *mut usize;
         *ret_slot = entry as usize;
         sp
@@ -106,7 +109,7 @@ unsafe extern "C" fn process_trampoline() {
         };
 
         func(init_state);
-        fflush(std::ptr::null_mut());
+        fflush(ptr::null_mut());
 
         let s = sched();
         let idx = (s.current_pid - 1) as usize;
@@ -189,7 +192,7 @@ pub extern "C" fn expo_rt_main_done() {
             Some(dl) => {
                 let now = Instant::now();
                 if dl > now {
-                    std::thread::sleep(dl - now);
+                    thread::sleep(dl - now);
                 }
             }
             None => {
@@ -207,8 +210,8 @@ pub extern "C" fn expo_rt_receive() -> *const u8 {
     let s = sched();
     let idx = (s.current_pid - 1) as usize;
 
-    if let Some(ptr) = s.processes[idx].mailbox.pop_front() {
-        return ptr as *const u8;
+    if let Some(p) = s.processes[idx].mailbox.pop_front() {
+        return p as *const u8;
     }
 
     s.processes[idx].state = ProcessState::Blocked;
@@ -223,7 +226,7 @@ pub extern "C" fn expo_rt_receive() -> *const u8 {
         .mailbox
         .pop_front()
         .map(|p| p as *const u8)
-        .unwrap_or(std::ptr::null())
+        .unwrap_or(ptr::null())
 }
 
 /// Like [`expo_rt_receive`], but unblocks after `timeout_ms` milliseconds
@@ -233,8 +236,8 @@ pub extern "C" fn expo_rt_receive_timeout(timeout_ms: i64) -> *const u8 {
     let s = sched();
     let idx = (s.current_pid - 1) as usize;
 
-    if let Some(ptr) = s.processes[idx].mailbox.pop_front() {
-        return ptr as *const u8;
+    if let Some(p) = s.processes[idx].mailbox.pop_front() {
+        return p as *const u8;
     }
 
     s.processes[idx].state = ProcessState::Blocked;
@@ -251,7 +254,7 @@ pub extern "C" fn expo_rt_receive_timeout(timeout_ms: i64) -> *const u8 {
         .mailbox
         .pop_front()
         .map(|p| p as *const u8)
-        .unwrap_or(std::ptr::null())
+        .unwrap_or(ptr::null())
 }
 
 /// Returns the process ID of the currently executing process.
@@ -275,10 +278,10 @@ pub unsafe extern "C" fn expo_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
 
     let len = msg_len as usize;
     unsafe {
-        let layout = std::alloc::Layout::from_size_align(len, 8).unwrap();
-        let ptr = std::alloc::alloc(layout);
-        std::ptr::copy_nonoverlapping(msg_ptr, ptr, len);
-        s.processes[idx].mailbox.push_back(ptr);
+        let layout = alloc::Layout::from_size_align(len, 8).unwrap();
+        let buf = alloc::alloc(layout);
+        ptr::copy_nonoverlapping(msg_ptr, buf, len);
+        s.processes[idx].mailbox.push_back(buf);
     }
 
     if s.processes[idx].state == ProcessState::Blocked {
@@ -304,20 +307,20 @@ pub unsafe extern "C" fn expo_rt_spawn(
     let heap_state = if state_len > 0 && !state_ptr.is_null() {
         let len = state_len as usize;
         unsafe {
-            let layout = std::alloc::Layout::from_size_align(len, 8).unwrap();
-            let ptr = std::alloc::alloc(layout);
-            std::ptr::copy_nonoverlapping(state_ptr, ptr, len);
-            ptr
+            let layout = alloc::Layout::from_size_align(len, 8).unwrap();
+            let buf = alloc::alloc(layout);
+            ptr::copy_nonoverlapping(state_ptr, buf, len);
+            buf
         }
     } else {
-        std::ptr::null_mut()
+        ptr::null_mut()
     };
 
     let sp = unsafe {
-        let layout = std::alloc::Layout::from_size_align(STACK_SIZE, 16).unwrap();
-        let base = std::alloc::alloc(layout);
+        let layout = alloc::Layout::from_size_align(STACK_SIZE, 16).unwrap();
+        let base = alloc::alloc(layout);
         if base.is_null() {
-            std::alloc::handle_alloc_error(layout);
+            alloc::handle_alloc_error(layout);
         }
         let stack_top = base.add(STACK_SIZE);
         let stack_top = ((stack_top as usize) & !15) as *mut u8;

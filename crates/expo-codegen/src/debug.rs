@@ -113,22 +113,22 @@ pub fn synthesize_all_formats<'ctx>(c: &mut Compiler<'ctx>) -> Result<(), String
     Ok(())
 }
 
-fn has_unsynthesizable_fields(c: &Compiler, name: &str) -> bool {
-    fn is_complex(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Indirect(_) | Type::GenericInstance { .. } | Type::Unknown
-        )
-    }
+fn is_complex_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Indirect(_) | Type::GenericInstance { .. } | Type::Unknown
+    )
+}
 
+fn has_unsynthesizable_fields(c: &Compiler, name: &str) -> bool {
     if let Some(ti) = c.type_ctx.types.get(name) {
         if let Some(fields) = ti.fields() {
-            return fields.iter().any(|(_, ty)| is_complex(ty));
+            return fields.iter().any(|(_, ty)| is_complex_type(ty));
         }
         if let Some(variants) = ti.variants() {
             return variants.iter().any(|vi| match &vi.data {
-                VariantData::Tuple(types) => types.iter().any(is_complex),
-                VariantData::Struct(fields) => fields.iter().any(|(_, ty)| is_complex(ty)),
+                VariantData::Tuple(types) => types.iter().any(is_complex_type),
+                VariantData::Struct(fields) => fields.iter().any(|(_, ty)| is_complex_type(ty)),
                 VariantData::Unit => false,
             });
         }
@@ -298,7 +298,7 @@ fn synthesize_enum_format<'ctx>(c: &mut Compiler<'ctx>, enum_name: &str) -> Resu
                     c.create_string_global(vi.name.as_bytes(), &format!("vn_{}", vi.name))
                 }
                 VariantData::Tuple(types) => {
-                    if types.len() == 1 {
+                    if types.len() == 1 && !is_complex_type(&types[0]) {
                         let payload_st = c.types.get_variant_payload_type(enum_name, &vi.name);
 
                         if let Some(payload_type) = payload_st {
@@ -415,7 +415,11 @@ fn synthesize_struct_format<'ctx>(c: &mut Compiler<'ctx>, struct_name: &str) -> 
                 .builder
                 .build_load(field_llvm_type, field_ptr, &format!("fv_{i}"))
                 .unwrap();
-            field_strs.push(call_format(c, field_val, field_type)?);
+            if is_complex_type(field_type) {
+                field_strs.push(c.create_string_global(b"...", &format!("f_opaque_{i}")));
+            } else {
+                field_strs.push(call_format(c, field_val, field_type)?);
+            }
         }
 
         let mut fmt_string = format!("{struct_name}{{");

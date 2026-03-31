@@ -4,7 +4,9 @@ use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
 
-use super::{build_result_err, build_result_ok};
+use super::{
+    OPTION_NONE_TAG, OPTION_SOME_TAG, STRING_HEADER_BYTES, build_result_err, build_result_ok,
+};
 
 pub fn emit_conversion_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -25,10 +27,10 @@ pub fn emit_conversion_intrinsic<'ctx>(
             let i8_ty = c.context.i8_type();
             let i64_ty = c.context.i64_type();
 
-            let neg8 = i64_ty.const_int((-8i64) as u64, true);
+            let neg_hdr = i64_ty.const_int(-(STRING_HEADER_BYTES as i64) as u64, true);
             let hdr_ptr = unsafe {
                 c.builder
-                    .build_gep(i8_ty, self_ptr, &[neg8], "hdr")
+                    .build_gep(i8_ty, self_ptr, &[neg_hdr], "hdr")
                     .unwrap()
             };
             let bit_length = c
@@ -88,7 +90,7 @@ pub fn emit_conversion_intrinsic<'ctx>(
                     .build_in_bounds_gep(
                         i8_ty,
                         new_base,
-                        &[i64_ty.const_int(8, false)],
+                        &[i64_ty.const_int(STRING_HEADER_BYTES, false)],
                         "new_payload",
                     )
                     .unwrap()
@@ -132,10 +134,10 @@ pub fn emit_conversion_intrinsic<'ctx>(
             let i8_ty = c.context.i8_type();
             let i64_ty = c.context.i64_type();
 
-            let neg8 = i64_ty.const_int((-8i64) as u64, true);
+            let neg_hdr = i64_ty.const_int(-(STRING_HEADER_BYTES as i64) as u64, true);
             let hdr_ptr = unsafe {
                 c.builder
-                    .build_gep(i8_ty, self_ptr, &[neg8], "hdr")
+                    .build_gep(i8_ty, self_ptr, &[neg_hdr], "hdr")
                     .unwrap()
             };
             let bit_length = c
@@ -154,10 +156,10 @@ pub fn emit_conversion_intrinsic<'ctx>(
             let i8_ty = c.context.i8_type();
             let i64_ty = c.context.i64_type();
 
-            let neg8 = i64_ty.const_int((-8i64) as u64, true);
+            let neg_hdr = i64_ty.const_int(-(STRING_HEADER_BYTES as i64) as u64, true);
             let hdr_ptr = unsafe {
                 c.builder
-                    .build_gep(i8_ty, self_ptr, &[neg8], "hdr")
+                    .build_gep(i8_ty, self_ptr, &[neg_hdr], "hdr")
                     .unwrap()
             };
             let bit_length = c
@@ -290,7 +292,7 @@ pub fn emit_string_intrinsic<'ctx>(
                 .build_struct_gep(option_struct, alloca_some, 0, "tag_ptr")
                 .unwrap();
             c.builder
-                .build_store(tag_ptr, i8_ty.const_int(0, false))
+                .build_store(tag_ptr, i8_ty.const_int(OPTION_SOME_TAG, false))
                 .unwrap();
             let payload_ptr = c
                 .builder
@@ -313,7 +315,7 @@ pub fn emit_string_intrinsic<'ctx>(
                 .build_struct_gep(option_struct, alloca_none, 0, "tag_ptr")
                 .unwrap();
             c.builder
-                .build_store(tag_ptr, i8_ty.const_int(1, false))
+                .build_store(tag_ptr, i8_ty.const_int(OPTION_NONE_TAG, false))
                 .unwrap();
             let result = c
                 .builder
@@ -325,10 +327,10 @@ pub fn emit_string_intrinsic<'ctx>(
             let self_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
             let i8_ty = c.context.i8_type();
             let i64_ty = c.context.i64_type();
-            let neg8 = i64_ty.const_int((-8i64) as u64, true);
+            let neg_hdr = i64_ty.const_int(-(STRING_HEADER_BYTES as i64) as u64, true);
             let hdr_ptr = unsafe {
                 c.builder
-                    .build_gep(i8_ty, self_ptr, &[neg8], "hdr")
+                    .build_gep(i8_ty, self_ptr, &[neg_hdr], "hdr")
                     .unwrap()
             };
             let bit_length = c

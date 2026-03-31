@@ -4,7 +4,7 @@ use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
 
-use super::{build_result_err, build_result_ok};
+use super::{OPTION_NONE_TAG, OPTION_SOME_TAG, build_result_err, build_result_ok};
 
 pub fn emit_system_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -62,7 +62,7 @@ pub fn emit_system_intrinsic<'ctx>(
                 .build_struct_gep(option_struct, alloca_some, 0, "tag_ptr")
                 .unwrap();
             c.builder
-                .build_store(tag_ptr, i8_ty.const_int(0, false))
+                .build_store(tag_ptr, i8_ty.const_int(OPTION_SOME_TAG, false))
                 .unwrap();
             let payload_ptr = c
                 .builder
@@ -85,7 +85,7 @@ pub fn emit_system_intrinsic<'ctx>(
                 .build_struct_gep(option_struct, alloca_none, 0, "tag_ptr")
                 .unwrap();
             c.builder
-                .build_store(tag_ptr, i8_ty.const_int(1, false))
+                .build_store(tag_ptr, i8_ty.const_int(OPTION_NONE_TAG, false))
                 .unwrap();
             let result = c
                 .builder
