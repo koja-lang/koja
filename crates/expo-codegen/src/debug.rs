@@ -6,7 +6,7 @@ use expo_typecheck::types::{Primitive, Type};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
 
 use crate::compiler::Compiler;
-use crate::hashtable::{emit_primitive_intrinsic, is_primitive_intrinsic, type_display_name};
+use crate::intrinsics::{emit_primitive_intrinsic, is_primitive_intrinsic, type_display_name};
 
 /// Calls `{Type}_format(val)` and returns the resulting string pointer.
 /// Synthesizes the format function on demand for enums and structs if it

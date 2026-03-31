@@ -905,8 +905,8 @@ impl<'ctx> Compiler<'ctx> {
             None => func.name.clone(),
         };
 
-        if crate::hashtable::is_primitive_intrinsic(&mangled) {
-            return crate::hashtable::emit_primitive_intrinsic(self, &mangled);
+        if crate::intrinsics::is_primitive_intrinsic(&mangled) {
+            return crate::intrinsics::emit_primitive_intrinsic(self, &mangled);
         }
 
         let fn_value = *self

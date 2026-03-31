@@ -8,6 +8,7 @@ mod enums;
 mod expr;
 mod generics;
 mod hashtable;
+mod intrinsics;
 mod list;
 mod map;
 mod ops;

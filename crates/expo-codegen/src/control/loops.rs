@@ -250,7 +250,7 @@ fn resolve_enumerable_info<'ctx>(
             }
         }
         Type::Primitive(_) => {
-            let name = crate::hashtable::type_display_name(ty);
+            let name = crate::intrinsics::type_display_name(ty);
             (name, Vec::new())
         }
         _ => {
