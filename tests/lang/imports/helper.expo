@@ -1,7 +1,12 @@
-fn add(a: Int, b: Int) -> Int
-  a + b
+struct Helper
 end
 
-fn multiply(a: Int, b: Int) -> Int
-  a * b
+impl Helper
+  fn add(a: Int, b: Int) -> Int
+    a + b
+  end
+
+  fn multiply(a: Int, b: Int) -> Int
+    a * b
+  end
 end

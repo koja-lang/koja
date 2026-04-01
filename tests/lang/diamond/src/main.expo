@@ -3,6 +3,6 @@ import diamond.logic
 
 fn main
   p = Point{x: 3, y: 4}
-  print(logic.distance(p))
-  print(types.origin().x)
+  print(p.distance())
+  print(Point.origin().x)
 end

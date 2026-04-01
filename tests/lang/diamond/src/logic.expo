@@ -1,5 +1,10 @@
 import diamond.types
 
-fn distance(p: Point) -> Int
-  p.x + p.y
+struct Geometry
+end
+
+impl Geometry
+  fn midpoint_distance(a: Point, b: Point) -> Int
+    a.distance() + b.distance()
+  end
 end

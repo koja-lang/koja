@@ -1,11 +1,10 @@
-@moduledoc """
-The Debug protocol provides string representations of values for
-developer-facing output. All types get a compiler-derived implementation.
+@doc """
+String representations of values for developer-facing output.
+All types get a compiler-derived implementation.
 
   - `format(self) -> String` returns the string representation
   - `inspect(move self) -> Self` prints and returns self for chaining
 """
-
 protocol Debug
   fn format(self) -> String
 

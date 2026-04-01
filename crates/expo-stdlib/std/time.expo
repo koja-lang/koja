@@ -1,10 +1,4 @@
-@moduledoc """
-Wall-clock time and duration types.
-
-`DateTime` wraps an epoch-millisecond timestamp. `Duration` represents
-a span of time in milliseconds. Duration is pure Expo with no intrinsics.
-"""
-
+@doc "Wall-clock time as an epoch-millisecond timestamp."
 struct DateTime
   millis: Int
 end

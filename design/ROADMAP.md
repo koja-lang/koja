@@ -185,6 +185,21 @@ The litmus test: does the compiler or language runtime need it to function, or i
 - Dependency resolution: fetch from git, lock file generation for reproducible builds
 - **Done when**: `expo.toml` resolves dependencies and builds the project
 
+#### C FFI
+
+User-facing foreign function interface for calling C libraries. Expo already calls C internally (the runtime is a C library, and codegen emits calls to it via intrinsics). The FFI exposes this capability to user code.
+
+- `extern "C"` blocks declare foreign function signatures with C-compatible types
+- `Ptr<T>` type for raw pointers (`Ptr.null()`, `Ptr.offset()`, `Ptr.read()`, `Ptr.write()`, `Ptr.alloc()`, `Ptr.free()`). `Ptr<T>` is `Copy` (just a machine word).
+- `CString` for null-terminated C string interop (`CString.from(string)`, `String.from_c(ptr)`)
+- `@link("libname")` annotation on extern blocks; `[link]` table in `expo.toml` for library paths
+- `@repr("C")` on structs for C-compatible memory layout
+- No `unsafe` keyword -- extern calls are callable anywhere. Safety is the wrapper package's job, not the caller's. The FFI is a break-glass mechanism, not a daily-driver API.
+- Codegen: `extern` functions emit LLVM `declare` with C calling convention. Same pattern the compiler already uses for runtime intrinsics.
+- Linker: `-l` flags for system libraries, static archive paths for vendored libraries. Already works for `libc` and `expo-runtime`.
+- Self-contained addition: no changes to the module system, type inference, gather-then-check pipeline, or project system. Parser adds `extern` blocks, type checker types them like bodyless functions, codegen emits `declare` instead of `define`.
+- **Done when**: an `argon2` wrapper package calls `libargon2` to hash and verify passwords
+
 #### First-party packages
 
 High-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline. Networking lives here because the API surface evolves (QUIC, io_uring, TLS integration, connection pooling) -- you don't want that locked into the stdlib release cycle.
@@ -196,7 +211,7 @@ High-quality, officially maintained, but not part of the compiler release cycle.
 - `http` -- HTTP server and client built on `net.tcp` / `net.tls`. Request parsing, routing, response building, middleware. Server spawns a process per connection using `Process<C, M, R>`. Binary pattern matching for protocol parsing. `http.client` for outbound requests.
 - `websocket` -- WebSocket server and client built on `http` (upgrade handshake) and `net.tcp` (framed message transport). Each WebSocket connection is a process -- natural fit for Expo's concurrency model. Frame parsing via binary pattern matching.
 - `json` -- `JSONValue` enum, recursive descent parser, encoder (compact and pretty-printed). Already implemented as a standalone `json` package in pure Expo, validated with 17 tests. Remaining: convenience methods (`as_string()`, `as_int()`), decoder combinator API for API input boundaries with error accumulation.
-- Crypto: hashing, random bytes (thin wrapper over libsodium or similar)
+- `crypto` -- password hashing (argon2, bcrypt), random bytes, HMAC. Thin C FFI wrappers over audited libraries (libargon2, libsodium). Safe Expo API: `Password.hash(string)`, `Password.verify(string, hash)`, `Random.bytes(count)`.
 - Structured logging
 - MessagePack serialization
 - UUID generation, regex, URL parsing
@@ -204,7 +219,7 @@ High-quality, officially maintained, but not part of the compiler release cycle.
 
 #### Approach
 
-Implement natively in Expo wherever possible. Use thin C FFI only for security-critical crypto and performance-critical parsing.
+Implement natively in Expo wherever possible. Use C FFI for security-critical crypto (don't roll your own) and system library bindings (TLS, databases). Wrapper packages provide safe Expo APIs so end users never touch pointers.
 
 ### Track B: Runtime + Reliability
 
@@ -221,7 +236,7 @@ Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can 
 - Timer wheel for timeouts, intervals, and deadlines
 - Process lifecycle manager (start, stop, crash detection)
 - All functions can suspend; the runtime handles it -- no function coloring
-- **System intrinsics via the runtime** -- `expo-runtime` is the gateway between Expo code and the OS. Beyond scheduling, it provides native functions for time (`expo_time_now_millis`), file I/O, random bytes, and other syscall-dependent operations. The compiler emits calls to these functions as intrinsics (same pattern as `spawn`/`send`/`receive`). Pure Expo types in the stdlib wrap them with ergonomic APIs (`DateTime.now()`, `File.read()`, etc.). This avoids a full C FFI while keeping system access centralized in one linked library. A general FFI for third-party native bindings is a later concern.
+- **System intrinsics via the runtime** -- `expo-runtime` is the gateway between Expo code and the OS. Beyond scheduling, it provides native functions for time (`expo_time_now_millis`), file I/O, random bytes, and other syscall-dependent operations. The compiler emits calls to these functions as intrinsics (same pattern as `spawn`/`send`/`receive`). Pure Expo types in the stdlib wrap them with ergonomic APIs (`DateTime.now()`, `File.read()`, etc.). The user-facing C FFI (Track A) generalizes this pattern for third-party native bindings.
 - **Done when**: 10,000 processes run concurrently with correct multi-threaded scheduling
 
 #### Supervision prerequisites
@@ -585,7 +600,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase | Milestone                                                                                                                               |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, first-party packages |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, C FFI, first-party packages |
 | 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`                                                      |
 | 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                  |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                              |

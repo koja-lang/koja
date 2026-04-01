@@ -1,5 +1,3 @@
-@moduledoc "Demonstrates enums, match, and cond."
-
 @doc "A direction on the compass."
 enum Direction
   North

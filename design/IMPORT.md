@@ -592,6 +592,23 @@ types.
   relevant primitive type or a stdlib utility type. Separate design
   doc needed.
 
+- **Protocol static methods vs struct static methods**: at the call
+  site, `IO.puts("hello")` (struct static), `Debug.format(value)`
+  (protocol instance method), and a hypothetical `Process.panic(msg)`
+  (protocol static) all look identical -- `Name.method(args)`. The
+  `TypeInfo` registry already stores structs, enums, and protocols in
+  the same map. Should the caller need to know whether `Name` is a
+  struct or a protocol? If protocols can have their own static methods
+  (not implementor-provided, but functions on the protocol itself),
+  they start to blur with structs-as-namespaces. Rust requires going
+  through a concrete type for trait associated functions. Swift allows
+  protocol extensions with static methods. Elixir sidesteps it by
+  keeping protocols for instance dispatch only. Expo needs to decide:
+  are protocols purely behavioral contracts (instance methods only,
+  implemented per type), or can they also be namespaces for related
+  static utilities? The answer affects whether `Kernel.panic` should
+  be on a struct (`Kernel`) or could equally live on a protocol.
+
 ---
 
 ## Summary

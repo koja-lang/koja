@@ -1,11 +1,9 @@
-@moduledoc """
+@doc """
 System-level operations for interacting with the OS environment.
 
 Provides access to environment variables, the current working directory,
-and the machine hostname. Deliberately excludes `argv` and `exit` --
-those map onto `main`'s `Process<C, M, R>` protocol.
+and the machine hostname.
 """
-
 struct System
 end
 

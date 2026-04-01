@@ -1,7 +1,4 @@
-@moduledoc """
-Raw file descriptor and file operations.
-"""
-
+@doc "Raw file descriptor for I/O operations."
 struct Fd
   descriptor: Int
 end

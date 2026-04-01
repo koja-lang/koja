@@ -1,9 +1,9 @@
-@moduledoc """
+@doc """
 Bitwise operations for integer types.
 
-Provides the `Bitwise` protocol with six operations: `band` (AND), `bor` (OR),
-`bxor` (XOR), `bnot` (NOT), `bsl` (shift left), and `bsr` (shift right).
-All integer types implement `Bitwise` via compiler intrinsics.
+Provides six methods: `band` (AND), `bor` (OR), `bxor` (XOR), `bnot` (NOT),
+`bsl` (shift left), and `bsr` (shift right). All integer types implement
+`Bitwise` via compiler intrinsics.
 
 Bitwise operations are methods rather than symbolic operators. Expo reserves
 `<<`/`>>` for binary literals, `|` for union types, and `&` is unused. Using
@@ -12,15 +12,9 @@ named methods avoids ambiguity and reads clearly in context:
     flags.band(0x01) != 0
     permissions.bor(read_flag)
     value.bsl(4)
-"""
 
-@doc """
-A protocol for types that support bitwise operations.
-
-Defines six methods: `band` (bitwise AND), `bor` (bitwise OR), `bxor`
-(bitwise XOR), `bnot` (bitwise NOT), `bsl` (bit shift left), and `bsr`
-(bit shift right). Any type can implement `Bitwise` by delegating to its
-underlying integer representation.
+Any type can implement `Bitwise` by delegating to its underlying integer
+representation.
 """
 protocol Bitwise
   @doc """

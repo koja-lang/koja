@@ -1,6 +1,6 @@
 import helper
 
 fn main
-  print(helper.add(3, 4))
-  print(helper.multiply(5, 6))
+  print(Helper.add(3, 4))
+  print(Helper.multiply(5, 6))
 end

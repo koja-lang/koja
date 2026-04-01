@@ -1,7 +1,3 @@
-@moduledoc """
-String methods: iteration, slicing, byte-level access, and type conversion.
-"""
-
 impl Equality for String
   @doc """
   Returns `true` if both strings have the same content.

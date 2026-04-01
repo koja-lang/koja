@@ -3,6 +3,12 @@ struct Point
   y: Int
 end
 
-fn origin -> Point
-  Point{x: 0, y: 0}
+impl Point
+  fn origin -> Point
+    Point{x: 0, y: 0}
+  end
+
+  fn distance(self) -> Int
+    self.x + self.y
+  end
 end

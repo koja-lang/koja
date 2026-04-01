@@ -1,13 +1,12 @@
-@moduledoc """
+import std.fd
+
+@doc """
 Standard I/O operations.
 
 Provides `IO.puts`, `IO.warn`, `IO.write`, and `IO.gets` for common
 console I/O. For low-level access, use `STDIN`, `STDOUT`, and `STDERR`
 directly as `Fd` values.
 """
-
-import std.fd
-
 struct IO
 end
 

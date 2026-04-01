@@ -1,12 +1,3 @@
-@moduledoc """
-Core types available in every Expo module without an explicit import.
-
-Provides `Option<T>` for nullable values, `Result<T, E>` for fallible
-operations, `Pair<A, B>` for lightweight two-value grouping,
-`List<T>` for dynamically-sized collections, and `Enumeration<T>`
-for protocol-backed iteration.
-"""
-
 @doc """
 Represents a value that may or may not exist. Use `Some(value)` when a
 value is present, or `None` when it is absent.
@@ -376,15 +367,14 @@ impl ReplyTo<R>
   fn send(self, reply: R)
     panic("intrinsic")
   end
-end
 
-@doc """
-Sends `value` to the caller if `from` is present, does nothing otherwise.
-Convenience helper for process handlers -- use `reply(from, value)` instead
-of manually matching on the `Option`.
-"""
-fn reply<R>(from: Option<ReplyTo<R>>, value: R)
-  from.map(r -> r.send(value))
+  @doc """
+  Sends `value` to the caller if `from` is present, does nothing otherwise.
+  Convenience helper for process handlers.
+  """
+  fn reply(from: Option<ReplyTo<R>>, value: R)
+    from.map(r -> r.send(value))
+  end
 end
 
 @doc """

@@ -1,7 +1,7 @@
 import test_project.helper
 
 fn main
-  result = helper.add(10, 20)
+  result = Helper.add(10, 20)
   print(result)
-  print(helper.greet("world"))
+  print(Helper.greet("world"))
 end
