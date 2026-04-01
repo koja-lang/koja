@@ -101,10 +101,10 @@ references naturally.
 ### Package management
 
 "Declare what external code you use." This is real -- but it's a
-project-level concern, not a per-file concern. `project.expo` declares
+project-level concern, not a per-file concern. `expo.toml` declares
 dependencies. That's where external packages belong.
 
-**Belongs in `project.expo`, not in source files.**
+**Belongs in `expo.toml`, not in source files.**
 
 ### Conclusion
 
@@ -114,7 +114,7 @@ multi-pass compilation, convention-based privacy, IDE tooling).
 Intra-project imports are pure ceremony.
 
 For inter-package dependencies: the declaration belongs in
-`project.expo`. Package types are accessed via their package qualifier
+`expo.toml`. Package types are accessed via their package qualifier
 (`json.Parser`), and `type` aliasing creates local short names when
 desired. No per-file `import` statements at all.
 
@@ -184,7 +184,7 @@ deployment unit → the binary.
 
 ### Files are transparent
 
-The project (`project.expo`) defines the compilation unit. All `.expo`
+The project (`expo.toml`) defines the compilation unit. All `.expo`
 files in `src/` are collected into one flat type namespace. Files have no
 semantic meaning beyond grouping source text for human convenience.
 Splitting or merging files is always a refactor with zero semantic
@@ -220,21 +220,58 @@ files. The compiler resolves all types in a gather-then-check pass:
 Circular type references between files work naturally -- the gather pass
 sees both types before either is checked.
 
+### Multiple binaries
+
+A project can produce multiple binaries from the same `src/` namespace.
+The common case is a single entry point:
+
+```toml
+[project]
+name = "my_app"
+version = "0.1.0"
+entry = "main"
+```
+
+For projects that need multiple binaries (a server and its CLI tool, a
+compiler and its formatter), use `[[bin]]` sections:
+
+```toml
+[project]
+name = "auth-manager"
+version = "0.1.0"
+
+[[bin]]
+name = "auth-manager"
+entry = "main"
+
+[[bin]]
+name = "auth-cli"
+entry = "cli"
+```
+
+Each `entry` names a file in `src/` containing a `main` function. The
+project-level `entry` field is sugar for a single `[[bin]]` with
+`name = project.name`. Specifying both `entry` and `[[bin]]` is an error.
+
+Since all files form one flat namespace, every binary sees the same types
+and functions. The compiler type-checks once, then emits one binary per
+entry. Dead code elimination trims what each binary doesn't call. This
+matches the transparent file philosophy -- binaries differ only in where
+execution starts, not in what code is visible.
+
 ### External packages
 
-Dependencies are declared in `project.expo`. Packages are distributed
+Dependencies are declared in `expo.toml`. Packages are distributed
 via git -- no centralized registry. The `name` field sets the local
 namespace used to access the package's types in code:
 
-```expo
-Project{
-  name: "my_app",
-  src: ["src"],
-  deps: [
-    Dep{name: "json", git: "github.com/expo-pkg/json"},
-    Dep{name: "http", git: "github.com/expo-pkg/http"},
-  ],
-}
+```toml
+[project]
+name = "my_app"
+
+[deps]
+json = { git = "github.com/expo-pkg/json" }
+http = { git = "github.com/expo-pkg/http" }
 ```
 
 Package types are always accessed through their package qualifier:
@@ -261,16 +298,15 @@ This is the same `type` alias syntax used for shortening complex types
 (`type Ints = List<Int>`). One concept, no new keywords.
 
 Since packages are git-distributed, the consumer controls the local
-name. If two packages both want `http`, rename one in `project.expo`:
+name. If two packages both want `http`, rename one in `expo.toml`:
 
-```expo
-deps: [
-  Dep{name: "http", git: "github.com/expo-pkg/http"},
-  Dep{name: "fasthttp", git: "github.com/someone/http"},
-],
+```toml
+[deps]
+http = { git = "github.com/expo-pkg/http" }
+fasthttp = { git = "github.com/someone/http" }
 ```
 
-No conflict, no ambiguity. The `name` field is the namespace, and the
+No conflict, no ambiguity. The TOML key is the namespace, and the
 user has final say over it.
 
 There is no `import` keyword. Package types are qualified by their
@@ -321,9 +357,11 @@ successfully at scale.
 
 ## What a project looks like
 
-```expo
-// project.expo
-Project{name: "my_app", src: ["src"]}
+```toml
+# expo.toml
+[project]
+name = "my_app"
+version = "0.1.0"
 ```
 
 ```expo
@@ -430,7 +468,7 @@ types and protocols listed. Types that have `@doc false` are excluded.
   a local name for a package type."*
 - **Module-level documentation.** `@moduledoc` on files loses its
   current meaning. Type-level `@doc` and a project-level description
-  in `project.expo` replace it.
+  in `expo.toml` replace it.
 - **Dependency ordering between files.** The compiler no longer needs
   to determine which file to compile first. All files are processed
   together.
@@ -445,7 +483,7 @@ types and protocols listed. Types that have `@doc false` are excluded.
   external extensions.
 - **`@doc` and `@doc false`**: documentation annotations on types and
   functions.
-- **`project.expo`**: project configuration, including dependency
+- **`expo.toml`**: project configuration, including dependency
   declarations with git URLs and local package names.
 - **`type` aliases**: now also serve as the mechanism for creating
   unqualified names for package types.
@@ -507,13 +545,13 @@ types.
 - **`@moduledoc` replacement**: files currently use `@moduledoc` for
   file-level documentation. With files being transparent, this
   annotation needs a new purpose or removal. One option: `@moduledoc`
-  becomes `@doc` on the project (in `project.expo`). Another: drop it
+  becomes `@doc` on the project (in `expo.toml`). Another: drop it
   entirely and rely on type-level `@doc`. A third: keep it as prose
   documentation associated with the file, surfaced in docs as a
   "guide" page rather than an API page.
 
 - **Single-file mode**: `expo run foo.expo` currently works for quick
-  scripts without a `project.expo`. This should continue to work. A
+  scripts without an `expo.toml`. This should continue to work. A
   single file is trivially a project with one source file.
 
 - **Subdirectories**: `src/handlers/auth.expo` defines types in the
@@ -571,7 +609,7 @@ The proposed model:
    own functions. No module-level namespaces.
 3. **No intra-project imports** -- every type is visible everywhere
    within the project.
-4. **Dependencies in `project.expo`** -- external packages declared
+4. **Dependencies in `expo.toml`** -- external packages declared
    once via git URLs, with user-controlled local names.
 5. **Package types are qualified by default** -- `json.Parser`,
    `http.Request`. Casing disambiguates: `lowercase.PascalCase` is

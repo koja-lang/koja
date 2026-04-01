@@ -105,7 +105,7 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 - **Example codebase** -- 17 `.expo` files porting `auth-manager` (a real Rust microservice) into Expo pseudocode, validating the language feels right
 - **Memory strategy** -- documented in `archive/20260323-MEMORY.md` (stack, ownership+move, explicit arena)
 - **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `archive/20260323-CONCURRENCY.md` (processes, native runtime, supervision)
-- **Project config format** -- `project.expo` replacing `Cargo.toml`
+- **Project config format** -- `expo.toml` (TOML-based, replacing `project.expo`)
 - **Module system redesign** -- documented in `IMPORT.md` (files as transparent, types as namespaces, no intra-project imports, qualified package access, `import` keyword removed)
 
 ### Tooling (pulled forward)
@@ -160,7 +160,7 @@ Two independent tracks. Track A makes the language useful for real programs. Tra
 
 #### Test runner -- **DONE**
 
-`expo test` discovers `@test`-annotated functions across `src/` and `test/` directories, generates a synthetic test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure -- the test name is printed before each call so you always know which one failed. `project.expo` gains an optional `test` field (default `["test"]`). Validated with 17 tests in the `json` package (encoder and decoder coverage).
+`expo test` discovers `@test`-annotated functions across `src/` and `test/` directories, generates a synthetic test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure -- the test name is printed before each call so you always know which one failed. `expo.toml` has an optional `test` field (default `["test"]`). Validated with 17 tests in the `json` package (encoder and decoder coverage).
 
 #### Stdlib -- **DONE**
 
@@ -181,9 +181,9 @@ The litmus test: does the compiler or language runtime need it to function, or i
 
 #### Package manager
 
-- `project.expo` extended with dependency declarations via git URLs with user-controlled local names
+- `expo.toml` extended with dependency declarations via git URLs with user-controlled local names
 - Dependency resolution: fetch from git, lock file generation for reproducible builds
-- **Done when**: `project.expo` resolves dependencies and builds the project
+- **Done when**: `expo.toml` resolves dependencies and builds the project
 
 #### First-party packages
 
@@ -550,7 +550,7 @@ Active design discussions about the type system, code organization, and function
 - **Backend protocol**: codegen backends implement a `CodeEmitter` protocol against ExpoIR. The LLVM backend (current) is the first implementation, not a special case. Other backends become possible: Cranelift (fast compilation for the REPL), direct WASM emission (smaller output for edge), C emission (maximum portability), or an interpreter (scripting, hot-reload).
 - **Compiler pipeline**: `Source → AST → TypedAST → ExpoIR → [CodeEmitter backend] → output`. Lowering happens once; backends only handle "emit a function call" and "emit a branch," not "figure out how closures capture variables."
 - **Public API**: ExpoIR and the backend protocol would be published as packages after self-hosting, enabling third-party codegen backends. During bootstrap, they're Rust crates wrapping inkwell.
-- **Build-time selection**: `project.expo` or `expo build --backend cranelift` selects the backend. One backend per binary. The compiler monomorphizes all emitter calls against the selected implementation -- no vtable overhead.
+- **Build-time selection**: `expo.toml` or `expo build --backend cranelift` selects the backend. One backend per binary. The compiler monomorphizes all emitter calls against the selected implementation -- no vtable overhead.
 - **Timing**: the IR split is Phase 6 (self-hosting) work. The current crate boundaries (codegen depends on ast + typecheck, clean downward dependencies) already support this separation. Keeping `expo-codegen` internals organized now avoids a painful refactor later.
 
 ### Literal protocols

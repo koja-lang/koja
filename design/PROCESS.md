@@ -292,7 +292,7 @@ These are fundamentally different entry points with different ergonomics.
   paradigm to a completely different one. Is there a gradient?
 
 - **Library-only projects.** No entry point at all. `expo new --lib` or
-  a flag in `project.expo`.
+  a flag in `expo.toml`.
 
 ---
 

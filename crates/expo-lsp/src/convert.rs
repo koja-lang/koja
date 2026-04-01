@@ -28,7 +28,7 @@ pub(crate) fn span_to_range(span: &Span) -> Range {
 /// Resolves a module import path to a `.expo` file on disk.
 ///
 /// First tries project-aware resolution: walks up from the current file to
-/// find `project.expo`, and if the import starts with the project name,
+/// find `expo.toml`, and if the import starts with the project name,
 /// strips it and resolves relative to the project's src directories.
 /// Falls back to resolving relative to the current file's directory.
 pub(crate) fn resolve_module_file(current_uri: &Uri, module_path: &[String]) -> Option<PathBuf> {
@@ -79,81 +79,34 @@ fn resolve_via_project(start_dir: &std::path::Path, module_path: &[String]) -> O
     None
 }
 
+#[derive(serde::Deserialize)]
+struct ExpoToml {
+    project: ProjectInfo,
+}
+
+#[derive(serde::Deserialize)]
 struct ProjectInfo {
     name: String,
+    #[serde(default = "default_src")]
     src: Vec<String>,
+}
+
+fn default_src() -> Vec<String> {
+    vec!["src".to_string()]
 }
 
 fn find_project_config(start_dir: &std::path::Path) -> Option<(PathBuf, ProjectInfo)> {
     let mut dir = start_dir.to_path_buf();
     loop {
-        let candidate = dir.join("project.expo");
+        let candidate = dir.join("expo.toml");
         if candidate.exists() {
             let source = std::fs::read_to_string(&candidate).ok()?;
-            let info = parse_project_info(&source)?;
-            return Some((dir, info));
+            let parsed: ExpoToml = toml::from_str(&source).ok()?;
+            return Some((dir, parsed.project));
         }
         if !dir.pop() {
             return None;
         }
-    }
-}
-
-fn parse_project_info(source: &str) -> Option<ProjectInfo> {
-    use expo_ast::ast::*;
-
-    let wrapped = format!("fn __project__\n{source}\nend");
-    let result = expo_parser::parse(&wrapped);
-    for item in &result.module.items {
-        let Item::Function(func) = item else { continue };
-        for stmt in &func.body {
-            let Statement::Expr(Expr::StructConstruction {
-                type_path, fields, ..
-            }) = stmt
-            else {
-                continue;
-            };
-            if type_path.first().map(|s| s.as_str()) != Some("Project") {
-                continue;
-            }
-            let mut proj_name = None;
-            let mut src = vec!["src".to_string()];
-            for field in fields {
-                match field.name.as_str() {
-                    "name" => proj_name = extract_string_value(&field.value),
-                    "src" => {
-                        if let Some(list) = extract_string_list_value(&field.value) {
-                            src = list;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            return Some(ProjectInfo {
-                name: proj_name?,
-                src,
-            });
-        }
-    }
-    None
-}
-
-fn extract_string_value(expr: &expo_ast::ast::Expr) -> Option<String> {
-    if let expo_ast::ast::Expr::String { parts, .. } = expr
-        && parts.len() == 1
-        && let expo_ast::ast::StringPart::Literal { value, .. } = &parts[0]
-    {
-        Some(value.clone())
-    } else {
-        None
-    }
-}
-
-fn extract_string_list_value(expr: &expo_ast::ast::Expr) -> Option<Vec<String>> {
-    if let expo_ast::ast::Expr::List { elements, .. } = expr {
-        elements.iter().map(extract_string_value).collect()
-    } else {
-        None
     }
 }
 

@@ -347,42 +347,39 @@ The resolver knows about multiple module sources:
 
 ---
 
-## Project file: `project.expo`
+## Project file: `expo.toml`
 
-### Format: struct literal
+### Format: TOML
 
-```expo
-Project{
-  name: "my_app",
-  src: ["src", "lib"],
-  test: ["test"],
-}
+```toml
+[project]
+name = "my_app"
+version = "0.1.0"
+entry = "main"
+src = ["src", "lib"]
+test = ["test"]
 ```
 
-The driver parses the file with the existing parser, walks the AST for a
-`StructConstruction` node named `Project`, and extracts field values directly
-from the AST (string literals, list literals). No typechecker or codegen
-needed -- just AST pattern matching.
-
-`Project` is not a registered type. The driver recognizes it by convention.
+The driver parses the file with the `toml` crate and deserializes into a
+`ProjectConfig` struct via serde. No Expo parser or AST involved.
 
 ### Fields
 
-| Field   | Type           | Default    | Purpose                        |
-| ------- | -------------- | ---------- | ------------------------------ |
-| `name`  | `String`       | (required) | Project name                   |
-| `src`   | `List<String>` | `["src"]`  | Source directories             |
-| `test`  | `List<String>` | `["test"]` | Test directories               |
-| `entry` | `String`       | `"main"`   | Entry module (for executables) |
+| Field     | Type     | Default    | Purpose                        |
+| --------- | -------- | ---------- | ------------------------------ |
+| `name`    | string   | (required) | Project name                   |
+| `version` | string   | (required) | Project version                |
+| `src`     | [string] | `["src"]`  | Source directories             |
+| `test`    | [string] | `["test"]` | Test directories               |
+| `entry`   | string   | (none)     | Entry module (for executables) |
 
-Extends naturally: future fields like `deps`, `build_backend` are just more
-struct fields.
+Extends naturally: future tables like `[deps]` are just more TOML sections.
 
 ### Driver behavior
 
-- On `expo build` / `expo test` / `expo check`: look for `project.expo` in the
+- On `expo build` / `expo test` / `expo check`: look for `expo.toml` in the
   current directory.
-- If found: parse it, extract config, set project root to the `project.expo`
+- If found: parse it, extract config, set project root to the `expo.toml`
   directory.
 - If not found: fall back to current behavior (entry file's parent as root).
 - Module discovery: scan `src` dirs for `.expo` files to build the module graph.
@@ -414,7 +411,7 @@ In Expo, these map to:
   `@moduledoc` documents it. No `module` keyword -- the file IS the module.
 - **Type**: `struct` or `enum` with inline functions. The namespace boundary
   within a module. Types are the ideas; files organize them on disk.
-- **Project**: `project.expo` defines the build unit.
+- **Project**: `expo.toml` defines the build unit.
 
 ### Fractal consistency
 
@@ -523,7 +520,7 @@ assignment analysis. No dedicated keyword needed.
   way as recursive struct types (`Type::Indirect`), but this adds significant
   complexity and is not needed for A3b.
 - **Test runner**: `@test` annotated functions with `expo test`. Discovery
-  scans `test` dirs from `project.expo`. Implementation details deferred to
+  scans `test` dirs from `expo.toml`. Implementation details deferred to
   the implementation phase.
 - **Record width subtyping**: is `{foo: String, bar: Int, baz: Bool}`
   assignable to `{foo: String, bar: Int}`? TypeScript says yes (wider records

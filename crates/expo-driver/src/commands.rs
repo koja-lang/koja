@@ -13,7 +13,7 @@ use crate::project;
 
 /// `expo build [file.expo] [-o output] [--emit-llvm]` -- compiles an Expo program to an executable.
 ///
-/// With no arguments, looks for `project.expo` in the current directory.
+/// With no arguments, looks for `expo.toml` in the current directory.
 /// With `--emit-llvm`, prints LLVM IR to stdout instead of producing a binary.
 pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, color: bool) {
     if let Some(source) = file {
@@ -32,9 +32,9 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, 
         let config = match project::load_project(&cwd) {
             Ok(Some(c)) => c,
             Ok(None) => {
-                eprintln!("error: no source file specified and no project.expo found");
+                eprintln!("error: no source file specified and no expo.toml found");
                 eprintln!("Usage: expo build <file.expo> [-o output]");
-                eprintln!("  or:  create a project.expo in the current directory");
+                eprintln!("  or:  create an expo.toml in the current directory");
                 process::exit(1);
             }
             Err(e) => {
@@ -49,7 +49,7 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, 
 
 /// `expo run [file.expo] [-- args...]` -- compiles to a temporary binary, runs it, then cleans up.
 ///
-/// With no arguments, looks for `project.expo` in the current directory.
+/// With no arguments, looks for `expo.toml` in the current directory.
 pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
     if let Some(path) = file {
         let tmp_dir = env::temp_dir();
@@ -88,9 +88,9 @@ pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
         let config = match project::load_project(&cwd) {
             Ok(Some(c)) => c,
             Ok(None) => {
-                eprintln!("error: no source file specified and no project.expo found");
+                eprintln!("error: no source file specified and no expo.toml found");
                 eprintln!("Usage: expo run <file.expo>");
-                eprintln!("  or:  create a project.expo in the current directory");
+                eprintln!("  or:  create an expo.toml in the current directory");
                 process::exit(1);
             }
             Err(e) => {
@@ -120,7 +120,7 @@ pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
 
 /// `expo check [file.expo ...]` -- type-checks without producing an executable.
 ///
-/// With no arguments, looks for `project.expo` in the current directory.
+/// With no arguments, looks for `expo.toml` in the current directory.
 pub fn cmd_check(files: Vec<String>, color: bool) {
     if files.is_empty() {
         let cwd = env::current_dir().unwrap_or_else(|e| {
@@ -131,9 +131,9 @@ pub fn cmd_check(files: Vec<String>, color: bool) {
         let config = match project::load_project(&cwd) {
             Ok(Some(c)) => c,
             Ok(None) => {
-                eprintln!("error: no source file specified and no project.expo found");
+                eprintln!("error: no source file specified and no expo.toml found");
                 eprintln!("Usage: expo check <file.expo>");
-                eprintln!("  or:  create a project.expo in the current directory");
+                eprintln!("  or:  create an expo.toml in the current directory");
                 process::exit(1);
             }
             Err(e) => {
@@ -169,7 +169,7 @@ pub fn cmd_check(files: Vec<String>, color: bool) {
 
 /// `expo doc [file.expo ...] [-o output_dir]` -- generates HTML documentation.
 ///
-/// With no arguments, looks for `project.expo` in the current directory.
+/// With no arguments, looks for `expo.toml` in the current directory.
 pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
     let mut collected: Vec<(String, String)> = Vec::new();
 
@@ -182,9 +182,9 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
         let config = match project::load_project(&cwd) {
             Ok(Some(c)) => c,
             Ok(None) => {
-                eprintln!("error: no source file specified and no project.expo found");
+                eprintln!("error: no source file specified and no expo.toml found");
                 eprintln!("Usage: expo doc <file.expo ...> [-o output_dir]");
-                eprintln!("  or:  create a project.expo in the current directory");
+                eprintln!("  or:  create an expo.toml in the current directory");
                 process::exit(1);
             }
             Err(e) => {
@@ -363,7 +363,7 @@ fn collect_expo_files_with_prefix(
 
 /// `expo test` -- discovers `@test` functions, compiles a test harness, and runs it.
 ///
-/// Requires a `project.expo` in the current directory.
+/// Requires an `expo.toml` in the current directory.
 pub fn cmd_test(color: bool) {
     let cwd = env::current_dir().unwrap_or_else(|e| {
         eprintln!("error: cannot determine current directory: {e}");
@@ -373,8 +373,8 @@ pub fn cmd_test(color: bool) {
     let config = match project::load_project(&cwd) {
         Ok(Some(c)) => c,
         Ok(None) => {
-            eprintln!("error: no project.expo found");
-            eprintln!("Usage: expo test (run from a directory containing project.expo)");
+            eprintln!("error: no expo.toml found");
+            eprintln!("Usage: expo test (run from a directory containing expo.toml)");
             process::exit(1);
         }
         Err(e) => {
@@ -403,15 +403,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
             }
         };
 
-        let is_project_file = Path::new(path)
-            .file_name()
-            .is_some_and(|n| n == "project.expo");
-
-        let result = if is_project_file {
-            expo_fmt::format_project(&source)
-        } else {
-            expo_fmt::format(&source)
-        };
+        let result = expo_fmt::format(&source);
 
         let formatted = match result {
             expo_fmt::FormatResult::Ok(s) => s,

@@ -27,7 +27,7 @@ struct Cli {
 enum Command {
     /// Compile a source file to a native binary
     Build {
-        /// Source file (omit to use project.expo)
+        /// Source file (omit to use expo.toml)
         file: Option<String>,
 
         /// Output binary name
@@ -40,12 +40,12 @@ enum Command {
     },
     /// Type-check a source file without compiling
     Check {
-        /// Source files (omit to use project.expo)
+        /// Source files (omit to use expo.toml)
         files: Vec<String>,
     },
     /// Generate HTML documentation
     Doc {
-        /// Source files or directories (omit to use project.expo)
+        /// Source files or directories (omit to use expo.toml)
         files: Vec<String>,
 
         /// Output directory for generated HTML
@@ -77,14 +77,14 @@ enum Command {
     },
     /// Compile and run a source file
     Run {
-        /// Source file (omit to use project.expo)
+        /// Source file (omit to use expo.toml)
         file: Option<String>,
 
         /// Arguments passed to the compiled program
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Run tests (requires project.expo)
+    /// Run tests (requires expo.toml)
     Test,
 }
 

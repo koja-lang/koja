@@ -192,7 +192,7 @@ fn can_resolve(module_name: &str, root_dir: &Path) -> bool {
 // Project-mode resolution
 // =============================================================================
 
-/// Builds a [`ModuleGraph`] for a project with `project.expo`.
+/// Builds a [`ModuleGraph`] for a project with `expo.toml`.
 ///
 /// All stdlib modules are auto-imported (inserted into the graph first, in
 /// dependency order). The entry module and its transitive imports are then
@@ -209,7 +209,7 @@ pub fn resolve_project_modules(
     let entry = config
         .entry
         .as_deref()
-        .ok_or("project.expo has no `entry` field; required for build/run/check")?;
+        .ok_or("expo.toml has no `entry` field; required for build/run/check")?;
 
     let entry_fqn = format!("{}.{}", config.name, entry);
 

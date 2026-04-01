@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Test runner -- `expo test` discovers `@test`-annotated functions in `src/` and `test/` directories, generates a test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure with the test name printed before each call. `project.expo` gains an optional `test` field (default `["test"]`).
+- Test runner -- `expo test` discovers `@test`-annotated functions in `src/` and `test/` directories, generates a test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure with the test name printed before each call. `expo.toml` has an optional `test` field (default `["test"]`).
 - `std.socket` module -- complete POSIX socket surface. `SocketKind` enum (`Stream`, `Datagram`), `IPAddress` struct (Binary-backed with `v4()`, `loopback()`, `any()`, `v4?()`, `v6?()` helpers), `SocketAddress` struct. `Socket` with `create`, `bind`, `connect`, `resolve` (DNS via `getaddrinfo`), `send_to`, `recv_from`, `listen`, `accept`, `set_reuse_addr`, `close`. Socket types moved from `std.fd` to `std.socket`. First-party `net` packages can now be built entirely in pure Expo without compiler intrinsics.
 - `Binary.byte_size()` -- returns the number of bytes in a binary value. `Binary` and `Bits` types now support debug formatting.
 - `Debug` protocol (`std.debug`) -- `format(self) -> String` returns a string representation, `inspect(move self) -> Self` prints and returns the value for tap-style chaining. Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation (`"#{value}"`) now dispatch through `Debug.format()` instead of hardcoded printf specifiers.
@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FileMode` enum (`Read`, `Write`, `Append`) and updated `File.open(path, mode)` for explicit open modes. New path-based file operations: `File.write(path, content)`, `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)`. Append mode support via `OpenOptions`. Handle-level writes via `file.fd.write(data)`.
 - `System` type (`std.system`) -- `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Environment variable access, working directory, and hostname via runtime intrinsics.
 - `DateTime` and `Duration` types (`std.time`) -- `DateTime.now()` for wall-clock time, `DateTime.timestamp_millis()` for epoch millis. `Duration.from_secs()`, `Duration.from_millis()`, and `Duration.millis()` for time spans. `Duration` is pure Expo; only `DateTime.now()` requires a runtime shim.
+
+### Changed
+
+- Project config migration -- replaced `project.expo` (Expo struct literal parsed via AST hack) with `expo.toml` (TOML-based, parsed via `toml` crate). Simpler, more robust, and prepares for the dependency system.
 
 ### Fixed
 
