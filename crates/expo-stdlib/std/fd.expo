@@ -1,4 +1,6 @@
-@doc "Raw file descriptor for I/O operations."
+@doc """
+Raw file descriptor for I/O operations.
+"""
 struct Fd
   descriptor: Int
 end
@@ -28,12 +30,18 @@ impl Fd
   end
 end
 
+@doc """
+The mode used when opening a file: `Read`, `Write`, or `Append`.
+"""
 enum FileMode
   Read
   Write
   Append
 end
 
+@doc """
+A file handle backed by a file descriptor.
+"""
 struct File
   fd: Fd
 end

@@ -1,8 +1,15 @@
+@doc """
+The kind of socket: `Stream` (TCP) or `Datagram` (UDP).
+"""
 enum SocketKind
   Stream
   Datagram
 end
 
+@doc """
+An IP address stored as raw bytes. IPv4 addresses use 4 bytes,
+IPv6 addresses use 16 bytes.
+"""
 struct IPAddress
   bytes: Binary
 end
@@ -44,12 +51,17 @@ impl IPAddress
   end
 end
 
+@doc """
+An IP address paired with a port number.
+"""
 struct SocketAddress
   ip: IPAddress
   port: Int
 end
 
-@doc "POSIX socket for TCP/UDP network I/O."
+@doc """
+POSIX socket for TCP/UDP network I/O.
+"""
 struct Socket
   fd: Fd
 end

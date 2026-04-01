@@ -203,9 +203,9 @@ fn annotation_string(annotation: &Option<expo_ast::ast::Annotation>) -> Option<S
 fn attach_impl_functions(
     imp: &ImplBlock,
     local_structs: &mut Vec<DocStruct>,
-    local_enums: &mut Vec<DocEnum>,
-    project_structs: &mut Vec<DocStruct>,
-    project_enums: &mut Vec<DocEnum>,
+    local_enums: &mut [DocEnum],
+    project_structs: &mut [DocStruct],
+    project_enums: &mut [DocEnum],
 ) {
     if imp.trait_expr.is_some() {
         return;

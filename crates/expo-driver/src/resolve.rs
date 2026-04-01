@@ -22,11 +22,11 @@ pub struct ResolvedModule {
     pub errors: Vec<expo_ast::ast::Diagnostic>,
 }
 
-/// The complete set of modules reachable from an entry file, in topological order.
+/// All modules in a compilation unit: stdlib + project files.
 pub struct ModuleGraph {
     pub entry: String,
     pub modules: HashMap<String, ResolvedModule>,
-    /// Module names in dependency order (leaves first).
+    /// Module names in processing order (stdlib first, then project files).
     pub order: Vec<String>,
 }
 

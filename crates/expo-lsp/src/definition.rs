@@ -41,6 +41,7 @@ impl Backend {
             SymbolInfo::Struct { name } | SymbolInfo::Enum { name } => {
                 state.ctx.types.get(name).map(|info| info.span)
             }
+            SymbolInfo::Protocol { name } => state.ctx.protocols.get(name).map(|info| info.span),
             SymbolInfo::Constant { name } => state.module.items.iter().find_map(|item| {
                 if let Item::Constant(c) = item
                     && c.name == *name
@@ -50,7 +51,7 @@ impl Backend {
                     None
                 }
             }),
-            SymbolInfo::Variable { .. } => None,
+            SymbolInfo::TypeAlias { .. } | SymbolInfo::Variable { .. } => None,
         };
 
         let span = match def_span {

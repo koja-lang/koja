@@ -19,7 +19,9 @@ pub(crate) enum SymbolInfo {
     Constant { name: String },
     Enum { name: String },
     Function { name: String },
+    Protocol { name: String },
     Struct { name: String },
+    TypeAlias { name: String },
     Variable { name: String },
 }
 
@@ -128,6 +130,9 @@ pub(crate) fn find_doc_for(module: &Module, name: &str) -> Option<String> {
             Item::Constant(c) if c.name == name => {
                 return span::annotation_doc(&c.annotation);
             }
+            Item::Protocol(p) if p.name == name => {
+                return span::annotation_doc(&p.annotation);
+            }
             Item::TypeAlias(t) if t.name == name => {
                 return span::annotation_doc(&t.annotation);
             }
@@ -173,8 +178,16 @@ pub(crate) fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo>
         Some(SymbolInfo::Enum {
             name: name.to_string(),
         })
+    } else if ctx.protocols.contains_key(name) {
+        Some(SymbolInfo::Protocol {
+            name: name.to_string(),
+        })
     } else if ctx.constants.contains_key(name) {
         Some(SymbolInfo::Constant {
+            name: name.to_string(),
+        })
+    } else if ctx.type_aliases.contains_key(name) {
+        Some(SymbolInfo::TypeAlias {
             name: name.to_string(),
         })
     } else {

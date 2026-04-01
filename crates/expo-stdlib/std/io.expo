@@ -8,8 +8,19 @@ directly as `Fd` values.
 struct IO
 end
 
+@doc """
+The standard input file descriptor.
+"""
 const STDIN: Fd = Fd{descriptor: 0}
+
+@doc """
+The standard output file descriptor.
+"""
 const STDOUT: Fd = Fd{descriptor: 1}
+
+@doc """
+The standard error file descriptor.
+"""
 const STDERR: Fd = Fd{descriptor: 2}
 
 impl IO

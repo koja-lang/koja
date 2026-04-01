@@ -38,8 +38,16 @@ impl Backend {
                 build_function_hover(name, state, &self.stdlib_modules)
             }
             SymbolInfo::Struct { name } => build_struct_hover(name, state, &self.stdlib_modules),
-            SymbolInfo::Constant { name } => build_constant_hover(name, state),
+            SymbolInfo::Constant { name } => {
+                build_constant_hover(name, state, &self.stdlib_modules)
+            }
             SymbolInfo::Enum { name } => build_enum_hover(name, state, &self.stdlib_modules),
+            SymbolInfo::Protocol { name } => {
+                build_protocol_hover(name, state, &self.stdlib_modules)
+            }
+            SymbolInfo::TypeAlias { name } => {
+                build_type_alias_hover(name, state, &self.stdlib_modules)
+            }
             SymbolInfo::Variable { name } => Some(format!("```expo\n{}\n```", name)),
         };
 
@@ -119,10 +127,14 @@ fn build_struct_hover(
     Some(format_hover(&signature, doc.as_deref()))
 }
 
-fn build_constant_hover(name: &str, state: &DocumentState) -> Option<String> {
+fn build_constant_hover(
+    name: &str,
+    state: &DocumentState,
+    stdlib_modules: &[Module],
+) -> Option<String> {
     let ty = state.ctx.constants.get(name)?;
     let signature = format!("const {}: {}", name, ty.display());
-    let doc = lookup::find_doc_for(&state.module, name);
+    let doc = resolve_doc(name, state, stdlib_modules);
     Some(format_hover(&signature, doc.as_deref()))
 }
 
@@ -151,6 +163,50 @@ fn build_enum_hover(
         })
         .collect();
     let signature = format!("enum {}\n{}\nend", name, variants.join("\n"));
+    let doc = resolve_doc(name, state, stdlib_modules);
+    Some(format_hover(&signature, doc.as_deref()))
+}
+
+fn build_protocol_hover(
+    name: &str,
+    state: &DocumentState,
+    stdlib_modules: &[Module],
+) -> Option<String> {
+    let info = state.ctx.protocols.get(name)?;
+    let tp = if info.type_params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", info.type_params.join(", "))
+    };
+    let methods: Vec<String> = info
+        .methods
+        .iter()
+        .map(|(n, sig)| {
+            let params_str: Vec<String> = sig
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name, p.ty.display()))
+                .collect();
+            format!(
+                "  fn {}({}) -> {}",
+                n,
+                params_str.join(", "),
+                sig.return_type.display()
+            )
+        })
+        .collect();
+    let signature = format!("protocol {}{}\n{}\nend", name, tp, methods.join("\n"));
+    let doc = resolve_doc(name, state, stdlib_modules);
+    Some(format_hover(&signature, doc.as_deref()))
+}
+
+fn build_type_alias_hover(
+    name: &str,
+    state: &DocumentState,
+    stdlib_modules: &[Module],
+) -> Option<String> {
+    let ty = state.ctx.type_aliases.get(name)?;
+    let signature = format!("type {} = {}", name, ty.display());
     let doc = resolve_doc(name, state, stdlib_modules);
     Some(format_hover(&signature, doc.as_deref()))
 }

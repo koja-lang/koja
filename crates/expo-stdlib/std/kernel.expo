@@ -423,6 +423,10 @@ protocol Process<C, M, R>
   end
 end
 
+@doc """
+A lightweight async task that runs a function in a spawned process and
+returns its result via `Task.await`.
+"""
 struct Task<R>
   work: fn() -> R
 end

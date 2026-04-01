@@ -1,4 +1,6 @@
-@doc "Wall-clock time as an epoch-millisecond timestamp."
+@doc """
+Wall-clock time as an epoch-millisecond timestamp.
+"""
 struct DateTime
   millis: Int
 end
@@ -19,6 +21,9 @@ impl DateTime
   end
 end
 
+@doc """
+A span of time measured in milliseconds.
+"""
 struct Duration
   millis: Int
 end

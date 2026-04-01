@@ -268,23 +268,9 @@ pub fn check_project(config: &ProjectConfig, project_root: &Path, color: bool) -
 /// Inserts stdlib modules at the front of an existing graph's order.
 /// Used for single-file mode where the graph is built without stdlib.
 fn prepend_stdlib(graph: &mut ModuleGraph) {
-    let mut stdlib_order = Vec::new();
-    for &(name, source) in expo_stdlib::SOURCES {
-        let parse_result = expo_parser::parse(source);
-        stdlib_order.push(name.to_string());
-        graph.modules.insert(
-            name.to_string(),
-            resolve::ResolvedModule {
-                name: name.to_string(),
-                path: std::path::PathBuf::from(format!("<{name}>")),
-                source: source.to_string(),
-                module: parse_result.module,
-                errors: parse_result.errors,
-            },
-        );
-    }
-    stdlib_order.append(&mut graph.order);
-    graph.order = stdlib_order;
+    let user_order = std::mem::take(&mut graph.order);
+    resolve::insert_stdlib(graph);
+    graph.order.extend(user_order);
 }
 
 /// A discovered `@test` function: its fully qualified module name, function name,
