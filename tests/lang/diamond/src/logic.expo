@@ -1,5 +1,3 @@
-import diamond.types
-
 struct Geometry
 end
 

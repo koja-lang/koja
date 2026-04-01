@@ -301,10 +301,13 @@ impl TypeContext {
             }
         }
         for (name, blocks) in &other.generic_impl_asts {
-            self.generic_impl_asts
-                .entry(name.clone())
-                .or_default()
-                .extend(blocks.iter().cloned());
+            let existing = self.generic_impl_asts.entry(name.clone()).or_default();
+            for block in blocks {
+                let dominated = existing.iter().any(|b| b.span == block.span);
+                if !dominated {
+                    existing.push(block.clone());
+                }
+            }
         }
         for (name, ast) in &other.generic_protocol_asts {
             if !self.generic_protocol_asts.contains_key(name) {
@@ -317,20 +320,33 @@ impl TypeContext {
             }
         }
         for (type_name, impls) in &other.protocol_impls {
-            self.protocol_impls
-                .entry(type_name.clone())
-                .or_default()
-                .extend(impls.iter().cloned());
+            let existing = self.protocol_impls.entry(type_name.clone()).or_default();
+            for entry in impls {
+                if !existing.contains(entry) {
+                    existing.push(entry.clone());
+                }
+            }
         }
         for (type_name, fns) in &other.synthesized_default_fns {
-            self.synthesized_default_fns
+            let existing = self
+                .synthesized_default_fns
                 .entry(type_name.clone())
-                .or_default()
-                .extend(fns.iter().cloned());
+                .or_default();
+            for f in fns {
+                let dominated = existing.iter().any(|e| e.span == f.span);
+                if !dominated {
+                    existing.push(f.clone());
+                }
+            }
         }
         for (name, ty) in &other.type_aliases {
             if !self.type_aliases.contains_key(name) {
                 self.type_aliases.insert(name.clone(), ty.clone());
+            }
+        }
+        for (name, ty) in &other.constants {
+            if !self.constants.contains_key(name) {
+                self.constants.insert(name.clone(), ty.clone());
             }
         }
         for (span, info) in &other.closure_info {

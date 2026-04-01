@@ -13,9 +13,14 @@ use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
 use crate::resolve::{self, ModuleGraph};
 
-/// Runs the type-checking pipeline for every module in a graph that includes
-/// stdlib modules. Stdlib context is accumulated as stdlib modules are processed,
-/// then merged into every subsequent module.
+/// Runs the type-checking pipeline for every module in a graph.
+///
+/// Stdlib modules are processed sequentially (they have a defined dependency
+/// order). Project modules use a gather-unify-check pipeline:
+///   1. **Gather** – collect type signatures from every project module.
+///   2. **Unify** – merge all project contexts into a single shared context
+///      so every module sees every other module's types without imports.
+///   3. **Check** – type-check each project module against the unified context.
 ///
 /// Returns the per-module type contexts and whether any errors were found.
 pub fn typecheck_graph(
@@ -42,8 +47,6 @@ pub fn typecheck_graph(
         return (module_contexts, true);
     }
 
-    // Phase 1: collect all struct/enum names across every module so that
-    // cross-module type references resolve on the first pass.
     let all_modules: Vec<&Module> = graph
         .order
         .iter()
@@ -53,25 +56,44 @@ pub fn typecheck_graph(
 
     let mut stdlib_ctx = expo_typecheck::context::TypeContext::new();
 
-    // Phase 2: per-module collection and type checking.
-    for name in &graph.order {
-        let rm = &graph.modules[name];
+    let (stdlib_names, project_names): (Vec<&String>, Vec<&String>) =
+        graph.order.iter().partition(|n| n.starts_with("std."));
 
-        if name.starts_with("std.") {
-            let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
-            ctx.merge(&stdlib_ctx);
-            stdlib_ctx.merge(&ctx);
-            module_contexts.insert(name.clone(), ctx);
-        } else {
-            let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
-            ctx.merge(&stdlib_ctx);
-            expo_typecheck::auto_derive_debug(&mut ctx);
-            expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
-            expo_typecheck::mark_recursive_fields(&mut ctx);
-            expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
-            expo_typecheck::check_module(&rm.module, &mut ctx);
-            module_contexts.insert(name.clone(), ctx);
-        }
+    // Stdlib: sequential accumulation (dependency-ordered).
+    for name in &stdlib_names {
+        let rm = &graph.modules[*name];
+        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
+        ctx.merge(&stdlib_ctx);
+        stdlib_ctx.merge(&ctx);
+        module_contexts.insert((*name).clone(), ctx);
+    }
+
+    // Gather: collect signatures from every project module.
+    for name in &project_names {
+        let rm = &graph.modules[*name];
+        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
+        ctx.merge(&stdlib_ctx);
+        expo_typecheck::auto_derive_debug(&mut ctx);
+        expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
+        expo_typecheck::mark_recursive_fields(&mut ctx);
+        module_contexts.insert((*name).clone(), ctx);
+    }
+
+    // Unify: build a shared context containing all project definitions.
+    let mut unified_project_ctx = stdlib_ctx.clone();
+    for name in &project_names {
+        unified_project_ctx.merge(&module_contexts[*name]);
+    }
+
+    // Check: type-check each project module against the unified context.
+    for name in &project_names {
+        let rm = &graph.modules[*name];
+        let mut ctx = module_contexts.remove(*name).unwrap();
+        ctx.merge(&unified_project_ctx);
+        warn_deprecated_imports(&rm.module, &mut ctx);
+        expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
+        expo_typecheck::check_module(&rm.module, &mut ctx);
+        module_contexts.insert((*name).clone(), ctx);
     }
 
     for name in &graph.order {
@@ -95,6 +117,24 @@ pub fn typecheck_graph(
     }
 
     (module_contexts, has_errors)
+}
+
+/// Emits a deprecation warning for each intra-project `import` statement.
+/// Stdlib imports (`std.*`) are silently ignored since they'll be handled
+/// when `import` is removed from the grammar entirely.
+fn warn_deprecated_imports(module: &Module, ctx: &mut expo_typecheck::context::TypeContext) {
+    for item in &module.items {
+        if let Item::Import(import) = item {
+            let dotted = import.path.join(".");
+            if !dotted.starts_with("std.") && dotted != "std" {
+                ctx.warning(
+                    "import is unnecessary: all types in the project are visible in every file"
+                        .to_string(),
+                    import.span,
+                );
+            }
+        }
+    }
 }
 
 /// Compiles a fully resolved module graph into an executable.
@@ -366,25 +406,13 @@ fn discover_tests(graph: &ModuleGraph, _project_name: &str) -> Vec<TestCase> {
 
 /// Generates the Expo source for a test harness module.
 ///
-/// The harness imports every module that contains tests, then calls each test
-/// function sequentially. It prints the test description before calling, and
-/// "ok" after it returns. If a test panics, the process aborts and the last
-/// printed description identifies the failing test.
-fn generate_harness(tests: &[TestCase], graph: &ModuleGraph) -> String {
-    let mut imports: Vec<String> = Vec::new();
-    let mut seen_modules = std::collections::HashSet::new();
-
-    for rm in graph.modules.values() {
-        if rm.name.starts_with("std.") {
-            continue;
-        }
-        if seen_modules.insert(rm.name.clone()) {
-            imports.push(format!("import {}", rm.name));
-        }
-    }
-
-    imports.sort();
-
+/// Calls each `@test` function sequentially. Prints the test description
+/// before calling, and "ok" after it returns. If a test panics, the process
+/// aborts and the last printed description identifies the failing test.
+///
+/// No imports are needed -- the gather-then-check pipeline makes all project
+/// types visible to every module automatically.
+fn generate_harness(tests: &[TestCase], _graph: &ModuleGraph) -> String {
     let total = tests.len();
     let mut body = String::new();
     body.push_str(&format!("  print(\"running {} tests\")\n", total));
@@ -400,11 +428,6 @@ fn generate_harness(tests: &[TestCase], graph: &ModuleGraph) -> String {
     body.push_str(&format!("  print(\"{} passed, 0 failed\")\n", total));
 
     let mut source = String::new();
-    for imp in &imports {
-        source.push_str(imp);
-        source.push('\n');
-    }
-    source.push('\n');
     source.push_str("fn main\n");
     source.push_str(&body);
     source.push_str("end\n");

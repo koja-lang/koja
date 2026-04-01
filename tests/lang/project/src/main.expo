@@ -1,5 +1,3 @@
-import test_project.helper
-
 fn main
   result = Helper.add(10, 20)
   print(result)

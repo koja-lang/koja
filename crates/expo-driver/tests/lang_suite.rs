@@ -176,29 +176,6 @@ fn lang_tests() {
 }
 
 #[test]
-fn lang_import_tests() {
-    let dir = lang_dir().join("imports");
-    if !dir.exists() {
-        return;
-    }
-
-    let main_file = dir.join("main.expo");
-    if !main_file.exists() {
-        return;
-    }
-
-    let expected_path = dir.join("main.stdout");
-    assert!(expected_path.exists(), "missing imports/main.stdout");
-
-    let (stdout, stderr, code) = run_expo(&main_file);
-    assert!(
-        code == 0,
-        "imports/main.expo failed with code {code}\nstderr:\n{stderr}"
-    );
-    assert_output_matches("imports/main", &stdout, &expected_path);
-}
-
-#[test]
 fn lang_project_build_test() {
     let project_dir = lang_dir().join("project");
     if !project_dir.exists() {
@@ -308,6 +285,33 @@ fn lang_diamond_import_test() {
         "expo run failed in diamond dir with code {code}\nstderr:\n{stderr}"
     );
     assert_output_matches("diamond/run", &stdout, &expected_path);
+}
+
+#[test]
+fn lang_cross_ref_test() {
+    let project_dir = lang_dir().join("cross_ref");
+    if !project_dir.exists() {
+        panic!("test fixture tests/lang/cross_ref/ not found");
+    }
+
+    let expected_path = project_dir.join("expected.stdout");
+    assert!(expected_path.exists(), "missing cross_ref/expected.stdout");
+
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("run").current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute expo run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert!(
+        code == 0,
+        "expo run failed in cross_ref dir with code {code}\nstderr:\n{stderr}"
+    );
+    assert_output_matches("cross_ref/run", &stdout, &expected_path);
 }
 
 #[test]

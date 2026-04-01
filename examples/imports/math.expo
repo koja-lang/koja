@@ -1,8 +1,0 @@
-@doc "Adds two integers."
-fn add(a: Int32, b: Int32) -> Int32
-  a + b
-end
-
-priv fn internal_helper(x: Int32) -> Int32
-  x * 2
-end

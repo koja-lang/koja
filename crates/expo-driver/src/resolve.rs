@@ -194,12 +194,9 @@ fn can_resolve(module_name: &str, root_dir: &Path) -> bool {
 
 /// Builds a [`ModuleGraph`] for a project with `expo.toml`.
 ///
-/// All stdlib modules are auto-imported (inserted into the graph first, in
-/// dependency order). The entry module and its transitive imports are then
-/// resolved with namespace-aware dispatch:
-///
-/// - Project name prefix → strip it, resolve in `src/` dirs
-/// - `std` prefix → already in graph from auto-import
+/// Scans all `src` directories for `.expo` files and adds them to the graph.
+/// Stdlib modules are inserted first. No import-following or topological
+/// sorting -- all project files form a flat namespace.
 pub fn resolve_project_modules(
     config: &ProjectConfig,
     project_root: &Path,
@@ -220,21 +217,13 @@ pub fn resolve_project_modules(
     };
 
     insert_stdlib(&mut graph);
+    scan_directories(&config.name, &src_roots, &mut graph)?;
 
-    let entry_path = resolve_project_import_path(entry, &src_roots)?;
-
-    let mut visiting: Vec<String> = Vec::new();
-    let mut visited: HashSet<String> = graph.modules.keys().cloned().collect();
-
-    resolve_project_recursive(
-        &entry_fqn,
-        &entry_path,
-        config,
-        &src_roots,
-        &mut graph,
-        &mut visiting,
-        &mut visited,
-    )?;
+    if !graph.modules.contains_key(&entry_fqn) {
+        return Err(format!(
+            "entry module `{entry}` not found in src directories"
+        ));
+    }
 
     Ok(graph)
 }
@@ -257,149 +246,52 @@ pub fn insert_stdlib(graph: &mut ModuleGraph) {
     }
 }
 
-fn resolve_project_recursive(
-    module_fqn: &str,
-    module_path: &Path,
-    config: &ProjectConfig,
-    src_roots: &[PathBuf],
+/// Scans directories for `.expo` files and adds each as a module to the graph.
+/// The fully qualified name is `{project_name}.{relative_path}` where
+/// `relative_path` is the file path relative to the src root with `.expo`
+/// stripped and `/` replaced by `.`.
+fn scan_directories(
+    project_name: &str,
+    roots: &[PathBuf],
     graph: &mut ModuleGraph,
-    visiting: &mut Vec<String>,
-    visited: &mut HashSet<String>,
 ) -> Result<(), String> {
-    if visited.contains(module_fqn) {
-        return Ok(());
-    }
-
-    if visiting.contains(&module_fqn.to_string()) {
-        let cycle_start = visiting.iter().position(|n| n == module_fqn).unwrap_or(0);
-        let cycle: Vec<&str> = visiting[cycle_start..]
-            .iter()
-            .map(|s| s.as_str())
-            .chain(std::iter::once(module_fqn))
-            .collect();
-        return Err(format!("circular import detected: {}", cycle.join(" -> ")));
-    }
-
-    let source = fs::read_to_string(module_path)
-        .map_err(|e| format!("error reading {}: {e}", module_path.display()))?;
-    let parse_result = expo_parser::parse(&source);
-
-    visiting.push(module_fqn.to_string());
-
-    let imports = extract_project_imports(&parse_result.module, config, src_roots);
-    for (import_fqn, _) in &imports {
-        if graph.modules.contains_key(import_fqn) || visited.contains(import_fqn) {
+    for root in roots {
+        if !root.is_dir() {
             continue;
         }
-
-        let relative = strip_project_prefix(import_fqn, &config.name)
-            .ok_or_else(|| format!("cannot resolve import `{import_fqn}`: unknown namespace"))?;
-
-        let import_path = resolve_project_import_path(relative, src_roots)?;
-        resolve_project_recursive(
-            import_fqn,
-            &import_path,
-            config,
-            src_roots,
-            graph,
-            visiting,
-            visited,
-        )?;
-    }
-
-    visiting.pop();
-    visited.insert(module_fqn.to_string());
-
-    graph.order.push(module_fqn.to_string());
-    graph.modules.insert(
-        module_fqn.to_string(),
-        ResolvedModule {
-            name: module_fqn.to_string(),
-            path: module_path.to_path_buf(),
-            source,
-            module: parse_result.module,
-            errors: parse_result.errors,
-        },
-    );
-
-    Ok(())
-}
-
-/// Strips the project name prefix from a fully qualified module name.
-/// Returns `None` if the name doesn't start with the project name.
-fn strip_project_prefix<'a>(fqn: &'a str, project_name: &str) -> Option<&'a str> {
-    fqn.strip_prefix(project_name)
-        .and_then(|rest| rest.strip_prefix('.'))
-}
-
-/// Resolves a project-relative module path (with project prefix already stripped)
-/// against the src root directories.
-fn resolve_project_import_path(
-    relative_module: &str,
-    src_roots: &[PathBuf],
-) -> Result<PathBuf, String> {
-    let relative = relative_module.replace('.', "/");
-
-    for root in src_roots {
-        let file_path = root.join(format!("{relative}.expo"));
-        if file_path.exists() {
-            return Ok(file_path);
-        }
-
-        let mod_path = root.join(&relative).join("mod.expo");
-        if mod_path.exists() {
-            return Ok(mod_path);
-        }
-    }
-
-    Err(format!(
-        "cannot find module `{relative_module}`: tried `{relative}.expo` and `{relative}/mod.expo` in src directories"
-    ))
-}
-
-/// Extracts imports from a module in project mode, returning fully qualified
-/// module names. Stdlib imports (prefixed with `std.`) are skipped since
-/// they're auto-imported.
-fn extract_project_imports(
-    module: &Module,
-    config: &ProjectConfig,
-    src_roots: &[PathBuf],
-) -> Vec<(String, ImportTarget)> {
-    module
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Import(import) = item {
-                let dotted = import.path.join(".");
-
-                if dotted.starts_with("std.") || dotted == "std" {
-                    return None;
-                }
-
-                match &import.target {
-                    ImportTarget::Module | ImportTarget::Wildcard | ImportTarget::Group(_) => {
-                        Some((dotted, import.target.clone()))
-                    }
-                    ImportTarget::Item(item_name) => {
-                        let full_path: Vec<String> = import
-                            .path
-                            .iter()
-                            .cloned()
-                            .chain(std::iter::once(item_name.clone()))
-                            .collect();
-                        let full_module = full_path.join(".");
-                        if can_resolve_project(&full_module, &config.name, src_roots) {
-                            Some((full_module, ImportTarget::Module))
-                        } else {
-                            Some((dotted, import.target.clone()))
-                        }
-                    }
-                }
-            } else {
-                None
+        let files = collect_expo_files_recursive(root);
+        for file_path in files {
+            let relative_module = file_path
+                .strip_prefix(root)
+                .unwrap_or(&file_path)
+                .with_extension("")
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            let fqn = format!("{project_name}.{relative_module}");
+            if graph.modules.contains_key(&fqn) {
+                continue;
             }
-        })
-        .collect()
+
+            let source = fs::read_to_string(&file_path)
+                .map_err(|e| format!("error reading {}: {e}", file_path.display()))?;
+            let parse_result = expo_parser::parse(&source);
+
+            graph.order.push(fqn.clone());
+            graph.modules.insert(
+                fqn,
+                ResolvedModule {
+                    name: format!("{project_name}.{relative_module}"),
+                    path: file_path,
+                    source,
+                    module: parse_result.module,
+                    errors: parse_result.errors,
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Builds a [`ModuleGraph`] for running tests.
@@ -417,11 +309,6 @@ pub fn resolve_test_project_modules(
 
     let all_roots: Vec<PathBuf> = src_roots.iter().chain(test_roots.iter()).cloned().collect();
 
-    let entry_fqn = config
-        .entry
-        .as_ref()
-        .map(|e| format!("{}.{}", config.name, e));
-
     let mut graph = ModuleGraph {
         entry: String::new(),
         modules: HashMap::new(),
@@ -429,42 +316,14 @@ pub fn resolve_test_project_modules(
     };
 
     insert_stdlib(&mut graph);
+    scan_directories(&config.name, &all_roots, &mut graph)?;
 
-    let mut visiting: Vec<String> = Vec::new();
-    let mut visited: HashSet<String> = graph.modules.keys().cloned().collect();
-
-    if let Some(ref skip) = entry_fqn {
-        visited.insert(skip.clone());
-    }
-
-    for root in &all_roots {
-        if !root.is_dir() {
-            continue;
+    if let Some(ref entry) = config.entry {
+        let entry_fqn = format!("{}.{}", config.name, entry);
+        if let Some(pos) = graph.order.iter().position(|n| n == &entry_fqn) {
+            graph.order.remove(pos);
         }
-        let files = collect_expo_files_recursive(root);
-        for file_path in files {
-            let relative_module = file_path
-                .strip_prefix(root)
-                .unwrap_or(&file_path)
-                .with_extension("")
-                .components()
-                .filter_map(|c| c.as_os_str().to_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let fqn = format!("{}.{}", config.name, relative_module);
-            if visited.contains(&fqn) {
-                continue;
-            }
-            resolve_project_recursive(
-                &fqn,
-                &file_path,
-                config,
-                &all_roots,
-                &mut graph,
-                &mut visiting,
-                &mut visited,
-            )?;
-        }
+        graph.modules.remove(&entry_fqn);
     }
 
     Ok(graph)
@@ -485,16 +344,4 @@ fn collect_expo_files_recursive(dir: &Path) -> Vec<PathBuf> {
         }
     }
     result
-}
-
-/// Checks if a fully qualified module name resolves to a file in project mode.
-fn can_resolve_project(fqn: &str, project_name: &str, src_roots: &[PathBuf]) -> bool {
-    let Some(relative_module) = strip_project_prefix(fqn, project_name) else {
-        return false;
-    };
-    let relative = relative_module.replace('.', "/");
-    src_roots.iter().any(|root| {
-        root.join(format!("{relative}.expo")).exists()
-            || root.join(&relative).join("mod.expo").exists()
-    })
 }

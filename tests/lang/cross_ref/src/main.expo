@@ -1,0 +1,9 @@
+fn main
+  p = Point.new(3, 4)
+  q = p.translate(1, -1)
+  print(q.x)
+  print(q.y)
+
+  s = Shape { origin: Point.new(10, 20), label: "box" }
+  print(s.describe())
+end

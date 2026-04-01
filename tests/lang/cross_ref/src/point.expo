@@ -1,0 +1,14 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+impl Point
+  fn new(x: Int, y: Int) -> Point
+    Point { x: x, y: y }
+  end
+
+  fn translate(self, dx: Int, dy: Int) -> Point
+    Point { x: self.x + dx, y: self.y + dy }
+  end
+end

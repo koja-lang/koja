@@ -1,6 +1,3 @@
-import diamond.types
-import diamond.logic
-
 fn main
   p = Point{x: 3, y: 4}
   print(p.distance())
