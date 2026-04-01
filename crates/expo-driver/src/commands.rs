@@ -239,12 +239,7 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
             for src_dir in &dep_config.src {
                 let dir = dep_path.join(src_dir);
                 if dir.is_dir() {
-                    collect_expo_files_with_prefix(
-                        &dir,
-                        &dir,
-                        &dep_config.name,
-                        &mut collected,
-                    );
+                    collect_expo_files_with_prefix(&dir, &dir, &dep_config.name, &mut collected);
                 }
             }
         }

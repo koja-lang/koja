@@ -228,16 +228,14 @@ fn resolve_dependencies(
             }
         };
 
-        let dep_config = project::load_project(&dep_path)?
-            .ok_or_else(|| {
-                format!(
-                    "dependency `{alias}`: no expo.toml found at {}",
-                    dep_path.display()
-                )
-            })?;
+        let dep_config = project::load_project(&dep_path)?.ok_or_else(|| {
+            format!(
+                "dependency `{alias}`: no expo.toml found at {}",
+                dep_path.display()
+            )
+        })?;
 
-        let dep_src_roots: Vec<PathBuf> =
-            dep_config.src.iter().map(|s| dep_path.join(s)).collect();
+        let dep_src_roots: Vec<PathBuf> = dep_config.src.iter().map(|s| dep_path.join(s)).collect();
         scan_directories(&dep_config.name, &dep_src_roots, graph)?;
 
         if let Some(ref entry) = dep_config.entry {

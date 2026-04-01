@@ -7,8 +7,8 @@
 //! cross-file type references resolve correctly.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use tower_lsp_server::ls_types::*;
@@ -95,7 +95,11 @@ fn parse_sibling_modules(project_root: &Path, current_path: Option<&Path>) -> Ve
                     }
                     if let Ok(text) = fs::read_to_string(&file) {
                         let pr = expo_parser::parse(&text);
-                        if pr.errors.iter().all(|d| !matches!(d.severity, ExpoSeverity::Error)) {
+                        if pr
+                            .errors
+                            .iter()
+                            .all(|d| !matches!(d.severity, ExpoSeverity::Error))
+                        {
                             mods.push(pr.module);
                         }
                     }
