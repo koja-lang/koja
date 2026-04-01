@@ -113,6 +113,9 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 - **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@doc` annotations
 - **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`), and go-to-definition (including qualified module calls) over stdio, integrated with the VSCode/Cursor extension
 - **VSCode extension** -- syntax highlighting and LSP client for `.expo` files
+- **Vim plugin** -- syntax highlighting, auto-indentation (`indentexpr`), `matchit` block matching (`fn`/`end`, `if`/`end`), and `:make` compiler integration with `expo check` and `errorformat` for quickfix
+- **DWARF debug info** -- always-on source-level debug metadata. Every function and statement carries file/line/column metadata. `.dSYM` bundles generated on macOS. Enables debugger attachment and runtime stacktraces.
+- **Runtime stacktraces** -- Elixir-style panic output with `(appname)`/`(stdlib)` frame labels, relative paths, demangled function names, generic parameter stripping, ANSI color (respects `NO_COLOR`), and contextual hints for known panic patterns
 
 ### Build history
 
@@ -593,18 +596,19 @@ Active design discussions about the type system, code organization, and function
 | Core      | Generics, ownership, protocols, closures, collections, processes                                                      |
 | Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
 | Phase 4A  | Test runner, `std.socket` (POSIX surface), `Debug` protocol, `std.io`, `std.file`, `std.system`, `std.time`           |
+| Tooling   | DWARF debug info, `--release` flag, runtime stacktraces, Vim plugin (indent, matchit, compiler)                       |
 
 For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md) and [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md).
 
 ### Remaining
 
-| Phase | Milestone                                                                                                                               |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase | Milestone                                                                                                                                      |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, C FFI, first-party packages |
-| 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`                                                      |
-| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                  |
-| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                              |
-| 6B    | auth-manager-expo runs for real, second project                                                                                         |
+| 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`                                                             |
+| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                         |
+| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                     |
+| 6B    | auth-manager-expo runs for real, second project                                                                                                |
 
 ---
 

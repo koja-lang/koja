@@ -1,8 +1,10 @@
 mod binary;
+mod builtins;
 mod calls;
 mod compiler;
 mod control;
 mod debug;
+mod debug_info;
 mod drop;
 mod enums;
 mod expr;

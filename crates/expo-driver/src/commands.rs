@@ -47,12 +47,19 @@ fn target_debug_dir(project_root: &Path) -> PathBuf {
 ///
 /// With no arguments, looks for `expo.toml` in the current directory.
 /// With `--emit-llvm`, prints LLVM IR to stdout instead of producing a binary.
-pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, color: bool) {
+pub fn cmd_build(
+    file: Option<String>,
+    output: Option<String>,
+    emit_llvm: bool,
+    release: bool,
+    color: bool,
+) {
     if let Some(source) = file {
         let args = pipeline::BuildArgs {
             source_file: Some(source),
             output_name: output,
             emit_llvm,
+            release,
         };
         pipeline::build(args, false, color);
     } else {
@@ -75,7 +82,15 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, 
             }
         };
 
-        pipeline::build_project(&config, &cwd, output.as_deref(), false, color, emit_llvm);
+        pipeline::build_project(
+            &config,
+            &cwd,
+            output.as_deref(),
+            false,
+            color,
+            emit_llvm,
+            release,
+        );
     }
 }
 
@@ -85,7 +100,7 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, 
 /// The compiled binary is placed in `target/debug/` for project mode
 /// or a temp directory for single-file mode. On Unix, the current process
 /// is replaced with the binary via `exec` so signals reach it directly.
-pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
+pub fn cmd_run(file: Option<String>, release: bool, run_args: Vec<String>, color: bool) {
     if let Some(path) = file {
         let tmp_dir = env::temp_dir();
         let binary = tmp_dir.join(format!(
@@ -101,6 +116,7 @@ pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
             source_file: Some(path),
             output_name: Some(output),
             emit_llvm: false,
+            release,
         };
         pipeline::build(args, true, color);
         exec_binary(&binary, &run_args);
@@ -127,7 +143,7 @@ pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
         let binary = target_debug_dir(&cwd).join(&config.name);
         let output = binary.to_str().unwrap().to_string();
 
-        pipeline::build_project(&config, &cwd, Some(&output), true, color, false);
+        pipeline::build_project(&config, &cwd, Some(&output), true, color, false, release);
         exec_binary(&binary, &run_args);
     }
 }

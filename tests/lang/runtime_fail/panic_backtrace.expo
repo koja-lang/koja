@@ -1,0 +1,8 @@
+fn crash()
+  x: Option<Int> = Option.None
+  x.unwrap()
+end
+
+fn main
+  crash()
+end

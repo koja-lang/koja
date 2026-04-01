@@ -45,6 +45,8 @@ pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
     let source = fs::read_to_string(entry_path)
         .map_err(|e| format!("error reading {}: {e}", entry_path.display()))?;
     let parse_result = expo_parser::parse(&source);
+    let mut module = parse_result.module;
+    module.path = Some(entry_path.to_path_buf());
 
     let mut graph = ModuleGraph {
         entry: entry_name.clone(),
@@ -59,7 +61,7 @@ pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
             name: entry_name,
             path: entry_path.to_path_buf(),
             source,
-            module: parse_result.module,
+            module,
             errors: parse_result.errors,
         },
     );
@@ -157,6 +159,8 @@ fn scan_directories(
             let source = fs::read_to_string(&file_path)
                 .map_err(|e| format!("error reading {}: {e}", file_path.display()))?;
             let parse_result = expo_parser::parse(&source);
+            let mut module = parse_result.module;
+            module.path = Some(file_path.clone());
 
             graph.order.push(fqn.clone());
             graph.modules.insert(
@@ -165,7 +169,7 @@ fn scan_directories(
                     name: format!("{project_name}.{relative_module}"),
                     path: file_path,
                     source,
-                    module: parse_result.module,
+                    module,
                     errors: parse_result.errors,
                 },
             );

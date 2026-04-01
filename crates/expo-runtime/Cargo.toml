@@ -8,5 +8,9 @@ version.workspace = true
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[dependencies]
+backtrace = "0.3"
+libc = "0.2"
+
 [build-dependencies]
 cc = "1"

@@ -272,7 +272,7 @@ fn compile_panic<'ctx>(
         .ok_or("argument to panic produced no value")?
         .value;
 
-    c.emit_panic("panic: %s\n", &[val]);
+    c.emit_panic("%s", &[val]);
 
     Ok(None)
 }

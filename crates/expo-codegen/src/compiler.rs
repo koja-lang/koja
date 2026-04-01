@@ -26,6 +26,7 @@ use expo_typecheck::types::{
     substitute_preserving,
 };
 use inkwell::OptimizationLevel;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -36,6 +37,7 @@ use inkwell::targets::{
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 
+use crate::debug_info::DebugContext;
 use crate::types::{to_llvm_metadata_type, to_llvm_type};
 
 /// An LLVM value paired with its Expo source-level type. Threaded through
@@ -240,13 +242,21 @@ pub struct Compiler<'ctx> {
     pub types: TypeRegistry<'ctx>,
     /// Per-function ephemeral state (variables, loops, TCO, etc.).
     pub fn_state: FnState<'ctx>,
+    /// DWARF debug info state (always present; emitted in all builds).
+    pub debug: DebugContext<'ctx>,
 }
 
 impl<'ctx> Compiler<'ctx> {
     /// Creates a new compiler instance with an empty LLVM module.
-    pub fn new(context: &'ctx Context, type_ctx: &'ctx TypeContext) -> Self {
+    pub fn new(
+        context: &'ctx Context,
+        type_ctx: &'ctx TypeContext,
+        filename: &str,
+        directory: &str,
+    ) -> Self {
         let module = context.create_module("expo_module");
         let builder = context.create_builder();
+        let debug = DebugContext::new(&module, filename, directory);
         Self {
             context,
             module,
@@ -258,6 +268,24 @@ impl<'ctx> Compiler<'ctx> {
             fn_ref_thunks: HashMap::new(),
             types: TypeRegistry::new(),
             fn_state: FnState::new(),
+            debug,
+        }
+    }
+
+    /// Applies `uwtable` and `frame-pointer=all` to every defined function
+    /// in the module so the platform unwinder can walk call stacks for backtraces.
+    pub fn apply_unwind_attrs(&self) {
+        let uwtable_id = Attribute::get_named_enum_kind_id("uwtable");
+        let uwtable_attr = self.context.create_enum_attribute(uwtable_id, 2);
+        let fp_attr = self.context.create_string_attribute("frame-pointer", "all");
+
+        let mut func = self.module.get_first_function();
+        while let Some(f) = func {
+            if f.count_basic_blocks() > 0 {
+                f.add_attribute(AttributeLoc::Function, uwtable_attr);
+                f.add_attribute(AttributeLoc::Function, fp_attr);
+            }
+            func = f.get_next_function();
         }
     }
 
@@ -343,10 +371,16 @@ impl<'ctx> Compiler<'ctx> {
 
         let thunk_name = format!("{fn_name}__thunk");
         let thunk_fn = self.module.add_function(&thunk_name, thunk_fn_type, None);
+
+        let file = self.debug.file();
+        self.debug
+            .push_function(thunk_fn, fn_name, &thunk_name, file, 0);
+
         let entry = self.context.append_basic_block(thunk_fn, "entry");
 
         let saved_block = self.builder.get_insert_block();
         self.builder.position_at_end(entry);
+        self.debug.set_location(self.context, &self.builder, 0, 0);
 
         let mut forward_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
         for i in 1..thunk_fn.count_params() {
@@ -361,6 +395,8 @@ impl<'ctx> Compiler<'ctx> {
         if let Some(bb) = saved_block {
             self.builder.position_at_end(bb);
         }
+
+        self.debug.pop_scope(self.context, &self.builder);
 
         self.fn_ref_thunks.insert(fn_name.to_string(), thunk_fn);
         Ok(thunk_fn)
@@ -393,7 +429,8 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     /// Writes the compiled LLVM module to a native object file at `path`.
-    pub fn emit_object_file(&self, path: &Path) -> Result<(), String> {
+    /// When `release` is true, uses aggressive optimization; otherwise none.
+    pub fn emit_object_file(&self, path: &Path, release: bool) -> Result<(), String> {
         Target::initialize_native(&InitializationConfig::default())
             .map_err(|e| format!("failed to initialize native target: {e}"))?;
 
@@ -401,12 +438,18 @@ impl<'ctx> Compiler<'ctx> {
         let target = Target::from_triple(&triple)
             .map_err(|e| format!("failed to get target: {}", e.to_string()))?;
 
+        let opt_level = if release {
+            OptimizationLevel::Aggressive
+        } else {
+            OptimizationLevel::None
+        };
+
         let machine = target
             .create_target_machine(
                 &triple,
                 "generic",
                 "",
-                OptimizationLevel::Default,
+                opt_level,
                 RelocMode::Default,
                 CodeModel::Default,
             )
@@ -493,156 +536,6 @@ impl<'ctx> Compiler<'ctx> {
             &self.type_ctx.type_aliases,
         );
         substitute_preserving(&ty, &self.fn_state.type_subst)
-    }
-
-    fn declare_builtins(&mut self) {
-        let void = self.context.void_type();
-        let i32 = self.context.i32_type();
-        let i64 = self.context.i64_type();
-        let ptr = self.context.ptr_type(inkwell::AddressSpace::default());
-
-        let mut decl = |name: &str, ty: inkwell::types::FunctionType<'ctx>| {
-            let f = self.module.add_function(name, ty, None);
-            self.functions.insert(name.to_string(), f);
-        };
-
-        // C stdlib
-        decl("printf", i32.fn_type(&[ptr.into()], true));
-        decl(
-            "snprintf",
-            i32.fn_type(&[ptr.into(), i32.into(), ptr.into()], true),
-        );
-        decl("fprintf", i32.fn_type(&[ptr.into(), ptr.into()], true));
-        decl("abort", void.fn_type(&[], false));
-        decl("fdopen", ptr.fn_type(&[i32.into(), ptr.into()], false));
-        decl("malloc", ptr.fn_type(&[i64.into()], false));
-        decl("realloc", ptr.fn_type(&[ptr.into(), i64.into()], false));
-        decl("free", void.fn_type(&[ptr.into()], false));
-        decl("strcmp", i32.fn_type(&[ptr.into(), ptr.into()], false));
-        decl("strlen", i64.fn_type(&[ptr.into()], false));
-        decl(
-            "memset",
-            ptr.fn_type(&[ptr.into(), i32.into(), i64.into()], false),
-        );
-        decl(
-            "memcpy",
-            ptr.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
-        );
-        decl(
-            "memcmp",
-            i32.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
-        );
-
-        // Process runtime
-        decl(
-            "expo_rt_spawn",
-            i64.fn_type(&[ptr.into(), ptr.into(), i64.into()], false),
-        );
-        decl(
-            "expo_rt_send",
-            void.fn_type(&[i64.into(), ptr.into(), i64.into()], false),
-        );
-        decl("expo_rt_receive", ptr.fn_type(&[], false));
-        decl("expo_rt_receive_timeout", ptr.fn_type(&[i64.into()], false));
-        decl("expo_rt_self", i64.fn_type(&[], false));
-        decl("expo_rt_main_done", void.fn_type(&[], false));
-
-        // String intrinsics
-        decl(
-            "expo_utf8_validate",
-            i64.fn_type(&[ptr.into(), i64.into()], false),
-        );
-        decl("expo_string_length", i64.fn_type(&[ptr.into()], false));
-        decl(
-            "expo_string_get",
-            ptr.fn_type(&[ptr.into(), i64.into()], false),
-        );
-        decl(
-            "expo_string_slice",
-            ptr.fn_type(&[ptr.into(), i64.into(), i64.into()], false),
-        );
-        decl(
-            "expo_int_parse",
-            i64.fn_type(&[ptr.into(), ptr.into()], false),
-        );
-        decl(
-            "expo_float_parse",
-            i64.fn_type(&[ptr.into(), ptr.into()], false),
-        );
-
-        // File I/O
-        decl(
-            "expo_fd_read",
-            ptr.fn_type(&[i64.into(), i64.into()], false),
-        );
-        decl(
-            "expo_fd_write",
-            i64.fn_type(&[i64.into(), ptr.into()], false),
-        );
-        decl("expo_fd_close", i64.fn_type(&[i64.into()], false));
-        decl("expo_last_error", ptr.fn_type(&[], false));
-        decl(
-            "expo_file_open",
-            i64.fn_type(&[ptr.into(), i64.into()], false),
-        );
-        decl("expo_file_read_all", ptr.fn_type(&[ptr.into()], false));
-        decl(
-            "expo_file_write_all",
-            i64.fn_type(&[ptr.into(), ptr.into()], false),
-        );
-        decl("expo_file_exists", i64.fn_type(&[ptr.into()], false));
-        decl("expo_file_delete", i64.fn_type(&[ptr.into()], false));
-        decl(
-            "expo_file_rename",
-            i64.fn_type(&[ptr.into(), ptr.into()], false),
-        );
-
-        // System
-        decl("expo_get_env", ptr.fn_type(&[ptr.into()], false));
-        decl(
-            "expo_set_env",
-            void.fn_type(&[ptr.into(), ptr.into()], false),
-        );
-        decl("expo_cwd", ptr.fn_type(&[], false));
-        decl("expo_hostname", ptr.fn_type(&[], false));
-
-        // Debug formatting
-        decl(
-            "expo_format_binary",
-            ptr.fn_type(&[ptr.into(), i64.into()], false),
-        );
-
-        // Time
-        decl("expo_time_now_millis", i64.fn_type(&[], false));
-
-        // Socket I/O
-        decl("expo_socket_create", i64.fn_type(&[i64.into()], false));
-        decl(
-            "expo_socket_bind",
-            i64.fn_type(&[i64.into(), ptr.into(), i64.into()], false),
-        );
-        decl(
-            "expo_socket_connect",
-            i64.fn_type(&[i64.into(), ptr.into(), i64.into()], false),
-        );
-        decl("expo_socket_resolve", ptr.fn_type(&[ptr.into()], false));
-        decl(
-            "expo_socket_send_to",
-            i64.fn_type(&[i64.into(), ptr.into(), ptr.into(), i64.into()], false),
-        );
-        decl(
-            "expo_socket_recv_from",
-            ptr.fn_type(&[i64.into(), i64.into()], false),
-        );
-        decl(
-            "expo_socket_listen",
-            i64.fn_type(&[i64.into(), i64.into()], false),
-        );
-        decl("expo_socket_accept", i64.fn_type(&[i64.into()], false));
-        decl(
-            "expo_socket_setsockopt_reuse",
-            i64.fn_type(&[i64.into()], false),
-        );
     }
 
     fn declare_function(
@@ -862,6 +755,9 @@ impl<'ctx> Compiler<'ctx> {
                         self.generic_fn_asts.insert(func.name.clone(), func.clone());
                         continue;
                     }
+                    if self.functions.contains_key(&func.name) {
+                        continue;
+                    }
                     let fn_value = self.declare_function(func, None)?;
                     self.functions.insert(func.name.clone(), fn_value);
                 }
@@ -871,6 +767,9 @@ impl<'ctx> Compiler<'ctx> {
                         for member in &impl_block.members {
                             if let ImplMember::Function(func) = member {
                                 let mangled = format!("{}_{}", target_name, func.name);
+                                if self.functions.contains_key(&mangled) {
+                                    continue;
+                                }
                                 let fn_value = self.declare_function(func, Some(&target_name))?;
                                 self.functions.insert(mangled, fn_value);
                             }
@@ -880,6 +779,9 @@ impl<'ctx> Compiler<'ctx> {
                         {
                             for func in synth_fns {
                                 let mangled = format!("{}_{}", target_name, func.name);
+                                if self.functions.contains_key(&mangled) {
+                                    continue;
+                                }
                                 let fn_value = self.declare_function(func, Some(&target_name))?;
                                 self.functions.insert(mangled, fn_value);
                             }
@@ -914,6 +816,10 @@ impl<'ctx> Compiler<'ctx> {
             .get(&mangled)
             .ok_or_else(|| format!("undeclared function: {}", mangled))?;
 
+        if fn_value.count_basic_blocks() > 0 {
+            return Ok(());
+        }
+
         let is_main = func.name == "main" && self_type_name.is_none();
 
         if is_main {
@@ -924,13 +830,41 @@ impl<'ctx> Compiler<'ctx> {
                 .add_function("__expo_user_main", user_main_ty, None);
             self.functions
                 .insert("__expo_user_main".to_string(), user_main);
+
+            let file = self.debug.file();
+            self.debug.push_function(
+                user_main,
+                "main",
+                "__expo_user_main",
+                file,
+                func.span.start.line,
+            );
+
             let um_entry = self.context.append_basic_block(user_main, "entry");
             self.builder.position_at_end(um_entry);
+            self.debug.set_location(
+                self.context,
+                &self.builder,
+                func.span.start.line,
+                func.span.start.column,
+            );
             self.fn_state.variables.clear();
             self.compile_function_body(&func.body, &Type::Unit, user_main, false)?;
 
+            self.debug.pop_scope(self.context, &self.builder);
+
+            let file = self.debug.file();
+            self.debug
+                .push_function(fn_value, "main", "main", file, func.span.start.line);
+
             let main_entry = self.context.append_basic_block(fn_value, "entry");
             self.builder.position_at_end(main_entry);
+            self.debug.set_location(
+                self.context,
+                &self.builder,
+                func.span.start.line,
+                func.span.start.column,
+            );
 
             let spawn_fn = *self
                 .functions
@@ -953,6 +887,8 @@ impl<'ctx> Compiler<'ctx> {
 
             let zero_i32 = self.context.i32_type().const_int(0, false);
             self.builder.build_return(Some(&zero_i32)).unwrap();
+
+            self.debug.pop_scope(self.context, &self.builder);
 
             return Ok(());
         }
@@ -993,6 +929,10 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn define_functions(&mut self, module: &Module) -> Result<(), String> {
+        if let Some(path) = &module.path {
+            self.debug.set_current_file(path);
+        }
+
         for item in &module.items {
             match item {
                 Item::Function(func) => {
@@ -1050,43 +990,43 @@ impl<'ctx> Compiler<'ctx> {
         None
     }
 
-    /// Emits a panic sequence: writes a formatted message to stderr via
-    /// `fdopen(2,"w")` + `fprintf`, then calls `abort` and marks the
+    /// Emits a panic sequence: formats a message into a temporary buffer
+    /// via `snprintf`, passes it to `expo_panic_backtrace` (which prints
+    /// the message and a symbolicated stack trace), and marks the
     /// insertion point as unreachable.
     ///
     /// `fmt` is a printf-style format string (e.g. `"panic: %s\n"`).
     /// `args` are the values to interpolate into the format string.
     pub fn emit_panic(&self, fmt: &str, args: &[BasicValueEnum<'ctx>]) {
-        let fdopen = *self.functions.get("fdopen").expect("fdopen not declared");
-        let fprintf = *self.functions.get("fprintf").expect("fprintf not declared");
-        let abort = *self.functions.get("abort").expect("abort not declared");
+        let snprintf = *self
+            .functions
+            .get("snprintf")
+            .expect("snprintf not declared");
+        let panic_bt = *self
+            .functions
+            .get("expo_panic_backtrace")
+            .expect("expo_panic_backtrace not declared");
 
-        let fd_val = self.context.i32_type().const_int(2, false);
-        let mode = self
-            .builder
-            .build_global_string_ptr("w", "panic_mode")
-            .unwrap();
-        let stderr = self
-            .call(
-                fdopen,
-                &[fd_val.into(), mode.as_pointer_value().into()],
-                "panic_stderr",
-            )
-            .expect("fdopen returned no value");
+        let i32_ty = self.context.i32_type();
+        let buf_size = 1024u32;
+        let buf = self.build_entry_alloca(self.context.i8_type().array_type(buf_size), "panic_buf");
 
         let fmt_ptr = self
             .builder
             .build_global_string_ptr(fmt, "panic_fmt")
             .unwrap();
 
-        let mut fprintf_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-            vec![stderr.into(), fmt_ptr.as_pointer_value().into()];
+        let mut snprintf_args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+            buf.into(),
+            i32_ty.const_int(buf_size as u64, false).into(),
+            fmt_ptr.as_pointer_value().into(),
+        ];
         for arg in args {
-            fprintf_args.push((*arg).into());
+            snprintf_args.push((*arg).into());
         }
-        self.call_void(fprintf, &fprintf_args, "panic_fprintf");
+        self.call_void(snprintf, &snprintf_args, "");
 
-        self.call_void(abort, &[], "panic_abort");
+        self.call_void(panic_bt, &[buf.into()], "");
         self.builder.build_unreachable().unwrap();
     }
 }
@@ -1096,8 +1036,10 @@ pub fn compile(
     module: &Module,
     type_ctx: &TypeContext,
     output_path: &Path,
+    release: bool,
+    app_name: &str,
 ) -> Result<(), Vec<Diagnostic>> {
-    compile_modules(&[module], type_ctx, output_path)
+    compile_modules(&[module], type_ctx, output_path, release, app_name)
 }
 
 /// Runs codegen for all modules: register types, declare, define.
@@ -1105,11 +1047,35 @@ fn run_codegen<'ctx>(
     modules: &[&Module],
     type_ctx: &'ctx TypeContext,
     context: &'ctx Context,
+    app_name: &str,
 ) -> Result<Compiler<'ctx>, Vec<Diagnostic>> {
-    let mut compiler = Compiler::new(context, type_ctx);
+    let (filename, directory) = modules
+        .first()
+        .and_then(|m| m.path.as_ref())
+        .map(|p| {
+            let f = p.file_name().and_then(|f| f.to_str()).unwrap_or("unknown");
+            let d = p.parent().and_then(|d| d.to_str()).unwrap_or(".");
+            (f.to_string(), d.to_string())
+        })
+        .unwrap_or_else(|| ("unknown".to_string(), ".".to_string()));
+
+    let mut compiler = Compiler::new(context, type_ctx, &filename, &directory);
+
+    let app_name_val = context.const_string(app_name.as_bytes(), true);
+    let global = compiler
+        .module
+        .add_global(app_name_val.get_type(), None, "__expo_app_name");
+    global.set_initializer(&app_name_val);
+    global.set_constant(true);
 
     compiler.register_types();
-    compiler.declare_builtins();
+    crate::builtins::declare_builtins(compiler.context, &compiler.module, &mut compiler.functions);
+
+    for module in modules {
+        if let Some(path) = &module.path {
+            compiler.debug.register_file(path);
+        }
+    }
 
     for module in modules {
         compiler.declare_constants(module).map_err(|e| {
@@ -1163,9 +1129,14 @@ pub fn compile_modules(
     modules: &[&Module],
     type_ctx: &TypeContext,
     output_path: &Path,
+    release: bool,
+    app_name: &str,
 ) -> Result<(), Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(modules, type_ctx, &context)?;
+    let compiler = run_codegen(modules, type_ctx, &context, app_name)?;
+
+    compiler.apply_unwind_attrs();
+    compiler.debug.finalize();
 
     compiler.module.verify().map_err(|e| {
         let span = modules.first().map(|m| m.span).unwrap_or_default();
@@ -1178,14 +1149,16 @@ pub fn compile_modules(
     })?;
 
     let span = modules.first().map(|m| m.span).unwrap_or_default();
-    compiler.emit_object_file(output_path).map_err(|e| {
-        vec![Diagnostic {
-            severity: Severity::Error,
-            message: e,
-            hint: None,
-            span,
-        }]
-    })
+    compiler
+        .emit_object_file(output_path, release)
+        .map_err(|e| {
+            vec![Diagnostic {
+                severity: Severity::Error,
+                message: e,
+                hint: None,
+                span,
+            }]
+        })
 }
 
 /// Compiles multiple Expo modules and returns the LLVM IR as a string.
@@ -1193,9 +1166,12 @@ pub fn compile_modules(
 pub fn emit_llvm_ir(
     modules: &[&Module],
     type_ctx: &TypeContext,
+    app_name: &str,
 ) -> Result<String, Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(modules, type_ctx, &context)?;
+    let compiler = run_codegen(modules, type_ctx, &context, app_name)?;
+    compiler.apply_unwind_attrs();
+    compiler.debug.finalize();
     Ok(compiler.module.print_to_string().to_string())
 }
 

@@ -98,12 +98,28 @@ impl<'ctx> Compiler<'ctx> {
         return_type: &Type,
         subst: HashMap<String, Type>,
     ) -> Result<(), String> {
+        let file = self.debug.file();
+        let linkage_name = fn_value.get_name().to_str().unwrap_or("").to_string();
+        self.debug.push_function(
+            fn_value,
+            &func.name,
+            &linkage_name,
+            file,
+            func.span.start.line,
+        );
+
         let entry = self.context.append_basic_block(fn_value, "entry");
         let saved_vars = mem::take(&mut self.fn_state.variables);
         let saved_block = self.builder.get_insert_block();
         let saved_subst = mem::replace(&mut self.fn_state.type_subst, subst);
 
         self.builder.position_at_end(entry);
+        self.debug.set_location(
+            self.context,
+            &self.builder,
+            func.span.start.line,
+            func.span.start.column,
+        );
 
         let mut param_idx = 0u32;
         let mut param_allocas: Vec<PointerValue<'ctx>> = Vec::new();
@@ -184,6 +200,8 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.position_at_end(bb);
         }
 
+        self.debug.pop_scope(self.context, &self.builder);
+
         result
     }
 
@@ -237,12 +255,22 @@ impl<'ctx> Compiler<'ctx> {
         let fn_value = self.module.add_function(&mangled, fn_type, None);
         self.functions.insert(mangled.clone(), fn_value);
 
+        let file = self.debug.file();
+        self.debug
+            .push_function(fn_value, name, &mangled, file, func_ast.span.start.line);
+
         let entry = self.context.append_basic_block(fn_value, "entry");
         let saved_vars = mem::take(&mut self.fn_state.variables);
         let saved_block = self.builder.get_insert_block();
         let saved_subst = mem::replace(&mut self.fn_state.type_subst, subst.clone());
 
         self.builder.position_at_end(entry);
+        self.debug.set_location(
+            self.context,
+            &self.builder,
+            func_ast.span.start.line,
+            func_ast.span.start.column,
+        );
 
         for (i, param) in func_ast.params.iter().enumerate() {
             if let Param::Regular { name: pname, .. } = param {
@@ -265,6 +293,8 @@ impl<'ctx> Compiler<'ctx> {
         if let Some(bb) = saved_block {
             self.builder.position_at_end(bb);
         }
+
+        self.debug.pop_scope(self.context, &self.builder);
 
         Ok(())
     }

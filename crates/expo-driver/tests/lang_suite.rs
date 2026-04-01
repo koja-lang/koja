@@ -405,3 +405,113 @@ fn lang_compile_fail_tests() {
         );
     }
 }
+
+#[test]
+fn lang_runtime_fail_tests() {
+    let dir = lang_dir().join("runtime_fail");
+    if !dir.exists() {
+        return;
+    }
+
+    let files = collect_expo_files(&dir);
+    let queue = Mutex::new(VecDeque::from_iter(files.iter()));
+    let failures = Mutex::new(Vec::new());
+
+    std::thread::scope(|s| {
+        for _ in 0..worker_count() {
+            s.spawn(|| {
+                loop {
+                    let file = queue.lock().unwrap().pop_front();
+                    let Some(file) = file else { break };
+
+                    let test_name = format!(
+                        "runtime_fail/{}",
+                        file.file_stem().unwrap().to_string_lossy()
+                    );
+                    let expected_path = file.with_extension("stderr");
+
+                    if !expected_path.exists() {
+                        failures
+                            .lock()
+                            .unwrap()
+                            .push(format!("{test_name}: missing .stderr file"));
+                        continue;
+                    }
+
+                    let (_stdout, stderr, code) = run_expo(file);
+
+                    if code == 0 {
+                        failures.lock().unwrap().push(format!(
+                            "{test_name}: expected runtime failure but exited with 0"
+                        ));
+                        continue;
+                    }
+
+                    let expected = fs::read_to_string(&expected_path).unwrap();
+                    let pattern = expected.trim();
+                    if !stderr.contains(pattern) {
+                        failures.lock().unwrap().push(format!(
+                            "{test_name}: stderr does not contain expected pattern\n\
+                         expected pattern: {pattern:?}\n\
+                         actual stderr:\n{stderr}"
+                        ));
+                    }
+                }
+            });
+        }
+    });
+
+    let failures = failures.into_inner().unwrap();
+    if !failures.is_empty() {
+        panic!(
+            "\n{} runtime_fail test(s) failed:\n\n{}",
+            failures.len(),
+            failures.join("\n---\n")
+        );
+    }
+}
+
+#[test]
+fn lang_release_build_test() {
+    let project_dir = lang_dir().join("project");
+    if !project_dir.exists() {
+        panic!("test fixture tests/lang/project/ not found");
+    }
+
+    let binary_path = std::env::temp_dir().join("expo_test_release_build");
+    let _ = std::fs::remove_file(&binary_path);
+
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("build")
+        .arg("--release")
+        .arg("-o")
+        .arg(binary_path.to_str().unwrap())
+        .current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd
+        .output()
+        .expect("failed to execute expo build --release");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "expo build --release failed\nstderr:\n{stderr}"
+    );
+    assert!(
+        binary_path.exists(),
+        "expected release binary at {}",
+        binary_path.display()
+    );
+
+    let run_output = Command::new(&binary_path)
+        .output()
+        .expect("failed to run release binary");
+    assert!(
+        run_output.status.success(),
+        "release binary exited with {:?}",
+        run_output.status.code()
+    );
+
+    let _ = std::fs::remove_file(&binary_path);
+}

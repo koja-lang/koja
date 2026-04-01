@@ -18,6 +18,16 @@ use crate::expr::compile_expr;
 use crate::structs::infer_static_method_return_type;
 use crate::types::to_llvm_type;
 
+fn statement_span(stmt: &Statement) -> Span {
+    match stmt {
+        Statement::Expr(expr) => expr_span(expr),
+        Statement::Assignment { span, .. }
+        | Statement::CompoundAssign { span, .. }
+        | Statement::Return { span, .. }
+        | Statement::Break { span, .. } => *span,
+    }
+}
+
 /// Compiles a single statement (assignment, return, break, or compound
 /// assignment). Expression statements are compiled for side effects only.
 pub fn compile_statement<'ctx>(
@@ -25,6 +35,10 @@ pub fn compile_statement<'ctx>(
     stmt: &Statement,
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let span = statement_span(stmt);
+    c.debug
+        .set_location(c.context, &c.builder, span.start.line, span.start.column);
+
     match stmt {
         Statement::Expr(expr) => {
             compile_expr(c, expr, function)?; // discard TypedValue

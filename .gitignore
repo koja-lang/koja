@@ -4,6 +4,7 @@
 *.o
 *.out
 *.exe
+*.dSYM
 
 # VSCode extension
 editors/vscode/node_modules

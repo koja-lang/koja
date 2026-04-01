@@ -37,6 +37,10 @@ enum Command {
         /// Print LLVM IR to stdout instead of producing a binary
         #[arg(long)]
         emit_llvm: bool,
+
+        /// Build with aggressive optimizations
+        #[arg(long)]
+        release: bool,
     },
     /// Type-check a source file without compiling
     Check {
@@ -80,6 +84,10 @@ enum Command {
         /// Source file (omit to use expo.toml)
         file: Option<String>,
 
+        /// Build with aggressive optimizations
+        #[arg(long)]
+        release: bool,
+
         /// Arguments passed to the compiled program
         #[arg(last = true)]
         args: Vec<String>,
@@ -97,7 +105,8 @@ fn main() {
             file,
             output,
             emit_llvm,
-        } => commands::cmd_build(file, output, emit_llvm, color),
+            release,
+        } => commands::cmd_build(file, output, emit_llvm, release, color),
         Command::Check { files } => commands::cmd_check(files, color),
         Command::Doc { files, output } => commands::cmd_doc(files, output, color),
         Command::Format {
@@ -107,7 +116,11 @@ fn main() {
         } => commands::cmd_format(files, check, write_back, color),
         Command::Lex { files } => commands::cmd_lex(files, color),
         Command::Parse { files } => commands::cmd_parse(files, color),
-        Command::Run { file, args } => commands::cmd_run(file, args, color),
+        Command::Run {
+            file,
+            release,
+            args,
+        } => commands::cmd_run(file, release, args, color),
         Command::Test => commands::cmd_test(color),
     }
 }

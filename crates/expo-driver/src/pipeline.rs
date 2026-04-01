@@ -128,6 +128,7 @@ pub fn build_from_graph(
     quiet: bool,
     color: bool,
     emit_llvm: bool,
+    release: bool,
 ) {
     let (module_contexts, has_errors) = typecheck_graph(graph, color);
     if has_errors {
@@ -145,8 +146,15 @@ pub fn build_from_graph(
         .map(|name| &graph.modules[name].module)
         .collect();
 
+    let app_name = graph
+        .entry
+        .split('.')
+        .next()
+        .unwrap_or(&graph.entry)
+        .to_string();
+
     if emit_llvm {
-        match expo_codegen::emit_llvm_ir(&modules_ast, &merged_ctx) {
+        match expo_codegen::emit_llvm_ir(&modules_ast, &merged_ctx, &app_name) {
             Ok(ir) => print!("{ir}"),
             Err(diagnostics) => {
                 let entry_rm = &graph.modules[&graph.entry];
@@ -163,9 +171,13 @@ pub fn build_from_graph(
     }
 
     let obj_path = format!("{output}.o");
-    if let Err(diagnostics) =
-        expo_codegen::compile_modules(&modules_ast, &merged_ctx, Path::new(&obj_path))
-    {
+    if let Err(diagnostics) = expo_codegen::compile_modules(
+        &modules_ast,
+        &merged_ctx,
+        Path::new(&obj_path),
+        release,
+        &app_name,
+    ) {
         let entry_rm = &graph.modules[&graph.entry];
         render_diagnostics(
             entry_rm.path.to_str().unwrap_or(&entry_rm.name),
@@ -187,6 +199,7 @@ pub fn build_project(
     quiet: bool,
     color: bool,
     emit_llvm: bool,
+    release: bool,
 ) {
     let graph = match resolve::resolve_project_modules(config, project_root) {
         Ok(g) => g,
@@ -200,7 +213,11 @@ pub fn build_project(
     let output = match output {
         Some(o) => o,
         None => {
-            let target_dir = project_root.join("target").join("debug");
+            let target_dir = if release {
+                project_root.join("target").join("release")
+            } else {
+                project_root.join("target").join("debug")
+            };
             fs::create_dir_all(&target_dir).unwrap_or_else(|e| {
                 eprintln!("error: cannot create target directory: {e}");
                 process::exit(1);
@@ -209,7 +226,7 @@ pub fn build_project(
             default_output.to_str().unwrap()
         }
     };
-    build_from_graph(&graph, output, quiet, color, emit_llvm);
+    build_from_graph(&graph, output, quiet, color, emit_llvm, release);
 }
 
 /// Full single-file build pipeline: resolve modules from an entry file,
@@ -245,7 +262,7 @@ pub fn build(args: BuildArgs, quiet: bool, color: bool) {
     };
 
     prepend_stdlib(&mut graph);
-    build_from_graph(&graph, &output, quiet, color, args.emit_llvm);
+    build_from_graph(&graph, &output, quiet, color, args.emit_llvm, args.release);
 }
 
 /// Type-checks a single-file module graph (without compiling).
@@ -342,7 +359,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     let binary = target_dir.join(format!("{}_test", config.name));
     let output = binary.to_str().unwrap().to_string();
 
-    build_from_graph(&graph, &output, true, color, false);
+    build_from_graph(&graph, &output, true, color, false, false);
 
     let status = process::Command::new(&binary).status();
     let _ = fs::remove_file(&binary);
@@ -422,6 +439,7 @@ pub struct BuildArgs {
     pub source_file: Option<String>,
     pub output_name: Option<String>,
     pub emit_llvm: bool,
+    pub release: bool,
 }
 
 /// Links an object file with the embedded runtime library to produce an executable.
@@ -437,10 +455,15 @@ fn link(obj_path: &str, output: &str, quiet: bool) {
         .args([obj_path, "-lexpo_runtime", "-L", &tmp_dir_str, "-o", output])
         .status();
 
-    let _ = fs::remove_dir_all(&tmp_dir);
-
     match status {
         Ok(s) if s.success() => {
+            if cfg!(target_os = "macos") {
+                let _ = process::Command::new("dsymutil")
+                    .arg(output)
+                    .stderr(process::Stdio::null())
+                    .status();
+            }
+            let _ = fs::remove_dir_all(&tmp_dir);
             let _ = fs::remove_file(obj_path);
             if !quiet {
                 println!("compiled: {output}");
@@ -448,11 +471,13 @@ fn link(obj_path: &str, output: &str, quiet: bool) {
         }
         Ok(s) => {
             eprintln!("linker failed with exit code: {}", s.code().unwrap_or(-1));
+            let _ = fs::remove_dir_all(&tmp_dir);
             let _ = fs::remove_file(obj_path);
             process::exit(1);
         }
         Err(e) => {
             eprintln!("failed to run linker: {e}");
+            let _ = fs::remove_dir_all(&tmp_dir);
             let _ = fs::remove_file(obj_path);
             process::exit(1);
         }
