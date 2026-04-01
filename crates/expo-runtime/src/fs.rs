@@ -7,7 +7,8 @@ use std::os::fd::IntoRawFd;
 use std::path::Path;
 use std::ptr;
 
-use crate::ffi::{libc_close, libc_read, libc_write};
+use crate::ffi::{EAGAIN, get_errno, libc_close, libc_read, libc_write};
+use crate::reactor::{Interest, io_block};
 use crate::util::{alloc_expo_string, expo_string_to_slice, set_last_error};
 
 /// Closes a raw file descriptor. Returns 0 on success, -1 on error.
@@ -21,34 +22,48 @@ pub extern "C" fn expo_fd_close(fd: i64) -> i64 {
     0
 }
 
-/// Reads up to `count` bytes from a raw file descriptor.
+/// Reads up to `count` bytes from a raw file descriptor. If the fd is
+/// non-blocking (sockets), suspends the process until data is available.
 /// Returns a length-prefixed string pointer, or null on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn expo_fd_read(fd: i64, count: i64) -> *const u8 {
     let mut buf = vec![0u8; count as usize];
-    let n = unsafe { libc_read(fd as i32, buf.as_mut_ptr(), buf.len()) };
-    if n < 0 {
+    loop {
+        let n = unsafe { libc_read(fd as i32, buf.as_mut_ptr(), buf.len()) };
+        if n >= 0 {
+            buf.truncate(n as usize);
+            return unsafe { alloc_expo_string(&buf) };
+        }
+        if get_errno() == EAGAIN {
+            io_block(fd as i32, Interest::Readable);
+            continue;
+        }
         set_last_error(io::Error::last_os_error());
         return ptr::null();
     }
-    buf.truncate(n as usize);
-    unsafe { alloc_expo_string(&buf) }
 }
 
 /// Writes a length-prefixed string's contents to a raw file descriptor.
-/// Returns bytes written, or -1 on error.
+/// If the fd is non-blocking (sockets), suspends the process until the
+/// write buffer has space. Returns bytes written, or -1 on error.
 ///
 /// # Safety
 /// `data_ptr` must point to a valid length-prefixed Expo string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_fd_write(fd: i64, data_ptr: *const u8) -> i64 {
     let slice = unsafe { expo_string_to_slice(data_ptr) };
-    let n = unsafe { libc_write(fd as i32, slice.as_ptr(), slice.len()) };
-    if n < 0 {
+    loop {
+        let n = unsafe { libc_write(fd as i32, slice.as_ptr(), slice.len()) };
+        if n >= 0 {
+            return n as i64;
+        }
+        if get_errno() == EAGAIN {
+            io_block(fd as i32, Interest::Writable);
+            continue;
+        }
         set_last_error(io::Error::last_os_error());
         return -1;
     }
-    n as i64
 }
 
 /// Deletes the file at `path`. Returns 0 on success, -1 on error.

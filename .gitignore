@@ -1,6 +1,8 @@
 # Build artifacts
 /target
 /target-check
+**/target/debug
+**/target/release
 *.o
 *.out
 *.exe

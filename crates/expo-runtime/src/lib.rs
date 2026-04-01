@@ -5,6 +5,7 @@
 mod ffi;
 mod fs;
 mod panic;
+mod reactor;
 mod scheduler;
 mod socket;
 mod string;

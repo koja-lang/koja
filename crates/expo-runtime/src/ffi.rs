@@ -10,6 +10,35 @@ pub const SOCK_DGRAM: i32 = 2;
 pub const SOL_SOCKET: i32 = 0xFFFF;
 /// Allow local address reuse (`setsockopt` option).
 pub const SO_REUSEADDR: i32 = 0x0004;
+/// Retrieve pending socket error (`getsockopt` option).
+pub const SO_ERROR: i32 = 0x1007;
+
+/// Get file descriptor flags.
+pub const F_GETFL: i32 = 3;
+/// Set file descriptor flags.
+pub const F_SETFL: i32 = 4;
+/// Non-blocking I/O flag for `fcntl`.
+pub const O_NONBLOCK: i32 = 0x0004;
+
+/// `EAGAIN` errno value (resource temporarily unavailable).
+#[cfg(target_os = "macos")]
+pub const EAGAIN: i32 = 35;
+/// `EAGAIN` errno value (resource temporarily unavailable).
+#[cfg(target_os = "linux")]
+pub const EAGAIN: i32 = 11;
+/// `EAGAIN` errno value (resource temporarily unavailable).
+#[cfg(target_os = "windows")]
+pub const EAGAIN: i32 = 11;
+
+/// `EINPROGRESS` errno value (connection in progress).
+#[cfg(target_os = "macos")]
+pub const EINPROGRESS: i32 = 36;
+/// `EINPROGRESS` errno value (connection in progress).
+#[cfg(target_os = "linux")]
+pub const EINPROGRESS: i32 = 115;
+/// `EINPROGRESS` errno value (connection in progress).
+#[cfg(target_os = "windows")]
+pub const EINPROGRESS: i32 = 112;
 
 /// BSD/POSIX `sockaddr_in` for IPv4 socket addresses.
 #[repr(C)]
@@ -93,4 +122,29 @@ unsafe extern "C" {
     pub fn libc_socket(domain: i32, sock_type: i32, protocol: i32) -> i32;
     #[link_name = "write"]
     pub fn libc_write(fd: i32, buf: *const u8, count: usize) -> isize;
+    #[link_name = "fcntl"]
+    pub fn libc_fcntl(fd: i32, cmd: i32, ...) -> i32;
+    #[link_name = "getsockopt"]
+    pub fn libc_getsockopt(
+        fd: i32,
+        level: i32,
+        optname: i32,
+        optval: *mut u8,
+        optlen: *mut u32,
+    ) -> i32;
+}
+
+/// Returns the current `errno` value for this thread.
+pub fn get_errno() -> i32 {
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+/// Sets a file descriptor to non-blocking mode via `fcntl`.
+pub fn set_nonblocking(fd: i32) {
+    unsafe {
+        let flags = libc_fcntl(fd, F_GETFL);
+        if flags >= 0 {
+            libc_fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        }
+    }
 }

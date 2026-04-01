@@ -18,7 +18,7 @@ An 11-crate Rust workspace that compiles Expo source to native binaries via LLVM
 - `expo-stdlib` -- embedded standard library `.expo` sources with fully qualified module names
 - `expo-fmt` -- opinionated code formatter
 - `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
-- `expo-runtime` -- native process scheduler (C ABI static library linked into compiled binaries)
+- `expo-runtime` -- multi-threaded process scheduler (C ABI static library linked into compiled binaries)
 - `expo-driver` -- CLI binary (`expo`)
 - `expo-lsp` -- language server (diagnostics, formatting, hover, go-to-definition, pattern symbol resolution)
 
@@ -227,15 +227,24 @@ Implement natively in Expo wherever possible. Use C FFI for security-critical cr
 
 ### Track B: Runtime + Reliability
 
-#### Multi-threaded scheduler + I/O
+#### Multi-threaded scheduler + I/O -- started
 
-Work-stealing M:N scheduler. I/O reactor (kqueue on macOS, epoll on Linux). Can start with a simple multi-threaded round-robin before optimizing to work-stealing.
+Multi-threaded round-robin scheduling and I/O reactor are implemented. Work-stealing is next.
 
 **No dependencies on Phase 3 B1-B3 or Track A.** The `Process<C, M, R>` protocol and `spawn`/`receive` work identically regardless of how many OS threads the scheduler uses underneath.
 
+**Done:**
+
+- ~~**Multi-threaded round-robin**~~ -- N worker OS threads share a `Mutex`-protected process list. Each worker runs a scheduling loop: lock, find a runnable process, unlock, context-switch, persist saved SP on return. Per-worker thread-local state (`CURRENT_PID`, `SCHED_SP`, `YIELD_SP`) via `thread_local!`. C ABI unchanged -- existing programs gain multi-core scheduling with no code changes.
+- ~~**Container-aware thread count**~~ -- reads cgroup v2 CPU quota (`/sys/fs/cgroup/cpu.max`) on Linux; falls back to `available_parallelism` on macOS and bare-metal Linux.
+- ~~**Idle thread parking (no spin)**~~ -- idle workers park on a `Condvar` when no work is available, consuming zero CPU. Woken by `send`, `spawn`, or deadline expiry.
+- ~~**Graceful shutdown**~~ -- `AtomicBool` shutdown flag set when the main process (PID 1) dies. All workers exit their loops and join. Deadlock detection for all-blocked-without-timeout scenarios.
+- ~~**I/O reactor**~~ -- non-blocking socket I/O via the `polling` crate (kqueue/epoll/IOCP). Sockets are `O_NONBLOCK`; on `EAGAIN`, processes enter `WaitingIo` state and the reactor wakes them on readiness. Dedicated reactor thread alongside workers. Covers `accept`, `connect`, `recv_from`, `send_to`, `fd_read`, `fd_write`. DNS and file I/O stay blocking.
+
+**Remaining:**
+
 - **Scheduler protocol** -- the runtime is defined as a protocol interface (`spawn_process`, `send_message`, `yield`, `park`/`wake`, `poll_io`), not a monolithic scheduler. The native runtime is one implementation; others (WASM, testing, embedded, debug) implement the same interface.
-- **Container-aware thread count** -- detect cgroup CPU limits (`/sys/fs/cgroup/cpu.max` on cgroups v2) for scheduler thread count, not host CPU count. A pod with `resources.limits.cpu: 2` on a 96-core host should spawn 2 scheduler threads. Fall back to `available_parallelism` on bare metal.
-- **Idle thread parking (default: no spin)** -- idle scheduler threads park on a condvar/futex when no work is available, consuming zero CPU. No busy-wait by default. Configurable via `EXPO_SCHEDULER_BUSYWAIT=none|short` environment variable: `none` (default, container-safe) parks immediately; `short` spins briefly before parking for ~1-5 microsecond lower steal latency on bare metal with dedicated cores. BEAM's `+sbwt short` default caused silent CFS quota burn in Kubernetes deployments -- Expo avoids this by defaulting to the container-safe behavior.
+- **Work-stealing** -- upgrade from round-robin to per-thread run queues with lock-free work-stealing for lower contention under high process counts.
 - **Graceful SIGTERM handling** -- K8s sends SIGTERM with a configurable grace period (default 30s). The scheduler stops accepting new spawns, drains in-flight processes, and exits cleanly. Processes that don't exit in time are killed on SIGKILL.
 - Timer wheel for timeouts, intervals, and deadlines
 - Process lifecycle manager (start, stop, crash detection)
@@ -597,6 +606,7 @@ Active design discussions about the type system, code organization, and function
 | Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
 | Phase 4A  | Test runner, `std.socket` (POSIX surface), `Debug` protocol, `std.io`, `std.file`, `std.system`, `std.time`           |
 | Tooling   | DWARF debug info, `--release` flag, runtime stacktraces, Vim plugin (indent, matchit, compiler)                       |
+| Phase 4B  | Multi-threaded scheduler, cgroup-aware thread count, Condvar parking, graceful shutdown, I/O reactor                 |
 
 For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md) and [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md).
 
@@ -605,7 +615,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 | Phase | Milestone                                                                                                                                      |
 | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, C FFI, first-party packages |
-| 4B    | Multi-threaded scheduler, preemption, supervision, process discovery, `shared_map`                                                             |
+| 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                         |
 | 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                         |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                     |
 | 6B    | auth-manager-expo runs for real, second project                                                                                                |

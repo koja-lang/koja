@@ -11,6 +11,7 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 backtrace = "0.3"
 libc = "0.2"
+polling = "3"
 
 [build-dependencies]
 cc = "1"
