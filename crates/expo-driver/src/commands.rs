@@ -4,12 +4,44 @@
 //! delegates to [`crate::pipeline`] for compilation or directly to the
 //! relevant crate (`expo_parser`, `expo_fmt`, `expo_doc`) for simpler tools.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
 use crate::diagnostics::render_diagnostics;
 use crate::pipeline;
 use crate::project;
+
+/// Replaces the current process with the given binary (Unix) or spawns and
+/// waits for it (non-Unix). Never returns on success.
+#[cfg(unix)]
+fn exec_binary(binary: &Path, args: &[String]) -> ! {
+    use std::os::unix::process::CommandExt;
+    let err = process::Command::new(binary).args(args).exec();
+    eprintln!("failed to run binary: {err}");
+    process::exit(1);
+}
+
+#[cfg(not(unix))]
+fn exec_binary(binary: &Path, args: &[String]) -> ! {
+    match process::Command::new(binary).args(args).status() {
+        Ok(s) => process::exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("failed to run binary: {e}");
+            process::exit(1);
+        }
+    }
+}
+
+/// Returns the `target/debug/` directory under the given root, creating it
+/// if it doesn't exist.
+fn target_debug_dir(project_root: &Path) -> PathBuf {
+    let dir = project_root.join("target").join("debug");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| {
+        eprintln!("error: cannot create target directory: {e}");
+        process::exit(1);
+    });
+    dir
+}
 
 /// `expo build [file.expo] [-o output] [--emit-llvm]` -- compiles an Expo program to an executable.
 ///
@@ -47,9 +79,12 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, emit_llvm: bool, 
     }
 }
 
-/// `expo run [file.expo] [-- args...]` -- compiles to a temporary binary, runs it, then cleans up.
+/// `expo run [file.expo] [-- args...]` -- compiles and runs an Expo program.
 ///
 /// With no arguments, looks for `expo.toml` in the current directory.
+/// The compiled binary is placed in `target/debug/` for project mode
+/// or a temp directory for single-file mode. On Unix, the current process
+/// is replaced with the binary via `exec` so signals reach it directly.
 pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
     if let Some(path) = file {
         let tmp_dir = env::temp_dir();
@@ -68,17 +103,7 @@ pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
             emit_llvm: false,
         };
         pipeline::build(args, true, color);
-
-        let status = process::Command::new(&binary).args(&run_args).status();
-        let _ = fs::remove_file(&binary);
-
-        match status {
-            Ok(s) => process::exit(s.code().unwrap_or(1)),
-            Err(e) => {
-                eprintln!("failed to run binary: {e}");
-                process::exit(1);
-            }
-        }
+        exec_binary(&binary, &run_args);
     } else {
         let cwd = env::current_dir().unwrap_or_else(|e| {
             eprintln!("error: cannot determine current directory: {e}");
@@ -99,22 +124,11 @@ pub fn cmd_run(file: Option<String>, run_args: Vec<String>, color: bool) {
             }
         };
 
-        let tmp_dir = env::temp_dir();
-        let binary = tmp_dir.join(format!("expo_run_{}", config.name));
+        let binary = target_debug_dir(&cwd).join(&config.name);
         let output = binary.to_str().unwrap().to_string();
 
         pipeline::build_project(&config, &cwd, Some(&output), true, color, false);
-
-        let status = process::Command::new(&binary).args(&run_args).status();
-        let _ = fs::remove_file(&binary);
-
-        match status {
-            Ok(s) => process::exit(s.code().unwrap_or(1)),
-            Err(e) => {
-                eprintln!("failed to run binary: {e}");
-                process::exit(1);
-            }
-        }
+        exec_binary(&binary, &run_args);
     }
 }
 
@@ -197,6 +211,41 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
             let dir = cwd.join(src_dir);
             if dir.is_dir() {
                 collect_expo_files_with_prefix(&dir, &dir, &config.name, &mut collected);
+            }
+        }
+
+        for (alias, dep) in &config.dependencies {
+            let dep_path = match &dep.path {
+                Some(p) => cwd.join(p),
+                None => {
+                    eprintln!("warning: dependency `{alias}` has no path, skipping docs");
+                    continue;
+                }
+            };
+            let dep_config = match project::load_project(&dep_path) {
+                Ok(Some(c)) => c,
+                Ok(None) => {
+                    eprintln!(
+                        "warning: dependency `{alias}` has no expo.toml at {}",
+                        dep_path.display()
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("warning: dependency `{alias}`: {e}");
+                    continue;
+                }
+            };
+            for src_dir in &dep_config.src {
+                let dir = dep_path.join(src_dir);
+                if dir.is_dir() {
+                    collect_expo_files_with_prefix(
+                        &dir,
+                        &dir,
+                        &dep_config.name,
+                        &mut collected,
+                    );
+                }
             }
         }
     } else {

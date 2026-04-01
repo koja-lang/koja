@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use expo_ast::ast::Module;
 
-use crate::project::ProjectConfig;
+use crate::project::{self, ProjectConfig};
 
 /// A single resolved module: its source text, parsed AST, and any parse errors.
 pub struct ResolvedModule {
@@ -97,6 +97,7 @@ pub fn resolve_project_modules(
 
     insert_stdlib(&mut graph);
     scan_directories(&config.name, &src_roots, &mut graph)?;
+    resolve_dependencies(config, project_root, &mut graph)?;
 
     if !graph.modules.contains_key(&entry_fqn) {
         return Err(format!(
@@ -196,6 +197,7 @@ pub fn resolve_test_project_modules(
 
     insert_stdlib(&mut graph);
     scan_directories(&config.name, &all_roots, &mut graph)?;
+    resolve_dependencies(config, project_root, &mut graph)?;
 
     if let Some(ref entry) = config.entry {
         let entry_fqn = format!("{}.{}", config.name, entry);
@@ -206,6 +208,47 @@ pub fn resolve_test_project_modules(
     }
 
     Ok(graph)
+}
+
+/// Scans each dependency declared in `[dependencies]` and adds its source
+/// modules to the graph. The dep's entry module is skipped to avoid `fn main`
+/// conflicts with the consuming project.
+fn resolve_dependencies(
+    config: &ProjectConfig,
+    project_root: &Path,
+    graph: &mut ModuleGraph,
+) -> Result<(), String> {
+    for (alias, dep) in &config.dependencies {
+        let dep_path = match &dep.path {
+            Some(p) => project_root.join(p),
+            None => {
+                return Err(format!(
+                    "dependency `{alias}` has no `path` (git dependencies are not yet supported)"
+                ));
+            }
+        };
+
+        let dep_config = project::load_project(&dep_path)?
+            .ok_or_else(|| {
+                format!(
+                    "dependency `{alias}`: no expo.toml found at {}",
+                    dep_path.display()
+                )
+            })?;
+
+        let dep_src_roots: Vec<PathBuf> =
+            dep_config.src.iter().map(|s| dep_path.join(s)).collect();
+        scan_directories(&dep_config.name, &dep_src_roots, graph)?;
+
+        if let Some(ref entry) = dep_config.entry {
+            let entry_fqn = format!("{}.{}", dep_config.name, entry);
+            if let Some(pos) = graph.order.iter().position(|n| n == &entry_fqn) {
+                graph.order.remove(pos);
+            }
+            graph.modules.remove(&entry_fqn);
+        }
+    }
+    Ok(())
 }
 
 fn collect_expo_files_recursive(dir: &Path) -> Vec<PathBuf> {

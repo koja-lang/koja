@@ -196,7 +196,19 @@ pub fn build_project(
         }
     };
 
-    let output = output.unwrap_or(&config.name);
+    let default_output;
+    let output = match output {
+        Some(o) => o,
+        None => {
+            let target_dir = project_root.join("target").join("debug");
+            fs::create_dir_all(&target_dir).unwrap_or_else(|e| {
+                eprintln!("error: cannot create target directory: {e}");
+                process::exit(1);
+            });
+            default_output = target_dir.join(&config.name);
+            default_output.to_str().unwrap()
+        }
+    };
     build_from_graph(&graph, output, quiet, color, emit_llvm);
 }
 
@@ -322,8 +334,12 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     );
     graph.entry = harness_name;
 
-    let tmp_dir = env::temp_dir();
-    let binary = tmp_dir.join(format!("expo_test_{}", config.name));
+    let target_dir = project_root.join("target").join("debug");
+    fs::create_dir_all(&target_dir).unwrap_or_else(|e| {
+        eprintln!("error: cannot create target directory: {e}");
+        process::exit(1);
+    });
+    let binary = target_dir.join(format!("{}_test", config.name));
     let output = binary.to_str().unwrap().to_string();
 
     build_from_graph(&graph, &output, true, color, false);

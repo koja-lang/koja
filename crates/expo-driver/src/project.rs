@@ -2,15 +2,24 @@
 //!
 //! Reads `expo.toml` and extracts a [`ProjectConfig`] via TOML deserialization.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use serde::Deserialize;
 
-/// Top-level TOML structure: `[project]` table.
+/// Top-level TOML structure: `[project]` + optional `[dependencies]`.
 #[derive(Deserialize)]
 struct ExpoToml {
     project: ProjectConfig,
+    #[serde(default)]
+    dependencies: HashMap<String, DepConfig>,
+}
+
+/// A single dependency declaration from `[dependencies]`.
+#[derive(Debug, Deserialize)]
+pub struct DepConfig {
+    pub path: Option<String>,
 }
 
 /// Parsed project configuration from an `expo.toml` file.
@@ -24,6 +33,8 @@ pub struct ProjectConfig {
     pub test: Vec<String>,
     #[serde(default)]
     pub entry: Option<String>,
+    #[serde(skip)]
+    pub dependencies: HashMap<String, DepConfig>,
 }
 
 fn default_src() -> Vec<String> {
@@ -50,5 +61,7 @@ pub fn load_project(dir: &Path) -> Result<Option<ProjectConfig>, String> {
     let parsed: ExpoToml =
         toml::from_str(&source).map_err(|e| format!("expo.toml parse error: {e}"))?;
 
-    Ok(Some(parsed.project))
+    let mut config = parsed.project;
+    config.dependencies = parsed.dependencies;
+    Ok(Some(config))
 }

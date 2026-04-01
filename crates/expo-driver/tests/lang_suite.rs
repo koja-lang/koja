@@ -315,6 +315,33 @@ fn lang_cross_ref_test() {
 }
 
 #[test]
+fn lang_local_dep_test() {
+    let project_dir = lang_dir().join("local_dep");
+    if !project_dir.exists() {
+        panic!("test fixture tests/lang/local_dep/ not found");
+    }
+
+    let expected_path = project_dir.join("expected.stdout");
+    assert!(expected_path.exists(), "missing local_dep/expected.stdout");
+
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("run").current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute expo run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    assert!(
+        code == 0,
+        "expo run failed in local_dep dir with code {code}\nstderr:\n{stderr}"
+    );
+    assert_output_matches("local_dep/run", &stdout, &expected_path);
+}
+
+#[test]
 fn lang_compile_fail_tests() {
     let dir = lang_dir().join("compile_fail");
     if !dir.exists() {

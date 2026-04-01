@@ -1,0 +1,7 @@
+[project]
+name = "local_dep"
+version = "0.1.0"
+entry = "main"
+
+[dependencies]
+greeter = { path = "libs/greeter" }

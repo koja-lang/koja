@@ -462,10 +462,10 @@ types and protocols listed. Types that have `@doc false` are excluded.
 - **Intra-project imports.** No `import my_app.server` to use `Server`.
   All types are visible within the project.
 - **`import` keyword.** No remaining use case. Package types are
-  qualified by their package name (`json.Parser`), and `type` aliasing
-  creates local short names. The compiler gives a helpful error if
-  someone tries `import`: *"Use `type Parser = json.Parser` to create
-  a local name for a package type."*
+  qualified by their package name (`json.Parser`), and `alias` creates
+  file-private short names. The compiler gives a helpful error if
+  someone tries `import`: *"Use `alias json.Parser` to create a local
+  name for a package type."*
 - **Module-level documentation.** ~~`@moduledoc` removed~~ -- type-level
   `@doc` is the documentation mechanism. Docs are flat, grouped by type.
 - **Dependency ordering between files.** The compiler no longer needs
@@ -484,8 +484,13 @@ types and protocols listed. Types that have `@doc false` are excluded.
   functions.
 - **`expo.toml`**: project configuration, including dependency
   declarations with git URLs and local package names.
-- **`type` aliases**: now also serve as the mechanism for creating
-  unqualified names for package types.
+- **`type` aliases**: real type definitions, globally visible across
+  the project (appear in docs, usable in public signatures).
+- **`alias` keyword** (planned): file-private shorthand for qualified
+  package types. `alias json.Encoder` or `alias json.Decoder as JSONDecoder`
+  makes the short name available only in the declaring file. Unlike
+  `type`, aliases don't create new type definitions -- they're purely
+  syntactic sugar that avoids polluting the flat project namespace.
 
 ### Changed
 

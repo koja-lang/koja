@@ -181,9 +181,10 @@ The litmus test: does the compiler or language runtime need it to function, or i
 
 #### Package manager
 
-- `expo.toml` extended with dependency declarations via git URLs with user-controlled local names
-- Dependency resolution: fetch from git, lock file generation for reproducible builds
-- **Done when**: `expo.toml` resolves dependencies and builds the project
+- ~~`expo.toml` extended with dependency declarations~~ **Done.** `[dependencies]` table with local path support (`json = { path = "../json" }`). Dependency sources are scanned and merged into the module graph.
+- Git dependencies: `expo.toml` extended with git URLs, tags, and branches. Dependency resolution: fetch from git, lock file generation for reproducible builds.
+- `alias` keyword: file-private shorthand for qualified package types. `alias json.Encoder` or `alias json.Decoder as JSONDecoder`. Unlike `type` (which creates a globally-visible type alias), `alias` is scoped to the declaring file and doesn't pollute the flat project namespace. This is the primary ergonomic mechanism for working with dependency types.
+- **Done when**: `expo.toml` resolves git dependencies and builds the project
 
 #### C FFI
 

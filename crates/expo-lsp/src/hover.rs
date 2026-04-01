@@ -64,13 +64,21 @@ impl Backend {
     }
 }
 
-/// Resolves a doc comment for `name` from the local module or stdlib.
+/// Resolves a doc comment for `name` from the local module, sibling
+/// project modules, or stdlib.
 fn resolve_doc(name: &str, state: &DocumentState, stdlib_modules: &[Module]) -> Option<String> {
-    lookup::find_doc_for(&state.module, name).or_else(|| {
-        stdlib_modules
-            .iter()
-            .find_map(|m| lookup::find_doc_for(m, name))
-    })
+    lookup::find_doc_for(&state.module, name)
+        .or_else(|| {
+            state
+                .project_modules
+                .iter()
+                .find_map(|m| lookup::find_doc_for(m, name))
+        })
+        .or_else(|| {
+            stdlib_modules
+                .iter()
+                .find_map(|m| lookup::find_doc_for(m, name))
+        })
 }
 
 fn build_function_hover(

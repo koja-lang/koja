@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Local path dependencies -- `[dependencies]` table in `expo.toml` with `path` support. Dependency source files are scanned and merged into the module graph, making dependency types available in the project namespace. Example: `json = { path = "../json" }`.
 - Test runner -- `expo test` discovers `@test`-annotated functions in `src/` and `test/` directories, generates a test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure with the test name printed before each call. `expo.toml` has an optional `test` field (default `["test"]`).
 - `std.socket` module -- complete POSIX socket surface. `SocketKind` enum (`Stream`, `Datagram`), `IPAddress` struct (Binary-backed with `v4()`, `loopback()`, `any()`, `v4?()`, `v6?()` helpers), `SocketAddress` struct. `Socket` with `create`, `bind`, `connect`, `resolve` (DNS via `getaddrinfo`), `send_to`, `recv_from`, `listen`, `accept`, `set_reuse_addr`, `close`. Socket types moved from `std.fd` to `std.socket`. First-party `net` packages can now be built entirely in pure Expo without compiler intrinsics.
 - `Binary.byte_size()` -- returns the number of bytes in a binary value. `Binary` and `Bits` types now support debug formatting.

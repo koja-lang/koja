@@ -373,7 +373,24 @@ The driver parses the file with the `toml` crate and deserializes into a
 | `test`    | [string] | `["test"]` | Test directories               |
 | `entry`   | string   | (none)     | Entry module (for executables) |
 
-Extends naturally: future tables like `[deps]` are just more TOML sections.
+### `[dependencies]`
+
+Declares external packages the project depends on. Each key is a local alias
+for the dependency; the value specifies where to find it.
+
+```toml
+[dependencies]
+json = { path = "../json" }
+```
+
+| Key    | Type   | Purpose                                    |
+| ------ | ------ | ------------------------------------------ |
+| `path` | string | Relative path to the dependency's root dir |
+
+The dependency must have its own `expo.toml`. The resolver loads it, scans
+its `src` directories, and merges the dependency's types into the project's
+flat namespace. The dependency's entry module (if any) is excluded to avoid
+`fn main` conflicts.
 
 ### Driver behavior
 

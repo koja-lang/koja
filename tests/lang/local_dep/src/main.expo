@@ -1,0 +1,4 @@
+fn main
+  g = Greeter.new("World")
+  print(g.greet())
+end

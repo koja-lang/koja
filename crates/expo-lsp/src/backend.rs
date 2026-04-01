@@ -21,6 +21,7 @@ pub(crate) struct DocumentState {
     pub(crate) module: Module,
     pub(crate) ctx: TypeContext,
     pub(crate) source: String,
+    pub(crate) project_modules: Vec<Module>,
 }
 
 /// The Expo language server backend.
