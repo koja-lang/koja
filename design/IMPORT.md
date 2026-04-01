@@ -80,7 +80,7 @@ code communicates what `Server` is whether or not there's an
 ### Encapsulation
 
 "If you can't import it, you can't use it." Expo already rejected this
-approach: "No private modules... Use `@moduledoc false` to signal
+approach: "No private modules... Use `@doc false` on types to signal
 'internal, don't depend on this' -- a documentation-level convention,
 not a compiler wall. This matches Elixir's approach." Elixir proves this
 works at scale. The community consensus is: if you use internal modules,
@@ -466,9 +466,8 @@ types and protocols listed. Types that have `@doc false` are excluded.
   creates local short names. The compiler gives a helpful error if
   someone tries `import`: *"Use `type Parser = json.Parser` to create
   a local name for a package type."*
-- **Module-level documentation.** `@moduledoc` on files loses its
-  current meaning. Type-level `@doc` and a project-level description
-  in `expo.toml` replace it.
+- **Module-level documentation.** ~~`@moduledoc` removed~~ -- type-level
+  `@doc` is the documentation mechanism. Docs are flat, grouped by type.
 - **Dependency ordering between files.** The compiler no longer needs
   to determine which file to compile first. All files are processed
   together.
@@ -542,11 +541,9 @@ types.
 
 ## Open questions
 
-- **`@moduledoc` replacement**: files currently use `@moduledoc` for
-  file-level documentation. With files being transparent, this
-  annotation needs a new purpose or removal. One option: `@moduledoc`
-  becomes `@doc` on the project (in `expo.toml`). Another: drop it
-  entirely and rely on type-level `@doc`. A third: keep it as prose
+- ~~**`@moduledoc` replacement**: resolved -- `@moduledoc` removed.
+  Type-level `@doc` is the sole documentation mechanism. Doc output
+  is a flat namespace of all types/functions/protocols. A third: keep it as prose~~
   documentation associated with the file, surfaced in docs as a
   "guide" page rather than an API page.
 

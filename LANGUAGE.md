@@ -18,7 +18,7 @@ Expo is a statically typed, compiled language targeting native binaries via LLVM
 - [Modules](#modules) -- Transparent Files, Visibility
 - [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
 - [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
-- [Annotations](#annotations) -- `@doc`, `@moduledoc`
+- [Annotations](#annotations) -- `@doc`
 - [Planned Features](#planned-features) -- Arena Blocks, Display, Struct Destructuring, Trait Bounds, `command`
 - [Tooling](#tooling) -- CLI Commands, LSP, Formatter
 
@@ -1371,16 +1371,6 @@ end
 ```
 
 `@doc false` excludes an item from generated documentation.
-
-### `@moduledoc`
-
-Documents a module (placed at the top of the file):
-
-```expo
-@moduledoc "Math utility functions."
-```
-
-`@moduledoc false` excludes the entire module from documentation.
 
 Doc strings support Markdown and are rendered by `expo doc`.
 

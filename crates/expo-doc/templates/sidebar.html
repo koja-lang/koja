@@ -1,23 +1,13 @@
 <nav class="sidebar">
   <h1>Expo</h1>
 
-  <h2>Modules</h2>
-  <ul>
-    {% for m in all_modules %}
+  <ul class="sidebar-items">
+    {% for item in all_items %}
     <li>
-      <a href="{% if is_item_page %}../{% endif %}{{ m.name }}.html"{% if m.name == *module_name %} class="active"{% endif %}>{{ m.name }}</a>
-      {% if m.name == *module_name %}
-      <ul class="sidebar-items">
-        {% for item in m.items %}
-        <li>
-          <a class="sidebar-item{% if let Some(active) = active_item %}{% if item.name == *active %} active{% endif %}{% endif %}" href="{% if is_item_page %}{% else %}{{ module_name }}/{% endif %}{{ item.name }}.html">
-            <span class="sidebar-item-name">{{ item.name }}</span>
-            <span class="type-chip chip-{{ item.kind }}">{{ item.kind }}</span>
-          </a>
-        </li>
-        {% endfor %}
-      </ul>
-      {% endif %}
+      <a class="sidebar-item{% if let Some(active) = active_item %}{% if item.name == *active %} active{% endif %}{% endif %}" href="{{ item.name }}.html">
+        <span class="sidebar-item-name">{{ item.name }}</span>
+        <span class="type-chip chip-{{ item.kind }}">{{ item.kind }}</span>
+      </a>
     </li>
     {% endfor %}
   </ul>

@@ -77,7 +77,7 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 - **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `PairLiteral<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
 - **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
 - **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Short closures (`x -> expr`) with full capture support and context-driven parameter type inference at inline call sites. Used by `map`/`then` on `Option` and `Result`.
-- **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
+- **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@doc false` on types to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 - **PascalCase primitives and type simplification** (done): Primitives renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. User-defined types (`Pair`, `User`) and language types (`Int`, `String`) are now visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction.
 - **`ref T` syntax** (parsed, deferred): Reference types use `ref T` (space, no angle brackets) instead of `ref<T>`. `ref` is a lowercase keyword modifier, consistent with the modifier pattern (`const`, `priv`, `move`, `ref`): lowercase keywords modify the thing that follows them, PascalCase names are always types. However, `ref T` is redundant in parameter position (borrow-by-default) and unsafe in return position without lifetime tracking. Deferred until a concrete use case emerges.
 - **Map literal syntax** (decided): `[key: value, key: value]` with `[:]` for empty maps. Maps are collections (like `List<T>`), not struct-like, so they share the bracket family rather than curly braces. The parser disambiguates list vs. map by peeking for `:` after the first expression. Curly braces remain exclusive to struct construction (`Config{name: "yo"}`).
@@ -110,8 +110,8 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 
 ### Tooling (pulled forward)
 
-- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@moduledoc`/`@doc` annotations
-- **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`/`@moduledoc`), and go-to-definition (including qualified module calls) over stdio, integrated with the VSCode/Cursor extension
+- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@doc` annotations
+- **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`), and go-to-definition (including qualified module calls) over stdio, integrated with the VSCode/Cursor extension
 - **VSCode extension** -- syntax highlighting and LSP client for `.expo` files
 
 ### Build history
@@ -306,11 +306,10 @@ This means no special `System.argv()`, `System.exit()`, or signal handler APIs. 
 
 ### Documentation -- started
 
-- ~~`expo doc` -- generates static HTML documentation from `@doc` and `@moduledoc` annotations~~
+- ~~`expo doc` -- generates static HTML documentation from `@doc` annotations~~
 - ~~Markdown rendering in doc strings (via pulldown-cmark)~~
-- ~~`@doc false` and `@moduledoc false` to exclude items from docs~~
-- ~~Recursive directory input with dotted module names (e.g. `src/what/util.expo` → `what.util`)~~
-- ~~Global sidebar navigation across all module pages~~
+- ~~`@doc false` to exclude items from docs~~
+- ~~Flat namespace sidebar navigation across all items~~
 - ~~Askama templates for HTML generation~~
 - ~~Brand-themed output (burnt orange + warm charcoal, Source Sans 3 / Source Code Pro typography)~~
 - Doctest support: code examples in `@doc` strings are compiled and run as tests
@@ -325,7 +324,7 @@ This means no special `System.argv()`, `System.exit()`, or signal handler APIs. 
 - ~~Document formatting via LSP (`textDocument/formatting`)~~
 - ~~VSCode/Cursor extension integration (LSP client over stdio)~~
 - ~~Go-to-definition for functions, structs, enums, and imports (jumps to module file)~~
-- ~~Hover showing type signatures, `@doc`, and `@moduledoc` for imports~~
+- ~~Hover showing type signatures and `@doc`~~
 - ~~Restart Language Server command~~
 - Autocomplete for module names, function names, struct fields
 - Inline type hints for inferred types

@@ -408,9 +408,10 @@ In Expo, these map to:
 
 - **Function**: `fn` -- does one thing.
 - **Module**: a file. Contains types and functions around one idea.
-  `@moduledoc` documents it. No `module` keyword -- the file IS the module.
+  No `module` keyword -- the file IS the module.
 - **Type**: `struct` or `enum` with inline functions. The namespace boundary
   within a module. Types are the ideas; files organize them on disk.
+  `@doc` documents each type.
 - **Project**: `expo.toml` defines the build unit.
 
 ### Fractal consistency
@@ -488,7 +489,7 @@ assignment analysis. No dedicated keyword needed.
 - **`union` replaces `type X = A | B`** for anonymous sums. Union types are
   real entries in the type registry, supporting `impl`.
 - **File = module**: no `module` keyword. The file provides the module
-  boundary. `@moduledoc` documents it. One idea per file by convention.
+  boundary. One idea per file by convention.
 - **`impl` across files**: `impl Display for User` can appear in a different
   file from `struct User`. A type is declared in one file, but `impl` blocks
   can appear anywhere (protocol conformance, extensions from other files).

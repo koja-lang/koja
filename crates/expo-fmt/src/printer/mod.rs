@@ -38,36 +38,14 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats an entire module: moduledoc, then items with interleaved comments.
+    /// Formats an entire module: items with interleaved comments.
     fn print_module(&mut self, module: &Module) -> Doc {
         let mut parts: Vec<Doc> = Vec::new();
         let mut emitted = false;
-        let mut moduledoc_emitted = false;
-
-        let moduledoc_line = module.moduledoc.as_ref().map(|md| md.span.start.line);
 
         let mut i = 0;
 
         while i < module.items.len() {
-            let next_item_line = item_span(&module.items[i]).start.line;
-
-            if !moduledoc_emitted
-                && let Some(md) = &module.moduledoc
-                && moduledoc_line.is_some_and(|ml| ml < next_item_line)
-            {
-                let (comment_docs, _) = self.comments.drain_before(md.span.start.line);
-                for c in comment_docs {
-                    parts.push(c);
-                }
-                if emitted {
-                    parts.push(hardline());
-                }
-                parts.push(annotation_to_doc(md));
-                parts.push(hardline());
-                emitted = true;
-                moduledoc_emitted = true;
-            }
-
             if matches!(&module.items[i], Item::Constant(_)) {
                 if emitted {
                     parts.push(hardline());
@@ -101,14 +79,6 @@ impl<'a> Printer<'a> {
                 emitted = true;
                 i += 1;
             }
-        }
-
-        if !moduledoc_emitted && let Some(md) = &module.moduledoc {
-            if emitted {
-                parts.push(hardline());
-            }
-            parts.push(annotation_to_doc(md));
-            parts.push(hardline());
         }
 
         let trailing = self.comments.drain_rest();

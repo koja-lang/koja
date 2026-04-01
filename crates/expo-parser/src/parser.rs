@@ -1,4 +1,4 @@
-use expo_ast::ast::{Annotation, Comment, Diagnostic, Item, Module, Severity, Visibility};
+use expo_ast::ast::{Comment, Diagnostic, Item, Module, Severity, Visibility};
 use expo_ast::span::{Position, Span};
 use expo_ast::token::{Token, TokenKind};
 use expo_lexer::{LexResult, lex};
@@ -213,25 +213,23 @@ impl Parser {
     pub(crate) fn parse_module(&mut self) -> Module {
         let start = self.current_span();
         let mut items = Vec::new();
-        let mut moduledoc = None;
 
         self.skip_newlines();
         while !self.at_eof() {
-            if let Some(item) = self.parse_item(&mut moduledoc) {
+            if let Some(item) = self.parse_item() {
                 items.push(item);
             }
             self.skip_newlines();
         }
 
         Module {
-            moduledoc,
             items,
             comments: self.comments.clone(),
             span: self.span_from(start),
         }
     }
 
-    fn parse_item(&mut self, moduledoc: &mut Option<Annotation>) -> Option<Item> {
+    fn parse_item(&mut self) -> Option<Item> {
         self.skip_newlines();
         match self.peek().clone() {
             TokenKind::Struct => Some(self.parse_struct_item()),
@@ -245,10 +243,6 @@ impl Parser {
             }
             TokenKind::At => {
                 let annotation = self.parse_annotation();
-                if annotation.name == "moduledoc" {
-                    *moduledoc = Some(annotation);
-                    return None;
-                }
                 self.skip_newlines();
                 match self.peek().clone() {
                     TokenKind::Struct => {

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>{{ p.name }} — {{ module_name }} — Expo Docs</title>
+  <title>{{ p.name }} — Expo Docs</title>
   {% include "head.html" %}
 </head>
 <body>
@@ -14,7 +14,6 @@
     <span class="type-chip chip-protocol">protocol</span>
     <h1>{{ p.name }}{% if !p.type_params.is_empty() %}&lt;{{ p.type_params.join(", ") }}&gt;{% endif %}</h1>
   </div>
-  <p class="breadcrumb"><a href="../{{ module_name }}.html">{{ module_name }}</a></p>
 
   {% if let Some(doc) = p.doc %}
   <div class="detail-doc">{{ doc|md }}</div>

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>{{ e.name }} — {{ module_name }} — Expo Docs</title>
+  <title>{{ e.name }} — Expo Docs</title>
   {% include "head.html" %}
 </head>
 <body>
@@ -14,7 +14,6 @@
     <span class="type-chip chip-enum">enum</span>
     <h1>{{ e.name }}</h1>
   </div>
-  <p class="breadcrumb"><a href="../{{ module_name }}.html">{{ module_name }}</a></p>
 
   {% if let Some(doc) = e.doc %}
   <div class="detail-doc">{{ doc|md }}</div>

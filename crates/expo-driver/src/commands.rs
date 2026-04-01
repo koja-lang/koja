@@ -216,9 +216,16 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
     }
     collected.sort_by(|a, b| a.1.cmp(&b.1));
 
-    let mut doc_modules = Vec::new();
+    let mut project = expo_doc::DocProject {
+        constants: Vec::new(),
+        enums: Vec::new(),
+        functions: Vec::new(),
+        items: Vec::new(),
+        protocols: Vec::new(),
+        structs: Vec::new(),
+    };
 
-    for (path, module_name) in &collected {
+    for (path, _module_name) in &collected {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -233,13 +240,13 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
             continue;
         }
 
-        if let Some(doc_module) = expo_doc::extract_module(module_name, &parse_result.module) {
-            doc_modules.push(doc_module);
-        }
+        expo_doc::extract_items(&parse_result.module, &mut project);
     }
 
-    if doc_modules.is_empty() {
-        println!("no modules to document");
+    expo_doc::finalize_project(&mut project);
+
+    if project.items.is_empty() {
+        println!("no items to document");
         return;
     }
 
@@ -249,40 +256,28 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
         process::exit(1);
     }
 
-    for m in &doc_modules {
-        let html = expo_doc::render_module(m, &doc_modules);
-        let file_path = out_path.join(format!("{}.html", m.name));
-        write_doc_file(&file_path, &html);
-
-        let module_dir = out_path.join(&m.name);
-        if let Err(e) = fs::create_dir_all(&module_dir) {
-            eprintln!("error creating directory {}: {e}", module_dir.display());
-            process::exit(1);
-        }
-
-        for c in &m.constants {
-            let html = expo_doc::render_constant(m, c, &doc_modules);
-            write_doc_file(&module_dir.join(format!("{}.html", c.name)), &html);
-        }
-        for e in &m.enums {
-            let html = expo_doc::render_enum(m, e, &doc_modules);
-            write_doc_file(&module_dir.join(format!("{}.html", e.name)), &html);
-        }
-        for f in &m.functions {
-            let html = expo_doc::render_function(m, f, &doc_modules);
-            write_doc_file(&module_dir.join(format!("{}.html", f.name)), &html);
-        }
-        for p in &m.protocols {
-            let html = expo_doc::render_protocol(m, p, &doc_modules);
-            write_doc_file(&module_dir.join(format!("{}.html", p.name)), &html);
-        }
-        for s in &m.structs {
-            let html = expo_doc::render_struct(m, s, &doc_modules);
-            write_doc_file(&module_dir.join(format!("{}.html", s.name)), &html);
-        }
+    for c in &project.constants {
+        let html = expo_doc::render_constant(c, &project);
+        write_doc_file(&out_path.join(format!("{}.html", c.name)), &html);
+    }
+    for e in &project.enums {
+        let html = expo_doc::render_enum(e, &project);
+        write_doc_file(&out_path.join(format!("{}.html", e.name)), &html);
+    }
+    for f in &project.functions {
+        let html = expo_doc::render_function(f, &project);
+        write_doc_file(&out_path.join(format!("{}.html", f.name)), &html);
+    }
+    for p in &project.protocols {
+        let html = expo_doc::render_protocol(p, &project);
+        write_doc_file(&out_path.join(format!("{}.html", p.name)), &html);
+    }
+    for s in &project.structs {
+        let html = expo_doc::render_struct(s, &project);
+        write_doc_file(&out_path.join(format!("{}.html", s.name)), &html);
     }
 
-    let index_html = expo_doc::render_index(&doc_modules);
+    let index_html = expo_doc::render_index(&project);
     write_doc_file(&out_path.join("index.html"), &index_html);
     println!("docs generated: {}", out_path.display());
 }

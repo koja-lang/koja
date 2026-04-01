@@ -126,29 +126,6 @@ a:hover { text-decoration: underline; }
   margin-bottom: 8px;
 }
 
-.moduledoc {
-  color: var(--fg);
-  margin-bottom: 40px;
-  line-height: 1.7;
-}
-
-.moduledoc p { margin-bottom: 12px; }
-.moduledoc code {
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  background: var(--code-bg);
-  padding: 2px 6px;
-  border-radius: 3px;
-}
-.moduledoc pre {
-  background: var(--code-bg);
-  padding: 16px;
-  border-radius: 6px;
-  overflow-x: auto;
-  margin: 12px 0;
-}
-.moduledoc pre code { background: none; padding: 0; }
-
 /* Section headers */
 .section-heading {
   font-size: 22px;

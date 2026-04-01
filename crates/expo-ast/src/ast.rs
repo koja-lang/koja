@@ -107,7 +107,6 @@ pub enum Item {
 /// The root AST node representing a single Expo source file.
 #[derive(Debug, Clone)]
 pub struct Module {
-    pub moduledoc: Option<Annotation>,
     pub items: Vec<Item>,
     pub comments: Vec<Comment>,
     pub span: Span,

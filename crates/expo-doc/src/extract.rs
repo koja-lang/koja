@@ -5,20 +5,7 @@ use expo_ast::ast::{
     ProtocolMethod, StructDecl, TypeExpr, Visibility,
 };
 
-/// Documentation for an entire module (source file).
-#[derive(Debug)]
-pub struct DocModule {
-    pub constants: Vec<DocConstant>,
-    pub enums: Vec<DocEnum>,
-    pub functions: Vec<DocFunction>,
-    pub items: Vec<DocItem>,
-    pub moduledoc: Option<String>,
-    pub name: String,
-    pub protocols: Vec<DocProtocol>,
-    pub structs: Vec<DocStruct>,
-}
-
-/// Summary of a documentable item for flat alphabetical listings.
+/// Summary of a documentable item for the flat index listing.
 #[derive(Debug)]
 pub struct DocItem {
     pub doc: Option<String>,
@@ -85,128 +72,125 @@ pub struct DocStruct {
     pub type_params: Vec<String>,
 }
 
-/// Extract documentation from a parsed module.
+/// All extracted documentation from a project, flattened into a single namespace.
+#[derive(Debug)]
+pub struct DocProject {
+    pub constants: Vec<DocConstant>,
+    pub enums: Vec<DocEnum>,
+    pub functions: Vec<DocFunction>,
+    pub items: Vec<DocItem>,
+    pub protocols: Vec<DocProtocol>,
+    pub structs: Vec<DocStruct>,
+}
+
+/// Extract documentation items from a parsed module into the running project.
 ///
-/// Returns `None` if the module has `@moduledoc false`, indicating it should
-/// be excluded from generated documentation.
-pub fn extract_module(name: &str, module: &Module) -> Option<DocModule> {
-    if let Some(ref md) = module.moduledoc
-        && md.value == Some(AnnotationValue::False)
-    {
-        return None;
-    }
-
-    let moduledoc = module.moduledoc.as_ref().and_then(|md| match &md.value {
-        Some(AnnotationValue::String(s)) => Some(s.clone()),
-        _ => None,
-    });
-
-    let mut constants = Vec::new();
-    let mut enums = Vec::new();
-    let mut functions = Vec::new();
-    let mut protocols = Vec::new();
-    let mut structs = Vec::new();
+/// Items with `@doc false` are excluded.
+pub fn extract_items(module: &Module, project: &mut DocProject) {
+    let mut local_structs: Vec<DocStruct> = Vec::new();
+    let mut local_enums: Vec<DocEnum> = Vec::new();
 
     for item in &module.items {
         match item {
             Item::Constant(c) => {
                 if let Some(dc) = extract_constant(c) {
-                    constants.push(dc);
+                    project.constants.push(dc);
                 }
             }
             Item::Enum(e) => {
                 if let Some(de) = extract_enum(e) {
-                    enums.push(de);
+                    local_enums.push(de);
                 }
             }
             Item::Function(f) => {
                 if f.visibility == Visibility::Public
                     && let Some(df) = extract_function(f)
                 {
-                    functions.push(df);
+                    project.functions.push(df);
                 }
             }
             Item::Impl(imp) => {
-                attach_impl_functions(imp, &mut structs, &mut enums);
+                attach_impl_functions(
+                    imp,
+                    &mut local_structs,
+                    &mut local_enums,
+                    &mut project.structs,
+                    &mut project.enums,
+                );
             }
             Item::Protocol(p) => {
                 if let Some(dp) = extract_protocol(p) {
-                    protocols.push(dp);
+                    project.protocols.push(dp);
                 }
             }
             Item::Struct(s) => {
                 if let Some(ds) = extract_struct(s) {
-                    structs.push(ds);
+                    local_structs.push(ds);
                 }
             }
             _ => {}
         }
     }
 
-    constants.sort_by(|a, b| a.name.cmp(&b.name));
-    enums.sort_by(|a, b| a.name.cmp(&b.name));
-    functions.sort_by(|a, b| a.name.cmp(&b.name));
-    protocols.sort_by(|a, b| a.name.cmp(&b.name));
-    structs.sort_by(|a, b| a.name.cmp(&b.name));
+    project.structs.extend(local_structs);
+    project.enums.extend(local_enums);
+}
 
-    for e in &mut enums {
+/// Finalize the project: sort everything and build the flat item index.
+pub fn finalize_project(project: &mut DocProject) {
+    project.constants.sort_by(|a, b| a.name.cmp(&b.name));
+    project.enums.sort_by(|a, b| a.name.cmp(&b.name));
+    project.functions.sort_by(|a, b| a.name.cmp(&b.name));
+    project.protocols.sort_by(|a, b| a.name.cmp(&b.name));
+    project.structs.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for e in &mut project.enums {
         e.functions.sort_by(|a, b| a.name.cmp(&b.name));
     }
-    for p in &mut protocols {
+    for p in &mut project.protocols {
         p.functions.sort_by(|a, b| a.name.cmp(&b.name));
     }
-    for s in &mut structs {
+    for s in &mut project.structs {
         s.functions.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
-    let mut items: Vec<DocItem> = Vec::new();
-    for c in &constants {
-        items.push(DocItem {
+    project.items.clear();
+    for c in &project.constants {
+        project.items.push(DocItem {
             doc: c.doc.clone(),
             kind: "const".to_string(),
             name: c.name.clone(),
         });
     }
-    for e in &enums {
-        items.push(DocItem {
+    for e in &project.enums {
+        project.items.push(DocItem {
             doc: e.doc.clone(),
             kind: "enum".to_string(),
             name: e.name.clone(),
         });
     }
-    for f in &functions {
-        items.push(DocItem {
+    for f in &project.functions {
+        project.items.push(DocItem {
             doc: f.doc.clone(),
             kind: "fn".to_string(),
             name: f.name.clone(),
         });
     }
-    for p in &protocols {
-        items.push(DocItem {
+    for p in &project.protocols {
+        project.items.push(DocItem {
             doc: p.doc.clone(),
             kind: "protocol".to_string(),
             name: p.name.clone(),
         });
     }
-    for s in &structs {
-        items.push(DocItem {
+    for s in &project.structs {
+        project.items.push(DocItem {
             doc: s.doc.clone(),
             kind: "struct".to_string(),
             name: s.name.clone(),
         });
     }
-    items.sort_by(|a, b| a.name.cmp(&b.name));
-
-    Some(DocModule {
-        constants,
-        enums,
-        functions,
-        items,
-        moduledoc,
-        name: name.to_string(),
-        protocols,
-        structs,
-    })
+    project.items.sort_by(|a, b| a.name.cmp(&b.name));
 }
 
 fn annotation_string(annotation: &Option<expo_ast::ast::Annotation>) -> Option<String> {
@@ -216,7 +200,13 @@ fn annotation_string(annotation: &Option<expo_ast::ast::Annotation>) -> Option<S
     })
 }
 
-fn attach_impl_functions(imp: &ImplBlock, structs: &mut Vec<DocStruct>, enums: &mut [DocEnum]) {
+fn attach_impl_functions(
+    imp: &ImplBlock,
+    local_structs: &mut Vec<DocStruct>,
+    local_enums: &mut Vec<DocEnum>,
+    project_structs: &mut Vec<DocStruct>,
+    project_enums: &mut Vec<DocEnum>,
+) {
     if imp.trait_expr.is_some() {
         return;
     }
@@ -244,12 +234,16 @@ fn attach_impl_functions(imp: &ImplBlock, structs: &mut Vec<DocStruct>, enums: &
         return;
     }
 
-    if let Some(ds) = structs.iter_mut().find(|s| s.name == target_name) {
+    if let Some(ds) = local_structs.iter_mut().find(|s| s.name == target_name) {
         ds.functions.extend(funcs);
-    } else if let Some(de) = enums.iter_mut().find(|e| e.name == target_name) {
+    } else if let Some(ds) = project_structs.iter_mut().find(|s| s.name == target_name) {
+        ds.functions.extend(funcs);
+    } else if let Some(de) = local_enums.iter_mut().find(|e| e.name == target_name) {
+        de.functions.extend(funcs);
+    } else if let Some(de) = project_enums.iter_mut().find(|e| e.name == target_name) {
         de.functions.extend(funcs);
     } else {
-        structs.push(DocStruct {
+        local_structs.push(DocStruct {
             doc: None,
             fields: Vec::new(),
             functions: funcs,

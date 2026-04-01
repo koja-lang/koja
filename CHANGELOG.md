@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `import` keyword -- all types and public functions in a project are visible in every file. No imports needed. The transparent file model replaces the old import-driven module system.
+- `@moduledoc` annotation -- with the transparent file model, module-level documentation is no longer needed. Use `@doc` on individual types instead.
+- Module-grouped doc output -- `expo doc` now produces a flat namespace of all types, functions, protocols, and constants instead of grouping by file/module.
 
 ### Fixed
 
