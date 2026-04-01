@@ -8,8 +8,6 @@ mod pattern;
 mod stmt;
 pub mod types;
 
-use std::collections::BTreeMap;
-
 use context::TypeContext;
 use expo_ast::ast::Module;
 
@@ -52,15 +50,6 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
 /// and enum types that don't already have them. Call after merging stdlib.
 pub fn auto_derive_debug(ctx: &mut TypeContext) {
     collect::auto_derive_debug(ctx);
-}
-
-/// Merges imported module contexts into the current context based on import statements.
-pub fn resolve_imports(
-    module: &Module,
-    ctx: &mut TypeContext,
-    module_contexts: &BTreeMap<String, TypeContext>,
-) {
-    collect::resolve_imports(module, ctx, module_contexts);
 }
 
 #[cfg(test)]

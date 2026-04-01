@@ -21,7 +21,6 @@ pub struct TypeContext {
     pub generic_impl_asts: BTreeMap<String, Vec<ImplBlock>>,
     pub generic_protocol_asts: BTreeMap<String, ProtocolDecl>,
     pub generic_struct_asts: BTreeMap<String, StructDecl>,
-    pub imported_modules: BTreeMap<String, TypeContext>,
     pub protocol_impls: BTreeMap<String, Vec<(String, Vec<Type>)>>,
     pub protocols: BTreeMap<String, ProtocolInfo>,
     pub synthesized_default_fns: BTreeMap<String, Vec<Function>>,
@@ -250,7 +249,6 @@ impl TypeContext {
             generic_impl_asts: BTreeMap::new(),
             generic_protocol_asts: BTreeMap::new(),
             generic_struct_asts: BTreeMap::new(),
-            imported_modules: BTreeMap::new(),
             protocol_impls: BTreeMap::new(),
             protocols: BTreeMap::new(),
             synthesized_default_fns: BTreeMap::new(),
@@ -277,12 +275,6 @@ impl TypeContext {
                 }
             } else {
                 self.types.insert(name.clone(), info.clone());
-            }
-        }
-        for (mod_name, mod_ctx) in &other.imported_modules {
-            if !self.imported_modules.contains_key(mod_name) {
-                self.imported_modules
-                    .insert(mod_name.clone(), mod_ctx.clone());
             }
         }
         for (name, ast) in &other.generic_function_asts {

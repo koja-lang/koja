@@ -90,8 +90,6 @@ pub fn typecheck_graph(
         let rm = &graph.modules[*name];
         let mut ctx = module_contexts.remove(*name).unwrap();
         ctx.merge(&unified_project_ctx);
-        warn_deprecated_imports(&rm.module, &mut ctx);
-        expo_typecheck::resolve_imports(&rm.module, &mut ctx, &module_contexts);
         expo_typecheck::check_module(&rm.module, &mut ctx);
         module_contexts.insert((*name).clone(), ctx);
     }
@@ -117,24 +115,6 @@ pub fn typecheck_graph(
     }
 
     (module_contexts, has_errors)
-}
-
-/// Emits a deprecation warning for each intra-project `import` statement.
-/// Stdlib imports (`std.*`) are silently ignored since they'll be handled
-/// when `import` is removed from the grammar entirely.
-fn warn_deprecated_imports(module: &Module, ctx: &mut expo_typecheck::context::TypeContext) {
-    for item in &module.items {
-        if let Item::Import(import) = item {
-            let dotted = import.path.join(".");
-            if !dotted.starts_with("std.") && dotted != "std" {
-                ctx.warning(
-                    "import is unnecessary: all types in the project are visible in every file"
-                        .to_string(),
-                    import.span,
-                );
-            }
-        }
-    }
 }
 
 /// Compiles a fully resolved module graph into an executable.

@@ -1210,7 +1210,7 @@ pub(crate) fn resolve_receiver_base_name(
     }
 }
 
-/// Type-checks a method call, resolving module-qualified calls and type functions.
+/// Type-checks a method call, resolving type functions.
 fn infer_method_call(
     receiver: &Expr,
     method: &str,
@@ -1219,45 +1219,6 @@ fn infer_method_call(
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
-    if let Expr::Ident { name: mod_name, .. } = receiver {
-        let mod_lookup = ctx.imported_modules.get(mod_name).map(|mod_ctx| {
-            mod_ctx
-                .functions
-                .get(method)
-                .map(|sig| (sig.return_type.clone(), sig.params.clone()))
-        });
-
-        match mod_lookup {
-            Some(Some((return_type, params))) => {
-                let display = format!("{}.{}", mod_name, method);
-                check_call_args(&display, &params, args, "", span, ctx, ce);
-                return return_type;
-            }
-            Some(None) => {
-                for arg in args {
-                    infer_expr(&arg.value, ctx, ce);
-                }
-                let available: Vec<String> = ctx
-                    .imported_modules
-                    .get(mod_name)
-                    .map(|m| m.functions.keys().cloned().collect())
-                    .unwrap_or_default();
-                let hint = if available.is_empty() {
-                    format!("module `{}` has no public functions", mod_name)
-                } else {
-                    format!("available functions: {}", available.join(", "))
-                };
-                ctx.error_with_hint(
-                    format!("module `{}` has no function `{}`", mod_name, method),
-                    hint,
-                    span,
-                );
-                return Type::Error;
-            }
-            None => {}
-        }
-    }
-
     if let Expr::Ident {
         name: type_name, ..
     } = receiver

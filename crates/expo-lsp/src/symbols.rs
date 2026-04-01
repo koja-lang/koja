@@ -211,7 +211,7 @@ fn build_document_symbols(module: &Module) -> Vec<DocumentSymbol> {
                     children: None,
                 });
             }
-            Item::Import(_) | Item::Shared(_) => {}
+            Item::Shared(_) => {}
         }
     }
 

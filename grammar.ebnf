@@ -22,8 +22,7 @@
 
 program = { top_level_decl } ;
 
-top_level_decl = import_decl
-               | struct_decl
+top_level_decl = struct_decl
                | enum_decl
                | protocol_decl
                | impl_block
@@ -35,23 +34,7 @@ top_level_decl = import_decl
 
 
 (* ========================================================================== *)
-(* 2. Imports                                                                 *)
-(* ========================================================================== *)
-
-import_decl = "import" , import_path ;
-
-import_path = module_path , "." , import_target
-            | module_path ;
-
-module_path = IDENT , { "." , IDENT } ;
-
-import_target = IDENT                                   (* single item *)
-              | "{" , IDENT , { "," , IDENT } , "}"     (* grouped *)
-              | "*" ;                                    (* wildcard *)
-
-
-(* ========================================================================== *)
-(* 3. Type declarations                                                       *)
+(* 2. Type declarations                                                       *)
 (* ========================================================================== *)
 
 struct_decl = [ annotation ] , "struct" , TYPE_IDENT , [ type_params ] ,
@@ -74,7 +57,7 @@ type_alias_decl = [ annotation ] , "type" , TYPE_IDENT , "=" , type_expr ;
 
 
 (* ========================================================================== *)
-(* 4. Protocols                                                               *)
+(* 3. Protocols                                                               *)
 (* ========================================================================== *)
 
 protocol_decl = [ annotation ] , "protocol" , TYPE_IDENT , [ type_params ] ,
@@ -87,7 +70,7 @@ protocol_method = [ annotation ] , "fn" , IDENT , [ type_params ] ,
 
 
 (* ========================================================================== *)
-(* 5. Impl blocks                                                             *)
+(* 4. Impl blocks                                                             *)
 (* ========================================================================== *)
 
 impl_block = "impl" , type_expr , [ "for" , type_expr ] ,
@@ -101,7 +84,7 @@ type_alias = "type" , TYPE_IDENT , "=" , type_expr ;
 
 
 (* ========================================================================== *)
-(* 6. Functions                                                               *)
+(* 5. Functions                                                               *)
 (* ========================================================================== *)
 
 function_decl = [ annotation ] , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
@@ -116,7 +99,7 @@ param = [ "move" ] , IDENT , ":" , type_expr , [ "=" , expr ]
 
 
 (* ========================================================================== *)
-(* 7. Type expressions                                                        *)
+(* 6. Type expressions                                                        *)
 (* ========================================================================== *)
 
 type_expr = primary_type_expr , { "|" , primary_type_expr } ;   (* union lowest precedence *)
@@ -138,7 +121,7 @@ named_type = TYPE_IDENT , { "." , TYPE_IDENT } ;
 
 
 (* ========================================================================== *)
-(* 8. Expressions                                                             *)
+(* 7. Expressions                                                             *)
 (* ========================================================================== *)
 
 statement = expr
@@ -227,7 +210,7 @@ enum_construction = named_type , "." , TYPE_IDENT                     (* unit *)
 
 
 (* ========================================================================== *)
-(* 9. Closures                                                                *)
+(* 8. Closures                                                                *)
 (* ========================================================================== *)
 
 (* Full closure: fn (args) -> ReturnType body end *)
@@ -255,7 +238,7 @@ closure_param_short = IDENT , [ ":" , type_expr ]
 
 
 (* ========================================================================== *)
-(* 10. Control flow                                                           *)
+(* 9. Control flow                                                           *)
 (* ========================================================================== *)
 
 if_expr = "if" , expr ,
@@ -298,7 +281,7 @@ while_expr = "while" , expr ,
 
 
 (* ========================================================================== *)
-(* 11. Arena                                                                  *)
+(* 10. Arena                                                                  *)
 (* ========================================================================== *)
 
 arena_expr = "arena" ,
@@ -307,7 +290,7 @@ arena_expr = "arena" ,
 
 
 (* ========================================================================== *)
-(* 12. Concurrency                                                            *)
+(* 11. Concurrency                                                            *)
 (* ========================================================================== *)
 
 (* spawn creates a new process; the type checker enforces the Process<C, M, R> constraint *)
@@ -323,7 +306,7 @@ receive_expr = "receive" ,
 
 
 (* ========================================================================== *)
-(* 13. Binary / bitstring literals                                            *)
+(* 12. Binary / bitstring literals                                            *)
 (* ========================================================================== *)
 
 binary_literal  = "<<" , [ binary_segment , { "," , binary_segment } ] , ">>" ;
@@ -346,7 +329,7 @@ modifier = "signed" | "unsigned" | "big" | "little" ;
 
 
 (* ========================================================================== *)
-(* 14. Pattern matching                                                       *)
+(* 13. Pattern matching                                                       *)
 (* ========================================================================== *)
 
 pattern = "_"                                                       (* wildcard *)
@@ -367,7 +350,7 @@ field_pattern = IDENT , [ ":" , pattern ] ;
 
 
 (* ========================================================================== *)
-(* 15. Literals                                                               *)
+(* 14. Literals                                                               *)
 (* ========================================================================== *)
 
 literal = integer_lit
@@ -412,7 +395,7 @@ map_lit  = "[" , ":" , "]"                                          (* empty map
 
 
 (* ========================================================================== *)
-(* 16. Operators                                                              *)
+(* 15. Operators                                                              *)
 (* ========================================================================== *)
 
 (* Precedence (lowest to highest):                                            *)
@@ -431,7 +414,7 @@ compound_assign = lvalue , ( "+=" | "-=" | "*=" | "/=" ) , expr ;
 
 
 (* ========================================================================== *)
-(* 17. Annotations                                                            *)
+(* 16. Annotations                                                            *)
 (* ========================================================================== *)
 
 annotation = "@" , IDENT , [ annotation_value ] ;
@@ -442,7 +425,7 @@ annotation_value = string_lit
 
 
 (* ========================================================================== *)
-(* 18. Comments                                                               *)
+(* 17. Comments                                                               *)
 (* ========================================================================== *)
 
 (* Line comments begin with # and extend to end of line.
@@ -452,7 +435,7 @@ comment = "#" , { any_char_except_newline } ;
 
 
 (* ========================================================================== *)
-(* 19. Other top-level declarations                                           *)
+(* 18. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
 constant_decl = [ annotation ] , "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
@@ -461,7 +444,7 @@ shared_decl = "shared" , IDENT , ":" , type_expr ;
 
 
 (* ========================================================================== *)
-(* 20. Lexical elements                                                       *)
+(* 19. Lexical elements                                                       *)
 (* ========================================================================== *)
 
 IDENT       = LOWER , { LOWER | UPPER | DIGIT | "_" | "?" } ;
@@ -479,9 +462,8 @@ BIN_DIGIT = "0" | "1" ;
 (* ========================================================================== *)
 
 (* after, arena, break, cond, const, else, end, enum, false, fn,         *)
-(* for, if, impl, import, in, loop, match, move, not, priv, protocol,    *)
-(* receive, return, self, shared, spawn, struct, true, type, unless,     *)
-(* when, while                                                           *)
+(* for, if, impl, in, loop, match, move, not, priv, protocol, receive,  *)
+(* return, self, shared, spawn, struct, true, type, unless, when, while  *)
 (*                                                                       *)
 (* Note: `and`, `or` are operator-identifiers, not reserved keywords.    *)
 (* They are recognized as infix operators by the parser in expression    *)

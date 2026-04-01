@@ -98,7 +98,6 @@ pub enum Item {
     Enum(EnumDecl),
     Function(Function),
     Impl(ImplBlock),
-    Import(Import),
     Protocol(ProtocolDecl),
     Shared(SharedDecl),
     Struct(StructDecl),
@@ -120,29 +119,6 @@ pub enum Severity {
     Error,
     Warning,
     Note,
-}
-
-// Imports
-
-/// An `import` statement bringing names into scope from another module.
-#[derive(Debug, Clone)]
-pub struct Import {
-    pub path: Vec<String>,
-    pub target: ImportTarget,
-    pub span: Span,
-}
-
-/// What an import statement brings into scope.
-#[derive(Debug, Clone)]
-pub enum ImportTarget {
-    /// `import path` — import the module itself as a qualified name.
-    Module,
-    /// `import path.{name}` — import a single named item.
-    Item(String),
-    /// `import path.{a, b, c}` — import multiple named items.
-    Group(Vec<String>),
-    /// `import path.*` — import all public items.
-    Wildcard,
 }
 
 // Declarations

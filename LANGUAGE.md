@@ -15,7 +15,7 @@ Expo is a statically typed, compiled language targeting native binaries via LLVM
 - [Closures and Function Types](#closures-and-function-types) -- Block Closures, Short Closures, Capture Semantics, Function Types
 - [Ownership and Borrowing](#ownership-and-borrowing) -- Rules, `clone()`, Drop Insertion, Copy Types
 - [Protocols](#protocols) -- Behavioral Contracts, Static Dispatch
-- [Modules and Imports](#modules-and-imports) -- File Modules, Qualified Calls, Visibility
+- [Modules](#modules) -- Transparent Files, Visibility
 - [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
 - [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
 - [Annotations](#annotations) -- `@doc`, `@moduledoc`
@@ -45,7 +45,7 @@ x = 42  # inline comment
 
 ```
 arena, break, cond, const, else, end, enum, false, fn, for,
-if, impl, import, in, loop, match, move, not, priv, protocol,
+if, impl, in, loop, match, move, not, priv, protocol,
 receive, return, self, shared, spawn, struct, true, type, unless, when
 ```
 
@@ -766,25 +766,25 @@ Protocol dispatch is static via monomorphization -- no vtables, no dynamic dispa
 
 ---
 
-## Modules and Imports
+## Modules
 
-Each file is a module. Import with `import`:
+Each `.expo` file is a module. In a project (defined by `expo.toml`), all types and public functions across all files are visible in every file -- no imports needed.
 
 ```expo
-import helper
+# src/helper.expo
+fn add(a: Int, b: Int) -> Int
+  a + b
+end
 
+# src/main.expo
 fn main
-  print(helper.add(3, 4))
+  print(Helper.add(3, 4))
 end
 ```
 
-Nested modules use dot-separated paths: `import what.util` resolves to `what/util.expo`.
-
-Functions can be called qualified (`helper.add(3, 4)`) or unqualified (`add(3, 4)`) if imported. Duplicate names from different imports produce a compile error.
-
 ### Visibility
 
-All modules are importable. Access control is at the function level (`priv fn`), not the module level. Use `@moduledoc false` to signal "internal, don't depend on this."
+Access control is at the function level (`priv fn`), not the module level. Private functions are only callable within the file that defines them.
 
 ---
 
@@ -913,7 +913,7 @@ In most cases you won't use `receive` directly -- the `Process` protocol's defau
 
 ## Standard Library
 
-The following types and functions are auto-imported from the standard library into every module.
+The following types and functions are available in every module.
 
 ### Built-in Functions
 

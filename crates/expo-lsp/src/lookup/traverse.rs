@@ -256,22 +256,17 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                     return Some(info);
                 }
                 if let Expr::Ident {
-                    name: mod_name,
-                    span: recv_span,
+                    span: recv_span, ..
                 } = receiver.as_ref()
                 {
                     let method_start = recv_span.end.column + 2;
                     let method_end = method_start + method.len() as u32;
-                    if line == recv_span.end.line && col >= method_start && col <= method_end {
-                        if ctx.imported_modules.contains_key(mod_name) {
-                            return Some(SymbolInfo::ModuleFunction {
-                                module: mod_name.clone(),
-                                name: method.clone(),
-                            });
-                        }
-                        if let Some(mangled) = resolve_method_name(receiver, method, ctx) {
-                            return Some(SymbolInfo::Function { name: mangled });
-                        }
+                    if line == recv_span.end.line
+                        && col >= method_start
+                        && col <= method_end
+                        && let Some(mangled) = resolve_method_name(receiver, method, ctx)
+                    {
+                        return Some(SymbolInfo::Function { name: mangled });
                     }
                 } else if let Some(mangled) = resolve_method_name(receiver, method, ctx)
                     && cursor_on_method(receiver, method, span, line, col)

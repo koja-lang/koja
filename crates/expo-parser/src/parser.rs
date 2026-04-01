@@ -153,43 +153,6 @@ impl Parser {
         }
     }
 
-    /// Try to consume a keyword token as if it were an identifier name.
-    /// Used in import groups where keywords like `spawn` are valid names.
-    pub(crate) fn keyword_as_ident(&mut self) -> Option<String> {
-        let name = match self.peek() {
-            TokenKind::Arena => "arena",
-            TokenKind::Break => "break",
-            TokenKind::Cond => "cond",
-            TokenKind::Else => "else",
-            TokenKind::End => "end",
-            TokenKind::Enum => "enum",
-            TokenKind::Fn => "fn",
-            TokenKind::For => "for",
-            TokenKind::If => "if",
-            TokenKind::Impl => "impl",
-            TokenKind::Import => "import",
-            TokenKind::In => "in",
-            TokenKind::Loop => "loop",
-            TokenKind::Match => "match",
-            TokenKind::Move => "move",
-            TokenKind::Not => "not",
-            TokenKind::Priv => "priv",
-            TokenKind::Protocol => "protocol",
-            TokenKind::Receive => "receive",
-            TokenKind::Return => "return",
-            TokenKind::Self_ => "self",
-            TokenKind::Shared => "shared",
-            TokenKind::Spawn => "spawn",
-            TokenKind::Struct => "struct",
-            TokenKind::Type => "type",
-            TokenKind::Unless => "unless",
-            TokenKind::When => "when",
-            _ => return None,
-        };
-        self.advance();
-        Some(name.to_string())
-    }
-
     pub(crate) fn save_pos(&self) -> (usize, usize) {
         (self.pos, self.errors.len())
     }
@@ -271,7 +234,6 @@ impl Parser {
     fn parse_item(&mut self, moduledoc: &mut Option<Annotation>) -> Option<Item> {
         self.skip_newlines();
         match self.peek().clone() {
-            TokenKind::Import => Some(self.parse_import_item()),
             TokenKind::Struct => Some(self.parse_struct_item()),
             TokenKind::Enum => Some(self.parse_enum_item()),
             TokenKind::Protocol => Some(self.parse_protocol_item(None)),

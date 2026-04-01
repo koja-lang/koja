@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Project config migration -- replaced `project.expo` (Expo struct literal parsed via AST hack) with `expo.toml` (TOML-based, parsed via `toml` crate). Simpler, more robust, and prepares for the dependency system.
 
+### Removed
+
+- `import` keyword -- all types and public functions in a project are visible in every file. No imports needed. The transparent file model replaces the old import-driven module system.
+
 ### Fixed
 
 - Generic enum variants where not all type parameters are inferrable from the payload (e.g., `Result.Ok(value)` in a function returning `Result<T, String>`) no longer fail with an LLVM type mismatch.

@@ -6,11 +6,10 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::{AnnotationValue, Module};
+use expo_ast::ast::Module;
 use expo_typecheck::context::VariantData;
 
 use crate::backend::{Backend, DocumentState};
-use crate::convert::{find_doc_from_uri, resolve_module_file};
 use crate::lookup::{self, SymbolInfo};
 
 impl Backend {
@@ -41,11 +40,7 @@ impl Backend {
             SymbolInfo::Struct { name } => build_struct_hover(name, state, &self.stdlib_modules),
             SymbolInfo::Constant { name } => build_constant_hover(name, state),
             SymbolInfo::Enum { name } => build_enum_hover(name, state, &self.stdlib_modules),
-            SymbolInfo::ModuleFunction { module, name } => {
-                build_module_function_hover(module, name, state)
-            }
             SymbolInfo::Variable { name } => Some(format!("```expo\n{}\n```", name)),
-            SymbolInfo::Module { path } => Some(build_module_hover(path, &uri, state)),
         };
 
         match hover_text {
@@ -61,18 +56,13 @@ impl Backend {
     }
 }
 
-/// Resolves a doc comment for `name`, checking imported origins first,
-/// then the local module, then all stdlib modules.
+/// Resolves a doc comment for `name` from the local module or stdlib.
 fn resolve_doc(name: &str, state: &DocumentState, stdlib_modules: &[Module]) -> Option<String> {
-    if let Some(origin_uri) = state.imported_origins.get(name) {
-        find_doc_from_uri(origin_uri, name)
-    } else {
-        lookup::find_doc_for(&state.module, name).or_else(|| {
-            stdlib_modules
-                .iter()
-                .find_map(|m| lookup::find_doc_for(m, name))
-        })
-    }
+    lookup::find_doc_for(&state.module, name).or_else(|| {
+        stdlib_modules
+            .iter()
+            .find_map(|m| lookup::find_doc_for(m, name))
+    })
 }
 
 fn build_function_hover(
@@ -163,58 +153,6 @@ fn build_enum_hover(
     let signature = format!("enum {}\n{}\nend", name, variants.join("\n"));
     let doc = resolve_doc(name, state, stdlib_modules);
     Some(format_hover(&signature, doc.as_deref()))
-}
-
-fn build_module_function_hover(module: &str, name: &str, state: &DocumentState) -> Option<String> {
-    let sig = state
-        .ctx
-        .imported_modules
-        .get(module)
-        .and_then(|m| m.functions.get(name))?;
-    let params_str: Vec<String> = sig
-        .params
-        .iter()
-        .map(|p| format!("{}: {}", p.name, p.ty.display()))
-        .collect();
-    let tp = if sig.type_params.is_empty() {
-        String::new()
-    } else {
-        format!("<{}>", sig.type_params.join(", "))
-    };
-    let signature = format!(
-        "fn {}.{}{}({}) -> {}",
-        module,
-        name,
-        tp,
-        params_str.join(", "),
-        sig.return_type.display()
-    );
-    let doc = state
-        .module_uris
-        .get(module)
-        .and_then(|uri_str| find_doc_from_uri(uri_str, name));
-    Some(format_hover(&signature, doc.as_deref()))
-}
-
-fn build_module_hover(path: &[String], uri: &Uri, state: &DocumentState) -> String {
-    let module_name = path.join(".");
-    let signature = format!("module {}", module_name);
-    let doc = state
-        .module_uris
-        .get(&module_name)
-        .and_then(|uri_str| {
-            let p = uri_str.strip_prefix("file://")?;
-            std::fs::read_to_string(p).ok()
-        })
-        .or_else(|| resolve_module_file(uri, path).and_then(|p| std::fs::read_to_string(p).ok()))
-        .and_then(|source| {
-            let parsed = expo_parser::parse(&source);
-            parsed.module.moduledoc.and_then(|d| match d.value {
-                Some(AnnotationValue::String(s)) => Some(s),
-                _ => None,
-            })
-        });
-    format_hover(&signature, doc.as_deref())
 }
 
 /// Formats a hover response as a Markdown code block with optional

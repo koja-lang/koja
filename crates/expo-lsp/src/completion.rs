@@ -14,8 +14,8 @@ use crate::backend::Backend;
 /// Expo language keywords offered as completions.
 const KEYWORDS: &[&str] = &[
     "arena", "break", "cond", "const", "else", "end", "enum", "false", "fn", "for", "if", "impl",
-    "import", "in", "loop", "match", "move", "priv", "protocol", "receive", "return", "self",
-    "shared", "spawn", "struct", "true", "type", "unless", "when", "while",
+    "in", "loop", "match", "move", "priv", "protocol", "receive", "return", "self", "shared",
+    "spawn", "struct", "true", "type", "unless", "when", "while",
 ];
 
 impl Backend {
@@ -150,17 +150,6 @@ fn add_symbol_completions(
             label: name.clone(),
             kind: Some(CompletionItemKind::CONSTANT),
             detail: Some(ty.display()),
-            ..Default::default()
-        });
-    }
-
-    for name in ctx.imported_modules.keys() {
-        if !matches(name) {
-            continue;
-        }
-        items.push(CompletionItem {
-            label: name.clone(),
-            kind: Some(CompletionItemKind::MODULE),
             ..Default::default()
         });
     }

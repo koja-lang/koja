@@ -19,8 +19,6 @@ pub(crate) enum SymbolInfo {
     Constant { name: String },
     Enum { name: String },
     Function { name: String },
-    Module { path: Vec<String> },
-    ModuleFunction { module: String, name: String },
     Struct { name: String },
     Variable { name: String },
 }
@@ -107,13 +105,6 @@ pub(crate) fn find_symbol_at(
                     }
                 }
             }
-            Item::Import(imp) => {
-                if span_contains(&imp.span, line, col) {
-                    return Some(SymbolInfo::Module {
-                        path: imp.path.clone(),
-                    });
-                }
-            }
             _ => {}
         }
     }
@@ -185,10 +176,6 @@ pub(crate) fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo>
     } else if ctx.constants.contains_key(name) {
         Some(SymbolInfo::Constant {
             name: name.to_string(),
-        })
-    } else if ctx.imported_modules.contains_key(name) {
-        Some(SymbolInfo::Module {
-            path: vec![name.to_string()],
         })
     } else {
         Some(SymbolInfo::Variable {

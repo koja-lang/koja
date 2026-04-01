@@ -12,7 +12,7 @@ use expo_typecheck::types::{
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 
-use crate::calls::{compile_call, invoke_closure_fat_ptr};
+use crate::calls::invoke_closure_fat_ptr;
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::try_parse_mangled_name;
@@ -206,8 +206,7 @@ pub fn compile_field_access<'ctx>(
     }
 }
 
-/// Compiles a method call (`receiver.method(args)`). Also handles qualified
-/// module calls (e.g. `math.add()`) by delegating to `compile_call`.
+/// Compiles a method call (`receiver.method(args)`).
 pub fn compile_method_call<'ctx>(
     c: &mut Compiler<'ctx>,
     receiver: &Expr,
@@ -216,13 +215,6 @@ pub fn compile_method_call<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let was_tail = c.fn_state.tco.save_tail();
-
-    if let Expr::Ident { name, .. } = receiver
-        && c.type_ctx.imported_modules.contains_key(name)
-        && !c.fn_state.variables.contains_key(name)
-    {
-        return compile_call(c, method, args, function);
-    }
 
     if let Expr::Ident { name, .. } = receiver {
         let is_type_name = c.type_ctx.types.contains_key(name);

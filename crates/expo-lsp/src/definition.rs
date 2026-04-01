@@ -9,7 +9,7 @@ use tower_lsp_server::ls_types::*;
 use expo_ast::ast::Item;
 
 use crate::backend::Backend;
-use crate::convert::{resolve_module_file, span_to_range};
+use crate::convert::span_to_range;
 use crate::lookup::{self, SymbolInfo};
 
 impl Backend {
@@ -36,51 +36,6 @@ impl Backend {
             None => return Ok(None),
         };
 
-        if let SymbolInfo::Module { ref path } = symbol {
-            let module_name = path.join(".");
-            let target_uri_str = state.module_uris.get(&module_name).cloned().or_else(|| {
-                resolve_module_file(&uri, path).map(|p| format!("file://{}", p.display()))
-            });
-            if let Some(uri_str) = target_uri_str {
-                let target_uri: Uri = uri_str.parse().map_err(|_| {
-                    tower_lsp_server::jsonrpc::Error::invalid_params("invalid module URI")
-                })?;
-                return Ok(Some(GotoDefinitionResponse::Scalar(Location {
-                    uri: target_uri,
-                    range: Range {
-                        start: Position::new(0, 0),
-                        end: Position::new(0, 0),
-                    },
-                })));
-            }
-            return Ok(None);
-        }
-
-        if let SymbolInfo::ModuleFunction {
-            ref module,
-            ref name,
-        } = symbol
-        {
-            if let Some(module_uri) = state.module_uris.get(module) {
-                return goto_definition_in_file(module_uri, name);
-            }
-            return Ok(None);
-        }
-
-        let symbol_name = match &symbol {
-            SymbolInfo::Function { name }
-            | SymbolInfo::Struct { name }
-            | SymbolInfo::Enum { name }
-            | SymbolInfo::Constant { name } => Some(name.as_str()),
-            _ => None,
-        };
-
-        if let Some(name) = symbol_name
-            && let Some(origin_uri_str) = state.imported_origins.get(name)
-        {
-            return goto_definition_in_file(origin_uri_str, name);
-        }
-
         let def_span = match &symbol {
             SymbolInfo::Function { name } => state.ctx.functions.get(name).map(|sig| sig.span),
             SymbolInfo::Struct { name } | SymbolInfo::Enum { name } => {
@@ -95,9 +50,7 @@ impl Backend {
                     None
                 }
             }),
-            SymbolInfo::Variable { .. }
-            | SymbolInfo::Module { .. }
-            | SymbolInfo::ModuleFunction { .. } => None,
+            SymbolInfo::Variable { .. } => None,
         };
 
         let span = match def_span {
@@ -110,40 +63,4 @@ impl Backend {
             range: span_to_range(&span),
         })))
     }
-}
-
-/// Resolves a definition in an external file by parsing it and looking up
-/// the symbol by name.
-fn goto_definition_in_file(uri_str: &str, name: &str) -> Result<Option<GotoDefinitionResponse>> {
-    let path = match uri_str.strip_prefix("file://") {
-        Some(p) => p,
-        None => return Ok(None),
-    };
-    let source = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => return Ok(None),
-    };
-    let parsed = expo_parser::parse(&source);
-    let global_names = expo_typecheck::collect_all_names(&[&parsed.module]);
-    let ctx = expo_typecheck::collect_module(&parsed.module, &global_names);
-
-    let span = ctx
-        .functions
-        .get(name)
-        .map(|sig| sig.span)
-        .or_else(|| ctx.types.get(name).map(|info| info.span));
-
-    let span = match span {
-        Some(s) => s,
-        None => return Ok(None),
-    };
-
-    let target_uri: Uri = uri_str
-        .parse()
-        .map_err(|_| tower_lsp_server::jsonrpc::Error::invalid_params("invalid URI"))?;
-
-    Ok(Some(GotoDefinitionResponse::Scalar(Location {
-        uri: target_uri,
-        range: span_to_range(&span),
-    })))
 }

@@ -40,7 +40,6 @@ pub enum TokenKind {
     For,
     If,
     Impl,
-    Import,
     In,
     Loop,
     Match,
@@ -119,7 +118,6 @@ impl TokenKind {
                 | TokenKind::For
                 | TokenKind::If
                 | TokenKind::Impl
-                | TokenKind::Import
                 | TokenKind::In
                 | TokenKind::Loop
                 | TokenKind::Match

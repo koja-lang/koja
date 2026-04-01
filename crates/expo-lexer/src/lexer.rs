@@ -106,7 +106,6 @@ impl Lexer {
                         | TokenKind::LBrace
                         | TokenKind::LBracket
                         | TokenKind::LtLt
-                        | TokenKind::Import
                         | TokenKind::Newline
                 ),
             },
@@ -158,7 +157,6 @@ impl Lexer {
             "for" => TokenKind::For,
             "if" => TokenKind::If,
             "impl" => TokenKind::Impl,
-            "import" => TokenKind::Import,
             "in" => TokenKind::In,
             "loop" => TokenKind::Loop,
             "match" => TokenKind::Match,

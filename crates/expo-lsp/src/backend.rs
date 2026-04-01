@@ -15,14 +15,12 @@ use tower_lsp_server::{Client, LanguageServer};
 use expo_ast::ast::Module;
 use expo_typecheck::context::TypeContext;
 
-/// Cached state for a single open document, including the parsed AST,
-/// type-checking context, and import origin mappings.
+/// Cached state for a single open document, including the parsed AST
+/// and type-checking context.
 pub(crate) struct DocumentState {
     pub(crate) module: Module,
     pub(crate) ctx: TypeContext,
     pub(crate) source: String,
-    pub(crate) imported_origins: HashMap<String, String>,
-    pub(crate) module_uris: HashMap<String, String>,
 }
 
 /// The Expo language server backend.

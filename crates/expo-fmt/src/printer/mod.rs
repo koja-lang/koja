@@ -38,23 +38,18 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats an entire module: moduledoc, sorted imports, then items with
-    /// interleaved comments.
+    /// Formats an entire module: moduledoc, then items with interleaved comments.
     fn print_module(&mut self, module: &Module) -> Doc {
         let mut parts: Vec<Doc> = Vec::new();
         let mut emitted = false;
         let mut moduledoc_emitted = false;
-        let mut after_moduledoc = false;
 
         let moduledoc_line = module.moduledoc.as_ref().map(|md| md.span.start.line);
 
         let mut i = 0;
 
         while i < module.items.len() {
-            let next_item_line = match &module.items[i] {
-                Item::Import(imp) => imp.span.start.line,
-                other => item_span(other).start.line,
-            };
+            let next_item_line = item_span(&module.items[i]).start.line;
 
             if !moduledoc_emitted
                 && let Some(md) = &module.moduledoc
@@ -71,53 +66,26 @@ impl<'a> Printer<'a> {
                 parts.push(hardline());
                 emitted = true;
                 moduledoc_emitted = true;
-                after_moduledoc = true;
             }
 
-            if matches!(&module.items[i], Item::Import(_) | Item::Constant(_)) {
-                let is_import = matches!(&module.items[i], Item::Import(_));
-                let run_start = i;
-
-                if emitted && (!is_import || run_start > 0 || after_moduledoc) {
+            if matches!(&module.items[i], Item::Constant(_)) {
+                if emitted {
                     parts.push(hardline());
                 }
 
-                if is_import {
-                    let mut imports: Vec<&Import> = Vec::new();
-                    while i < module.items.len() {
-                        if let Item::Import(imp) = &module.items[i] {
-                            imports.push(imp);
-                            i += 1;
-                        } else {
-                            break;
-                        }
+                while i < module.items.len() && matches!(&module.items[i], Item::Constant(_)) {
+                    let item = &module.items[i];
+                    let span = item_span(item);
+                    let (comment_docs, _) = self.comments.drain_before(span.start.line);
+                    for c in comment_docs {
+                        parts.push(c);
                     }
-
-                    let block_end = imports.last().unwrap().span.end.line + 1;
-                    let _ = self.comments.drain_before(block_end);
-
-                    imports.sort_by_key(|imp| import_sort_key(imp));
-
-                    for imp in &imports {
-                        parts.push(import_to_doc(imp));
-                        parts.push(hardline());
-                    }
-                } else {
-                    while i < module.items.len() && matches!(&module.items[i], Item::Constant(_)) {
-                        let item = &module.items[i];
-                        let span = item_span(item);
-                        let (comment_docs, _) = self.comments.drain_before(span.start.line);
-                        for c in comment_docs {
-                            parts.push(c);
-                        }
-                        parts.push(self.item_to_doc(item));
-                        parts.push(hardline());
-                        i += 1;
-                    }
+                    parts.push(self.item_to_doc(item));
+                    parts.push(hardline());
+                    i += 1;
                 }
 
                 emitted = true;
-                after_moduledoc = false;
             } else {
                 let item = &module.items[i];
                 let span = item_span(item);
@@ -131,7 +99,6 @@ impl<'a> Printer<'a> {
                 parts.push(self.item_to_doc(item));
                 parts.push(hardline());
                 emitted = true;
-                after_moduledoc = false;
                 i += 1;
             }
         }
@@ -155,7 +122,6 @@ impl<'a> Printer<'a> {
     /// Dispatches a top-level item to its specific formatter.
     fn item_to_doc(&mut self, item: &Item) -> Doc {
         match item {
-            Item::Import(i) => import_to_doc(i),
             Item::Struct(s) => self.struct_to_doc(s),
             Item::Enum(e) => self.enum_to_doc(e),
             Item::Function(f) => self.function_to_doc(f),

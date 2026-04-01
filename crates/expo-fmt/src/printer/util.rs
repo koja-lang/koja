@@ -66,40 +66,10 @@ pub(super) fn item_span(item: &Item) -> &Span {
         Item::Enum(e) => &e.span,
         Item::Function(f) => &f.span,
         Item::Impl(i) => &i.span,
-        Item::Import(i) => &i.span,
         Item::Protocol(p) => &p.span,
         Item::Shared(s) => &s.span,
         Item::Struct(s) => &s.span,
         Item::TypeAlias(t) => &t.span,
-    }
-}
-
-/// Produces a stable sort key for an import so that the formatter can
-/// alphabetize import groups deterministically.
-pub(super) fn import_sort_key(imp: &Import) -> String {
-    let base = imp.path.join(".");
-    match &imp.target {
-        ImportTarget::Module => base,
-        ImportTarget::Item(name) => format!("{}.{}", base, name),
-        ImportTarget::Group(_) => base,
-        ImportTarget::Wildcard => format!("{}.*", base),
-    }
-}
-
-/// Formats an `import` statement.
-pub(super) fn import_to_doc(imp: &Import) -> Doc {
-    let path_str = imp.path.join(".");
-    match &imp.target {
-        ImportTarget::Module => text(format!("import {}", path_str)),
-        ImportTarget::Item(name) => text(format!("import {}.{}", path_str, name)),
-        ImportTarget::Group(names) => {
-            let items: Vec<Doc> = names.iter().map(|n| text(n.clone())).collect();
-            concat(vec![
-                text(format!("import {}.", path_str)),
-                fill_bracket_list("{", "}", items),
-            ])
-        }
-        ImportTarget::Wildcard => text(format!("import {}.*", path_str)),
     }
 }
 
