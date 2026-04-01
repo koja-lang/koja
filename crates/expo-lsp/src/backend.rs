@@ -31,6 +31,7 @@ pub(crate) struct DocumentState {
 pub struct Backend {
     pub(crate) client: Client,
     pub(crate) documents: Arc<RwLock<HashMap<String, DocumentState>>>,
+    pub(crate) project_modules: Arc<RwLock<Vec<Module>>>,
     pub(crate) stdlib_ctx: TypeContext,
     pub(crate) stdlib_modules: Vec<Module>,
 }
@@ -70,6 +71,7 @@ impl Backend {
         Self {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
+            project_modules: Arc::new(RwLock::new(Vec::new())),
             stdlib_ctx: ctx,
             stdlib_modules,
         }
@@ -96,6 +98,8 @@ impl LanguageServer for Backend {
                     retrigger_characters: None,
                     work_done_progress_options: Default::default(),
                 }),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -162,6 +166,17 @@ impl LanguageServer for Backend {
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
         self.handle_document_symbol(params).await
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<WorkspaceSymbolResponse>> {
+        self.handle_workspace_symbol(params).await
+    }
+
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        self.handle_folding_range(params).await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {

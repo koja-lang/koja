@@ -1,8 +1,11 @@
-//! Document symbol provider for the Expo LSP.
+//! Symbol providers for the Expo LSP.
 //!
-//! Maps the parsed AST of an open document into a hierarchical list of
-//! [`DocumentSymbol`]s, powering the editor's outline view, breadcrumbs,
-//! and `Cmd+Shift+O` navigation.
+//! **Document symbols** (`textDocument/documentSymbol`): maps the parsed AST
+//! of an open document into a hierarchical list of [`DocumentSymbol`]s,
+//! powering the editor's outline view, breadcrumbs, and `Cmd+Shift+O`.
+//!
+//! **Workspace symbols** (`workspace/symbol`): searches all project modules
+//! for symbols matching a query string, powering `Cmd+T` / `#` search.
 
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
@@ -10,7 +13,7 @@ use tower_lsp_server::ls_types::*;
 use expo_ast::ast::{Function, ImplMember, Item, Module, Param, TypeExpr, Visibility};
 
 use crate::backend::Backend;
-use crate::convert::span_to_range;
+use crate::convert::{path_to_uri, span_to_range};
 
 /// Formats a [`TypeExpr`] into a human-readable string for symbol details.
 fn type_expr_label(te: &TypeExpr) -> String {
@@ -54,6 +57,156 @@ impl Backend {
 
         let symbols = build_document_symbols(&state.module);
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    /// Handles `workspace/symbol` requests by searching all project modules
+    /// and open documents for symbols matching the query.
+    pub(crate) async fn handle_workspace_symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<WorkspaceSymbolResponse>> {
+        let query = params.query.to_ascii_lowercase();
+        let mut results = Vec::new();
+
+        let project_mods = self.project_modules.read().await;
+        for module in project_mods.iter() {
+            collect_workspace_symbols(module, &query, &mut results);
+        }
+
+        let docs = self.documents.read().await;
+        for state in docs.values() {
+            collect_workspace_symbols(&state.module, &query, &mut results);
+        }
+
+        Ok(Some(WorkspaceSymbolResponse::Flat(results)))
+    }
+}
+
+/// Collects workspace symbols from a module, filtering by query substring.
+#[allow(deprecated)]
+fn collect_workspace_symbols(module: &Module, query: &str, results: &mut Vec<SymbolInformation>) {
+    let uri = module.path.as_deref().and_then(path_to_uri);
+    let uri = match uri {
+        Some(u) => u,
+        None => return,
+    };
+
+    let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
+
+    for item in &module.items {
+        match item {
+            Item::Function(f) => {
+                if matches(&f.name) {
+                    results.push(SymbolInformation {
+                        name: f.name.clone(),
+                        kind: SymbolKind::FUNCTION,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: uri.clone(),
+                            range: span_to_range(&f.span),
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+            Item::Struct(s) => {
+                if matches(&s.name) {
+                    results.push(SymbolInformation {
+                        name: s.name.clone(),
+                        kind: SymbolKind::STRUCT,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: uri.clone(),
+                            range: span_to_range(&s.span),
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+            Item::Enum(e) => {
+                if matches(&e.name) {
+                    results.push(SymbolInformation {
+                        name: e.name.clone(),
+                        kind: SymbolKind::ENUM,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: uri.clone(),
+                            range: span_to_range(&e.span),
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+            Item::Constant(c) => {
+                if matches(&c.name) {
+                    results.push(SymbolInformation {
+                        name: c.name.clone(),
+                        kind: SymbolKind::CONSTANT,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: uri.clone(),
+                            range: span_to_range(&c.span),
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+            Item::Protocol(p) => {
+                if matches(&p.name) {
+                    results.push(SymbolInformation {
+                        name: p.name.clone(),
+                        kind: SymbolKind::INTERFACE,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: uri.clone(),
+                            range: span_to_range(&p.span),
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+            Item::TypeAlias(t) => {
+                if matches(&t.name) {
+                    results.push(SymbolInformation {
+                        name: t.name.clone(),
+                        kind: SymbolKind::TYPE_PARAMETER,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: uri.clone(),
+                            range: span_to_range(&t.span),
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+            Item::Impl(imp) => {
+                let container = type_expr_label(&imp.target);
+                for member in &imp.members {
+                    if let ImplMember::Function(f) = member
+                        && matches(&f.name)
+                    {
+                        results.push(SymbolInformation {
+                            name: f.name.clone(),
+                            kind: SymbolKind::METHOD,
+                            tags: None,
+                            deprecated: None,
+                            location: Location {
+                                uri: uri.clone(),
+                                range: span_to_range(&f.span),
+                            },
+                            container_name: Some(container.clone()),
+                        });
+                    }
+                }
+            }
+            Item::Shared(_) => {}
+        }
     }
 }
 

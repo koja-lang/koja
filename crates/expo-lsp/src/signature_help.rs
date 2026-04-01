@@ -1,8 +1,9 @@
 //! Signature help provider for the Expo LSP.
 //!
-//! When the cursor is inside a function call's argument list, displays
-//! the function's parameter names and types with the active parameter
-//! highlighted.
+//! When the cursor is inside a function or method call's argument list,
+//! displays the parameter names and types with the active parameter
+//! highlighted. Supports both free functions (`print(...)`) and method
+//! calls (`socket.connect(...)`, `Socket.new(...)`).
 
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
@@ -10,6 +11,7 @@ use tower_lsp_server::ls_types::*;
 use expo_typecheck::context::{FunctionSig, TypeContext};
 
 use crate::backend::Backend;
+use crate::lookup::receiver::resolve_receiver_type;
 
 impl Backend {
     /// Handles `textDocument/signatureHelp` requests by finding the
@@ -32,7 +34,17 @@ impl Backend {
             None => return Ok(None),
         };
 
-        let sig = find_function_sig(&call.function_name, &state.ctx, &self.stdlib_ctx);
+        let sig = match &call.receiver {
+            Some(receiver) => find_method_sig(
+                receiver,
+                &call.function_name,
+                &state.source,
+                &state.ctx,
+                &self.stdlib_ctx,
+            ),
+            None => find_function_sig(&call.function_name, &state.ctx, &self.stdlib_ctx),
+        };
+
         let sig = match sig {
             Some(s) => s,
             None => return Ok(None),
@@ -41,6 +53,7 @@ impl Backend {
         let params: Vec<ParameterInformation> = sig
             .params
             .iter()
+            .filter(|p| p.name != "self")
             .map(|p| ParameterInformation {
                 label: ParameterLabel::Simple(format!("{}: {}", p.name, p.ty.display())),
                 documentation: None,
@@ -50,6 +63,7 @@ impl Backend {
         let params_str: Vec<String> = sig
             .params
             .iter()
+            .filter(|p| p.name != "self")
             .map(|p| format!("{}: {}", p.name, p.ty.display()))
             .collect();
         let label = format!(
@@ -74,14 +88,16 @@ impl Backend {
     }
 }
 
-/// Context about a function call at the cursor position.
 struct CallContext {
     function_name: String,
+    /// If the call is `receiver.method(...)`, the receiver token.
+    receiver: Option<String>,
     active_param: u32,
 }
 
 /// Scans the source text backwards from the cursor to find the enclosing
-/// function call and determine which parameter is active.
+/// function call and determine which parameter is active. Also detects
+/// method calls by checking for `.` before the function name.
 fn find_call_context(source: &str, pos: Position) -> Option<CallContext> {
     let lines: Vec<&str> = source.lines().collect();
     let line_idx = pos.line as usize;
@@ -149,14 +165,37 @@ fn find_call_context(source: &str, pos: Position) -> Option<CallContext> {
         .ok()?
         .to_string();
 
+    let receiver = if name_start > 0 && bytes[name_start - 1] == b'.' {
+        let dot_pos = name_start - 1;
+        let recv_end = dot_pos;
+        let mut recv_start = recv_end;
+        while recv_start > 0 {
+            let c = bytes[recv_start - 1];
+            if c.is_ascii_alphanumeric() || c == b'_' {
+                recv_start -= 1;
+            } else {
+                break;
+            }
+        }
+        if recv_start < recv_end {
+            std::str::from_utf8(&bytes[recv_start..recv_end])
+                .ok()
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     Some(CallContext {
         function_name,
+        receiver,
         active_param: commas,
     })
 }
 
-/// Looks up a function signature by name, checking the document's context
-/// first, then the stdlib.
+/// Looks up a free function signature by name.
 fn find_function_sig<'a>(
     name: &str,
     ctx: &'a TypeContext,
@@ -165,4 +204,53 @@ fn find_function_sig<'a>(
     ctx.functions
         .get(name)
         .or_else(|| stdlib_ctx.functions.get(name))
+}
+
+/// Looks up a method signature by resolving the receiver type, then
+/// searching for the method in that type's functions. Falls back to
+/// the mangled `Type_method` name in the global function table.
+fn find_method_sig<'a>(
+    receiver: &str,
+    method: &str,
+    source: &str,
+    ctx: &'a TypeContext,
+    stdlib_ctx: &'a TypeContext,
+) -> Option<&'a FunctionSig> {
+    if let Some(type_name) = resolve_receiver_type(receiver, source, ctx)
+        .or_else(|| resolve_receiver_type(receiver, source, stdlib_ctx))
+    {
+        if let Some(sig) = ctx
+            .types
+            .get(&type_name)
+            .and_then(|ti| ti.functions.get(method))
+        {
+            return Some(sig);
+        }
+        if let Some(sig) = stdlib_ctx
+            .types
+            .get(&type_name)
+            .and_then(|ti| ti.functions.get(method))
+        {
+            return Some(sig);
+        }
+    }
+
+    let mangled = format!("{}_{}", receiver, method);
+    ctx.functions
+        .get(&mangled)
+        .or_else(|| stdlib_ctx.functions.get(&mangled))
+        .or_else(|| {
+            let suffix = format!("_{}", method);
+            ctx.functions
+                .iter()
+                .find(|(k, _)| k.ends_with(&suffix))
+                .map(|(_, v)| v)
+                .or_else(|| {
+                    stdlib_ctx
+                        .functions
+                        .iter()
+                        .find(|(k, _)| k.ends_with(&suffix))
+                        .map(|(_, v)| v)
+                })
+        })
 }

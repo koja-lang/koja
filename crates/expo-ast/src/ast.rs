@@ -6,6 +6,8 @@
 //! nodes. [`Pattern`]s appear in `match` arms, `for` loops, and destructuring
 //! assignments.
 
+use std::path::PathBuf;
+
 use crate::span::Span;
 
 // Semantic enums
@@ -110,6 +112,7 @@ pub struct Module {
     pub items: Vec<Item>,
     pub comments: Vec<Comment>,
     pub span: Span,
+    pub path: Option<PathBuf>,
 }
 
 /// The severity level of a compiler diagnostic.

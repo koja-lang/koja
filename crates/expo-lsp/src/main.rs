@@ -3,6 +3,7 @@ mod completion;
 mod convert;
 mod definition;
 mod diagnostics;
+mod folding;
 mod hover;
 mod lookup;
 mod signature_help;

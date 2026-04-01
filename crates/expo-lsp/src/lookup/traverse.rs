@@ -35,8 +35,25 @@ pub(crate) fn find_in_ident_at_name(
     None
 }
 
+/// Searches function parameters for type annotations at the cursor position.
+pub(crate) fn find_in_params(
+    params: &[Param],
+    line: u32,
+    col: u32,
+    ctx: &TypeContext,
+) -> Option<SymbolInfo> {
+    for param in params {
+        if let Param::Regular { type_expr, .. } = param
+            && let Some(info) = find_in_type_expr(type_expr, line, col, ctx)
+        {
+            return Some(info);
+        }
+    }
+    None
+}
+
 /// Searches a statement for a symbol at the cursor position by
-/// delegating to expression traversal.
+/// delegating to expression and type expression traversal.
 pub(crate) fn find_in_statement(
     stmt: &Statement,
     line: u32,
@@ -45,7 +62,18 @@ pub(crate) fn find_in_statement(
 ) -> Option<SymbolInfo> {
     match stmt {
         Statement::Expr(expr) => find_in_expr(expr, line, col, ctx),
-        Statement::Assignment { value, .. } => find_in_expr(value, line, col, ctx),
+        Statement::Assignment {
+            type_annotation,
+            value,
+            ..
+        } => {
+            if let Some(te) = type_annotation
+                && let Some(info) = find_in_type_expr(te, line, col, ctx)
+            {
+                return Some(info);
+            }
+            find_in_expr(value, line, col, ctx)
+        }
         Statement::CompoundAssign { value, .. } => find_in_expr(value, line, col, ctx),
         Statement::Return {
             value: Some(expr), ..

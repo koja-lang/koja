@@ -226,6 +226,7 @@ impl Parser {
             items,
             comments: self.comments.clone(),
             span: self.span_from(start),
+            path: None,
         }
     }
 

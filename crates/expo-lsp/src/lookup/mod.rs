@@ -4,6 +4,7 @@
 //! handlers: given a cursor position, determine which symbol (if any) is
 //! under it.
 
+pub(crate) mod receiver;
 mod span;
 mod traverse;
 
@@ -11,7 +12,7 @@ use expo_ast::ast::*;
 use expo_typecheck::context::TypeContext;
 
 use span::{span_contains, span_contains_name};
-use traverse::{find_in_ident_at_name, find_in_statement, find_in_type_expr};
+use traverse::{find_in_ident_at_name, find_in_params, find_in_statement, find_in_type_expr};
 
 /// Describes the kind and identity of a symbol found at a cursor position.
 #[derive(Debug)]
@@ -42,6 +43,14 @@ pub(crate) fn find_symbol_at(
                 if let Some(info) = find_in_ident_at_name(&f.name, &f.span, line, col, ctx) {
                     return Some(info);
                 }
+                if let Some(info) = find_in_params(&f.params, line, col, ctx) {
+                    return Some(info);
+                }
+                if let Some(ret) = &f.return_type
+                    && let Some(info) = find_in_type_expr(ret, line, col, ctx)
+                {
+                    return Some(info);
+                }
                 for stmt in &f.body {
                     if let Some(info) = find_in_statement(stmt, line, col, ctx) {
                         return Some(info);
@@ -53,6 +62,14 @@ pub(crate) fn find_symbol_at(
                     if let ImplMember::Function(f) = member {
                         if !span_contains(&f.span, line, col) {
                             continue;
+                        }
+                        if let Some(info) = find_in_params(&f.params, line, col, ctx) {
+                            return Some(info);
+                        }
+                        if let Some(ret) = &f.return_type
+                            && let Some(info) = find_in_type_expr(ret, line, col, ctx)
+                        {
+                            return Some(info);
                         }
                         for stmt in &f.body {
                             if let Some(info) = find_in_statement(stmt, line, col, ctx) {
@@ -67,10 +84,10 @@ pub(crate) fn find_symbol_at(
                     continue;
                 }
                 for m in &p.methods {
+                    if !span_contains(&m.span, line, col) {
+                        continue;
+                    }
                     if let Some(body) = &m.body {
-                        if !span_contains(&m.span, line, col) {
-                            continue;
-                        }
                         for stmt in body {
                             if let Some(info) = find_in_statement(stmt, line, col, ctx) {
                                 return Some(info);
@@ -80,17 +97,45 @@ pub(crate) fn find_symbol_at(
                 }
             }
             Item::Struct(s) => {
+                if !span_contains(&s.span, line, col) {
+                    continue;
+                }
                 if span_contains_name(&s.name, &s.span, line, col) {
                     return Some(SymbolInfo::Struct {
                         name: s.name.clone(),
                     });
                 }
+                for field in &s.fields {
+                    if let Some(info) = find_in_type_expr(&field.type_expr, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
             }
             Item::Enum(e) => {
+                if !span_contains(&e.span, line, col) {
+                    continue;
+                }
                 if span_contains_name(&e.name, &e.span, line, col) {
                     return Some(SymbolInfo::Enum {
                         name: e.name.clone(),
                     });
+                }
+                for variant in &e.variants {
+                    if let EnumVariantData::Struct(fields) = &variant.data {
+                        for field in fields {
+                            if let Some(info) = find_in_type_expr(&field.type_expr, line, col, ctx)
+                            {
+                                return Some(info);
+                            }
+                        }
+                    }
+                    if let EnumVariantData::Tuple(types) = &variant.data {
+                        for te in types {
+                            if let Some(info) = find_in_type_expr(te, line, col, ctx) {
+                                return Some(info);
+                            }
+                        }
+                    }
                 }
             }
             Item::Constant(c) => {

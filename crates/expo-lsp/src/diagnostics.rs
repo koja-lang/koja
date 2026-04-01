@@ -17,7 +17,7 @@ use expo_ast::ast::{Diagnostic as ExpoDiagnostic, Module, Severity as ExpoSeveri
 use expo_typecheck::context::TypeContext;
 
 use crate::backend::{Backend, DocumentState};
-use crate::convert::span_to_range;
+use crate::convert::{span_to_range, uri_to_path};
 
 #[derive(Deserialize)]
 struct ExpoToml {
@@ -100,7 +100,9 @@ fn parse_sibling_modules(project_root: &Path, current_path: Option<&Path>) -> Ve
                             .iter()
                             .all(|d| !matches!(d.severity, ExpoSeverity::Error))
                         {
-                            mods.push(pr.module);
+                            let mut module = pr.module;
+                            module.path = Some(file.clone());
+                            mods.push(module);
                         }
                     }
                 }
@@ -131,33 +133,6 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Extracts a file path from a `file://` URI.
-fn uri_to_path(uri: &str) -> Option<PathBuf> {
-    if let Some(rest) = uri.strip_prefix("file://") {
-        let decoded = percent_decode(rest);
-        Some(PathBuf::from(decoded))
-    } else {
-        None
-    }
-}
-
-fn percent_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut bytes = s.bytes();
-    while let Some(b) = bytes.next() {
-        if b == b'%' {
-            let hi = bytes.next().and_then(|c| (c as char).to_digit(16));
-            let lo = bytes.next().and_then(|c| (c as char).to_digit(16));
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h * 16 + l) as u8 as char);
-            }
-        } else {
-            out.push(b as char);
-        }
-    }
-    out
-}
-
 impl Backend {
     /// Runs the full diagnostic pipeline on the given source text:
     /// parse, type-check, then publish LSP diagnostics.
@@ -167,6 +142,7 @@ impl Backend {
     /// resolve correctly.
     pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
         let parse_result = expo_parser::parse(text);
+        let file_path = uri_to_path(uri.as_str());
 
         let mut all_diags: Vec<ExpoDiagnostic> = parse_result.errors;
 
@@ -174,7 +150,6 @@ impl Backend {
             .iter()
             .all(|d| !matches!(d.severity, ExpoSeverity::Error))
         {
-            let file_path = uri_to_path(uri.as_str());
             let project_root = file_path
                 .as_deref()
                 .and_then(|p| p.parent())
@@ -210,11 +185,19 @@ impl Backend {
         };
 
         {
+            let mut module = parse_result.module;
+            module.path = file_path;
+
+            if !project_modules.is_empty() {
+                let mut pm = self.project_modules.write().await;
+                *pm = project_modules.clone();
+            }
+
             let mut docs = self.documents.write().await;
             docs.insert(
                 uri.as_str().to_string(),
                 DocumentState {
-                    module: parse_result.module,
+                    module,
                     ctx,
                     source: text.to_string(),
                     project_modules,
