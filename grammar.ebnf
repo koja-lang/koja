@@ -51,7 +51,9 @@ enum_variant = TYPE_IDENT                                           (* unit *)
              | TYPE_IDENT , "(" , type_expr , { "," , type_expr } , ")"   (* tuple *)
              | TYPE_IDENT , "{" , struct_field , { "," , struct_field } , "}" ; (* struct *)
 
-type_params = "<" , TYPE_IDENT , { "," , TYPE_IDENT } , ">" ;
+type_params = "<" , type_param , { "," , type_param } , ">" ;
+
+type_param = TYPE_IDENT , [ ":" , TYPE_IDENT , { "&" , TYPE_IDENT } ] ;
 
 type_alias_decl = [ annotation ] , "type" , TYPE_IDENT , "=" , type_expr ;
 

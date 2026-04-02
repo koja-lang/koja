@@ -209,7 +209,14 @@ fn add_symbol_completions(ctx: &TypeContext, prefix_lower: &str, items: &mut Vec
         let detail = if info.type_params.is_empty() {
             None
         } else {
-            Some(format!("<{}>", info.type_params.join(", ")))
+            Some(format!(
+                "<{}>",
+                info.type_params
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
         };
         items.push(CompletionItem {
             label: name.clone(),
@@ -226,7 +233,14 @@ fn add_symbol_completions(ctx: &TypeContext, prefix_lower: &str, items: &mut Vec
         let detail = if info.type_params.is_empty() {
             None
         } else {
-            Some(format!("<{}>", info.type_params.join(", ")))
+            Some(format!(
+                "<{}>",
+                info.type_params
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
         };
         items.push(CompletionItem {
             label: name.clone(),

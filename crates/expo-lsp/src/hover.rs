@@ -100,7 +100,14 @@ fn build_function_hover(
     let tp = if sig.type_params.is_empty() {
         String::new()
     } else {
-        format!("<{}>", sig.type_params.join(", "))
+        format!(
+            "<{}>",
+            sig.type_params
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
     let signature = format!(
         "{} {}{}({}) -> {}",
@@ -128,7 +135,14 @@ fn build_struct_hover(
     let tp = if info.type_params.is_empty() {
         String::new()
     } else {
-        format!("<{}>", info.type_params.join(", "))
+        format!(
+            "<{}>",
+            info.type_params
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
     let signature = format!("struct {}{}\n{}\nend", name, tp, fields.join("\n"));
     let doc = resolve_doc(name, state, stdlib_modules);
@@ -184,7 +198,14 @@ fn build_protocol_hover(
     let tp = if info.type_params.is_empty() {
         String::new()
     } else {
-        format!("<{}>", info.type_params.join(", "))
+        format!(
+            "<{}>",
+            info.type_params
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
     let methods: Vec<String> = info
         .methods

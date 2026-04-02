@@ -225,9 +225,9 @@ fn compile_generic_enum_construction<'ctx>(
         .iter()
         .map(|tp| {
             subst
-                .get(tp)
+                .get(&tp.name)
                 .cloned()
-                .or_else(|| c.fn_state.type_subst.get(tp).cloned())
+                .or_else(|| c.fn_state.type_subst.get(&tp.name).cloned())
                 .unwrap_or(Type::Unknown)
         })
         .collect();

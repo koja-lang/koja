@@ -67,7 +67,7 @@ pub fn compile_statement<'ctx>(
                         saved_subst = Some(c.fn_state.type_subst.clone());
                         for (param, arg) in tp.iter().zip(type_args.iter()) {
                             let concrete = substitute(arg, &c.fn_state.type_subst);
-                            c.fn_state.type_subst.insert(param.clone(), concrete);
+                            c.fn_state.type_subst.insert(param.name.clone(), concrete);
                         }
                     }
                 }
@@ -458,7 +458,7 @@ fn infer_instance_method_return_type(c: &Compiler, recv_ty: &Type, method: &str)
             let subst: HashMap<String, Type> = type_params
                 .iter()
                 .zip(type_args.iter())
-                .map(|(p, a)| (p.clone(), a.clone()))
+                .map(|(p, a)| (p.name.clone(), a.clone()))
                 .collect();
             Some(substitute(&sig.return_type, &subst))
         }

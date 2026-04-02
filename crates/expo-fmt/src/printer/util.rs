@@ -9,6 +9,24 @@ use crate::doc::*;
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
+/// Formats a `TypeParam` as a string, including bounds if present.
+/// E.g. `T`, `T: Debug`, `T: Debug & Hash`.
+pub fn format_type_param(tp: &TypeParam) -> String {
+    if tp.bounds.is_empty() {
+        tp.name.clone()
+    } else {
+        format!("{}: {}", tp.name, tp.bounds.join(" & "))
+    }
+}
+
+/// Formats a list of `TypeParam`s as a comma-separated string.
+pub fn format_type_params(tps: &[TypeParam]) -> String {
+    tps.iter()
+        .map(format_type_param)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Formats a comma-separated list of items using fill layout inside brackets.
 ///
 /// Items are packed left-to-right on each line. A trailing comma is added
@@ -586,7 +604,7 @@ pub(super) fn sig_will_break(f: &Function) -> bool {
     len += f.name.len();
     if !f.type_params.is_empty() {
         len += 1;
-        len += f.type_params.join(", ").len();
+        len += format_type_params(&f.type_params).len();
         len += 1;
     }
     len += 1;

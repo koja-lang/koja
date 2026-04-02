@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use expo_ast::ast::TypeExpr;
+use expo_ast::ast::{TypeExpr, TypeParam};
 
 /// The resolved type representation used throughout the type checker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -571,11 +571,11 @@ pub fn mangle_type(ty: &Type) -> String {
 }
 
 /// Builds a substitution map from type parameter names to concrete type arguments.
-pub fn build_substitution(type_params: &[String], type_args: &[Type]) -> HashMap<String, Type> {
+pub fn build_substitution(type_params: &[TypeParam], type_args: &[Type]) -> HashMap<String, Type> {
     type_params
         .iter()
         .zip(type_args.iter())
-        .map(|(tp, ta)| (tp.clone(), ta.clone()))
+        .map(|(tp, ta)| (tp.name.clone(), ta.clone()))
         .collect()
 }
 

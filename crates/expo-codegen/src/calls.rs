@@ -179,7 +179,7 @@ fn compile_generic_call<'ctx>(
     let type_args: Vec<Type> = sig
         .type_params
         .iter()
-        .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Unknown))
+        .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
         .collect();
 
     let mangled = mangle_name(name, &type_args);
@@ -201,7 +201,7 @@ fn compile_generic_call<'ctx>(
             .type_params
             .iter()
             .zip(type_args.iter())
-            .map(|(p, a)| (p.clone(), a.clone()))
+            .map(|(p, a)| (p.name.clone(), a.clone()))
             .collect();
         substitute(&sig.return_type, &subst_map)
     };

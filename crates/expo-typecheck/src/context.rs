@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, ProtocolMethod, Severity, StructDecl,
+    TypeParam,
 };
 pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::span::Span;
@@ -46,7 +47,7 @@ pub struct FunctionSig {
     pub return_type: Type,
     pub kind: FunctionKind,
     pub span: Span,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
 }
 
 /// A single parameter's name, resolved type, and how ownership is transferred.
@@ -71,7 +72,7 @@ pub struct ProtocolInfo {
     pub default_bodies: BTreeMap<String, ProtocolMethod>,
     pub methods: BTreeMap<String, FunctionSig>,
     pub span: Span,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
 }
 
 /// Unified metadata for any named type: struct, enum, or primitive.
@@ -83,7 +84,7 @@ pub struct TypeInfo {
     pub functions: BTreeMap<String, FunctionSig>,
     pub kind: TypeKind,
     pub span: Span,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
 }
 
 /// What kind of named type a [`TypeInfo`] represents.

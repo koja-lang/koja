@@ -930,19 +930,55 @@ fn infer_generic_call(
         }
     }
 
-    if sig.type_params.iter().any(|tp| !subst.contains_key(tp))
+    if sig
+        .type_params
+        .iter()
+        .any(|tp| !subst.contains_key(&tp.name))
         && let Some(hint) = &ce.type_hint
     {
         unify(&sig.return_type, hint, &mut subst);
     }
 
     for tp in &sig.type_params {
-        if !subst.contains_key(tp) {
+        if !subst.contains_key(&tp.name) {
             ctx.error(
-                format!("cannot infer type parameter `{tp}` for `{name}`"),
+                format!("cannot infer type parameter `{}` for `{name}`", tp.name),
                 span,
             );
             return Type::Error;
+        }
+    }
+
+    for tp in &sig.type_params {
+        if tp.bounds.is_empty() {
+            continue;
+        }
+        let Some(concrete) = subst.get(&tp.name) else {
+            continue;
+        };
+        let type_name = match concrete {
+            Type::Struct(n) | Type::Enum(n) => Some(n.clone()),
+            Type::Primitive(p) => Some(p.display().to_string()),
+            Type::GenericInstance { base, .. } => Some(base.clone()),
+            _ => None,
+        };
+        let Some(type_name) = type_name else {
+            continue;
+        };
+        let impls = ctx.protocol_impls.get(&type_name);
+        for bound in &tp.bounds {
+            let satisfied = impls.is_some_and(|list| list.iter().any(|(proto, _)| proto == bound));
+            if !satisfied {
+                ctx.error(
+                    format!(
+                        "type `{}` does not implement protocol `{bound}` (required by type parameter `{}` in `{name}`)",
+                        concrete.display(),
+                        tp.name,
+                    ),
+                    span,
+                );
+                return Type::Error;
+            }
         }
     }
 
@@ -1075,7 +1111,7 @@ fn infer_enum_construction(
                 let type_args: Vec<Type> = type_info
                     .type_params
                     .iter()
-                    .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Unknown))
+                    .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
                     .collect();
                 Type::GenericInstance {
                     base: enum_name,
@@ -1168,7 +1204,7 @@ fn infer_field_access(
             .type_params
             .iter()
             .zip(type_args.iter())
-            .map(|(p, a)| (p.clone(), a.clone()))
+            .map(|(p, a)| (p.name.clone(), a.clone()))
             .collect();
         substitute_preserving(field_ty, &subst_map)
     } else {
@@ -1264,6 +1300,40 @@ fn infer_method_call(
 
     if method == "clone" && args.is_empty() {
         return recv_ty;
+    }
+
+    if let Type::TypeVar(ref tv_name) = recv_ty
+        && let Some(tp) = ce.fn_type_params.iter().find(|tp| &tp.name == tv_name)
+    {
+        for bound in &tp.bounds {
+            if let Some(pi) = ctx.protocols.get(bound)
+                && let Some(proto_sig) = pi.methods.get(method)
+            {
+                let subst_self =
+                    HashMap::from([("Self".to_string(), Type::TypeVar(tv_name.clone()))]);
+                let return_type = substitute_preserving(&proto_sig.return_type, &subst_self);
+                let params: Vec<ParamInfo> = proto_sig
+                    .params
+                    .iter()
+                    .map(|p| ParamInfo {
+                        mode: p.mode,
+                        name: p.name.clone(),
+                        ty: substitute_preserving(&p.ty, &subst_self),
+                    })
+                    .collect();
+                check_call_args(method, &params, args, "self, ", span, ctx, ce);
+                return return_type;
+            }
+        }
+        let bound_list = tp.bounds.join(" & ");
+        ctx.error_with_hint(
+            format!("cannot call `{method}` on type `{tv_name}`"),
+            format!(
+                "add a `: {bound_list}` bound that provides `{method}`, or use a different method"
+            ),
+            span,
+        );
+        return Type::Error;
     }
 
     let (base_name, subst) = resolve_receiver_base_name(&recv_ty, ctx);
@@ -1435,6 +1505,7 @@ fn infer_closure(
         enum_names: ce.enum_names,
         type_hint: None,
         process_msg_type: ce.process_msg_type.clone(),
+        fn_type_params: ce.fn_type_params.clone(),
     };
     let param_types =
         bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
@@ -1497,6 +1568,7 @@ fn infer_short_closure(
         enum_names: ce.enum_names,
         type_hint: None,
         process_msg_type: ce.process_msg_type.clone(),
+        fn_type_params: ce.fn_type_params.clone(),
     };
     let param_types =
         bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);

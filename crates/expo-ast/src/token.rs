@@ -80,6 +80,7 @@ pub enum TokenKind {
     SlashEq,
     Arrow,
     Pipe,
+    Ampersand,
     Question,
     At,
     Dot,

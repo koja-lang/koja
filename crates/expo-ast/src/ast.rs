@@ -125,6 +125,20 @@ pub enum Severity {
 
 // Declarations
 
+/// A generic type parameter with optional protocol bounds.
+///
+/// ```expo
+/// fn format<T: Debug>(item: T)          # bounded
+/// fn identity<T>(item: T) -> T          # unbounded
+/// fn dedup<T: Equality & Hash>(items: List<T>)  # multiple bounds
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: String,
+    pub bounds: Vec<String>,
+    pub span: Span,
+}
+
 /// A module-level constant: `const NAME = expr` or `const NAME: Type = expr`.
 #[derive(Debug, Clone)]
 pub struct Constant {
@@ -140,7 +154,7 @@ pub struct Constant {
 pub struct EnumDecl {
     pub annotation: Option<Annotation>,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariant>,
     pub span: Span,
 }
@@ -170,7 +184,7 @@ pub struct Function {
     pub annotation: Option<Annotation>,
     pub visibility: Visibility,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub body: Vec<Statement>,
@@ -198,7 +212,7 @@ pub enum ImplMember {
 pub struct ProtocolDecl {
     pub annotation: Option<Annotation>,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub methods: Vec<ProtocolMethod>,
     pub span: Span,
 }
@@ -210,7 +224,7 @@ pub struct ProtocolDecl {
 pub struct ProtocolMethod {
     pub annotation: Option<Annotation>,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub body: Option<Vec<Statement>>,
@@ -249,7 +263,7 @@ pub struct SharedDecl {
 pub struct StructDecl {
     pub annotation: Option<Annotation>,
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructField>,
     pub span: Span,
 }

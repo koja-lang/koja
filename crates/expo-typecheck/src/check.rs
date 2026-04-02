@@ -191,6 +191,7 @@ fn check_function_with_msg(
         enum_names,
         type_hint: None,
         process_msg_type,
+        fn_type_params: f.type_params.clone(),
     };
 
     let check_implicit_return = declared_return != Type::Unit && declared_return != Type::Unknown;

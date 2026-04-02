@@ -66,11 +66,11 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 - Bare function names as references (`f = double; f(5)`, `list.map(double)`) -- top-level functions produce closure-compatible fat pointers via thunk wrappers
 - Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support with typed binding patterns (`p: Post -> p.title`)
 - Named union aliases (`type FeedItem = Post | Comment | Ad`) -- `type` keyword declarations resolved in the type context
+- Trait bounds on generic type parameters (`<T: Protocol>`, `<T: Proto1 & Proto2>`) -- bounds verified at call sites, protocol method resolution on bounded type vars in function bodies, `&` as protocol composition operator
 
 ### Parsed and type-checked but NOT yet in codegen
 
 - `arena` blocks (deferred post-v1)
-- Trait bounds on generic type parameters
 
 ### Design notes
 
@@ -257,7 +257,7 @@ Multi-threaded round-robin scheduling and I/O reactor are implemented. Work-stea
 Three features whose primary use cases are supervision constructs:
 
 - **`Pid` type** -- type-erased process ID (raw integer). Used in `ExitSignal` (which carries the crashed process's pid), registries, and `Process.monitor`. Distinct from `Ref<M, R>` (typed handle).
-- **Trait bounds on generics** -- `fn foo<T: Process<C, M, R>>(x: T)` needed for `child_spec` and generic process utilities. Parser currently only accepts bare `<T>`, needs `:` bound syntax. Touches parser, type checker, and codegen.
+- ~~**Trait bounds on generics**~~ -- **Done.** `<T: Protocol>` and `<T: Proto1 & Proto2>` syntax. Bounds verified at call sites, protocol method calls resolved on bounded type vars in function bodies. `&` is the protocol composition operator (complement to `|` for unions).
 - **`copy` keyword** -- third parameter modifier alongside default borrow and `move`: `fn start(copy config: Config)`. Auto-clones at the call boundary. Primary use case: `child_spec` default impl captures `copy config` in a closure for supervisor restart. `PassMode::Copy` already exists for closure captures; this extends it to parameter declarations. See `archive/20260323-CONCURRENCY.md` for full design.
 
 #### Preemption and priority
@@ -512,7 +512,7 @@ Active design discussions about the type system, code organization, and function
 - **Implemented**: protocol declarations with function signatures, `impl Protocol for Type` blocks with completeness and signature validation, `priv fn` helpers in impl blocks, `@doc` on protocol declarations.
 - **Decided**: static dispatch via monomorphization -- no vtables, no dynamic dispatch. Consistent with the existing generic compilation model.
 - **Implemented**: `impl` blocks on all types (structs, enums, primitives) -- functions stored in a unified `TypeContext.types` registry via `TypeInfo { functions, type_params, kind: TypeKind, span }`. `TypeKind` discriminates `Struct` (with fields), `Enum` (with variants), and `Primitive`. Previously, structs, enums, and primitives each had separate storage (`StructInfo`, `EnumInfo`, `primitive_methods`); the unified registry eliminates duplicated lookup/dispatch logic across the type checker and codegen. Used for conversion intrinsics, protocol methods, user-defined functions, and static/instance dispatch.
-- **Open**: trait bounds on generic type parameters (`fn foo<T: Display>(x: T)`) -- requires protocols, now unblocked.
+- ~~**Open**: trait bounds on generic type parameters (`fn foo<T: Display>(x: T)`)~~ -- **Done.** `<T: Protocol>` and `<T: Proto1 & Proto2>` syntax with `&` as the protocol composition operator.
 - **Open**: whether bare `impl Type` eventually migrates to inline functions in type bodies, or both coexist permanently.
 
 ### Struct field defaults and trailing keyword syntax (open)

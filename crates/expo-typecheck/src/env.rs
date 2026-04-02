@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use expo_ast::ast::TypeParam;
 use expo_ast::span::Span;
 
 use crate::context::{FunctionKind, TypeContext};
@@ -42,6 +43,9 @@ pub(crate) struct CheckEnv<'a> {
     /// The message type `M` when the current function is a process function
     /// (spawned as `Process<M>`). Used by `receive` to infer its return type.
     pub process_msg_type: Option<Type>,
+    /// Type parameters with bounds from the current function, used to resolve
+    /// protocol method calls on bounded type variables.
+    pub fn_type_params: Vec<TypeParam>,
 }
 
 impl<'a> CheckEnv<'a> {
@@ -58,6 +62,7 @@ impl<'a> CheckEnv<'a> {
             enum_names: self.enum_names,
             type_hint: None,
             process_msg_type: self.process_msg_type.clone(),
+            fn_type_params: self.fn_type_params.clone(),
         }
     }
 

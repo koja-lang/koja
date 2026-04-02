@@ -581,16 +581,29 @@ impl Parser {
     // Helpers
     // =========================================================================
 
-    pub(crate) fn parse_optional_type_params(&mut self) -> Vec<String> {
+    pub(crate) fn parse_optional_type_params(&mut self) -> Vec<TypeParam> {
         if self.eat(&TokenKind::Lt).is_none() {
             return Vec::new();
         }
-        let mut params = vec![self.expect_type_ident()];
+        let mut params = vec![self.parse_type_param()];
         while self.eat(&TokenKind::Comma).is_some() {
-            params.push(self.expect_type_ident());
+            params.push(self.parse_type_param());
         }
         self.expect_gt();
         params
+    }
+
+    fn parse_type_param(&mut self) -> TypeParam {
+        let span = self.current_span();
+        let name = self.expect_type_ident();
+        let mut bounds = Vec::new();
+        if self.eat(&TokenKind::Colon).is_some() {
+            bounds.push(self.expect_type_ident());
+            while self.eat(&TokenKind::Ampersand).is_some() {
+                bounds.push(self.expect_type_ident());
+            }
+        }
+        TypeParam { name, bounds, span }
     }
 
     pub(crate) fn parse_block(&mut self) -> Vec<Statement> {

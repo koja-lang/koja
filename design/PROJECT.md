@@ -514,6 +514,28 @@ assignment analysis. No dedicated keyword needed.
   ROADMAP is achievable as a stdlib pattern (`enum Step<T>` with function
   payloads + `Pipeline<T>`) backed by cross-function definite assignment
   analysis in the self-hosted typechecker. No dedicated keyword needed.
+- **Trait bounds use `&`**: generic type params can be bounded with
+  `<T: Protocol>` or `<T: Proto1 & Proto2>`. `&` is the protocol
+  composition operator, complementing `|` for union types. `&` has no
+  other meaning in Expo (no references, no address-of). Mirrors
+  TypeScript and Swift's `&` for intersection/composition.
+- **`protocol` keyword for composition**: named protocol compositions
+  use `protocol Storable = Readable & Writable`. The result is a
+  protocol, so the keyword stays in the protocol family. No `type`
+  keyword needed.
+- **`type` keyword removed**: every type declaration has a specific
+  keyword: `struct` (product), `enum` (sum with variants), `union`
+  (anonymous sum), `protocol` (contract + composition), `alias`
+  (transparent redirect). `type` was the catch-all; now each blade
+  has its own handle. The `type` keyword in the lexer should be
+  replaced with `union` once the migration is done.
+- **`|` and `&` don't mix**: `|` composes types (union), `&` composes
+  protocols (intersection). `Cat & Dog` and `Debug | Hash` are compile
+  errors. This avoids diamond-inheritance-style confusion and keeps
+  both operators simple.
+- **No `&` for references or mutability**: Expo uses `move` for
+  ownership transfer and borrows by default. `&` is purely a
+  type-level composition operator. This decision is final.
 
 ## Open questions
 

@@ -91,7 +91,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
     for item in &module.items {
         match item {
             Item::Enum(e) => {
-                let tp_refs: Vec<&str> = e.type_params.iter().map(|s| s.as_str()).collect();
+                let tp_refs: Vec<&str> = e.type_params.iter().map(|s| s.name.as_str()).collect();
                 let variants: Vec<VariantInfo> = e
                     .variants
                     .iter()
@@ -284,7 +284,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                     let proto_type_param_names: Vec<String> = ctx
                         .protocols
                         .get(proto)
-                        .map(|pi| pi.type_params.clone())
+                        .map(|pi| pi.type_params.iter().map(|tp| tp.name.clone()).collect())
                         .unwrap_or_default();
                     let proto_type_args: Vec<String> = if let Some(TypeExpr::Generic {
                         args, ..
@@ -440,7 +440,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                 }
             }
             Item::Protocol(p) => {
-                let tp_refs: Vec<&str> = p.type_params.iter().map(|s| s.as_str()).collect();
+                let tp_refs: Vec<&str> = p.type_params.iter().map(|s| s.name.as_str()).collect();
                 let mut methods: BTreeMap<String, FunctionSig> = BTreeMap::new();
                 let mut default_bodies: BTreeMap<String, ProtocolMethod> = BTreeMap::new();
                 for m in &p.methods {
@@ -471,7 +471,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                 );
             }
             Item::Struct(s) => {
-                let tp_refs: Vec<&str> = s.type_params.iter().map(|s| s.as_str()).collect();
+                let tp_refs: Vec<&str> = s.type_params.iter().map(|s| s.name.as_str()).collect();
                 let fields: Vec<(String, Type)> = s
                     .fields
                     .iter()
@@ -629,7 +629,7 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
             let proto_type_param_names: Vec<String> = ctx
                 .protocols
                 .get(&proto)
-                .map(|pi| pi.type_params.clone())
+                .map(|pi| pi.type_params.iter().map(|tp| tp.name.clone()).collect())
                 .unwrap_or_default();
             let proto_type_args: Vec<String> =
                 if let Some(TypeExpr::Generic { args, .. }) = &impl_block.trait_expr {
@@ -704,7 +704,7 @@ fn build_function_sig_with_params(
     extra_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
 ) -> Option<FunctionSig> {
-    let mut all_tp: Vec<&str> = f.type_params.iter().map(|s| s.as_str()).collect();
+    let mut all_tp: Vec<&str> = f.type_params.iter().map(|s| s.name.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
     if !all_tp.contains(&"Self") {
         all_tp.push("Self");
@@ -776,7 +776,7 @@ fn build_protocol_method_sig(
     extra_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
 ) -> Option<FunctionSig> {
-    let mut all_tp: Vec<&str> = m.type_params.iter().map(|s| s.as_str()).collect();
+    let mut all_tp: Vec<&str> = m.type_params.iter().map(|s| s.name.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
     if !all_tp.contains(&"Self") {
         all_tp.push("Self");

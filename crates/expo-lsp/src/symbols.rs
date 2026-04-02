@@ -10,7 +10,7 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::{Function, ImplMember, Item, Module, Param, TypeExpr, Visibility};
+use expo_ast::ast::{Function, ImplMember, Item, Module, Param, TypeExpr, TypeParam, Visibility};
 
 use crate::backend::Backend;
 use crate::convert::{path_to_uri, span_to_range};
@@ -411,10 +411,17 @@ fn function_symbol(f: &Function) -> DocumentSymbol {
 
 /// Formats type parameters as a detail string like `<T, U>`, or `None`
 /// if the list is empty.
-fn type_params_detail(params: &[String]) -> Option<String> {
+fn type_params_detail(params: &[TypeParam]) -> Option<String> {
     if params.is_empty() {
         None
     } else {
-        Some(format!("<{}>", params.join(", ")))
+        Some(format!(
+            "<{}>",
+            params
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
     }
 }

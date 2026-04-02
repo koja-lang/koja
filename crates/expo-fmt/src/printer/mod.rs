@@ -113,7 +113,7 @@ impl<'a> Printer<'a> {
         let mut header = format!("struct {}", s.name);
         if !s.type_params.is_empty() {
             header.push('<');
-            header.push_str(&s.type_params.join(", "));
+            header.push_str(&util::format_type_params(&s.type_params));
             header.push('>');
         }
         parts.push(text(header));
@@ -167,7 +167,7 @@ impl<'a> Printer<'a> {
         let mut header = format!("enum {}", e.name);
         if !e.type_params.is_empty() {
             header.push('<');
-            header.push_str(&e.type_params.join(", "));
+            header.push_str(&util::format_type_params(&e.type_params));
             header.push('>');
         }
         parts.push(text(header));
@@ -263,7 +263,7 @@ impl<'a> Printer<'a> {
 
         if !f.type_params.is_empty() {
             prefix.push('<');
-            prefix.push_str(&f.type_params.join(", "));
+            prefix.push_str(&util::format_type_params(&f.type_params));
             prefix.push('>');
         }
 
@@ -350,7 +350,7 @@ impl<'a> Printer<'a> {
         let mut header = format!("protocol {}", p.name);
         if !p.type_params.is_empty() {
             header.push('<');
-            header.push_str(&p.type_params.join(", "));
+            header.push_str(&util::format_type_params(&p.type_params));
             header.push('>');
         }
         parts.push(text(header));
@@ -381,7 +381,7 @@ impl<'a> Printer<'a> {
         prefix.push_str(&m.name);
         if !m.type_params.is_empty() {
             prefix.push('<');
-            prefix.push_str(&m.type_params.join(", "));
+            prefix.push_str(&util::format_type_params(&m.type_params));
             prefix.push('>');
         }
 

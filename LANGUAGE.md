@@ -19,7 +19,7 @@ Expo is a statically typed, compiled language targeting native binaries via LLVM
 - [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
 - [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
 - [Annotations](#annotations) -- `@doc`
-- [Planned Features](#planned-features) -- Arena Blocks, Display, Struct Destructuring, Trait Bounds, `command`
+- [Planned Features](#planned-features) -- Arena Blocks, Display, Struct Destructuring, `command`
 - [Tooling](#tooling) -- CLI Commands, LSP, Formatter
 
 ---
@@ -760,6 +760,34 @@ end
 
 The compiler validates completeness (all protocol functions must be implemented) and signature compatibility. `priv fn` helpers are allowed in impl blocks. `@doc` annotations are supported on protocol declarations.
 
+### Trait Bounds
+
+Generic type parameters can be constrained to types implementing specific protocols using `:` syntax:
+
+```expo
+fn say_hello<T: Greeter>(animal: T) -> String
+  animal.greet()
+end
+```
+
+Multiple bounds use `&` (the protocol composition operator, complementing `|` for union types):
+
+```expo
+fn describe_and_greet<T: Greeter & Description>(animal: T) -> String
+  animal.describe() <> " says " <> animal.greet()
+end
+```
+
+Bounds are verified at call sites -- if a concrete type doesn't implement a required protocol, the compiler emits an error:
+
+```
+type `Cat` does not implement protocol `Description` (required by type parameter `T` in `describe_and_greet`)
+```
+
+Inside the function body, protocol methods can be called directly on bounded type parameters. The compiler resolves the method through the protocol's signature.
+
+Unbounded type parameters (`<T>`) remain valid and backwards compatible.
+
 ### Dispatch
 
 Protocol dispatch is static via monomorphization -- no vtables, no dynamic dispatch.
@@ -1321,7 +1349,7 @@ protocol Bitwise
 end
 ```
 
-Bitwise operations are methods rather than symbolic operators. Expo reserves `<<`/`>>` for binary literals, `|` for union types, and `&` is unused. All integer types implement `Bitwise`.
+Bitwise operations are methods rather than symbolic operators. Expo reserves `<<`/`>>` for binary literals, `|` for union types, and `&` for protocol composition in trait bounds. All integer types implement `Bitwise`.
 
 ```expo
 flags = 0b1010
@@ -1404,16 +1432,6 @@ Config{name, port} = load_config()
 ```
 
 Compile-time verified exhaustive. Enum destructuring uses `match`.
-
-### Trait Bounds
-
-Bounds on generic type parameters:
-
-```expo
-fn foo<T: Display>(x: T) -> String
-  x.display()
-end
-```
 
 ### `command` Construct
 

@@ -520,7 +520,7 @@ fn compile_closure_core<'ctx>(
                 .map(|ti| &ti.type_params);
             if let Some(tps) = type_params {
                 for (tp, ta) in tps.iter().zip(type_args.iter()) {
-                    extra.insert(tp.clone(), ta.clone());
+                    extra.insert(tp.name.clone(), ta.clone());
                 }
             }
         }

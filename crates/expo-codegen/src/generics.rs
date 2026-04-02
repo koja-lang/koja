@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::mem;
 
-use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr};
+use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr, TypeParam};
 use expo_typecheck::context::{FunctionKind, VariantData};
 use expo_typecheck::types::{
     GenericKind, Primitive, Type, build_substitution, mangle_name, mangle_type, substitute,
@@ -535,16 +535,20 @@ impl<'ctx> Compiler<'ctx> {
             .clone();
 
         let mut method_ast = None;
-        let mut impl_type_params = Vec::new();
+        let mut impl_type_params: Vec<TypeParam> = Vec::new();
         for block in &impl_blocks {
             if let TypeExpr::Generic { args, .. } = &block.target {
-                let tp_names: Vec<String> = args
+                let impl_tps: Vec<TypeParam> = args
                     .iter()
                     .filter_map(|a| {
-                        if let TypeExpr::Named { path, .. } = a
+                        if let TypeExpr::Named { path, span, .. } = a
                             && path.len() == 1
                         {
-                            return Some(path[0].clone());
+                            return Some(TypeParam {
+                                name: path[0].clone(),
+                                bounds: Vec::new(),
+                                span: *span,
+                            });
                         }
                         None
                     })
@@ -554,7 +558,7 @@ impl<'ctx> Compiler<'ctx> {
                         && f.name == method_name
                     {
                         method_ast = Some(f.clone());
-                        impl_type_params = tp_names;
+                        impl_type_params = impl_tps;
                         break;
                     }
                 }
@@ -569,7 +573,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let mut subst = build_substitution(&impl_type_params, type_args);
         for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
-            subst.insert(tp.clone(), ta.clone());
+            subst.insert(tp.name.clone(), ta.clone());
         }
 
         let info = self

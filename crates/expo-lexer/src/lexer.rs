@@ -572,6 +572,7 @@ impl Lexer {
                     _ => self.single(TokenKind::Gt),
                 },
                 '|' => self.single(TokenKind::Pipe),
+                '&' => self.single(TokenKind::Ampersand),
                 ':' => match self.cursor.peek_at(1) {
                     Some(':') => self.double(TokenKind::ColonColon),
                     _ => self.single(TokenKind::Colon),

@@ -291,7 +291,7 @@ fn extract_function(f: &Function) -> Option<DocFunction> {
         name: f.name.clone(),
         params,
         return_type: f.return_type.as_ref().map(type_expr_to_string),
-        type_params: f.type_params.clone(),
+        type_params: f.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })
 }
 
@@ -328,7 +328,7 @@ fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
         doc: annotation_string(&p.annotation),
         functions,
         name: p.name.clone(),
-        type_params: p.type_params.clone(),
+        type_params: p.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })
 }
 
@@ -344,7 +344,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
         name: m.name.clone(),
         params,
         return_type: m.return_type.as_ref().map(type_expr_to_string),
-        type_params: m.type_params.clone(),
+        type_params: m.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })
 }
 
@@ -367,7 +367,7 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
         fields,
         functions: Vec::new(),
         name: s.name.clone(),
-        type_params: s.type_params.clone(),
+        type_params: s.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })
 }
 

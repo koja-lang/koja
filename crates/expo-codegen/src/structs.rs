@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::PassMode;
-use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit};
+use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit, TypeParam};
 use expo_typecheck::context::{FunctionKind, TypeInfo};
 use expo_typecheck::types::{
     GenericKind, Type, build_substitution, mangle_name, substitute, unify, unwrap_indirect,
@@ -302,7 +302,7 @@ pub fn compile_method_call<'ctx>(
         let mut subst = build_substitution(&ti.type_params, &ta);
         let method_tp = &sig.type_params;
         for (mp, ma) in method_tp.iter().zip(resolved_method_type_args.iter()) {
-            subst.insert(mp.clone(), ma.clone());
+            subst.insert(mp.name.clone(), ma.clone());
         }
         (
             sig.params
@@ -378,7 +378,7 @@ pub fn compile_method_call<'ctx>(
     Ok(result.map(|v| TypedValue::new(v, return_type)))
 }
 
-fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<String> {
+fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<TypeParam> {
     let methods = c.type_ctx.types.get(base_type).map(|ti| &ti.functions);
     if let Some(methods) = methods
         && let Some(sig) = methods.get(method)
@@ -427,7 +427,7 @@ fn infer_method_type_args(
     Ok(sig
         .type_params
         .iter()
-        .map(|tp| method_subst.get(tp).cloned().unwrap_or(Type::Unknown))
+        .map(|tp| method_subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
         .collect())
 }
 
@@ -477,7 +477,7 @@ fn infer_static_struct_type_args_from_args(
     type_name: &str,
     method: &str,
     args: &[Arg],
-    type_params: &[String],
+    type_params: &[TypeParam],
 ) -> Result<Vec<Type>, String> {
     if type_params.is_empty() {
         return Ok(vec![]);
@@ -507,8 +507,11 @@ fn infer_static_struct_type_args_from_args(
     type_params
         .iter()
         .map(|tp| {
-            subst.get(tp).cloned().ok_or_else(|| {
-                format!("cannot infer type parameter `{tp}` for `{type_name}.{method}`")
+            subst.get(&tp.name).cloned().ok_or_else(|| {
+                format!(
+                    "cannot infer type parameter `{}` for `{type_name}.{method}`",
+                    tp.name
+                )
             })
         })
         .collect()
@@ -617,7 +620,7 @@ fn push_generic_type_subst<'ctx>(
         let saved = c.fn_state.type_subst.clone();
         for (param, arg) in type_params.iter().zip(type_args.iter()) {
             let concrete = substitute(arg, &c.fn_state.type_subst);
-            c.fn_state.type_subst.insert(param.clone(), concrete);
+            c.fn_state.type_subst.insert(param.name.clone(), concrete);
         }
         Some(saved)
     } else {
@@ -768,7 +771,7 @@ fn compile_generic_struct_construction<'ctx>(
     let type_args: Vec<Type> = info
         .type_params
         .iter()
-        .map(|tp| subst.get(tp).cloned().unwrap_or(Type::Unknown))
+        .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
         .collect();
 
     let mangled = mangle_name(struct_name, &type_args);
@@ -865,7 +868,7 @@ fn compile_static_call<'ctx>(
         && !tp.is_empty()
     {
         tp.iter()
-            .filter_map(|name| c.fn_state.type_subst.get(name).cloned())
+            .filter_map(|param| c.fn_state.type_subst.get(&param.name).cloned())
             .collect()
     } else {
         Vec::new()
