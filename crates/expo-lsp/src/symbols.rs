@@ -95,6 +95,7 @@ fn collect_workspace_symbols(module: &Module, query: &str, results: &mut Vec<Sym
 
     for item in &module.items {
         match item {
+            Item::Alias(_) => {}
             Item::Function(f) => {
                 if matches(&f.name) {
                     results.push(SymbolInformation {
@@ -216,6 +217,7 @@ fn build_document_symbols(module: &Module) -> Vec<DocumentSymbol> {
 
     for item in &module.items {
         match item {
+            Item::Alias(_) => {}
             Item::Function(f) => symbols.push(function_symbol(f)),
             Item::Struct(s) => {
                 let range = span_to_range(&s.span);

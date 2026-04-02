@@ -52,6 +52,7 @@ fn span_fold(span: &Span, kind: Option<FoldingRangeKind>) -> Option<FoldingRange
 fn collect_item_folds(module: &Module, ranges: &mut Vec<FoldingRange>) {
     for item in &module.items {
         match item {
+            Item::Alias(_) => {}
             Item::Function(f) => {
                 if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);

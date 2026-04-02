@@ -28,6 +28,8 @@ pub struct ModuleGraph {
     pub modules: HashMap<String, ResolvedModule>,
     /// Module names in processing order (stdlib first, then project files).
     pub order: Vec<String>,
+    /// Package names loaded as dependencies (e.g. "json", "http").
+    pub dep_packages: Vec<String>,
 }
 
 // =============================================================================
@@ -52,6 +54,7 @@ pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
         entry: entry_name.clone(),
         modules: HashMap::new(),
         order: Vec::new(),
+        dep_packages: Vec::new(),
     };
 
     graph.order.push(entry_name.clone());
@@ -95,6 +98,7 @@ pub fn resolve_project_modules(
         entry: entry_fqn.clone(),
         modules: HashMap::new(),
         order: Vec::new(),
+        dep_packages: Vec::new(),
     };
 
     insert_stdlib(&mut graph);
@@ -197,6 +201,7 @@ pub fn resolve_test_project_modules(
         entry: String::new(),
         modules: HashMap::new(),
         order: Vec::new(),
+        dep_packages: Vec::new(),
     };
 
     insert_stdlib(&mut graph);
@@ -241,6 +246,7 @@ fn resolve_dependencies(
 
         let dep_src_roots: Vec<PathBuf> = dep_config.src.iter().map(|s| dep_path.join(s)).collect();
         scan_directories(&dep_config.name, &dep_src_roots, graph)?;
+        graph.dep_packages.push(dep_config.name.clone());
 
         if let Some(ref entry) = dep_config.entry {
             let entry_fqn = format!("{}.{}", dep_config.name, entry);

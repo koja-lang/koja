@@ -351,6 +351,55 @@ impl Parser {
         Item::TypeAlias(alias)
     }
 
+    pub(crate) fn parse_alias_item(&mut self) -> Item {
+        let start = self.current_span();
+        self.advance(); // alias
+
+        let mut path = Vec::new();
+        // Parse dotted path: lowercase.segments.TypeName
+        loop {
+            match self.peek().clone() {
+                TokenKind::Ident(name) => {
+                    self.advance();
+                    path.push(name);
+                    if self.eat(&TokenKind::Dot).is_none() {
+                        let span = self.current_span();
+                        self.error(
+                            "alias path must end with a type name (PascalCase)".to_string(),
+                            span,
+                        );
+                        break;
+                    }
+                }
+                TokenKind::TypeIdent(name) => {
+                    self.advance();
+                    path.push(name);
+                    break;
+                }
+                _ => {
+                    let span = self.current_span();
+                    self.error(
+                        format!("expected package path in alias, found {:?}", self.peek()),
+                        span,
+                    );
+                    break;
+                }
+            }
+        }
+
+        let local_name = if self.eat(&TokenKind::Ident("as".to_string())).is_some() {
+            self.expect_type_ident()
+        } else {
+            path.last().cloned().unwrap_or_default()
+        };
+
+        Item::Alias(AliasDecl {
+            path,
+            local_name,
+            span: self.span_from(start),
+        })
+    }
+
     // =========================================================================
     // Function
     // =========================================================================

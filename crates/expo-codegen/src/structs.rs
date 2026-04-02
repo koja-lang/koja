@@ -7,7 +7,8 @@ use expo_ast::ast::PassMode;
 use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit, TypeParam};
 use expo_typecheck::context::{FunctionKind, TypeInfo};
 use expo_typecheck::types::{
-    GenericKind, Type, build_substitution, mangle_name, substitute, unify, unwrap_indirect,
+    GenericKind, Type, build_substitution, mangle_name, resolve_type_alias_name, substitute, unify,
+    unwrap_indirect,
 };
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
@@ -217,9 +218,9 @@ pub fn compile_method_call<'ctx>(
     let was_tail = c.fn_state.tco.save_tail();
 
     if let Expr::Ident { name, .. } = receiver {
-        let is_type_name = c.type_ctx.types.contains_key(name);
-        if is_type_name {
-            return compile_static_call(c, name, method, args, function);
+        let resolved = resolve_type_alias_name(name, &c.type_ctx.type_aliases);
+        if c.type_ctx.types.contains_key(&resolved) {
+            return compile_static_call(c, &resolved, method, args, function);
         }
     }
 
@@ -635,9 +636,10 @@ pub fn compile_struct_construction<'ctx>(
     fields: &[FieldInit],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let struct_name = type_path
+    let raw_name = type_path
         .first()
         .ok_or("empty type path in struct construction")?;
+    let struct_name = &resolve_type_alias_name(raw_name, &c.type_ctx.type_aliases);
 
     // For generic structs, compile field values first, infer type args, and monomorphize
     if let Some(info) = c.type_ctx.types.get(struct_name)

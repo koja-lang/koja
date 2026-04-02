@@ -67,6 +67,7 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 - Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support with typed binding patterns (`p: Post -> p.title`)
 - Named union aliases (`type FeedItem = Post | Comment | Ad`) -- `type` keyword declarations resolved in the type context
 - Trait bounds on generic type parameters (`<T: Protocol>`, `<T: Proto1 & Proto2>`) -- bounds verified at call sites, protocol method resolution on bounded type vars in function bodies, `&` as protocol composition operator
+- `alias` keyword for file-private package type shorthands (`alias json.Decoder`, `alias json.Decoder as JSONDecoder`) -- qualified type resolution via `package.Type` syntax
 
 ### Parsed and type-checked but NOT yet in codegen
 
@@ -186,7 +187,7 @@ The litmus test: does the compiler or language runtime need it to function, or i
 
 - ~~`expo.toml` extended with dependency declarations~~ **Done.** `[dependencies]` table with local path support (`json = { path = "../json" }`). Dependency sources are scanned and merged into the module graph.
 - Git dependencies: `expo.toml` extended with git URLs, tags, and branches. Dependency resolution: fetch from git, lock file generation for reproducible builds.
-- `alias` keyword: file-private shorthand for qualified package types. `alias json.Encoder` or `alias json.Decoder as JSONDecoder`. Unlike `type` (which creates a globally-visible type alias), `alias` is scoped to the declaring file and doesn't pollute the flat project namespace. This is the primary ergonomic mechanism for working with dependency types.
+- ~~`alias` keyword~~ -- **Done.** File-private shorthand for qualified package types. `alias json.Encoder` or `alias json.Decoder as JSONDecoder`. Scoped to the declaring file, doesn't pollute the flat project namespace. Parser, type checker, formatter, LSP, and doc extractor all handle `Item::Alias`. Package types tracked via `ModuleGraph.dep_packages` and `TypeContext.package_types`.
 - **Done when**: `expo.toml` resolves git dependencies and builds the project
 
 #### C FFI

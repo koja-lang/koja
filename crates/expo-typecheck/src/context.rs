@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, ProtocolMethod, Severity, StructDecl,
@@ -27,6 +27,10 @@ pub struct TypeContext {
     pub synthesized_default_fns: BTreeMap<String, Vec<Function>>,
     pub type_aliases: BTreeMap<String, Type>,
     pub types: BTreeMap<String, TypeInfo>,
+    /// Maps package name to the set of type names it provides (e.g. "json" -> {"Decoder", "Encoder"}).
+    pub package_types: BTreeMap<String, BTreeSet<String>>,
+    /// File-private aliases from `alias` declarations. NOT merged across modules.
+    pub module_aliases: BTreeMap<String, Type>,
 }
 
 /// Whether a function in an impl block takes a `self` receiver or is static.
@@ -255,6 +259,8 @@ impl TypeContext {
             synthesized_default_fns: BTreeMap::new(),
             type_aliases: BTreeMap::new(),
             types: BTreeMap::new(),
+            package_types: BTreeMap::new(),
+            module_aliases: BTreeMap::new(),
         }
     }
 
@@ -350,6 +356,13 @@ impl TypeContext {
                 .entry(*span)
                 .or_insert_with(|| coercion.clone());
         }
+        for (pkg, types) in &other.package_types {
+            self.package_types
+                .entry(pkg.clone())
+                .or_default()
+                .extend(types.iter().cloned());
+        }
+        // module_aliases intentionally NOT merged (file-private)
     }
 
     /// Records a warning diagnostic at the given span.

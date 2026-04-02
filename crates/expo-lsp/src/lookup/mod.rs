@@ -36,6 +36,7 @@ pub(crate) fn find_symbol_at(
 ) -> Option<SymbolInfo> {
     for item in &module.items {
         match item {
+            Item::Alias(_) => {}
             Item::Function(f) => {
                 if !span_contains(&f.span, line, col) {
                     continue;
@@ -163,6 +164,7 @@ pub(crate) fn find_symbol_at(
 pub(crate) fn find_doc_for(module: &Module, name: &str) -> Option<String> {
     for item in &module.items {
         match item {
+            Item::Alias(_) => {}
             Item::Function(f) if f.name == name => {
                 return span::annotation_doc(&f.annotation);
             }

@@ -80,6 +80,7 @@ pub(super) fn struct_body(prefix: Doc, field_docs: Vec<Doc>) -> Doc {
 /// Returns the source span for any top-level `Item`.
 pub(super) fn item_span(item: &Item) -> &Span {
     match item {
+        Item::Alias(a) => &a.span,
         Item::Constant(c) => &c.span,
         Item::Enum(e) => &e.span,
         Item::Function(f) => &f.span,
@@ -89,6 +90,19 @@ pub(super) fn item_span(item: &Item) -> &Span {
         Item::Struct(s) => &s.span,
         Item::TypeAlias(t) => &t.span,
     }
+}
+
+/// Formats an `alias` declaration (`alias pkg.Type` or `alias pkg.Type as Name`).
+pub(super) fn alias_to_doc(a: &AliasDecl) -> Doc {
+    let mut parts = Vec::new();
+    parts.push(text("alias "));
+    parts.push(text(a.path.join(".")));
+    let default_name = a.path.last().map(|s| s.as_str()).unwrap_or("");
+    if a.local_name != default_name {
+        parts.push(text(" as "));
+        parts.push(text(&a.local_name));
+    }
+    concat(parts)
 }
 
 /// Formats a `type` alias declaration (`type Name = TypeExpr`).

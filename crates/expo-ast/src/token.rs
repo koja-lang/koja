@@ -80,6 +80,7 @@ pub enum TokenKind {
     SlashEq,
     Arrow,
     Pipe,
+    Alias,
     Ampersand,
     Question,
     At,
@@ -107,6 +108,7 @@ impl TokenKind {
         matches!(
             self,
             TokenKind::After
+                | TokenKind::Alias
                 | TokenKind::Arena
                 | TokenKind::Break
                 | TokenKind::Cond

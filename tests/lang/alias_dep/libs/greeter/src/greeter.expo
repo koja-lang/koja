@@ -1,0 +1,13 @@
+struct Greeter
+  name: String
+end
+
+impl Greeter
+  fn new(name: String) -> Greeter
+    Greeter{name: name}
+  end
+
+  fn greet(self) -> String
+    "Hello, #{self.name}!"
+  end
+end

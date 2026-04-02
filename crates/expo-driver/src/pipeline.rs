@@ -9,6 +9,9 @@ use std::{env, fs, process};
 
 use expo_ast::ast::{AnnotationValue, Item, Module, Severity};
 
+use expo_typecheck::context::TypeContext;
+use expo_typecheck::types::is_package_type;
+
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
 use crate::resolve::{self, ModuleGraph};
@@ -85,11 +88,36 @@ pub fn typecheck_graph(
         unified_project_ctx.merge(&module_contexts[*name]);
     }
 
+    // Populate package_types: map each dependency package name to the types it provides.
+    for pkg in &graph.dep_packages {
+        let prefix = format!("{pkg}.");
+        for fqn in &graph.order {
+            if fqn.starts_with(&prefix) {
+                let rm = &graph.modules[fqn];
+                for item in &rm.module.items {
+                    let type_name = match item {
+                        expo_ast::ast::Item::Struct(s) => Some(&s.name),
+                        expo_ast::ast::Item::Enum(e) => Some(&e.name),
+                        _ => None,
+                    };
+                    if let Some(name) = type_name {
+                        unified_project_ctx
+                            .package_types
+                            .entry(pkg.clone())
+                            .or_default()
+                            .insert(name.clone());
+                    }
+                }
+            }
+        }
+    }
+
     // Check: type-check each project module against the unified context.
     for name in &project_names {
         let rm = &graph.modules[*name];
         let mut ctx = module_contexts.remove(*name).unwrap();
         ctx.merge(&unified_project_ctx);
+        resolve_module_aliases(&rm.module, &mut ctx);
         expo_typecheck::check_module(&rm.module, &mut ctx);
         module_contexts.insert((*name).clone(), ctx);
     }
@@ -115,6 +143,42 @@ pub fn typecheck_graph(
     }
 
     (module_contexts, has_errors)
+}
+
+/// Resolves `alias` declarations in a module, validating against known package
+/// types and inserting resolved aliases into `ctx.type_aliases` so they are
+/// visible during type checking of this module.
+fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
+    use expo_typecheck::types::Type;
+
+    for item in &module.items {
+        if let Item::Alias(a) = item {
+            if a.path.len() != 2 {
+                ctx.error(
+                    format!(
+                        "alias path must be `package.Type`, got `{}`",
+                        a.path.join(".")
+                    ),
+                    a.span,
+                );
+                continue;
+            }
+            let pkg = &a.path[0];
+            let type_name = &a.path[1];
+            if !is_package_type(pkg, type_name, &ctx.package_types) {
+                ctx.error(format!("unknown package type `{pkg}.{type_name}`"), a.span);
+                continue;
+            }
+            let resolved = if ctx.types.contains_key(type_name) {
+                Type::Struct(type_name.clone())
+            } else {
+                Type::Enum(type_name.clone())
+            };
+            ctx.module_aliases
+                .insert(a.local_name.clone(), resolved.clone());
+            ctx.type_aliases.insert(a.local_name.clone(), resolved);
+        }
+    }
 }
 
 /// Compiles a fully resolved module graph into an executable.

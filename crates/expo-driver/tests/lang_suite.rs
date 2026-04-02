@@ -360,6 +360,7 @@ lang_test_dir!(lang_project, "project", project);
 lang_test_dir!(lang_diamond, "diamond", project);
 lang_test_dir!(lang_cross_ref, "cross_ref", project);
 lang_test_dir!(lang_local_dep, "local_dep", project);
+lang_test_dir!(lang_alias_dep, "alias_dep", project);
 
 // ---------------------------------------------------------------------------
 // Standalone project-specific tests (build, check, release)

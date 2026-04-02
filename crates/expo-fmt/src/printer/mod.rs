@@ -97,6 +97,7 @@ impl<'a> Printer<'a> {
             Item::Function(f) => self.function_to_doc(f),
             Item::Impl(i) => self.impl_to_doc(i),
             Item::Protocol(p) => self.protocol_to_doc(p),
+            Item::Alias(a) => alias_to_doc(a),
             Item::Constant(c) => self.constant_to_doc(c),
             Item::Shared(s) => shared_to_doc(s),
             Item::TypeAlias(t) => type_alias_to_doc(t),

@@ -30,6 +30,7 @@ top_level_decl = struct_decl
                | constant_decl
                | shared_decl
                | type_alias_decl
+               | alias_decl
                | annotation ;
 
 
@@ -56,6 +57,8 @@ type_params = "<" , type_param , { "," , type_param } , ">" ;
 type_param = TYPE_IDENT , [ ":" , TYPE_IDENT , { "&" , TYPE_IDENT } ] ;
 
 type_alias_decl = [ annotation ] , "type" , TYPE_IDENT , "=" , type_expr ;
+
+alias_decl = "alias" , IDENT , "." , TYPE_IDENT , [ "as" , TYPE_IDENT ] ;
 
 
 (* ========================================================================== *)

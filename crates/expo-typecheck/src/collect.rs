@@ -32,6 +32,7 @@ pub fn collect_all_names(modules: &[&Module]) -> GlobalNames {
     for module in modules {
         for item in &module.items {
             match item {
+                Item::Alias(_) => {}
                 Item::Struct(s) => {
                     names.struct_names.insert(s.name.clone());
                 }
@@ -90,6 +91,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
 
     for item in &module.items {
         match item {
+            Item::Alias(_) => {}
             Item::Enum(e) => {
                 let tp_refs: Vec<&str> = e.type_params.iter().map(|s| s.name.as_str()).collect();
                 let variants: Vec<VariantInfo> = e

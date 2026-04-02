@@ -92,6 +92,7 @@ pub fn extract_items(module: &Module, project: &mut DocProject) {
 
     for item in &module.items {
         match item {
+            Item::Alias(_) => {}
             Item::Constant(c) => {
                 if let Some(dc) = extract_constant(c) {
                     project.constants.push(dc);

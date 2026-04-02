@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use expo_ast::ast::{TypeExpr, TypeParam};
 
@@ -239,6 +239,44 @@ pub fn resolve_type_expr(
     resolve_type_expr_with_params(type_expr, known_structs, known_enums, &[], &BTreeMap::new())
 }
 
+/// Checks both global type aliases and file-private module aliases for a name.
+pub fn resolve_alias(
+    name: &str,
+    type_aliases: &BTreeMap<String, Type>,
+    module_aliases: &BTreeMap<String, Type>,
+) -> Option<Type> {
+    module_aliases
+        .get(name)
+        .or_else(|| type_aliases.get(name))
+        .cloned()
+}
+
+/// If `name` is a type alias pointing to a struct or enum, returns the
+/// underlying type name. Otherwise returns `name` unchanged. Used by the
+/// type checker and codegen to resolve aliases before type-info lookup.
+pub fn resolve_type_alias_name(name: &str, type_aliases: &BTreeMap<String, Type>) -> String {
+    type_aliases
+        .get(name)
+        .and_then(|ty| match ty {
+            Type::Struct(s) | Type::Enum(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// Checks if a two-segment qualified type path like `json.Decoder` is valid
+/// according to the package_types registry. Returns `true` if the package
+/// exists and contains the named type.
+pub fn is_package_type(
+    package: &str,
+    type_name: &str,
+    package_types: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    package_types
+        .get(package)
+        .is_some_and(|types| types.contains(type_name))
+}
+
 /// Like [`resolve_type_expr`] but also resolves type parameter names (e.g. `T`, `A`)
 /// to [`Type::TypeVar`] when they appear in generic function/struct definitions,
 /// and named type aliases from the provided map.
@@ -249,37 +287,66 @@ pub fn resolve_type_expr_with_params(
     known_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
 ) -> Type {
+    resolve_type_expr_full(
+        type_expr,
+        known_structs,
+        known_enums,
+        known_type_params,
+        known_type_aliases,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+}
+
+/// Resolves a type expression with full context including package-qualified types
+/// and file-private module aliases.
+pub fn resolve_type_expr_full(
+    type_expr: &TypeExpr,
+    known_structs: &[&str],
+    known_enums: &[&str],
+    known_type_params: &[&str],
+    known_type_aliases: &BTreeMap<String, Type>,
+    package_types: &BTreeMap<String, BTreeSet<String>>,
+    module_aliases: &BTreeMap<String, Type>,
+) -> Type {
     match type_expr {
         TypeExpr::Generic { path, args, .. } => {
-            if path.len() == 1
-                && (known_structs.contains(&path[0].as_str())
-                    || known_enums.contains(&path[0].as_str()))
+            let base_name = if path.len() == 1 {
+                Some(path[0].as_str())
+            } else if path.len() == 2 && is_package_type(&path[0], &path[1], package_types) {
+                Some(path[1].as_str())
+            } else {
+                None
+            };
+            if let Some(name) = base_name
+                && (known_structs.contains(&name) || known_enums.contains(&name))
             {
                 let resolved_args: Vec<Type> = args
                     .iter()
                     .map(|a| {
-                        resolve_type_expr_with_params(
+                        resolve_type_expr_full(
                             a,
                             known_structs,
                             known_enums,
                             known_type_params,
                             known_type_aliases,
+                            package_types,
+                            module_aliases,
                         )
                     })
                     .collect();
-                let kind = if known_structs.contains(&path[0].as_str()) {
+                let kind = if known_structs.contains(&name) {
                     GenericKind::Struct
                 } else {
                     GenericKind::Enum
                 };
-                Type::GenericInstance {
-                    base: path[0].clone(),
+                return Type::GenericInstance {
+                    base: name.to_string(),
                     kind,
                     type_args: resolved_args,
-                }
-            } else {
-                Type::Unknown
+                };
             }
+            Type::Unknown
         }
         TypeExpr::Named { path, .. } => {
             if path.len() == 1 {
@@ -287,8 +354,8 @@ pub fn resolve_type_expr_with_params(
                 if known_type_params.contains(&name) {
                     return Type::TypeVar(name.to_string());
                 }
-                if let Some(aliased) = known_type_aliases.get(name) {
-                    return aliased.clone();
+                if let Some(aliased) = resolve_alias(name, known_type_aliases, module_aliases) {
+                    return aliased;
                 }
                 match name {
                     "Binary" => Type::Primitive(Primitive::Binary),
@@ -315,6 +382,15 @@ pub fn resolve_type_expr_with_params(
                         }
                     }
                 }
+            } else if path.len() == 2 && is_package_type(&path[0], &path[1], package_types) {
+                let name = path[1].as_str();
+                if known_structs.contains(&name) {
+                    Type::Struct(name.to_string())
+                } else if known_enums.contains(&name) {
+                    Type::Enum(name.to_string())
+                } else {
+                    Type::Unknown
+                }
             } else {
                 Type::Unknown
             }
@@ -335,21 +411,25 @@ pub fn resolve_type_expr_with_params(
             let param_types = params
                 .iter()
                 .map(|p| {
-                    resolve_type_expr_with_params(
+                    resolve_type_expr_full(
                         p,
                         known_structs,
                         known_enums,
                         known_type_params,
                         known_type_aliases,
+                        package_types,
+                        module_aliases,
                     )
                 })
                 .collect();
-            let ret = resolve_type_expr_with_params(
+            let ret = resolve_type_expr_full(
                 return_type,
                 known_structs,
                 known_enums,
                 known_type_params,
                 known_type_aliases,
+                package_types,
+                module_aliases,
             );
             Type::Function {
                 params: param_types,
@@ -360,12 +440,14 @@ pub fn resolve_type_expr_with_params(
             let resolved: Vec<Type> = types
                 .iter()
                 .map(|t| {
-                    resolve_type_expr_with_params(
+                    resolve_type_expr_full(
                         t,
                         known_structs,
                         known_enums,
                         known_type_params,
                         known_type_aliases,
+                        package_types,
+                        module_aliases,
                     )
                 })
                 .collect();

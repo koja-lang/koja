@@ -19,6 +19,7 @@ use crate::lookup::{self, SymbolInfo};
 fn find_definition_in_module(module: &Module, name: &str) -> Option<Span> {
     for item in &module.items {
         match item {
+            Item::Alias(a) if a.local_name == name => return Some(a.span),
             Item::Function(f) if f.name == name => return Some(f.span),
             Item::Struct(s) if s.name == name => return Some(s.span),
             Item::Enum(e) if e.name == name => return Some(e.span),

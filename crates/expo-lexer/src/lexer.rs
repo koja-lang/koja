@@ -145,6 +145,7 @@ impl Lexer {
         }
         match name.as_str() {
             "after" => TokenKind::After,
+            "alias" => TokenKind::Alias,
             "arena" => TokenKind::Arena,
             "break" => TokenKind::Break,
             "cond" => TokenKind::Cond,

@@ -96,6 +96,7 @@ pub struct Diagnostic {
 /// A top-level declaration within a module.
 #[derive(Debug, Clone)]
 pub enum Item {
+    Alias(AliasDecl),
     Constant(Constant),
     Enum(EnumDecl),
     Function(Function),
@@ -274,6 +275,15 @@ pub struct StructField {
     pub name: String,
     pub type_expr: TypeExpr,
     pub default: Option<Expr>,
+    pub span: Span,
+}
+
+/// A file-private alias for a package-qualified type: `alias json.Decoder`
+/// or `alias json.Decoder as JSONDecoder`.
+#[derive(Debug, Clone)]
+pub struct AliasDecl {
+    pub path: Vec<String>,
+    pub local_name: String,
     pub span: Span,
 }
 

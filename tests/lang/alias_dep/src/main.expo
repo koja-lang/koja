@@ -1,0 +1,10 @@
+alias greeter.Greeter
+alias greeter.Greeter as G
+
+fn main
+  g = Greeter.new("World")
+  print(g.greet())
+
+  g2 = G.new("Alias")
+  print(g2.greet())
+end

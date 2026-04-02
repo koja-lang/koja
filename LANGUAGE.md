@@ -15,7 +15,7 @@ Expo is a statically typed, compiled language targeting native binaries via LLVM
 - [Closures and Function Types](#closures-and-function-types) -- Block Closures, Short Closures, Capture Semantics, Function Types
 - [Ownership and Borrowing](#ownership-and-borrowing) -- Rules, `clone()`, Drop Insertion, Copy Types
 - [Protocols](#protocols) -- Behavioral Contracts, Static Dispatch
-- [Modules](#modules) -- Transparent Files, Visibility
+- [Modules](#modules) -- Transparent Files, Visibility, Aliases
 - [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
 - [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
 - [Annotations](#annotations) -- `@doc`
@@ -44,7 +44,7 @@ x = 42  # inline comment
 ### Keywords
 
 ```
-arena, break, cond, const, else, end, enum, false, fn, for,
+alias, arena, break, cond, const, else, end, enum, false, fn, for,
 if, impl, in, loop, match, move, not, priv, protocol,
 receive, return, self, shared, spawn, struct, true, type, unless, when
 ```
@@ -813,6 +813,25 @@ end
 ### Visibility
 
 Access control is at the function level (`priv fn`), not the module level. Private functions are only callable within the file that defines them.
+
+### Aliases
+
+When using types from dependency packages, `alias` creates a file-private shorthand:
+
+```expo
+alias json.Decoder
+alias json.Encoder as JSONEncoder
+
+fn decode(d: Decoder) -> String
+  d.read()
+end
+
+fn encode(e: JSONEncoder) -> String
+  e.write()
+end
+```
+
+`alias json.Decoder` makes `Decoder` available as a local name. `alias json.Decoder as JSONEncoder` binds a custom local name. Aliases are scoped to the declaring file and don't affect other modules.
 
 ---
 
