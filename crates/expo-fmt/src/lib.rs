@@ -223,7 +223,7 @@ mod tests {
             end
         ",
             "
-            fn apply(f: fn(Int) -> Int, x: Int) -> Int
+            fn apply(f: fn (Int) -> Int, x: Int) -> Int
               f(x)
             end
 

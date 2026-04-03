@@ -11,6 +11,7 @@ use inkwell::values::{FunctionValue, StructValue};
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::debug::call_format;
 use crate::expr::{compile_expr, compile_expr_coerced};
+use crate::stmt::coerce_numeric;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
 
@@ -193,18 +194,27 @@ fn compile_generic_call<'ctx>(
         .get(&mangled)
         .ok_or_else(|| format!("monomorphized function `{mangled}` not found"))?;
 
-    let call_args: Vec<inkwell::values::BasicMetadataValueEnum> =
-        compiled_args.iter().map(|v| (*v).into()).collect();
+    let subst_map: HashMap<String, Type> = sig
+        .type_params
+        .iter()
+        .zip(type_args.iter())
+        .map(|(p, a)| (p.name.clone(), a.clone()))
+        .collect();
 
-    let ret_type = {
-        let subst_map: HashMap<String, Type> = sig
-            .type_params
-            .iter()
-            .zip(type_args.iter())
-            .map(|(p, a)| (p.name.clone(), a.clone()))
-            .collect();
-        substitute(&sig.return_type, &subst_map)
-    };
+    let call_args: Vec<inkwell::values::BasicMetadataValueEnum> = compiled_args
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            if let Some(param) = sig.params.get(i) {
+                let concrete = substitute(&param.ty, &subst_map);
+                coerce_numeric(c, *v, &concrete).into()
+            } else {
+                (*v).into()
+            }
+        })
+        .collect();
+
+    let ret_type = substitute(&sig.return_type, &subst_map);
 
     Ok(c.call(callee, &call_args, &format!("call_{mangled}"))
         .map(|v| TypedValue::new(v, ret_type)))

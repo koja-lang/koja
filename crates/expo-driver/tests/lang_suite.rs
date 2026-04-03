@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 
 fn worker_count() -> usize {
     std::thread::available_parallelism()
@@ -48,14 +49,43 @@ fn library_path() -> Option<String> {
     None
 }
 
-fn run_expo(file: &Path) -> (String, String, i32) {
-    let mut cmd = Command::new(expo_bin());
-    cmd.arg("run").arg(file);
-    if let Some(lib_path) = library_path() {
-        cmd.env("LIBRARY_PATH", lib_path);
-    }
-    let output = cmd.output().expect("failed to execute expo");
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn run_expo(file: &Path) -> (String, String, i32) {
+    run_with_timeout(|cmd| {
+        cmd.arg("run").arg(file);
+    })
+}
+
+fn run_with_timeout(configure: impl FnOnce(&mut Command)) -> (String, String, i32) {
+    let mut cmd = Command::new(expo_bin());
+    configure(&mut cmd);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", &lib_path);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().expect("failed to execute expo");
+    let deadline = std::time::Instant::now() + TEST_TIMEOUT;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return (
+                    String::new(),
+                    "test timed out (killed after 30s)".to_string(),
+                    -1,
+                );
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return (String::new(), format!("wait error: {e}"), -1),
+        }
+    }
+
+    let output = child.wait_with_output().expect("failed to collect output");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let code = output.status.code().unwrap_or(-1);
@@ -63,17 +93,10 @@ fn run_expo(file: &Path) -> (String, String, i32) {
 }
 
 fn run_expo_in_dir(dir: &Path) -> (String, String, i32) {
-    let mut cmd = Command::new(expo_bin());
-    cmd.arg("run").current_dir(dir);
-    if let Some(lib_path) = library_path() {
-        cmd.env("LIBRARY_PATH", lib_path);
-    }
-    let output = cmd.output().expect("failed to execute expo");
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let code = output.status.code().unwrap_or(-1);
-    (stdout, stderr, code)
+    let dir = dir.to_path_buf();
+    run_with_timeout(|cmd| {
+        cmd.arg("run").current_dir(&dir);
+    })
 }
 
 // ---------------------------------------------------------------------------

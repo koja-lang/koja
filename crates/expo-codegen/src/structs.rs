@@ -293,7 +293,7 @@ pub fn compile_method_call<'ctx>(
 
     let (method_param_types, return_type) = if let Some(sig) = c.type_ctx.functions.get(&mangled) {
         (
-            sig.params.iter().skip(1).map(|p| p.ty.clone()).collect(),
+            sig.params.iter().map(|p| p.ty.clone()).collect(),
             sig.return_type.clone(),
         )
     } else if let Some((base_name, ta)) = try_parse_mangled_name(&struct_name, c)
@@ -316,7 +316,7 @@ pub fn compile_method_call<'ctx>(
         && let Some(sig) = ti.functions.get(method)
     {
         (
-            sig.params.iter().skip(1).map(|p| p.ty.clone()).collect(),
+            sig.params.iter().map(|p| p.ty.clone()).collect(),
             sig.return_type.clone(),
         )
     } else {
@@ -914,28 +914,40 @@ fn compile_static_call<'ctx>(
         .get(&mangled_fn)
         .ok_or_else(|| format!("undefined static function `{method}` on `{mangled_type}`"))?;
 
-    let return_type = c
+    let (param_types, return_type) = c
         .type_ctx
         .functions
         .get(&mangled_fn)
-        .map(|sig| sig.return_type.clone())
+        .map(|sig| {
+            let pts: Vec<Type> = sig.params.iter().map(|p| p.ty.clone()).collect();
+            (pts, sig.return_type.clone())
+        })
         .or_else(|| {
             let ti = c.type_ctx.types.get(type_name)?;
             let sig = ti.functions.get(method)?;
             if !type_args.is_empty() {
                 let subst = build_substitution(&ti.type_params, &type_args);
-                Some(substitute(&sig.return_type, &subst))
+                let pts = sig
+                    .params
+                    .iter()
+                    .map(|p| substitute(&p.ty, &subst))
+                    .collect();
+                Some((pts, substitute(&sig.return_type, &subst)))
             } else {
-                Some(sig.return_type.clone())
+                let pts = sig.params.iter().map(|p| p.ty.clone()).collect();
+                Some((pts, sig.return_type.clone()))
             }
         })
-        .unwrap_or(Type::Unknown);
+        .unwrap_or_else(|| (Vec::new(), Type::Unknown));
 
     let mut llvm_args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
-    for arg in args {
-        let val = compile_expr(c, &arg.value, function)?
-            .ok_or_else(|| "static call argument produced no value".to_string())?
-            .value;
+    for (i, arg) in args.iter().enumerate() {
+        let val = if i < param_types.len() {
+            compile_expr_coerced(c, &arg.value, &param_types[i], function)?
+        } else {
+            compile_expr(c, &arg.value, function)?.map(|tv| tv.value)
+        }
+        .ok_or_else(|| "static call argument produced no value".to_string())?;
         llvm_args.push(val.into());
     }
 

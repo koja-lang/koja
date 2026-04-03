@@ -694,10 +694,10 @@ Captured closures use heap-allocated environment structs that are automatically 
 
 ### Function Types
 
-Function types are written as `fn(ParamTypes) -> ReturnType`:
+Function types are written as `fn (ParamTypes) -> ReturnType`:
 
 ```expo
-fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
+fn apply(x: Int32, f: fn (Int32) -> Int32) -> Int32
   f(x)
 end
 
@@ -706,10 +706,10 @@ print(apply(5, fn (n: Int32) -> Int32 n * 2 end))
 
 #### `move` in Function Types
 
-`fn(T) -> U` borrows `T`. `fn(move T) -> U` takes ownership of `T`:
+`fn (T) -> U` borrows `T`. `fn (move T) -> U` takes ownership of `T`:
 
 ```expo
-fn map<U>(move self, f: fn(move T) -> U) -> Option<U>
+fn map<U>(move self, f: fn (move T) -> U) -> Option<U>
 ```
 
 ---
@@ -1046,7 +1046,7 @@ enum Option<T>
 end
 ```
 
-Functions: `unwrap()`, `or(default)`, `some?()`, `none?()`, `map(fn(T) -> U)`, `then(fn(T) -> Option<U>)`.
+Functions: `unwrap()`, `or(default)`, `some?()`, `none?()`, `map(fn (T) -> U)`, `then(fn (T) -> Option<U>)`.
 
 ```expo
 x = Option.Some(42)
@@ -1070,7 +1070,7 @@ enum Result<T, E>
 end
 ```
 
-Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `map(fn(T) -> U)`, `then(fn(T) -> Result<U, E>)`.
+Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `map(fn (T) -> U)`, `then(fn (T) -> Result<U, E>)`.
 
 ```expo
 ok: Result<Int32, Int32> = Result.Ok(42)
@@ -1142,10 +1142,10 @@ Functions:
 - `length(self) -> Int` -- returns the number of elements.
 - `get(self, index: Int) -> Option<T>` -- returns the element at `index`, or `None` if out of bounds.
 - `empty?(self) -> Bool` -- returns `true` if the list has no elements.
-- `map(self, f: fn(T) -> U) -> List<U>` -- returns a new list with `f` applied to each element.
-- `filter(self, f: fn(T) -> Bool) -> List<T>` -- returns elements for which `f` returns `true`.
-- `any?(self, f: fn(T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for at least one element.
-- `all?(self, f: fn(T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for every element. Returns `true` for an empty list.
+- `map(self, f: fn (T) -> U) -> List<U>` -- returns a new list with `f` applied to each element.
+- `filter(self, f: fn (T) -> Bool) -> List<T>` -- returns elements for which `f` returns `true`.
+- `any?(self, f: fn (T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for at least one element.
+- `all?(self, f: fn (T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for every element. Returns `true` for an empty list.
 
 ```expo
 nums = [1, 2, 3, 4, 5]

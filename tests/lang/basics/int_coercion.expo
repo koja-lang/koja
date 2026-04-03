@@ -1,0 +1,26 @@
+struct Counter
+  value: Int32
+end
+
+impl Counter
+  fn new(v: Int32) -> Self
+    Counter{value: v}
+  end
+
+  fn add(self, n: Int32) -> Int32
+    self.value + n
+  end
+end
+
+fn identity<T>(x: T) -> T
+  x
+end
+
+fn main
+  c = Counter.new(10)
+  print(c.value)
+  print(c.add(5))
+
+  x: Int32 = identity(42)
+  print(x)
+end

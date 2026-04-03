@@ -184,7 +184,7 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
                 })
                 .collect();
             concat(vec![
-                text("fn("),
+                text("fn ("),
                 intersperse(params_doc, text(", ")),
                 text(") -> "),
                 type_expr_to_doc(return_type),
@@ -693,7 +693,7 @@ pub(super) fn type_expr_text_len(ty: &TypeExpr) -> usize {
         } => {
             let params_len: usize = params.iter().map(type_expr_text_len).sum::<usize>()
                 + params.len().saturating_sub(1) * 2;
-            3 + params_len + 5 + type_expr_text_len(return_type)
+            4 + params_len + 5 + type_expr_text_len(return_type)
         }
         TypeExpr::Union { types, .. } => {
             let inner: usize = types.iter().map(type_expr_text_len).sum::<usize>();
