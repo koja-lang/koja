@@ -390,6 +390,11 @@ impl Parser {
 
     fn parse_closure_param(&mut self) -> ClosureParam {
         let start = self.current_span();
+        let mode = if self.eat(&TokenKind::Move).is_some() {
+            PassMode::Move
+        } else {
+            PassMode::Borrow
+        };
         match self.peek().clone() {
             TokenKind::Ident(name) if name == "_" => {
                 self.advance();
@@ -405,6 +410,7 @@ impl Parser {
                     None
                 };
                 ClosureParam::Name {
+                    mode,
                     name,
                     type_expr,
                     span: self.span_from(start),
@@ -447,6 +453,7 @@ impl Parser {
             }
             Expr::Ident { name, span } => {
                 vec![ClosureParam::Name {
+                    mode: PassMode::Borrow,
                     name: name.clone(),
                     type_expr: None,
                     span: *span,

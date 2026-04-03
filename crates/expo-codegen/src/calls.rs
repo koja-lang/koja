@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, FieldInit};
+use expo_typecheck::context::FnParam;
 use expo_typecheck::types::{Type, mangle_name, substitute, unify, unwrap_indirect};
 use inkwell::types::BasicType;
 use inkwell::values::{FunctionValue, StructValue};
@@ -19,7 +20,7 @@ use crate::types::to_llvm_type;
 pub fn invoke_closure_fat_ptr<'ctx>(
     c: &mut Compiler<'ctx>,
     fat_ptr: StructValue<'ctx>,
-    params: &[Type],
+    params: &[FnParam],
     return_type: &Type,
     args: &[Arg],
     function: FunctionValue<'ctx>,
@@ -37,8 +38,8 @@ pub fn invoke_closure_fat_ptr<'ctx>(
         .unwrap();
 
     let mut llvm_call_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
-    for p in params {
-        if let Some(lt) = to_llvm_type(p, c.context, &c.types.structs) {
+    for fp in params {
+        if let Some(lt) = to_llvm_type(&fp.ty, c.context, &c.types.structs) {
             llvm_call_params.push(lt.into());
         }
     }
@@ -50,7 +51,7 @@ pub fn invoke_closure_fat_ptr<'ctx>(
     let mut compiled_args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![env_ptr.into()];
     for (i, arg) in args.iter().enumerate() {
         let val = if i < params.len() {
-            compile_expr_coerced(c, &arg.value, &params[i], function)?
+            compile_expr_coerced(c, &arg.value, &params[i].ty, function)?
         } else {
             compile_expr(c, &arg.value, function)?.map(|tv| tv.value)
         }

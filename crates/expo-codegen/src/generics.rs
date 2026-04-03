@@ -685,8 +685,8 @@ impl<'ctx> Compiler<'ctx> {
                 params,
                 return_type,
             } => {
-                for p in params {
-                    self.ensure_types_exist(p)?;
+                for fp in params {
+                    self.ensure_types_exist(&fp.ty)?;
                 }
                 self.ensure_types_exist(return_type)?;
             }

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use expo_ast::ast::PassMode;
 use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit, TypeParam};
-use expo_typecheck::context::{FunctionKind, TypeInfo};
+use expo_typecheck::context::{FnParam, FunctionKind, TypeInfo};
 use expo_typecheck::types::{
     GenericKind, Type, build_substitution, mangle_name, resolve_type_alias_name, substitute, unify,
     unwrap_indirect,
@@ -459,9 +459,12 @@ fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
             params,
             return_type,
         } => {
-            let expanded_params: Vec<Type> = params
+            let expanded_params = params
                 .iter()
-                .map(|p| expand_mangled_arg_type(c, p))
+                .map(|fp| FnParam {
+                    ty: expand_mangled_arg_type(c, &fp.ty),
+                    mode: fp.mode,
+                })
                 .collect();
             let expanded_ret = expand_mangled_arg_type(c, return_type);
             Type::Function {
@@ -552,7 +555,7 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
                 let sig = c.type_ctx.functions.get(name)?;
                 if sig.type_params.is_empty() {
                     Some(Type::Function {
-                        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                        params: sig.params.iter().map(FnParam::from).collect(),
                         return_type: Box::new(sig.return_type.clone()),
                     })
                 } else {
@@ -584,7 +587,7 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
                 None => Type::Unit,
             };
             Type::Function {
-                params: param_types,
+                params: param_types.into_iter().map(FnParam::borrow).collect(),
                 return_type: Box::new(ret),
             }
         }
@@ -593,7 +596,11 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
             .closure_info
             .get(span)
             .map(|ci| Type::Function {
-                params: ci.param_types.clone(),
+                params: ci
+                    .param_types
+                    .iter()
+                    .map(|t| FnParam::borrow(t.clone()))
+                    .collect(),
                 return_type: Box::new(ci.return_type.clone().unwrap_or(Type::Unit)),
             })
             .unwrap_or(Type::Unknown),

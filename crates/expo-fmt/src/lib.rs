@@ -253,6 +253,24 @@ mod tests {
     }
 
     #[test]
+    fn closure_move_param_formatting() {
+        assert_fmt(
+            "
+            fn main
+              f =
+                fn (move x: Int) -> Int x * 2 end
+            end
+        ",
+            "
+            fn main
+              f =
+                fn (move x: Int) -> Int x * 2 end
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn binary_literal_formatting() {
         assert_fmt(
             "

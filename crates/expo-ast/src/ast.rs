@@ -411,8 +411,9 @@ pub enum BinOp {
 /// A parameter in a closure expression.
 #[derive(Debug, Clone)]
 pub enum ClosureParam {
-    /// A named parameter with optional type: `x`, `x: Int`.
+    /// A named parameter with optional type: `x`, `x: Int`, `move x: Int`.
     Name {
+        mode: PassMode,
         name: String,
         type_expr: Option<TypeExpr>,
         span: Span,

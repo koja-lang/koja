@@ -4,6 +4,7 @@
 use expo_ast::ast::{ClosureParam, Expr, Literal, MatchArm, Statement, StringPart, TypeExpr};
 use expo_ast::span::Span;
 
+use expo_typecheck::context::FnParam;
 use expo_typecheck::types::{
     GenericKind, Primitive, Type, build_substitution, mangle_name, substitute,
 };
@@ -95,7 +96,7 @@ pub fn compile_expr<'ctx>(
                     .functions
                     .get(name)
                     .map(|sig| Type::Function {
-                        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                        params: sig.params.iter().map(FnParam::from).collect(),
                         return_type: Box::new(sig.return_type.clone()),
                     })
                     .unwrap_or(Type::Unknown);
@@ -643,7 +644,7 @@ fn compile_closure_core<'ctx>(
         .into_struct_value();
 
     let closure_type = Type::Function {
-        params: param_types.clone(),
+        params: param_types.iter().cloned().map(FnParam::borrow).collect(),
         return_type: Box::new(ret_type),
     };
     Ok(Some(TypedValue::new(fat_ptr.into(), closure_type)))

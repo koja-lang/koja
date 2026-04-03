@@ -379,13 +379,21 @@ pub(super) fn literal_to_doc(lit: &Literal) -> Doc {
 pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
     match cp {
         ClosureParam::Name {
-            name, type_expr, ..
+            mode,
+            name,
+            type_expr,
+            ..
         } => {
-            if let Some(te) = type_expr {
-                concat(vec![text(name.clone()), text(": "), type_expr_to_doc(te)])
-            } else {
-                text(name.clone())
+            let mut parts = Vec::new();
+            if *mode == PassMode::Move {
+                parts.push(text("move "));
             }
+            parts.push(text(name.clone()));
+            if let Some(te) = type_expr {
+                parts.push(text(": "));
+                parts.push(type_expr_to_doc(te));
+            }
+            concat(parts)
         }
         ClosureParam::Destructured { names, .. } => concat(vec![
             text("("),

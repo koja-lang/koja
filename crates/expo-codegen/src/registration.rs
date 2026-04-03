@@ -265,8 +265,8 @@ fn collect_union_types(ty: &Type, out: &mut Vec<Type>) {
             params,
             return_type,
         } => {
-            for p in params {
-                collect_union_types(p, out);
+            for fp in params {
+                collect_union_types(&fp.ty, out);
             }
             collect_union_types(return_type, out);
         }

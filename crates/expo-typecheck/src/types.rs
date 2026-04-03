@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use expo_ast::ast::{TypeExpr, TypeParam};
+use expo_ast::ast::{PassMode, TypeExpr, TypeParam};
+
+use crate::context::FnParam;
 
 /// The resolved type representation used throughout the type checker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,7 +10,7 @@ pub enum Type {
     Enum(String),
     Error,
     Function {
-        params: Vec<Type>,
+        params: Vec<crate::context::FnParam>,
         return_type: Box<Type>,
     },
     GenericInstance {
@@ -83,8 +85,17 @@ impl Type {
                 params,
                 return_type,
             } => {
-                let p: Vec<String> = params.iter().map(|t| t.display()).collect();
-                format!("fn({}) -> {}", p.join(", "), return_type.display())
+                let p: Vec<String> = params
+                    .iter()
+                    .map(|fp| {
+                        if fp.mode == PassMode::Move {
+                            format!("move {}", fp.ty.display())
+                        } else {
+                            fp.ty.display()
+                        }
+                    })
+                    .collect();
+                format!("fn ({}) -> {}", p.join(", "), return_type.display())
             }
             Type::GenericInstance {
                 base, type_args, ..
@@ -405,13 +416,15 @@ pub fn resolve_type_expr_full(
         TypeExpr::Unit { .. } => Type::Unit,
         TypeExpr::Function {
             params,
+            param_modes,
             return_type,
             ..
         } => {
-            let param_types = params
+            let fn_params = params
                 .iter()
-                .map(|p| {
-                    resolve_type_expr_full(
+                .zip(param_modes.iter())
+                .map(|(p, mode)| {
+                    let ty = resolve_type_expr_full(
                         p,
                         known_structs,
                         known_enums,
@@ -419,7 +432,8 @@ pub fn resolve_type_expr_full(
                         known_type_aliases,
                         package_types,
                         module_aliases,
-                    )
+                    );
+                    FnParam { ty, mode: *mode }
                 })
                 .collect();
             let ret = resolve_type_expr_full(
@@ -432,7 +446,7 @@ pub fn resolve_type_expr_full(
                 module_aliases,
             );
             Type::Function {
-                params: param_types,
+                params: fn_params,
                 return_type: Box::new(ret),
             }
         }
@@ -522,7 +536,7 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
                 return false;
             }
             for (a, b) in pa.iter().zip(pb.iter()) {
-                if !unify(a, b, subst) {
+                if a.mode != b.mode || !unify(&a.ty, &b.ty, subst) {
                     return false;
                 }
             }
@@ -547,7 +561,13 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
             params,
             return_type,
         } => Type::Function {
-            params: params.iter().map(|p| substitute(p, subst)).collect(),
+            params: params
+                .iter()
+                .map(|fp| FnParam {
+                    ty: substitute(&fp.ty, subst),
+                    mode: fp.mode,
+                })
+                .collect(),
             return_type: Box::new(substitute(return_type, subst)),
         },
         Type::GenericInstance {
@@ -589,7 +609,10 @@ pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
         } => Type::Function {
             params: params
                 .iter()
-                .map(|p| substitute_preserving(p, subst))
+                .map(|fp| FnParam {
+                    ty: substitute_preserving(&fp.ty, subst),
+                    mode: fp.mode,
+                })
                 .collect(),
             return_type: Box::new(substitute_preserving(return_type, subst)),
         },
@@ -641,7 +664,17 @@ pub fn mangle_type(ty: &Type) -> String {
             params,
             return_type,
         } => {
-            let p: Vec<String> = params.iter().map(mangle_type).collect();
+            let p: Vec<String> = params
+                .iter()
+                .map(|fp| {
+                    let t = mangle_type(&fp.ty);
+                    if fp.mode == PassMode::Move {
+                        format!("move_{t}")
+                    } else {
+                        t
+                    }
+                })
+                .collect();
             format!("fn_{}__{}", p.join("_"), mangle_type(return_type))
         }
         Type::Union(members) => {
@@ -668,7 +701,7 @@ pub fn contains_type_var(ty: &Type) -> bool {
         Type::Function {
             params,
             return_type,
-        } => params.iter().any(contains_type_var) || contains_type_var(return_type),
+        } => params.iter().any(|fp| contains_type_var(&fp.ty)) || contains_type_var(return_type),
         Type::GenericInstance { type_args, .. } => type_args.iter().any(contains_type_var),
         Type::Indirect(inner) => contains_type_var(inner),
         Type::Union(members) => members.iter().any(contains_type_var),
@@ -799,10 +832,19 @@ mod tests {
     #[test]
     fn display_function_type() {
         let ty = Type::Function {
-            params: vec![Type::Primitive(Primitive::I64)],
+            params: vec![FnParam::borrow(Type::Primitive(Primitive::I64))],
             return_type: Box::new(Type::Primitive(Primitive::Bool)),
         };
-        assert_eq!(ty.display(), "fn(Int) -> Bool");
+        assert_eq!(ty.display(), "fn (Int) -> Bool");
+    }
+
+    #[test]
+    fn display_function_type_with_move() {
+        let ty = Type::Function {
+            params: vec![FnParam::moved(Type::Primitive(Primitive::I64))],
+            return_type: Box::new(Type::Primitive(Primitive::Bool)),
+        };
+        assert_eq!(ty.display(), "fn (move Int) -> Bool");
     }
 
     #[test]

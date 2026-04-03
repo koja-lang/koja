@@ -187,8 +187,8 @@ fn collect_refs(ty: &Type, known: &HashSet<String>, refs: &mut HashSet<String>) 
             params,
             return_type,
         } => {
-            for p in params {
-                collect_refs(p, known, refs);
+            for fp in params {
+                collect_refs(&fp.ty, known, refs);
             }
             collect_refs(return_type, known, refs);
         }

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Closure `move` params -- closures now support `move` on parameters (`fn (move x: T) -> U ... end`), matching regular function syntax. `Type::Function` carries per-parameter pass modes via a new `FnParam { ty, mode }` struct, enabling end-to-end type enforcement of `fn (move T) -> U` contracts. Parser, type checker, codegen, formatter, and LSP all updated.
 - `expo new <name>` -- scaffolds a new Expo project directory with `expo.toml` and `src/main.expo`. Project name must be ASCII alphanumeric or underscores.
 - `alias` keyword for file-private package type shorthands -- `alias json.Decoder` makes `Decoder` available as a local name, `alias json.Decoder as JSONDecoder` binds a custom local name. Qualified type references (`package.Type` syntax) resolve against dependency package types. Package type tracking via `ModuleGraph.dep_packages` and `TypeContext.package_types`. Formatter, doc extractor, and LSP all handle `Item::Alias`.
 - Trait bounds on generic type parameters -- `<T: Protocol>` constrains type parameters to types implementing specific protocols. Multiple bounds use `&` (`<T: Debug & Hash>`), complementing `|` for union types. Bounds are verified at call sites with clear error messages. Protocol methods can be called directly on bounded type vars inside function bodies. Unbounded `<T>` remains valid (backwards compatible). New `&` token in the lexer, `TypeParam` struct in the AST with `name` and `bounds` fields.

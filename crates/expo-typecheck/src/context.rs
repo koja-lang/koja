@@ -62,6 +62,40 @@ pub struct ParamInfo {
     pub ty: Type,
 }
 
+/// A function parameter at the type level -- type + pass mode, no name.
+/// This is the structural primitive that `Type::Function` uses.
+/// `ParamInfo` is `FnParam` + a name (for named function signatures).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnParam {
+    pub ty: Type,
+    pub mode: PassMode,
+}
+
+impl FnParam {
+    pub fn borrow(ty: Type) -> Self {
+        Self {
+            ty,
+            mode: PassMode::Borrow,
+        }
+    }
+
+    pub fn moved(ty: Type) -> Self {
+        Self {
+            ty,
+            mode: PassMode::Move,
+        }
+    }
+}
+
+impl From<&ParamInfo> for FnParam {
+    fn from(p: &ParamInfo) -> Self {
+        Self {
+            ty: p.ty.clone(),
+            mode: p.mode,
+        }
+    }
+}
+
 /// All type-checker metadata for a single closure (block or short).
 #[derive(Clone)]
 pub struct ClosureInfo {

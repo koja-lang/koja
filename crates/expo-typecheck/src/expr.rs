@@ -15,7 +15,7 @@ use crate::check::{
     types_compatible,
 };
 use crate::context::{
-    CaptureInfo, ClosureInfo, FunctionKind, FunctionSig, ParamInfo, PassMode, TypeContext,
+    CaptureInfo, ClosureInfo, FnParam, FunctionKind, FunctionSig, ParamInfo, PassMode, TypeContext,
     VariantData,
 };
 use crate::env::CheckEnv;
@@ -143,7 +143,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             } else if let Some(sig) = ctx.functions.get(name) {
                 if sig.type_params.is_empty() {
                     Type::Function {
-                        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                        params: sig.params.iter().map(FnParam::from).collect(),
                         return_type: Box::new(sig.return_type.clone()),
                     }
                 } else {
@@ -813,10 +813,10 @@ fn infer_call(
             let param_infos: Vec<ParamInfo> = params
                 .iter()
                 .enumerate()
-                .map(|(i, ty)| ParamInfo {
-                    mode: PassMode::Borrow,
+                .map(|(i, fp)| ParamInfo {
+                    mode: fp.mode,
                     name: format!("_{i}"),
-                    ty: ty.clone(),
+                    ty: fp.ty.clone(),
                 })
                 .collect();
             check_call_args(name, &param_infos, args, "", span, ctx, ce);
@@ -1508,7 +1508,7 @@ pub(crate) fn infer_expr_with_expected(
 /// Shared inference for block closures (`fn (params) -> Type ... end`).
 fn infer_closure(
     params: &[ClosureParam],
-    expected_param_types: Option<&[Type]>,
+    expected_param_types: Option<&[FnParam]>,
     body: &[Statement],
     span: Span,
     ctx: &mut TypeContext,
@@ -1528,8 +1528,7 @@ fn infer_closure(
         process_msg_type: ce.process_msg_type.clone(),
         fn_type_params: ce.fn_type_params.clone(),
     };
-    let param_types =
-        bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
+    let fn_params = bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
 
     let param_names: HashSet<String> = params
         .iter()
@@ -1557,13 +1556,13 @@ fn infer_closure(
         span,
         ClosureInfo {
             captures: captured,
-            param_types: param_types.clone(),
+            param_types: fn_params.iter().map(|fp| fp.ty.clone()).collect(),
             return_type: None,
         },
     );
 
     Type::Function {
-        params: param_types,
+        params: fn_params,
         return_type: Box::new(return_type),
     }
 }
@@ -1571,7 +1570,7 @@ fn infer_closure(
 /// Shared inference for short closures (`x -> expr`).
 fn infer_short_closure(
     params: &[ClosureParam],
-    expected_param_types: Option<&[Type]>,
+    expected_param_types: Option<&[FnParam]>,
     body: &Expr,
     span: Span,
     ctx: &mut TypeContext,
@@ -1591,8 +1590,7 @@ fn infer_short_closure(
         process_msg_type: ce.process_msg_type.clone(),
         fn_type_params: ce.fn_type_params.clone(),
     };
-    let param_types =
-        bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
+    let fn_params = bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
 
     let param_names: HashSet<String> = params
         .iter()
@@ -1613,13 +1611,13 @@ fn infer_short_closure(
         span,
         ClosureInfo {
             captures: captured,
-            param_types: param_types.clone(),
+            param_types: fn_params.iter().map(|fp| fp.ty.clone()).collect(),
             return_type: Some(return_type.clone()),
         },
     );
 
     Type::Function {
-        params: param_types,
+        params: fn_params,
         return_type: Box::new(return_type),
     }
 }
@@ -1658,27 +1656,30 @@ fn collect_captures(
 /// always take priority.
 fn bind_closure_params(
     params: &[ClosureParam],
-    expected_param_types: Option<&[Type]>,
+    expected_param_types: Option<&[FnParam]>,
     ce: &mut CheckEnv,
     ctx: &mut TypeContext,
     _closure_span: Span,
-) -> Vec<Type> {
-    let mut types = Vec::new();
+) -> Vec<FnParam> {
+    let mut result = Vec::new();
     for (i, p) in params.iter().enumerate() {
         let expected = expected_param_types.and_then(|e| e.get(i));
         match p {
             ClosureParam::Name {
-                name, type_expr, ..
+                mode,
+                name,
+                type_expr,
+                ..
             } => {
                 let ty = if let Some(te) = type_expr {
                     resolve_type_expr(te, ce.struct_names, ce.enum_names)
                 } else if let Some(exp) = expected {
-                    exp.clone()
+                    exp.ty.clone()
                 } else {
                     Type::Unknown
                 };
                 ce.insert_var(name.clone(), ty.clone());
-                types.push(ty);
+                result.push(FnParam { ty, mode: *mode });
             }
             ClosureParam::Destructured { names, span, .. } => {
                 ctx.error_with_hint(
@@ -1688,16 +1689,18 @@ fn bind_closure_params(
                 );
                 for name in names {
                     ce.insert_var(name.clone(), Type::Unknown);
-                    types.push(Type::Unknown);
+                    result.push(FnParam::borrow(Type::Unknown));
                 }
             }
             ClosureParam::Wildcard { .. } => {
-                let ty = expected.cloned().unwrap_or(Type::Unknown);
-                types.push(ty);
+                let fp = expected
+                    .cloned()
+                    .unwrap_or_else(|| FnParam::borrow(Type::Unknown));
+                result.push(fp);
             }
         }
     }
-    types
+    result
 }
 
 /// Returns the source span of an expression node.

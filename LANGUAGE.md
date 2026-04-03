@@ -664,6 +664,12 @@ add = fn (a: Int32, b: Int32) -> Int32
 end
 ```
 
+Closure parameters support `move` to take ownership, matching the function parameter convention:
+
+```expo
+consume = fn (move data: String) -> Int data.length() end
+```
+
 ### Short Closures
 
 Short closures use `param -> expr` syntax with parameter types inferred from the calling context:

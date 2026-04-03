@@ -5,7 +5,7 @@ use expo_ast::ast::{
     AssignTarget, BinOp, ClosureParam, CompoundOp, Expr, Literal, Pattern, Statement, StringPart,
 };
 use expo_ast::span::Span;
-use expo_typecheck::context::Coercion;
+use expo_typecheck::context::{Coercion, FnParam};
 use expo_typecheck::types::{
     GenericKind, Primitive, Type, mangle_name, mangle_type, substitute, substitute_preserving,
 };
@@ -381,7 +381,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             None => Type::Unit,
         };
         return Some(Type::Function {
-            params: param_types,
+            params: param_types.into_iter().map(FnParam::borrow).collect(),
             return_type: Box::new(ret),
         });
     }
@@ -390,7 +390,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
         && sig.type_params.is_empty()
     {
         return Some(Type::Function {
-            params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+            params: sig.params.iter().map(FnParam::from).collect(),
             return_type: Box::new(sig.return_type.clone()),
         });
     }
