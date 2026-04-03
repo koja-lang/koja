@@ -275,10 +275,11 @@ These are fundamentally different entry points with different ergonomics.
   handling, no supervision. The program runs and exits. This is what you
   get when you write a standalone `.expo` file.
 
-- **`expo new project_name`** scaffolds a project with a full
-  `Process<List<String>, Signal, ExitCode>` implementation. The entry point
-  is a struct implementing the Process protocol, not a bare `fn main`.
-  Library-only projects get a flag to disable the entry point.
+- **`expo new project_name`** scaffolds a project. The initial implementation
+  uses a simple `fn main` template. A future enhancement would scaffold a full
+  `Process<List<String>, Signal, ExitCode>` implementation for applications
+  that need signal handling and supervision. Library-only projects would get
+  a `--lib` flag to disable the entry point.
 
 ### Unresolved tensions
 

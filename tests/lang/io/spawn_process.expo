@@ -39,5 +39,6 @@ fn main
   w = spawn Worker.new(WorkerConfig{label: "w1"})
   w.cast(WorkerMsg.Greet("Expo"))
   w.cast(WorkerMsg.Add(10, 32))
-  w.cast(WorkerMsg.Stop)
+  # Last message uses call to ensure the worker finishes before main exits.
+  w.call(WorkerMsg.Stop, 5000)
 end

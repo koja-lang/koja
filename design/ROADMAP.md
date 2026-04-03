@@ -24,7 +24,7 @@ An 11-crate Rust workspace that compiles Expo source to native binaries via LLVM
 
 ### CLI
 
-Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo format`, `expo doc`, `expo lex`, `expo parse`. All commands support multi-module projects.
+Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, `expo format`, `expo doc`, `expo lex`, `expo parse`. All commands support multi-module projects.
 
 ### What compiles to native binaries today
 
@@ -98,6 +98,9 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 - **Nested enum equality codegen**: comparing `Option<SomeEnum>` with `==` generates invalid LLVM IR (phi node predecessors mismatch) when the inner enum has many variants. The workaround is to use `match` instead of `==` for `Option<Enum>` comparisons. Surfaced during the self-hosted lexer port (`lex_newline` duplicate newline check).
 - **Integer literal type coercion at call sites**: integer literals in function call arguments default to `i64` and are not coerced to match the parameter type (e.g., passing `1` to a `UInt32` parameter generates `i64 1` in LLVM IR, causing a type mismatch verification error). Variable annotations work (`x: UInt32 = 1`), but call-site coercion does not. Workaround: avoid small-integer parameters with literal arguments, or bind to an annotated variable first. Surfaced during the self-hosted lexer port (`Cursor.peek_at`).
 - **`match` inside `while`/`loop` with `return` causes codegen crash**: when a `match` expression appears inside a `while` or `loop` body and any arm contains a `return` statement, the generated binary segfaults on startup (before `main` runs). The crash is in LLVM codegen -- likely incorrect basic block wiring for the match's phi nodes when nested inside a loop's back-edge structure. Workaround: use recursion instead of loops with `match`. Since Expo is FP-oriented, recursive helpers with `move` parameters are idiomatic and avoid the bug entirely. Surfaced during the `json` package decoder (recursive descent parser for arrays and objects).
+- **Free function codegen gap**: free functions (outside `impl` blocks) pass `expo check` but crash at codegen with `"assignment value produced no value"`. The type checker still has old semantics from before the migration to `impl`-based functions. Fix: either reject free functions at the type-check stage with a clear error (`"functions must be declared inside impl blocks"`), or finish codegen support. Surfaced during the agent expression evaluator test.
+- **`cond` multi-statement arm crash**: `cond` arms with multiple statements (e.g., a variable assignment followed by a counter increment) pass type checking but cause a codegen crash (`thread panicked at generics.rs`). Single-expression arms work correctly. Workaround: extract multi-statement logic into a helper method. Surfaced during the agent expression evaluator test.
+- **`else if` silently accepted as nested `if`**: `else if` is parsed as a nested `if` inside the `else` block rather than being rejected. This leads users to deep nesting instead of guiding them to `cond`. The parser should detect `else` followed immediately by `if` and emit a targeted error: `"else if is not supported -- use cond for multi-way branching"`. Surfaced during the agent expression evaluator test.
 
 ### Design artifacts
 
@@ -111,6 +114,7 @@ Eight commands: `expo build`, `expo run`, `expo check`, `expo test`, `expo forma
 
 ### Tooling (pulled forward)
 
+- **Project scaffolding** -- `expo new <name>` creates a project directory with `expo.toml` and `src/main.expo`
 - **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@doc` annotations
 - **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`), and go-to-definition (including qualified module calls) over stdio, integrated with the VSCode/Cursor extension
 - **VSCode extension** -- syntax highlighting and LSP client for `.expo` files
@@ -602,7 +606,7 @@ Active design discussions about the type system, code organization, and function
 | Phase     | Milestone                                                                                                             |
 | --------- | --------------------------------------------------------------------------------------------------------------------- |
 | Bootstrap | Lexer, parser, type system, LLVM codegen -- native binaries from Expo source                                          |
-| Tooling   | Formatter, `expo run`, VSCode extension, LSP, documentation generator                                                 |
+| Tooling   | Formatter, `expo new`, `expo run`, VSCode extension, LSP, documentation generator                                     |
 | Core      | Generics, ownership, protocols, closures, collections, processes                                                      |
 | Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
 | Phase 4A  | Test runner, `std.socket` (POSIX surface), `Debug` protocol, `std.io`, `std.file`, `std.system`, `std.time`           |

@@ -28,5 +28,6 @@ fn main
   counter = spawn Counter.new(CounterConfig{})
   counter.cast(CounterMsg.Increment)
   counter.cast(CounterMsg.Increment)
-  counter.cast(CounterMsg.Increment)
+  # Last message uses call to ensure the worker finishes before main exits.
+  counter.call(CounterMsg.Increment, 5000)
 end

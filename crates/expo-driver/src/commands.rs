@@ -43,6 +43,28 @@ fn target_debug_dir(project_root: &Path) -> PathBuf {
     dir
 }
 
+/// Strips the common leading whitespace from a multi-line string so that
+/// template literals can be written with natural indentation in the source.
+fn dedent(s: &str) -> String {
+    let s = s.strip_prefix('\n').unwrap_or(s);
+    let min_indent = s
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    s.lines()
+        .map(|l| {
+            if l.len() >= min_indent {
+                &l[min_indent..]
+            } else {
+                l.trim()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// `expo build [file.expo] [-o output] [--emit-llvm]` -- compiles an Expo program to an executable.
 ///
 /// With no arguments, looks for `expo.toml` in the current directory.
@@ -494,6 +516,56 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
     if check && has_diff {
         process::exit(1);
     }
+}
+
+/// `expo new <name>` -- scaffolds a new Expo project.
+///
+/// Creates a directory with `expo.toml` and `src/main.expo`.
+pub fn cmd_new(name: String) {
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        eprintln!("error: project name must contain only ASCII letters, digits, and underscores");
+        process::exit(1);
+    }
+
+    let project_dir = Path::new(&name);
+    if project_dir.exists() {
+        eprintln!("error: directory '{name}' already exists");
+        process::exit(1);
+    }
+
+    let src_dir = project_dir.join("src");
+    fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
+        eprintln!("error: cannot create directory: {e}");
+        process::exit(1);
+    });
+
+    let toml_content = dedent(&format!(
+        "
+        [project]
+        entry = \"main\"
+        name = \"{name}\"
+        version = \"0.1.0\"
+        "
+    ));
+    fs::write(project_dir.join("expo.toml"), toml_content).unwrap_or_else(|e| {
+        eprintln!("error: cannot write expo.toml: {e}");
+        process::exit(1);
+    });
+
+    let main_content = dedent(
+        "
+        fn main
+          name = \"Expo\"
+          IO.puts(\"Hello, #{name}!\")
+        end
+        ",
+    );
+    fs::write(src_dir.join("main.expo"), main_content).unwrap_or_else(|e| {
+        eprintln!("error: cannot write src/main.expo: {e}");
+        process::exit(1);
+    });
+
+    println!("created project '{name}'");
 }
 
 /// `expo parse <file.expo>` -- parses and reports item count or errors.

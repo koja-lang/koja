@@ -170,6 +170,8 @@ end
 
 Functions without a return type return `()`. Parameters require explicit types. Return type annotation is required if the function returns a value.
 
+Standalone functions are only supported for `fn main` — the program entry point. All other functions must be declared inside `impl` blocks on a struct or enum. See [Impl Functions](#impl-functions) and [Static Functions](#static-functions).
+
 ### Private Functions
 
 `priv fn` makes a function inaccessible from other modules:
@@ -226,6 +228,8 @@ end
 ```
 
 `if`/`else` can be used as value-producing expressions when both branches produce values.
+
+There is no `else if`. For multi-way branching, use [`cond`](#cond).
 
 ### `while`
 
@@ -401,6 +405,22 @@ end
 list = list.append(42)  # move in, get back
 ```
 
+`Self` is a shorthand for the enclosing type in return positions. Use it instead of repeating the type name:
+
+```expo
+impl Point
+  fn origin() -> Self
+    Point{x: 0, y: 0}
+  end
+
+  fn translate(move self, dx: Int32, dy: Int32) -> Self
+    self.x += dx
+    self.y += dy
+    self
+  end
+end
+```
+
 #### Static Functions
 
 Functions in `impl` blocks without `self` are called on the type directly:
@@ -452,6 +472,18 @@ fn opposite(dir: Direction) -> String
     East -> "west"
     West -> "east"
   end
+end
+```
+
+#### Recursive Enums
+
+Enums can reference themselves through generic containers like `List<T>`:
+
+```expo
+enum Expr
+  Num(Int)
+  Add(Expr, Expr)
+  Mul(List<Expr>)
 end
 ```
 
@@ -587,6 +619,8 @@ Variable bindings inside OR patterns are disallowed.
 
 `match` is value-producing when all arms produce values.
 
+`match` borrows the matched value — it does not consume it. The original variable remains live inside all arms and after the `match` expression.
+
 ### `cond`
 
 Multi-branch conditional, like a chain of `if`/`else if`. Requires `else` arm:
@@ -602,6 +636,17 @@ end
 ```
 
 `cond` is value-producing when all arms (including `else`) produce values.
+
+`cond` is the idiomatic replacement for `else if` chains. Arms can use any boolean expression, including method calls:
+
+```expo
+cond
+  c.digit?() -> handle_digit(c)
+  c.whitespace?() -> skip_whitespace()
+  c == "+" -> handle_plus()
+  else -> handle_unknown(c)
+end
+```
 
 ---
 
@@ -1047,10 +1092,12 @@ end
 Fields: `first`, `second`.
 
 ```expo
-p = Pair{first: 10, second: "hello"}
+p: Pair<Int, String> = Pair{first: 10, second: "hello"}
 print(p.first)    # 10
 print(p.second)   # hello
 ```
+
+Generic struct literals like `Pair{first: x, second: y}` require a type annotation on the binding — the compiler does not infer generic parameters from field values alone.
 
 ### `Range`
 
@@ -1133,6 +1180,8 @@ Functions:
 - `remove(move self, key: K) -> Map<K, V>` -- removes the entry for the key. Returns the map unchanged if the key is absent.
 - `length(self) -> Int` -- returns the number of entries.
 - `empty?(self) -> Bool` -- returns `true` if the map has no entries.
+
+`Map` does not currently support iteration. To iterate over entries, use `List<Pair<K, V>>` as an ordered key-value collection instead.
 
 Map literals (`[key: value, ...]`) are backed by the `MapLiteral<K, V>` protocol. See [Literal Protocols](#literal-protocols).
 
@@ -1306,6 +1355,23 @@ content = File.read("config.txt").unwrap()
 print(content)
 ```
 
+### Console I/O
+
+`IO` provides ergonomic console input/output. `STDIN`, `STDOUT`, and `STDERR` are available as `Fd` constants for low-level access.
+
+Functions:
+
+- `IO.puts(message: String)` -- writes to stdout with a trailing newline.
+- `IO.warn(message: String)` -- writes to stderr with a trailing newline.
+- `IO.write(message: String)` -- writes to stdout without a trailing newline.
+- `IO.gets(prompt: String) -> String` -- prints `prompt` and reads a line from stdin (without the trailing newline).
+
+```expo
+IO.puts("hello")
+name = IO.gets("What is your name? ")
+IO.puts("Hello, #{name}!")
+```
+
 ### Parsing
 
 Static functions on `Int` and `Float` for parsing strings:
@@ -1378,6 +1444,26 @@ print(1.bsl(4))             # 16
 print(16.bsr(4))            # 1
 ```
 
+### `Debug` Protocol
+
+```expo
+protocol Debug
+  fn format(self) -> String
+  fn inspect(move self) -> Self
+end
+```
+
+`format` returns a string representation of the value. `inspect` prints the value and returns it for tap-style debugging chains. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Custom implementations can override the derived one via `impl Debug for MyType`.
+
+`print()` and string interpolation (`"#{value}"`) dispatch through `Debug.format()`. Any type can be printed or interpolated:
+
+```expo
+p = Point{x: 1, y: 2}
+print(p)                  # Point{x: 1, y: 2}
+print("point is #{p}")    # point is Point{x: 1, y: 2}
+print("n = #{42}")        # n = 42
+```
+
 ### Literal Protocols
 
 List and map literals are backed by protocols, allowing custom types to opt into literal syntax.
@@ -1421,6 +1507,26 @@ end
 
 Doc strings support Markdown and are rendered by `expo doc`.
 
+### `@test`
+
+Marks a function as a test case. `expo test` discovers and runs all `@test`-annotated functions in `src/` and `test/` directories.
+
+```expo
+@test
+fn test_addition
+  result = add(2, 3)
+  assert(result == 5, "expected 5")
+end
+
+@test "handles negative numbers"
+fn test_negative
+  result = add(-1, 1)
+  assert(result == 0, "expected 0")
+end
+```
+
+An optional string after `@test` provides a description printed during the test run. Tests abort on first failure.
+
 ---
 
 ## Planned Features
@@ -1437,10 +1543,6 @@ result = arena
   # only explicitly cloned values escape
 end
 ```
-
-### `Display` Protocol
-
-Auto-derived string representation for all types. `print()` will dispatch through `Display` instead of hardcoding format specifiers per type.
 
 ### Struct Destructuring
 
@@ -1462,13 +1564,43 @@ Language-native typed pipelines for backend business logic with step-ordered typ
 
 | Command       | Description                                       |
 | ------------- | ------------------------------------------------- |
+| `expo new`    | Scaffold a new project directory                  |
 | `expo build`  | Compile to a native binary via LLVM               |
 | `expo run`    | Build and execute in one step                     |
 | `expo check`  | Type check without compiling                      |
+| `expo test`   | Run `@test`-annotated functions                   |
 | `expo format` | Opinionated code formatter (`--write`, `--check`) |
 | `expo doc`    | Generate static HTML documentation                |
 | `expo lex`    | Dump tokens                                       |
 | `expo parse`  | Dump AST                                          |
+
+### Project Scaffolding
+
+`expo new <name>` creates a project directory with the following structure:
+
+```
+my_app/
+  expo.toml
+  src/
+    main.expo
+```
+
+The `expo.toml` file defines the project configuration:
+
+```toml
+[project]
+entry = "main"
+name = "my_app"
+version = "0.1.0"
+```
+
+Fields:
+
+- `name` -- project name (used as the binary output name).
+- `version` -- semantic version string.
+- `entry` -- the module containing `fn main` (default `"main"`).
+- `src` -- source directories (default `["src"]`).
+- `test` -- test directories (default `["test"]`).
 
 ### Language Server (LSP)
 

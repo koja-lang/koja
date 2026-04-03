@@ -74,6 +74,11 @@ enum Command {
         /// Source files to lex
         files: Vec<String>,
     },
+    /// Create a new Expo project
+    New {
+        /// Project name (used as directory name)
+        name: String,
+    },
     /// Dump the parsed AST
     Parse {
         /// Source files to parse
@@ -115,6 +120,7 @@ fn main() {
             write_back,
         } => commands::cmd_format(files, check, write_back, color),
         Command::Lex { files } => commands::cmd_lex(files, color),
+        Command::New { name } => commands::cmd_new(name),
         Command::Parse { files } => commands::cmd_parse(files, color),
         Command::Run {
             file,
