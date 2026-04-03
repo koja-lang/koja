@@ -48,24 +48,44 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         } => infer_closure(params, None, body, *span, ctx, ce),
 
         Expr::Cond {
-            arms, else_body, ..
+            arms,
+            else_body,
+            span,
         } => {
-            let mut result_type = Type::Unknown;
+            let mut arm_types: Vec<Type> = Vec::new();
             for arm in arms {
                 infer_expr(&arm.condition, ctx, ce);
                 let mut child = ce.child(Type::Unknown);
-                let arm_ty = infer_body_type(&arm.body, ctx, &mut child);
-                if result_type == Type::Unknown && arm_ty.is_known() {
-                    result_type = arm_ty;
-                }
+                arm_types.push(infer_body_type(&arm.body, ctx, &mut child));
             }
             if let Some(body) = else_body {
                 let mut child = ce.child(Type::Unknown);
-                let else_ty = infer_body_type(body, ctx, &mut child);
-                if result_type == Type::Unknown && else_ty.is_known() {
-                    result_type = else_ty;
+                arm_types.push(infer_body_type(body, ctx, &mut child));
+            }
+
+            let result_type = arm_types
+                .iter()
+                .find(|t| t.is_known() && **t != Type::Unit)
+                .cloned()
+                .or_else(|| arm_types.iter().find(|t| t.is_known()).cloned())
+                .unwrap_or(Type::Unknown);
+
+            if result_type.is_known() && result_type != Type::Unit {
+                for arm_ty in &arm_types {
+                    if arm_ty.is_known() && *arm_ty != result_type {
+                        ctx.error(
+                            format!(
+                                "cond arms have inconsistent types: expected `{}`, got `{}`",
+                                result_type.display(),
+                                arm_ty.display()
+                            ),
+                            *span,
+                        );
+                        break;
+                    }
                 }
             }
+
             result_type
         }
 

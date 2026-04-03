@@ -1,0 +1,31 @@
+struct Counter
+  value: Int
+end
+
+impl Counter
+  fn new() -> Self
+    Counter{value: 0}
+  end
+
+  fn apply(move self, n: Int) -> Self
+    cond
+      n > 0 ->
+        self.value = self.value + n
+        print("added")
+      n < 0 ->
+        self.value = self.value + n
+        print("subtracted")
+      else ->
+        print("zero")
+    end
+    self
+  end
+end
+
+fn main
+  c = Counter.new()
+  c = c.apply(5)
+  c = c.apply(-2)
+  c = c.apply(0)
+  print(c.value)
+end

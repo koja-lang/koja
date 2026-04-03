@@ -99,6 +99,14 @@ pub fn compile_cond<'ctx>(
         }
     }
 
+    if !incoming.is_empty() && incoming.len() != expected_sources {
+        return Err(format!(
+            "cond arms have inconsistent types: {} of {} arms produce a value",
+            incoming.len(),
+            expected_sources
+        ));
+    }
+
     Ok(None)
 }
 

@@ -13,6 +13,13 @@ impl Parser {
         let then_body = self.parse_block();
 
         let else_body = if self.eat(&TokenKind::Else).is_some() {
+            if *self.peek() == TokenKind::If {
+                self.error_with_hint(
+                    "else if is not supported".to_string(),
+                    "use cond for multi-way branching".to_string(),
+                    self.current_span(),
+                );
+            }
             Some(self.parse_block())
         } else {
             None
