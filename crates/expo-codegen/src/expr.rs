@@ -22,6 +22,7 @@ use crate::control::{
 use crate::debug::call_format;
 use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
+use crate::generics::{monomorphize_impl_method, monomorphize_struct};
 use crate::ops::{compile_binary, compile_unary};
 use crate::stmt::{apply_coercion, coerce_numeric};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
@@ -674,16 +675,16 @@ fn compile_list_literal<'ctx>(
     let mangled_type = mangle_name("List", &type_args);
 
     if !c.types.structs.contains_key(&mangled_type) {
-        c.monomorphize_struct("List", &type_args)?;
+        monomorphize_struct(c, "List", &type_args)?;
     }
 
     let new_fn_name = format!("{mangled_type}_new");
     if !c.functions.contains_key(&new_fn_name) {
-        c.monomorphize_impl_method("List", "new", &type_args, &[])?;
+        monomorphize_impl_method(c, "List", "new", &type_args, &[])?;
     }
     let append_fn_name = format!("{mangled_type}_append");
     if !c.functions.contains_key(&append_fn_name) {
-        c.monomorphize_impl_method("List", "append", &type_args, &[])?;
+        monomorphize_impl_method(c, "List", "append", &type_args, &[])?;
     }
 
     let new_fn = *c.functions.get(&new_fn_name).ok_or("List.new not found")?;
@@ -733,16 +734,16 @@ fn compile_map_literal<'ctx>(
     let mangled_type = mangle_name("Map", &type_args);
 
     if !c.types.structs.contains_key(&mangled_type) {
-        c.monomorphize_struct("Map", &type_args)?;
+        monomorphize_struct(c, "Map", &type_args)?;
     }
 
     let new_fn_name = format!("{mangled_type}_new");
     if !c.functions.contains_key(&new_fn_name) {
-        c.monomorphize_impl_method("Map", "new", &type_args, &[])?;
+        monomorphize_impl_method(c, "Map", "new", &type_args, &[])?;
     }
     let put_fn_name = format!("{mangled_type}_put");
     if !c.functions.contains_key(&put_fn_name) {
-        c.monomorphize_impl_method("Map", "put", &type_args, &[])?;
+        monomorphize_impl_method(c, "Map", "put", &type_args, &[])?;
     }
 
     let new_fn = *c.functions.get(&new_fn_name).ok_or("Map.new not found")?;
@@ -829,7 +830,7 @@ fn compile_spawn<'ctx>(
             )
         })?;
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&mangled_state, c) {
-        c.monomorphize_impl_method(&base, "run", &type_args, &[])?;
+        monomorphize_impl_method(c, &base, "run", &type_args, &[])?;
     }
     let run_fn_name = format!("{mangled_state}_run");
     let run_fn = c
@@ -942,7 +943,7 @@ fn compile_spawn<'ctx>(
     let type_args = vec![msg_type, reply_type];
     let mangled = mangle_name("Ref", &type_args);
     if !c.types.structs.contains_key(&mangled) {
-        c.monomorphize_struct("Ref", &type_args)?;
+        monomorphize_struct(c, "Ref", &type_args)?;
     }
     let ref_struct = *c
         .types

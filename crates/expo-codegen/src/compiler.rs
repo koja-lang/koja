@@ -7,6 +7,8 @@ use std::path::Path;
 
 use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
+use crate::generics::{compile_function_body, compile_method_body, ensure_types_exist};
+use crate::registration::register_types;
 use crate::util::parse_int_literal;
 
 /// Result of attempting to emit an intrinsic method for a built-in type.
@@ -743,12 +745,12 @@ impl<'ctx> Compiler<'ctx> {
                         for param in &func.params {
                             if let Param::Regular { type_expr, .. } = param {
                                 let ty = self.resolve_type_expr(type_expr);
-                                let _ = self.ensure_types_exist(&ty);
+                                let _ = ensure_types_exist(self, &ty);
                             }
                         }
                         if let Some(ret_te) = &func.return_type {
                             let ret_ty = self.resolve_type_expr(ret_te);
-                            let _ = self.ensure_types_exist(&ret_ty);
+                            let _ = ensure_types_exist(self, &ret_ty);
                         }
                     }
                 }
@@ -862,7 +864,7 @@ impl<'ctx> Compiler<'ctx> {
                 func.span.start.column,
             );
             self.fn_state.variables.clear();
-            self.compile_function_body(&func.body, &Type::Unit, user_main, false)?;
+            compile_function_body(self, &func.body, &Type::Unit, user_main, false)?;
 
             self.debug.pop_scope(self.context, &self.builder);
 
@@ -925,7 +927,8 @@ impl<'ctx> Compiler<'ctx> {
             .unwrap_or(Type::Unit);
 
         let self_type = self_type_name.map(|n| (n, n));
-        let result = self.compile_method_body(
+        let result = compile_method_body(
+            self,
             fn_value,
             func,
             self_type,
@@ -1282,7 +1285,7 @@ fn run_codegen<'ctx>(
     global.set_initializer(&app_name_val);
     global.set_constant(true);
 
-    compiler.register_types();
+    register_types(&mut compiler);
     crate::builtins::declare_builtins(compiler.context, &compiler.module, &mut compiler.functions);
 
     for module in modules {

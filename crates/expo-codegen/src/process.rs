@@ -8,6 +8,7 @@ use inkwell::AddressSpace;
 use inkwell::types::BasicType;
 
 use crate::compiler::{Compiler, EmitResult};
+use crate::generics::{ensure_types_exist, monomorphize_enum};
 use crate::types::to_llvm_type;
 
 pub fn monomorphize_ref_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
@@ -140,7 +141,7 @@ pub fn emit_ref_method<'ctx>(
             };
 
             let envelope_type = process_envelope_type(msg_type, reply_type);
-            c.ensure_types_exist(&envelope_type)?;
+            ensure_types_exist(c, &envelope_type)?;
             let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for Pair envelope")?
                 .into_struct_type();
@@ -174,7 +175,7 @@ pub fn emit_ref_method<'ctx>(
                     type_args: vec![reply_type.clone()],
                 }],
             };
-            c.ensure_types_exist(&option_reply_type)?;
+            ensure_types_exist(c, &option_reply_type)?;
             let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
                 .into_struct_type();
@@ -268,7 +269,7 @@ pub fn emit_ref_method<'ctx>(
 
             let option_reply_mangled = mangle_name("Option", std::slice::from_ref(reply_type));
             if !c.types.structs.contains_key(&option_reply_mangled) {
-                c.monomorphize_enum("Option", std::slice::from_ref(reply_type))?;
+                monomorphize_enum(c, "Option", std::slice::from_ref(reply_type))?;
             }
             let option_reply_struct = *c
                 .types
@@ -277,7 +278,7 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("Option struct not found for call reply")?;
 
             let envelope_type = process_envelope_type(msg_type, reply_type);
-            c.ensure_types_exist(&envelope_type)?;
+            ensure_types_exist(c, &envelope_type)?;
             let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for Pair envelope")?
                 .into_struct_type();
@@ -287,7 +288,7 @@ pub fn emit_ref_method<'ctx>(
                 kind: GenericKind::Struct,
                 type_args: vec![reply_type.clone()],
             };
-            c.ensure_types_exist(&reply_to_type)?;
+            ensure_types_exist(c, &reply_to_type)?;
             let reply_to_llvm = to_llvm_type(&reply_to_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for ReplyTo<R>")?
                 .into_struct_type();
@@ -297,7 +298,7 @@ pub fn emit_ref_method<'ctx>(
                 kind: GenericKind::Enum,
                 type_args: vec![reply_to_type],
             };
-            c.ensure_types_exist(&option_from_type)?;
+            ensure_types_exist(c, &option_from_type)?;
             let option_from_llvm = to_llvm_type(&option_from_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
                 .into_struct_type();

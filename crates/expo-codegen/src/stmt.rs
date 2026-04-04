@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use crate::compiler::Compiler;
 use crate::drop::Ownership;
 use crate::expr::compile_expr;
+use crate::generics::{ensure_types_exist, monomorphize_impl_method};
 use crate::structs::infer_static_method_return_type;
 use crate::types::to_llvm_type;
 
@@ -102,7 +103,7 @@ pub fn compile_statement<'ctx>(
                     }
                     other => other,
                 };
-                let _ = c.ensure_types_exist(&annotated);
+                let _ = ensure_types_exist(c, &annotated);
                 annotated
             } else if compiled_type != Type::Unknown {
                 compiled_type
@@ -588,7 +589,7 @@ fn convert_list_literal_if_needed<'ctx>(
     let target_mangled = mangle_name(&base, &type_args);
     let from_list_fn_name = format!("{target_mangled}_from_list");
     if !c.functions.contains_key(&from_list_fn_name) {
-        c.monomorphize_impl_method(&base, "from_list", &type_args, &[])?;
+        monomorphize_impl_method(c, &base, "from_list", &type_args, &[])?;
     }
     let from_list_fn = *c
         .functions

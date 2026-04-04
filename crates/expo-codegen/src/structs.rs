@@ -16,7 +16,10 @@ use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use crate::calls::invoke_closure_fat_ptr;
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::{compile_expr, compile_expr_coerced};
-use crate::generics::try_parse_mangled_name;
+use crate::generics::{
+    ensure_types_exist, monomorphize_enum, monomorphize_impl_method, monomorphize_struct,
+    try_parse_mangled_name,
+};
 
 use crate::types::to_llvm_type;
 
@@ -35,7 +38,7 @@ pub(crate) fn load_maybe_indirect<'ctx>(
             .build_load(ptr_ty, field_ptr, &format!("{label}_ptr"))
             .unwrap()
             .into_pointer_value();
-        let _ = c.ensure_types_exist(inner);
+        let _ = ensure_types_exist(c, inner);
         let inner_llvm_ty = to_llvm_type(inner, c.context, &c.types.structs)
             .expect("indirect inner type must have LLVM representation");
         c.builder
@@ -59,7 +62,7 @@ pub(crate) fn store_maybe_indirect<'ctx>(
     label: &str,
 ) {
     if let Type::Indirect(inner) = field_type {
-        let _ = c.ensure_types_exist(inner);
+        let _ = ensure_types_exist(c, inner);
         let inner_llvm_ty = to_llvm_type(inner, c.context, &c.types.structs)
             .expect("indirect inner type must have LLVM representation");
         let size = llvm_type_size(inner_llvm_ty, c);
@@ -279,10 +282,10 @@ pub fn compile_method_call<'ctx>(
             mangled = format!("{}_{}", struct_name, method_suffix);
 
             if !c.functions.contains_key(&mangled) {
-                c.monomorphize_impl_method(&base, method, &type_args, &method_type_args)?;
+                monomorphize_impl_method(c, &base, method, &type_args, &method_type_args)?;
             }
         } else if !c.functions.contains_key(&mangled) {
-            c.monomorphize_impl_method(&base, method, &type_args, &[])?;
+            monomorphize_impl_method(c, &base, method, &type_args, &[])?;
         }
     }
 
@@ -786,7 +789,7 @@ fn compile_generic_struct_construction<'ctx>(
     let mangled = mangle_name(struct_name, &type_args);
 
     if !c.types.structs.contains_key(&mangled) {
-        c.monomorphize_struct(struct_name, &type_args)?;
+        monomorphize_struct(c, struct_name, &type_args)?;
     }
 
     let struct_type = *c
@@ -896,9 +899,9 @@ fn compile_static_call<'ctx>(
         let m = mangle_name(type_name, &type_args);
         if !c.types.structs.contains_key(&m) {
             if c.type_ctx.is_struct(type_name) {
-                c.monomorphize_struct(type_name, &type_args)?;
+                monomorphize_struct(c, type_name, &type_args)?;
             } else {
-                c.monomorphize_enum(type_name, &type_args)?;
+                monomorphize_enum(c, type_name, &type_args)?;
             }
         }
         m
@@ -908,7 +911,7 @@ fn compile_static_call<'ctx>(
 
     if !c.functions.contains_key(&mangled_fn) {
         if !type_args.is_empty() {
-            c.monomorphize_impl_method(type_name, method, &type_args, &[])?;
+            monomorphize_impl_method(c, type_name, method, &type_args, &[])?;
         } else {
             return Err(format!(
                 "undefined static function `{method}` on `{type_name}`"

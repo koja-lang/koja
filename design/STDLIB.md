@@ -1,8 +1,8 @@
 # Standard Library Design
 
 Design notes for Expo's standard library architecture: package hierarchy,
-auto-import rules, networking stack, HTTP vocabulary types, and the 20-year
-rule for stdlib inclusion.
+auto-import rules, networking stack, HTTP vocabulary types, randomness,
+cryptographic primitives, and the 20-year rule for stdlib inclusion.
 
 ---
 
@@ -159,20 +159,73 @@ in pure Expo with 17 tests covering encoder and decoder.
 
 ---
 
+## `random` package
+
+OS-level randomness. Not crypto-specific -- random numbers are used for games,
+tests, shuffling, UUID generation, and any non-deterministic behavior.
+
+### Types
+
+- **`random.Random`** -- `bytes(n) -> Binary` (cryptographically secure random
+  bytes), `int(min, max) -> Int` (uniform random integer in range).
+
+### Implementation
+
+Wraps the OS entropy source (`getrandom` on Linux, `arc4random_buf` on macOS)
+via a runtime intrinsic. No userspace PRNG -- always OS-quality randomness.
+Programs that never call `random.*` pay nothing.
+
+---
+
+## `crypto` package
+
+Stable cryptographic primitives. The building blocks that TLS, HMAC-based
+auth, and integrity checks all depend on. These algorithms are decades old
+and standardized.
+
+### Types
+
+- **`crypto.Hash`** -- `sha256(data) -> Binary`, `sha384(data) -> Binary`,
+  `sha512(data) -> Binary`. One-shot hashing. Streaming/incremental hashing
+  can be added later if needed.
+- **`crypto.HMAC`** -- `sign(algorithm, key, data) -> Binary`,
+  `verify(algorithm, key, data, signature) -> Bool`. Keyed message
+  authentication.
+
+### What stays in packages
+
+Password hashing algorithms (`argon2`, `bcrypt`) are first-party packages,
+not stdlib. They're algorithm-specific, evolve with computing power, and
+wrap specific C libraries. The stdlib provides the primitives they're built
+on.
+
+### Implementation
+
+Wraps system crypto libraries (CommonCrypto on macOS, OpenSSL/libcrypto on
+Linux) via C FFI. TLS (`upgrade_tls`) separately wraps `libssl` from the
+same OpenSSL distribution -- they're sibling FFI bindings, not layered.
+
+---
+
 ## The 20-year rule
 
 Stdlib candidates must be based on standards/protocols that have proven
 themselves over decades:
 
-| Protocol | Year | Age | Stdlib? |
-| -------- | ---- | --- | ------- |
-| TCP/UDP  | 1981 | 45  | Yes     |
-| HTTP/1.1 | 1997 | 29  | Yes     |
-| TLS      | 1999 | 27  | Yes     |
-| JSON     | 2001 | 25  | Yes     |
-| HTTP/2   | 2015 | 11  | No      |
-| QUIC     | 2021 | 5   | No      |
-| HTTP/3   | 2022 | 4   | No      |
+| Protocol      | Year     | Age | Stdlib?                 |
+| ------------- | -------- | --- | ----------------------- |
+| TCP/UDP       | 1981     | 45  | Yes                     |
+| SHA-2         | 2001     | 25  | Yes                     |
+| HMAC          | 1996     | 30  | Yes                     |
+| HTTP/1.1      | 1997     | 29  | Yes                     |
+| TLS           | 1999     | 27  | Yes                     |
+| JSON          | 2001     | 25  | Yes                     |
+| OS randomness | OS-level | ∞   | Yes                     |
+| bcrypt        | 1999     | 27  | No (algorithm-specific) |
+| argon2        | 2015     | 11  | No                      |
+| HTTP/2        | 2015     | 11  | No                      |
+| QUIC          | 2021     | 5   | No                      |
+| HTTP/3        | 2022     | 4   | No                      |
 
 The language spec locks at 1.0. Post-1.0 changes are additive only.
 Stdlib inclusion is a permanent commitment -- the 20-year rule ensures
@@ -193,8 +246,8 @@ we only commit to things that will still make sense in another 20 years.
 - **Connection pooling** -- different strategies for different apps.
 - **XML** -- complex (namespaces, DTDs, entities), declining usage in new
   systems. The `xmerl` cautionary tale from Erlang.
-- **Crypto** -- password hashing, HMAC, random bytes. Thin FFI wrappers
-  over audited C libraries (libargon2, libsodium).
+- **Password hashing** (`argon2`, `bcrypt`) -- algorithm-specific, evolves
+  with computing power. First-party packages wrapping audited C libraries.
 - **Structured logging, MessagePack, UUID, regex, URL parsing**
 
 ---
@@ -202,12 +255,16 @@ we only commit to things that will still make sense in another 20 years.
 ## Layer diagram
 
 ```
+random.Random      OS entropy (bytes, int)
+crypto.Hash        SHA-2 family          ← application-level crypto
+crypto.HMAC        keyed message auth
+
 net.Socket         raw POSIX primitives (create, bind, connect, etc.)
     |
 net.TCPSocket      ergonomic TCP (connect, read, write, close)
 net.UDPSocket      ergonomic UDP (bind, send_to, recv_from)
     |
-    | .upgrade_tls(TLSConfig)
+    | .upgrade_tls(TLSConfig)    (calls OpenSSL/LibreSSL C API directly)
     v
 net.TCPSocket      same type, now encrypted
     |
@@ -216,6 +273,10 @@ net.TCPSocket      same type, now encrypted
               |
          http.Request / http.Response   shared vocabulary
 ```
+
+`crypto` and TLS are siblings -- both wrap the same system C library
+(OpenSSL's `libcrypto` and `libssl` respectively) but have no dependency
+on each other at the Expo level.
 
 Each layer builds on the one below. `http.Server` uses `net.TCPListener`;
 `http.Client` opens a `net.TCPSocket`. The raw `net.Socket` stays available

@@ -9,6 +9,7 @@ use inkwell::values::FunctionValue;
 
 use crate::compiler::{Compiler, ExprResult};
 use crate::expr::compile_expr;
+use crate::generics::monomorphize_impl_method;
 use crate::stmt::compile_statement;
 use crate::types::to_llvm_type;
 
@@ -116,8 +117,8 @@ pub fn compile_for<'ctx>(
     let (mangled_type, elem_llvm_ty, elem_expo_ty, base, type_args) =
         resolve_enumerable_info(c, &iter_ty)?;
 
-    c.monomorphize_impl_method(&base, "length", &type_args, &[])?;
-    c.monomorphize_impl_method(&base, "get", &type_args, &[])?;
+    monomorphize_impl_method(c, &base, "length", &type_args, &[])?;
+    monomorphize_impl_method(c, &base, "get", &type_args, &[])?;
 
     let length_fn_name = format!("{}_length", mangled_type);
     let get_fn_name = format!("{}_get", mangled_type);

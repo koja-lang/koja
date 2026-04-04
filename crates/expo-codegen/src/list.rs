@@ -6,6 +6,7 @@
 use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name};
 
 use crate::compiler::{Compiler, EmitResult};
+use crate::generics::ensure_types_exist;
 use crate::types::to_llvm_type;
 
 pub fn monomorphize_list_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
@@ -192,11 +193,14 @@ pub fn emit_list_method<'ctx>(
         "get" => {
             let option_type_args = vec![elem_ty.clone()];
             let option_mangled = mangle_name("Option", &option_type_args);
-            c.ensure_types_exist(&Type::GenericInstance {
-                base: "Option".to_string(),
-                type_args: option_type_args,
-                kind: GenericKind::Enum,
-            })?;
+            ensure_types_exist(
+                c,
+                &Type::GenericInstance {
+                    base: "Option".to_string(),
+                    type_args: option_type_args,
+                    kind: GenericKind::Enum,
+                },
+            )?;
             let option_struct = *c
                 .types
                 .structs
@@ -366,11 +370,14 @@ pub fn emit_list_method<'ctx>(
 
         "pop" => {
             let option_type_args = vec![elem_ty.clone()];
-            c.ensure_types_exist(&Type::GenericInstance {
-                base: "Option".to_string(),
-                type_args: option_type_args.clone(),
-                kind: GenericKind::Enum,
-            })?;
+            ensure_types_exist(
+                c,
+                &Type::GenericInstance {
+                    base: "Option".to_string(),
+                    type_args: option_type_args.clone(),
+                    kind: GenericKind::Enum,
+                },
+            )?;
             let option_mangled = mangle_name("Option", &option_type_args);
             let option_struct = *c
                 .types
@@ -389,11 +396,14 @@ pub fn emit_list_method<'ctx>(
                 kind: GenericKind::Enum,
             };
             let pair_type_args = vec![option_type, list_type];
-            c.ensure_types_exist(&Type::GenericInstance {
-                base: "Pair".to_string(),
-                type_args: pair_type_args.clone(),
-                kind: GenericKind::Struct,
-            })?;
+            ensure_types_exist(
+                c,
+                &Type::GenericInstance {
+                    base: "Pair".to_string(),
+                    type_args: pair_type_args.clone(),
+                    kind: GenericKind::Struct,
+                },
+            )?;
             let pair_mangled = mangle_name("Pair", &pair_type_args);
             let pair_struct = *c
                 .types

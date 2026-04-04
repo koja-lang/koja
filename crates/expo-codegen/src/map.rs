@@ -7,6 +7,7 @@
 use expo_typecheck::types::{GenericKind, Type, mangle_name};
 
 use crate::compiler::{Compiler, EmitResult};
+use crate::generics::ensure_types_exist;
 use crate::hashtable;
 use crate::types::to_llvm_type;
 
@@ -531,11 +532,14 @@ pub fn emit_map_method<'ctx>(
         "get" => {
             let option_type_args = vec![val_type.clone()];
             let option_mangled = mangle_name("Option", &option_type_args);
-            c.ensure_types_exist(&Type::GenericInstance {
-                base: "Option".to_string(),
-                type_args: option_type_args.clone(),
-                kind: GenericKind::Enum,
-            })?;
+            ensure_types_exist(
+                c,
+                &Type::GenericInstance {
+                    base: "Option".to_string(),
+                    type_args: option_type_args.clone(),
+                    kind: GenericKind::Enum,
+                },
+            )?;
             let option_struct = *c
                 .types
                 .structs

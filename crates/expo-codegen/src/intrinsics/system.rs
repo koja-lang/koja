@@ -3,6 +3,7 @@ use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
+use crate::generics::ensure_types_exist;
 
 use super::{OPTION_NONE_TAG, OPTION_SOME_TAG, build_result_err, build_result_ok};
 
@@ -18,11 +19,14 @@ pub fn emit_system_intrinsic<'ctx>(
     match mangled {
         "System_get_env" => {
             let option_mangled = "Option_$String$";
-            c.ensure_types_exist(&Type::GenericInstance {
-                base: "Option".to_string(),
-                type_args: vec![Type::Primitive(Primitive::String)],
-                kind: GenericKind::Enum,
-            })?;
+            ensure_types_exist(
+                c,
+                &Type::GenericInstance {
+                    base: "Option".to_string(),
+                    type_args: vec![Type::Primitive(Primitive::String)],
+                    kind: GenericKind::Enum,
+                },
+            )?;
             let option_struct = *c
                 .types
                 .structs

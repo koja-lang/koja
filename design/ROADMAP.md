@@ -199,11 +199,13 @@ User-facing foreign function interface for calling C libraries. Expo already cal
 
 #### Standard library packages
 
-`net`, `http`, and `json` are stdlib packages -- they ship with the compiler, are always available, and use qualified imports (`net.TCPSocket`, `http.Request`). See [STDLIB.md](STDLIB.md) for the full package hierarchy design.
+`net`, `http`, `json`, `random`, and `crypto` are stdlib packages -- they ship with the compiler, are always available, and use qualified imports (`net.TCPSocket`, `http.Request`). See [STDLIB.md](STDLIB.md) for the full package hierarchy design.
 
 - `net` -- `TCPSocket` (with TLS via `upgrade_tls`), `TCPListener`, `UDPSocket`, `TLSConfig`. Built on `net.Socket` (raw POSIX primitives from current `std.socket`).
 - `http` -- shared vocabulary types (`Request`, `Response`, `Method`, `Status`, `Headers`), HTTP/1.1 parser, one-shot client, spawn-per-connection server.
 - `json` -- already implemented as a standalone package. Promote to stdlib status.
+- `random` -- `Random.bytes(n)`, `Random.int(min, max)`. OS-level randomness (`getrandom`/`/dev/urandom`). Universal capability, not crypto-specific.
+- `crypto` -- `Hash.sha256(data)`, `HMAC.sign(key, data)`. Stable cryptographic primitives (SHA-2, HMAC). Building blocks for TLS and application-level auth.
 
 #### First-party packages
 
@@ -211,11 +213,12 @@ High-quality, officially maintained, but not part of the compiler release cycle.
 
 - `websocket` -- WebSocket server and client built on `http` (upgrade handshake) and `net` (framed message transport). Each WebSocket connection is a process.
 - `http2` -- HTTP/2 transport package reusing stdlib `http.Request`/`http.Response` types.
-- `crypto` -- password hashing (argon2, bcrypt), random bytes, HMAC. Thin C FFI wrappers over audited libraries (libargon2, libsodium). Safe Expo API: `Password.hash(string)`, `Password.verify(string, hash)`, `Random.bytes(count)`.
+- `argon2` -- password hashing via libargon2 C FFI. `Argon2.hash(password)`, `Argon2.verify(password, hash)`.
+- `bcrypt` -- password hashing via bcrypt C FFI. Same API shape as `argon2`.
 - Structured logging
 - MessagePack serialization
 - UUID generation, regex, URL parsing
-- **Done when**: `handlers.expo` compiles using stdlib + first-party packages -- it exercises HTTP, JSON, crypto, logging, and UUID generation
+- **Done when**: `handlers.expo` compiles using stdlib + first-party packages -- it exercises HTTP, JSON, argon2, logging, and UUID generation
 
 #### Approach
 
@@ -563,7 +566,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase | Milestone                                                                                                                                                                               |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, C FFI, stdlib packages (`net`, `http`, `json`), first-party packages |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, C FFI, stdlib packages (`net`, `http`, `json`, `random`, `crypto`), first-party packages |
 | 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                  |
 | 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                                                  |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                              |

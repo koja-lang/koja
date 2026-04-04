@@ -12,6 +12,7 @@ use inkwell::values::{FunctionValue, StructValue};
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::debug::call_format;
 use crate::expr::{compile_expr, compile_expr_coerced};
+use crate::generics::monomorphize_function;
 use crate::stmt::coerce_numeric;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
@@ -187,7 +188,7 @@ fn compile_generic_call<'ctx>(
     let mangled = mangle_name(name, &type_args);
 
     if !c.functions.contains_key(&mangled) {
-        c.monomorphize_function(name, &type_args)?;
+        monomorphize_function(c, name, &type_args)?;
     }
 
     let callee = *c

@@ -7,6 +7,7 @@
 use expo_typecheck::types::{Type, mangle_name};
 
 use crate::compiler::{Compiler, EmitResult};
+use crate::generics::monomorphize_struct;
 use crate::hashtable;
 use crate::types::to_llvm_type;
 
@@ -766,7 +767,7 @@ pub fn emit_set_method<'ctx>(
 
         "from_list" => {
             let list_mangled = mangle_name("List", std::slice::from_ref(elem_type));
-            c.monomorphize_struct("List", std::slice::from_ref(elem_type))?;
+            monomorphize_struct(c, "List", std::slice::from_ref(elem_type))?;
             let list_struct = *c
                 .types
                 .structs

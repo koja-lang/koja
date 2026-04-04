@@ -11,6 +11,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::control::{get_payload_ptr, lookup_variant_data, match_values};
 use crate::expr::{compile_expr, compile_expr_coerced};
+use crate::generics::monomorphize_enum;
 use crate::structs::{load_maybe_indirect, store_maybe_indirect};
 
 /// Compiles an enum variant construction (`EnumName.Variant(...)` or
@@ -257,7 +258,7 @@ fn compile_generic_enum_construction<'ctx>(
     let mangled = mangle_name(enum_name, &type_args);
 
     if !c.types.structs.contains_key(&mangled) {
-        c.monomorphize_enum(enum_name, &type_args)?;
+        monomorphize_enum(c, enum_name, &type_args)?;
     }
 
     let enum_type = *c
