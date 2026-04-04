@@ -1,10 +1,14 @@
 fn pick(n: Int) -> String
   cond
-    n > 0 -> "positive"
+    n > 0 ->
+      "positive"
+
     n < 0 ->
       x = n * -1
       x
-    else -> "zero"
+
+    else ->
+      "zero"
   end
 end
 

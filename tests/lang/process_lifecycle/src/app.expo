@@ -11,7 +11,9 @@ impl Process<App, AppMsg, String> for App
     config
   end
 
-  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Self | StopReason
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>)
+    -> Self | StopReason
+
     self
   end
 
@@ -20,10 +22,13 @@ impl Process<App, AppMsg, String> for App
       Lifecycle.Shutdown ->
         IO.puts("shutting down gracefully")
         StopReason.Shutdown
+
       Lifecycle.Interrupt ->
         IO.puts("interrupted")
         StopReason.Shutdown
-      Lifecycle.Reload -> self
+
+      Lifecycle.Reload ->
+        self
     end
   end
 end

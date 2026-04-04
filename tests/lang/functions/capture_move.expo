@@ -3,7 +3,7 @@ struct Config
   offset: Int
 end
 
-fn apply(x: Int, f: fn(Int) -> Int) -> Int
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
   f(x)
 end
 

@@ -271,10 +271,11 @@ fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
     }
 
     let variants = e.variants.iter().map(|v| v.name.clone()).collect();
+    let functions = e.functions.iter().filter_map(extract_function).collect();
 
     Some(DocEnum {
         doc: annotation_string(&e.annotation),
-        functions: Vec::new(),
+        functions,
         name: e.name.clone(),
         variants,
     })
@@ -362,11 +363,12 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
             type_name: type_expr_to_string(&f.type_expr),
         })
         .collect();
+    let functions = s.functions.iter().filter_map(extract_function).collect();
 
     Some(DocStruct {
         doc: annotation_string(&s.annotation),
         fields,
-        functions: Vec::new(),
+        functions,
         name: s.name.clone(),
         type_params: s.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })

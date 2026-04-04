@@ -7,7 +7,9 @@ fn main
   inner = [Val.Num(1), Val.Num(2)]
   v = Val.Arr(inner)
   match v
-    Val.Num(n) -> print(n)
+    Val.Num(n) ->
+      print(n)
+
     Val.Arr(items) ->
       print(items.length())
       first = items.get(0)
@@ -17,7 +19,9 @@ fn main
             Val.Num(n) -> print(n)
             Val.Arr(_) -> print("nested arr")
           end
-        Option.None -> print("empty")
+
+        Option.None ->
+          print("empty")
       end
   end
 end

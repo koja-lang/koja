@@ -22,7 +22,21 @@ fn find_definition_in_module(module: &Module, name: &str) -> Option<Span> {
             Item::Alias(a) if a.local_name == name => return Some(a.span),
             Item::Function(f) if f.name == name => return Some(f.span),
             Item::Struct(s) if s.name == name => return Some(s.span),
+            Item::Struct(s) => {
+                for f in &s.functions {
+                    if f.name == name || format!("{}_{}", s.name, f.name) == name {
+                        return Some(f.span);
+                    }
+                }
+            }
             Item::Enum(e) if e.name == name => return Some(e.span),
+            Item::Enum(e) => {
+                for f in &e.functions {
+                    if f.name == name || format!("{}_{}", e.name, f.name) == name {
+                        return Some(f.span);
+                    }
+                }
+            }
             Item::Constant(c) if c.name == name => return Some(c.span),
             Item::Protocol(p) if p.name == name => return Some(p.span),
             Item::TypeAlias(t) if t.name == name => return Some(t.span),

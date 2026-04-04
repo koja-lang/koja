@@ -1,8 +1,6 @@
 struct Config
   enabled: Bool
-end
 
-impl Config
   fn toggle(self)
     self.enabled = not self.enabled
   end

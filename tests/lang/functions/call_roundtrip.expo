@@ -13,7 +13,9 @@ impl Process<CalcConfig, CalcMsg, Int> for Calc
     Calc{}
   end
 
-  fn handle(move self, msg: CalcMsg, from: Option<ReplyTo<Int>>) -> Self | StopReason
+  fn handle(move self, msg: CalcMsg, from: Option<ReplyTo<Int>>)
+    -> Self | StopReason
+
     match msg
       CalcMsg.Add(a, b) ->
         sum = a + b

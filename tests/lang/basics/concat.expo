@@ -1,4 +1,4 @@
-fn main()
+fn main
   a = "hello"
   b = " world"
   c = a <> b

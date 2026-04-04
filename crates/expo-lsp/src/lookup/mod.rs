@@ -111,6 +111,9 @@ pub(crate) fn find_symbol_at(
                         return Some(info);
                     }
                 }
+                if let Some(info) = find_in_inline_functions(&s.functions, line, col, ctx) {
+                    return Some(info);
+                }
             }
             Item::Enum(e) => {
                 if !span_contains(&e.span, line, col) {
@@ -138,6 +141,9 @@ pub(crate) fn find_symbol_at(
                         }
                     }
                 }
+                if let Some(info) = find_in_inline_functions(&e.functions, line, col, ctx) {
+                    return Some(info);
+                }
             }
             Item::Constant(c) => {
                 if span_contains(&c.span, line, col) {
@@ -154,6 +160,34 @@ pub(crate) fn find_symbol_at(
                 }
             }
             _ => {}
+        }
+    }
+    None
+}
+
+/// Searches inline functions inside a struct or enum body for a symbol at position.
+fn find_in_inline_functions(
+    functions: &[Function],
+    line: u32,
+    col: u32,
+    ctx: &TypeContext,
+) -> Option<SymbolInfo> {
+    for f in functions {
+        if !span_contains(&f.span, line, col) {
+            continue;
+        }
+        if let Some(info) = find_in_params(&f.params, line, col, ctx) {
+            return Some(info);
+        }
+        if let Some(ret) = &f.return_type
+            && let Some(info) = find_in_type_expr(ret, line, col, ctx)
+        {
+            return Some(info);
+        }
+        for stmt in &f.body {
+            if let Some(info) = find_in_statement(stmt, line, col, ctx) {
+                return Some(info);
+            }
         }
     }
     None

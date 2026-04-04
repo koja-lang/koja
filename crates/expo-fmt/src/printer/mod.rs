@@ -128,6 +128,11 @@ impl<'a> Printer<'a> {
             }
             body.push(self.struct_field_to_doc(field));
         }
+        for func in &s.functions {
+            body.push(hardline());
+            body.push(hardline());
+            body.push(self.function_to_doc(func));
+        }
         let (mut trailing, _) = self.comments.drain_before(s.span.end.line);
         if !trailing.is_empty() {
             trailing.pop();
@@ -181,6 +186,11 @@ impl<'a> Printer<'a> {
                 body.push(c);
             }
             body.push(self.enum_variant_to_doc(variant));
+        }
+        for func in &e.functions {
+            body.push(hardline());
+            body.push(hardline());
+            body.push(self.function_to_doc(func));
         }
         let (mut trailing, _) = self.comments.drain_before(e.span.end.line);
         if !trailing.is_empty() {

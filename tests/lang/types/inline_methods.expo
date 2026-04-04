@@ -1,0 +1,61 @@
+struct Point
+  x: Int
+  y: Int
+
+  fn distance_squared(self) -> Int
+    self.x * self.x + self.y * self.y
+  end
+
+  fn translate(self, dx: Int, dy: Int) -> Point
+    Point{x: self.x + dx, y: self.y + dy}
+  end
+
+  fn origin -> Point
+    Point{x: 0, y: 0}
+  end
+end
+
+enum Direction
+  North
+  South
+  East
+  West
+
+  fn label(self) -> String
+    match self
+      Direction.North -> "north"
+      Direction.South -> "south"
+      Direction.East -> "east"
+      Direction.West -> "west"
+    end
+  end
+
+  fn is_vertical?(self) -> Bool
+    match self
+      Direction.North -> true
+      Direction.South -> true
+      _ -> false
+    end
+  end
+end
+
+fn main
+  p = Point{x: 3, y: 4}
+  print(p.distance_squared())
+
+  p2 = p.translate(1, 2)
+  print(p2.x)
+  print(p2.y)
+
+  o = Point.origin()
+  print(o.x)
+  print(o.y)
+
+  d = Direction.North
+  print(d.label())
+  print(d.is_vertical?())
+
+  d2 = Direction.East
+  print(d2.label())
+  print(d2.is_vertical?())
+end

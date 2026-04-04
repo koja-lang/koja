@@ -1,8 +1,6 @@
 struct Counter
   n: Int
-end
 
-impl Counter
   fn count_down(move self) -> Self
     if self.n <= 0
       return self

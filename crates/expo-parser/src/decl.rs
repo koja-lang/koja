@@ -24,8 +24,16 @@ impl Parser {
 
         self.skip_newlines();
         let mut fields = Vec::new();
+        let mut functions = Vec::new();
         while !self.at(&TokenKind::End) && !self.at_eof() {
-            fields.push(self.parse_struct_field());
+            match self.peek().clone() {
+                TokenKind::Fn | TokenKind::Priv | TokenKind::At => {
+                    functions.push(self.parse_type_body_function("struct"));
+                }
+                _ => {
+                    fields.push(self.parse_struct_field());
+                }
+            }
             self.skip_newlines();
         }
         self.expect(&TokenKind::End);
@@ -35,6 +43,7 @@ impl Parser {
             name,
             type_params,
             fields,
+            functions,
             span: self.span_from(start),
         })
     }
@@ -58,6 +67,42 @@ impl Parser {
     }
 
     // =========================================================================
+    // Shared: parse a function inside a struct or enum body
+    // =========================================================================
+
+    /// Parses a single function declaration inside a struct or enum body.
+    /// Handles `fn`, `priv fn`, and `@annotation fn` / `@annotation priv fn`.
+    fn parse_type_body_function(&mut self, context: &str) -> Function {
+        match self.peek().clone() {
+            TokenKind::Fn => self.parse_function_decl(None, Visibility::Public),
+            TokenKind::Priv => {
+                self.advance();
+                self.parse_function_decl(None, Visibility::Private)
+            }
+            TokenKind::At => {
+                let annotation = self.parse_annotation();
+                self.skip_newlines();
+                match self.peek() {
+                    TokenKind::Fn => self.parse_function_decl(Some(annotation), Visibility::Public),
+                    TokenKind::Priv => {
+                        self.advance();
+                        self.parse_function_decl(Some(annotation), Visibility::Private)
+                    }
+                    _ => {
+                        let span = self.current_span();
+                        self.error(
+                            format!("annotation in {context} block must be followed by a function"),
+                            span,
+                        );
+                        self.parse_function_decl(Some(annotation), Visibility::Public)
+                    }
+                }
+            }
+            _ => unreachable!("parse_type_body_function called on non-function token"),
+        }
+    }
+
+    // =========================================================================
     // Enum
     // =========================================================================
 
@@ -77,8 +122,16 @@ impl Parser {
 
         self.skip_newlines();
         let mut variants = Vec::new();
+        let mut functions = Vec::new();
         while !self.at(&TokenKind::End) && !self.at_eof() {
-            variants.push(self.parse_enum_variant());
+            match self.peek().clone() {
+                TokenKind::Fn | TokenKind::Priv | TokenKind::At => {
+                    functions.push(self.parse_type_body_function("enum"));
+                }
+                _ => {
+                    variants.push(self.parse_enum_variant());
+                }
+            }
             self.skip_newlines();
         }
         self.expect(&TokenKind::End);
@@ -88,6 +141,7 @@ impl Parser {
             name,
             type_params,
             variants,
+            functions,
             span: self.span_from(start),
         })
     }
@@ -270,39 +324,9 @@ impl Parser {
                 break;
             }
             match self.peek().clone() {
-                TokenKind::Fn => {
-                    let func = self.parse_function_decl(None, Visibility::Public);
+                TokenKind::Fn | TokenKind::Priv | TokenKind::At => {
+                    let func = self.parse_type_body_function("impl");
                     members.push(ImplMember::Function(func));
-                }
-                TokenKind::Priv => {
-                    self.advance();
-                    let func = self.parse_function_decl(None, Visibility::Private);
-                    members.push(ImplMember::Function(func));
-                }
-                TokenKind::At => {
-                    let annotation = self.parse_annotation();
-                    self.skip_newlines();
-                    match self.peek() {
-                        TokenKind::Fn => {
-                            let func =
-                                self.parse_function_decl(Some(annotation), Visibility::Public);
-                            members.push(ImplMember::Function(func));
-                        }
-                        TokenKind::Priv => {
-                            self.advance();
-                            let func =
-                                self.parse_function_decl(Some(annotation), Visibility::Private);
-                            members.push(ImplMember::Function(func));
-                        }
-                        _ => {
-                            let span = self.current_span();
-                            self.error(
-                                "annotation in impl block must be followed by a function"
-                                    .to_string(),
-                                span,
-                            );
-                        }
-                    }
                 }
                 TokenKind::Type => {
                     let alias = self.parse_type_alias(None);

@@ -1,8 +1,8 @@
-fn apply(x: Int, f: fn(Int) -> Int) -> Int
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
   f(x)
 end
 
-fn apply_str(x: String, f: fn(String) -> String) -> String
+fn apply_str(x: String, f: fn (String) -> String) -> String
   f(x)
 end
 
@@ -16,7 +16,9 @@ fn main
   print(apply_str("world", fn (s: String) -> String prefix <> s end))
 
   # chained closure calls
-  inc = fn (x: Int) -> Int x + 1 end
+  inc =
+    fn (x: Int) -> Int x + 1 end
+
   print(apply(apply(0, inc), inc))
 
   # closure capturing multiple variables

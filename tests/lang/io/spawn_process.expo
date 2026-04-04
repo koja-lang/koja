@@ -17,7 +17,9 @@ impl Process<WorkerConfig, WorkerMsg, String> for Worker
     Worker{label: config.label}
   end
 
-  fn handle(move self, msg: WorkerMsg, from: Option<ReplyTo<String>>) -> Self | StopReason
+  fn handle(move self, msg: WorkerMsg, from: Option<ReplyTo<String>>)
+    -> Self | StopReason
+
     match msg
       WorkerMsg.Greet(name) ->
         print("#{self.label}: Hello, #{name}!")

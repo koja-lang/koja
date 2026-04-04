@@ -378,41 +378,49 @@ print(p.x)
 print(p.y)
 ```
 
-#### Impl Functions
+#### Inline Functions
 
-Attach functions to a type via `impl` blocks:
+Functions can be defined directly inside `struct` bodies alongside fields:
 
 ```expo
-impl Point
+struct Point
+  x: Int32
+  y: Int32
+
   fn distance_squared(self) -> Int32
     self.x * self.x + self.y * self.y
   end
+
+  fn origin -> Self
+    Point{x: 0, y: 0}
+  end
 end
 
+p = Point{x: 3, y: 4}
 print(p.distance_squared())
+print(Point.origin().x)
 ```
 
 `self` borrows by default (read-only). Use `move self` for mutating functions that return the modified value:
 
 ```expo
-impl List<T>
-  fn append(move self, item: T) -> List<T>
-    # owns self, can mutate
-    self
+struct Counter
+  value: Int
+
+  fn increment(move self) -> Self
+    Counter{value: self.value + 1}
   end
 end
-
-list = list.append(42)  # move in, get back
 ```
 
-`Self` is a shorthand for the enclosing type in return positions. Use it instead of repeating the type name:
+`Self` is a shorthand for the enclosing type in return positions. Use it instead of repeating the type name.
+
+#### Impl Blocks (Extensions)
+
+`impl` blocks attach additional functions to an existing type, analogous to Swift extensions. Use `impl` for protocol conformance and adding functions from outside the type's definition:
 
 ```expo
 impl Point
-  fn origin() -> Self
-    Point{x: 0, y: 0}
-  end
-
   fn translate(move self, dx: Int32, dy: Int32) -> Self
     self.x += dx
     self.y += dy
@@ -423,16 +431,18 @@ end
 
 #### Static Functions
 
-Functions in `impl` blocks without `self` are called on the type directly:
+Functions without `self` (either inline or in `impl` blocks) are called on the type directly:
 
 ```expo
-impl List<T>
-  fn new() -> List<T>
-    # ...
+struct Config
+  port: Int
+
+  fn default -> Self
+    Config{port: 8080}
   end
 end
 
-list: List<Int32> = List.new()
+config = Config.default()
 ```
 
 ### Enums
@@ -471,6 +481,28 @@ fn opposite(dir: Direction) -> String
     South -> "north"
     East -> "west"
     West -> "east"
+  end
+end
+```
+
+#### Inline Functions
+
+Enums can also define functions directly in their body:
+
+```expo
+enum Direction
+  North
+  South
+  East
+  West
+
+  fn label(self) -> String
+    match self
+      Direction.North -> "north"
+      Direction.South -> "south"
+      Direction.East -> "east"
+      Direction.West -> "west"
+    end
   end
 end
 ```

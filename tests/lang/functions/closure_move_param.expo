@@ -9,6 +9,7 @@ end
 fn main
   p = Packet{data: "hello"}
 
-  result = consume(p, fn (move pkt: Packet) -> String pkt.data end)
+  result =
+    consume(p, fn (move pkt: Packet) -> String pkt.data end)
   print(result)
 end

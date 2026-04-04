@@ -14,7 +14,9 @@ impl Process<CounterConfig, CounterMsg, Int> for Counter
     Counter{count: 0}
   end
 
-  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self | StopReason
+  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>)
+    -> Self | StopReason
+
     match msg
       CounterMsg.Increment ->
         new_count = self.count + 1

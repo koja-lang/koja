@@ -1,9 +1,7 @@
 struct Shape
   origin: Point
   label: String
-end
 
-impl Shape
   fn describe(self) -> String
     "#{self.label} at (#{self.origin.x}, #{self.origin.y})"
   end

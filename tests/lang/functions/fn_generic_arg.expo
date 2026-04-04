@@ -2,12 +2,14 @@ struct Wrapper<T>
   value: T
 end
 
-fn apply(f: fn(Int) -> Int, x: Int) -> Int
+fn apply(f: fn (Int) -> Int, x: Int) -> Int
   f(x)
 end
 
 fn main
-  double = fn (n: Int) -> Int n * 2 end
+  double =
+    fn (n: Int) -> Int n * 2 end
+
   w = Wrapper{value: double}
   result = apply(w.value, 21)
   print("result: #{result}")

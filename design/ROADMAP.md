@@ -184,17 +184,16 @@ The litmus test: does the compiler or language runtime need it to function, or i
 
 #### C FFI
 
-User-facing foreign function interface for calling C libraries. Expo already calls C internally (the runtime is a C library, and codegen emits calls to it via intrinsics). The FFI exposes this capability to user code.
+User-facing foreign function interface for calling C libraries. Expo already calls C internally (the runtime is a C library, and codegen emits calls to it via intrinsics). The FFI exposes this capability to user code. See [FFI.md](FFI.md) for the full design.
 
-- `extern "C"` blocks declare foreign function signatures with C-compatible types
+- `@extern "C"` annotation on structs (pure binding namespace) or individual functions (mixed with Expo code). No new keywords -- uses existing annotation system.
+- `@link "libname"` annotation on structs or functions; `[link]` table in `expo.toml` for search paths
 - `Ptr<T>` type for raw pointers (`Ptr.null()`, `Ptr.offset()`, `Ptr.read()`, `Ptr.write()`, `Ptr.alloc()`, `Ptr.free()`). `Ptr<T>` is `Copy` (just a machine word).
-- `CString` for null-terminated C string interop (`CString.from(string)`, `String.from_c(ptr)`)
-- `@link("libname")` annotation on extern blocks; `[link]` table in `expo.toml` for library paths
-- `@repr("C")` on structs for C-compatible memory layout
-- No `unsafe` keyword -- extern calls are callable anywhere. Safety is the wrapper package's job, not the caller's. The FFI is a break-glass mechanism, not a daily-driver API.
-- Codegen: `extern` functions emit LLVM `declare` with C calling convention. Same pattern the compiler already uses for runtime intrinsics.
+- `CString` for null-terminated C string interop (`string.to_cstring()`, `cstring.to_string()`)
+- `@compat "C"` on structs for C-compatible memory layout
+- Codegen: extern functions emit LLVM `declare` with C calling convention. Same pattern the compiler already uses for runtime intrinsics. Extern function names are unmangled.
 - Linker: `-l` flags for system libraries, static archive paths for vendored libraries. Already works for `libc` and `expo-runtime`.
-- Self-contained addition: no changes to the module system, type inference, gather-then-check pipeline, or project system. Parser adds `extern` blocks, type checker types them like bodyless functions, codegen emits `declare` instead of `define`.
+- Phased: primitives-only first, then `Ptr<T>`/`CString`, then `@compat "C"` structs and callbacks
 - **Done when**: an `argon2` wrapper package calls `libargon2` to hash and verify passwords
 
 #### Standard library packages
@@ -489,7 +488,7 @@ Active design discussions about the type system, code organization, and function
 - **Decided**: static dispatch via monomorphization -- no vtables, no dynamic dispatch. Consistent with the existing generic compilation model.
 - **Implemented**: `impl` blocks on all types (structs, enums, primitives) -- functions stored in a unified `TypeContext.types` registry via `TypeInfo { functions, type_params, kind: TypeKind, span }`. `TypeKind` discriminates `Struct` (with fields), `Enum` (with variants), and `Primitive`. Previously, structs, enums, and primitives each had separate storage (`StructInfo`, `EnumInfo`, `primitive_methods`); the unified registry eliminates duplicated lookup/dispatch logic across the type checker and codegen. Used for conversion intrinsics, protocol methods, user-defined functions, and static/instance dispatch.
 - ~~**Open**: trait bounds on generic type parameters (`fn foo<T: Display>(x: T)`)~~ -- **Done.** `<T: Protocol>` and `<T: Proto1 & Proto2>` syntax with `&` as the protocol composition operator.
-- **Open**: whether bare `impl Type` eventually migrates to inline functions in type bodies, or both coexist permanently.
+- ~~**Open**: whether bare `impl Type` eventually migrates to inline functions in type bodies, or both coexist permanently.~~ -- **Done.** Inline functions are now supported in both `struct` and `enum` bodies. Both `fn` and `priv fn` can appear alongside fields/variants. `impl` remains for external extensions and protocol conformance (analogous to Swift extensions). Static functions (no `self`) are also allowed, making types act as namespaces.
 
 ### Struct field defaults and trailing keyword syntax (open)
 

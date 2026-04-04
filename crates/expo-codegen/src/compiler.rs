@@ -737,11 +737,72 @@ impl<'ctx> Compiler<'ctx> {
         Some(struct_type.const_named_struct(&values).into())
     }
 
+    /// Pre-pass: ensures LLVM struct types exist for all parameter/return types
+    /// referenced by a set of functions.
+    fn ensure_function_types_exist(&mut self, functions: &[Function]) {
+        for func in functions {
+            for param in &func.params {
+                if let Param::Regular { type_expr, .. } = param {
+                    let ty = self.resolve_type_expr(type_expr);
+                    let _ = ensure_types_exist(self, &ty);
+                }
+            }
+            if let Some(ret_te) = &func.return_type {
+                let ret_ty = self.resolve_type_expr(ret_te);
+                let _ = ensure_types_exist(self, &ret_ty);
+            }
+        }
+    }
+
+    /// Declares a set of methods belonging to `type_name`, mangling as
+    /// `{TypeName}_{fn_name}`. Shared by inline functions and impl blocks.
+    fn declare_type_methods(
+        &mut self,
+        type_name: &str,
+        functions: &[Function],
+    ) -> Result<(), String> {
+        self.fn_state.self_type_name = Some(type_name.to_string());
+        for func in functions {
+            let mangled = format!("{type_name}_{}", func.name);
+            if self.functions.contains_key(&mangled) {
+                continue;
+            }
+            let fn_value = self.declare_function(func, Some(type_name))?;
+            self.functions.insert(mangled, fn_value);
+        }
+        self.fn_state.self_type_name = None;
+        Ok(())
+    }
+
+    /// Defines (emits IR bodies for) a set of methods belonging to `type_name`.
+    /// Shared by inline functions and impl blocks.
+    fn define_type_methods(
+        &mut self,
+        type_name: &str,
+        functions: &[Function],
+    ) -> Result<(), String> {
+        for func in functions {
+            self.define_function(func, Some(type_name))?;
+        }
+        Ok(())
+    }
+
     fn declare_functions(&mut self, module: &Module) -> Result<(), String> {
         for item in &module.items {
-            if let Item::Impl(impl_block) = item {
-                for member in &impl_block.members {
-                    if let ImplMember::Function(func) = member {
+            match item {
+                Item::Impl(impl_block) => {
+                    let fns: Vec<&Function> = impl_block
+                        .members
+                        .iter()
+                        .filter_map(|m| {
+                            if let ImplMember::Function(f) = m {
+                                Some(f)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    for func in &fns {
                         for param in &func.params {
                             if let Param::Regular { type_expr, .. } = param {
                                 let ty = self.resolve_type_expr(type_expr);
@@ -754,6 +815,9 @@ impl<'ctx> Compiler<'ctx> {
                         }
                     }
                 }
+                Item::Struct(s) => self.ensure_function_types_exist(&s.functions),
+                Item::Enum(e) => self.ensure_function_types_exist(&e.functions),
+                _ => {}
             }
         }
 
@@ -770,33 +834,34 @@ impl<'ctx> Compiler<'ctx> {
                     let fn_value = self.declare_function(func, None)?;
                     self.functions.insert(func.name.clone(), fn_value);
                 }
+                Item::Struct(s) if !s.type_params.is_empty() => {}
+                Item::Struct(s) => {
+                    self.declare_type_methods(&s.name, &s.functions)?;
+                }
+                Item::Enum(e) if !e.type_params.is_empty() => {}
+                Item::Enum(e) => {
+                    self.declare_type_methods(&e.name, &e.functions)?;
+                }
                 Item::Impl(impl_block) => {
                     let target_name = self.type_name_from_expr(&impl_block.target);
                     if let Some(target_name) = target_name {
-                        self.fn_state.self_type_name = Some(target_name.clone());
-                        for member in &impl_block.members {
-                            if let ImplMember::Function(func) = member {
-                                let mangled = format!("{}_{}", target_name, func.name);
-                                if self.functions.contains_key(&mangled) {
-                                    continue;
+                        let impl_fns: Vec<Function> = impl_block
+                            .members
+                            .iter()
+                            .filter_map(|m| {
+                                if let ImplMember::Function(f) = m {
+                                    Some(f.clone())
+                                } else {
+                                    None
                                 }
-                                let fn_value = self.declare_function(func, Some(&target_name))?;
-                                self.functions.insert(mangled, fn_value);
-                            }
-                        }
+                            })
+                            .collect();
+                        self.declare_type_methods(&target_name, &impl_fns)?;
                         if let Some(synth_fns) =
                             self.type_ctx.synthesized_default_fns.get(&target_name)
                         {
-                            for func in synth_fns {
-                                let mangled = format!("{}_{}", target_name, func.name);
-                                if self.functions.contains_key(&mangled) {
-                                    continue;
-                                }
-                                let fn_value = self.declare_function(func, Some(&target_name))?;
-                                self.functions.insert(mangled, fn_value);
-                            }
+                            self.declare_type_methods(&target_name, synth_fns)?;
                         }
-                        self.fn_state.self_type_name = None;
                     }
                 }
                 _ => {}
@@ -953,20 +1018,33 @@ impl<'ctx> Compiler<'ctx> {
                     }
                     self.define_function(func, None)?;
                 }
+                Item::Struct(s) if !s.type_params.is_empty() => {}
+                Item::Struct(s) => {
+                    self.define_type_methods(&s.name, &s.functions)?;
+                }
+                Item::Enum(e) if !e.type_params.is_empty() => {}
+                Item::Enum(e) => {
+                    self.define_type_methods(&e.name, &e.functions)?;
+                }
                 Item::Impl(impl_block) => {
                     let target_name = self.type_name_from_expr(&impl_block.target);
                     if let Some(target_name) = target_name {
-                        for member in &impl_block.members {
-                            if let ImplMember::Function(func) = member {
-                                self.define_function(func, Some(&target_name))?;
-                            }
-                        }
+                        let impl_fns: Vec<Function> = impl_block
+                            .members
+                            .iter()
+                            .filter_map(|m| {
+                                if let ImplMember::Function(f) = m {
+                                    Some(f.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        self.define_type_methods(&target_name, &impl_fns)?;
                         if let Some(synth_fns) =
                             self.type_ctx.synthesized_default_fns.get(&target_name)
                         {
-                            for func in synth_fns {
-                                self.define_function(func, Some(&target_name))?;
-                            }
+                            self.define_type_methods(&target_name, synth_fns)?;
                         }
                     }
                 }

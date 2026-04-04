@@ -1,8 +1,8 @@
-fn apply(x: Int, f: fn(Int) -> Int) -> Int
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
   f(x)
 end
 
-fn apply_str(s: String, f: fn(String) -> String) -> String
+fn apply_str(s: String, f: fn (String) -> String) -> String
   f(s)
 end
 

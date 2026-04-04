@@ -1,8 +1,6 @@
 struct Counter
   value: Int32
-end
 
-impl Counter
   fn new(v: Int32) -> Self
     Counter{value: v}
   end

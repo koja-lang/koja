@@ -38,7 +38,9 @@ fn main
         <<0x01, 0x02>> -> print("bits to_binary ok")
         _ -> print("bits to_binary wrong bytes")
       end
-    Result.Err(msg) -> print(msg)
+
+    Result.Err(msg) ->
+      print(msg)
   end
 
   print("all conversion tests passed")

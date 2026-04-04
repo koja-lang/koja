@@ -23,13 +23,17 @@ fn main
   # Multi-arm string pattern dispatch
   msg = <<0x47, 0x45, 0x54, 0x20, 0x2F>>
   match msg
-    <<"POST", _rest: Binary>> -> print("post")
+    <<"POST", _rest: Binary>> ->
+      print("post")
+
     <<"GET ", path: Binary>> ->
       match path
         <<0x2F>> -> print("get root")
         _ -> print("get other")
       end
-    _ -> print("unknown")
+
+    _ ->
+      print("unknown")
   end
 
   print("all binary string segment tests passed")

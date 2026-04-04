@@ -1,9 +1,7 @@
 struct Point
   x: Int
   y: Int
-end
 
-impl Point
   fn origin -> Point
     Point{x: 0, y: 0}
   end

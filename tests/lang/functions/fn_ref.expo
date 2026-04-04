@@ -6,7 +6,7 @@ fn greet(name: String) -> String
   "hello #{name}"
 end
 
-fn apply(x: Int, f: fn(Int) -> Int) -> Int
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
   f(x)
 end
 

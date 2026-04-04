@@ -8,7 +8,9 @@ enum JsonValue
 end
 
 fn main
-  obj: Map<String, JsonValue> = ["name": JsonValue.JStr("Expo"), "version": JsonValue.JInt(1)]
+  obj: Map<String, JsonValue> = [
+    "name": JsonValue.JStr("Expo"), "version": JsonValue.JInt(1)
+  ]
   v = JsonValue.JObj(obj)
   match v
     JsonValue.JObj(m) ->
@@ -19,8 +21,12 @@ fn main
             JsonValue.JStr(s) -> print(s)
             _ -> print("not a string")
           end
-        Option.None -> print("missing")
+
+        Option.None ->
+          print("missing")
       end
-    _ -> print("not an object")
+
+    _ ->
+      print("not an object")
   end
 end

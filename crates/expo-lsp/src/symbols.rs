@@ -139,6 +139,21 @@ fn collect_workspace_symbols(module: &Module, query: &str, results: &mut Vec<Sym
                         container_name: None,
                     });
                 }
+                for f in &s.functions {
+                    if matches(&f.name) {
+                        results.push(SymbolInformation {
+                            name: f.name.clone(),
+                            kind: SymbolKind::METHOD,
+                            tags: None,
+                            deprecated: None,
+                            location: Location {
+                                uri: uri.clone(),
+                                range: span_to_range(&f.span),
+                            },
+                            container_name: Some(s.name.clone()),
+                        });
+                    }
+                }
             }
             Item::Enum(e) => {
                 if matches(&e.name) {
@@ -153,6 +168,21 @@ fn collect_workspace_symbols(module: &Module, query: &str, results: &mut Vec<Sym
                         },
                         container_name: None,
                     });
+                }
+                for f in &e.functions {
+                    if matches(&f.name) {
+                        results.push(SymbolInformation {
+                            name: f.name.clone(),
+                            kind: SymbolKind::METHOD,
+                            tags: None,
+                            deprecated: None,
+                            location: Location {
+                                uri: uri.clone(),
+                                range: span_to_range(&f.span),
+                            },
+                            container_name: Some(e.name.clone()),
+                        });
+                    }
                 }
             }
             Item::Constant(c) => {
@@ -235,6 +265,8 @@ fn build_document_symbols(module: &Module) -> Vec<DocumentSymbol> {
             Item::Function(f) => symbols.push(function_symbol(f)),
             Item::Struct(s) => {
                 let range = span_to_range(&s.span);
+                let children: Vec<DocumentSymbol> =
+                    s.functions.iter().map(function_symbol).collect();
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
                     name: s.name.clone(),
@@ -244,12 +276,16 @@ fn build_document_symbols(module: &Module) -> Vec<DocumentSymbol> {
                     deprecated: None,
                     range,
                     selection_range: range,
-                    children: None,
+                    children: if children.is_empty() {
+                        None
+                    } else {
+                        Some(children)
+                    },
                 });
             }
             Item::Enum(e) => {
                 let range = span_to_range(&e.span);
-                let children: Vec<DocumentSymbol> = e
+                let mut children: Vec<DocumentSymbol> = e
                     .variants
                     .iter()
                     .map(|v| {
@@ -267,6 +303,7 @@ fn build_document_symbols(module: &Module) -> Vec<DocumentSymbol> {
                         }
                     })
                     .collect();
+                children.extend(e.functions.iter().map(function_symbol));
 
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {

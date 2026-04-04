@@ -294,7 +294,7 @@ This differs from Erlang's "let it crash" philosophy. In Erlang, crashes are rou
 
 ---
 
-## Proposal: inline functions on types
+## Inline functions on types (implemented)
 
 Functions can be defined directly inside `struct` and `enum` bodies. `impl` becomes the mechanism for _extending_ a type from outside (other files, protocol conformance).
 

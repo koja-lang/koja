@@ -38,14 +38,18 @@ top_level_decl = struct_decl
 (* 2. Type declarations                                                       *)
 (* ========================================================================== *)
 
+struct_member = struct_field | function_decl ;
+
 struct_decl = [ annotation ] , "struct" , TYPE_IDENT , [ type_params ] ,
-              { struct_field } ,
+              { struct_member } ,
               "end" ;
 
 struct_field = IDENT , ":" , type_expr , [ "=" , expr ] ;
 
+enum_member = enum_variant | function_decl ;
+
 enum_decl = [ annotation ] , "enum" , TYPE_IDENT , [ type_params ] ,
-            { enum_variant } ,
+            { enum_member } ,
             "end" ;
 
 enum_variant = TYPE_IDENT                                           (* unit *)

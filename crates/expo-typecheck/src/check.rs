@@ -31,6 +31,34 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                     check_function(f, ctx, None, &struct_name_refs, &enum_name_refs);
                 }
             }
+            Item::Struct(s) if !s.type_params.is_empty() => {
+                // Generic -- checked during monomorphization
+            }
+            Item::Struct(s) => {
+                let self_type = Type::Struct(s.name.clone());
+                check_inline_functions(
+                    &s.functions,
+                    &s.name,
+                    &self_type,
+                    ctx,
+                    &struct_name_refs,
+                    &enum_name_refs,
+                );
+            }
+            Item::Enum(e) if !e.type_params.is_empty() => {
+                // Generic -- checked during monomorphization
+            }
+            Item::Enum(e) => {
+                let self_type = Type::Enum(e.name.clone());
+                check_inline_functions(
+                    &e.functions,
+                    &e.name,
+                    &self_type,
+                    ctx,
+                    &struct_name_refs,
+                    &enum_name_refs,
+                );
+            }
             Item::Impl(impl_block) => {
                 let (target_name, is_generic_impl) = match &impl_block.target {
                     TypeExpr::Named { path, .. } if path.len() == 1 => (&path[0], false),
@@ -96,6 +124,39 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// Type-checks inline functions defined inside a struct or enum body.
+fn check_inline_functions(
+    functions: &[Function],
+    type_name: &str,
+    self_type: &Type,
+    ctx: &mut TypeContext,
+    struct_names: &[&str],
+    enum_names: &[&str],
+) {
+    let process_msg = ctx.protocol_impls.get(type_name).and_then(|impls| {
+        impls
+            .iter()
+            .find(|(proto, _)| proto == "Process")
+            .and_then(|(_, args)| {
+                let m = args.get(1)?;
+                let r = args.get(2)?;
+                Some(crate::types::process_envelope_type(m, r))
+            })
+    });
+    for f in functions {
+        if f.type_params.is_empty() {
+            check_function_with_msg(
+                f,
+                ctx,
+                Some(self_type),
+                struct_names,
+                enum_names,
+                process_msg.clone(),
+            );
         }
     }
 }

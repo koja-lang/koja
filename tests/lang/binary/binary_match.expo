@@ -30,7 +30,9 @@ fn main
         <<0xBB, 0xCC, 0xDD>> -> print("rest ok")
         _ -> print("rest wrong")
       end
-    _ -> print("no match")
+
+    _ ->
+      print("no match")
   end
 
   # Little-endian extraction

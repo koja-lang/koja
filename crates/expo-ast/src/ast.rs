@@ -157,6 +157,7 @@ pub struct EnumDecl {
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariant>,
+    pub functions: Vec<Function>,
     pub span: Span,
 }
 
@@ -266,6 +267,7 @@ pub struct StructDecl {
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructField>,
+    pub functions: Vec<Function>,
     pub span: Span,
 }
 

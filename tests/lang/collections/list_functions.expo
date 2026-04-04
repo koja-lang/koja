@@ -83,6 +83,7 @@ fn main
   end
 
   # reduce
-  sum = [1, 2, 3, 4].reduce(0, fn (acc: Int, x: Int) -> Int acc + x end)
+  sum =
+    [1, 2, 3, 4].reduce(0, fn (acc: Int, x: Int) -> Int acc + x end)
   print(sum)
 end

@@ -1,4 +1,4 @@
-fn main()
+fn main
   print(5.band(3))
   print(5.bor(3))
   print(5.bxor(3))

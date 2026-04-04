@@ -1,4 +1,4 @@
-fn apply(x: Int, f: fn(Int) -> String) -> String
+fn apply(x: Int, f: fn (Int) -> String) -> String
   f(x)
 end
 

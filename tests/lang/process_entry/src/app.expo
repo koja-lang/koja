@@ -11,7 +11,9 @@ impl Process<App, AppMsg, String> for App
     config
   end
 
-  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Self | StopReason
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>)
+    -> Self | StopReason
+
     self
   end
 

@@ -1,7 +1,5 @@
 struct Helper
-end
 
-impl Helper
   fn add(a: Int, b: Int) -> Int
     a + b
   end

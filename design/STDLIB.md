@@ -96,8 +96,8 @@ makes this feel natural in Expo.
 
 `net.TCPSocket` and friends are built entirely in pure Expo on top of
 `net.Socket` (the raw POSIX primitives). TLS wraps a system library
-(LibreSSL/OpenSSL/BoringSSL) via C FFI. Programs that don't call
-`upgrade_tls` don't pull in TLS dependencies.
+(LibreSSL/OpenSSL/BoringSSL) via C FFI (see [FFI.md](FFI.md)). Programs
+that don't call `upgrade_tls` don't pull in TLS dependencies.
 
 ---
 
@@ -173,7 +173,8 @@ tests, shuffling, UUID generation, and any non-deterministic behavior.
 
 Wraps the OS entropy source (`getrandom` on Linux, `arc4random_buf` on macOS)
 via a runtime intrinsic. No userspace PRNG -- always OS-quality randomness.
-Programs that never call `random.*` pay nothing.
+Programs that never call `random.*` pay nothing. See [FFI.md](FFI.md) for
+the C interop design.
 
 ---
 
@@ -204,6 +205,7 @@ on.
 Wraps system crypto libraries (CommonCrypto on macOS, OpenSSL/libcrypto on
 Linux) via C FFI. TLS (`upgrade_tls`) separately wraps `libssl` from the
 same OpenSSL distribution -- they're sibling FFI bindings, not layered.
+See [FFI.md](FFI.md) for the C interop design.
 
 ---
 

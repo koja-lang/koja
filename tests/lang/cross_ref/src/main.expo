@@ -4,6 +4,6 @@ fn main
   print(q.x)
   print(q.y)
 
-  s = Shape { origin: Point.new(10, 20), label: "box" }
+  s = Shape{origin: Point.new(10, 20), label: "box"}
   print(s.describe())
 end

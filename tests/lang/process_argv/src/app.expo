@@ -8,10 +8,12 @@ end
 
 impl Process<List<String>, AppMsg, String> for App
   fn new(config: List<String>) -> Self
-    App { args: config }
+    App{args: config}
   end
 
-  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Self | StopReason
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>)
+    -> Self | StopReason
+
     self
   end
 

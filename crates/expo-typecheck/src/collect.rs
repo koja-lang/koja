@@ -148,6 +148,16 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                         type_params: e.type_params.clone(),
                     },
                 );
+                let self_type = Type::Enum(e.name.clone());
+                let resolve = ResolveCtx {
+                    struct_names: &struct_names,
+                    enum_names: &enum_names,
+                    tp_refs: &tp_refs,
+                    type_aliases: &type_aliases,
+                };
+                for f in &e.functions {
+                    register_method_on_type(&mut ctx, f, &e.name, &self_type, &resolve);
+                }
             }
             Item::Function(f) => {
                 if let Some(sig) = build_function_sig(f, &struct_names, &enum_names, &type_aliases)
@@ -498,6 +508,16 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                         type_params: s.type_params.clone(),
                     },
                 );
+                let self_type = Type::Struct(s.name.clone());
+                let resolve = ResolveCtx {
+                    struct_names: &struct_names,
+                    enum_names: &enum_names,
+                    tp_refs: &tp_refs,
+                    type_aliases: &type_aliases,
+                };
+                for f in &s.functions {
+                    register_method_on_type(&mut ctx, f, &s.name, &self_type, &resolve);
+                }
             }
             Item::TypeAlias(_) => {} // handled in pre-pass above
             _ => {}
@@ -683,6 +703,47 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
                 }
             }
         }
+    }
+}
+
+/// Name-resolution context passed to helpers that build function signatures.
+struct ResolveCtx<'a> {
+    struct_names: &'a [&'a str],
+    enum_names: &'a [&'a str],
+    tp_refs: &'a [&'a str],
+    type_aliases: &'a BTreeMap<String, Type>,
+}
+
+/// Builds a function signature and registers it on the given type's [`TypeInfo`].
+/// Shared by both inline functions (defined inside struct/enum) and `impl` blocks.
+fn register_method_on_type(
+    ctx: &mut TypeContext,
+    f: &Function,
+    type_name: &str,
+    self_type: &Type,
+    resolve: &ResolveCtx<'_>,
+) {
+    let Some(sig) = build_function_sig_with_params(
+        f,
+        resolve.struct_names,
+        resolve.enum_names,
+        resolve.tp_refs,
+        resolve.type_aliases,
+    ) else {
+        return;
+    };
+    let sig = substitute_self_type(sig, self_type);
+
+    let Some(ti) = ctx.types.get_mut(type_name) else {
+        return;
+    };
+    if ti.functions.contains_key(&f.name) {
+        ctx.error(
+            format!("duplicate function `{}` on `{type_name}`", f.name),
+            f.span,
+        );
+    } else {
+        ti.functions.insert(f.name.clone(), sig);
     }
 }
 

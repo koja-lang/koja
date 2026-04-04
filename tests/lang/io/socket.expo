@@ -4,7 +4,9 @@ fn main
     Result.Ok(s) ->
       print("stream ok")
       s.close()
-    Result.Err(msg) -> print("stream err: " <> msg)
+
+    Result.Err(msg) ->
+      print("stream err: " <> msg)
   end
 
   # Create a datagram socket
@@ -12,7 +14,9 @@ fn main
     Result.Ok(s) ->
       print("datagram ok")
       s.close()
-    Result.Err(msg) -> print("datagram err: " <> msg)
+
+    Result.Err(msg) ->
+      print("datagram err: " <> msg)
   end
 
   # IPAddress helpers
@@ -33,9 +37,13 @@ fn main
         Result.Ok(bound) ->
           print("bind ok")
           bound.close()
-        Result.Err(msg) -> print("bind err: " <> msg)
+
+        Result.Err(msg) ->
+          print("bind err: " <> msg)
       end
-    Result.Err(msg) -> print("create for bind err: " <> msg)
+
+    Result.Err(msg) ->
+      print("create for bind err: " <> msg)
   end
 
   # Connect to loopback:1 should fail (connection refused)
@@ -45,10 +53,13 @@ fn main
         Result.Ok(conn) ->
           print("connect unexpected success")
           conn.close()
+
         Result.Err(_) ->
           print("connect refused ok")
       end
-    Result.Err(msg) -> print("create for connect err: " <> msg)
+
+    Result.Err(msg) ->
+      print("create for connect err: " <> msg)
   end
 
   # Resolve localhost
@@ -56,6 +67,8 @@ fn main
     Result.Ok(addrs) ->
       print("resolve ok")
       print(addrs.length() > 0)
-    Result.Err(msg) -> print("resolve err: " <> msg)
+
+    Result.Err(msg) ->
+      print("resolve err: " <> msg)
   end
 end
