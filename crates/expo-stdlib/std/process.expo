@@ -1,0 +1,167 @@
+@doc """
+Platform-agnostic lifecycle events. The runtime maps OS signals to these
+variants: `SIGTERM` → `Shutdown`, `SIGINT` → `Interrupt`, `SIGHUP` → `Reload`.
+"""
+enum Lifecycle
+  Shutdown
+  Interrupt
+  Reload
+end
+
+@doc """
+Why a process stopped intentionally. Returned from `handle` or
+`handle_lifecycle` to terminate the process.
+"""
+enum StopReason
+  Normal
+  Shutdown
+end
+
+@doc """
+Maps a stop reason to an OS exit code. Only the entry process needs this.
+"""
+protocol ExitStatus
+  fn code(self) -> Int
+end
+
+impl ExitStatus for StopReason
+  fn code(self) -> Int
+    match self
+      StopReason.Normal -> 0
+      StopReason.Shutdown -> 0
+    end
+  end
+end
+
+@doc """
+What a supervisor sees when a child process stops. Type-erased so
+supervisors can manage heterogeneous children.
+"""
+enum ExitReason
+  Normal
+  Shutdown
+  Crashed(String)
+end
+
+@doc """
+A typed reply channel for process handlers. Wraps the caller's process
+id and enforces that replies match the expected type `R` at compile time.
+At runtime this is a bare integer (the caller's pid).
+"""
+struct ReplyTo<R>
+  id: Int
+end
+
+impl ReplyTo<R>
+  @doc """
+  Sends a reply of type `R` to the caller that initiated a synchronous call.
+  """
+  fn send(self, reply: R)
+    panic("intrinsic")
+  end
+
+  @doc """
+  Sends `value` to the caller if `from` is present, does nothing otherwise.
+  Convenience helper for process handlers.
+  """
+  fn reply(from: Option<ReplyTo<R>>, value: R)
+    from.map(r -> r.send(value))
+  end
+end
+
+@doc """
+A typed handle to a running process. `M` is the message type the process
+accepts, `R` is its reply type. Returned by `spawn`. At runtime this is
+a bare integer (the process pid).
+"""
+struct Ref<M, R>
+  id: Int
+end
+
+impl Ref<M, R>
+  @doc """
+  Sends a message to the process without waiting for a reply (fire and forget).
+  The handler receives `from = Option.None`.
+  """
+  fn cast(self, msg: M)
+    panic("intrinsic")
+  end
+
+  @doc """
+  Sends a message and waits up to `timeout` milliseconds for a reply.
+  Returns `Option.Some(reply)` on success, `Option.None` on timeout.
+  The handler receives `from = Option.Some(reply_to)`.
+  """
+  fn call(self, msg: M, timeout: Int) -> Option<R>
+    panic("intrinsic")
+  end
+end
+
+@doc """
+The process protocol. Structs implement this to become spawnable processes.
+`C` is the config type passed to `new`, `M` is the message type handled
+while running, `R` is the reply type for synchronous calls.
+"""
+protocol Process<C, M, R>
+  fn new(config: C) -> Self
+
+  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
+
+  fn handle_lifecycle(move self, event: Lifecycle) -> Self | StopReason
+    match event
+      Lifecycle.Shutdown -> StopReason.Shutdown
+      Lifecycle.Interrupt -> StopReason.Shutdown
+      Lifecycle.Reload -> self
+    end
+  end
+
+  fn run(move self) -> StopReason
+    receive
+      pair: Pair<M, Option<ReplyTo<R>>> ->
+        match self.handle(pair.first, pair.second)
+          next: Self -> next.run()
+          reason: StopReason -> reason
+        end
+    end
+  end
+end
+
+@doc """
+A lightweight async task that runs a function in a spawned process and
+returns its result via `Task.await`.
+"""
+struct Task<R>
+  work: fn() -> R
+end
+
+impl Task<R>
+  fn async(fun: fn() -> R) -> Ref<(), R>
+    spawn Task.new(Task{work: fun})
+  end
+
+  fn await(move reference: Ref<(), R>) -> Option<R>
+    reference.call((), 5000)
+  end
+end
+
+impl Process<Task<R>, (), R> for Task<R>
+  fn new(config: Task<R>) -> Self
+    config
+  end
+
+  fn run(move self) -> StopReason
+    result = self.work()
+    receive
+      pair: Pair<(), Option<ReplyTo<R>>> ->
+        match pair.second
+          Option.Some(reply_to) -> reply_to.send(result)
+          Option.None -> ()
+        end
+        StopReason.Normal
+    end
+  end
+
+  fn handle(move self, msg: (), from: Option<ReplyTo<R>>) -> Self | StopReason
+    self
+  end
+end

@@ -108,9 +108,17 @@ impl<'ctx> Compiler<'ctx> {
                 collect_union_types(&p.ty, &mut union_types);
             }
         }
-        for info in self.type_ctx.types.values().filter(|ti| ti.is_struct()) {
-            for (_, ty) in info.fields().unwrap() {
-                collect_union_types(ty, &mut union_types);
+        for info in self.type_ctx.types.values() {
+            if let Some(fields) = info.fields() {
+                for (_, ty) in fields {
+                    collect_union_types(ty, &mut union_types);
+                }
+            }
+            for sig in info.functions.values() {
+                collect_union_types(&sig.return_type, &mut union_types);
+                for p in &sig.params {
+                    collect_union_types(&p.ty, &mut union_types);
+                }
             }
         }
 

@@ -209,6 +209,9 @@ pub struct FnState<'ctx> {
     pub type_subst: HashMap<String, Type>,
     pub tco: TailCallCtx<'ctx>,
     pub closure_counter: usize,
+    /// When inside an `impl` block, the concrete type name (e.g. "Counter").
+    /// Used by `resolve_type_expr` to substitute `Self` automatically.
+    pub self_type_name: Option<String>,
 }
 
 impl<'ctx> FnState<'ctx> {
@@ -221,6 +224,7 @@ impl<'ctx> FnState<'ctx> {
             type_subst: HashMap::new(),
             tco: TailCallCtx::new(),
             closure_counter: 0,
+            self_type_name: None,
         }
     }
 }
@@ -496,17 +500,10 @@ impl<'ctx> Compiler<'ctx> {
         })
     }
 
-    /// Resolves an optional return type annotation to an Expo type, defaulting
-    /// to `Unit` when absent.
-    pub fn resolve_return_type(&self, return_type: &Option<TypeExpr>) -> Type {
-        match return_type {
-            Some(te) => self.resolve_type_expr(te),
-            None => Type::Unit,
-        }
-    }
-
     /// Resolves a type expression AST node into an Expo type, using the
-    /// currently registered struct and enum names for lookup.
+    /// currently registered struct and enum names for lookup. When inside an
+    /// `impl` block (`fn_state.self_type_name` is set), `Self` is automatically
+    /// substituted with the concrete target type.
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Type {
         let struct_names: Vec<&str> = self
             .type_ctx
@@ -522,12 +519,15 @@ impl<'ctx> Compiler<'ctx> {
             .filter(|(_, ti)| ti.is_enum())
             .map(|(name, _)| name.as_str())
             .collect();
-        let type_params: Vec<&str> = self
+        let mut type_params: Vec<&str> = self
             .fn_state
             .type_subst
             .keys()
             .map(|s| s.as_str())
             .collect();
+        if self.fn_state.self_type_name.is_some() && !type_params.contains(&"Self") {
+            type_params.push("Self");
+        }
         let ty = resolve_type_expr_with_params(
             type_expr,
             &struct_names,
@@ -535,7 +535,20 @@ impl<'ctx> Compiler<'ctx> {
             &type_params,
             &self.type_ctx.type_aliases,
         );
-        substitute_preserving(&ty, &self.fn_state.type_subst)
+        if let Some(ref name) = self.fn_state.self_type_name {
+            let self_ty = if self.type_ctx.is_struct(name) {
+                Type::Struct(name.clone())
+            } else if self.type_ctx.is_enum(name) {
+                Type::Enum(name.clone())
+            } else {
+                return substitute_preserving(&ty, &self.fn_state.type_subst);
+            };
+            let mut subst = self.fn_state.type_subst.clone();
+            subst.insert("Self".to_string(), self_ty);
+            substitute_preserving(&ty, &subst)
+        } else {
+            substitute_preserving(&ty, &self.fn_state.type_subst)
+        }
     }
 
     fn declare_function(
@@ -543,17 +556,11 @@ impl<'ctx> Compiler<'ctx> {
         func: &Function,
         self_type_name: Option<&str>,
     ) -> Result<FunctionValue<'ctx>, String> {
-        let mut return_type = self.resolve_return_type(&func.return_type);
-        if let Some(name) = self_type_name
-            && return_type == Type::Unknown
-            && matches!(&func.return_type, Some(TypeExpr::Self_ { .. }))
-        {
-            if self.type_ctx.is_struct(name) {
-                return_type = Type::Struct(name.to_string());
-            } else if self.type_ctx.is_enum(name) {
-                return_type = Type::Enum(name.to_string());
-            }
-        }
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type_expr(t))
+            .unwrap_or(Type::Unit);
         let mut param_types = Vec::new();
 
         if let Some(name) = self_type_name
@@ -764,6 +771,7 @@ impl<'ctx> Compiler<'ctx> {
                 Item::Impl(impl_block) => {
                     let target_name = self.type_name_from_expr(&impl_block.target);
                     if let Some(target_name) = target_name {
+                        self.fn_state.self_type_name = Some(target_name.clone());
                         for member in &impl_block.members {
                             if let ImplMember::Function(func) = member {
                                 let mangled = format!("{}_{}", target_name, func.name);
@@ -786,6 +794,7 @@ impl<'ctx> Compiler<'ctx> {
                                 self.functions.insert(mangled, fn_value);
                             }
                         }
+                        self.fn_state.self_type_name = None;
                     }
                 }
                 _ => {}
@@ -802,12 +811,15 @@ impl<'ctx> Compiler<'ctx> {
         func: &Function,
         self_type_name: Option<&str>,
     ) -> Result<(), String> {
+        self.fn_state.self_type_name = self_type_name.map(|s| s.to_string());
+
         let mangled = match self_type_name {
             Some(tn) => format!("{}_{}", tn, func.name),
             None => func.name.clone(),
         };
 
         if crate::intrinsics::is_primitive_intrinsic(&mangled) {
+            self.fn_state.self_type_name = None;
             return crate::intrinsics::emit_primitive_intrinsic(self, &mangled);
         }
 
@@ -817,6 +829,7 @@ impl<'ctx> Compiler<'ctx> {
             .ok_or_else(|| format!("undeclared function: {}", mangled))?;
 
         if fn_value.count_basic_blocks() > 0 {
+            self.fn_state.self_type_name = None;
             return Ok(());
         }
 
@@ -905,27 +918,23 @@ impl<'ctx> Compiler<'ctx> {
             })
             .collect();
 
-        let mut return_type = self.resolve_return_type(&func.return_type);
-        if let Some(target) = self_type_name
-            && return_type == Type::Unknown
-            && matches!(&func.return_type, Some(TypeExpr::Self_ { .. }))
-        {
-            if self.type_ctx.is_struct(target) {
-                return_type = Type::Struct(target.to_string());
-            } else if self.type_ctx.is_enum(target) {
-                return_type = Type::Enum(target.to_string());
-            }
-        }
+        let return_type = func
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type_expr(t))
+            .unwrap_or(Type::Unit);
 
         let self_type = self_type_name.map(|n| (n, n));
-        self.compile_method_body(
+        let result = self.compile_method_body(
             fn_value,
             func,
             self_type,
             &param_types,
             &return_type,
             HashMap::new(),
-        )
+        );
+        self.fn_state.self_type_name = None;
+        result
     }
 
     fn define_functions(&mut self, module: &Module) -> Result<(), String> {

@@ -908,18 +908,26 @@ For stateful, long-lived processes, implement the `Process` protocol. `C` is the
 ```expo
 protocol Process<C, M, R>
   fn new(config: C) -> Self
-  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self
-  fn run(move self)
+  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
+  fn handle_lifecycle(move self, event: Lifecycle) -> Self | StopReason
+  fn run(move self) -> StopReason
 end
 ```
 
-`run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle`:
+`handle` returns `Self | StopReason`. Returning `Self` continues the process; returning a `StopReason` variant (`Normal` or `Shutdown`) stops it.
+
+`handle_lifecycle` has a default implementation that stops on `Shutdown`/`Interrupt` and ignores `Reload`. Override it for graceful drain or hot config reload.
+
+`run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle` and stopping when a `StopReason` is returned:
 
 ```expo
-fn run(move self)
+fn run(move self) -> StopReason
   receive
     pair: Pair<M, Option<ReplyTo<R>>> ->
-      self.handle(pair.first, pair.second).run()
+      match self.handle(pair.first, pair.second)
+        next: Self -> next.run()
+        reason: StopReason -> reason
+      end
   end
 end
 ```
@@ -941,7 +949,7 @@ impl Process<Counter, CounterMsg, Int> for Counter
     config
   end
 
-  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self
+  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self | StopReason
     match msg
       CounterMsg.Increment -> self.count += 1
       CounterMsg.Decrement -> self.count -= 1
@@ -954,6 +962,45 @@ end
 ref = spawn Counter.new(Counter{count: 0})
 ref.cast(CounterMsg.Increment)
 count = ref.call(CounterMsg.Increment, 5000)
+```
+
+### Lifecycle and StopReason
+
+`Lifecycle` abstracts OS signals into a platform-agnostic enum:
+
+```expo
+enum Lifecycle
+  Shutdown    # SIGTERM
+  Interrupt   # SIGINT
+  Reload      # SIGHUP
+end
+```
+
+`StopReason` represents intentional process termination:
+
+```expo
+enum StopReason
+  Normal      # process finished its work
+  Shutdown    # process was told to stop
+end
+```
+
+The `ExitStatus` protocol maps a `StopReason` to an OS exit code (only relevant for the entry process):
+
+```expo
+protocol ExitStatus
+  fn code(self) -> Int
+end
+```
+
+`ExitReason` is what a supervisor sees when a child stops:
+
+```expo
+enum ExitReason
+  Normal
+  Shutdown
+  Crashed(String)
+end
 ```
 
 ### `Ref<M, R>`

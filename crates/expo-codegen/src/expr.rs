@@ -1033,7 +1033,7 @@ fn compile_receive<'ctx>(
                 .unwrap();
 
             c.builder.position_at_end(empty_bb);
-            c.builder.build_return(None).unwrap();
+            c.builder.build_unreachable().unwrap();
 
             c.builder.position_at_end(got_msg_bb);
         }

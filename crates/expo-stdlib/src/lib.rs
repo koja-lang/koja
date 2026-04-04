@@ -4,6 +4,7 @@
 //! [`SOURCES`] provides all modules in dependency order (kernel first).
 
 pub const KERNEL: &str = include_str!("../std/kernel.expo");
+pub const PROCESS: &str = include_str!("../std/process.expo");
 pub const DEBUG: &str = include_str!("../std/debug.expo");
 pub const LIST: &str = include_str!("../std/list.expo");
 pub const STRING: &str = include_str!("../std/string.expo");
@@ -22,6 +23,7 @@ pub const TIME: &str = include_str!("../std/time.expo");
 /// Each entry is `(fully_qualified_module_name, source_text)`.
 pub const SOURCES: &[(&str, &str)] = &[
     ("std.kernel", KERNEL),
+    ("std.process", PROCESS),
     ("std.debug", DEBUG),
     ("std.list", LIST),
     ("std.string", STRING),

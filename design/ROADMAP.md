@@ -61,7 +61,7 @@ Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, 
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
 - `Self` type expression in `protocol` and `impl` blocks
 - `Hash` and `Equality` protocols with intrinsic implementations for all primitives
-- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`)
+- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `std.process`)
 - `List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) implemented as pure Expo code in `std.kernel`
 - Bare function names as references (`f = double; f(5)`, `list.map(double)`) -- top-level functions produce closure-compatible fat pointers via thunk wrappers
 - Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support with typed binding patterns (`p: Post -> p.title`)
@@ -172,6 +172,7 @@ Stdlib contains primitives that are as fundamental as integers -- things the com
 - `std.file` -- **DONE** `FileMode` enum (`Read`, `Write`, `Append`). `File.open(path, mode)` opens with explicit mode. `File.write(path, content)` for one-shot writes. `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)` for path-based operations. Handle-level writes via `file.fd.write(data)`. `seek` deferred until embedded database work.
 - `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space -- reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases, large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
 - `std.io` -- **DONE** `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
+- `std.process` -- **DONE** process lifecycle types and the `Process` protocol. `ReplyTo<R>`, `Ref<M, R>`, `Task<R>` (moved from `std.kernel`). New types: `Lifecycle` (`Shutdown`, `Interrupt`, `Reload`), `StopReason` (`Normal`, `Shutdown`), `ExitStatus` protocol, `ExitReason` (`Normal`, `Shutdown`, `Crashed(String)`). `Process<C, M, R>` updated: `handle` returns `Self | StopReason`, `run` returns `StopReason`, `handle_lifecycle` has a default implementation.
 - `std.debug` -- **DONE** `Debug` protocol with `format(self) -> String` and `inspect(move self) -> Self` (tap-style). Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation dispatch through `Debug.format()`.
 - `std.system` -- **DONE** `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Genuinely global OS state operations not tied to any process's C/M/R types. Thin wrappers over C stdlib calls via runtime intrinsics.
 - `std.time` -- **DONE** `DateTime.now() -> DateTime`, `DateTime.timestamp_millis(self) -> Int` for wall-clock time. `Duration.from_secs(Int) -> Duration`, `Duration.from_millis(Int) -> Duration`, `Duration.millis(self) -> Int` for time spans. `Duration` is pure Expo (no intrinsics). Only `DateTime.now()` requires a runtime shim.
@@ -502,6 +503,8 @@ Active design discussions about the type system, code organization, and function
 - In protocol declarations, `Self` is abstract -- it becomes a type variable that the compiler substitutes with the concrete type when checking `impl` blocks.
 - In `impl` blocks, `Self` resolves to the target type (e.g., `impl ListLiteral<T> for List<T>` → `Self` = `List<T>`).
 - Works with generics and monomorphization. Modeled after Rust's `Self` and Swift's `Self`.
+- `Self` works inside union types (e.g., `-> Self | StopReason`) in both type checker and codegen.
+- **Implementation**: centralized resolution via `fn_state.self_type_name` (codegen) and a shared `resolve` closure (type checker). No special-case methods -- `Self` is injected into the standard type resolution path as a type parameter with automatic substitution.
 - Syntax highlighting and formatter support included.
 
 ### `impl` and protocols (decided, implemented)
@@ -559,7 +562,7 @@ Active design discussions about the type system, code organization, and function
 
 ### Stdlib design (implemented)
 
-- **Done**: `std.kernel` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. Embedded in the compiler via `include_str!`, parsed at startup, types merged into every module's context before type checking.
+- **Done**: `std.kernel` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. `std.process` for process lifecycle types (`Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason`, `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`). Both embedded in the compiler via `include_str!`, parsed at startup, types merged into every module's context before type checking.
 - Rule: "stdlib = always available, packages = explicit import." All `std.*` modules are auto-imported. As the stdlib grows, types split into separate modules (`std.option`, `std.string`, `std.list`) for documentation and organization, but all remain auto-imported.
 - Option/Result API: `unwrap` (panics on failure), `or` (lazy fallback), `some?`/`none?` (Option), `ok?`/`err?` (Result), `map` (transform inner value), `then` (flat map / chain fallible operations).
 - No `map_err` yet. No `or_else` -- `or` is implicitly lazy.

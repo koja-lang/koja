@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `std.process` module -- process-related types (`ReplyTo`, `Ref`, `Task`, `Process` protocol) moved from `std.kernel` to a dedicated `std.process` module. New lifecycle types: `Lifecycle` enum (`Shutdown`, `Interrupt`, `Reload`), `StopReason` enum (`Normal`, `Shutdown`), `ExitStatus` protocol, `ExitReason` enum (`Normal`, `Shutdown`, `Crashed(String)`). `Process` protocol updated: `handle` returns `Self | StopReason`, `run` returns `StopReason`, and a new `handle_lifecycle` method with a default implementation handles lifecycle events.
 - Closure `move` params -- closures now support `move` on parameters (`fn (move x: T) -> U ... end`), matching regular function syntax. `Type::Function` carries per-parameter pass modes via a new `FnParam { ty, mode }` struct, enabling end-to-end type enforcement of `fn (move T) -> U` contracts. Parser, type checker, codegen, formatter, and LSP all updated.
 - `expo new <name>` -- scaffolds a new Expo project directory with `expo.toml` and `src/main.expo`. Project name must be ASCII alphanumeric or underscores.
 - `alias` keyword for file-private package type shorthands -- `alias json.Decoder` makes `Decoder` available as a local name, `alias json.Decoder as JSONDecoder` binds a custom local name. Qualified type references (`package.Type` syntax) resolve against dependency package types. Package type tracking via `ModuleGraph.dep_packages` and `TypeContext.package_types`. Formatter, doc extractor, and LSP all handle `Item::Alias`.
@@ -41,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Self` resolution centralized -- `Self` type substitution in `impl` blocks is now handled by a single code path in both the type checker and codegen, rather than scattered special-case logic. Previously, `Self` inside union return types (e.g., `Self | StopReason`) resolved to `Unknown`. The type checker uses a shared `resolve` closure with `Self`-aware substitution for both parameters and return types. Codegen stores `self_type_name` in `FnState` and injects `Self` into the standard `resolve_type_expr` path, eliminating the separate `resolve_return_type_with_self` helper.
 - Generic enum variants where not all type parameters are inferrable from the payload (e.g., `Result.Ok(value)` in a function returning `Result<T, String>`) no longer fail with an LLVM type mismatch.
 - Static method calls as bare statements (e.g., `System.set_env(key, value)`) no longer emit a spurious "unknown variable" error. The discarded-move-self warning now skips static calls.
 

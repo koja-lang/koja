@@ -4,7 +4,7 @@
 //! bodies and impl blocks, plus shared helper functions used across the
 //! type-checking modules.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use expo_ast::ast::*;
 use expo_ast::span::Span;
@@ -14,7 +14,7 @@ use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr, infer_expr_with_expected};
 use crate::stmt::check_body;
 use crate::types::numeric_compatible;
-use crate::types::{Primitive, Type, resolve_type_expr};
+use crate::types::{Primitive, Type, resolve_type_expr_with_params, substitute_preserving};
 
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
@@ -122,6 +122,24 @@ fn check_function_with_msg(
     enum_names: &[&str],
     override_msg_type: Option<Type>,
 ) {
+    let self_subst: Option<HashMap<String, Type>> =
+        self_type.map(|ty| HashMap::from([("Self".to_string(), ty.clone())]));
+    let self_params: &[&str] = if self_type.is_some() { &["Self"] } else { &[] };
+
+    let resolve = |te: &TypeExpr| -> Type {
+        let ty = resolve_type_expr_with_params(
+            te,
+            struct_names,
+            enum_names,
+            self_params,
+            &BTreeMap::new(),
+        );
+        match &self_subst {
+            Some(subst) => substitute_preserving(&ty, subst),
+            None => ty,
+        }
+    };
+
     let mut env: HashMap<String, VarInfo> = HashMap::new();
 
     if let Some(ty) = self_type {
@@ -139,7 +157,7 @@ fn check_function_with_msg(
             name, type_expr, ..
         } = param
         {
-            let ty = resolve_type_expr(type_expr, struct_names, enum_names);
+            let ty = resolve(type_expr);
             env.insert(
                 name.clone(),
                 VarInfo {
@@ -150,21 +168,7 @@ fn check_function_with_msg(
         }
     }
 
-    let declared_return = f
-        .return_type
-        .as_ref()
-        .map(|t| resolve_type_expr(t, struct_names, enum_names))
-        .unwrap_or(Type::Unit);
-    let declared_return = if declared_return == Type::Unknown
-        && let Some(self_ty) = self_type
-        && f.return_type
-            .as_ref()
-            .is_some_and(|t| matches!(t, TypeExpr::Self_ { .. }))
-    {
-        self_ty.clone()
-    } else {
-        declared_return
-    };
+    let declared_return = f.return_type.as_ref().map(&resolve).unwrap_or(Type::Unit);
 
     if f.body.is_empty() {
         return;
