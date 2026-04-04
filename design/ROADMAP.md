@@ -238,7 +238,7 @@ Multi-threaded round-robin scheduling and I/O reactor are implemented. Work-stea
 - ~~**Container-aware thread count**~~ -- reads cgroup v2 CPU quota (`/sys/fs/cgroup/cpu.max`) on Linux; falls back to `available_parallelism` on macOS and bare-metal Linux.
 - ~~**Idle thread parking (no spin)**~~ -- idle workers park on a `Condvar` when no work is available, consuming zero CPU. Woken by `send`, `spawn`, or deadline expiry.
 - ~~**Graceful shutdown**~~ -- `AtomicBool` shutdown flag set when the main process (PID 1) dies. All workers exit their loops and join. Deadlock detection for all-blocked-without-timeout scenarios.
-- ~~**I/O reactor**~~ -- non-blocking socket I/O via the `polling` crate (kqueue/epoll/IOCP). Sockets are `O_NONBLOCK`; on `EAGAIN`, processes enter `WaitingIo` state and the reactor wakes them on readiness. Dedicated reactor thread alongside workers. Covers `accept`, `connect`, `recv_from`, `send_to`, `fd_read`, `fd_write`. DNS and file I/O stay blocking.
+- ~~**I/O reactor**~~ -- non-blocking socket I/O via the `polling` crate (kqueue on macOS, epoll on Linux). Sockets are `O_NONBLOCK`; on `EAGAIN`, processes enter `WaitingIo` state and the reactor wakes them on readiness. Dedicated reactor thread alongside workers. Covers `accept`, `connect`, `recv_from`, `send_to`, `fd_read`, `fd_write`. DNS and file I/O stay blocking.
 
 **Remaining:**
 

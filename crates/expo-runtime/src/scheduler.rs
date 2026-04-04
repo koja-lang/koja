@@ -30,17 +30,11 @@ const INIT_FRAME_SIZE: usize = 160;
 #[cfg(target_arch = "aarch64")]
 const RET_ADDR_OFFSET: usize = 88;
 
-// Intel Macs and Linux
-#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+// x86_64 (SysV ABI)
+#[cfg(target_arch = "x86_64")]
 const INIT_FRAME_SIZE: usize = 64;
-#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+#[cfg(target_arch = "x86_64")]
 const RET_ADDR_OFFSET: usize = 48;
-
-// Windows
-#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
-const INIT_FRAME_SIZE: usize = 240;
-#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
-const RET_ADDR_OFFSET: usize = 224;
 
 // ---------------------------------------------------------------------------
 // Process & scheduler state

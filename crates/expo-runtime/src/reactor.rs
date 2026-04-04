@@ -1,4 +1,4 @@
-//! I/O reactor backed by the `polling` crate (kqueue/epoll/IOCP).
+//! I/O reactor backed by the `polling` crate (kqueue on macOS, epoll on Linux).
 //!
 //! A single dedicated reactor thread runs [`reactor_loop`], polling for
 //! readiness events on registered file descriptors. When a fd becomes

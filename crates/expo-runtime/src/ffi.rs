@@ -6,41 +6,36 @@ pub const AF_INET: i32 = 2;
 pub const SOCK_STREAM: i32 = 1;
 /// Datagram (UDP) socket type.
 pub const SOCK_DGRAM: i32 = 2;
-/// Socket-level option group for `setsockopt`.
-pub const SOL_SOCKET: i32 = 0xFFFF;
-/// Allow local address reuse (`setsockopt` option).
-pub const SO_REUSEADDR: i32 = 0x0004;
-/// Retrieve pending socket error (`getsockopt` option).
-pub const SO_ERROR: i32 = 0x1007;
+
+#[cfg(target_os = "macos")]
+mod platform {
+    pub const SOL_SOCKET: i32 = 0xFFFF;
+    pub const SO_REUSEADDR: i32 = 0x0004;
+    pub const SO_ERROR: i32 = 0x1007;
+    pub const O_NONBLOCK: i32 = 0x0004;
+    pub const EAGAIN: i32 = 35;
+    pub const EINPROGRESS: i32 = 36;
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    pub const SOL_SOCKET: i32 = 1;
+    pub const SO_REUSEADDR: i32 = 2;
+    pub const SO_ERROR: i32 = 4;
+    pub const O_NONBLOCK: i32 = 0x800;
+    pub const EAGAIN: i32 = 11;
+    pub const EINPROGRESS: i32 = 115;
+}
+
+pub use platform::*;
 
 /// Get file descriptor flags.
 pub const F_GETFL: i32 = 3;
 /// Set file descriptor flags.
 pub const F_SETFL: i32 = 4;
-/// Non-blocking I/O flag for `fcntl`.
-pub const O_NONBLOCK: i32 = 0x0004;
 
-/// `EAGAIN` errno value (resource temporarily unavailable).
+/// BSD `sockaddr_in` (macOS: includes `sin_len` field).
 #[cfg(target_os = "macos")]
-pub const EAGAIN: i32 = 35;
-/// `EAGAIN` errno value (resource temporarily unavailable).
-#[cfg(target_os = "linux")]
-pub const EAGAIN: i32 = 11;
-/// `EAGAIN` errno value (resource temporarily unavailable).
-#[cfg(target_os = "windows")]
-pub const EAGAIN: i32 = 11;
-
-/// `EINPROGRESS` errno value (connection in progress).
-#[cfg(target_os = "macos")]
-pub const EINPROGRESS: i32 = 36;
-/// `EINPROGRESS` errno value (connection in progress).
-#[cfg(target_os = "linux")]
-pub const EINPROGRESS: i32 = 115;
-/// `EINPROGRESS` errno value (connection in progress).
-#[cfg(target_os = "windows")]
-pub const EINPROGRESS: i32 = 112;
-
-/// BSD/POSIX `sockaddr_in` for IPv4 socket addresses.
 #[repr(C)]
 pub struct SockaddrIn {
     pub sin_len: u8,
@@ -50,7 +45,22 @@ pub struct SockaddrIn {
     pub sin_zero: [u8; 8],
 }
 
+/// Linux `sockaddr_in` (no `sin_len` field, `sin_family` is `u16`).
+#[cfg(target_os = "linux")]
+#[repr(C)]
+pub struct SockaddrIn {
+    pub sin_family: u16,
+    pub sin_port: u16,
+    pub sin_addr: u32,
+    pub sin_zero: [u8; 8],
+}
+
 /// POSIX `addrinfo` returned by `getaddrinfo`.
+///
+/// Field order differs between macOS and Linux:
+/// - macOS: canonname, addr, next
+/// - Linux: addr, canonname, next
+#[cfg(target_os = "macos")]
 #[repr(C)]
 pub struct Addrinfo {
     pub ai_flags: i32,
@@ -60,6 +70,19 @@ pub struct Addrinfo {
     pub ai_addrlen: u32,
     pub ai_canonname: *mut u8,
     pub ai_addr: *mut u8,
+    pub ai_next: *mut Addrinfo,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+pub struct Addrinfo {
+    pub ai_flags: i32,
+    pub ai_family: i32,
+    pub ai_socktype: i32,
+    pub ai_protocol: i32,
+    pub ai_addrlen: u32,
+    pub ai_addr: *mut u8,
+    pub ai_canonname: *mut u8,
     pub ai_next: *mut Addrinfo,
 }
 

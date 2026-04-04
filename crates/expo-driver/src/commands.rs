@@ -11,25 +11,12 @@ use crate::diagnostics::render_diagnostics;
 use crate::pipeline;
 use crate::project;
 
-/// Replaces the current process with the given binary (Unix) or spawns and
-/// waits for it (non-Unix). Never returns on success.
-#[cfg(unix)]
+/// Replaces the current process with the given binary via `exec`. Never returns on success.
 fn exec_binary(binary: &Path, args: &[String]) -> ! {
     use std::os::unix::process::CommandExt;
     let err = process::Command::new(binary).args(args).exec();
     eprintln!("failed to run binary: {err}");
     process::exit(1);
-}
-
-#[cfg(not(unix))]
-fn exec_binary(binary: &Path, args: &[String]) -> ! {
-    match process::Command::new(binary).args(args).status() {
-        Ok(s) => process::exit(s.code().unwrap_or(1)),
-        Err(e) => {
-            eprintln!("failed to run binary: {e}");
-            process::exit(1);
-        }
-    }
 }
 
 /// Returns the `target/debug/` directory under the given root, creating it

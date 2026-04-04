@@ -323,8 +323,12 @@ fn build_sockaddr_from_ip(ip_ptr: *const u8, port: i64) -> Result<(SockaddrIn, u
             let mut ip_bytes = [0u8; 4];
             unsafe { ptr::copy_nonoverlapping(ip_ptr, ip_bytes.as_mut_ptr(), 4) };
             let addr = SockaddrIn {
+                #[cfg(target_os = "macos")]
                 sin_len: mem::size_of::<SockaddrIn>() as u8,
+                #[cfg(target_os = "macos")]
                 sin_family: AF_INET as u8,
+                #[cfg(target_os = "linux")]
+                sin_family: AF_INET as u16,
                 sin_port: (port as u16).to_be(),
                 sin_addr: u32::from_ne_bytes(ip_bytes),
                 sin_zero: [0; 8],
