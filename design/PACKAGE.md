@@ -124,16 +124,16 @@ backwards compatibility.
 Stdlib, the cookbook, and `expo.toml` dependencies serve different
 purposes:
 
-| Mechanism       | Purpose                         | Ships with compiler | Versioned |
-| --------------- | ------------------------------- | ------------------- | --------- |
-| `std.*`         | Language primitives             | Yes                 | Yes (with compiler) |
-| Cookbook         | Reference implementations       | No (separate repo)  | No        |
-| `expo.toml` deps| Shared code between own projects| N/A                 | By git ref |
+| Mechanism        | Purpose                          | Ships with compiler | Versioned           |
+| ---------------- | -------------------------------- | ------------------- | ------------------- |
+| `std.*`          | Language primitives              | Yes                 | Yes (with compiler) |
+| Cookbook         | Reference implementations        | No (separate repo)  | No                  |
+| `expo.toml` deps | Shared code between own projects | N/A                 | By git ref          |
 
 `expo.toml` local path and git dependencies remain useful for sharing
 code between your own projects (a monorepo with shared types, an
 internal library used across services). The cookbook doesn't replace
-that -- it replaces the *community package ecosystem*.
+that -- it replaces the _community package ecosystem_.
 
 ---
 
@@ -169,8 +169,9 @@ Implementation uses standard HTML `<details>` tags:
 
 ```html
 <h3>Postgres.connect</h3>
-<p>Establishes a connection to a PostgreSQL server
-   using the v3 wire protocol.</p>
+<p>
+  Establishes a connection to a PostgreSQL server using the v3 wire protocol.
+</p>
 
 <pre><code>conn = Postgres.connect("localhost", 5432, "mydb", "user", "pass")</code></pre>
 

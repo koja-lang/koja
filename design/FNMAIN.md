@@ -6,9 +6,9 @@
 
 The language has three related open questions:
 
-1. **Where does `fn main` live?** (IMPORT.md, lines 585-595)
+1. **Where does `fn main` live?** (archive/20260403-IMPORT.md, lines 585-595)
 2. **Should `impl Type` migrate to inline functions in type bodies?** (ROADMAP.md, lines 514-521, 538-542)
-3. **How does `fn main` relate to `Process<C, M, R>`?** (PROCESS.md, lines 256-281; ROADMAP.md, lines 304-312)
+3. **How does `fn main` relate to `Process<C, M, R>`?** (archive/20260403-PROCESS.md, lines 256-281; ROADMAP.md, lines 304-312)
 
 This doc proposes a unified answer to all three.
 
@@ -296,7 +296,7 @@ This differs from Erlang's "let it crash" philosophy. In Erlang, crashes are rou
 
 ## Proposal: inline functions on types
 
-Functions can be defined directly inside `struct` and `enum` bodies. `impl` becomes the mechanism for *extending* a type from outside (other files, protocol conformance).
+Functions can be defined directly inside `struct` and `enum` bodies. `impl` becomes the mechanism for _extending_ a type from outside (other files, protocol conformance).
 
 ### Struct with inline functions
 
@@ -427,7 +427,7 @@ The REPL (ROADMAP.md, lines 352-359) uses `.exps` semantics. A REPL session is a
 
 ## Function-scoped types (future exploration)
 
-Since `.exps` files already allow types inside a function body (the script *is* a function body), the fractal design question is: can *any* function body define types?
+Since `.exps` files already allow types inside a function body (the script _is_ a function body), the fractal design question is: can _any_ function body define types?
 
 ```expo
 struct DataPipeline
@@ -508,32 +508,111 @@ Test files use `@test` annotations on functions inside types. They are `.expo` f
 
 ## Cross-references
 
-- **IMPORT.md, lines 585-595:** Open question about removing top-level functions -- this doc answers it. No free functions in `.expo` files. Top-level statements exist only in `.exps` scripts.
-- **IMPORT.md, lines 203-205:** Top-level functions in flat scope -- eliminated. All functions on types.
-- **PROCESS.md, lines 256-281:** `fn main` vs `Process` split -- resolved. Projects always use `Process`. Scripts use `.exps`.
-- **PROCESS.md, lines 304-312 / ROADMAP.md, lines 304-312:** `fn main` as `Process<C,M,R>` -- the entry type *is* the `Process` impl. argv as config, lifecycle events via `handle_lifecycle`, exit codes via `ExitStatus` protocol.
+- **archive/20260403-IMPORT.md, lines 585-595:** Open question about removing top-level functions -- this doc answers it. No free functions in `.expo` files. Top-level statements exist only in `.exps` scripts.
+- **archive/20260403-IMPORT.md, lines 203-205:** Top-level functions in flat scope -- eliminated. All functions on types.
+- **archive/20260403-PROCESS.md, lines 256-281:** `fn main` vs `Process` split -- resolved. Projects always use `Process`. Scripts use `.exps`.
+- **archive/20260403-PROCESS.md, lines 304-312 / ROADMAP.md, lines 304-312:** `fn main` as `Process<C,M,R>` -- the entry type _is_ the `Process` impl. argv as config, lifecycle events via `handle_lifecycle`, exit codes via `ExitStatus` protocol.
 - **ROADMAP.md, lines 514-521:** Open question about `impl Type` migrating to inline functions -- this doc proposes it.
 - **ROADMAP.md, lines 538-542:** Type system philosophy, inline functions on types -- addressed here.
 - **ROADMAP.md, lines 544-551:** Namespace unification -- compatible, modules and types both own functions.
 - **ROADMAP.md, lines 352-359:** REPL design -- uses `.exps` script semantics.
-- **PROJECT.md, lines 555-557:** Entry file may have top-level statements -- replaced: `.expo` files never have top-level statements; `.exps` files always do.
+- **archive/20260403-PROJECT.md, lines 555-557:** Entry file may have top-level statements -- replaced: `.expo` files never have top-level statements; `.exps` files always do.
+
+---
+
+## Open: panic behavior
+
+(Migrated from [archive/20260403-PROCESS.md](archive/20260403-PROCESS.md))
+
+A panic is not a clean exit. The process didn't choose to return
+`StopReason` -- it crashed unexpectedly. Supervisors need to distinguish
+these two cases to decide restart strategy:
+
+- **Normal exit**: the process returned `StopReason`. The supervisor knows
+  the exit was intentional.
+- **Panic crash**: the process called `panic()` or hit an unrecoverable
+  error. The supervisor needs a different notification.
+
+`ExitReason.Crashed(String)` is defined in `std.process` but runtime
+delivery is not yet designed. Options:
+
+**Option A: separate crash notification.** The runtime sends a different
+signal type for panics. The supervisor's M includes both clean exit
+notifications (carrying `StopReason`) and crash notifications (carrying
+panic info). This keeps `StopReason` clean.
+
+**Option B: runtime wraps exits.** The supervisor doesn't receive raw
+`StopReason` -- it receives `ExitReason` which is either
+`Normal`, `Shutdown`, or `Crashed(String)`. The supervisor always
+knows whether the child exited cleanly or crashed.
+
+In Erlang, exit reasons include `:normal`, `:shutdown`, and arbitrary crash
+terms. The supervisor inspects the reason to decide on restart.
+
+---
+
+## Open: supervision details
+
+(Migrated from [archive/20260403-PROCESS.md](archive/20260403-PROCESS.md))
+
+### Prerequisites
+
+- **`Pid` type** -- type-erased process ID for `ExitSignal` and registries.
+  Distinct from `Ref<M, R>`.
+- ~~**Trait bounds on generics**~~ -- **Done.**
+- **`copy` keyword** -- needed for `child_spec` closures that capture config
+  for supervisor restart.
+
+### Exit notification flow
+
+When a child process exits or crashes, the supervisor needs to know.
+`ExitSignal` carries `pid: Pid` and `reason: ExitReason`:
+
+```expo
+type SupervisorMsg = SupervisorCmd | ExitSignal
+```
+
+The supervisor includes `ExitSignal` in its M type via a union. The runtime
+sends an `ExitSignal` to the supervisor's mailbox when a monitored child
+dies. `Process.monitor(ref)` sets up the monitoring relationship.
+
+Exit notifications are type-erased -- the supervisor receives `ExitReason`
+(not the child's typed `StopReason`), since the supervisor may monitor
+children of different types.
+
+### Child specs and restart strategies
+
+- `ChildSpec` holds a `start: fn() -> Pid` closure and a `RestartStrategy`
+- The closure captures `copy config` for type-erased restart
+- Restart strategies: `OneForOne`, `OneForAll`, `RestForOne`
+- Max-restarts-exceeded crashes the supervisor (fail-fast)
+
+### Shutdown ordering
+
+Supervisors shut down children in reverse start order (last started, first
+stopped). Each child spec may include a shutdown timeout. The supervisor
+sends a shutdown signal, waits up to the timeout, then kills the child if
+it hasn't exited.
+
+This interacts with the `handle_lifecycle` design: the supervisor sends
+`Lifecycle.Shutdown` to each child, which flows through `handle_lifecycle`.
 
 ---
 
 ## Summary
 
-| Today | Proposed |
-|-------|----------|
-| `fn main` is a special free-floating function | Entry point is a `Process` impl specified in `expo.toml` (TBD: `project.exps`) |
-| Functions defined in separate `impl` blocks | Functions defined inline in `struct`/`enum` bodies |
-| `impl Type` for primary methods | `impl` reserved for extensions and protocol conformance |
-| Free functions disallowed (except `fn main`) | No free functions, period. Consistent rule. |
-| Hello world requires `fn main` ceremony | Hello world: `IO.puts("Hello!")` in a `.exps` script |
-| One file extension (`.expo`) | Two: `.expo` (structured modules) and `.exps` (scripts) |
-| REPL is a separate design question | REPL is `.exps` semantics, interactive |
-| OS signals handled ad-hoc (`Signal` placeholder) | `Lifecycle` enum with `handle_lifecycle` default impl on `Process` |
-| Exit codes as reply type (`ExitCode` placeholder) | `StopReason` enum, `ExitStatus` protocol for OS exit code mapping |
-| No supervision model | `ExitReason` for supervisors, `Lifecycle` propagation, fractal dispatch |
+| Today                                             | Proposed                                                                       |
+| ------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `fn main` is a special free-floating function     | Entry point is a `Process` impl specified in `expo.toml` (TBD: `project.exps`) |
+| Functions defined in separate `impl` blocks       | Functions defined inline in `struct`/`enum` bodies                             |
+| `impl Type` for primary methods                   | `impl` reserved for extensions and protocol conformance                        |
+| Free functions disallowed (except `fn main`)      | No free functions, period. Consistent rule.                                    |
+| Hello world requires `fn main` ceremony           | Hello world: `IO.puts("Hello!")` in a `.exps` script                           |
+| One file extension (`.expo`)                      | Two: `.expo` (structured modules) and `.exps` (scripts)                        |
+| REPL is a separate design question                | REPL is `.exps` semantics, interactive                                         |
+| OS signals handled ad-hoc (`Signal` placeholder)  | `Lifecycle` enum with `handle_lifecycle` default impl on `Process`             |
+| Exit codes as reply type (`ExitCode` placeholder) | `StopReason` enum, `ExitStatus` protocol for OS exit code mapping              |
+| No supervision model                              | `ExitReason` for supervisors, `Lifecycle` propagation, fractal dispatch        |
 
 ---
 

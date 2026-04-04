@@ -15,9 +15,7 @@
       },
       "name": "markup.fenced_code.block.markdown",
       "contentName": "meta.embedded.block.expo",
-      "patterns": [
-        { "include": "source.expo" }
-      ]
+      "patterns": [{ "include": "source.expo" }]
     }
   ]
 }

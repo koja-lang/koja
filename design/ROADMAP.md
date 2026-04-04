@@ -87,13 +87,7 @@ Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, 
 
 ### Known gaps
 
-- **Generic enum unit variants in top-level code**: `Option.None` cannot infer `T` without usage context in bare declarations -- workaround: variable type annotations (`z: Option<Int32> = Option.None`). Inside monomorphized method bodies and closures with return type annotations, generic enum construction resolves all type parameters automatically. Also affects generic function calls where one argument is a generic unit variant: `Pair.new(self, Option.None)` in a function returning `Pair<Lexer, Option<String>>` fails to infer `A` and `B` because the return type isn't propagated into the call. Workaround: use struct literals directly (`Pair{first: self, second: Option.None}`) where the return type annotation provides context, or bind with a type annotation first.
-- **Type checker**: `ref T` parsed but deferred (redundant with borrow-by-default, revisit if a concrete use case emerges)
-- **Iteration protocol**: `Enumeration<T>` requires `length()` + `get(index)`, locking `for` to index-based while loops. This precludes lazy iteration, streaming, and any non-random-access collection (maps, linked lists, generators). Pre-v1.0, replace with an `Iterator<T>` protocol using `next(move self) -> Option<Pair<T, Self>>`. `get` now returns `Option<T>`. Codegen change is contained to `compile_for` in `loops.rs`; List/String impls wrap existing index-based access in iterator state. Note: the current `for` loop hides the `Option` from the user (unwraps automatically since iteration is bounds-checked). With lazy iteration, `Option` becomes the termination mechanism -- `for` desugars to `loop { match iter.next() ... }` and `None` breaks the loop.
-- **Nested enum pattern matching with literal payloads**: matching a nested variant with a literal payload (e.g., `Some(TokenKind.Ident("and"))`) causes a segfault at runtime. The workaround is to bind the payload and check it in the body: `Some(TokenKind.Ident(name)) -> name == "and"`. Surfaced during the self-hosted lexer port (`continues_line?`).
-- **Nested enum equality codegen**: comparing `Option<SomeEnum>` with `==` generates invalid LLVM IR (phi node predecessors mismatch) when the inner enum has many variants. The workaround is to use `match` instead of `==` for `Option<Enum>` comparisons. Surfaced during the self-hosted lexer port (`lex_newline` duplicate newline check).
-- **`match` inside `while`/`loop` with `return` causes codegen crash**: when a `match` expression appears inside a `while` or `loop` body and any arm contains a `return` statement, the generated binary segfaults on startup (before `main` runs). The crash is in LLVM codegen -- likely incorrect basic block wiring for the match's phi nodes when nested inside a loop's back-edge structure. Workaround: use recursion instead of loops with `match`. Since Expo is FP-oriented, recursive helpers with `move` parameters are idiomatic and avoid the bug entirely. Surfaced during the `json` package decoder (recursive descent parser for arrays and objects).
-- **Free function codegen gap**: free functions (outside `impl` blocks) pass `expo check` but crash at codegen with `"assignment value produced no value"`. The type checker still has old semantics from before the migration to `impl`-based functions. Fix: either reject free functions at the type-check stage with a clear error (`"functions must be declared inside impl blocks"`), or finish codegen support. Surfaced during the agent expression evaluator test.
+See [GAPS.md](GAPS.md) for known compiler limitations and workarounds.
 
 ### Design artifacts
 
@@ -103,7 +97,7 @@ Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, 
 - **Memory strategy** -- documented in `archive/20260323-MEMORY.md` (stack, ownership+move, explicit arena)
 - **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `archive/20260323-CONCURRENCY.md` (processes, native runtime, supervision)
 - **Project config format** -- `expo.toml` (TOML-based, replacing `project.expo`)
-- **Module system redesign** -- documented in `IMPORT.md` (files as transparent, types as namespaces, no intra-project imports, qualified package access, `import` keyword removed)
+- **Module system redesign** -- documented in `archive/20260403-IMPORT.md` (files as transparent, types as namespaces, no intra-project imports, qualified package access, `import` keyword removed)
 
 ### Tooling (pulled forward)
 
@@ -203,17 +197,20 @@ User-facing foreign function interface for calling C libraries. Expo already cal
 - Self-contained addition: no changes to the module system, type inference, gather-then-check pipeline, or project system. Parser adds `extern` blocks, type checker types them like bodyless functions, codegen emits `declare` instead of `define`.
 - **Done when**: an `argon2` wrapper package calls `libargon2` to hash and verify passwords
 
+#### Standard library packages
+
+`net`, `http`, and `json` are stdlib packages -- they ship with the compiler, are always available, and use qualified imports (`net.TCPSocket`, `http.Request`). See [STDLIB.md](STDLIB.md) for the full package hierarchy design.
+
+- `net` -- `TCPSocket` (with TLS via `upgrade_tls`), `TCPListener`, `UDPSocket`, `TLSConfig`. Built on `net.Socket` (raw POSIX primitives from current `std.socket`).
+- `http` -- shared vocabulary types (`Request`, `Response`, `Method`, `Status`, `Headers`), HTTP/1.1 parser, one-shot client, spawn-per-connection server.
+- `json` -- already implemented as a standalone package. Promote to stdlib status.
+
 #### First-party packages
 
-High-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline. Networking lives here because the API surface evolves (QUIC, io_uring, TLS integration, connection pooling) -- you don't want that locked into the stdlib release cycle.
+High-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline.
 
-- `net` -- networking primitives as submodules, one package, coordinated releases. Built entirely in pure Expo on top of `std.socket` -- no compiler intrinsics needed. Shared types (`IPAddress`, `SocketAddress`) from `std.socket` used across submodules.
-  - `net.tcp` -- `TcpListener` (bind + accept) and `TcpSocket` (connect + read + write + close). Both wrap `Socket`/`Fd` from stdlib. `TcpListener.accept()` returns a `TcpSocket` -- same type for server and client connections. Uses `Socket.create(SocketKind.Stream)` + `Socket.resolve` for DNS.
-  - `net.udp` -- `UdpSocket` with `bind`, `send_to`, `recv_from`. Datagram-oriented, no connections. Uses `Socket.create(SocketKind.Datagram)`. Independent from TCP -- different semantics, different API shape.
-  - `net.tls` -- `TlsSocket` wrapping a `TcpSocket` with encryption. `TlsSocket.wrap(move socket: TcpSocket, config: TlsConfig) -> Result<TlsSocket, TlsError>`. Same `read`/`write`/`close` interface. Thin wrapper over system TLS library (LibreSSL/OpenSSL/BoringSSL via C FFI). Programs that only import `net.tcp` don't pull in TLS dependencies.
-- `http` -- HTTP server and client built on `net.tcp` / `net.tls`. Request parsing, routing, response building, middleware. Server spawns a process per connection using `Process<C, M, R>`. Binary pattern matching for protocol parsing. `http.client` for outbound requests.
-- `websocket` -- WebSocket server and client built on `http` (upgrade handshake) and `net.tcp` (framed message transport). Each WebSocket connection is a process -- natural fit for Expo's concurrency model. Frame parsing via binary pattern matching.
-- `json` -- `JSONValue` enum, recursive descent parser, encoder (compact and pretty-printed). Already implemented as a standalone `json` package in pure Expo, validated with 17 tests. Remaining: convenience methods (`as_string()`, `as_int()`), decoder combinator API for API input boundaries with error accumulation.
+- `websocket` -- WebSocket server and client built on `http` (upgrade handshake) and `net` (framed message transport). Each WebSocket connection is a process.
+- `http2` -- HTTP/2 transport package reusing stdlib `http.Request`/`http.Response` types.
 - `crypto` -- password hashing (argon2, bcrypt), random bytes, HMAC. Thin C FFI wrappers over audited libraries (libargon2, libsodium). Safe Expo API: `Password.hash(string)`, `Password.verify(string, hash)`, `Random.bytes(count)`.
 - Structured logging
 - MessagePack serialization
@@ -414,37 +411,6 @@ Rewrite the Expo compiler in Expo. The lexer port from Phase 3 A4 (validation) p
 
 ---
 
-## Future: `command` construct (post-v1)
-
-A language-native `command` keyword for typed, composable pipelines -- inspired by the Commandex library pattern but with compile-time guarantees.
-
-```expo
-command RegisterUser
-  param email: String
-  param password: String
-
-  step hash_password -> password_hash: String
-    Crypto.hash_sha256(password)
-  end
-
-  step create_user -> user: User
-    User.create(email: email, password_hash: password_hash)
-  end
-end
-```
-
-What the compiler provides that libraries can't:
-
-- **Step-ordered type safety** -- `password_hash` only accessible in steps after `hash_password`
-- **Exhaustive data flow** -- every data field verified set before read
-- **Automatic error types** -- generated from `halt` calls
-- **Composability** -- commands can be used as steps in other commands
-- **Zero overhead** -- compiles to sequential function calls
-
-Commands live inside modules alongside `fn`, `struct`, and `enum` -- not a separate paradigm, just another construct for a common shape of backend logic.
-
----
-
 ## Future: Arena blocks (post-v1)
 
 Bulk-allocation regions where many objects share a lifetime and are freed together at scope exit. Useful for request-scoped allocation in web servers, parsing large documents, and other workloads with many short-lived allocations.
@@ -524,37 +490,19 @@ Active design discussions about the type system, code organization, and function
 
 ### Struct field defaults and trailing keyword syntax (open)
 
-- **Open**: struct fields with default values (`struct Opts timeout: Int = 5000 end`).
-  Enables partial construction — only override the fields you care about.
-- **Open**: trailing keyword syntax at call sites as sugar for opts struct
-  construction. `pid.call(msg, timeout: 30000)` desugars to
-  `pid.call(msg, CallOpts{timeout: 30000})`. Combined with struct field defaults,
-  this gives typed, compile-checked keyword arguments — Elixir's `Keyword.t()`
-  opts pattern but with type safety (invalid keys and wrong value types are
-  compile errors).
-- **Motivating use case**: `Ref.call` needs an optional timeout with a sensible
-  default. Without this feature, every call site must specify the timeout
-  explicitly. Useful far beyond concurrency — any function with optional
-  configuration benefits (HTTP clients, query builders, formatters).
+Open design for default field values and trailing keyword call syntax. See [TYPES.md](TYPES.md) for full details.
 
 ### Type system philosophy
 
-- **Decided**: enums and structs have equal capabilities -- fractal design where the same features available to `Option<T>` (a built-in enum) are available to any user-defined enum. No two-tier type system.
-- **Decided**: if types get inline functions, both structs and enums support them. An enum is semantically a one-field struct with a tagged union type -- the distinction is surface syntax, not fundamental.
-- **Open**: whether inline functions in type bodies are restricted to `self`-taking functions only (instance methods), or also allow non-`self` functions (static/factory -- which makes the type act as a namespace).
+Enums and structs have equal capabilities (fractal design). See [TYPES.md](TYPES.md) for full details.
 
 ### Identifier priming for keyword/builtin collisions (future)
 
-- Trailing prime notation (`'`) would allow `end'` as a field name and `Self'` or `String'` as enum variant names without ambiguity. Grammar change: append `[ "'" ]` to both `IDENT` and `TYPE_IDENT` rules (trailing-only, single prime). Surfaced by the `expo-ast` self-hosting port: `Span.end` had to become `Span.stop`, and enum variants like `Self`, `String`, `Bool`, `Int`, `Float` needed descriptive renames (`SelfReceiver`, `StringVal`, `BoolLit`, etc.). Leading `'` stays invalid, so `'wrongstring'` is always a syntax error. Lexer-only change, no parser/typecheck/codegen impact.
+Trailing `'` notation for field/variant name collisions with keywords. Lexer-only change. See [TYPES.md](TYPES.md) for full details.
 
 ### Namespace unification: modules as pseudotypes (exploration)
 
-- **Context**: the `TypeInfo` refactor unified struct/enum/primitive function storage into a single `ctx.types` registry. This eliminates duplicated dispatch logic but still treats module-qualified calls (`Module.function()`) differently from type-qualified calls (`Type.function()`).
-- **Observation**: a module file is structurally similar to a type -- it defines imports, structs, enums, and functions. A type (struct/enum/primitive) defines functions (and possibly nested types in the future). Both are namespaces that own functions.
-- **Design exploration**: treat modules as pseudotypes in the same `TypeInfo` registry, with a new `TypeKind::Module` variant. Module-qualified calls (`Http.get(url)`) and static type calls (`Option.some(x)`) would resolve through the same lookup path: `ctx.types.get(qualifier).and_then(|ti| ti.functions.get(name))`.
-- **Benefits**: single resolution path for all qualified calls, recursive namespace model (modules contain types, types contain functions), forward-compatible with nested types or module re-exports.
-- **Risks**: modules currently carry full `TypeContext` in `imported_modules` (with their own types, functions, etc.), which is richer than `TypeInfo`. Flattening this into `TypeInfo` may lose expressiveness. The `imported_modules` map also handles transitive imports and visibility scoping.
-- **Status**: not planned for immediate implementation. The current `TypeInfo` registry is designed to be forward-compatible -- adding `TypeKind::Module` later would not require re-architecture. Document here for future reference.
+Exploration of treating modules as `TypeKind::Module` in the unified registry. Not planned for immediate implementation. See [TYPES.md](TYPES.md) for full details.
 
 ### FP and chaining vs `?` operator (decided, implemented)
 
@@ -563,15 +511,13 @@ Active design discussions about the type system, code organization, and function
 - **Decided**: `map`, `then`, `or` as the chaining API for `Option` and `Result`. `map` transforms the inner value (closure returns plain value). `then` chains fallible operations (closure returns `Option`/`Result`). `or` provides a lazy fallback. Approachable naming -- plain English, no `and_then`/`flat_map`/`unwrap_or`.
 - `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
 - Compiler guidance when `map` is used where `then` is needed (or vice versa).
-- **Decided**: no pipe operator (`|>`). Dot-call chaining with `move self` functions covers the same use case. The `command` construct (post-v1) will handle complex sequential data flow with stronger guarantees.
+- **Decided**: no pipe operator (`|>`). Dot-call chaining with `move self` functions covers the same use case. The `Command` stdlib type (see [TYPES.md](TYPES.md)) will handle complex sequential data flow with stronger guarantees.
 - `map`/`then` ship in the stdlib using block closures or short closures. Context-driven param inference allows `opt.map(x -> x + 1)` without type annotations at inline call sites.
 
-### Stdlib design (implemented)
+### Stdlib design (implemented + planned)
 
-- **Done**: `std.kernel` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. `std.process` for process lifecycle types (`Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason`, `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`). Both embedded in the compiler via `include_str!`, parsed at startup, types merged into every module's context before type checking.
-- Rule: "stdlib = always available, packages = explicit import." All `std.*` modules are auto-imported. As the stdlib grows, types split into separate modules (`std.option`, `std.string`, `std.list`) for documentation and organization, but all remain auto-imported.
-- Option/Result API: `unwrap` (panics on failure), `or` (lazy fallback), `some?`/`none?` (Option), `ok?`/`err?` (Result), `map` (transform inner value), `then` (flat map / chain fallible operations).
-- No `map_err` yet. No `or_else` -- `or` is implicitly lazy.
+- **Done**: `std.kernel` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. `std.process` for process lifecycle types. Both embedded in the compiler via `include_str!`, parsed at startup.
+- **Planned**: two-tier stdlib with auto-imported core types and qualified standard packages (`net`, `http`, `json`). See [STDLIB.md](STDLIB.md) for the package hierarchy design.
 - Monomorphization ensures zero binary bloat for unused stdlib types. Only instantiations that are actually called get compiled.
 
 ### `Debug` protocol and `print` (decided, implemented)
@@ -593,15 +539,7 @@ Active design discussions about the type system, code organization, and function
 
 ### Literal protocols
 
-- **Concept**: all literal syntax (`42`, `"hello"`, `[...]`, `[k:v]`, `(a,b)`) backed by protocols, not special-cased types. Any type can opt into literal construction by implementing the protocol.
-- **Protocol family**: `IntLiteral`, `FloatLiteral`, `StringLiteral`, `ListLiteral<T>`, `MapLiteral<K,V>`, `PairLiteral<A,B>`.
-- **Default types**: `Int`, `Float`, `String`, `List<T>`, `Map<K,V>`, `Pair<A,B>` when no type annotation is present.
-- **Infallible**: literal protocols return `Self`, not `Result`. Fallible parsing (e.g. from untrusted input) uses regular functions that return `Result`.
-- **Pair syntax**: `(a, b)` may return via `PairLiteral<A, B>` -- only pairs (arity 2). 3+ values use named structs.
-- **Implemented**: `ListLiteral<T>` with `from_list(move list: List<T>) -> Self` -- `List<T>` and `Set<T>` implement it. Defined in `std.kernel`.
-- **Implemented**: `MapLiteral<K, V>` with `from_map(move map: Map<K, V>) -> Self` -- `Map<K, V>` implements it as identity. `[key: value]` syntax and `[:]` for empty maps.
-- **Planned**: `IntLiteral`, `FloatLiteral` (enables custom `Decimal` type from float literals), `StringLiteral`, `PairLiteral<A,B>`.
-- **Fractal design**: user-defined types and built-in types have identical access to literal syntax. No two-tier system.
+`ListLiteral<T>` and `MapLiteral<K,V>` are implemented. Remaining: `IntLiteral`, `FloatLiteral`, `StringLiteral`, `PairLiteral<A,B>`. See [TYPES.md](TYPES.md) for full details.
 
 ---
 
@@ -623,13 +561,13 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 ### Remaining
 
-| Phase | Milestone                                                                                                                                      |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, C FFI, first-party packages |
-| 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                         |
-| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                         |
-| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                     |
-| 6B    | auth-manager-expo runs for real, second project                                                                                                |
+| Phase | Milestone                                                                                                                                                                               |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, C FFI, stdlib packages (`net`, `http`, `json`), first-party packages |
+| 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                  |
+| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                                                  |
+| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                              |
+| 6B    | auth-manager-expo runs for real, second project                                                                                                                                         |
 
 ---
 

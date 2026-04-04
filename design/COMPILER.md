@@ -102,17 +102,17 @@ blocking.
 
 ## What this eliminates from the Rust codebase
 
-| Rust workaround                                            | Lines | Status in Expo |
-| ---------------------------------------------------------- | ----- | -------------- |
-| `CheckEnv` struct, lifetime, methods                       | ~150  | Gone (fields become local or on collector actors) |
-| `struct_names`/`enum_names` extraction (x5 call sites)     | ~50   | Gone (read `ctx.structs` directly) |
-| `ctx: &mut TypeContext` in 31 function signatures          | ~31   | `ctx: TypeContext` (borrowed, no `&mut`) |
-| `ce: &mut CheckEnv` in 20+ function signatures             | ~20   | Gone |
-| `CheckEnv` construction at each function entry             | ~60   | Gone |
-| `Box<T>` in AST + deref in all pattern matches             | ~100+ | Gone (compiler handles heap placement) |
-| `#[derive(Debug, Clone, ...)]` on all types                | ~80   | Gone |
-| `pub` on all struct fields                                 | ~120  | Gone (public by default) |
-| `Compiler<'ctx>` lifetime param in 80+ codegen signatures  | ~80   | Gone (no lifetime annotations) |
+| Rust workaround                                           | Lines | Status in Expo                                    |
+| --------------------------------------------------------- | ----- | ------------------------------------------------- |
+| `CheckEnv` struct, lifetime, methods                      | ~150  | Gone (fields become local or on collector actors) |
+| `struct_names`/`enum_names` extraction (x5 call sites)    | ~50   | Gone (read `ctx.structs` directly)                |
+| `ctx: &mut TypeContext` in 31 function signatures         | ~31   | `ctx: TypeContext` (borrowed, no `&mut`)          |
+| `ce: &mut CheckEnv` in 20+ function signatures            | ~20   | Gone                                              |
+| `CheckEnv` construction at each function entry            | ~60   | Gone                                              |
+| `Box<T>` in AST + deref in all pattern matches            | ~100+ | Gone (compiler handles heap placement)            |
+| `#[derive(Debug, Clone, ...)]` on all types               | ~80   | Gone                                              |
+| `pub` on all struct fields                                | ~120  | Gone (public by default)                          |
+| `Compiler<'ctx>` lifetime param in 80+ codegen signatures | ~80   | Gone (no lifetime annotations)                    |
 
 ~700 lines of pure ceremony removed. The Rust compiler is ~27,700 lines; the
 self-hosted compiler should land around 50-55% of that (~14,000-15,000 lines)
