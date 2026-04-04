@@ -302,11 +302,11 @@ Dual entry mode is implemented. `expo.toml` `entry` field determines behavior by
 **Done:**
 
 - ~~Dual entry mode~~ -- `entry = "App"` (PascalCase) spawns a Process impl; `entry = "main"` (lowercase) retains `fn main`. Both coexist.
+- ~~Exit code mapping~~ -- `StopReason` returned by `run` is captured via a `@__expo_exit_code` global, mapped through `ExitStatus.code()`, and returned from C `main`. `Normal -> 0`, `Shutdown -> 1`.
+- ~~argv passing~~ -- when `C = List<String>`, the entry's C `main(argc, argv)` calls `expo_rt_build_argv` to construct an Expo `List<String>` (skipping `argv[0]`). Other config types remain zero-initialized.
 
 **Remaining:**
 
-- **argv passing** -- config type `C` is currently zero-initialized. Need runtime support (`expo_rt_get_argv`) to construct `List<String>` from command-line arguments.
-- **Exit code mapping** -- `StopReason` returned by `run` is currently discarded. Need to call `ExitStatus.code()` and return it from C `main`.
 - **Lifecycle event delivery** -- OS signals (`SIGTERM`, `SIGINT`, `SIGHUP`) need to be captured by the runtime and dispatched as `Lifecycle` events to the entry process's `handle_lifecycle`.
 - **`expo new` scaffolding** -- update to generate Process entry instead of `fn main`.
 - **Remove `fn main`** -- once `.exps` scripts are implemented, `fn main` becomes unnecessary and can be removed.

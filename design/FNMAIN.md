@@ -104,9 +104,9 @@ end
 
 ### What this gives you
 
-- **argv as config:** `C` is the config type. The runtime constructs it from command-line arguments (or a config struct). Details TBD (see PROCESS.md, lines 304-312).
-- **OS signals as lifecycle events:** `Lifecycle.Shutdown`, `Lifecycle.Interrupt`, `Lifecycle.Reload` are dispatched to `handle_lifecycle`. Graceful shutdown is an override of the default implementation.
-- **Exit codes via protocol:** the entry type's `StopReason` implements `ExitStatus`, mapping to OS exit codes. Default: `Normal -> 0`, `Shutdown -> 0`. Custom exit codes via `ExitStatus` protocol implementation.
+- **argv as config (implemented):** when `C = List<String>`, the runtime converts `argc`/`argv` (skipping the program name) into an Expo `List<String>` and passes it to `new`. Other config types are zero-initialized.
+- **OS signals as lifecycle events (deferred):** `Lifecycle.Shutdown`, `Lifecycle.Interrupt`, `Lifecycle.Reload` are dispatched to `handle_lifecycle`. Graceful shutdown is an override of the default implementation. Not yet implemented -- requires a two-mailbox model in the runtime.
+- **Exit codes via protocol (implemented):** the entry type's `StopReason` implements `ExitStatus`, mapping to OS exit codes. Default: `Normal -> 0`, `Shutdown -> 1`. Custom exit codes via `ExitStatus` protocol implementation. The spawn wrapper captures `run`'s return value, calls `ExitStatus.code()`, and stores the result in a global `@__expo_exit_code` that C `main` reads after `expo_rt_main_done()`.
 - **Supervision:** the entry type can spawn child processes in `new`. `expo new --sup` scaffolds a supervision tree.
 
 ### No special cases
@@ -185,7 +185,7 @@ end
 
 `ExitStatus` maps a stop reason to an OS exit code. Only the entry process needs this -- it's the boundary between the Expo runtime and the OS.
 
-`StopReason` has a default `ExitStatus` implementation: `Normal -> 0`, `Shutdown -> 0`. User types can implement `ExitStatus` for custom exit codes (e.g., distinguishing between graceful shutdown and specific failure modes).
+`StopReason` has a default `ExitStatus` implementation: `Normal -> 0`, `Shutdown -> 1`. User types can implement `ExitStatus` for custom exit codes (e.g., distinguishing between graceful shutdown and specific failure modes).
 
 ---
 

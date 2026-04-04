@@ -86,3 +86,44 @@ pub fn set_last_error(e: impl fmt::Display) {
         *cell.borrow_mut() = Some(e.to_string());
     });
 }
+
+/// Matches the LLVM layout `{ ptr, i64, i64 }` used by `List<T>`.
+#[repr(C)]
+pub struct ExpoList {
+    pub ptr: *const u8,
+    pub length: i64,
+    pub capacity: i64,
+}
+
+/// Builds a `List<String>` from C `argc`/`argv`, converting each argument
+/// into a length-prefixed Expo string.
+///
+/// # Safety
+/// `argv` must contain at least `argc` valid, NUL-terminated C strings.
+/// Builds a `List<String>` from C `argc`/`argv` (skipping `argv[0]`, the
+/// program name) and writes the result into `out`. Uses an output pointer
+/// to avoid struct-return ABI mismatches on AArch64.
+///
+/// # Safety
+/// `argv` must contain at least `argc` valid, NUL-terminated C strings.
+/// `out` must point to writable memory large enough for an `ExpoList`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_rt_build_argv(argc: i32, argv: *const *const u8, out: *mut ExpoList) {
+    let skip = 1; // skip argv[0] (program name)
+    let total = argc.max(0) as usize;
+    let count = total.saturating_sub(skip);
+    let buf = unsafe { malloc(count * std::mem::size_of::<*const u8>()) as *mut *const u8 };
+    for i in 0..count {
+        let c_str =
+            unsafe { std::ffi::CStr::from_ptr(*argv.add(i + skip) as *const std::ffi::c_char) };
+        let expo_str = unsafe { alloc_expo_string(c_str.to_bytes()) };
+        unsafe { *buf.add(i) = expo_str };
+    }
+    unsafe {
+        *out = ExpoList {
+            ptr: buf as *const u8,
+            length: count as i64,
+            capacity: count as i64,
+        };
+    }
+}

@@ -28,7 +28,7 @@ impl ExitStatus for StopReason
   fn code(self) -> Int
     match self
       StopReason.Normal -> 0
-      StopReason.Shutdown -> 0
+      StopReason.Shutdown -> 1
     end
   end
 end

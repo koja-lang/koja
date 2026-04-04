@@ -1,0 +1,24 @@
+struct App
+  args: List<String>
+end
+
+enum AppMsg
+  Noop
+end
+
+impl Process<List<String>, AppMsg, String> for App
+  fn new(config: List<String>) -> Self
+    App { args: config }
+  end
+
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Self | StopReason
+    self
+  end
+
+  fn run(move self) -> StopReason
+    for arg in self.args
+      IO.puts(arg)
+    end
+    StopReason.Normal
+  end
+end

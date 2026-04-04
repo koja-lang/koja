@@ -92,13 +92,6 @@ fn run_with_timeout(configure: impl FnOnce(&mut Command)) -> (String, String, i3
     (stdout, stderr, code)
 }
 
-fn run_expo_in_dir(dir: &Path) -> (String, String, i32) {
-    let dir = dir.to_path_buf();
-    run_with_timeout(|cmd| {
-        cmd.arg("run").current_dir(&dir);
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Shared runners
 // ---------------------------------------------------------------------------
@@ -288,15 +281,42 @@ fn run_runtime_fail_dir(dir: &Path, label: &str) {
 }
 
 fn run_project_dir(dir: &Path, label: &str) {
+    run_project_dir_with(dir, label, &[]);
+}
+
+fn run_project_dir_with(dir: &Path, label: &str, extra_args: &[&str]) {
     assert!(dir.exists(), "test fixture {label}/ not found");
 
     let expected_path = dir.join("expected.stdout");
     assert!(expected_path.exists(), "missing {label}/expected.stdout");
 
-    let (stdout, stderr, code) = run_expo_in_dir(dir);
+    let dir_owned = dir.to_path_buf();
+    let extra: Vec<String> = extra_args.iter().map(|s| s.to_string()).collect();
+    let (stdout, stderr, code) = run_with_timeout(|cmd| {
+        cmd.arg("run").current_dir(&dir_owned);
+        if !extra.is_empty() {
+            cmd.arg("--");
+            for a in &extra {
+                cmd.arg(a);
+            }
+        }
+    });
+
+    let expected_code = dir
+        .join("expected.exit_code")
+        .exists()
+        .then(|| {
+            fs::read_to_string(dir.join("expected.exit_code"))
+                .unwrap()
+                .trim()
+                .parse::<i32>()
+                .expect("expected.exit_code must be an integer")
+        })
+        .unwrap_or(0);
+
     assert!(
-        code == 0,
-        "expo run failed in {label} with code {code}\nstderr:\n{stderr}"
+        code == expected_code,
+        "expo run in {label}: expected exit code {expected_code}, got {code}\nstderr:\n{stderr}"
     );
 
     let expected = fs::read_to_string(&expected_path).unwrap();
@@ -359,6 +379,12 @@ macro_rules! lang_test_dir {
             run_project_dir(&lang_dir().join($dir), $dir);
         }
     };
+    ($name:ident, $dir:expr, project, $($arg:expr),+) => {
+        #[test]
+        fn $name() {
+            run_project_dir_with(&lang_dir().join($dir), $dir, &[$($arg),+]);
+        }
+    };
 }
 
 // Pass tests
@@ -385,6 +411,8 @@ lang_test_dir!(lang_cross_ref, "cross_ref", project);
 lang_test_dir!(lang_local_dep, "local_dep", project);
 lang_test_dir!(lang_alias_dep, "alias_dep", project);
 lang_test_dir!(lang_process_entry, "process_entry", project);
+lang_test_dir!(lang_process_exit, "process_exit", project);
+lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
 
 // ---------------------------------------------------------------------------
 // Standalone project-specific tests (build, check, release)

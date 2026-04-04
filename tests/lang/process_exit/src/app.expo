@@ -1,0 +1,21 @@
+struct App
+end
+
+enum AppMsg
+  Noop
+end
+
+impl Process<App, AppMsg, String> for App
+  fn new(config: App) -> Self
+    IO.puts("shutting down")
+    config
+  end
+
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Self | StopReason
+    self
+  end
+
+  fn run(move self) -> StopReason
+    StopReason.Shutdown
+  end
+end

@@ -1091,7 +1091,18 @@ impl<'ctx> Compiler<'ctx> {
             .get_function(&run_fn_name)
             .ok_or_else(|| format!("entry type `{type_name}` has no `run` function"))?;
 
+        let code_fn = self
+            .module
+            .get_function("StopReason_code")
+            .ok_or("StopReason_code (ExitStatus impl) not found")?;
+
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+
+        // Global exit code variable, written by the wrapper, read by C main
+        let exit_code_global = self.module.add_global(i32_ty, None, "__expo_exit_code");
+        exit_code_global.set_initializer(&i32_ty.const_int(0, false));
 
         // Build spawn wrapper: void __entry_T(i8* state_ptr)
         let wrapper_name = format!("__entry_{type_name}");
@@ -1112,12 +1123,36 @@ impl<'ctx> Compiler<'ctx> {
             .build_load(struct_type, typed_ptr, "loaded_state")
             .unwrap();
 
-        self.call_void(run_fn, &[loaded_state.into()], "");
+        // Call run, capture StopReason return value
+        let stop_reason = self
+            .call(run_fn, &[loaded_state.into()], "stop_reason")
+            .ok_or("run() did not produce a value")?;
+
+        // Call ExitStatus.code(stop_reason) -> Int
+        let exit_code_i64 = self
+            .call(code_fn, &[stop_reason.into()], "exit_code")
+            .ok_or("StopReason_code did not produce a value")?;
+
+        // Truncate i64 -> i32 and store to global
+        let exit_code_i32 = self
+            .builder
+            .build_int_truncate(exit_code_i64.into_int_value(), i32_ty, "exit_i32")
+            .unwrap();
+        self.builder
+            .build_store(exit_code_global.as_pointer_value(), exit_code_i32)
+            .unwrap();
+
         self.builder.build_return(None).unwrap();
 
-        // Build C main: int main()
-        let i32_ty = self.context.i32_type();
-        let main_fn_type = i32_ty.fn_type(&[], false);
+        // Detect whether C is List<String> for argv passing
+        let is_list_string = config_type.display() == "List<String>";
+
+        // Build C main: int main(int argc, char** argv)
+        let main_fn_type = if is_list_string {
+            i32_ty.fn_type(&[i32_ty.into(), ptr_ty.into()], false)
+        } else {
+            i32_ty.fn_type(&[], false)
+        };
         let main_fn = self.module.add_function("main", main_fn_type, None);
 
         let file = self.debug.file();
@@ -1127,8 +1162,36 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.position_at_end(main_entry);
         self.debug.set_location(self.context, &self.builder, 1, 1);
 
-        // Construct config: zero-initialize the config type
-        let config_val = config_llvm.const_zero();
+        // Construct config
+        let config_val = if is_list_string {
+            let argc_val = main_fn.get_nth_param(0).unwrap().into_int_value();
+            let argv_val = main_fn.get_nth_param(1).unwrap().into_pointer_value();
+            // expo_rt_build_argv(argc, argv, out_ptr) -- writes result via pointer
+            let void_ty = self.context.void_type();
+            let build_argv_type =
+                void_ty.fn_type(&[i32_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+            let build_argv_fn = self
+                .module
+                .get_function("expo_rt_build_argv")
+                .unwrap_or_else(|| {
+                    self.module
+                        .add_function("expo_rt_build_argv", build_argv_type, None)
+                });
+            let list_alloca = self
+                .builder
+                .build_alloca(config_llvm.into_struct_type(), "argv_buf")
+                .unwrap();
+            self.call_void(
+                build_argv_fn,
+                &[argc_val.into(), argv_val.into(), list_alloca.into()],
+                "",
+            );
+            self.builder
+                .build_load(config_llvm.into_struct_type(), list_alloca, "argv_list")
+                .unwrap()
+        } else {
+            config_llvm.const_zero()
+        };
 
         // Call T_new(config) -> Self
         let state_val = self
@@ -1146,7 +1209,7 @@ impl<'ctx> Compiler<'ctx> {
         let state_size = struct_type.size_of().unwrap();
         let state_size_i64 = self
             .builder
-            .build_int_cast(state_size, self.context.i64_type(), "state_size")
+            .build_int_cast(state_size, i64_ty, "state_size")
             .unwrap();
 
         // expo_rt_spawn(wrapper, state, size)
@@ -1168,9 +1231,12 @@ impl<'ctx> Compiler<'ctx> {
             .ok_or("expo_rt_main_done not declared")?;
         self.call_void(main_done, &[], "");
 
-        // return 0
-        let zero_i32 = i32_ty.const_int(0, false);
-        self.builder.build_return(Some(&zero_i32)).unwrap();
+        // Load exit code from global and return it
+        let final_code = self
+            .builder
+            .build_load(i32_ty, exit_code_global.as_pointer_value(), "final_code")
+            .unwrap();
+        self.builder.build_return(Some(&final_code)).unwrap();
 
         self.debug.pop_scope(self.context, &self.builder);
 
