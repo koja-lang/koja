@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Process entry point -- projects can use `entry = "App"` (PascalCase) in `expo.toml` to designate a `Process<C, M, R>` implementation as the program entry point. Codegen generates a C `main` that constructs the entry type via `T.new`, spawns it into `T.run`, and starts the runtime scheduler. Lowercase `entry = "main"` retains the existing `fn main` behavior. Both modes coexist -- no existing code changes required.
 - `std.process` module -- process-related types (`ReplyTo`, `Ref`, `Task`, `Process` protocol) moved from `std.kernel` to a dedicated `std.process` module. New lifecycle types: `Lifecycle` enum (`Shutdown`, `Interrupt`, `Reload`), `StopReason` enum (`Normal`, `Shutdown`), `ExitStatus` protocol, `ExitReason` enum (`Normal`, `Shutdown`, `Crashed(String)`). `Process` protocol updated: `handle` returns `Self | StopReason`, `run` returns `StopReason`, and a new `handle_lifecycle` method with a default implementation handles lifecycle events.
 - Closure `move` params -- closures now support `move` on parameters (`fn (move x: T) -> U ... end`), matching regular function syntax. `Type::Function` carries per-parameter pass modes via a new `FnParam { ty, mode }` struct, enabling end-to-end type enforcement of `fn (move T) -> U` contracts. Parser, type checker, codegen, formatter, and LSP all updated.
 - `expo new <name>` -- scaffolds a new Expo project directory with `expo.toml` and `src/main.expo`. Project name must be ASCII alphanumeric or underscores.

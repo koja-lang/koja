@@ -1038,6 +1038,144 @@ impl<'ctx> Compiler<'ctx> {
         self.call_void(panic_bt, &[buf.into()], "");
         self.builder.build_unreachable().unwrap();
     }
+
+    /// Generates the C `main` function for a Process-based entry point.
+    ///
+    /// Instead of looking for a user-written `fn main`, this emits a C `main`
+    /// that constructs the entry type via `T_new`, spawns it into `T_run`,
+    /// and starts the runtime scheduler.
+    fn emit_process_entry(&mut self, type_name: &str) -> Result<(), String> {
+        let process_args = self
+            .type_ctx
+            .protocol_impls
+            .get(type_name)
+            .and_then(|impls| {
+                impls
+                    .iter()
+                    .find(|(proto, _)| proto == "Process")
+                    .map(|(_, args)| args.clone())
+            })
+            .ok_or_else(|| format!("entry type `{type_name}` does not implement Process"))?;
+
+        if process_args.len() < 3 {
+            return Err(format!(
+                "entry type `{type_name}` has incomplete Process impl (expected 3 type args)"
+            ));
+        }
+        let config_type = &process_args[0];
+
+        let struct_type = self
+            .types
+            .structs
+            .get(type_name)
+            .copied()
+            .ok_or_else(|| format!("entry type `{type_name}` has no LLVM struct layout"))?;
+
+        let config_llvm =
+            to_llvm_type(config_type, self.context, &self.types.structs).ok_or_else(|| {
+                format!(
+                    "could not resolve LLVM type for config type `{}`",
+                    config_type.display()
+                )
+            })?;
+
+        let new_fn_name = format!("{type_name}_new");
+        let new_fn = self
+            .module
+            .get_function(&new_fn_name)
+            .ok_or_else(|| format!("entry type `{type_name}` has no `new` function"))?;
+
+        let run_fn_name = format!("{type_name}_run");
+        let run_fn = self
+            .module
+            .get_function(&run_fn_name)
+            .ok_or_else(|| format!("entry type `{type_name}` has no `run` function"))?;
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+
+        // Build spawn wrapper: void __entry_T(i8* state_ptr)
+        let wrapper_name = format!("__entry_{type_name}");
+        let wrapper_type = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let wrapper_fn = self.module.add_function(&wrapper_name, wrapper_type, None);
+
+        let wrapper_entry = self.context.append_basic_block(wrapper_fn, "entry");
+        self.builder.position_at_end(wrapper_entry);
+
+        let raw_ptr = wrapper_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let typed_ptr = self
+            .builder
+            .build_bit_cast(raw_ptr, ptr_ty, "typed_ptr")
+            .unwrap()
+            .into_pointer_value();
+        let loaded_state = self
+            .builder
+            .build_load(struct_type, typed_ptr, "loaded_state")
+            .unwrap();
+
+        self.call_void(run_fn, &[loaded_state.into()], "");
+        self.builder.build_return(None).unwrap();
+
+        // Build C main: int main()
+        let i32_ty = self.context.i32_type();
+        let main_fn_type = i32_ty.fn_type(&[], false);
+        let main_fn = self.module.add_function("main", main_fn_type, None);
+
+        let file = self.debug.file();
+        self.debug.push_function(main_fn, "main", "main", file, 1);
+
+        let main_entry = self.context.append_basic_block(main_fn, "entry");
+        self.builder.position_at_end(main_entry);
+        self.debug.set_location(self.context, &self.builder, 1, 1);
+
+        // Construct config: zero-initialize the config type
+        let config_val = config_llvm.const_zero();
+
+        // Call T_new(config) -> Self
+        let state_val = self
+            .call(new_fn, &[config_val.into()], "state")
+            .ok_or_else(|| format!("{type_name}.new() did not produce a value"))?;
+
+        // Alloca state, store, get pointer and size
+        let state_alloca = self.builder.build_alloca(struct_type, "state").unwrap();
+        self.builder.build_store(state_alloca, state_val).unwrap();
+
+        let state_ptr = self
+            .builder
+            .build_bit_cast(state_alloca, ptr_ty, "state_ptr")
+            .unwrap();
+        let state_size = struct_type.size_of().unwrap();
+        let state_size_i64 = self
+            .builder
+            .build_int_cast(state_size, self.context.i64_type(), "state_size")
+            .unwrap();
+
+        // expo_rt_spawn(wrapper, state, size)
+        let spawn_fn = *self
+            .functions
+            .get("expo_rt_spawn")
+            .ok_or("expo_rt_spawn not declared")?;
+        let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
+        self.call_void(
+            spawn_fn,
+            &[wrapper_ptr.into(), state_ptr.into(), state_size_i64.into()],
+            "",
+        );
+
+        // expo_rt_main_done()
+        let main_done = *self
+            .functions
+            .get("expo_rt_main_done")
+            .ok_or("expo_rt_main_done not declared")?;
+        self.call_void(main_done, &[], "");
+
+        // return 0
+        let zero_i32 = i32_ty.const_int(0, false);
+        self.builder.build_return(Some(&zero_i32)).unwrap();
+
+        self.debug.pop_scope(self.context, &self.builder);
+
+        Ok(())
+    }
 }
 
 /// Compiles a single Expo module to a native object file.
@@ -1048,7 +1186,7 @@ pub fn compile(
     release: bool,
     app_name: &str,
 ) -> Result<(), Vec<Diagnostic>> {
-    compile_modules(&[module], type_ctx, output_path, release, app_name)
+    compile_modules(&[module], type_ctx, output_path, release, app_name, None)
 }
 
 /// Runs codegen for all modules: register types, declare, define.
@@ -1057,6 +1195,7 @@ fn run_codegen<'ctx>(
     type_ctx: &'ctx TypeContext,
     context: &'ctx Context,
     app_name: &str,
+    entry_type: Option<&str>,
 ) -> Result<Compiler<'ctx>, Vec<Diagnostic>> {
     let (filename, directory) = modules
         .first()
@@ -1129,6 +1268,18 @@ fn run_codegen<'ctx>(
         })?;
     }
 
+    if let Some(type_name) = entry_type {
+        let span = modules.first().map(|m| m.span).unwrap_or_default();
+        compiler.emit_process_entry(type_name).map_err(|e| {
+            vec![Diagnostic {
+                severity: Severity::Error,
+                message: e,
+                hint: None,
+                span,
+            }]
+        })?;
+    }
+
     Ok(compiler)
 }
 
@@ -1140,9 +1291,10 @@ pub fn compile_modules(
     output_path: &Path,
     release: bool,
     app_name: &str,
+    entry_type: Option<&str>,
 ) -> Result<(), Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(modules, type_ctx, &context, app_name)?;
+    let compiler = run_codegen(modules, type_ctx, &context, app_name, entry_type)?;
 
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
@@ -1176,9 +1328,10 @@ pub fn emit_llvm_ir(
     modules: &[&Module],
     type_ctx: &TypeContext,
     app_name: &str,
+    entry_type: Option<&str>,
 ) -> Result<String, Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(modules, type_ctx, &context, app_name)?;
+    let compiler = run_codegen(modules, type_ctx, &context, app_name, entry_type)?;
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
     Ok(compiler.module.print_to_string().to_string())

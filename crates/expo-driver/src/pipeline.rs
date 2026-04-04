@@ -217,8 +217,10 @@ pub fn build_from_graph(
         .unwrap_or(&graph.entry)
         .to_string();
 
+    let entry_type = graph.entry_type.as_deref();
+
     if emit_llvm {
-        match expo_codegen::emit_llvm_ir(&modules_ast, &merged_ctx, &app_name) {
+        match expo_codegen::emit_llvm_ir(&modules_ast, &merged_ctx, &app_name, entry_type) {
             Ok(ir) => print!("{ir}"),
             Err(diagnostics) => {
                 let entry_rm = &graph.modules[&graph.entry];
@@ -241,6 +243,7 @@ pub fn build_from_graph(
         Path::new(&obj_path),
         release,
         &app_name,
+        entry_type,
     ) {
         let entry_rm = &graph.modules[&graph.entry];
         render_diagnostics(

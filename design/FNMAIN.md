@@ -46,7 +46,14 @@ Conflating the two (allowing top-level statements in `.expo` files, or requiring
 
 ## Proposal: project entry points are `Process` implementations
 
-`fn main` is removed. The project entry point is a type that implements `Process<C, M, R>`, specified in `expo.toml`.
+### Status: partially implemented
+
+The dual entry mode is implemented. The `entry` field in `expo.toml` determines behavior by casing:
+
+- **lowercase** (`entry = "main"`) -- existing behavior: resolves to a module file containing `fn main`
+- **PascalCase** (`entry = "App"`) -- new behavior: names a type that implements `Process<C, M, R>`, codegen generates a C `main` that constructs and spawns it
+
+Both modes coexist. Existing projects and tests are unchanged. The `fn main` path will be removed once `.exps` scripts are implemented (see below).
 
 ### `expo.toml`
 

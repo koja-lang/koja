@@ -30,6 +30,9 @@ pub struct ModuleGraph {
     pub order: Vec<String>,
     /// Package names loaded as dependencies (e.g. "json", "http").
     pub dep_packages: Vec<String>,
+    /// When the entry is a PascalCase type name (Process entry mode), this
+    /// holds the type name (e.g. `"App"`). `None` for legacy `fn main` mode.
+    pub entry_type: Option<String>,
 }
 
 // =============================================================================
@@ -55,6 +58,7 @@ pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
         modules: HashMap::new(),
         order: Vec::new(),
         dep_packages: Vec::new(),
+        entry_type: None,
     };
 
     graph.order.push(entry_name.clone());
@@ -92,20 +96,37 @@ pub fn resolve_project_modules(
         .as_deref()
         .ok_or("expo.toml has no `entry` field; required for build/run/check")?;
 
-    let entry_fqn = format!("{}.{}", config.name, entry);
+    let is_type_entry = config.entry_type_name().is_some();
+
+    let entry_fqn = if is_type_entry {
+        format!("{}.src", config.name)
+    } else {
+        format!("{}.{}", config.name, entry)
+    };
 
     let mut graph = ModuleGraph {
         entry: entry_fqn.clone(),
         modules: HashMap::new(),
         order: Vec::new(),
         dep_packages: Vec::new(),
+        entry_type: config.entry_type_name().map(|s| s.to_string()),
     };
 
     insert_stdlib(&mut graph);
     scan_directories(&config.name, &src_roots, &mut graph)?;
     resolve_dependencies(config, project_root, &mut graph)?;
 
-    if !graph.modules.contains_key(&entry_fqn) {
+    if is_type_entry {
+        if graph.order.iter().all(|n| n.starts_with("std.")) {
+            return Err("no source files found in src directories".to_string());
+        }
+        if !graph.modules.contains_key(&entry_fqn) {
+            let first_src = graph.order.iter().find(|n| !n.starts_with("std.")).cloned();
+            if let Some(name) = first_src {
+                graph.entry = name;
+            }
+        }
+    } else if !graph.modules.contains_key(&entry_fqn) {
         return Err(format!(
             "entry module `{entry}` not found in src directories"
         ));
@@ -202,13 +223,16 @@ pub fn resolve_test_project_modules(
         modules: HashMap::new(),
         order: Vec::new(),
         dep_packages: Vec::new(),
+        entry_type: None,
     };
 
     insert_stdlib(&mut graph);
     scan_directories(&config.name, &all_roots, &mut graph)?;
     resolve_dependencies(config, project_root, &mut graph)?;
 
-    if let Some(ref entry) = config.entry {
+    if let Some(ref entry) = config.entry
+        && config.entry_type_name().is_none()
+    {
         let entry_fqn = format!("{}.{}", config.name, entry);
         if let Some(pos) = graph.order.iter().position(|n| n == &entry_fqn) {
             graph.order.remove(pos);

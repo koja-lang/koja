@@ -1,0 +1,22 @@
+struct App
+end
+
+enum AppMsg
+  Greet
+end
+
+impl Process<App, AppMsg, String> for App
+  fn new(config: App) -> Self
+    IO.puts("starting")
+    config
+  end
+
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Self | StopReason
+    self
+  end
+
+  fn run(move self) -> StopReason
+    IO.puts("running")
+    StopReason.Normal
+  end
+end

@@ -295,15 +295,21 @@ The API design is largely settled (see `archive/20260323-CONCURRENCY.md`). Depen
 - Solves the two core problems of shared state: memory explosion from copying, and corruption from concurrent modification
 - **Done when**: multiple processes read/write a `shared_map` without corruption
 
-### `fn main` as `Process<C, M, R>`
+### `fn main` as `Process<C, M, R>` -- started
 
-Design area needing its own doc. `fn main` fully embodies the Process protocol:
+Dual entry mode is implemented. `expo.toml` `entry` field determines behavior by casing: lowercase names a module with `fn main`, PascalCase names a `Process` type. Codegen generates a C `main` that constructs the entry type, spawns it, and starts the scheduler. See [FNMAIN.md](FNMAIN.md) for full design.
 
-- **C = `List<String>`** -- argv, the config passed to construct main
-- **M = OS signals** -- `Signal.Term`, `Signal.Int`, etc. delivered as typed messages to main's receive loop, enabling graceful shutdown propagation to child processes
-- **R = exit code** -- the integer returned to the OS when main finishes
+**Done:**
 
-This means no special `System.argv()`, `System.exit()`, or signal handler APIs. Argv is main's config, exit codes are main's return, signals are messages in main's receive loop. The OS/process boundary maps onto the same `Process<C, M, R>` protocol that every other process uses.
+- ~~Dual entry mode~~ -- `entry = "App"` (PascalCase) spawns a Process impl; `entry = "main"` (lowercase) retains `fn main`. Both coexist.
+
+**Remaining:**
+
+- **argv passing** -- config type `C` is currently zero-initialized. Need runtime support (`expo_rt_get_argv`) to construct `List<String>` from command-line arguments.
+- **Exit code mapping** -- `StopReason` returned by `run` is currently discarded. Need to call `ExitStatus.code()` and return it from C `main`.
+- **Lifecycle event delivery** -- OS signals (`SIGTERM`, `SIGINT`, `SIGHUP`) need to be captured by the runtime and dispatched as `Lifecycle` events to the entry process's `handle_lifecycle`.
+- **`expo new` scaffolding** -- update to generate Process entry instead of `fn main`.
+- **Remove `fn main`** -- once `.exps` scripts are implemented, `fn main` becomes unnecessary and can be removed.
 
 ### Risks
 

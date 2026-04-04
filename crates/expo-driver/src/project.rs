@@ -45,6 +45,17 @@ fn default_test() -> Vec<String> {
     vec!["test".to_string()]
 }
 
+impl ProjectConfig {
+    /// Returns the entry value as a Process type name when it starts with an
+    /// uppercase letter (PascalCase). Lowercase entries are module names and
+    /// use the existing `fn main` codegen path.
+    pub fn entry_type_name(&self) -> Option<&str> {
+        self.entry
+            .as_deref()
+            .filter(|e| e.starts_with(|c: char| c.is_ascii_uppercase()))
+    }
+}
+
 /// Attempts to load an `expo.toml` file from the given directory.
 ///
 /// Returns `Ok(Some(config))` if the file exists and is valid,
