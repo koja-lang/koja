@@ -670,7 +670,15 @@ pub(crate) fn apply_coercion<'ctx>(
     let span = expr_span(expr);
     if let Some(coercion) = c.type_ctx.coercions.get(&span).cloned() {
         match coercion {
-            Coercion::UnionWiden { source, target } => compile_union_wrap(c, val, &source, &target),
+            Coercion::UnionWiden { source, target } => {
+                let target_mangled = mangle_type(&target);
+                if let Some(&target_llvm) = c.types.structs.get(&target_mangled)
+                    && val.get_type() == target_llvm.into()
+                {
+                    return Ok(val);
+                }
+                compile_union_wrap(c, val, &source, &target)
+            }
         }
     } else {
         Ok(val)

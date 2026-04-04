@@ -14,7 +14,96 @@ use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::ffi::{expo_context_switch, fflush};
+use crate::ffi::{expo_context_switch, fflush, setvbuf};
+
+// ---------------------------------------------------------------------------
+// Signal handling state
+// ---------------------------------------------------------------------------
+
+static GOT_SIGTERM: AtomicBool = AtomicBool::new(false);
+static GOT_SIGINT: AtomicBool = AtomicBool::new(false);
+static GOT_SIGHUP: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn handle_sigterm(_sig: libc::c_int) {
+    GOT_SIGTERM.store(true, Ordering::Relaxed);
+}
+
+extern "C" fn handle_sigint(_sig: libc::c_int) {
+    GOT_SIGINT.store(true, Ordering::Relaxed);
+}
+
+extern "C" fn handle_sighup(_sig: libc::c_int) {
+    GOT_SIGHUP.store(true, Ordering::Relaxed);
+}
+
+fn install_signals() {
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_flags = 0;
+        libc::sigemptyset(&mut sa.sa_mask);
+
+        sa.sa_sigaction = handle_sigterm as *const () as usize;
+        libc::sigaction(libc::SIGTERM, &sa, ptr::null_mut());
+
+        sa.sa_sigaction = handle_sigint as *const () as usize;
+        libc::sigaction(libc::SIGINT, &sa, ptr::null_mut());
+
+        sa.sa_sigaction = handle_sighup as *const () as usize;
+        libc::sigaction(libc::SIGHUP, &sa, ptr::null_mut());
+
+        // Unblock these signals in case the parent process (e.g. cargo test
+        // linking LLVM) inherited a mask that blocks them.
+        let mut unblock: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut unblock);
+        libc::sigaddset(&mut unblock, libc::SIGTERM);
+        libc::sigaddset(&mut unblock, libc::SIGINT);
+        libc::sigaddset(&mut unblock, libc::SIGHUP);
+        libc::sigprocmask(libc::SIG_UNBLOCK, &unblock, ptr::null_mut());
+    }
+}
+
+/// Checks atomic signal flags and injects lifecycle messages into PID 1's
+/// mailbox. Called from the worker loop. Lifecycle variant indices match
+/// the `Lifecycle` enum declaration order: Shutdown=0, Interrupt=1, Reload=2.
+fn poll_signals() {
+    if GOT_SIGTERM.swap(false, Ordering::Relaxed) {
+        send_lifecycle_to(1, 0);
+    }
+    if GOT_SIGINT.swap(false, Ordering::Relaxed) {
+        send_lifecycle_to(1, 1);
+    }
+    if GOT_SIGHUP.swap(false, Ordering::Relaxed) {
+        send_lifecycle_to(1, 2);
+    }
+}
+
+/// Internal helper: allocates a tagged lifecycle message buffer and
+/// pushes it to the front of the target process's mailbox.
+fn send_lifecycle_to(pid: i64, variant: i64) {
+    let total = 16usize;
+    let buf = unsafe {
+        let layout = alloc::Layout::from_size_align(total, 8).unwrap();
+        let buf = alloc::alloc(layout);
+        ptr::write_bytes(buf, 0, total);
+        *buf = 1u8; // tag = 1 (lifecycle)
+        *buf.add(8) = variant as u8;
+        buf
+    };
+
+    {
+        let mut guard = SCHED.lock().unwrap();
+        let idx = (pid - 1) as usize;
+        if idx >= guard.processes.len() {
+            return;
+        }
+        guard.processes[idx].mailbox.push_front(buf);
+        if guard.processes[idx].state == ProcessState::Blocked {
+            guard.processes[idx].state = ProcessState::Runnable;
+        }
+    }
+
+    WORK_AVAILABLE.notify_all();
+}
 
 const STACK_SIZE: usize = 512 * 1024;
 
@@ -249,6 +338,8 @@ fn worker_loop() {
             break;
         }
 
+        poll_signals();
+
         let mut guard = SCHED.lock().unwrap();
 
         let now = Instant::now();
@@ -321,26 +412,16 @@ fn worker_loop() {
             .filter_map(|p| p.deadline)
             .min();
 
-        if any_active {
-            let timeout = nearest
+        let timeout = if any_active {
+            nearest
                 .map(|dl| dl.saturating_duration_since(now))
-                .unwrap_or(Duration::from_millis(10));
-            let _ = WORK_AVAILABLE.wait_timeout(guard, timeout);
+                .unwrap_or(Duration::from_millis(10))
         } else {
-            match nearest {
-                Some(dl) => {
-                    let timeout = dl.saturating_duration_since(now);
-                    let _ = WORK_AVAILABLE.wait_timeout(guard, timeout);
-                }
-                None => {
-                    eprintln!("expo runtime: deadlock — all processes blocked without timeout");
-                    SHUTDOWN.store(true, Ordering::Relaxed);
-                    drop(guard);
-                    WORK_AVAILABLE.notify_all();
-                    break;
-                }
-            }
-        }
+            nearest
+                .map(|dl| dl.saturating_duration_since(now))
+                .unwrap_or(Duration::from_millis(100))
+        };
+        let _ = WORK_AVAILABLE.wait_timeout(guard, timeout);
     }
 }
 
@@ -356,6 +437,24 @@ fn worker_loop() {
 /// until the main process (PID 1) dies and [`SHUTDOWN`] is set.
 #[unsafe(no_mangle)]
 pub extern "C" fn expo_rt_main_done() {
+    // Force line-buffered stdout so output is visible immediately even
+    // when stdout is a pipe (e.g. when spawned by a test harness).
+    unsafe {
+        #[cfg(target_os = "macos")]
+        unsafe extern "C" {
+            #[link_name = "__stdoutp"]
+            static stdout_ptr: *mut u8;
+        }
+        #[cfg(target_os = "linux")]
+        unsafe extern "C" {
+            #[link_name = "stdout"]
+            static stdout_ptr: *mut u8;
+        }
+        const _IOLBF: i32 = 1;
+        setvbuf(stdout_ptr, ptr::null_mut(), _IOLBF, 0);
+    }
+
+    install_signals();
     crate::reactor::init();
 
     let n = worker_count();
@@ -450,18 +549,22 @@ pub extern "C" fn expo_rt_self() -> i64 {
 /// Sends a message to the process identified by `pid`.
 ///
 /// Copies `msg_len` bytes from `msg_ptr` into a heap-allocated buffer
-/// and appends it to the target's mailbox. If the target is `Blocked`,
-/// it is promoted to `Runnable` and a worker is woken.
+/// with an 8-byte tag header (tag=0 for business messages). The payload
+/// starts at offset 8 in the buffer. Appends to the target's mailbox
+/// via `push_back`. If the target is `Blocked`, it is promoted to
+/// `Runnable` and a worker is woken.
 ///
 /// # Safety
 /// `msg_ptr` must point to `msg_len` readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64) {
     let len = msg_len as usize;
+    let total = 8 + len;
     let buf = unsafe {
-        let layout = alloc::Layout::from_size_align(len, 8).unwrap();
+        let layout = alloc::Layout::from_size_align(total, 8).unwrap();
         let buf = alloc::alloc(layout);
-        ptr::copy_nonoverlapping(msg_ptr, buf, len);
+        ptr::write_bytes(buf, 0, 8);
+        ptr::copy_nonoverlapping(msg_ptr, buf.add(8), len);
         buf
     };
 
@@ -478,6 +581,16 @@ pub unsafe extern "C" fn expo_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
     }
 
     WORK_AVAILABLE.notify_one();
+}
+
+/// Sends a lifecycle event to the given process. Allocates a tagged
+/// buffer with tag=1 (lifecycle) and the variant byte, inserted at
+/// the front of the mailbox for priority delivery.
+///
+/// Variant indices: 0=Shutdown, 1=Interrupt, 2=Reload.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_rt_send_lifecycle(pid: i64, variant: i64) {
+    send_lifecycle_to(pid, variant);
 }
 
 /// Spawns a new lightweight process that will call `fn_ptr(state)`.

@@ -1,0 +1,29 @@
+struct App
+end
+
+enum AppMsg
+  Ping
+end
+
+impl Process<App, AppMsg, String> for App
+  fn new(config: App) -> Self
+    IO.puts("started")
+    config
+  end
+
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Self | StopReason
+    self
+  end
+
+  fn handle_lifecycle(move self, event: Lifecycle) -> Self | StopReason
+    match event
+      Lifecycle.Shutdown ->
+        IO.puts("shutting down gracefully")
+        StopReason.Shutdown
+      Lifecycle.Interrupt ->
+        IO.puts("interrupted")
+        StopReason.Shutdown
+      Lifecycle.Reload -> self
+    end
+  end
+end

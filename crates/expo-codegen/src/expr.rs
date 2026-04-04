@@ -1040,6 +1040,16 @@ fn compile_receive<'ctx>(
     }
 
     let msg_type = c.fn_state.process_msg_type.clone();
+    let is_process = msg_type.is_some()
+        && !matches!(
+            msg_type.as_ref().unwrap(),
+            Type::Primitive(Primitive::String)
+        );
+
+    if is_process {
+        return compile_receive_tagged(c, arms, raw_ptr, merge_bb, function);
+    }
+
     let is_string = msg_type
         .as_ref()
         .is_none_or(|t| matches!(t, Type::Primitive(Primitive::String)));
@@ -1051,7 +1061,7 @@ fn compile_receive<'ctx>(
                 .build_in_bounds_gep(
                     i8_type,
                     raw_ptr.into_pointer_value(),
-                    &[c.context.i64_type().const_int(8, false)],
+                    &[c.context.i64_type().const_int(16, false)],
                     "recv_str_payload",
                 )
                 .unwrap()
@@ -1061,12 +1071,20 @@ fn compile_receive<'ctx>(
         let msg_ty = msg_type.unwrap();
         let llvm_ty = crate::types::to_llvm_type(&msg_ty, c.context, &c.types.structs)
             .ok_or_else(|| format!("no LLVM type for receive message `{msg_ty:?}`"))?;
-        let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-        let typed_ptr = c
-            .builder
-            .build_pointer_cast(raw_ptr.into_pointer_value(), ptr_ty, "msg_typed_ptr")
-            .unwrap();
-        c.builder.build_load(llvm_ty, typed_ptr, "msg_val").unwrap()
+        let i8_type = c.context.i8_type();
+        let payload_ptr = unsafe {
+            c.builder
+                .build_in_bounds_gep(
+                    i8_type,
+                    raw_ptr.into_pointer_value(),
+                    &[c.context.i64_type().const_int(8, false)],
+                    "recv_payload_ptr",
+                )
+                .unwrap()
+        };
+        c.builder
+            .build_load(llvm_ty, payload_ptr, "msg_val")
+            .unwrap()
     };
 
     if arms.is_empty() {
@@ -1095,15 +1113,62 @@ fn compile_receive<'ctx>(
         Vec::new();
     let mut reachable_arm_count = 0usize;
 
+    let arm_refs: Vec<&MatchArm> = arms.iter().collect();
+    let arm_ctx = ReceiveArmCtx {
+        subject_alloca,
+        subject_type: &subject_type,
+        merge_bb,
+        fallthrough_bb,
+        prefix: "recv",
+        function,
+    };
+    compile_receive_arms(
+        c,
+        &arm_refs,
+        &arm_ctx,
+        &mut incoming,
+        &mut reachable_arm_count,
+    )?;
+
+    c.builder.position_at_end(merge_bb);
+    build_receive_phi(
+        c,
+        &mut incoming,
+        reachable_arm_count,
+        &[fallthrough_bb],
+        &subject_type,
+    )
+}
+
+/// Control-flow context for compiling a set of receive arms.
+struct ReceiveArmCtx<'a, 'ctx> {
+    subject_alloca: inkwell::values::PointerValue<'ctx>,
+    subject_type: &'a Type,
+    merge_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    fallthrough_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    prefix: &'a str,
+    function: FunctionValue<'ctx>,
+}
+
+/// Compiles a slice of receive arms against a loaded subject value.
+/// Shared by both the plain and tagged receive paths. Appends to
+/// `incoming` and `reachable_arm_count` for the caller's phi node.
+fn compile_receive_arms<'ctx>(
+    c: &mut Compiler<'ctx>,
+    arms: &[&MatchArm],
+    ctx: &ReceiveArmCtx<'_, 'ctx>,
+    incoming: &mut Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
+    reachable_arm_count: &mut usize,
+) -> Result<(), String> {
     for (i, arm) in arms.iter().enumerate() {
         let body_bb = c
             .context
-            .append_basic_block(function, &format!("recv_body_{i}"));
+            .append_basic_block(ctx.function, &format!("{}_body_{i}", ctx.prefix));
         let next_bb = if i + 1 < arms.len() {
             c.context
-                .append_basic_block(function, &format!("recv_test_{}", i + 1))
+                .append_basic_block(ctx.function, &format!("{}_test_{}", ctx.prefix, i + 1))
         } else {
-            fallthrough_bb
+            ctx.fallthrough_bb
         };
 
         let saved_vars = c.fn_state.variables.clone();
@@ -1111,13 +1176,13 @@ fn compile_receive<'ctx>(
         let condition = crate::control::compile_pattern(
             c,
             &arm.pattern,
-            subject_alloca,
-            &subject_type,
-            function,
+            ctx.subject_alloca,
+            ctx.subject_type,
+            ctx.function,
         )?;
 
         let final_cond = if let Some(guard) = &arm.guard {
-            let guard_val = compile_expr(c, guard, function)?
+            let guard_val = compile_expr(c, guard, ctx.function)?
                 .ok_or("receive guard produced no value")?
                 .value;
             c.builder
@@ -1132,11 +1197,10 @@ fn compile_receive<'ctx>(
             .unwrap();
 
         c.builder.position_at_end(body_bb);
-        let arm_tv = crate::control::compile_body_as_value(c, &arm.body, function)?;
-        let arm_terminated = c.current_block_terminated();
-        if !arm_terminated {
-            c.builder.build_unconditional_branch(merge_bb).unwrap();
-            reachable_arm_count += 1;
+        let arm_tv = crate::control::compile_body_as_value(c, &arm.body, ctx.function)?;
+        if !c.current_block_terminated() {
+            c.builder.build_unconditional_branch(ctx.merge_bb).unwrap();
+            *reachable_arm_count += 1;
         }
         let arm_end_bb = c.builder.get_insert_block().unwrap();
         if let Some(tv) = arm_tv {
@@ -1147,26 +1211,197 @@ fn compile_receive<'ctx>(
         c.builder.position_at_end(next_bb);
     }
 
-    c.builder.position_at_end(fallthrough_bb);
-    c.builder.build_unconditional_branch(merge_bb).unwrap();
+    c.builder.position_at_end(ctx.fallthrough_bb);
+    c.builder.build_unconditional_branch(ctx.merge_bb).unwrap();
+    Ok(())
+}
 
-    c.builder.position_at_end(merge_bb);
-
+/// Builds a phi node from `incoming` values if they all share the same
+/// LLVM type, adding zero-valued entries for each fallthrough block.
+fn build_receive_phi<'ctx>(
+    c: &Compiler<'ctx>,
+    incoming: &mut Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
+    reachable_arm_count: usize,
+    fallthrough_bbs: &[inkwell::basic_block::BasicBlock<'ctx>],
+    result_type: &Type,
+) -> ExprResult<'ctx> {
     if !incoming.is_empty() && incoming.len() == reachable_arm_count {
         let first_ty = incoming[0].0.get_type();
         if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
             let undef = first_ty.const_zero();
-            incoming.push((undef, fallthrough_bb));
-
+            for &bb in fallthrough_bbs {
+                incoming.push((undef, bb));
+            }
             let phi = c.builder.build_phi(first_ty, "recv_result").unwrap();
             let refs: Vec<_> = incoming
                 .iter()
                 .map(|(v, bb)| (v as &dyn inkwell::values::BasicValue, *bb))
                 .collect();
             phi.add_incoming(&refs);
-            return Ok(Some(TypedValue::new(phi.as_basic_value(), subject_type)));
+            return Ok(Some(TypedValue::new(
+                phi.as_basic_value(),
+                result_type.clone(),
+            )));
         }
     }
-
     Ok(None)
+}
+
+/// Compiles a `receive` expression in a Process context where the mailbox
+/// uses tagged messages. The raw buffer layout is [tag: 8 bytes, payload].
+/// Tag 0 = business message (Pair<M, Option<ReplyTo<R>>>), tag 1 = Lifecycle.
+///
+/// Arms are partitioned by their TypedBinding type annotation: arms whose
+/// resolved type matches `Lifecycle` go to the lifecycle branch, all others
+/// go to the business branch.
+fn compile_receive_tagged<'ctx>(
+    c: &mut Compiler<'ctx>,
+    arms: &[MatchArm],
+    raw_ptr: BasicValueEnum<'ctx>,
+    merge_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    use expo_ast::ast::Pattern;
+
+    let i8_type = c.context.i8_type();
+    let i64_type = c.context.i64_type();
+    let envelope_type = c.fn_state.process_msg_type.clone().unwrap();
+
+    let tag_val = c
+        .builder
+        .build_load(i8_type, raw_ptr.into_pointer_value(), "recv_tag")
+        .unwrap()
+        .into_int_value();
+
+    let payload_ptr = unsafe {
+        c.builder
+            .build_in_bounds_gep(
+                i8_type,
+                raw_ptr.into_pointer_value(),
+                &[i64_type.const_int(8, false)],
+                "recv_payload",
+            )
+            .unwrap()
+    };
+
+    let mut business_arms: Vec<&MatchArm> = Vec::new();
+    let mut lifecycle_arms: Vec<&MatchArm> = Vec::new();
+
+    for arm in arms {
+        if let Pattern::TypedBinding { type_expr, .. } = &arm.pattern {
+            let resolved = c.resolve_type_expr(type_expr);
+            if matches!(&resolved, Type::Enum(n) if n == "Lifecycle") {
+                lifecycle_arms.push(arm);
+                continue;
+            }
+        }
+        business_arms.push(arm);
+    }
+
+    let has_lifecycle = !lifecycle_arms.is_empty();
+
+    let biz_bb = c.context.append_basic_block(function, "recv_tag_business");
+    let lc_bb = if has_lifecycle {
+        c.context.append_basic_block(function, "recv_tag_lifecycle")
+    } else {
+        merge_bb
+    };
+    let default_bb = c.context.append_basic_block(function, "recv_tag_default");
+
+    c.builder
+        .build_switch(
+            tag_val,
+            default_bb,
+            &[
+                (i8_type.const_int(0, false), biz_bb),
+                (i8_type.const_int(1, false), lc_bb),
+            ],
+        )
+        .unwrap();
+
+    c.builder.position_at_end(default_bb);
+    c.builder.build_unreachable().unwrap();
+
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+        Vec::new();
+    let mut reachable_arm_count = 0usize;
+    let mut fallthrough_bbs: Vec<inkwell::basic_block::BasicBlock<'ctx>> = Vec::new();
+
+    // --- Business arms (tag 0) ---
+    c.builder.position_at_end(biz_bb);
+    let env_llvm = crate::types::to_llvm_type(&envelope_type, c.context, &c.types.structs)
+        .ok_or_else(|| format!("no LLVM type for envelope `{}`", envelope_type.display()))?;
+    let biz_val = c
+        .builder
+        .build_load(env_llvm, payload_ptr, "biz_msg")
+        .unwrap();
+    let biz_alloca = c
+        .builder
+        .build_alloca(biz_val.get_type(), "biz_subject")
+        .unwrap();
+    c.builder.build_store(biz_alloca, biz_val).unwrap();
+
+    let biz_fallthrough = c.context.append_basic_block(function, "recv_biz_none");
+    let biz_ctx = ReceiveArmCtx {
+        subject_alloca: biz_alloca,
+        subject_type: &envelope_type,
+        merge_bb,
+        fallthrough_bb: biz_fallthrough,
+        prefix: "recv_biz",
+        function,
+    };
+    compile_receive_arms(
+        c,
+        &business_arms,
+        &biz_ctx,
+        &mut incoming,
+        &mut reachable_arm_count,
+    )?;
+    fallthrough_bbs.push(biz_fallthrough);
+
+    // --- Lifecycle arms (tag 1) ---
+    if has_lifecycle {
+        c.builder.position_at_end(lc_bb);
+
+        let lifecycle_type = Type::Enum("Lifecycle".to_string());
+        let lc_llvm = crate::types::to_llvm_type(&lifecycle_type, c.context, &c.types.structs)
+            .ok_or("no LLVM type for Lifecycle enum")?;
+        let lc_val = c
+            .builder
+            .build_load(lc_llvm, payload_ptr, "lc_msg")
+            .unwrap();
+        let lc_alloca = c
+            .builder
+            .build_alloca(lc_val.get_type(), "lc_subject")
+            .unwrap();
+        c.builder.build_store(lc_alloca, lc_val).unwrap();
+
+        let lc_fallthrough = c.context.append_basic_block(function, "recv_lc_none");
+        let lc_ctx = ReceiveArmCtx {
+            subject_alloca: lc_alloca,
+            subject_type: &lifecycle_type,
+            merge_bb,
+            fallthrough_bb: lc_fallthrough,
+            prefix: "recv_lc",
+            function,
+        };
+        compile_receive_arms(
+            c,
+            &lifecycle_arms,
+            &lc_ctx,
+            &mut incoming,
+            &mut reachable_arm_count,
+        )?;
+        fallthrough_bbs.push(lc_fallthrough);
+    }
+
+    c.builder.position_at_end(merge_bb);
+    let result_type = c.fn_state.process_msg_type.clone().unwrap_or(Type::Unknown);
+    build_receive_phi(
+        c,
+        &mut incoming,
+        reachable_arm_count,
+        &fallthrough_bbs,
+        &result_type,
+    )
 }

@@ -22,3 +22,6 @@ expo-typecheck = { path = "../expo-typecheck" }
 clap = { version = "4.6.0", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+
+[dev-dependencies]
+libc = "0.2"

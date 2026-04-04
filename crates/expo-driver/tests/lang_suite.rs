@@ -1,15 +1,9 @@
-use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::Duration;
 
-fn worker_count() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get().min(4))
-        .unwrap_or(4)
-}
+extern crate libc;
 
 fn lang_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -104,51 +98,33 @@ fn run_pass_dir(dir: &Path, label: &str) {
         dir.display()
     );
 
-    let queue = Mutex::new(VecDeque::from_iter(files.iter()));
-    let failures = Mutex::new(Vec::new());
+    let mut failures = Vec::new();
 
-    std::thread::scope(|s| {
-        for _ in 0..worker_count() {
-            s.spawn(|| {
-                loop {
-                    let file = queue.lock().unwrap().pop_front();
-                    let Some(file) = file else { break };
+    for file in &files {
+        let test_name = format!("{label}/{}", file.file_stem().unwrap().to_string_lossy());
+        let expected_path = file.with_extension("stdout");
 
-                    let test_name =
-                        format!("{label}/{}", file.file_stem().unwrap().to_string_lossy());
-                    let expected_path = file.with_extension("stdout");
-
-                    if !expected_path.exists() {
-                        failures
-                            .lock()
-                            .unwrap()
-                            .push(format!("{test_name}: missing .stdout file"));
-                        continue;
-                    }
-
-                    let (stdout, stderr, code) = run_expo(file);
-
-                    if code != 0 {
-                        failures.lock().unwrap().push(format!(
-                            "{test_name}: exited with code {code}\nstderr:\n{stderr}"
-                        ));
-                        continue;
-                    }
-
-                    let expected = fs::read_to_string(&expected_path).unwrap();
-                    if stdout != expected {
-                        let diff = diff_lines(&stdout, &expected);
-                        failures
-                            .lock()
-                            .unwrap()
-                            .push(format!("{test_name}: output mismatch\n{diff}"));
-                    }
-                }
-            });
+        if !expected_path.exists() {
+            failures.push(format!("{test_name}: missing .stdout file"));
+            continue;
         }
-    });
 
-    let failures = failures.into_inner().unwrap();
+        let (stdout, stderr, code) = run_expo(file);
+
+        if code != 0 {
+            failures.push(format!(
+                "{test_name}: exited with code {code}\nstderr:\n{stderr}"
+            ));
+            continue;
+        }
+
+        let expected = fs::read_to_string(&expected_path).unwrap();
+        if stdout != expected {
+            let diff = diff_lines(&stdout, &expected);
+            failures.push(format!("{test_name}: output mismatch\n{diff}"));
+        }
+    }
+
     if !failures.is_empty() {
         panic!(
             "\n{} {label} test(s) failed:\n\n{}",
@@ -164,52 +140,37 @@ fn run_compile_fail_dir(dir: &Path, label: &str) {
     }
 
     let files = collect_expo_files(dir);
-    let queue = Mutex::new(VecDeque::from_iter(files.iter()));
-    let failures = Mutex::new(Vec::new());
+    let mut failures = Vec::new();
 
-    std::thread::scope(|s| {
-        for _ in 0..worker_count() {
-            s.spawn(|| {
-                loop {
-                    let file = queue.lock().unwrap().pop_front();
-                    let Some(file) = file else { break };
+    for file in &files {
+        let test_name = format!("{label}/{}", file.file_stem().unwrap().to_string_lossy());
+        let expected_path = file.with_extension("stdout");
 
-                    let test_name =
-                        format!("{label}/{}", file.file_stem().unwrap().to_string_lossy());
-                    let expected_path = file.with_extension("stdout");
-
-                    if !expected_path.exists() {
-                        failures
-                            .lock()
-                            .unwrap()
-                            .push(format!("{test_name}: missing .stdout file"));
-                        continue;
-                    }
-
-                    let (_stdout, stderr, code) = run_expo(file);
-
-                    if code == 0 {
-                        failures.lock().unwrap().push(format!(
-                            "{test_name}: expected compilation failure but succeeded"
-                        ));
-                        continue;
-                    }
-
-                    let expected = fs::read_to_string(&expected_path).unwrap();
-                    let pattern = expected.trim();
-                    if !stderr.contains(pattern) {
-                        failures.lock().unwrap().push(format!(
-                            "{test_name}: stderr does not contain expected pattern\n\
-                         expected pattern: {pattern:?}\n\
-                         actual stderr:\n{stderr}"
-                        ));
-                    }
-                }
-            });
+        if !expected_path.exists() {
+            failures.push(format!("{test_name}: missing .stdout file"));
+            continue;
         }
-    });
 
-    let failures = failures.into_inner().unwrap();
+        let (_stdout, stderr, code) = run_expo(file);
+
+        if code == 0 {
+            failures.push(format!(
+                "{test_name}: expected compilation failure but succeeded"
+            ));
+            continue;
+        }
+
+        let expected = fs::read_to_string(&expected_path).unwrap();
+        let pattern = expected.trim();
+        if !stderr.contains(pattern) {
+            failures.push(format!(
+                "{test_name}: stderr does not contain expected pattern\n\
+                 expected pattern: {pattern:?}\n\
+                 actual stderr:\n{stderr}"
+            ));
+        }
+    }
+
     if !failures.is_empty() {
         panic!(
             "\n{} {label} test(s) failed:\n\n{}",
@@ -225,52 +186,37 @@ fn run_runtime_fail_dir(dir: &Path, label: &str) {
     }
 
     let files = collect_expo_files(dir);
-    let queue = Mutex::new(VecDeque::from_iter(files.iter()));
-    let failures = Mutex::new(Vec::new());
+    let mut failures = Vec::new();
 
-    std::thread::scope(|s| {
-        for _ in 0..worker_count() {
-            s.spawn(|| {
-                loop {
-                    let file = queue.lock().unwrap().pop_front();
-                    let Some(file) = file else { break };
+    for file in &files {
+        let test_name = format!("{label}/{}", file.file_stem().unwrap().to_string_lossy());
+        let expected_path = file.with_extension("stderr");
 
-                    let test_name =
-                        format!("{label}/{}", file.file_stem().unwrap().to_string_lossy());
-                    let expected_path = file.with_extension("stderr");
-
-                    if !expected_path.exists() {
-                        failures
-                            .lock()
-                            .unwrap()
-                            .push(format!("{test_name}: missing .stderr file"));
-                        continue;
-                    }
-
-                    let (_stdout, stderr, code) = run_expo(file);
-
-                    if code == 0 {
-                        failures.lock().unwrap().push(format!(
-                            "{test_name}: expected runtime failure but exited with 0"
-                        ));
-                        continue;
-                    }
-
-                    let expected = fs::read_to_string(&expected_path).unwrap();
-                    let pattern = expected.trim();
-                    if !stderr.contains(pattern) {
-                        failures.lock().unwrap().push(format!(
-                            "{test_name}: stderr does not contain expected pattern\n\
-                         expected pattern: {pattern:?}\n\
-                         actual stderr:\n{stderr}"
-                        ));
-                    }
-                }
-            });
+        if !expected_path.exists() {
+            failures.push(format!("{test_name}: missing .stderr file"));
+            continue;
         }
-    });
 
-    let failures = failures.into_inner().unwrap();
+        let (_stdout, stderr, code) = run_expo(file);
+
+        if code == 0 {
+            failures.push(format!(
+                "{test_name}: expected runtime failure but exited with 0"
+            ));
+            continue;
+        }
+
+        let expected = fs::read_to_string(&expected_path).unwrap();
+        let pattern = expected.trim();
+        if !stderr.contains(pattern) {
+            failures.push(format!(
+                "{test_name}: stderr does not contain expected pattern\n\
+                 expected pattern: {pattern:?}\n\
+                 actual stderr:\n{stderr}"
+            ));
+        }
+    }
+
     if !failures.is_empty() {
         panic!(
             "\n{} {label} test(s) failed:\n\n{}",
@@ -413,6 +359,86 @@ lang_test_dir!(lang_alias_dep, "alias_dep", project);
 lang_test_dir!(lang_process_entry, "process_entry", project);
 lang_test_dir!(lang_process_exit, "process_exit", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
+
+#[test]
+fn lang_process_lifecycle() {
+    run_signal_test(
+        &lang_dir().join("process_lifecycle"),
+        "process_lifecycle",
+        libc::SIGTERM,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Signal test runner
+// ---------------------------------------------------------------------------
+
+fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
+    assert!(dir.exists(), "test fixture {label}/ not found");
+
+    let expected_path = dir.join("expected.stdout");
+    assert!(expected_path.exists(), "missing {label}/expected.stdout");
+
+    let binary = dir.join("target").join("debug").join(label);
+
+    let build_out = {
+        let mut cmd = Command::new(expo_bin());
+        cmd.arg("build")
+            .arg("-o")
+            .arg(binary.to_str().unwrap())
+            .current_dir(dir);
+        if let Some(lib_path) = library_path() {
+            cmd.env("LIBRARY_PATH", &lib_path);
+        }
+        cmd.output().expect("failed to build")
+    };
+    assert!(
+        build_out.status.success(),
+        "expo build failed for {label}:\n{}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let child = Command::new(&binary)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run compiled binary");
+
+    let pid = child.id() as libc::pid_t;
+    std::thread::sleep(Duration::from_millis(500));
+
+    unsafe {
+        libc::kill(pid, signal);
+    }
+
+    let output = child.wait_with_output().expect("failed to collect output");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+
+    let expected_code = dir
+        .join("expected.exit_code")
+        .exists()
+        .then(|| {
+            fs::read_to_string(dir.join("expected.exit_code"))
+                .unwrap()
+                .trim()
+                .parse::<i32>()
+                .expect("expected.exit_code must be an integer")
+        })
+        .unwrap_or(0);
+
+    assert!(
+        code == expected_code,
+        "{label}: expected exit code {expected_code}, got {code}\nstderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+
+    let expected = fs::read_to_string(&expected_path).unwrap();
+    if stdout != expected {
+        let diff = diff_lines(&stdout, &expected);
+        panic!("\n--- FAIL: {label} ---\n{diff}");
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Standalone project-specific tests (build, check, release)

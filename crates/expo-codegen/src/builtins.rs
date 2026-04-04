@@ -65,6 +65,10 @@ pub(crate) fn declare_builtins<'ctx>(
     decl("expo_rt_receive_timeout", ptr.fn_type(&[i64.into()], false));
     decl("expo_rt_self", i64.fn_type(&[], false));
     decl("expo_rt_main_done", void.fn_type(&[], false));
+    decl(
+        "expo_rt_send_lifecycle",
+        void.fn_type(&[i64.into(), i64.into()], false),
+    );
 
     // String intrinsics
     decl(

@@ -310,6 +310,7 @@ dependencies = [
  "expo-runtime",
  "expo-stdlib",
  "expo-typecheck",
+ "libc",
  "serde",
  "toml",
 ]

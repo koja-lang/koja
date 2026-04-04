@@ -46,11 +46,14 @@ pub fn compile_match<'ctx>(
 
     let merge_bb = c.context.append_basic_block(function, "match_end");
     let fallthrough_bb = c.context.append_basic_block(function, "match_none");
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-        Vec::new();
     let mut arm_expo_type: Option<Type> = None;
-
     let mut reachable_arm_count = 0usize;
+    let mut pending_arms: Vec<(
+        BasicValueEnum<'ctx>,
+        Type,
+        inkwell::basic_block::BasicBlock<'ctx>,
+    )> = Vec::new();
+    let mut needs_branch: Vec<inkwell::basic_block::BasicBlock<'ctx>> = Vec::new();
 
     for (i, arm) in arms.iter().enumerate() {
         let body_bb = c
@@ -85,20 +88,72 @@ pub fn compile_match<'ctx>(
         c.builder.position_at_end(body_bb);
         let arm_tv = compile_body_as_value(c, &arm.body, function)?;
         let arm_terminated = c.current_block_terminated();
-        if !arm_terminated {
-            c.builder.build_unconditional_branch(merge_bb).unwrap();
-            reachable_arm_count += 1;
-        }
         let arm_end_bb = c.builder.get_insert_block().unwrap();
-        if let Some(tv) = arm_tv {
-            if arm_expo_type.is_none() {
-                arm_expo_type = Some(tv.expo_type.clone());
+        if !arm_terminated {
+            reachable_arm_count += 1;
+            if let Some(tv) = arm_tv {
+                if arm_expo_type.is_none() {
+                    arm_expo_type = Some(tv.expo_type.clone());
+                }
+                pending_arms.push((tv.value, tv.expo_type, arm_end_bb));
+            } else {
+                needs_branch.push(arm_end_bb);
             }
-            incoming.push((tv.value, arm_end_bb));
         }
 
         c.fn_state.variables = saved_vars;
         c.builder.position_at_end(next_bb);
+    }
+
+    // Check whether arm LLVM types are uniform or need union wrapping.
+    let types_uniform = !pending_arms.is_empty()
+        && pending_arms
+            .iter()
+            .all(|(v, _, _)| v.get_type() == pending_arms[0].0.get_type());
+
+    let union_target = if !types_uniform && !pending_arms.is_empty() {
+        if let Some(Type::Union(ref members)) = c.fn_state.return_type_hint {
+            let target = Type::Union(members.clone());
+            let target_mangled = mangle_type(&target);
+            let all_members = pending_arms.iter().all(|(_, ty, _)| {
+                matches!(ty, Type::Union(_))
+                    || members.iter().any(|m| mangle_type(m) == mangle_type(ty))
+            });
+            if all_members {
+                c.types.structs.get(&target_mangled).map(|_| target)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Emit branches and collect phi values (with wrapping if needed).
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+        Vec::new();
+
+    for (val, ty, bb) in &pending_arms {
+        c.builder.position_at_end(*bb);
+        let final_val = if let Some(ref target) = union_target {
+            if matches!(ty, Type::Union(_)) {
+                *val
+            } else {
+                crate::stmt::compile_union_wrap(c, *val, ty, target)?
+            }
+        } else {
+            *val
+        };
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+        let end_bb = c.builder.get_insert_block().unwrap();
+        incoming.push((final_val, end_bb));
+    }
+
+    for bb in &needs_branch {
+        c.builder.position_at_end(*bb);
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
     }
 
     c.builder.position_at_end(fallthrough_bb);
@@ -110,13 +165,13 @@ pub fn compile_match<'ctx>(
         let first_ty = incoming[0].0.get_type();
         if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
             let undef = first_ty.const_zero();
-            incoming.push((undef, fallthrough_bb));
 
             let phi = c.builder.build_phi(first_ty, "matchval").unwrap();
             for (v, bb) in &incoming {
                 phi.add_incoming(&[(v, *bb)]);
             }
-            let result_type = arm_expo_type.unwrap_or(Type::Unknown);
+            phi.add_incoming(&[(&undef, fallthrough_bb)]);
+            let result_type = union_target.or(arm_expo_type).unwrap_or(Type::Unknown);
             return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
         }
     }

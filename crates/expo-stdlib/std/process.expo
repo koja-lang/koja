@@ -122,6 +122,11 @@ protocol Process<C, M, R>
           next: Self -> next.run()
           reason: StopReason -> reason
         end
+      event: Lifecycle ->
+        match self.handle_lifecycle(event)
+          next: Self -> next.run()
+          reason: StopReason -> reason
+        end
     end
   end
 end
@@ -158,6 +163,7 @@ impl Process<Task<R>, (), R> for Task<R>
           Option.None -> ()
         end
         StopReason.Normal
+      event: Lifecycle -> StopReason.Shutdown
     end
   end
 

@@ -90,6 +90,7 @@ unsafe extern "C" {
     pub fn expo_context_switch(save_sp: *mut *mut u8, load_sp: *mut u8);
 
     pub fn fflush(stream: *mut u8) -> i32;
+    pub fn setvbuf(stream: *mut u8, buf: *mut u8, mode: i32, size: usize) -> i32;
     pub fn malloc(size: usize) -> *mut u8;
 
     #[link_name = "accept"]

@@ -438,11 +438,32 @@ pub fn emit_ref_method<'ctx>(
             c.builder.build_unconditional_branch(merge_bb).unwrap();
 
             c.builder.position_at_end(else_bb);
+            let i8_ty_reply = c.context.i8_type();
+            let reply_payload_ptr = unsafe {
+                c.builder
+                    .build_in_bounds_gep(
+                        i8_ty_reply,
+                        raw_ptr,
+                        &[c.context.i64_type().const_int(8, false)],
+                        "reply_payload",
+                    )
+                    .unwrap()
+            };
             let reply_val = if is_reply_string {
-                raw_ptr.into()
+                let str_ptr = unsafe {
+                    c.builder
+                        .build_in_bounds_gep(
+                            i8_ty_reply,
+                            raw_ptr,
+                            &[c.context.i64_type().const_int(16, false)],
+                            "reply_str_ptr",
+                        )
+                        .unwrap()
+                };
+                str_ptr.into()
             } else {
                 c.builder
-                    .build_load(reply_llvm, raw_ptr, "reply_val")
+                    .build_load(reply_llvm, reply_payload_ptr, "reply_val")
                     .unwrap()
             };
             let some_val = {
