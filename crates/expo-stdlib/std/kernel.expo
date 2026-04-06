@@ -351,6 +351,25 @@ impl Hash for UInt64
   end
 end
 
+@doc """
+Cryptographically secure random data from the operating system.
+"""
+struct Random
+  @doc """
+  Returns `count` random bytes from the OS entropy source.
+  """
+  fn bytes(count: Int) -> Binary
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns a random integer in the inclusive range [min, max].
+  """
+  fn int(min: Int, max: Int) -> Int
+    panic("intrinsic")
+  end
+end
+
 impl Int
   @doc """
   Parses a string as a 64-bit signed integer. Returns `Result.Ok(value)` on

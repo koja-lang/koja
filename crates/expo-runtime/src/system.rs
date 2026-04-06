@@ -80,3 +80,57 @@ pub extern "C" fn expo_time_now_millis() -> i64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
+
+/// Fills `buf` with `len` bytes of OS entropy.
+fn fill_random(buf: *mut u8, len: usize) {
+    let mut offset = 0;
+    while offset < len {
+        let remaining = len - offset;
+        let dest = unsafe { buf.add(offset) };
+
+        #[cfg(target_os = "macos")]
+        {
+            let chunk = remaining.min(256);
+            let ret = unsafe { crate::ffi::libc_getentropy(dest, chunk) };
+            assert!(ret == 0, "getentropy failed");
+            offset += chunk;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let n = unsafe { crate::ffi::libc_getrandom(dest, remaining, 0) };
+            assert!(n > 0, "getrandom failed");
+            offset += n as usize;
+        }
+    }
+}
+
+/// Returns a Binary containing `count` cryptographically random bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_random_bytes(count: i64) -> *mut u8 {
+    let len = count.max(0) as usize;
+    let mut buf = vec![0u8; len];
+    if len > 0 {
+        fill_random(buf.as_mut_ptr(), len);
+    }
+    crate::util::alloc_binary(&buf)
+}
+
+/// Returns a random integer in the inclusive range [min, max].
+/// Uses rejection sampling to avoid modulo bias.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_random_int(min: i64, max: i64) -> i64 {
+    if min >= max {
+        return min;
+    }
+    let range = (max - min) as u64 + 1;
+    let reject_above = u64::MAX - (u64::MAX % range);
+    loop {
+        let mut raw = [0u8; 8];
+        fill_random(raw.as_mut_ptr(), 8);
+        let val = u64::from_ne_bytes(raw);
+        if val < reject_above {
+            return min + (val % range) as i64;
+        }
+    }
+}

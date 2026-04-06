@@ -276,21 +276,21 @@ authors do.
 
 Expo already has fixed-width integer types that map directly to C:
 
-| Expo | C | Size |
-| ---- | - | ---- |
-| `Int8` | `int8_t` | 1 byte |
-| `Int16` | `int16_t` | 2 bytes |
-| `Int32` | `int32_t` | 4 bytes |
-| `Int` | `int64_t` | 8 bytes |
-| `UInt8` | `uint8_t` | 1 byte |
-| `UInt16` | `uint16_t` | 2 bytes |
-| `UInt32` | `uint32_t` | 4 bytes |
-| `UInt64` | `uint64_t` | 8 bytes |
-| `Float32` | `float` | 4 bytes |
-| `Float` | `double` | 8 bytes |
-| `Bool` | `_Bool` / `uint8_t` | 1 byte |
-| `()` | `void` | 0 bytes |
-| `Ptr<T>` | `T*` | pointer-sized |
+| Expo      | C                   | Size          |
+| --------- | ------------------- | ------------- |
+| `Int8`    | `int8_t`            | 1 byte        |
+| `Int16`   | `int16_t`           | 2 bytes       |
+| `Int32`   | `int32_t`           | 4 bytes       |
+| `Int`     | `int64_t`           | 8 bytes       |
+| `UInt8`   | `uint8_t`           | 1 byte        |
+| `UInt16`  | `uint16_t`          | 2 bytes       |
+| `UInt32`  | `uint32_t`          | 4 bytes       |
+| `UInt64`  | `uint64_t`          | 8 bytes       |
+| `Float32` | `float`             | 4 bytes       |
+| `Float`   | `double`            | 8 bytes       |
+| `Bool`    | `_Bool` / `uint8_t` | 1 byte        |
+| `()`      | `void`              | 0 bytes       |
+| `Ptr<T>`  | `T*`                | pointer-sized |
 
 ### The `Int` footgun
 
@@ -498,3 +498,33 @@ follow the same pattern:
 The extern function name in LLVM IR must match the C symbol exactly.
 Expo's name mangling (which prefixes module/type names) is skipped for
 extern declarations.
+
+---
+
+## Open: conditional `@extern` (`@when`)
+
+`@extern "C"` on its own cannot express different C symbols or signatures
+per target OS or per compiler version. The same problem exists for any
+library that wants to ship one package that works on multiple platforms
+or across a range of Expo releases.
+
+**Planned direction:** a single conditional mechanism, working name `@when`,
+attachable to declarations (functions, structs, `impl` items, etc.) with
+predicate expressions evaluated at **compile time**:
+
+- **Target:** `target_os`, `target_arch`, and related triple fields, so
+  Linux can declare `getrandom` and macOS can declare `getentropy` (or
+  each links a thin shim) without runtime probing.
+- **Toolchain:** `expo_version` / compiler version with semver ranges, so
+  package maintainers can ship alternate implementations or shims for
+  breaking API changes (same idea as `rust-version` in Cargo, but at the
+  declaration level).
+
+**Alternatives** (see also [STDLIB.md](STDLIB.md) for the “system data”
+story): file-level or module-level inclusion by target; a tiny C/Rust shim
+with one stable symbol so Expo only ever sees one `extern`; both can
+coexist with `@when`.
+
+Exact grammar, predicate set, and error messages when no arm matches are
+TBD. This section is a placeholder so the FFI doc does not pretend that
+one undecorated `extern` block solves platform-specific C APIs.

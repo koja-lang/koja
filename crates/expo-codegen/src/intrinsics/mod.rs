@@ -23,7 +23,7 @@ use self::hash::{emit_bitwise_intrinsic, emit_eq_intrinsic, emit_hash_intrinsic}
 use self::io::{emit_fd_intrinsic, emit_file_intrinsic};
 use self::socket::emit_socket_intrinsic;
 use self::string::{emit_conversion_intrinsic, emit_parse_intrinsic, emit_string_intrinsic};
-use self::system::{emit_system_intrinsic, emit_time_intrinsic};
+use self::system::{emit_random_intrinsic, emit_system_intrinsic, emit_time_intrinsic};
 
 const PRIMITIVE_TYPES: &[&str] = &[
     "Bool", "Int", "Int8", "Int16", "Int32", "String", "UInt8", "UInt16", "UInt32", "UInt64",
@@ -89,6 +89,8 @@ const SYSTEM_INTRINSICS: &[&str] = &[
 
 const TIME_INTRINSICS: &[&str] = &["DateTime_now"];
 
+const RANDOM_INTRINSICS: &[&str] = &["Random_bytes", "Random_int"];
+
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     for prim in PRIMITIVE_TYPES {
         if mangled == format!("{prim}_hash") || mangled == format!("{prim}_eq") {
@@ -115,6 +117,7 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
         || SOCKET_INTRINSICS.contains(&mangled)
         || SYSTEM_INTRINSICS.contains(&mangled)
         || TIME_INTRINSICS.contains(&mangled)
+        || RANDOM_INTRINSICS.contains(&mangled)
     {
         return true;
     }
@@ -157,6 +160,10 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
 
     if TIME_INTRINSICS.contains(&mangled) {
         return emit_time_intrinsic(c, fn_val, mangled);
+    }
+
+    if RANDOM_INTRINSICS.contains(&mangled) {
+        return emit_random_intrinsic(c, fn_val, mangled);
     }
 
     if let Some(type_name) = mangled.strip_suffix("_format") {

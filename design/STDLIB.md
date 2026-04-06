@@ -159,22 +159,26 @@ in pure Expo with 17 tests covering encoder and decoder.
 
 ---
 
-## `random` package
+## `Random` (implemented -- in `std.kernel`)
 
 OS-level randomness. Not crypto-specific -- random numbers are used for games,
 tests, shuffling, UUID generation, and any non-deterministic behavior.
 
-### Types
+Decided against a separate `random` package -- too small (two functions), too
+fundamental. Lives in `std.kernel`, auto-imported into every module.
 
-- **`random.Random`** -- `bytes(n) -> Binary` (cryptographically secure random
-  bytes), `int(min, max) -> Int` (uniform random integer in range).
+### API
+
+- **`Random.bytes(count: Int) -> Binary`** -- cryptographically secure random bytes.
+- **`Random.int(min: Int, max: Int) -> Int`** -- uniform random integer in
+  inclusive range [min, max]. Uses rejection sampling to avoid modulo bias.
 
 ### Implementation
 
-Wraps the OS entropy source (`getrandom` on Linux, `arc4random_buf` on macOS)
-via a runtime intrinsic. No userspace PRNG -- always OS-quality randomness.
-Programs that never call `random.*` pay nothing. See [FFI.md](FFI.md) for
-the C interop design.
+Wraps the OS entropy source (`getrandom(2)` on Linux, `getentropy(2)` on macOS)
+via runtime intrinsics (`expo_random_bytes`, `expo_random_int`). No userspace
+PRNG -- always OS-quality randomness. Programs that never call `Random.*` pay
+nothing.
 
 ---
 
@@ -257,7 +261,7 @@ we only commit to things that will still make sense in another 20 years.
 ## Layer diagram
 
 ```
-random.Random      OS entropy (bytes, int)
+Random             OS entropy (bytes, int)    ← std.kernel, auto-imported
 crypto.Hash        SHA-2 family          ← application-level crypto
 crypto.HMAC        keyed message auth
 

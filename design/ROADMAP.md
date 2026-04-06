@@ -203,7 +203,7 @@ User-facing foreign function interface for calling C libraries. Expo already cal
 - `net` -- `TCPSocket` (with TLS via `upgrade_tls`), `TCPListener`, `UDPSocket`, `TLSConfig`. Built on `net.Socket` (raw POSIX primitives from current `std.socket`).
 - `http` -- shared vocabulary types (`Request`, `Response`, `Method`, `Status`, `Headers`), HTTP/1.1 parser, one-shot client, spawn-per-connection server.
 - `json` -- already implemented as a standalone package. Promote to stdlib status.
-- `random` -- `Random.bytes(n)`, `Random.int(min, max)`. OS-level randomness (`getrandom`/`/dev/urandom`). Universal capability, not crypto-specific.
+- ~~`random`~~ -- **Done.** `Random.bytes(n)` and `Random.int(min, max)` landed in `std.kernel` (auto-imported, no package qualifier needed). OS entropy via `getrandom(2)` / `getentropy(2)`, no OpenSSL dependency. Decided against a separate package -- too small, too fundamental.
 - `crypto` -- `Hash.sha256(data)`, `HMAC.sign(key, data)`. Stable cryptographic primitives (SHA-2, HMAC). Building blocks for TLS and application-level auth.
 
 #### First-party packages
@@ -247,7 +247,7 @@ Multi-threaded round-robin scheduling and I/O reactor are implemented. Work-stea
 - Timer wheel for timeouts, intervals, and deadlines
 - Process lifecycle manager (start, stop, crash detection)
 - All functions can suspend; the runtime handles it -- no function coloring
-- **System intrinsics via the runtime** -- `expo-runtime` is the gateway between Expo code and the OS. Beyond scheduling, it provides native functions for time (`expo_time_now_millis`), file I/O, random bytes, and other syscall-dependent operations. The compiler emits calls to these functions as intrinsics (same pattern as `spawn`/`send`/`receive`). Pure Expo types in the stdlib wrap them with ergonomic APIs (`DateTime.now()`, `File.read()`, etc.). The user-facing C FFI (Track A) generalizes this pattern for third-party native bindings.
+- **System intrinsics via the runtime** -- `expo-runtime` is the gateway between Expo code and the OS. Beyond scheduling, it provides native functions for time (`expo_time_now_millis`), file I/O, random bytes (`expo_random_bytes`, `expo_random_int`), and other syscall-dependent operations. The compiler emits calls to these functions as intrinsics (same pattern as `spawn`/`send`/`receive`). Pure Expo types in the stdlib wrap them with ergonomic APIs (`DateTime.now()`, `File.read()`, etc.). The user-facing C FFI (Track A) generalizes this pattern for third-party native bindings.
 - **Done when**: 10,000 processes run concurrently with correct multi-threaded scheduling
 
 #### Supervision prerequisites
@@ -563,13 +563,13 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 ### Remaining
 
-| Phase | Milestone                                                                                                                                                                               |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, package manager, C FFI, stdlib packages (`net`, `http`, `json`, `random`, `crypto`), first-party packages |
-| 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                  |
-| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                                                  |
-| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                              |
-| 6B    | auth-manager-expo runs for real, second project                                                                                                                                         |
+| Phase | Milestone                                                                                                                                                                                                       |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, ~~`random`~~, package manager, C FFI, stdlib packages (`net`, `http`, `json`, `crypto`), first-party packages |
+| 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                                          |
+| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                                                                          |
+| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                                                      |
+| 6B    | auth-manager-expo runs for real, second project                                                                                                                                                                 |
 
 ---
 

@@ -138,6 +138,13 @@ pub(crate) fn declare_builtins<'ctx>(
     // Time
     decl("expo_time_now_millis", i64.fn_type(&[], false));
 
+    // Random
+    decl("expo_random_bytes", ptr.fn_type(&[i64.into()], false));
+    decl(
+        "expo_random_int",
+        i64.fn_type(&[i64.into(), i64.into()], false),
+    );
+
     // Socket I/O
     decl("expo_socket_create", i64.fn_type(&[i64.into()], false));
     decl(

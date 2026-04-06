@@ -148,6 +148,14 @@ unsafe extern "C" {
     pub fn libc_write(fd: i32, buf: *const u8, count: usize) -> isize;
     #[link_name = "fcntl"]
     pub fn libc_fcntl(fd: i32, cmd: i32, ...) -> i32;
+    #[cfg(target_os = "macos")]
+    #[link_name = "getentropy"]
+    pub fn libc_getentropy(buf: *mut u8, buflen: usize) -> i32;
+
+    #[cfg(target_os = "linux")]
+    #[link_name = "getrandom"]
+    pub fn libc_getrandom(buf: *mut u8, buflen: usize, flags: u32) -> isize;
+
     #[link_name = "getsockopt"]
     pub fn libc_getsockopt(
         fd: i32,
