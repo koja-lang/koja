@@ -276,11 +276,11 @@ dependencies = [
 
 [[package]]
 name = "expo-ast"
-version = "0.8.0"
+version = "0.9.0"
 
 [[package]]
 name = "expo-codegen"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "expo-ast",
  "expo-typecheck",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "expo-doc"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "askama",
  "expo-ast",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "expo-driver"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "clap",
  "expo-ast",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "expo-fmt"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "expo-ast",
  "expo-parser",
@@ -325,14 +325,14 @@ dependencies = [
 
 [[package]]
 name = "expo-lexer"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "expo-ast",
 ]
 
 [[package]]
 name = "expo-lsp"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "expo-ast",
  "expo-fmt",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "expo-parser"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "expo-ast",
  "expo-lexer",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "expo-runtime"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "backtrace",
  "cc",
@@ -365,11 +365,11 @@ dependencies = [
 
 [[package]]
 name = "expo-stdlib"
-version = "0.8.0"
+version = "0.9.0"
 
 [[package]]
 name = "expo-typecheck"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "expo-ast",
  "expo-parser",

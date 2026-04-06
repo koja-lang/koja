@@ -5,50 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.9.0] - 2026-04-06
 
 ### Added
 
-- `Random` type in `std.kernel` -- `Random.bytes(count)` returns cryptographically secure random bytes from the OS entropy source (`getrandom(2)` on Linux, `getentropy(2)` on macOS). `Random.int(min, max)` returns a random integer in the inclusive range [min, max] using rejection sampling to avoid modulo bias. Both are auto-imported, no package qualifier needed.
-- Inline functions in struct/enum bodies -- `fn` and `priv fn` declarations can now appear directly inside `struct` and `enum` bodies alongside fields and variants. These are semantically identical to `impl` block methods (same mangling, same `self` handling, same type registration). `impl` blocks remain for external extensions and protocol conformance. Grammar, parser, type checker, codegen, formatter, doc extractor, and LSP all updated.
-- Process entry point -- projects can use `entry = "App"` (PascalCase) in `expo.toml` to designate a `Process<C, M, R>` implementation as the program entry point. Codegen generates a C `main` that constructs the entry type via `T.new`, spawns it into `T.run`, and starts the runtime scheduler. Lowercase `entry = "main"` retains the existing `fn main` behavior. Both modes coexist -- no existing code changes required. Exit code mapping: the entry process's `StopReason` is mapped to an OS exit code via the `ExitStatus` protocol (`Normal -> 0`, `Shutdown -> 1`). Argv passing: when the config type `C` is `List<String>`, command-line arguments (excluding `argv[0]`) are automatically converted into an Expo `List<String>` and passed to `new`.
-- `std.process` module -- process-related types (`ReplyTo`, `Ref`, `Task`, `Process` protocol) moved from `std.kernel` to a dedicated `std.process` module. New lifecycle types: `Lifecycle` enum (`Shutdown`, `Interrupt`, `Reload`), `StopReason` enum (`Normal`, `Shutdown`), `ExitStatus` protocol, `ExitReason` enum (`Normal`, `Shutdown`, `Crashed(String)`). `Process` protocol updated: `handle` returns `Self | StopReason`, `run` returns `StopReason`, and a new `handle_lifecycle` method with a default implementation handles lifecycle events.
-- Closure `move` params -- closures now support `move` on parameters (`fn (move x: T) -> U ... end`), matching regular function syntax. `Type::Function` carries per-parameter pass modes via a new `FnParam { ty, mode }` struct, enabling end-to-end type enforcement of `fn (move T) -> U` contracts. Parser, type checker, codegen, formatter, and LSP all updated.
-- `expo new <name>` -- scaffolds a new Expo project directory with `expo.toml` and `src/main.expo`. Project name must be ASCII alphanumeric or underscores.
-- `alias` keyword for file-private package type shorthands -- `alias json.Decoder` makes `Decoder` available as a local name, `alias json.Decoder as JSONDecoder` binds a custom local name. Qualified type references (`package.Type` syntax) resolve against dependency package types. Package type tracking via `ModuleGraph.dep_packages` and `TypeContext.package_types`. Formatter, doc extractor, and LSP all handle `Item::Alias`.
-- Trait bounds on generic type parameters -- `<T: Protocol>` constrains type parameters to types implementing specific protocols. Multiple bounds use `&` (`<T: Debug & Hash>`), complementing `|` for union types. Bounds are verified at call sites with clear error messages. Protocol methods can be called directly on bounded type vars inside function bodies. Unbounded `<T>` remains valid (backwards compatible). New `&` token in the lexer, `TypeParam` struct in the AST with `name` and `bounds` fields.
-- Multi-threaded scheduler -- the process runtime now runs N worker OS threads (cgroup v2-aware count on Linux, `available_parallelism` elsewhere). Workers share a `Mutex`-protected process list and park on a `Condvar` when idle (zero CPU burn). Graceful shutdown when the main process exits. Deadlock detection for all-blocked-without-timeout scenarios. The C ABI (`spawn`, `send`, `receive`) is unchanged -- existing Expo programs gain multi-core scheduling with no code changes.
-- I/O reactor -- non-blocking socket I/O backed by the `polling` crate (kqueue on macOS, epoll on Linux). All sockets are created in `O_NONBLOCK` mode. When a syscall returns `EAGAIN`, the process suspends via a new `WaitingIo` state and the reactor thread wakes it when the fd is ready. Affects `accept`, `connect`, `recv_from`, `send_to`, `fd_read`, and `fd_write`. A dedicated reactor thread polls for events alongside the worker threads. DNS resolution (`getaddrinfo`) remains blocking. File I/O stays blocking (regular files don't benefit from non-blocking mode). No changes to the C ABI or codegen.
-- DWARF debug info -- the compiler now emits full DWARF debug metadata (file, function, and line-level) in all builds. Every function gets a `DISubprogram`, every statement gets a `DILocation`. Debug info is always present; `--release` only controls LLVM optimization level, ensuring stacktraces and debugger support in all binaries.
-- `expo build --release` flag -- enables LLVM aggressive optimizations (`-O3`). Without `--release`, builds use no optimization (`-O0`). Both modes emit full debug info. `.dSYM` bundles are generated automatically on macOS via `dsymutil`.
-- Runtime stacktraces on panic -- when a compiled Expo program panics (e.g., `unwrap` on `None`, explicit `panic()`), the runtime prints a formatted stacktrace with source file and line numbers. Elixir-style formatting: `** (panic) message` header, `(appname)`/`(stdlib)` frame labels, relative paths, demangled function names with generic parameters stripped. App name is derived from the filename (single-file mode) or project name (`expo.toml`). ANSI red coloring on TTY with `NO_COLOR` env var support. Contextual hints for known panic patterns (e.g., "use .unwrap_or(default) or pattern match to handle None safely").
-- Local path dependencies -- `[dependencies]` table in `expo.toml` with `path` support. Dependency source files are scanned and merged into the module graph, making dependency types available in the project namespace. Example: `json = { path = "../json" }`.
-- Test runner -- `expo test` discovers `@test`-annotated functions in `src/` and `test/` directories, generates a test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure with the test name printed before each call. `expo.toml` has an optional `test` field (default `["test"]`).
-- `std.socket` module -- complete POSIX socket surface. `SocketKind` enum (`Stream`, `Datagram`), `IPAddress` struct (Binary-backed with `v4()`, `loopback()`, `any()`, `v4?()`, `v6?()` helpers), `SocketAddress` struct. `Socket` with `create`, `bind`, `connect`, `resolve` (DNS via `getaddrinfo`), `send_to`, `recv_from`, `listen`, `accept`, `set_reuse_addr`, `close`. Socket types moved from `std.fd` to `std.socket`. First-party `net` packages can now be built entirely in pure Expo without compiler intrinsics.
-- `Binary.byte_size()` -- returns the number of bytes in a binary value. `Binary` and `Bits` types now support debug formatting.
-- `Debug` protocol (`std.debug`) -- `format(self) -> String` returns a string representation, `inspect(move self) -> Self` prints and returns the value for tap-style chaining. Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation (`"#{value}"`) now dispatch through `Debug.format()` instead of hardcoded printf specifiers.
-- `std.io` module -- `IO.puts`, `IO.warn`, `IO.write`, and `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive byte-by-byte `STDIN.read(1)`.
-- `FileMode` enum (`Read`, `Write`, `Append`) and updated `File.open(path, mode)` for explicit open modes. New path-based file operations: `File.write(path, content)`, `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)`. Append mode support via `OpenOptions`. Handle-level writes via `file.fd.write(data)`.
-- `System` type (`std.system`) -- `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Environment variable access, working directory, and hostname via runtime intrinsics.
-- `DateTime` and `Duration` types (`std.time`) -- `DateTime.now()` for wall-clock time, `DateTime.timestamp_millis()` for epoch millis. `Duration.from_secs()`, `Duration.from_millis()`, and `Duration.millis()` for time spans. `Duration` is pure Expo; only `DateTime.now()` requires a runtime shim.
-- Vim plugin -- `indent/expo.vim` (auto-indentation with `indentexpr`), `ftplugin/expo.vim` (`matchit` support for `fn`/`end`, `if`/`end`, etc.), and `compiler/expo.vim` (`:make` integration with `expo check` and Vim `errorformat` for quickfix).
+- Inline functions in struct/enum bodies -- `fn` and `priv fn` can now appear directly inside `struct` and `enum` bodies alongside fields and variants. `impl` blocks remain for extensions and protocol conformance.
+- Process lifecycle -- new `Lifecycle` enum (`Shutdown`, `Interrupt`, `Reload`), `StopReason`, `ExitStatus` protocol, and `handle_lifecycle` method on the `Process` protocol. OS signals (`SIGTERM`, `SIGINT`, `SIGHUP`) are delivered as typed messages to the entry process.
+- Process entry point -- `entry = "App"` in `expo.toml` designates a `Process<C, M, R>` implementation as the program entry point. Exit codes map through `ExitStatus` (`Normal -> 0`, `Shutdown -> 1`). When `C` is `List<String>`, command-line arguments are passed automatically.
+- Multi-threaded scheduler -- the runtime now runs N worker threads (cgroup-aware on Linux). Existing programs gain multi-core scheduling with no code changes. Graceful shutdown and deadlock detection included.
+- I/O reactor -- non-blocking socket I/O via kqueue (macOS) and epoll (Linux). Processes suspend on `EAGAIN` and resume when the fd is ready.
+- Trait bounds -- `<T: Protocol>` constrains type parameters. Multiple bounds use `&` (`<T: Debug & Hash>`). Bounds are verified at call sites with clear error messages.
+- `Random` type -- `Random.bytes(count)` for cryptographically secure random bytes, `Random.int(min, max)` for a random integer in an inclusive range. Auto-imported from `std.kernel`.
+- Closure `move` params -- closures now support `move` on parameters (`fn (move x: T) -> U ... end`), matching regular function syntax.
+- `alias` keyword -- file-private shorthands for package types. `alias json.Decoder` or `alias json.Decoder as JSONDecoder`.
+- Local path dependencies -- `[dependencies]` in `expo.toml` with `path` support for local packages.
+- Test runner -- `expo test` discovers and runs `@test`-annotated functions. Optional description: `@test "adds two numbers"`.
+- `expo new <name>` -- scaffolds a new project with `expo.toml` and `src/main.expo`.
+- Debug and release builds -- DWARF debug info in all builds. `expo build --release` enables LLVM `-O3` optimizations. `.dSYM` bundles on macOS.
+- Stacktraces on panic -- formatted stacktraces with source locations, demangled names, and contextual hints (e.g., "use `.or(default)` or pattern match to handle None safely").
+- `std.process` module -- process types (`Ref`, `ReplyTo`, `Task`, `Process` protocol) moved from `std.kernel` to a dedicated module.
+- `std.socket` module -- `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`. TCP and UDP socket creation, bind, connect, listen, accept, send/receive, and DNS resolution.
+- `Debug` protocol -- `format(self) -> String` and `inspect(move self) -> Self`. Compiler-derived for all types. `print()` and string interpolation now dispatch through `Debug.format()`.
+- `std.io` module -- `IO.puts`, `IO.warn`, `IO.write`, `IO.gets`. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants.
+- File operations -- `FileMode` enum, `File.write(path, content)`, `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)`.
+- `System` type -- `System.get_env`, `System.set_env`, `System.cwd`, `System.hostname`.
+- `DateTime` and `Duration` types -- `DateTime.now()`, `Duration.from_secs()`, `Duration.from_millis()`.
+- `Binary.byte_size()` and debug formatting for `Binary` and `Bits`.
+- Vim plugin -- auto-indentation, `matchit` support, and `:make` integration with `expo check`.
 
 ### Changed
 
-- Project config migration -- replaced `project.expo` (Expo struct literal parsed via AST hack) with `expo.toml` (TOML-based, parsed via `toml` crate). Simpler, more robust, and prepares for the dependency system.
+- Project config is now `expo.toml` (TOML-based), replacing `project.expo`.
 
 ### Removed
 
-- Windows support -- removed Windows context-switching assembly (`x86_64_win.s`), Windows `EAGAIN`/`EINPROGRESS` errno values, Windows stack frame constants, and the `#[cfg(not(unix))]` exec fallback in the driver. The runtime now targets Unix only (macOS + Linux). Platform-specific FFI constants (`SOL_SOCKET`, `SO_REUSEADDR`, `SO_ERROR`, `O_NONBLOCK`, `SockaddrIn`, `Addrinfo`) are now correctly split between macOS and Linux via `cfg` modules, fixing previously hardcoded macOS-only values that would have been incorrect on Linux.
-- `import` keyword -- all types and public functions in a project are visible in every file. No imports needed. The transparent file model replaces the old import-driven module system.
-- `@moduledoc` annotation -- with the transparent file model, module-level documentation is no longer needed. Use `@doc` on individual types instead.
-- Module-grouped doc output -- `expo doc` now produces a flat namespace of all types, functions, protocols, and constants instead of grouping by file/module.
+- Windows support -- the runtime now targets Unix only (macOS + Linux).
+- `import` keyword -- all types and public functions are visible in every file. The transparent file model replaces imports.
+- `@moduledoc` annotation -- use `@doc` on individual types instead.
+- Module-grouped doc output -- `expo doc` now produces a flat type namespace.
 
 ### Fixed
 
-- `Self` resolution centralized -- `Self` type substitution in `impl` blocks is now handled by a single code path in both the type checker and codegen, rather than scattered special-case logic. Previously, `Self` inside union return types (e.g., `Self | StopReason`) resolved to `Unknown`. The type checker uses a shared `resolve` closure with `Self`-aware substitution for both parameters and return types. Codegen stores `self_type_name` in `FnState` and injects `Self` into the standard `resolve_type_expr` path, eliminating the separate `resolve_return_type_with_self` helper.
-- Generic enum variants where not all type parameters are inferrable from the payload (e.g., `Result.Ok(value)` in a function returning `Result<T, String>`) no longer fail with an LLVM type mismatch.
-- Static method calls as bare statements (e.g., `System.set_env(key, value)`) no longer emit a spurious "unknown variable" error. The discarded-move-self warning now skips static calls.
+- `Self` inside union return types (e.g., `Self | StopReason`) now resolves correctly in all positions.
+- Generic enum variants with partially inferrable type parameters (e.g., `Result.Ok(value)`) no longer fail with an LLVM type mismatch.
+- Static method calls as bare statements no longer emit a spurious "unknown variable" error.
 
 ## [0.8.0] - 2026-03-30
 
