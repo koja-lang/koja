@@ -71,4 +71,54 @@ fn main
     Result.Err(msg) ->
       print("resolve err: " <> msg)
   end
+
+  # TCPListener bind and close
+  match TCPListener.bind(0)
+    Result.Ok(listener) ->
+      print("tcp listener bind ok")
+      listener.close()
+
+    Result.Err(msg) ->
+      print("tcp listener bind err: " <> msg)
+  end
+
+  # TCPSocket connect to refused port
+  match TCPSocket.connect_addr(SocketAddress{ip: IPAddress.loopback(), port: 1})
+    Result.Ok(conn) ->
+      print("tcp connect unexpected success")
+      conn.close()
+
+    Result.Err(_) ->
+      print("tcp connect refused ok")
+  end
+
+  # UDPSocket bind and close
+  match UDPSocket.bind(0)
+    Result.Ok(sock) ->
+      print("udp bind ok")
+      sock.close()
+
+    Result.Err(msg) ->
+      print("udp bind err: " <> msg)
+  end
+
+  # UDPSocket bind_addr
+  match UDPSocket.bind_addr(SocketAddress{ip: IPAddress.loopback(), port: 0})
+    Result.Ok(sock) ->
+      print("udp bind_addr ok")
+      sock.close()
+
+    Result.Err(msg) ->
+      print("udp bind_addr err: " <> msg)
+  end
+
+  # TCPListener bind_addr
+  match TCPListener.bind_addr(SocketAddress{ip: IPAddress.loopback(), port: 0})
+    Result.Ok(listener) ->
+      print("tcp listener bind_addr ok")
+      listener.close()
+
+    Result.Err(msg) ->
+      print("tcp listener bind_addr err: " <> msg)
+  end
 end

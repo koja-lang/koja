@@ -58,16 +58,20 @@ Networking with TLS as a capability on `TCPSocket`, not a separate type.
 
 ### Types
 
-- **`net.TCPSocket`** -- `connect(host, port)`, `read(count)`, `write(data)`,
-  `close()`. TLS via `upgrade_tls(config)` (`move self -> Self`) or the
-  convenience factory `connect_tls(host, port, config)`. One type handles
-  both plain and encrypted connections.
-- **`net.TCPListener`** -- `bind(port)`, `accept()` (returns `TCPSocket`).
-  Same type for server and client connections.
-- **`net.UDPSocket`** -- `bind(port)`, `send_to(host, port, data)`,
+- **`net.TCPSocket`** -- **implemented** (currently in `std.socket`).
+  `connect(host, port)` resolves DNS and connects, `connect_addr(addr)`
+  for direct connections, `read(count)`, `write(data)`, `close()`.
+  TLS via `upgrade_tls(config)` (`move self -> Self`) or the
+  convenience factory `connect_tls(host, port, config)` (pending).
+  One type handles both plain and encrypted connections.
+- **`net.TCPListener`** -- **implemented** (currently in `std.socket`).
+  `bind(port)` or `bind_addr(addr)`, `accept()` (returns `TCPSocket`).
+  Sets `SO_REUSEADDR` and listens with backlog 128 automatically.
+- **`net.UDPSocket`** -- **implemented** (currently in `std.socket`).
+  `bind(port)` or `bind_addr(addr)`, `send_to(data, addr)`,
   `recv_from(count)`. Datagram-oriented, no connection ceremony.
 - **`net.TLSConfig`** -- certificate options, verification settings. Passed
-  to `upgrade_tls` or `connect_tls`.
+  to `upgrade_tls` or `connect_tls`. Pending implementation.
 - **`net.Socket`** -- raw POSIX socket primitives (current `std.socket`
   internals). Rarely used directly -- `TCPSocket` and `UDPSocket` wrap it.
 
@@ -94,8 +98,9 @@ makes this feel natural in Expo.
 
 ### Implementation
 
-`net.TCPSocket` and friends are built entirely in pure Expo on top of
-`net.Socket` (the raw POSIX primitives). TLS wraps a system library
+`TCPSocket`, `TCPListener`, and `UDPSocket` are implemented in pure Expo
+in `std.socket`, wrapping the raw `Socket` primitives. They will move to
+the `net` package namespace when the package system is built. TLS wraps a system library
 (LibreSSL/OpenSSL/BoringSSL) via C FFI (see [FFI.md](FFI.md)). Programs
 that don't call `upgrade_tls` don't pull in TLS dependencies.
 

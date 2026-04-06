@@ -8,3 +8,8 @@ bind ok
 connect refused ok
 resolve ok
 true
+tcp listener bind ok
+tcp connect refused ok
+udp bind ok
+udp bind_addr ok
+tcp listener bind_addr ok
