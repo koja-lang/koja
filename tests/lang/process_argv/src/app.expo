@@ -7,14 +7,12 @@ enum AppMsg
 end
 
 impl Process<List<String>, AppMsg, String> for App
-  fn new(config: List<String>) -> Self
-    App{args: config}
+  fn start(move config: List<String>) -> Result<Self, StopReason>
+    Result.Ok(App{args: config})
   end
 
-  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>)
-    -> Self | StopReason
-
-    self
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+    Step.Continue(self)
   end
 
   fn run(move self) -> StopReason

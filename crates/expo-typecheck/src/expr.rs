@@ -310,7 +310,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             let type_name = match inner.as_ref() {
                 Expr::MethodCall {
                     receiver, method, ..
-                } if method == "new" => {
+                } if method == "start" => {
                     if let Expr::Ident { name, .. } = receiver.as_ref() {
                         Some(name.clone())
                     } else {
@@ -320,7 +320,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 Expr::Call { callee, .. } => match callee.as_ref() {
                     Expr::FieldAccess {
                         receiver, field, ..
-                    } if field == "new" => {
+                    } if field == "start" => {
                         if let Expr::Ident { name, .. } = receiver.as_ref() {
                             Some(name.clone())
                         } else {
@@ -334,7 +334,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
 
             let Some(target) = type_name else {
                 ctx.error(
-                    "spawn requires `Type.new(config)` form where Type implements Process"
+                    "spawn requires `Type.start(config)` form where Type implements Process"
                         .to_string(),
                     *span,
                 );
@@ -369,7 +369,14 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
 
             let inner_ty = infer_expr(inner, ctx, ce);
 
-            let reply_type = match &inner_ty {
+            let state_ty = match &inner_ty {
+                Type::GenericInstance {
+                    base, type_args, ..
+                } if base == "Result" => type_args.first().cloned().unwrap_or(inner_ty.clone()),
+                _ => inner_ty.clone(),
+            };
+
+            let reply_type = match &state_ty {
                 Type::GenericInstance {
                     base, type_args, ..
                 } if *base == target && type_args.len() == 1 => type_args[0].clone(),

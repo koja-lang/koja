@@ -280,6 +280,98 @@ The constant is defined once; the typed lookup helper pins both the name and the
 
 ---
 
+## Ref API and shutdown primitives
+
+`Ref<M, R>` is a typed handle to a running process. It currently supports two operations: `cast` (fire-and-forget) and `call` (synchronous with timeout). This section adds `signal` for lifecycle events and `Process.kill` for forced termination, and changes `call` to return `Result<R, CallError>` instead of `Option<R>`.
+
+### `Ref.signal`
+
+Every process mailbox already accepts two kinds of messages: business messages (`M`) and lifecycle events (`Lifecycle`). The `run()` default has two receive arms for them. But `Ref` only exposes the business channel through `cast` and `call`. `signal` exposes the lifecycle channel:
+
+```expo
+impl Ref<M, R>
+  fn cast(self, msg: M)                                # fire-and-forget business message
+  fn call(self, msg: M, timeout: Int) -> Result<R, CallError>  # synchronous business message
+  fn signal(self, event: Lifecycle)                     # fire-and-forget lifecycle event
+end
+```
+
+`signal` maps directly to the runtime's `expo_rt_send_lifecycle(pid, variant)`, which pushes lifecycle events to the **front** of the mailbox (priority delivery). The runtime already uses this path for OS signals to PID 1 -- `signal` generalizes it so any process can send lifecycle events to any other process it holds a `Ref` to.
+
+This is the mechanism supervisors use for cooperative shutdown. The supervisor doesn't need to know `M` or `R` to shut down a child -- it captures `ref.signal` in a closure at spawn time:
+
+```expo
+struct ChildHandle
+  signal: fn (Lifecycle) -> ()
+  id: Int
+end
+```
+
+### `CallError`
+
+`Ref.call` currently returns `Option<R>`, which conflates two failure modes: the process timed out (it's busy or slow) vs. the process is dead. These require different responses -- retry vs. escalate. `CallError` distinguishes them:
+
+```expo
+enum CallError
+  Timeout
+  ProcessDown
+end
+```
+
+`call` becomes `fn call(self, msg: M, timeout: Int) -> Result<R, CallError>`:
+
+- `Result.Ok(reply)` -- the process replied within the timeout
+- `Result.Err(CallError.Timeout)` -- the process is alive but didn't reply in time
+- `Result.Err(CallError.ProcessDown)` -- the process is dead
+
+The runtime detects `ProcessDown` by checking the target process's state before sending or after a timeout. If the process is `Dead` in the scheduler, the call returns `ProcessDown` immediately without waiting.
+
+`Task.await` changes to match: `fn await(move reference: Ref<(), R>) -> Result<R, CallError>`.
+
+### `Ref.kill`
+
+Cooperative shutdown via `signal(Lifecycle.Shutdown)` depends on the target process handling the event. If the process is stuck -- infinite loop in a handler, deadlocked on a `call` to a dead process -- it will never respond. The supervisor needs an escape hatch.
+
+```expo
+ref.kill()
+```
+
+`kill` is uncooperative. The runtime marks the process as `Dead`, frees all memory owned by it, and (once monitoring is implemented) sends `ExitSignal` to any watchers. It does not go through the mailbox. It does not call `handle_signal`. The process simply stops existing.
+
+This is safe because Expo has no shared mutable state. Every allocation belongs to exactly one process. Kill it, free everything, no other process is affected.
+
+`kill` is an instance method on `Ref<M, R>`. You need a handle to kill a process -- you can't kill by raw pid. This is consistent with Expo's typed-handles philosophy and eliminates the need for a separate `Pid` type. The supervisor holds refs (or closures capturing refs) for every child.
+
+The supervisor's shutdown loop:
+
+```expo
+for child in self.children.reverse()
+  child.handle.signal(Lifecycle.Shutdown)
+  match self.wait_for_exit(child.id, child.shutdown_timeout)
+    Option.Some(reason) -> ()
+    Option.None -> child.handle.kill()
+  end
+end
+```
+
+The supervisor iterates children in reverse start order (last started, first stopped), sends cooperative shutdown, waits up to a per-child timeout, then force-kills if necessary. This matches OTP's shutdown semantics.
+
+### No `Pid` type
+
+`Ref<M, R>` is the only process handle. All operations -- `cast`, `call`, `signal`, `kill` -- go through it. The supervisor achieves type erasure through closures that capture typed refs, not through a separate untyped `Pid`. `ExitSignal` carries an `Int` (the raw process id from `ref.id`) for identification, not a `Pid` struct.
+
+### Summary: the three shutdown primitives
+
+| Primitive                               | Cooperative | Goes through mailbox  | Caller blocks |
+| --------------------------------------- | ----------- | --------------------- | ------------- |
+| `ref.signal(Lifecycle.Shutdown)`        | Yes         | Yes (front of queue)  | No            |
+| `ref.kill()`                            | No          | No                    | No            |
+| `supervisor.wait_for_exit(id, timeout)` | N/A         | Receives `ExitSignal` | Yes           |
+
+These three compose into the supervisor shutdown loop. `signal` is the polite request, `kill` is the last resort, `wait_for_exit` is the synchronization point.
+
+---
+
 ## Error handling philosophy
 
 Expo's error model has three layers, each progressively less precise:

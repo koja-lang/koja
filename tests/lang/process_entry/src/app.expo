@@ -6,15 +6,13 @@ enum AppMsg
 end
 
 impl Process<App, AppMsg, String> for App
-  fn new(config: App) -> Self
+  fn start(move config: App) -> Result<Self, StopReason>
     IO.puts("starting")
-    config
+    Result.Ok(config)
   end
 
-  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>)
-    -> Self | StopReason
-
-    self
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+    Step.Continue(self)
   end
 
   fn run(move self) -> StopReason

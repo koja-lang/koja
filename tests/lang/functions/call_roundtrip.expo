@@ -9,12 +9,12 @@ struct Calc
 end
 
 impl Process<CalcConfig, CalcMsg, Int> for Calc
-  fn new(config: CalcConfig) -> Self
-    Calc{}
+  fn start(move config: CalcConfig) -> Result<Self, StopReason>
+    Result.Ok(Calc{})
   end
 
   fn handle(move self, msg: CalcMsg, from: Option<ReplyTo<Int>>)
-    -> Self | StopReason
+    -> Step<Self>
 
     match msg
       CalcMsg.Add(a, b) ->
@@ -24,13 +24,13 @@ impl Process<CalcConfig, CalcMsg, Int> for Calc
           Option.Some(reply) -> reply.send(sum)
           Option.None -> ()
         end
-        self
+        Step.Continue(self)
     end
   end
 end
 
 fn main
-  calc = spawn Calc.new(CalcConfig{})
+  calc = spawn Calc.start(CalcConfig{})
   result = calc.call(CalcMsg.Add(10, 32), 5000)
   match result
     Option.Some(n) -> print("result: #{n}")

@@ -298,23 +298,16 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                         .get(proto)
                         .map(|pi| pi.type_params.iter().map(|tp| tp.name.clone()).collect())
                         .unwrap_or_default();
-                    let proto_type_args: Vec<String> = if let Some(TypeExpr::Generic {
-                        args, ..
-                    }) = &impl_block.trait_expr
-                    {
-                        args.iter()
-                            .map(|a| match a {
-                                TypeExpr::Named { path, .. } if path.len() == 1 => path[0].clone(),
-                                _ => String::new(),
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    let type_param_map: Vec<(&str, &str)> = proto_type_param_names
+                    let proto_type_arg_exprs: Vec<&TypeExpr> =
+                        if let Some(TypeExpr::Generic { args, .. }) = &impl_block.trait_expr {
+                            args.iter().collect()
+                        } else {
+                            Vec::new()
+                        };
+                    let type_param_map: Vec<(&str, &TypeExpr)> = proto_type_param_names
                         .iter()
-                        .zip(proto_type_args.iter())
-                        .map(|(k, v)| (k.as_str(), v.as_str()))
+                        .zip(proto_type_arg_exprs.iter())
+                        .map(|(k, v)| (k.as_str(), *v))
                         .collect();
 
                     for name in &missing {
@@ -653,21 +646,16 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
                 .get(&proto)
                 .map(|pi| pi.type_params.iter().map(|tp| tp.name.clone()).collect())
                 .unwrap_or_default();
-            let proto_type_args: Vec<String> =
+            let proto_type_arg_exprs: Vec<&TypeExpr> =
                 if let Some(TypeExpr::Generic { args, .. }) = &impl_block.trait_expr {
-                    args.iter()
-                        .map(|a| match a {
-                            TypeExpr::Named { path, .. } if path.len() == 1 => path[0].clone(),
-                            _ => String::new(),
-                        })
-                        .collect()
+                    args.iter().collect()
                 } else {
                     Vec::new()
                 };
-            let type_param_map: Vec<(&str, &str)> = proto_type_param_names
+            let type_param_map: Vec<(&str, &TypeExpr)> = proto_type_param_names
                 .iter()
-                .zip(proto_type_args.iter())
-                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .zip(proto_type_arg_exprs.iter())
+                .map(|(k, v)| (k.as_str(), *v))
                 .collect();
 
             for name in &missing {
@@ -947,11 +935,12 @@ pub fn auto_derive_debug(ctx: &mut TypeContext) {
 
 /// Converts a `ProtocolMethod` with a default body into a `Function` AST node
 /// suitable for compilation as `{target_type}_{method_name}`.
-/// `type_param_map` maps protocol type params to concrete type names (e.g., `T` -> `String`).
+/// `type_param_map` maps protocol type params to concrete type expressions
+/// (e.g., `"T"` -> `TypeExpr::Named { path: ["String"], .. }`).
 fn synthesize_default_fn(
     pm: &ProtocolMethod,
     target_type: &str,
-    type_param_map: &[(&str, &str)],
+    type_param_map: &[(&str, &TypeExpr)],
 ) -> Function {
     let mut params = pm.params.clone();
     for p in &mut params {
@@ -989,11 +978,11 @@ fn synthesize_default_fn(
 }
 
 /// Replaces a named type reference (e.g., a protocol type parameter like `T`)
-/// with a concrete type name throughout a type expression tree.
-fn substitute_named_in_type_expr(te: &mut TypeExpr, from: &str, to: &str) {
+/// with a concrete type expression throughout a type expression tree.
+fn substitute_named_in_type_expr(te: &mut TypeExpr, from: &str, to: &TypeExpr) {
     match te {
         TypeExpr::Named { path, .. } if path.len() == 1 && path[0] == from => {
-            path[0] = to.to_string();
+            *te = to.clone();
         }
         TypeExpr::Generic { args, .. } => {
             for arg in args {
@@ -1019,9 +1008,9 @@ fn substitute_named_in_type_expr(te: &mut TypeExpr, from: &str, to: &str) {
     }
 }
 
-/// Recursively renames type references from `from` to `to` inside a statement,
+/// Recursively replaces type references from `from` to `to` inside a statement,
 /// used when synthesizing protocol defaults for a concrete type parameter.
-fn substitute_named_in_statement(stmt: &mut Statement, from: &str, to: &str) {
+fn substitute_named_in_statement(stmt: &mut Statement, from: &str, to: &TypeExpr) {
     match stmt {
         Statement::Expr(expr) => substitute_named_in_expr(expr, from, to),
         Statement::Assignment {
@@ -1046,8 +1035,8 @@ fn substitute_named_in_statement(stmt: &mut Statement, from: &str, to: &str) {
     }
 }
 
-/// Renames type references from `from` to `to` inside match/receive arms.
-fn substitute_named_in_arms(arms: &mut [expo_ast::ast::MatchArm], from: &str, to: &str) {
+/// Replaces type references from `from` to `to` inside match/receive arms.
+fn substitute_named_in_arms(arms: &mut [expo_ast::ast::MatchArm], from: &str, to: &TypeExpr) {
     for arm in arms {
         substitute_named_in_pattern(&mut arm.pattern, from, to);
         if let Some(g) = &mut arm.guard {
@@ -1059,8 +1048,8 @@ fn substitute_named_in_arms(arms: &mut [expo_ast::ast::MatchArm], from: &str, to
     }
 }
 
-/// Recursively renames type references from `from` to `to` inside an expression tree.
-fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &str) {
+/// Recursively replaces type references from `from` to `to` inside an expression tree.
+fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
     match expr {
         Expr::Match { subject, arms, .. } => {
             substitute_named_in_expr(subject, from, to);
@@ -1213,8 +1202,8 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &str) {
     }
 }
 
-/// Renames type references from `from` to `to` inside a pattern tree.
-fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &str) {
+/// Replaces type references from `from` to `to` inside a pattern tree.
+fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &TypeExpr) {
     match pat {
         Pattern::TypedBinding { type_expr, .. } => {
             substitute_named_in_type_expr(type_expr, from, to);

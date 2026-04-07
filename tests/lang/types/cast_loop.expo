@@ -10,12 +10,12 @@ struct Counter
 end
 
 impl Process<CounterConfig, CounterMsg, Int> for Counter
-  fn new(config: CounterConfig) -> Self
-    Counter{count: 0}
+  fn start(move config: CounterConfig) -> Result<Self, StopReason>
+    Result.Ok(Counter{count: 0})
   end
 
   fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>)
-    -> Self | StopReason
+    -> Step<Self>
 
     match msg
       CounterMsg.Increment ->
@@ -25,13 +25,13 @@ impl Process<CounterConfig, CounterMsg, Int> for Counter
           Option.Some(r) -> r.send(new_count)
           Option.None -> ()
         end
-        Counter{count: new_count}
+        Step.Continue(Counter{count: new_count})
     end
   end
 end
 
 fn main
-  counter = spawn Counter.new(CounterConfig{})
+  counter = spawn Counter.start(CounterConfig{})
   counter.cast(CounterMsg.Increment)
   counter.cast(CounterMsg.Increment)
   # Last message uses call to ensure the worker finishes before main exits.

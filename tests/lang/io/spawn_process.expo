@@ -13,22 +13,22 @@ struct Worker
 end
 
 impl Process<WorkerConfig, WorkerMsg, String> for Worker
-  fn new(config: WorkerConfig) -> Self
-    Worker{label: config.label}
+  fn start(move config: WorkerConfig) -> Result<Self, StopReason>
+    Result.Ok(Worker{label: config.label})
   end
 
   fn handle(move self, msg: WorkerMsg, from: Option<ReplyTo<String>>)
-    -> Self | StopReason
+    -> Step<Self>
 
     match msg
       WorkerMsg.Greet(name) ->
         print("#{self.label}: Hello, #{name}!")
-        self
+        Step.Continue(self)
 
       WorkerMsg.Add(a, b) ->
         result = a + b
         print("#{self.label}: Sum: #{result}")
-        self
+        Step.Continue(self)
 
       WorkerMsg.Stop ->
         print("#{self.label}: Stopped.")
@@ -36,13 +36,13 @@ impl Process<WorkerConfig, WorkerMsg, String> for Worker
           Option.Some(r) -> r.send("done")
           Option.None -> ()
         end
-        self
+        Step.Continue(self)
     end
   end
 end
 
 fn main
-  w = spawn Worker.new(WorkerConfig{label: "w1"})
+  w = spawn Worker.start(WorkerConfig{label: "w1"})
   w.cast(WorkerMsg.Greet("Expo"))
   w.cast(WorkerMsg.Add(10, 32))
   # Last message uses call to ensure the worker finishes before main exits.

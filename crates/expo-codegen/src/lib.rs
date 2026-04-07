@@ -17,6 +17,7 @@ mod ops;
 mod process;
 mod registration;
 mod set;
+mod spawn;
 mod stmt;
 mod structs;
 mod types;

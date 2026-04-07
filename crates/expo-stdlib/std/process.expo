@@ -44,6 +44,16 @@ enum ExitReason
 end
 
 @doc """
+The control flow type for process message handlers. Each handler returns
+a `Step` to indicate whether the process should continue running with
+updated state or stop with a reason.
+"""
+enum Step<S>
+  Continue(S)
+  Done(StopReason)
+end
+
+@doc """
 A typed reply channel for process handlers. Wraps the caller's process
 id and enforces that replies match the expected type `R` at compile time.
 At runtime this is a bare integer (the caller's pid).
@@ -65,7 +75,10 @@ impl ReplyTo<R>
   Convenience helper for process handlers.
   """
   fn reply(from: Option<ReplyTo<R>>, value: R)
-    from.map(r -> r.send(value))
+    match from
+      Option.Some(r) -> r.send(value)
+      Option.None -> ()
+    end
   end
 end
 
@@ -99,33 +112,52 @@ end
 
 @doc """
 The process protocol. Structs implement this to become spawnable processes.
-`C` is the config type passed to `new`, `M` is the message type handled
+`C` is the config type passed to `start`, `M` is the message type handled
 while running, `R` is the reply type for synchronous calls.
 """
 protocol Process<C, M, R>
-  fn new(config: C) -> Self
+  @doc """
+  Starts the process by building initial state from config. Runs in the
+  child process context after spawn, before the receive loop begins.
+  Return `Result.Err` to abort startup.
+  """
+  fn start(move config: C) -> Result<Self, StopReason>
 
-  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
+  @doc """
+  Handles a business message. Return `Step.Continue(self)` to keep running
+  with updated state, or `Step.Done(reason)` to stop the process.
+  """
+  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
 
-  fn handle_lifecycle(move self, event: Lifecycle) -> Self | StopReason
+  @doc """
+  Handles an OS lifecycle event (SIGTERM, SIGINT, SIGHUP). Default stops
+  on Shutdown/Interrupt and continues on Reload.
+  """
+  fn handle_lifecycle(move self, event: Lifecycle) -> Step<Self>
     match event
-      Lifecycle.Shutdown -> StopReason.Shutdown
-      Lifecycle.Interrupt -> StopReason.Shutdown
-      Lifecycle.Reload -> self
+      Lifecycle.Shutdown -> Step.Done(StopReason.Shutdown)
+      Lifecycle.Interrupt -> Step.Done(StopReason.Shutdown)
+      Lifecycle.Reload -> Step.Continue(self)
     end
   end
 
+  @doc """
+  The main receive loop. Dispatches business messages to `handle` and
+  lifecycle events to `handle_lifecycle`. Can be overridden for custom
+  loop behavior.
+  """
   fn run(move self) -> StopReason
     receive
       pair: Pair<M, Option<ReplyTo<R>>> ->
         match self.handle(pair.first, pair.second)
-          next: Self -> next.run()
-          reason: StopReason -> reason
+          Step.Continue(next) -> next.run()
+          Step.Done(reason) -> reason
         end
+
       event: Lifecycle ->
         match self.handle_lifecycle(event)
-          next: Self -> next.run()
-          reason: StopReason -> reason
+          Step.Continue(next) -> next.run()
+          Step.Done(reason) -> reason
         end
     end
   end
@@ -136,12 +168,12 @@ A lightweight async task that runs a function in a spawned process and
 returns its result via `Task.await`.
 """
 struct Task<R>
-  work: fn() -> R
+  work: fn () -> R
 end
 
 impl Task<R>
-  fn async(fun: fn() -> R) -> Ref<(), R>
-    spawn Task.new(Task{work: fun})
+  fn async(fun: fn () -> R) -> Ref<(), R>
+    spawn Task.start(Task{work: fun})
   end
 
   fn await(move reference: Ref<(), R>) -> Option<R>
@@ -150,8 +182,8 @@ impl Task<R>
 end
 
 impl Process<Task<R>, (), R> for Task<R>
-  fn new(config: Task<R>) -> Self
-    config
+  fn start(move config: Task<R>) -> Result<Self, StopReason>
+    Result.Ok(config)
   end
 
   fn run(move self) -> StopReason
@@ -163,11 +195,13 @@ impl Process<Task<R>, (), R> for Task<R>
           Option.None -> ()
         end
         StopReason.Normal
-      event: Lifecycle -> StopReason.Shutdown
+
+      event: Lifecycle ->
+        StopReason.Shutdown
     end
   end
 
-  fn handle(move self, msg: (), from: Option<ReplyTo<R>>) -> Self | StopReason
-    self
+  fn handle(move self, msg: (), from: Option<ReplyTo<R>>) -> Step<Self>
+    Step.Continue(self)
   end
 end

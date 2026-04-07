@@ -1,0 +1,73 @@
+enum PingMsg
+  Ping(String)
+  Stop
+end
+
+struct Ponger
+  label: String
+end
+
+impl Process<Ponger, PingMsg, String> for Ponger
+  fn start(move config: Ponger) -> Result<Self, StopReason>
+    Result.Ok(config)
+  end
+
+  fn handle(move self, msg: PingMsg, from: Option<ReplyTo<String>>)
+    -> Step<Self>
+    match msg
+      PingMsg.Ping(name) ->
+        print("#{self.label}: pong #{name}")
+        match from
+          Option.Some(r) -> r.send("pong")
+          Option.None -> ()
+        end
+        Step.Continue(self)
+
+      PingMsg.Stop ->
+        print("#{self.label}: stopping")
+        match from
+          Option.Some(r) -> r.send("bye")
+          Option.None -> ()
+        end
+        Step.Done(StopReason.Normal)
+    end
+  end
+end
+
+enum CoordMsg
+  RunTest
+  Done
+end
+
+struct Coordinator
+  label: String
+end
+
+impl Process<Coordinator, CoordMsg, String> for Coordinator
+  fn start(move config: Coordinator) -> Result<Self, StopReason>
+    Result.Ok(config)
+  end
+
+  fn handle(move self, msg: CoordMsg, from: Option<ReplyTo<String>>)
+    -> Step<Self>
+    match msg
+      CoordMsg.RunTest ->
+        p = spawn Ponger.start(Ponger{label: "ponger"})
+        p.call(PingMsg.Ping("multi"), 5000)
+        p.call(PingMsg.Stop, 5000)
+        print("coordinator: test done")
+        Step.Continue(self)
+
+      CoordMsg.Done ->
+        print("coordinator: shutting down")
+        Step.Done(StopReason.Normal)
+    end
+  end
+end
+
+fn main
+  c = spawn Coordinator.start(Coordinator{label: "coord"})
+  c.cast(CoordMsg.RunTest)
+  c.call(CoordMsg.Done, 5000)
+  print("main: all done")
+end

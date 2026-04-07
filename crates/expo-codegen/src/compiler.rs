@@ -170,14 +170,6 @@ impl<'ctx> TypeRegistry<'ctx> {
         }
     }
 
-    /// Maps an LLVM struct type back to the Expo mangled name (e.g. `Task_$Int$`).
-    pub fn mangled_name_for_struct_type(&self, st: StructType<'ctx>) -> Option<String> {
-        self.structs
-            .iter()
-            .find(|(_, registered)| **registered == st)
-            .map(|(name, _)| name.clone())
-    }
-
     /// Returns the LLVM struct type for an enum variant's payload, if it has one.
     pub fn get_variant_payload_type(
         &self,
@@ -763,6 +755,16 @@ impl<'ctx> Compiler<'ctx> {
     ) -> Result<(), String> {
         self.fn_state.self_type_name = Some(type_name.to_string());
         for func in functions {
+            if let Some(rt) = &func.return_type {
+                let return_type = self.resolve_type_expr(rt);
+                ensure_types_exist(self, &return_type)?;
+            }
+            for param in &func.params {
+                if let Param::Regular { type_expr, .. } = param {
+                    let pt = self.resolve_type_expr(type_expr);
+                    ensure_types_exist(self, &pt)?;
+                }
+            }
             let mangled = format!("{type_name}_{}", func.name);
             if self.functions.contains_key(&mangled) {
                 continue;
@@ -1122,10 +1124,13 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Generates the C `main` function for a Process-based entry point.
     ///
-    /// Instead of looking for a user-written `fn main`, this emits a C `main`
-    /// that constructs the entry type via `T_new`, spawns it into `T_run`,
-    /// and starts the runtime scheduler.
+    /// Resolves the `Process<C, M, R>` impl for `type_name`, builds the
+    /// child-side spawn wrapper via [`crate::spawn::build_spawn_wrapper`]
+    /// (with exit-code tracking), then emits a C `main` that serialises
+    /// config, spawns the entry process, and waits for completion.
     fn emit_process_entry(&mut self, type_name: &str) -> Result<(), String> {
+        use crate::spawn::{self, ExitCodeCtx};
+
         let process_args = self
             .type_ctx
             .protocol_impls
@@ -1160,11 +1165,11 @@ impl<'ctx> Compiler<'ctx> {
                 )
             })?;
 
-        let new_fn_name = format!("{type_name}_new");
-        let new_fn = self
+        let start_fn_name = format!("{type_name}_start");
+        let start_fn = self
             .module
-            .get_function(&new_fn_name)
-            .ok_or_else(|| format!("entry type `{type_name}` has no `new` function"))?;
+            .get_function(&start_fn_name)
+            .ok_or_else(|| format!("entry type `{type_name}` has no `start` function"))?;
 
         let run_fn_name = format!("{type_name}_run");
         let run_fn = self
@@ -1177,58 +1182,39 @@ impl<'ctx> Compiler<'ctx> {
             .get_function("StopReason_code")
             .ok_or("StopReason_code (ExitStatus impl) not found")?;
 
+        let stop_reason_llvm = self
+            .types
+            .structs
+            .get("StopReason")
+            .copied()
+            .ok_or("StopReason LLVM type not found")?;
+
         let i32_ty = self.context.i32_type();
-        let i64_ty = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
 
-        // Global exit code variable, written by the wrapper, read by C main
         let exit_code_global = self.module.add_global(i32_ty, None, "__expo_exit_code");
         exit_code_global.set_initializer(&i32_ty.const_int(0, false));
 
-        // Build spawn wrapper: void __entry_T(i8* state_ptr)
+        let exit_ctx = ExitCodeCtx {
+            exit_code_global,
+            code_fn,
+            stop_reason_llvm,
+            i32_ty,
+        };
         let wrapper_name = format!("__entry_{type_name}");
-        let wrapper_type = self.context.void_type().fn_type(&[ptr_ty.into()], false);
-        let wrapper_fn = self.module.add_function(&wrapper_name, wrapper_type, None);
+        let wrapper_fn = spawn::build_spawn_wrapper(
+            self,
+            &wrapper_name,
+            config_llvm,
+            struct_type,
+            start_fn,
+            run_fn,
+            Some(&exit_ctx),
+        )?;
 
-        let wrapper_entry = self.context.append_basic_block(wrapper_fn, "entry");
-        self.builder.position_at_end(wrapper_entry);
-
-        let raw_ptr = wrapper_fn.get_nth_param(0).unwrap().into_pointer_value();
-        let typed_ptr = self
-            .builder
-            .build_bit_cast(raw_ptr, ptr_ty, "typed_ptr")
-            .unwrap()
-            .into_pointer_value();
-        let loaded_state = self
-            .builder
-            .build_load(struct_type, typed_ptr, "loaded_state")
-            .unwrap();
-
-        // Call run, capture StopReason return value
-        let stop_reason = self
-            .call(run_fn, &[loaded_state.into()], "stop_reason")
-            .ok_or("run() did not produce a value")?;
-
-        // Call ExitStatus.code(stop_reason) -> Int
-        let exit_code_i64 = self
-            .call(code_fn, &[stop_reason.into()], "exit_code")
-            .ok_or("StopReason_code did not produce a value")?;
-
-        // Truncate i64 -> i32 and store to global
-        let exit_code_i32 = self
-            .builder
-            .build_int_truncate(exit_code_i64.into_int_value(), i32_ty, "exit_i32")
-            .unwrap();
-        self.builder
-            .build_store(exit_code_global.as_pointer_value(), exit_code_i32)
-            .unwrap();
-
-        self.builder.build_return(None).unwrap();
-
-        // Detect whether C is List<String> for argv passing
+        // Detect whether C is List<String> for argv passing.
         let is_list_string = config_type.display() == "List<String>";
 
-        // Build C main: int main(int argc, char** argv)
         let main_fn_type = if is_list_string {
             i32_ty.fn_type(&[i32_ty.into(), ptr_ty.into()], false)
         } else {
@@ -1243,11 +1229,9 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.position_at_end(main_entry);
         self.debug.set_location(self.context, &self.builder, 1, 1);
 
-        // Construct config
         let config_val = if is_list_string {
             let argc_val = main_fn.get_nth_param(0).unwrap().into_int_value();
             let argv_val = main_fn.get_nth_param(1).unwrap().into_pointer_value();
-            // expo_rt_build_argv(argc, argv, out_ptr) -- writes result via pointer
             let void_ty = self.context.void_type();
             let build_argv_type =
                 void_ty.fn_type(&[i32_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
@@ -1274,26 +1258,8 @@ impl<'ctx> Compiler<'ctx> {
             config_llvm.const_zero()
         };
 
-        // Call T_new(config) -> Self
-        let state_val = self
-            .call(new_fn, &[config_val.into()], "state")
-            .ok_or_else(|| format!("{type_name}.new() did not produce a value"))?;
+        let serialized = spawn::serialize_config(self, config_val)?;
 
-        // Alloca state, store, get pointer and size
-        let state_alloca = self.builder.build_alloca(struct_type, "state").unwrap();
-        self.builder.build_store(state_alloca, state_val).unwrap();
-
-        let state_ptr = self
-            .builder
-            .build_bit_cast(state_alloca, ptr_ty, "state_ptr")
-            .unwrap();
-        let state_size = struct_type.size_of().unwrap();
-        let state_size_i64 = self
-            .builder
-            .build_int_cast(state_size, i64_ty, "state_size")
-            .unwrap();
-
-        // expo_rt_spawn(wrapper, state, size)
         let spawn_fn = *self
             .functions
             .get("expo_rt_spawn")
@@ -1301,18 +1267,20 @@ impl<'ctx> Compiler<'ctx> {
         let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
         self.call_void(
             spawn_fn,
-            &[wrapper_ptr.into(), state_ptr.into(), state_size_i64.into()],
+            &[
+                wrapper_ptr.into(),
+                serialized.ptr.into(),
+                serialized.size.into(),
+            ],
             "",
         );
 
-        // expo_rt_main_done()
         let main_done = *self
             .functions
             .get("expo_rt_main_done")
             .ok_or("expo_rt_main_done not declared")?;
         self.call_void(main_done, &[], "");
 
-        // Load exit code from global and return it
         let final_code = self
             .builder
             .build_load(i32_ty, exit_code_global.as_pointer_value(), "final_code")

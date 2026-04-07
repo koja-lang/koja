@@ -5,9 +5,7 @@ use expo_ast::ast::{ClosureParam, Expr, Literal, MatchArm, Statement, StringPart
 use expo_ast::span::Span;
 
 use expo_typecheck::context::FnParam;
-use expo_typecheck::types::{
-    GenericKind, Primitive, Type, build_substitution, mangle_name, substitute,
-};
+use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use std::collections::HashMap;
@@ -775,109 +773,76 @@ fn compile_map_literal<'ctx>(
     Ok(Some(TypedValue::new(map_val, map_type)))
 }
 
+/// Compiles a `spawn T.start(config)` expression.
+///
+/// Delegates to [`crate::spawn`] helpers for each phase: AST extraction,
+/// config serialization, wrapper generation, and `Ref<M, R>` construction.
 fn compile_spawn<'ctx>(
     c: &mut Compiler<'ctx>,
     expr: &Expr,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let type_name = match expr {
-        Expr::MethodCall { receiver, .. }
-        | Expr::Call {
-            callee: receiver, ..
-        } => match receiver.as_ref() {
-            Expr::Ident { name, .. } => name.clone(),
-            Expr::FieldAccess { receiver: r, .. } => {
-                if let Expr::Ident { name, .. } = r.as_ref() {
-                    name.clone()
-                } else {
-                    return Err("spawn requires T.new(config) form".to_string());
-                }
-            }
-            _ => return Err("spawn requires T.new(config) form".to_string()),
-        },
-        _ => return Err("spawn requires T.new(config) form".to_string()),
-    };
+    use crate::spawn;
 
-    let init_value = compile_expr(c, expr, function)?
-        .ok_or_else(|| format!("{type_name}.new() did not produce a value"))?
-        .value;
+    let target = spawn::extract_spawn_target(expr)?;
 
-    let struct_type = init_value.get_type().into_struct_type();
-    let state_alloca = c.builder.build_alloca(struct_type, "spawn_state").unwrap();
-    c.builder.build_store(state_alloca, init_value).unwrap();
-
-    let state_ptr = c
-        .builder
-        .build_bit_cast(
-            state_alloca,
-            c.context.ptr_type(inkwell::AddressSpace::default()),
-            "state_ptr",
-        )
-        .unwrap();
-
-    let state_size = struct_type.size_of().unwrap();
-    let state_size_i64 = c
-        .builder
-        .build_int_cast(state_size, c.context.i64_type(), "state_size")
-        .unwrap();
-
-    let mangled_state = c
-        .types
-        .mangled_name_for_struct_type(struct_type)
+    let config_expr = target
+        .config_args
+        .first()
+        .map(|a| &a.value)
+        .ok_or("spawn T.start(config) requires a config argument")?;
+    let config_value = compile_expr(c, config_expr, function)?
         .ok_or_else(|| {
             format!(
-                "could not resolve mangled struct name for spawn state (receiver `{type_name}`)"
+                "{}.start() config argument produced no value",
+                target.type_name
             )
-        })?;
+        })?
+        .value;
+
+    let serialized = spawn::serialize_config(c, config_value)?;
+    let mangled_state = spawn::resolve_mangled_state(&target.type_name, config_value);
+
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&mangled_state, c) {
+        monomorphize_impl_method(c, &base, "start", &type_args, &[])?;
         monomorphize_impl_method(c, &base, "run", &type_args, &[])?;
     }
+
+    let start_fn_name = format!("{mangled_state}_start");
+    let start_fn = c
+        .module
+        .get_function(&start_fn_name)
+        .ok_or_else(|| format!("undefined start function: {start_fn_name}"))?;
+
     let run_fn_name = format!("{mangled_state}_run");
     let run_fn = c
         .module
         .get_function(&run_fn_name)
         .ok_or_else(|| format!("undefined run function: {run_fn_name}"))?;
 
+    let state_struct_type = c
+        .types
+        .structs
+        .get(&mangled_state)
+        .copied()
+        .ok_or_else(|| format!("no LLVM struct for `{mangled_state}`"))?;
+
     let wrapper_name = format!("__spawn_{mangled_state}");
     let wrapper = if let Some(existing) = c.module.get_function(&wrapper_name) {
         existing
     } else {
-        let i8_ptr = c.context.ptr_type(inkwell::AddressSpace::default());
-        let wrapper_type = c.context.void_type().fn_type(&[i8_ptr.into()], false);
-        let wrapper_fn = c.module.add_function(&wrapper_name, wrapper_type, None);
-
-        let entry = c.context.append_basic_block(wrapper_fn, "entry");
-
-        let saved_block = c.builder.get_insert_block();
-        c.builder.position_at_end(entry);
-
-        let raw_ptr = wrapper_fn.get_nth_param(0).unwrap().into_pointer_value();
-        let typed_ptr = c
-            .builder
-            .build_bit_cast(
-                raw_ptr,
-                c.context.ptr_type(inkwell::AddressSpace::default()),
-                "typed_ptr",
-            )
-            .unwrap()
-            .into_pointer_value();
-        let loaded = c
-            .builder
-            .build_load(struct_type, typed_ptr, "loaded_state")
-            .unwrap();
-
-        c.call_void(run_fn, &[loaded.into()], "");
-        c.builder.build_return(None).unwrap();
-
-        if let Some(bb) = saved_block {
-            c.builder.position_at_end(bb);
-        }
-
-        wrapper_fn
+        spawn::build_spawn_wrapper(
+            c,
+            &wrapper_name,
+            serialized.llvm_type,
+            state_struct_type,
+            start_fn,
+            run_fn,
+            None,
+        )?
     };
 
     let wrapper_ptr = wrapper.as_global_value().as_pointer_value();
-
     let spawn_fn = *c
         .functions
         .get("expo_rt_spawn")
@@ -886,84 +851,20 @@ fn compile_spawn<'ctx>(
     let pid = c
         .call(
             spawn_fn,
-            &[wrapper_ptr.into(), state_ptr.into(), state_size_i64.into()],
+            &[
+                wrapper_ptr.into(),
+                serialized.ptr.into(),
+                serialized.size.into(),
+            ],
             "spawn_pid",
         )
         .ok_or("expo_rt_spawn did not return a value")?
         .into_int_value();
 
-    // `protocol_impls` stores generic `Process<…, M, R>` args; for `spawn Task.new(…)`
-    // the state is monomorphized (e.g. `Task_$Int$`) so we must substitute `R` → `Int`
-    // when building `Ref<M, R>` — same idea as `resolve_process_envelope_type`.
-    let (msg_type, reply_type) = if let Some((base, type_args)) =
-        crate::generics::try_parse_mangled_name(&mangled_state, c)
-    {
-        let impls = c
-            .type_ctx
-            .protocol_impls
-            .get(&base)
-            .ok_or_else(|| format!("`{base}` does not implement Process"))?;
-        let (_, proto_args) = impls
-            .iter()
-            .find(|(proto, _)| proto == "Process")
-            .ok_or_else(|| format!("`{base}` does not implement Process"))?;
-        let ti = c
-            .type_ctx
-            .types
-            .get(&base)
-            .ok_or_else(|| format!("no type `{base}` for Process impl"))?;
-        let subst = build_substitution(&ti.type_params, &type_args);
-        let default_m_r = Type::Primitive(Primitive::String);
-        let m = substitute(proto_args.get(1).unwrap_or(&default_m_r), &subst);
-        let r = substitute(proto_args.get(2).unwrap_or(&default_m_r), &subst);
-        (m, r)
-    } else {
-        let process_args = c
-            .type_ctx
-            .protocol_impls
-            .get(&type_name)
-            .and_then(|impls| {
-                impls
-                    .iter()
-                    .find(|(proto, _)| proto == "Process")
-                    .map(|(_, args)| args.clone())
-            })
-            .ok_or_else(|| format!("`{type_name}` does not implement Process"))?;
-        let m = process_args
-            .get(1)
-            .cloned()
-            .unwrap_or(Type::Primitive(Primitive::String));
-        let r = process_args
-            .get(2)
-            .cloned()
-            .unwrap_or(Type::Primitive(Primitive::String));
-        (m, r)
-    };
+    let (msg_type, reply_type) =
+        spawn::resolve_process_msg_reply(c, &target.type_name, &mangled_state)?;
 
-    let type_args = vec![msg_type, reply_type];
-    let mangled = mangle_name("Ref", &type_args);
-    if !c.types.structs.contains_key(&mangled) {
-        monomorphize_struct(c, "Ref", &type_args)?;
-    }
-    let ref_struct = *c
-        .types
-        .structs
-        .get(&mangled)
-        .ok_or("Ref struct type not found")?;
-
-    let mut sv = ref_struct.get_undef();
-    sv = c
-        .builder
-        .build_insert_value(sv, pid, 0, "wrap_pid")
-        .unwrap()
-        .into_struct_value();
-
-    let ref_type = Type::GenericInstance {
-        base: "Ref".to_string(),
-        kind: GenericKind::Struct,
-        type_args: type_args.clone(),
-    };
-    Ok(Some(TypedValue::new(sv.into(), ref_type)))
+    spawn::build_ref_value(c, pid, msg_type, reply_type).map(Some)
 }
 
 fn compile_receive<'ctx>(

@@ -28,8 +28,8 @@ The compiler auto-imports them into every module -- no prefix needed:
 
 - **Kernel types**: `Option`, `Result`, `List`, `Map`, `Set`, `Pair`, `Int`,
   `Float`, `Bool`, `String`
-- **Process types**: `Process`, `Ref`, `ReplyTo`, `Task`, `Lifecycle`,
-  `StopReason`, `ExitStatus`, `ExitReason`
+- **Process types**: `Process`, `Ref`, `ReplyTo`, `Task`, `Step`,
+  `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason`
 - **IO types**: `IO`, `File`, `Fd`, `System`, `DateTime`, `Duration`, `Debug`
 
 ### Qualified (domain-specific)
