@@ -69,6 +69,11 @@ pub(crate) fn declare_builtins<'ctx>(
         "expo_rt_send_lifecycle",
         void.fn_type(&[i64.into(), i64.into()], false),
     );
+    decl(
+        "expo_rt_is_process_alive",
+        i64.fn_type(&[i64.into()], false),
+    );
+    decl("expo_rt_kill", void.fn_type(&[i64.into()], false));
 
     // String intrinsics
     decl(

@@ -13,10 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TCPListener` -- TCP server listener. `bind(port)` listens on all interfaces, `bind_addr(addr)` for specific addresses. `accept()` returns a `TCPSocket` for each incoming connection.
 - `UDPSocket` -- connectionless UDP socket. `bind(port)` or `bind_addr(addr)` to receive, `send_to(data, addr)` and `recv_from(count)` for datagram I/O. All three types are pure Expo wrappers over `Socket` -- no new intrinsics.
 - `Step<S>` enum -- process control flow type with `Continue(S)` and `Done(StopReason)` variants. Replaces ad-hoc `Self | StopReason` unions in process handlers.
+- `CallError` enum -- `Timeout` and `ProcessDown` variants. Distinguishes a timed-out call from a dead process.
+- `Ref.signal(event: Lifecycle)` -- sends a lifecycle signal to a process for cooperative shutdown.
+- `Ref.kill()` -- immediately terminates a process without sending a signal.
+- `Ref.alive?()` -- returns `true` if the process is still running.
 
 ### Changed
 
-- **Breaking**: `Process<C, M, R>` protocol redesigned. `new(config) -> Self` replaced by `start(move config) -> Result<Self, StopReason>` -- initialization now runs in the child process context after spawn. `handle` and `handle_lifecycle` return `Step<Self>` instead of `Self | StopReason`. `spawn T.new(config)` becomes `spawn T.start(config)`.
+- **Breaking**: `Process<C, M, R>` protocol redesigned. `new(config) -> Self` replaced by `start(move config) -> Result<Self, StopReason>` -- initialization now runs in the child process context after spawn. `handle` and `handle_signal` return `Step<Self>` instead of `Self | StopReason`. `spawn T.new(config)` becomes `spawn T.start(config)`.
+- **Breaking**: `Ref.call` now returns `Result<R, CallError>` instead of `Option<R>`. `Task.await` follows suit.
+- **Breaking**: `handle_lifecycle` renamed to `handle_signal` on the `Process` protocol.
 
 ### Fixed
 

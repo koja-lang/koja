@@ -928,7 +928,7 @@ The simplest way to run concurrent work. Wraps a closure, runs it in a spawned p
 
 ```expo
 ref = Task.async(fn -> expensive_computation() end)
-result = Task.await(ref)  # Option<R>, times out after 5000ms
+result = Task.await(ref)  # Result<R, CallError>, times out after 5000ms
 ```
 
 `Task.async(fn)` spawns the closure and returns a `Ref<(), R>`. `Task.await(ref)` sends a unit message and waits for the reply.
@@ -941,14 +941,14 @@ For stateful, long-lived processes, implement the `Process` protocol. `C` is the
 protocol Process<C, M, R>
   fn new(config: C) -> Self
   fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
-  fn handle_lifecycle(move self, event: Lifecycle) -> Self | StopReason
+  fn handle_signal(move self, event: Lifecycle) -> Self | StopReason
   fn run(move self) -> StopReason
 end
 ```
 
 `handle` returns `Self | StopReason`. Returning `Self` continues the process; returning a `StopReason` variant (`Normal` or `Shutdown`) stops it.
 
-`handle_lifecycle` has a default implementation that stops on `Shutdown`/`Interrupt` and ignores `Reload`. Override it for graceful drain or hot config reload.
+`handle_signal` has a default implementation that stops on `Shutdown`/`Interrupt` and ignores `Reload`. Override it for graceful drain or hot config reload.
 
 `run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle` and stopping when a `StopReason` is returned:
 
@@ -1045,14 +1045,18 @@ struct Ref<M, R>
 end
 ```
 
-Two ways to send messages:
+Operations on a process handle:
 
 - `cast(msg: M)` -- fire-and-forget. The handler receives `from = Option.None`.
-- `call(msg: M, timeout: Int) -> Option<R>` -- sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Option.Some(reply)` on success, `Option.None` on timeout.
+- `call(msg: M, timeout: Int) -> Result<R, CallError>` -- sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)` if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)` if the process is dead.
+- `signal(event: Lifecycle)` -- sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`). Delivered to `handle_signal`.
+- `kill()` -- immediately terminates the process. No signal is sent.
+- `alive?() -> Bool` -- returns `true` if the process is still running.
 
 ```expo
 ref.cast(CounterMsg.Increment)
 result = ref.call(CounterMsg.Increment, 5000)
+ref.signal(Lifecycle.Shutdown)
 ```
 
 ### `ReplyTo<R>` and `reply`

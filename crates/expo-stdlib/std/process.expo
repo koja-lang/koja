@@ -10,7 +10,7 @@ end
 
 @doc """
 Why a process stopped intentionally. Returned from `handle` or
-`handle_lifecycle` to terminate the process.
+`handle_signal` to terminate the process.
 """
 enum StopReason
   Normal
@@ -41,6 +41,15 @@ enum ExitReason
   Normal
   Shutdown
   Crashed(String)
+end
+
+@doc """
+Why a synchronous `Ref.call` failed. Distinguishes a timeout (process
+is alive but didn't reply in time) from a dead process.
+"""
+enum CallError
+  Timeout
+  ProcessDown
 end
 
 @doc """
@@ -102,10 +111,34 @@ impl Ref<M, R>
 
   @doc """
   Sends a message and waits up to `timeout` milliseconds for a reply.
-  Returns `Option.Some(reply)` on success, `Option.None` on timeout.
-  The handler receives `from = Option.Some(reply_to)`.
+  Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)`
+  if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)`
+  if the process is no longer running.
   """
-  fn call(self, msg: M, timeout: Int) -> Option<R>
+  fn call(self, msg: M, timeout: Int) -> Result<R, CallError>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`).
+  The signal is delivered to the process's `handle_signal` method.
+  """
+  fn signal(self, event: Lifecycle)
+    panic("intrinsic")
+  end
+
+  @doc """
+  Immediately terminates the process. No signal is sent -- the process
+  is destroyed without a chance to run cleanup.
+  """
+  fn kill(self)
+    panic("intrinsic")
+  end
+
+  @doc """
+  Returns `true` if the process is still running.
+  """
+  fn alive?(self) -> Bool
     panic("intrinsic")
   end
 end
@@ -133,7 +166,7 @@ protocol Process<C, M, R>
   Handles an OS lifecycle event (SIGTERM, SIGINT, SIGHUP). Default stops
   on Shutdown/Interrupt and continues on Reload.
   """
-  fn handle_lifecycle(move self, event: Lifecycle) -> Step<Self>
+  fn handle_signal(move self, event: Lifecycle) -> Step<Self>
     match event
       Lifecycle.Shutdown -> Step.Done(StopReason.Shutdown)
       Lifecycle.Interrupt -> Step.Done(StopReason.Shutdown)
@@ -143,7 +176,7 @@ protocol Process<C, M, R>
 
   @doc """
   The main receive loop. Dispatches business messages to `handle` and
-  lifecycle events to `handle_lifecycle`. Can be overridden for custom
+  lifecycle events to `handle_signal`. Can be overridden for custom
   loop behavior.
   """
   fn run(move self) -> StopReason
@@ -155,7 +188,7 @@ protocol Process<C, M, R>
         end
 
       event: Lifecycle ->
-        match self.handle_lifecycle(event)
+        match self.handle_signal(event)
           Step.Continue(next) -> next.run()
           Step.Done(reason) -> reason
         end
@@ -176,7 +209,7 @@ impl Task<R>
     spawn Task.start(Task{work: fun})
   end
 
-  fn await(move reference: Ref<(), R>) -> Option<R>
+  fn await(move reference: Ref<(), R>) -> Result<R, CallError>
     reference.call((), 5000)
   end
 end

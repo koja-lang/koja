@@ -593,6 +593,40 @@ pub extern "C" fn expo_rt_send_lifecycle(pid: i64, variant: i64) {
     send_lifecycle_to(pid, variant);
 }
 
+/// Returns 1 if the process with the given PID is still alive (not `Dead`),
+/// 0 otherwise. An out-of-range PID returns 0.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_rt_is_process_alive(pid: i64) -> i64 {
+    let guard = SCHED.lock().unwrap();
+    let idx = (pid - 1) as usize;
+    if idx >= guard.processes.len() {
+        return 0;
+    }
+    if guard.processes[idx].state == ProcessState::Dead {
+        0
+    } else {
+        1
+    }
+}
+
+/// Immediately marks a process as `Dead`. Its mailbox is drained and
+/// its stack is deallocated. No signal is sent -- the process gets no
+/// chance to run cleanup. This is the "last resort" termination primitive.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_rt_kill(pid: i64) {
+    let mut guard = SCHED.lock().unwrap();
+    let idx = (pid - 1) as usize;
+    if idx >= guard.processes.len() {
+        return;
+    }
+    let proc = &mut guard.processes[idx];
+    if proc.state == ProcessState::Dead {
+        return;
+    }
+    proc.state = ProcessState::Dead;
+    proc.mailbox.clear();
+}
+
 /// Spawns a new lightweight process that will call `fn_ptr(state)`.
 ///
 /// Allocates a stack, copies the initial state onto the heap, and

@@ -3,7 +3,7 @@ fn main
     Task.async(fn () -> Int 42 end)
   r = Task.await(t)
   match r
-    Option.Some(v) -> print(v)
-    Option.None -> print("timeout")
+    Result.Ok(v) -> print(v)
+    Result.Err(_) -> print("call failed")
   end
 end

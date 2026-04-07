@@ -110,6 +110,42 @@ fn build_send_body<'ctx>(
     Ok(())
 }
 
+/// Builds a `Result.Err(CallError.Variant)` value as a struct.
+/// `callerror_tag` is the CallError variant index (0=Timeout, 1=ProcessDown).
+fn build_result_err<'ctx>(
+    c: &mut Compiler<'ctx>,
+    result_struct: inkwell::types::StructType<'ctx>,
+    i8_ty: inkwell::types::IntType<'ctx>,
+    callerror_tag: u64,
+) -> Result<inkwell::values::StructValue<'ctx>, String> {
+    let ptr_ty = c.context.ptr_type(AddressSpace::default());
+    let alloca = c.builder.build_alloca(result_struct, "err_buf").unwrap();
+    // Result.Err tag = 1
+    let tag_ptr = c
+        .builder
+        .build_struct_gep(result_struct, alloca, 0, "err_tag_ptr")
+        .unwrap();
+    c.builder
+        .build_store(tag_ptr, i8_ty.const_int(1, false))
+        .unwrap();
+    // CallError is { i8 } -- write the variant tag into the payload.
+    let payload_ptr = c
+        .builder
+        .build_struct_gep(result_struct, alloca, 1, "err_payload_ptr")
+        .unwrap();
+    let typed_ptr = c
+        .builder
+        .build_pointer_cast(payload_ptr, ptr_ty, "err_typed_ptr")
+        .unwrap();
+    c.builder
+        .build_store(typed_ptr, i8_ty.const_int(callerror_tag, false))
+        .unwrap();
+    Ok(c.builder
+        .build_load(result_struct, alloca, "err_val")
+        .unwrap()
+        .into_struct_value())
+}
+
 pub fn emit_ref_method<'ctx>(
     c: &mut Compiler<'ctx>,
     mangled_type: &str,
@@ -249,7 +285,6 @@ pub fn emit_ref_method<'ctx>(
             let msg_llvm = if is_msg_string {
                 c.context.ptr_type(AddressSpace::default()).into()
             } else if is_msg_unit {
-                // ZST message; i8 placeholder matches Pair<Unit,_> envelope field layout.
                 c.context.i8_type().into()
             } else {
                 to_llvm_type(msg_type, c.context, &c.types.structs)
@@ -257,25 +292,35 @@ pub fn emit_ref_method<'ctx>(
             };
 
             let i64_ty = c.context.i64_type();
+            let i8_ty = c.context.i8_type();
+            let ptr_ty = c.context.ptr_type(AddressSpace::default());
 
             let reply_llvm = if is_reply_string {
-                c.context.ptr_type(AddressSpace::default()).into()
+                ptr_ty.into()
             } else if is_reply_unit {
-                c.context.i8_type().into()
+                i8_ty.into()
             } else {
                 to_llvm_type(reply_type, c.context, &c.types.structs)
                     .ok_or_else(|| format!("no LLVM type for reply `{reply_type:?}`"))?
             };
 
-            let option_reply_mangled = mangle_name("Option", std::slice::from_ref(reply_type));
-            if !c.types.structs.contains_key(&option_reply_mangled) {
-                monomorphize_enum(c, "Option", std::slice::from_ref(reply_type))?;
+            // Monomorphize Result<R, CallError> as return type.
+            let callerror_type = Type::Enum("CallError".to_string());
+            let result_type_args = vec![reply_type.clone(), callerror_type.clone()];
+            let result_mangled = mangle_name("Result", &result_type_args);
+            if !c.types.structs.contains_key(&result_mangled) {
+                monomorphize_enum(c, "Result", &result_type_args)?;
             }
-            let option_reply_struct = *c
+            let result_struct = *c
                 .types
                 .structs
-                .get(&option_reply_mangled)
-                .ok_or("Option struct not found for call reply")?;
+                .get(&result_mangled)
+                .ok_or("Result<R, CallError> struct not found")?;
+
+            // Ensure CallError enum exists in LLVM.
+            if !c.types.structs.contains_key("CallError") {
+                monomorphize_enum(c, "CallError", &[])?;
+            }
 
             let envelope_type = process_envelope_type(msg_type, reply_type);
             ensure_types_exist(c, &envelope_type)?;
@@ -303,8 +348,8 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
                 .into_struct_type();
 
-            let fn_type = option_reply_struct
-                .fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
+            let fn_type =
+                result_struct.fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
             c.functions.insert(mangled_fn.to_string(), fn_val);
 
@@ -336,6 +381,7 @@ pub fn emit_ref_method<'ctx>(
                 .unwrap()
                 .into_struct_value();
 
+            // Build Option.Some(reply_to) for the envelope.
             let option_some = {
                 let alloca = c
                     .builder
@@ -345,7 +391,7 @@ pub fn emit_ref_method<'ctx>(
                     .builder
                     .build_struct_gep(option_from_llvm, alloca, 0, "tag_ptr")
                     .unwrap();
-                let tag_some = c.context.i8_type().const_int(0, false);
+                let tag_some = i8_ty.const_int(0, false);
                 c.builder.build_store(tag_ptr, tag_some).unwrap();
                 let payload_ptr = c
                     .builder
@@ -353,11 +399,7 @@ pub fn emit_ref_method<'ctx>(
                     .unwrap();
                 let typed_ptr = c
                     .builder
-                    .build_pointer_cast(
-                        payload_ptr,
-                        c.context.ptr_type(AddressSpace::default()),
-                        "typed_payload_ptr",
-                    )
+                    .build_pointer_cast(payload_ptr, ptr_ty, "typed_payload_ptr")
                     .unwrap();
                 c.builder.build_store(typed_ptr, reply_to_val).unwrap();
                 c.builder
@@ -366,6 +408,7 @@ pub fn emit_ref_method<'ctx>(
                     .into_struct_value()
             };
 
+            // Build the Pair<M, Option<ReplyTo<R>>> envelope.
             let mut pair_val = envelope_llvm.get_undef();
             pair_val = c
                 .builder
@@ -383,7 +426,6 @@ pub fn emit_ref_method<'ctx>(
                 .get("expo_rt_send")
                 .ok_or("expo_rt_send not declared")?;
 
-            let ptr_ty = c.context.ptr_type(AddressSpace::default());
             let alloca = c
                 .builder
                 .build_alloca(envelope_llvm, "envelope_buf")
@@ -402,6 +444,7 @@ pub fn emit_ref_method<'ctx>(
                 "",
             );
 
+            // Wait for reply with timeout.
             let timeout_val = fn_val.get_nth_param(2).unwrap().into_int_value();
 
             let receive_timeout_fn = *c
@@ -417,35 +460,63 @@ pub fn emit_ref_method<'ctx>(
             let null_ptr = ptr_ty.const_null();
             let is_null = c
                 .builder
-                .build_int_compare(inkwell::IntPredicate::EQ, raw_ptr, null_ptr, "is_timeout")
+                .build_int_compare(inkwell::IntPredicate::EQ, raw_ptr, null_ptr, "is_null")
                 .unwrap();
 
-            let then_bb = c.context.append_basic_block(fn_val, "timeout");
-            let else_bb = c.context.append_basic_block(fn_val, "got_reply");
+            // Three-way branch: got_reply / check_alive / timeout / process_down.
+            let got_reply_bb = c.context.append_basic_block(fn_val, "got_reply");
+            let check_alive_bb = c.context.append_basic_block(fn_val, "check_alive");
+            let timeout_bb = c.context.append_basic_block(fn_val, "timeout");
+            let process_down_bb = c.context.append_basic_block(fn_val, "process_down");
             let merge_bb = c.context.append_basic_block(fn_val, "merge");
 
             c.builder
-                .build_conditional_branch(is_null, then_bb, else_bb)
+                .build_conditional_branch(is_null, check_alive_bb, got_reply_bb)
                 .unwrap();
 
-            c.builder.position_at_end(then_bb);
-            let mut none_val = option_reply_struct.get_undef();
-            let tag_none = c.context.i8_type().const_int(1, false);
-            none_val = c
+            // -- check_alive: distinguish Timeout from ProcessDown --
+            c.builder.position_at_end(check_alive_bb);
+            let is_alive_fn = *c
+                .functions
+                .get("expo_rt_is_process_alive")
+                .ok_or("expo_rt_is_process_alive not declared")?;
+            let alive_result = c
+                .call(is_alive_fn, &[target_pid.into()], "alive")
+                .ok_or("expo_rt_is_process_alive did not return a value")?
+                .into_int_value();
+            let is_alive = c
                 .builder
-                .build_insert_value(none_val, tag_none, 0, "none_tag")
-                .unwrap()
-                .into_struct_value();
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    alive_result,
+                    i64_ty.const_int(0, false),
+                    "is_alive",
+                )
+                .unwrap();
+            c.builder
+                .build_conditional_branch(is_alive, timeout_bb, process_down_bb)
+                .unwrap();
+
+            // -- timeout: Result.Err(CallError.Timeout) --
+            // CallError.Timeout = tag 0
+            c.builder.position_at_end(timeout_bb);
+            let timeout_result = build_result_err(c, result_struct, i8_ty, 0)?;
             c.builder.build_unconditional_branch(merge_bb).unwrap();
 
-            c.builder.position_at_end(else_bb);
-            let i8_ty_reply = c.context.i8_type();
+            // -- process_down: Result.Err(CallError.ProcessDown) --
+            // CallError.ProcessDown = tag 1
+            c.builder.position_at_end(process_down_bb);
+            let down_result = build_result_err(c, result_struct, i8_ty, 1)?;
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // -- got_reply: Result.Ok(reply) --
+            c.builder.position_at_end(got_reply_bb);
             let reply_payload_ptr = unsafe {
                 c.builder
                     .build_in_bounds_gep(
-                        i8_ty_reply,
+                        i8_ty,
                         raw_ptr,
-                        &[c.context.i64_type().const_int(8, false)],
+                        &[i64_ty.const_int(8, false)],
                         "reply_payload",
                     )
                     .unwrap()
@@ -454,9 +525,9 @@ pub fn emit_ref_method<'ctx>(
                 let str_ptr = unsafe {
                     c.builder
                         .build_in_bounds_gep(
-                            i8_ty_reply,
+                            i8_ty,
                             raw_ptr,
-                            &[c.context.i64_type().const_int(16, false)],
+                            &[i64_ty.const_int(16, false)],
                             "reply_str_ptr",
                         )
                         .unwrap()
@@ -467,45 +538,197 @@ pub fn emit_ref_method<'ctx>(
                     .build_load(reply_llvm, reply_payload_ptr, "reply_val")
                     .unwrap()
             };
-            let some_val = {
-                let alloca = c
-                    .builder
-                    .build_alloca(option_reply_struct, "some_reply_buf")
-                    .unwrap();
+            // Result.Ok tag = 0
+            let ok_result = {
+                let alloca = c.builder.build_alloca(result_struct, "ok_buf").unwrap();
                 let tag_ptr = c
                     .builder
-                    .build_struct_gep(option_reply_struct, alloca, 0, "reply_tag_ptr")
+                    .build_struct_gep(result_struct, alloca, 0, "ok_tag_ptr")
                     .unwrap();
-                let tag_some_reply = c.context.i8_type().const_int(0, false);
-                c.builder.build_store(tag_ptr, tag_some_reply).unwrap();
+                c.builder
+                    .build_store(tag_ptr, i8_ty.const_int(0, false))
+                    .unwrap();
                 let payload_ptr = c
                     .builder
-                    .build_struct_gep(option_reply_struct, alloca, 1, "reply_payload_ptr")
+                    .build_struct_gep(result_struct, alloca, 1, "ok_payload_ptr")
                     .unwrap();
                 let typed_ptr = c
                     .builder
-                    .build_pointer_cast(
-                        payload_ptr,
-                        c.context.ptr_type(AddressSpace::default()),
-                        "reply_typed_ptr",
-                    )
+                    .build_pointer_cast(payload_ptr, ptr_ty, "ok_typed_ptr")
                     .unwrap();
                 c.builder.build_store(typed_ptr, reply_val).unwrap();
                 c.builder
-                    .build_load(option_reply_struct, alloca, "some_val")
+                    .build_load(result_struct, alloca, "ok_val")
                     .unwrap()
                     .into_struct_value()
             };
             c.builder.build_unconditional_branch(merge_bb).unwrap();
 
+            // -- merge --
             c.builder.position_at_end(merge_bb);
-            let phi = c
-                .builder
-                .build_phi(option_reply_struct, "call_result")
-                .unwrap();
-            phi.add_incoming(&[(&none_val, then_bb), (&some_val, else_bb)]);
+            let phi = c.builder.build_phi(result_struct, "call_result").unwrap();
+            phi.add_incoming(&[
+                (&ok_result, got_reply_bb),
+                (&timeout_result, timeout_bb),
+                (&down_result, process_down_bb),
+            ]);
 
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+
+            if let Some(bb) = saved_block {
+                c.builder.position_at_end(bb);
+            }
+
+            Ok(EmitResult::Emitted)
+        }
+        "signal" => {
+            let ref_struct = *c
+                .types
+                .structs
+                .get(mangled_type)
+                .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
+
+            // Lifecycle is an enum with unit variants; its LLVM repr is { i8 }.
+            let lifecycle_llvm = to_llvm_type(
+                &Type::Enum("Lifecycle".to_string()),
+                c.context,
+                &c.types.structs,
+            )
+            .ok_or("no LLVM type for Lifecycle enum")?;
+
+            let fn_type = c
+                .context
+                .void_type()
+                .fn_type(&[ref_struct.into(), lifecycle_llvm.into()], false);
+            let fn_val = c.module.add_function(mangled_fn, fn_type, None);
+            c.functions.insert(mangled_fn.to_string(), fn_val);
+
+            let entry = c.context.append_basic_block(fn_val, "entry");
+            let saved_block = c.builder.get_insert_block();
+            c.builder.position_at_end(entry);
+
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let pid = c
+                .builder
+                .build_extract_value(self_val, 0, "pid")
+                .unwrap()
+                .into_int_value();
+
+            let event_val = fn_val.get_nth_param(1).unwrap().into_struct_value();
+            let tag = c
+                .builder
+                .build_extract_value(event_val, 0, "lifecycle_tag")
+                .unwrap()
+                .into_int_value();
+
+            let i64_ty = c.context.i64_type();
+            let variant_i64 = c
+                .builder
+                .build_int_z_extend(tag, i64_ty, "variant_i64")
+                .unwrap();
+
+            let send_lifecycle_fn = *c
+                .functions
+                .get("expo_rt_send_lifecycle")
+                .ok_or("expo_rt_send_lifecycle not declared")?;
+
+            c.call_void(send_lifecycle_fn, &[pid.into(), variant_i64.into()], "");
+
+            c.builder.build_return(None).unwrap();
+
+            if let Some(bb) = saved_block {
+                c.builder.position_at_end(bb);
+            }
+
+            Ok(EmitResult::Emitted)
+        }
+        "kill" => {
+            let ref_struct = *c
+                .types
+                .structs
+                .get(mangled_type)
+                .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
+
+            let fn_type = c.context.void_type().fn_type(&[ref_struct.into()], false);
+            let fn_val = c.module.add_function(mangled_fn, fn_type, None);
+            c.functions.insert(mangled_fn.to_string(), fn_val);
+
+            let entry = c.context.append_basic_block(fn_val, "entry");
+            let saved_block = c.builder.get_insert_block();
+            c.builder.position_at_end(entry);
+
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let pid = c
+                .builder
+                .build_extract_value(self_val, 0, "pid")
+                .unwrap()
+                .into_int_value();
+
+            let kill_fn = *c
+                .functions
+                .get("expo_rt_kill")
+                .ok_or("expo_rt_kill not declared")?;
+
+            c.call_void(kill_fn, &[pid.into()], "");
+            c.builder.build_return(None).unwrap();
+
+            if let Some(bb) = saved_block {
+                c.builder.position_at_end(bb);
+            }
+
+            Ok(EmitResult::Emitted)
+        }
+        "alive?" => {
+            let ref_struct = *c
+                .types
+                .structs
+                .get(mangled_type)
+                .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
+
+            let i8_ty = c.context.i8_type();
+            let fn_type = i8_ty.fn_type(&[ref_struct.into()], false);
+            let fn_val = c.module.add_function(mangled_fn, fn_type, None);
+            c.functions.insert(mangled_fn.to_string(), fn_val);
+
+            let entry = c.context.append_basic_block(fn_val, "entry");
+            let saved_block = c.builder.get_insert_block();
+            c.builder.position_at_end(entry);
+
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let pid = c
+                .builder
+                .build_extract_value(self_val, 0, "pid")
+                .unwrap()
+                .into_int_value();
+
+            let is_alive_fn = *c
+                .functions
+                .get("expo_rt_is_process_alive")
+                .ok_or("expo_rt_is_process_alive not declared")?;
+
+            let result_i64 = c
+                .call(is_alive_fn, &[pid.into()], "alive_result")
+                .ok_or("expo_rt_is_process_alive did not return a value")?
+                .into_int_value();
+
+            let i64_ty = c.context.i64_type();
+            let is_alive = c
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    result_i64,
+                    i64_ty.const_int(0, false),
+                    "is_alive",
+                )
+                .unwrap();
+
+            // Zero-extend i1 to i8 (Expo's Bool representation).
+            let bool_val = c
+                .builder
+                .build_int_z_extend(is_alive, i8_ty, "bool_val")
+                .unwrap();
+
+            c.builder.build_return(Some(&bool_val)).unwrap();
 
             if let Some(bb) = saved_block {
                 c.builder.position_at_end(bb);

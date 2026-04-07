@@ -15,7 +15,7 @@ impl Process<App, AppMsg, String> for App
     Step.Continue(self)
   end
 
-  fn handle_lifecycle(move self, event: Lifecycle) -> Step<Self>
+  fn handle_signal(move self, event: Lifecycle) -> Step<Self>
     match event
       Lifecycle.Shutdown ->
         IO.puts("shutting down gracefully")

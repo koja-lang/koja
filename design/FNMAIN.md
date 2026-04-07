@@ -91,7 +91,7 @@ impl Process<App, AppMsg, ()> for App
     end
   end
 
-  fn handle_lifecycle(move self, event: Lifecycle) -> Self | StopReason
+  fn handle_signal(move self, event: Lifecycle) -> Self | StopReason
     match event
       Lifecycle.Shutdown ->
         IO.puts("Shutting down #{self.name}")
@@ -105,7 +105,7 @@ end
 ### What this gives you
 
 - **argv as config (implemented):** when `C = List<String>`, the runtime converts `argc`/`argv` (skipping the program name) into an Expo `List<String>` and passes it to `new`. Other config types are zero-initialized.
-- **OS signals as lifecycle events (deferred):** `Lifecycle.Shutdown`, `Lifecycle.Interrupt`, `Lifecycle.Reload` are dispatched to `handle_lifecycle`. Graceful shutdown is an override of the default implementation. Not yet implemented -- requires a two-mailbox model in the runtime.
+- **OS signals as lifecycle events (deferred):** `Lifecycle.Shutdown`, `Lifecycle.Interrupt`, `Lifecycle.Reload` are dispatched to `handle_signal`. Graceful shutdown is an override of the default implementation. Not yet implemented -- requires a two-mailbox model in the runtime.
 - **Exit codes via protocol (implemented):** the entry type's `StopReason` implements `ExitStatus`, mapping to OS exit codes. Default: `Normal -> 0`, `Shutdown -> 1`. Custom exit codes via `ExitStatus` protocol implementation. The spawn wrapper captures `run`'s return value, calls `ExitStatus.code()`, and stores the result in a global `@__expo_exit_code` that C `main` reads after `expo_rt_main_done()`.
 - **Supervision:** the entry type can spawn child processes in `new`. `expo new --sup` scaffolds a supervision tree.
 
@@ -117,7 +117,7 @@ The entry type is just a type. It uses the same `Process` protocol as every othe
 
 ## Process lifecycle
 
-The entry type example above uses `Lifecycle`, `StopReason`, and `handle_lifecycle`. This section defines those types and explains how they connect OS signals, process shutdown, and exit codes.
+The entry type example above uses `Lifecycle`, `StopReason`, and `handle_signal`. This section defines those types and explains how they connect OS signals, process shutdown, and exit codes.
 
 ### Lifecycle
 
@@ -133,9 +133,9 @@ end
 
 The entry process receives `Lifecycle` events from the OS runtime. Supervised children receive them from their supervisor. Same type, different sender.
 
-### `handle_lifecycle`
+### `handle_signal`
 
-The `Process` protocol has two dispatch points: `handle` for business messages, `handle_lifecycle` for lifecycle events.
+The `Process` protocol has two dispatch points: `handle` for business messages, `handle_signal` for lifecycle events.
 
 ```expo
 protocol Process<C, M, R>
@@ -143,7 +143,7 @@ protocol Process<C, M, R>
 
   fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
 
-  fn handle_lifecycle(move self, event: Lifecycle) -> Self | StopReason
+  fn handle_signal(move self, event: Lifecycle) -> Self | StopReason
     match event
       Lifecycle.Shutdown -> StopReason.Shutdown
       Lifecycle.Interrupt -> StopReason.Shutdown
@@ -153,9 +153,9 @@ protocol Process<C, M, R>
 end
 ```
 
-The mailbox internally accepts `M | Lifecycle`. The runtime dispatches `M` messages to `handle` and `Lifecycle` events to `handle_lifecycle`. This is an implementation detail -- the user declares `M`, not `M | Lifecycle`.
+The mailbox internally accepts `M | Lifecycle`. The runtime dispatches `M` messages to `handle` and `Lifecycle` events to `handle_signal`. This is an implementation detail -- the user declares `M`, not `M | Lifecycle`.
 
-`handle_lifecycle` has a default implementation: stop on `Shutdown`/`Interrupt`, ignore `Reload`. Most processes never override it. Override for graceful drain, hot config reload, or custom shutdown sequencing.
+`handle_signal` has a default implementation: stop on `Shutdown`/`Interrupt`, ignore `Reload`. Most processes never override it. Override for graceful drain, hot config reload, or custom shutdown sequencing.
 
 This mirrors `run`, which also has a default implementation that most processes never touch. The pattern is: sensible defaults with opt-in customization.
 
@@ -168,7 +168,7 @@ enum StopReason
 end
 ```
 
-`handle` and `handle_lifecycle` both return `Self | StopReason`. Returning `Self` continues the process. Returning a `StopReason` variant stops it.
+`handle` and `handle_signal` both return `Self | StopReason`. Returning `Self` continues the process. Returning a `StopReason` variant stops it.
 
 - `Normal` -- the process finished its work (e.g., a `Task` that completed its computation).
 - `Shutdown` -- the process was told to stop (lifecycle event, supervisor directive).
@@ -218,14 +218,14 @@ end
 
 When the supervisor spawns a child with `Ref<DbPoolMsg, R>`, it captures `fn (event: Lifecycle) -> () ref.cast(event) end` and stores it. The supervisor doesn't know `M` -- it only sends `Lifecycle`, never business messages.
 
-On shutdown, the supervisor iterates children, calls `child.send_lifecycle(Lifecycle.Shutdown)` for each. The child's runtime dispatches to `handle_lifecycle`, which returns `StopReason.Shutdown` (default) or runs custom cleanup before stopping.
+On shutdown, the supervisor iterates children, calls `child.send_lifecycle(Lifecycle.Shutdown)` for each. The child's runtime dispatches to `handle_signal`, which returns `StopReason.Shutdown` (default) or runs custom cleanup before stopping.
 
 ### Fractal dispatch
 
 The lifecycle mechanism is the same at every level:
 
-- **OS runtime** sends `Lifecycle` to the entry process mailbox, dispatched to `handle_lifecycle`.
-- **Supervisor** sends `Lifecycle` to child process mailboxes, dispatched to `handle_lifecycle`.
+- **OS runtime** sends `Lifecycle` to the entry process mailbox, dispatched to `handle_signal`.
+- **Supervisor** sends `Lifecycle` to child process mailboxes, dispatched to `handle_signal`.
 
 Same mechanism, different sender. The entry process is not special -- it's just a process whose lifecycle events happen to come from the OS instead of a supervisor.
 
@@ -282,7 +282,7 @@ The constant is defined once; the typed lookup helper pins both the name and the
 
 ## Ref API and shutdown primitives
 
-`Ref<M, R>` is a typed handle to a running process. It currently supports two operations: `cast` (fire-and-forget) and `call` (synchronous with timeout). This section adds `signal` for lifecycle events and `Process.kill` for forced termination, and changes `call` to return `Result<R, CallError>` instead of `Option<R>`.
+`Ref<M, R>` is a typed handle to a running process. It currently supports two operations: `cast` (fire-and-forget) and `call` (synchronous with timeout). This section adds `signal` for lifecycle events, `kill` for forced termination, `alive?` for liveness checks, and changes `call` to return `Result<R, CallError>` instead of `Option<R>`.
 
 ### `Ref.signal`
 
@@ -577,7 +577,7 @@ impl Process<List<String>, AppMsg, ()> for App
 end
 ```
 
-`handle_lifecycle` is not shown -- the default implementation is sufficient for a hello world.
+`handle_signal` is not shown -- the default implementation is sufficient for a hello world.
 
 And `expo.toml` is:
 
@@ -603,7 +603,7 @@ Test files use `@test` annotations on functions inside types. They are `.expo` f
 - **archive/20260403-IMPORT.md, lines 585-595:** Open question about removing top-level functions -- this doc answers it. No free functions in `.expo` files. Top-level statements exist only in `.exps` scripts.
 - **archive/20260403-IMPORT.md, lines 203-205:** Top-level functions in flat scope -- eliminated. All functions on types.
 - **archive/20260403-PROCESS.md, lines 256-281:** `fn main` vs `Process` split -- resolved. Projects always use `Process`. Scripts use `.exps`.
-- **archive/20260403-PROCESS.md, lines 304-312 / ROADMAP.md, lines 304-312:** `fn main` as `Process<C,M,R>` -- the entry type _is_ the `Process` impl. argv as config, lifecycle events via `handle_lifecycle`, exit codes via `ExitStatus` protocol.
+- **archive/20260403-PROCESS.md, lines 304-312 / ROADMAP.md, lines 304-312:** `fn main` as `Process<C,M,R>` -- the entry type _is_ the `Process` impl. argv as config, lifecycle events via `handle_signal`, exit codes via `ExitStatus` protocol.
 - **ROADMAP.md, lines 514-521:** Open question about `impl Type` migrating to inline functions -- this doc proposes it.
 - **ROADMAP.md, lines 538-542:** Type system philosophy, inline functions on types -- addressed here.
 - **ROADMAP.md, lines 544-551:** Namespace unification -- compatible, modules and types both own functions.
@@ -686,8 +686,8 @@ stopped). Each child spec may include a shutdown timeout. The supervisor
 sends a shutdown signal, waits up to the timeout, then kills the child if
 it hasn't exited.
 
-This interacts with the `handle_lifecycle` design: the supervisor sends
-`Lifecycle.Shutdown` to each child, which flows through `handle_lifecycle`.
+This interacts with the `handle_signal` design: the supervisor sends
+`Lifecycle.Shutdown` to each child, which flows through `handle_signal`.
 
 ---
 
@@ -702,7 +702,7 @@ This interacts with the `handle_lifecycle` design: the supervisor sends
 | Hello world requires `fn main` ceremony           | Hello world: `IO.puts("Hello!")` in a `.exps` script                           |
 | One file extension (`.expo`)                      | Two: `.expo` (structured modules) and `.exps` (scripts)                        |
 | REPL is a separate design question                | REPL is `.exps` semantics, interactive                                         |
-| OS signals handled ad-hoc (`Signal` placeholder)  | `Lifecycle` enum with `handle_lifecycle` default impl on `Process`             |
+| OS signals handled ad-hoc (`Signal` placeholder)  | `Lifecycle` enum with `handle_signal` default impl on `Process`             |
 | Exit codes as reply type (`ExitCode` placeholder) | `StopReason` enum, `ExitStatus` protocol for OS exit code mapping              |
 | No supervision model                              | `ExitReason` for supervisors, `Lifecycle` propagation, fractal dispatch        |
 
