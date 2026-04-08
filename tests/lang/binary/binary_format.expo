@@ -1,3 +1,5 @@
+alias net.IPAddress
+
 fn main
   # Empty binary
   empty: Binary = <<>>

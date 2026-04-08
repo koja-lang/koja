@@ -17,12 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Ref.signal(event: Lifecycle)` -- sends a lifecycle signal to a process for cooperative shutdown.
 - `Ref.kill()` -- immediately terminates a process without sending a signal.
 - `Ref.alive?()` -- returns `true` if the process is still running.
+- `json` promoted to qualified stdlib package. Ships with the compiler -- no `[dependencies]` entry needed. `json.Value` (renamed from `JSONValue`), `json.Encoder`, `json.Decoder`, `json.StringBuilder`. Use `alias json.Value` or `json.Value.object(...)` to access.
+- `expo-stdlib` build script auto-discovers `.expo` files under `expo/lib/`. Adding a new stdlib package is just creating a directory with an `expo.toml` and `src/` -- no Rust code changes needed.
 
 ### Changed
 
 - **Breaking**: `Process<C, M, R>` protocol redesigned. `new(config) -> Self` replaced by `start(move config) -> Result<Self, StopReason>` -- initialization now runs in the child process context after spawn. `handle` and `handle_signal` return `Step<Self>` instead of `Self | StopReason`. `spawn T.new(config)` becomes `spawn T.start(config)`.
 - **Breaking**: `Ref.call` now returns `Result<R, CallError>` instead of `Option<R>`. `Task.await` follows suit.
 - **Breaking**: `handle_lifecycle` renamed to `handle_signal` on the `Process` protocol.
+- **Breaking**: Networking types (`TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`) moved from auto-imported `std.socket` to qualified `net` package. Use `alias net.TCPSocket` or `net.TCPSocket.connect(...)` to access them.
+- **Breaking**: `JSONValue` renamed to `Value` in the `json` package. `json.JSONValue` becomes `json.Value`. All constructor methods updated (`Value.string(...)`, `Value.object(...)`, etc.).
 
 ### Fixed
 

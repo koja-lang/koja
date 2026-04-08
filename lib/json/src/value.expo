@@ -1,0 +1,45 @@
+@doc "Core JSON value type and convenience constructors."
+enum Value
+  Null
+  Bool(Bool)
+  Int(Int)
+  Float(Float)
+  String(String)
+  Array(List<Value>)
+  Object(List<Pair<String, Value>>)
+end
+
+impl Value
+  fn null() -> Value
+    Value.Null
+  end
+
+  fn bool(v: Bool) -> Value
+    Value.Bool(v)
+  end
+
+  fn int(n: Int) -> Value
+    Value.Int(n)
+  end
+
+  fn float(f: Float) -> Value
+    Value.Float(f)
+  end
+
+  fn string(s: String) -> Value
+    Value.String(s)
+  end
+
+  fn array(items: List<Value>) -> Value
+    Value.Array(items)
+  end
+
+  fn object(entries: List<Pair<String, Value>>) -> Value
+    Value.Object(entries)
+  end
+
+  fn entry(key: String, value: Value) -> Pair<String, Value>
+    result: Pair<String, Value> = Pair{first: key, second: value}
+    result
+  end
+end

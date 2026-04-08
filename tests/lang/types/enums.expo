@@ -5,7 +5,7 @@ enum Direction
   West
 end
 
-enum Value
+enum Tagged
   Integer(Int)
   Text(String)
 end
@@ -19,10 +19,10 @@ fn opposite(dir: Direction) -> String
   end
 end
 
-fn describe(v: Value) -> Int
+fn describe(v: Tagged) -> Int
   match v
-    Value.Integer(n) -> n
-    Value.Text(_) -> 0
+    Tagged.Integer(n) -> n
+    Tagged.Text(_) -> 0
   end
 end
 
@@ -30,6 +30,6 @@ fn main
   print(opposite(Direction.North))
   print(opposite(Direction.East))
 
-  print(describe(Value.Integer(42)))
-  print(describe(Value.Text("hello")))
+  print(describe(Tagged.Integer(42)))
+  print(describe(Tagged.Text("hello")))
 end

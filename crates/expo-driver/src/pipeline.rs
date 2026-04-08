@@ -59,14 +59,17 @@ pub fn typecheck_graph(
 
     let mut stdlib_ctx = expo_typecheck::context::TypeContext::new();
 
-    let (stdlib_names, project_names): (Vec<&String>, Vec<&String>) =
-        graph.order.iter().partition(|n| n.starts_with("std."));
+    let is_stdlib = |n: &str| n.starts_with("std.");
 
-    // Stdlib: sequential accumulation (dependency-ordered).
+    let (stdlib_names, project_names): (Vec<&String>, Vec<&String>) =
+        graph.order.iter().partition(|n| is_stdlib(n));
+
+    // Auto-imported std modules: merge into stdlib_ctx directly.
     for name in &stdlib_names {
         let rm = &graph.modules[*name];
         let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
         ctx.merge(&stdlib_ctx);
+
         stdlib_ctx.merge(&ctx);
         module_contexts.insert((*name).clone(), ctx);
     }
@@ -88,11 +91,19 @@ pub fn typecheck_graph(
         unified_project_ctx.merge(&module_contexts[*name]);
     }
 
-    // Populate package_types: map each dependency package name to the types it provides.
-    for pkg in &graph.dep_packages {
+    // Populate package_types: map each package name to the types it provides.
+    // Covers both external dependency packages and qualified stdlib packages.
+    let all_packages: Vec<String> = graph
+        .dep_packages
+        .iter()
+        .cloned()
+        .chain(expo_stdlib::QUALIFIED_MODULES.iter().map(|s| s.to_string()))
+        .collect();
+
+    for pkg in &all_packages {
         let prefix = format!("{pkg}.");
         for fqn in &graph.order {
-            if fqn.starts_with(&prefix) {
+            if fqn.starts_with(&prefix) || fqn == pkg {
                 let rm = &graph.modules[fqn];
                 for item in &rm.module.items {
                     let type_name = match item {

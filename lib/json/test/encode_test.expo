@@ -1,0 +1,75 @@
+@test "encode null"
+fn test_encode_null
+  result = Encoder.encode(Value.null())
+  if result != "null"
+    panic("expected \"null\", got #{result}")
+  end
+end
+
+@test "encode true"
+fn test_encode_true
+  result = Encoder.encode(Value.bool(true))
+  if result != "true"
+    panic("expected \"true\", got #{result}")
+  end
+end
+
+@test "encode false"
+fn test_encode_false
+  result = Encoder.encode(Value.bool(false))
+  if result != "false"
+    panic("expected \"false\", got #{result}")
+  end
+end
+
+@test "encode integer"
+fn test_encode_int
+  result = Encoder.encode(Value.int(42))
+  if result != "42"
+    panic("expected \"42\", got #{result}")
+  end
+end
+
+@test "encode string"
+fn test_encode_string
+  result = Encoder.encode(Value.string("hello"))
+  if result != "\"hello\""
+    panic("expected '\"hello\"', got #{result}")
+  end
+end
+
+@test "encode empty array"
+fn test_encode_empty_array
+  items: List<Value> = List.new()
+  result = Encoder.encode(Value.array(items))
+  if result != "[]"
+    panic("expected \"[]\", got #{result}")
+  end
+end
+
+@test "encode array with elements"
+fn test_encode_array
+  result = Encoder.encode(Value.array([Value.int(1), Value.int(2), Value.int(3)]))
+  if result != "[1,2,3]"
+    panic("expected \"[1,2,3]\", got #{result}")
+  end
+end
+
+@test "encode empty object"
+fn test_encode_empty_object
+  entries: List<Pair<String, Value>> = List.new()
+  result = Encoder.encode(Value.object(entries))
+  if result != "{}"
+    panic("expected \"{}\", got #{result}")
+  end
+end
+
+@test "encode object"
+fn test_encode_object
+  result = Encoder.encode(Value.object([
+    Value.entry("name", Value.string("expo"))
+  ]))
+  if result != "{\"name\":\"expo\"}"
+    panic("expected '{\"name\":\"expo\"}', got #{result}")
+  end
+end

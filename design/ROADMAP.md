@@ -15,7 +15,7 @@ An 11-crate Rust workspace that compiles Expo source to native binaries via LLVM
 - `expo-parser` -- recursive descent parser (Pratt precedence for expressions)
 - `expo-typecheck` -- type inference and semantic analysis
 - `expo-codegen` -- LLVM IR generation via `inkwell`
-- `expo-stdlib` -- embedded standard library `.expo` sources with fully qualified module names
+- `expo-stdlib` -- build script auto-discovers `.expo` sources under `expo/lib/` and embeds them via `include_str!`
 - `expo-fmt` -- opinionated code formatter
 - `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
 - `expo-runtime` -- multi-threaded process scheduler (C ABI static library linked into compiled binaries)
@@ -161,8 +161,8 @@ Two independent tracks. Track A makes the language useful for real programs. Tra
 
 Stdlib contains primitives that are as fundamental as integers -- things the compiler or language runtime needs to function, or that virtually every program needs and whose API is stable for decades.
 
-- `std.fd` -- **DONE** shipped in Phase 3 A3a (basic `read`, `write`, `close`). `Fd`, `FileMode`, `File` remain here. Socket types moved to `std.socket`.
-- `std.socket` -- **DONE** POSIX socket primitives. `SocketKind` enum (`Stream`, `Datagram`), `IPAddress` struct (Binary-backed with `v4`, `loopback`, `any`, `v4?`, `v6?` helpers), `SocketAddress` struct. `Socket` with full POSIX surface: `create`, `bind`, `connect`, `resolve` (DNS via `getaddrinfo`), `send_to`, `recv_from`, `listen`, `accept`, `set_reuse_addr`, `close`. Ergonomic wrappers: `TCPSocket` (client connections with DNS resolution), `TCPListener` (server-side bind/accept returning `TCPSocket`), `UDPSocket` (connectionless datagram I/O). All wrappers are pure Expo on top of `Socket` -- no additional intrinsics.
+- `std.fd` -- **DONE** shipped in Phase 3 A3a (basic `read`, `write`, `close`). `Fd`, `FileMode`, `File` remain here.
+- `net` -- **DONE** (qualified stdlib package). POSIX socket primitives. `SocketKind` enum (`Stream`, `Datagram`), `IPAddress` struct (Binary-backed with `v4`, `loopback`, `any`, `v4?`, `v6?` helpers), `SocketAddress` struct. `Socket` with full POSIX surface: `create`, `bind`, `connect`, `resolve` (DNS via `getaddrinfo`), `send_to`, `recv_from`, `listen`, `accept`, `set_reuse_addr`, `close`. Ergonomic wrappers: `TCPSocket` (client connections with DNS resolution), `TCPListener` (server-side bind/accept returning `TCPSocket`), `UDPSocket` (connectionless datagram I/O). All wrappers are pure Expo on top of `Socket` -- no additional intrinsics. Accessed via `alias net.TCPSocket` or `net.TCPSocket.connect(...)`.
 - `std.file` -- **DONE** `FileMode` enum (`Read`, `Write`, `Append`). `File.open(path, mode)` opens with explicit mode. `File.write(path, content)` for one-shot writes. `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)` for path-based operations. Handle-level writes via `file.fd.write(data)`. `seek` deferred until embedded database work.
 - `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space -- reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases, large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
 - `std.io` -- **DONE** `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
@@ -200,9 +200,9 @@ User-facing foreign function interface for calling C libraries. Expo already cal
 
 `net`, `http`, `json`, `random`, and `crypto` are stdlib packages -- they ship with the compiler, are always available, and use qualified imports (`net.TCPSocket`, `http.Request`). See [STDLIB.md](STDLIB.md) for the full package hierarchy design.
 
-- `net` -- `TCPSocket`, `TCPListener`, `UDPSocket` are implemented in `std.socket` as pure Expo wrappers. TLS support (`upgrade_tls`, `TLSConfig`) and promotion to a `net` package namespace are pending.
+- `net` -- **DONE** `TCPSocket`, `TCPListener`, `UDPSocket` implemented as the `net` qualified stdlib package (`net.expo`). TLS support (`upgrade_tls`, `TLSConfig`) pending.
 - `http` -- shared vocabulary types (`Request`, `Response`, `Method`, `Status`, `Headers`), HTTP/1.1 parser, one-shot client, spawn-per-connection server.
-- `json` -- already implemented as a standalone package. Promote to stdlib status.
+- `json` -- **DONE** (qualified stdlib package). `json.Value` (renamed from `JSONValue`), `json.Encoder`, `json.Decoder`, `json.StringBuilder`. Pure Expo, 17 tests. Accessed via `alias json.Value` or `json.Value.object(...)`.
 - ~~`random`~~ -- **Done.** `Random.bytes(n)` and `Random.int(min, max)` landed in `std.kernel` (auto-imported, no package qualifier needed). OS entropy via `getrandom(2)` / `getentropy(2)`, no OpenSSL dependency. Decided against a separate package -- too small, too fundamental.
 - `crypto` -- `Hash.sha256(data)`, `HMAC.sign(key, data)`. Stable cryptographic primitives (SHA-2, HMAC). Building blocks for TLS and application-level auth.
 
@@ -555,7 +555,7 @@ Exploration of treating modules as `TypeKind::Module` in the unified registry. N
 | Tooling   | Formatter, `expo new`, `expo run`, VSCode extension, LSP, documentation generator                                     |
 | Core      | Generics, ownership, protocols, closures, collections, processes                                                      |
 | Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
-| Phase 4A  | Test runner, `std.socket` (POSIX surface), `Debug` protocol, `std.io`, `std.file`, `std.system`, `std.time`           |
+| Phase 4A  | Test runner, `net` package (POSIX surface), `Debug` protocol, `std.io`, `std.file`, `std.system`, `std.time`           |
 | Tooling   | DWARF debug info, `--release` flag, runtime stacktraces, Vim plugin (indent, matchit, compiler)                       |
 | Phase 4B  | Multi-threaded scheduler, cgroup-aware thread count, Condvar parking, graceful shutdown, I/O reactor                  |
 

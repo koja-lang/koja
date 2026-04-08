@@ -1,3 +1,11 @@
+alias net.Socket
+alias net.SocketKind
+alias net.SocketAddress
+alias net.IPAddress
+alias net.TCPListener
+alias net.TCPSocket
+alias net.UDPSocket
+
 fn main
   # Create a stream socket
   match Socket.create(SocketKind.Stream)

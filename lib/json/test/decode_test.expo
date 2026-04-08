@@ -1,0 +1,96 @@
+@test "decode null"
+fn test_decode_null
+  match Decoder.decode("null")
+    Result.Ok(val) ->
+      result = Encoder.encode(val)
+      if result != "null"
+        panic("expected \"null\", got #{result}")
+      end
+    Result.Err(msg) -> panic("decode failed: #{msg}")
+  end
+end
+
+@test "decode true"
+fn test_decode_true
+  match Decoder.decode("true")
+    Result.Ok(val) ->
+      result = Encoder.encode(val)
+      if result != "true"
+        panic("expected \"true\", got #{result}")
+      end
+    Result.Err(msg) -> panic("decode failed: #{msg}")
+  end
+end
+
+@test "decode integer"
+fn test_decode_integer
+  match Decoder.decode("42")
+    Result.Ok(val) ->
+      result = Encoder.encode(val)
+      if result != "42"
+        panic("expected \"42\", got #{result}")
+      end
+    Result.Err(msg) -> panic("decode failed: #{msg}")
+  end
+end
+
+@test "decode string"
+fn test_decode_string
+  match Decoder.decode("\"hello\"")
+    Result.Ok(val) ->
+      result = Encoder.encode(val)
+      if result != "\"hello\""
+        panic("expected '\"hello\"', got #{result}")
+      end
+    Result.Err(msg) -> panic("decode failed: #{msg}")
+  end
+end
+
+@test "decode empty array"
+fn test_decode_empty_array
+  match Decoder.decode("[]")
+    Result.Ok(val) ->
+      result = Encoder.encode(val)
+      if result != "[]"
+        panic("expected \"[]\", got #{result}")
+      end
+    Result.Err(msg) -> panic("decode failed: #{msg}")
+  end
+end
+
+@test "decode array"
+fn test_decode_array
+  match Decoder.decode("[1, 2, 3]")
+    Result.Ok(val) ->
+      result = Encoder.encode(val)
+      if result != "[1,2,3]"
+        panic("expected \"[1,2,3]\", got #{result}")
+      end
+    Result.Err(msg) -> panic("decode failed: #{msg}")
+  end
+end
+
+@test "decode object"
+fn test_decode_object
+  match Decoder.decode("{\"key\": \"value\"}")
+    Result.Ok(val) ->
+      result = Encoder.encode(val)
+      if result != "{\"key\":\"value\"}"
+        panic("expected '{\"key\":\"value\"}', got #{result}")
+      end
+    Result.Err(msg) -> panic("decode failed: #{msg}")
+  end
+end
+
+@test "round trip object"
+fn test_round_trip
+  input = "{\"name\":\"expo\",\"version\":\"0.1.0\",\"tags\":[1,2,3]}"
+  match Decoder.decode(input)
+    Result.Ok(val) ->
+      output = Encoder.encode(val)
+      if output != input
+        panic("round trip failed: #{output}")
+      end
+    Result.Err(msg) -> panic("decode failed: #{msg}")
+  end
+end

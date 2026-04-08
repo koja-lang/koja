@@ -9,10 +9,9 @@ cryptographic primitives, and the 20-year rule for stdlib inclusion.
 ## The problem
 
 `std.*` is flat and overloaded. Adding networking, HTTP, TLS, and JSON to
-the same flat namespace doesn't scale. `std.socket`, `std.http`, `std.tls`,
-`std.json` all at the same level implies they're equally fundamental, but
-they're not -- `IO.puts` is used in every program while `TCPSocket` is
-domain-specific.
+the same flat namespace doesn't scale. `std.http`, `std.tls`, `std.json`
+all at the same level implies they're equally fundamental, but they're not
+-- `IO.puts` is used in every program while `TCPSocket` is domain-specific.
 
 ---
 
@@ -58,22 +57,22 @@ Networking with TLS as a capability on `TCPSocket`, not a separate type.
 
 ### Types
 
-- **`net.TCPSocket`** -- **implemented** (currently in `std.socket`).
+- **`net.TCPSocket`** -- **implemented** (in `net.expo`).
   `connect(host, port)` resolves DNS and connects, `connect_addr(addr)`
   for direct connections, `read(count)`, `write(data)`, `close()`.
   TLS via `upgrade_tls(config)` (`move self -> Self`) or the
   convenience factory `connect_tls(host, port, config)` (pending).
   One type handles both plain and encrypted connections.
-- **`net.TCPListener`** -- **implemented** (currently in `std.socket`).
+- **`net.TCPListener`** -- **implemented** (in `net.expo`).
   `bind(port)` or `bind_addr(addr)`, `accept()` (returns `TCPSocket`).
   Sets `SO_REUSEADDR` and listens with backlog 128 automatically.
-- **`net.UDPSocket`** -- **implemented** (currently in `std.socket`).
+- **`net.UDPSocket`** -- **implemented** (in `net.expo`).
   `bind(port)` or `bind_addr(addr)`, `send_to(data, addr)`,
   `recv_from(count)`. Datagram-oriented, no connection ceremony.
 - **`net.TLSConfig`** -- certificate options, verification settings. Passed
   to `upgrade_tls` or `connect_tls`. Pending implementation.
-- **`net.Socket`** -- raw POSIX socket primitives (current `std.socket`
-  internals). Rarely used directly -- `TCPSocket` and `UDPSocket` wrap it.
+- **`net.Socket`** -- raw POSIX socket primitives (in `net.expo`).
+  Rarely used directly -- `TCPSocket` and `UDPSocket` wrap it.
 
 ### TLS as upgrade, not separate type
 
@@ -99,8 +98,8 @@ makes this feel natural in Expo.
 ### Implementation
 
 `TCPSocket`, `TCPListener`, and `UDPSocket` are implemented in pure Expo
-in `std.socket`, wrapping the raw `Socket` primitives. They will move to
-the `net` package namespace when the package system is built. TLS wraps a system library
+in `net.expo`, wrapping the raw `Socket` primitives. Access requires
+qualified names (`net.TCPSocket`) or `alias net.TCPSocket`. TLS wraps a system library
 (LibreSSL/OpenSSL/BoringSSL) via C FFI (see [FFI.md](FFI.md)). Programs
 that don't call `upgrade_tls` don't pull in TLS dependencies.
 
@@ -153,14 +152,17 @@ naturally.
 
 ---
 
-## `json` package
+## `json` package -- **DONE** (qualified stdlib package)
 
-Promote the existing `json` package to stdlib status. Already implemented
-in pure Expo with 17 tests covering encoder and decoder.
+Promoted from standalone package to stdlib. Ships with the compiler,
+accessed via qualified names (`json.Value`) or `alias json.Value`.
+Implemented in pure Expo with 17 tests covering encoder and decoder.
 
-- `json.JSONValue` enum (recursive descent)
-- `json.Encoder` (compact and pretty-printed)
-- `json.Decoder` (planned: combinator API with error accumulation)
+- `json.Value` enum -- `Null`, `Bool`, `Int`, `Float`, `String`, `Array`, `Object`.
+  Convenience constructors: `Value.string(s)`, `Value.int(n)`, `Value.object(entries)`, etc.
+- `json.Encoder` -- compact (`encode`) and pretty-printed (`encode_pretty`) output.
+- `json.Decoder` -- recursive descent parser. `Decoder.decode(input)` returns `Result<Value, String>`.
+- `json.StringBuilder` -- efficient string builder used internally by the encoder.
 
 ---
 

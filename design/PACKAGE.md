@@ -90,13 +90,13 @@ expo-cookbook/
 
 ### What's in the cookbook vs. what's in stdlib
 
-**Stdlib** -- primitives that are exact and universal. `std.socket`,
+**Stdlib** -- primitives that are exact and universal. `net`,
 `std.file`, `std.time`. Building blocks that the runtime provides and
 every program may need. Stable API, ships with the compiler.
 
 **Cookbook** -- compositions of stdlib primitives for specific tasks.
 "Here's how to implement the Postgres wire protocol using
-`std.socket` and binary pattern matching." The cookbook uses stdlib but
+`net` and binary pattern matching." The cookbook uses stdlib but
 is not stdlib.
 
 The litmus test: if the implementation involves a third-party
@@ -216,8 +216,8 @@ page containing description, API surface, examples, and collapsible
 full source.
 
 Search covers both sections. A developer searching "socket" finds
-`std.socket` (the primitive) and cookbook entries that use it (TCP
-server patterns, WebSocket client).
+`net` (the primitive) and cookbook entries that use it (TCP server
+patterns, WebSocket client).
 
 ### Hosting
 

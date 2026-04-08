@@ -899,22 +899,25 @@ Access control is at the function level (`priv fn`), not the module level. Priva
 
 ### Aliases
 
-When using types from dependency packages, `alias` creates a file-private shorthand:
+When using types from qualified standard library packages or dependency packages, `alias` creates a file-private shorthand:
 
 ```expo
+alias net.TCPSocket
 alias json.Decoder
 alias json.Encoder as JSONEncoder
 
-fn decode(d: Decoder) -> String
-  d.read()
-end
-
-fn encode(e: JSONEncoder) -> String
-  e.write()
-end
+conn = TCPSocket.connect("example.com", 80)
 ```
 
-`alias json.Decoder` makes `Decoder` available as a local name. `alias json.Decoder as JSONEncoder` binds a custom local name. Aliases are scoped to the declaring file and don't affect other modules.
+`alias net.TCPSocket` makes `TCPSocket` available as a local name. `alias json.Decoder as JSONEncoder` binds a custom local name. Aliases are scoped to the declaring file and don't affect other modules.
+
+### Standard library visibility
+
+Core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, etc.) are auto-imported into every module -- no alias needed. Domain-specific packages require qualified access:
+
+- **`net`** -- `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`
+
+Use `alias net.TCPSocket` or `net.TCPSocket.connect(...)` to access them.
 
 ---
 
