@@ -16,7 +16,7 @@ pub fn to_llvm_type<'ctx>(
 ) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
         Type::Indirect(_) => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
-        Type::Primitive(p) => Some(primitive_to_llvm(p, context)),
+        Type::Primitive(primitive) => Some(primitive_to_llvm(primitive, context)),
         Type::Named {
             identifier,
             type_args,
@@ -33,10 +33,10 @@ pub fn to_llvm_type<'ctx>(
             structs.get(&mangled).map(|st| (*st).into())
         }
         Type::Function { .. } => {
-            let ptr_ty = context.ptr_type(inkwell::AddressSpace::default());
+            let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
             Some(
                 context
-                    .struct_type(&[ptr_ty.into(), ptr_ty.into()], false)
+                    .struct_type(&[ptr_type.into(), ptr_type.into()], false)
                     .into(),
             )
         }
@@ -78,8 +78,11 @@ pub fn primitive_name_to_type(name: &str) -> Type {
 }
 
 /// Maps an Expo primitive type to its corresponding LLVM type.
-pub fn primitive_to_llvm<'ctx>(p: &Primitive, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
-    match p {
+pub fn primitive_to_llvm<'ctx>(
+    primitive: &Primitive,
+    context: &'ctx Context,
+) -> BasicTypeEnum<'ctx> {
+    match primitive {
         Primitive::Binary | Primitive::Bits | Primitive::String => {
             context.ptr_type(inkwell::AddressSpace::default()).into()
         }

@@ -5,7 +5,9 @@
 //! lives in the `intrinsics` module.
 
 use expo_typecheck::types::{Primitive, Type, mangle_name};
+use inkwell::AddressSpace;
 use inkwell::IntPredicate;
+use inkwell::types::StructType;
 use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
@@ -17,13 +19,13 @@ use crate::compiler::Compiler;
 /// Both Map<K,V> and Set<T> use the same LLVM struct layout:
 /// `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`
 pub fn monomorphize_hashtable_struct<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     mangled: &str,
 ) -> Result<(), String> {
-    let st = c.context.opaque_struct_type(mangled);
-    let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
-    let i64_type = c.context.i64_type();
-    st.set_body(
+    let struct_type = compiler.context.opaque_struct_type(mangled);
+    let ptr_type = compiler.context.ptr_type(AddressSpace::default());
+    let i64_type = compiler.context.i64_type();
+    struct_type.set_body(
         &[
             ptr_type.into(),
             ptr_type.into(),
@@ -32,8 +34,11 @@ pub fn monomorphize_hashtable_struct<'ctx>(
         ],
         false,
     );
-    c.types.structs.insert(mangled.to_string(), st);
-    c.types.mono_struct_info.insert(
+    compiler
+        .types
+        .structs
+        .insert(mangled.to_string(), struct_type);
+    compiler.types.mono_struct_info.insert(
         mangled.to_string(),
         vec![
             (
@@ -49,101 +54,108 @@ pub fn monomorphize_hashtable_struct<'ctx>(
 }
 
 /// Emits `fn new() -> CollectionStruct` for a hash-table-backed collection.
-/// Allocates entries buffer (`cap * entry_size` bytes) and states buffer
-/// (`cap` bytes, zeroed), returns the 4-field struct.
+/// Allocates entries buffer (`capacity * entry_size` bytes) and states buffer
+/// (`capacity` bytes, zeroed), returns the 4-field struct.
 pub fn emit_hashtable_new<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     mangled_fn: &str,
-    collection_struct: inkwell::types::StructType<'ctx>,
+    collection_struct: StructType<'ctx>,
     entry_size: u64,
 ) -> Result<(), String> {
-    let i64_ty = c.context.i64_type();
-    let i32_ty = c.context.i32_type();
+    let i64_type = compiler.context.i64_type();
+    let i32_type = compiler.context.i32_type();
 
     let fn_type = collection_struct.fn_type(&[], false);
-    let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-    c.functions.insert(mangled_fn.to_string(), fn_val);
+    let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
+    compiler.functions.insert(mangled_fn.to_string(), fn_value);
 
-    let entry = c.context.append_basic_block(fn_val, "entry");
-    let saved_block = c.builder.get_insert_block();
-    c.builder.position_at_end(entry);
+    let entry = compiler.context.append_basic_block(fn_value, "entry");
+    let saved_block = compiler.builder.get_insert_block();
+    compiler.builder.position_at_end(entry);
 
-    let cap = i64_ty.const_int(8, false);
-    let entries_bytes = c
+    let capacity = i64_type.const_int(8, false);
+    let entries_bytes = compiler
         .builder
-        .build_int_mul(cap, i64_ty.const_int(entry_size, false), "entries_bytes")
+        .build_int_mul(
+            capacity,
+            i64_type.const_int(entry_size, false),
+            "entries_bytes",
+        )
         .unwrap();
-    let malloc = *c.functions.get("malloc").unwrap();
-    let entries_ptr = c
+    let malloc = *compiler.functions.get("malloc").unwrap();
+    let entries_ptr = compiler
         .call(malloc, &[entries_bytes.into()], "entries")
         .unwrap()
         .into_pointer_value();
-    let states_ptr = c
-        .call(malloc, &[cap.into()], "states")
+    let states_ptr = compiler
+        .call(malloc, &[capacity.into()], "states")
         .unwrap()
         .into_pointer_value();
-    let memset = *c.functions.get("memset").unwrap();
-    c.call_void(
+    let memset = *compiler.functions.get("memset").unwrap();
+    compiler.call_void(
         memset,
         &[
             states_ptr.into(),
-            i32_ty.const_int(0, false).into(),
-            cap.into(),
+            i32_type.const_int(0, false).into(),
+            capacity.into(),
         ],
         "clear_states",
     );
 
     let result = collection_struct.get_undef();
-    let result = c
+    let result = compiler
         .builder
-        .build_insert_value(result, entries_ptr, 0, "r_e")
+        .build_insert_value(result, entries_ptr, 0, "insert_entries")
         .unwrap()
         .into_struct_value();
-    let result = c
+    let result = compiler
         .builder
-        .build_insert_value(result, states_ptr, 1, "r_s")
+        .build_insert_value(result, states_ptr, 1, "insert_states")
         .unwrap()
         .into_struct_value();
-    let result = c
+    let result = compiler
         .builder
-        .build_insert_value(result, i64_ty.const_int(0, false), 2, "r_l")
+        .build_insert_value(result, i64_type.const_int(0, false), 2, "insert_length")
         .unwrap()
         .into_struct_value();
-    let result = c
+    let result = compiler
         .builder
-        .build_insert_value(result, cap, 3, "r_c")
+        .build_insert_value(result, capacity, 3, "insert_capacity")
         .unwrap()
         .into_struct_value();
-    c.builder.build_return(Some(&result)).unwrap();
+    compiler.builder.build_return(Some(&result)).unwrap();
 
-    if let Some(bb) = saved_block {
-        c.builder.position_at_end(bb);
+    if let Some(block) = saved_block {
+        compiler.builder.position_at_end(block);
     }
     Ok(())
 }
 
 /// Emits `fn length(self) -> Int` for a hash-table-backed collection.
 pub fn emit_hashtable_length<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     mangled_fn: &str,
-    collection_struct: inkwell::types::StructType<'ctx>,
+    collection_struct: StructType<'ctx>,
 ) -> Result<(), String> {
-    let i64_ty = c.context.i64_type();
+    let i64_type = compiler.context.i64_type();
 
-    let fn_type = i64_ty.fn_type(&[collection_struct.into()], false);
-    let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-    c.functions.insert(mangled_fn.to_string(), fn_val);
+    let fn_type = i64_type.fn_type(&[collection_struct.into()], false);
+    let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
+    compiler.functions.insert(mangled_fn.to_string(), fn_value);
 
-    let entry = c.context.append_basic_block(fn_val, "entry");
-    let saved_block = c.builder.get_insert_block();
-    c.builder.position_at_end(entry);
+    let entry = compiler.context.append_basic_block(fn_value, "entry");
+    let saved_block = compiler.builder.get_insert_block();
+    compiler.builder.position_at_end(entry);
 
-    let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-    let len = c.builder.build_extract_value(self_val, 2, "len").unwrap();
-    c.builder.build_return(Some(&len)).unwrap();
+    let self_value = fn_value.get_nth_param(0).unwrap().into_struct_value();
+    let length = compiler
+        .builder
+        .build_extract_value(self_value, 2, "length")
+        .unwrap();
+    compiler.builder.build_return(Some(&length)).unwrap();
 
-    if let Some(bb) = saved_block {
-        c.builder.position_at_end(bb);
+    if let Some(block) = saved_block {
+        compiler.builder.position_at_end(block);
     }
     Ok(())
 }
@@ -151,40 +163,40 @@ pub fn emit_hashtable_length<'ctx>(
 /// Emits `fn empty?(self) -> Bool` for a hash-table-backed collection.
 /// Returns true when field 2 (length) is zero.
 pub fn emit_hashtable_empty<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     mangled_fn: &str,
-    collection_struct: inkwell::types::StructType<'ctx>,
+    collection_struct: StructType<'ctx>,
 ) -> Result<(), String> {
-    let i64_ty = c.context.i64_type();
-    let i1_ty = c.context.bool_type();
+    let i64_type = compiler.context.i64_type();
+    let bool_type = compiler.context.bool_type();
 
-    let fn_type = i1_ty.fn_type(&[collection_struct.into()], false);
-    let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-    c.functions.insert(mangled_fn.to_string(), fn_val);
+    let fn_type = bool_type.fn_type(&[collection_struct.into()], false);
+    let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
+    compiler.functions.insert(mangled_fn.to_string(), fn_value);
 
-    let entry = c.context.append_basic_block(fn_val, "entry");
-    let saved_block = c.builder.get_insert_block();
-    c.builder.position_at_end(entry);
+    let entry = compiler.context.append_basic_block(fn_value, "entry");
+    let saved_block = compiler.builder.get_insert_block();
+    compiler.builder.position_at_end(entry);
 
-    let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-    let len = c
+    let self_value = fn_value.get_nth_param(0).unwrap().into_struct_value();
+    let length = compiler
         .builder
-        .build_extract_value(self_val, 2, "len")
+        .build_extract_value(self_value, 2, "length")
         .unwrap()
         .into_int_value();
-    let is_empty = c
+    let is_empty = compiler
         .builder
         .build_int_compare(
             IntPredicate::EQ,
-            len,
-            i64_ty.const_int(0, false),
+            length,
+            i64_type.const_int(0, false),
             "is_empty",
         )
         .unwrap();
-    c.builder.build_return(Some(&is_empty)).unwrap();
+    compiler.builder.build_return(Some(&is_empty)).unwrap();
 
-    if let Some(bb) = saved_block {
-        c.builder.position_at_end(bb);
+    if let Some(block) = saved_block {
+        compiler.builder.position_at_end(block);
     }
     Ok(())
 }
@@ -194,13 +206,13 @@ pub fn emit_hashtable_empty<'ctx>(
 // ---------------------------------------------------------------------------
 
 pub fn ensure_hash_fn<'ctx>(
-    c: &Compiler<'ctx>,
+    compiler: &Compiler<'ctx>,
     key_type: &Type,
 ) -> Result<FunctionValue<'ctx>, String> {
     let type_name = type_display_name(key_type);
     let fn_name = format!("{type_name}_hash");
-    if let Some(fv) = c.functions.get(&fn_name) {
-        return Ok(*fv);
+    if let Some(function) = compiler.functions.get(&fn_name) {
+        return Ok(*function);
     }
     Err(format!(
         "type `{type_name}` does not implement Hash (no `{fn_name}` found)"
@@ -208,13 +220,13 @@ pub fn ensure_hash_fn<'ctx>(
 }
 
 pub fn ensure_eq_fn<'ctx>(
-    c: &Compiler<'ctx>,
+    compiler: &Compiler<'ctx>,
     key_type: &Type,
 ) -> Result<FunctionValue<'ctx>, String> {
     let type_name = type_display_name(key_type);
     let fn_name = format!("{type_name}_eq");
-    if let Some(fv) = c.functions.get(&fn_name) {
-        return Ok(*fv);
+    if let Some(function) = compiler.functions.get(&fn_name) {
+        return Ok(*function);
     }
     Err(format!(
         "type `{type_name}` does not implement Equality (no `{fn_name}` found)"
@@ -223,7 +235,7 @@ pub fn ensure_eq_fn<'ctx>(
 
 pub fn type_display_name(ty: &Type) -> String {
     match ty {
-        Type::Primitive(p) => match p {
+        Type::Primitive(primitive) => match primitive {
             Primitive::Binary => "Binary".to_string(),
             Primitive::Bits => "Bits".to_string(),
             Primitive::Bool => "Bool".to_string(),

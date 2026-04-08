@@ -240,7 +240,7 @@ fn compile_call_as_struct<'ctx>(
         })
         .collect();
 
-    compile_struct_construction(c, &[name.to_string()], &fields, function)
+    compile_struct_construction(c, &[name.to_string()], &fields, None, function)
 }
 
 fn compile_print<'ctx>(

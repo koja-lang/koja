@@ -15,7 +15,7 @@ use expo_typecheck::types::{
     Primitive, Type, build_substitution, mangle_name, named_generic, substitute,
 };
 use inkwell::IntPredicate;
-use inkwell::types::{BasicType, BasicTypeEnum, StructType};
+use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue};
 
 use crate::compiler::{Compiler, TypedValue};
@@ -354,31 +354,31 @@ pub(crate) fn build_spawn_wrapper<'ctx>(
 /// Monomorphizes the `Ref` struct type if it hasn't been instantiated for
 /// this `(M, R)` pair yet, then inserts the pid into field 0.
 pub(crate) fn build_ref_value<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     pid: IntValue<'ctx>,
     msg_type: Type,
     reply_type: Type,
 ) -> Result<TypedValue<'ctx>, String> {
     let type_args = vec![msg_type, reply_type];
     let mangled = mangle_name("Ref", &type_args);
-    if !c.types.structs.contains_key(&mangled) {
-        monomorphize_struct(c, "Ref", &type_args)?;
+    if !compiler.types.structs.contains_key(&mangled) {
+        monomorphize_struct(compiler, "Ref", &type_args)?;
     }
-    let ref_struct = *c
+    let ref_struct = *compiler
         .types
         .structs
         .get(&mangled)
         .ok_or("Ref struct type not found")?;
 
-    let mut sv = ref_struct.get_undef();
-    sv = c
+    let mut struct_value = ref_struct.get_undef();
+    struct_value = compiler
         .builder
-        .build_insert_value(sv, pid, 0, "wrap_pid")
+        .build_insert_value(struct_value, pid, 0, "wrap_pid")
         .unwrap()
         .into_struct_value();
 
-    let ref_type = named_generic("Ref", type_args, c.type_ctx);
-    Ok(TypedValue::new(sv.into(), ref_type))
+    let ref_type = named_generic("Ref", type_args, compiler.type_ctx);
+    Ok(TypedValue::new(struct_value.into(), ref_type))
 }
 
 // ---------------------------------------------------------------------------
@@ -388,16 +388,17 @@ pub(crate) fn build_ref_value<'ctx>(
 /// Converts a `StopReason` value to `i32` by calling `ExitStatus.code()` and
 /// truncating from i64.
 fn stop_reason_to_i32<'ctx>(
-    c: &Compiler<'ctx>,
+    compiler: &Compiler<'ctx>,
     stop_reason: BasicValueEnum<'ctx>,
     code_fn: FunctionValue<'ctx>,
-    i32_ty: inkwell::types::IntType<'ctx>,
+    i32_type: IntType<'ctx>,
     name: &str,
 ) -> Result<IntValue<'ctx>, String> {
-    let exit_code_i64 = c
+    let exit_code_i64 = compiler
         .call(code_fn, &[stop_reason.into()], &format!("{name}_i64"))
         .ok_or("StopReason_code did not produce a value")?;
-    Ok(c.builder
-        .build_int_truncate(exit_code_i64.into_int_value(), i32_ty, name)
+    Ok(compiler
+        .builder
+        .build_int_truncate(exit_code_i64.into_int_value(), i32_type, name)
         .unwrap())
 }

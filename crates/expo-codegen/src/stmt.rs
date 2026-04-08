@@ -552,8 +552,8 @@ pub(crate) fn coerce_numeric<'ctx>(
     }
 }
 
-fn int_bit_width(p: &Primitive) -> u32 {
-    match p {
+fn int_bit_width(primitive: &Primitive) -> u32 {
+    match primitive {
         Primitive::I8 | Primitive::U8 => 8,
         Primitive::I16 | Primitive::U16 => 16,
         Primitive::I32 | Primitive::U32 => 32,

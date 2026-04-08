@@ -25,16 +25,18 @@ pub fn compile_enum_construction<'ctx>(
     type_path: &[String],
     variant: &str,
     data: &EnumConstructionData,
+    resolved_type: Option<&TypeIdentifier>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let base_name = type_path
         .first()
         .ok_or("empty type path in enum construction")?;
 
-    let is_generic = c
-        .type_ctx
-        .find_type(base_name.as_str())
-        .is_some_and(|ti| ti.is_enum() && !ti.type_params.is_empty());
+    let type_info = resolved_type
+        .and_then(|id| c.type_ctx.get_type(id))
+        .or_else(|| c.type_ctx.find_type(base_name.as_str()));
+
+    let is_generic = type_info.is_some_and(|ti| ti.is_enum() && !ti.type_params.is_empty());
 
     if is_generic {
         return compile_generic_enum_construction(c, base_name, variant, data, function);

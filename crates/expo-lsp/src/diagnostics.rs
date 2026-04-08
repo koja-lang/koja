@@ -141,7 +141,7 @@ impl Backend {
     /// all sibling project files are parsed so cross-file type references
     /// resolve correctly.
     pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
-        let parse_result = expo_parser::parse(text);
+        let mut parse_result = expo_parser::parse(text);
         let file_path = uri_to_path(uri.as_str());
 
         let mut all_diags: Vec<ExpoDiagnostic> = parse_result.errors;
@@ -178,7 +178,7 @@ impl Backend {
             expo_typecheck::auto_derive_debug(&mut ctx);
             expo_typecheck::mark_recursive_fields(&mut ctx);
             expo_typecheck::resolve_packages(&mut ctx);
-            expo_typecheck::check_module(&parse_result.module, &mut ctx);
+            expo_typecheck::check_module(&mut parse_result.module, &mut ctx);
             all_diags.extend(ctx.diagnostics.clone());
             (ctx, sibling_modules)
         } else {

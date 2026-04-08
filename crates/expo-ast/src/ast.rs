@@ -8,6 +8,8 @@
 
 use std::path::PathBuf;
 
+use crate::identifier::TypeIdentifier;
+
 use crate::span::Span;
 
 // Semantic enums
@@ -479,6 +481,8 @@ pub enum Expr {
         variant: String,
         data: EnumConstructionData,
         span: Span,
+        /// Resolved identity of the enum type. Populated by the type checker.
+        resolved_type: Option<TypeIdentifier>,
     },
     /// A field access: `point.x`.
     FieldAccess {
@@ -527,6 +531,8 @@ pub enum Expr {
         method: String,
         args: Vec<Arg>,
         span: Span,
+        /// Resolved identity of the receiver's base type. Populated by the type checker.
+        resolved_type: Option<TypeIdentifier>,
     },
     /// A receive block with match arms and optional timeout:
     /// `receive ... after timeout -> ... end`.
@@ -557,6 +563,8 @@ pub enum Expr {
         type_path: Vec<String>,
         fields: Vec<FieldInit>,
         span: Span,
+        /// Resolved identity of the struct type. Populated by the type checker.
+        resolved_type: Option<TypeIdentifier>,
     },
     /// A ternary expression: `cond ? then_expr : else_expr`.
     Ternary {

@@ -16,7 +16,7 @@ pub use collect::{GlobalNames, collect_all_names};
 
 /// Runs collection and type-checking in one step, returning a populated context.
 /// Uses module-local names only (for single-file / test usage).
-pub fn check(module: &Module) -> TypeContext {
+pub fn check(module: &mut Module) -> TypeContext {
     let global = collect_all_names(&[module]);
     let mut ctx = collect::collect(module, &global, "");
     resolve::resolve_packages(&mut ctx);
@@ -25,7 +25,7 @@ pub fn check(module: &Module) -> TypeContext {
 }
 
 /// Validates all function bodies, expressions, and patterns against the context.
-pub fn check_module(module: &Module, ctx: &mut TypeContext) {
+pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
     check::check_module(module, ctx);
 }
 
@@ -98,8 +98,8 @@ mod tests {
     }
 
     fn check_source(src: &str) -> TypeContext {
-        let parse_result = expo_parser::parse(src);
-        check(&parse_result.module)
+        let mut parse_result = expo_parser::parse(src);
+        check(&mut parse_result.module)
     }
 
     fn errors(ctx: &TypeContext) -> Vec<&str> {

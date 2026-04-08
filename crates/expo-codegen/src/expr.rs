@@ -1,28 +1,34 @@
 //! Expression compilation: translates Expo expressions (literals, variables,
 //! binary/unary ops, calls, closures, string interpolation, etc.) into LLVM IR.
 
-use expo_ast::ast::{ClosureParam, Expr, Literal, MatchArm, Statement, StringPart, TypeExpr};
+use expo_ast::ast::{
+    ClosureParam, Expr, Literal, MatchArm, Pattern, Statement, StringPart, TypeExpr,
+};
 use expo_ast::span::Span;
 
 use expo_typecheck::context::FnParam;
 use expo_typecheck::types::{Primitive, Type, mangle_name, named, named_generic};
-use inkwell::types::BasicType;
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use inkwell::AddressSpace;
+use inkwell::IntPredicate;
+use inkwell::basic_block::BasicBlock;
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
 use crate::binary::construction::compile_binary_literal;
 use crate::calls::compile_call;
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::control::{
-    compile_cond, compile_for, compile_if, compile_loop, compile_match, compile_ternary,
-    compile_unless, compile_while,
+    compile_body_as_value, compile_cond, compile_for, compile_if, compile_loop, compile_match,
+    compile_pattern, compile_ternary, compile_unless, compile_while,
 };
 use crate::debug::call_format;
 use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
-use crate::generics::{monomorphize_impl_method, monomorphize_struct};
+use crate::generics::{monomorphize_impl_method, monomorphize_struct, try_parse_mangled_name};
 use crate::ops::{compile_binary, compile_unary};
-use crate::stmt::{apply_coercion, coerce_numeric};
+use crate::spawn;
+use crate::stmt::{apply_coercion, coerce_numeric, compile_statement};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
 use crate::util::{parse_int_literal, printf_format_spec};
@@ -30,17 +36,16 @@ use crate::util::{parse_int_literal, printf_format_spec};
 /// Compiles an expression and coerces the result to the expected type.
 /// Use when the target type is known (e.g. function arguments, struct fields).
 pub fn compile_expr_coerced<'ctx>(
-    c: &mut Compiler<'ctx>,
-    expr: &Expr,
+    compiler: &mut Compiler<'ctx>,
+    expression: &Expr,
     expected: &Type,
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let tv = compile_expr(c, expr, function)?;
-    match tv {
-        Some(tv) => {
-            let v = coerce_numeric(c, tv.value, expected);
-            let v = apply_coercion(c, v, expr)?;
-            Ok(Some(v))
+    match compile_expr(compiler, expression, function)? {
+        Some(typed_value) => {
+            let value = coerce_numeric(compiler, typed_value.value, expected);
+            let value = apply_coercion(compiler, value, expression)?;
+            Ok(Some(value))
         }
         None => Ok(None),
     }
@@ -49,48 +54,52 @@ pub fn compile_expr_coerced<'ctx>(
 /// Top-level expression dispatch. Matches each AST expression variant and
 /// delegates to the appropriate specialized compiler function.
 pub fn compile_expr<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     expr: &Expr,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     match expr {
-        Expr::Literal { value, .. } => compile_literal(c, value),
+        Expr::Literal { value, .. } => compile_literal(compiler, value),
 
         Expr::Ident { name, .. } => {
-            if let Some((ptr, ty, _)) = c.fn_state.variables.get(name) {
+            if let Some((ptr, ty, _)) = compiler.fn_state.variables.get(name) {
                 let ty = ty.clone();
-                let llvm_ty = to_llvm_type(&ty, c.context, &c.types.structs)
+                let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.types.structs)
                     .ok_or_else(|| format!("cannot load variable of unsupported type: {name}"))?;
-                let val = c.builder.build_load(llvm_ty, *ptr, name).unwrap();
-                Ok(Some(TypedValue::new(val, ty)))
-            } else if let Some(val) = c.constants.get(name) {
-                let ty = c
+                let value = compiler.builder.build_load(llvm_ty, *ptr, name).unwrap();
+                return Ok(Some(TypedValue::new(value, ty)));
+            }
+
+            if let Some(constant) = compiler.constants.get(name) {
+                let ty = compiler
                     .type_ctx
                     .constants
                     .get(name)
                     .cloned()
                     .unwrap_or(Type::Unknown);
-                Ok(Some(TypedValue::new(*val, ty)))
-            } else if c.module.get_function(name).is_some() {
-                let thunk = c.get_or_create_thunk(name)?;
-                let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-                let closure_struct_ty = c
+                return Ok(Some(TypedValue::new(*constant, ty)));
+            }
+
+            if compiler.module.get_function(name).is_some() {
+                let thunk = compiler.get_or_create_thunk(name)?;
+                let ptr_ty = compiler.context.ptr_type(AddressSpace::default());
+                let closure_struct_ty = compiler
                     .context
                     .struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
                 let null_env = ptr_ty.const_null();
                 let mut fat_ptr = closure_struct_ty.get_undef();
-                fat_ptr = c
+                fat_ptr = compiler
                     .builder
                     .build_insert_value(fat_ptr, thunk_ptr, 0, "insert_fn")
                     .unwrap()
                     .into_struct_value();
-                fat_ptr = c
+                fat_ptr = compiler
                     .builder
                     .build_insert_value(fat_ptr, null_env, 1, "insert_env")
                     .unwrap()
                     .into_struct_value();
-                let fn_type = c
+                let fn_type = compiler
                     .type_ctx
                     .functions
                     .get(name)
@@ -99,23 +108,23 @@ pub fn compile_expr<'ctx>(
                         return_type: Box::new(sig.return_type.clone()),
                     })
                     .unwrap_or(Type::Unknown);
-                Ok(Some(TypedValue::new(fat_ptr.into(), fn_type)))
-            } else {
-                Err(format!("undefined variable: {name}"))
+                return Ok(Some(TypedValue::new(fat_ptr.into(), fn_type)));
             }
+
+            Err(format!("undefined variable: {name}"))
         }
 
-        Expr::Group { expr, .. } => compile_expr(c, expr, function),
+        Expr::Group { expr, .. } => compile_expr(compiler, expr, function),
 
         Expr::Binary {
             op, left, right, ..
-        } => compile_binary(c, op, left, right, function),
+        } => compile_binary(compiler, op, left, right, function),
 
-        Expr::Unary { op, operand, .. } => compile_unary(c, op, operand, function),
+        Expr::Unary { op, operand, .. } => compile_unary(compiler, op, operand, function),
 
         Expr::Call { callee, args, .. } => {
             if let Expr::Ident { name, .. } = callee.as_ref() {
-                compile_call(c, name, args, function)
+                compile_call(compiler, name, args, function)
             } else {
                 Err("only named function calls are supported".to_string())
             }
@@ -126,79 +135,97 @@ pub fn compile_expr<'ctx>(
             then_body,
             else_body,
             ..
-        } => compile_if(c, condition, then_body, else_body, function),
+        } => compile_if(compiler, condition, then_body, else_body, function),
 
         Expr::StructConstruction {
-            type_path, fields, ..
-        } => compile_struct_construction(c, type_path, fields, function),
+            type_path,
+            fields,
+            resolved_type,
+            ..
+        } => compile_struct_construction(
+            compiler,
+            type_path,
+            fields,
+            resolved_type.as_ref(),
+            function,
+        ),
 
         Expr::FieldAccess {
             receiver, field, ..
-        } => compile_field_access(c, receiver, field, function),
+        } => compile_field_access(compiler, receiver, field, function),
 
         Expr::MethodCall {
             receiver,
             method,
             args,
             ..
-        } => compile_method_call(c, receiver, method, args, function),
+        } => compile_method_call(compiler, receiver, method, args, function),
 
-        Expr::String { parts, .. } => compile_string(c, parts, function),
+        Expr::String { parts, .. } => compile_string(compiler, parts, function),
 
-        Expr::Loop { body, .. } => compile_loop(c, body, function),
+        Expr::Loop { body, .. } => compile_loop(compiler, body, function),
 
         Expr::While {
             condition, body, ..
-        } => compile_while(c, condition, body, function),
+        } => compile_while(compiler, condition, body, function),
 
         Expr::Self_ { .. } => {
-            if let Some((ptr, ty, _)) = c.fn_state.variables.get("self") {
-                let ty = ty.clone();
-                let llvm_ty = to_llvm_type(&ty, c.context, &c.types.structs)
-                    .ok_or("cannot load self of unsupported type")?;
-                let val = c.builder.build_load(llvm_ty, *ptr, "self").unwrap();
-                Ok(Some(TypedValue::new(val, ty)))
-            } else {
-                Err("self used outside of impl method".to_string())
-            }
+            let (ptr, ty, _) = compiler
+                .fn_state
+                .variables
+                .get("self")
+                .ok_or("self used outside of impl method")?;
+            let ty = ty.clone();
+            let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.types.structs)
+                .ok_or("cannot load self of unsupported type")?;
+            let value = compiler.builder.build_load(llvm_ty, *ptr, "self").unwrap();
+            Ok(Some(TypedValue::new(value, ty)))
         }
 
         Expr::Cond {
             arms, else_body, ..
-        } => compile_cond(c, arms, else_body, function),
+        } => compile_cond(compiler, arms, else_body, function),
 
         Expr::EnumConstruction {
             type_path,
             variant,
             data,
+            resolved_type,
             ..
-        } => compile_enum_construction(c, type_path, variant, data, function),
+        } => compile_enum_construction(
+            compiler,
+            type_path,
+            variant,
+            data,
+            resolved_type.as_ref(),
+            function,
+        ),
 
-        Expr::Match { subject, arms, .. } => compile_match(c, subject, arms, function),
+        Expr::Match { subject, arms, .. } => compile_match(compiler, subject, arms, function),
 
         Expr::Ternary {
             condition,
             then_expr,
             else_expr,
             ..
-        } => compile_ternary(c, condition, then_expr, else_expr, function),
+        } => compile_ternary(compiler, condition, then_expr, else_expr, function),
 
         Expr::Closure {
             params,
             return_type,
             body,
             span,
-        } => compile_closure(c, params, return_type, body, function, *span),
+        } => compile_closure(compiler, params, return_type, body, function, *span),
 
         Expr::ShortClosure { params, body, span } => {
             let body_stmts = vec![Statement::Expr((**body).clone())];
-            let ret_type = c
+            let ret_type = compiler
                 .type_ctx
                 .closure_info
                 .get(span)
                 .and_then(|ci| ci.return_type.clone())
                 .unwrap_or(Type::Unit);
-            compile_closure_core(c, params, ret_type, &body_stmts, function, *span)
+            compile_closure_core(compiler, params, ret_type, &body_stmts, function, *span)
         }
 
         Expr::For {
@@ -206,26 +233,34 @@ pub fn compile_expr<'ctx>(
             iterable,
             body,
             ..
-        } => compile_for(c, pattern, iterable, body, function),
+        } => compile_for(compiler, pattern, iterable, body, function),
 
         Expr::Unless {
             condition, body, ..
-        } => compile_unless(c, condition, body, function),
+        } => compile_unless(compiler, condition, body, function),
 
-        Expr::List { elements, .. } => compile_list_literal(c, elements, function),
+        Expr::List { elements, .. } => compile_list_literal(compiler, elements, function),
 
-        Expr::Map { entries, .. } => compile_map_literal(c, entries, function),
+        Expr::Map { entries, .. } => compile_map_literal(compiler, entries, function),
 
-        Expr::BinaryLiteral { segments, .. } => compile_binary_literal(c, segments, function),
+        Expr::BinaryLiteral { segments, .. } => {
+            compile_binary_literal(compiler, segments, function)
+        }
 
-        Expr::Spawn { expr, .. } => compile_spawn(c, expr, function),
+        Expr::Spawn { expr, .. } => compile_spawn(compiler, expr, function),
 
         Expr::Receive {
             arms,
             after_timeout,
             after_body,
             ..
-        } => compile_receive(c, arms, after_timeout.as_deref(), after_body, function),
+        } => compile_receive(
+            compiler,
+            arms,
+            after_timeout.as_deref(),
+            after_body,
+            function,
+        ),
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
@@ -234,26 +269,31 @@ pub fn compile_expr<'ctx>(
     }
 }
 
-fn compile_literal<'ctx>(c: &Compiler<'ctx>, lit: &Literal) -> ExprResult<'ctx> {
-    match lit {
-        Literal::Int(s) => {
-            let val = parse_int_literal(s)?;
+fn compile_literal<'ctx>(compiler: &Compiler<'ctx>, literal: &Literal) -> ExprResult<'ctx> {
+    match literal {
+        Literal::Int(text) => {
+            let value = parse_int_literal(text)?;
             Ok(Some(TypedValue::new(
-                c.context.i64_type().const_int(val as u64, true).into(),
+                compiler
+                    .context
+                    .i64_type()
+                    .const_int(value as u64, true)
+                    .into(),
                 Type::Primitive(Primitive::I64),
             )))
         }
-        Literal::Float(s) => {
-            let val: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
+        Literal::Float(text) => {
+            let value: f64 = text.parse().map_err(|_| format!("invalid float: {text}"))?;
             Ok(Some(TypedValue::new(
-                c.context.f64_type().const_float(val).into(),
+                compiler.context.f64_type().const_float(value).into(),
                 Type::Primitive(Primitive::F64),
             )))
         }
-        Literal::Bool(b) => Ok(Some(TypedValue::new(
-            c.context
+        Literal::Bool(value) => Ok(Some(TypedValue::new(
+            compiler
+                .context
                 .bool_type()
-                .const_int(if *b { 1 } else { 0 }, false)
+                .const_int(if *value { 1 } else { 0 }, false)
                 .into(),
             Type::Primitive(Primitive::Bool),
         ))),
@@ -263,7 +303,7 @@ fn compile_literal<'ctx>(c: &Compiler<'ctx>, lit: &Literal) -> ExprResult<'ctx> 
 }
 
 fn compile_string<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     parts: &[StringPart],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
@@ -278,14 +318,17 @@ fn compile_string<'ctx>(
                 combined.push_str(value);
             }
         }
-        let payload_ptr = c.create_string_global(combined.as_bytes(), "str");
+        let payload_ptr = compiler.create_string_global(combined.as_bytes(), "str");
         return Ok(Some(TypedValue::new(
             payload_ptr.into(),
             Type::Primitive(Primitive::String),
         )));
     }
 
-    let snprintf = *c.functions.get("snprintf").ok_or("snprintf not declared")?;
+    let snprintf = *compiler
+        .functions
+        .get("snprintf")
+        .ok_or("snprintf not declared")?;
 
     let mut fmt_string = String::new();
     let mut interp_values: Vec<BasicValueEnum<'ctx>> = Vec::new();
@@ -302,20 +345,20 @@ fn compile_string<'ctx>(
                 }
             }
             StringPart::Interpolation { expr, .. } => {
-                let tv = compile_expr(c, expr, function)?
+                let typed_value = compile_expr(compiler, expr, function)?
                     .ok_or("interpolated expression produced no value")?;
-                let val = tv.value;
+                let value = typed_value.value;
 
                 let is_bool =
-                    val.is_int_value() && val.into_int_value().get_type().get_bit_width() == 1;
+                    value.is_int_value() && value.into_int_value().get_type().get_bit_width() == 1;
                 let is_plain_printf =
-                    !val.is_struct_value() && !is_bool && printf_format_spec(&val).is_ok();
+                    !value.is_struct_value() && !is_bool && printf_format_spec(&value).is_ok();
 
                 if is_plain_printf {
-                    fmt_string.push_str(printf_format_spec(&val).unwrap());
-                    interp_values.push(val);
+                    fmt_string.push_str(printf_format_spec(&value).unwrap());
+                    interp_values.push(value);
                 } else {
-                    let str_ptr = call_format(c, val, &tv.expo_type)?;
+                    let str_ptr = call_format(compiler, value, &typed_value.expo_type)?;
                     fmt_string.push_str("%s");
                     interp_values.push(str_ptr.into());
                 }
@@ -323,53 +366,60 @@ fn compile_string<'ctx>(
         }
     }
 
-    let fmt_global = c
+    let fmt_global = compiler
         .builder
         .build_global_string_ptr(&fmt_string, "interp_fmt")
         .unwrap();
     let fmt_ptr = fmt_global.as_pointer_value();
 
-    let i32_type = c.context.i32_type();
-    let i8_ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
-    let null_ptr = i8_ptr_type.const_null();
+    let i32_type = compiler.context.i32_type();
+    let ptr_type = compiler.context.ptr_type(AddressSpace::default());
+    let null_ptr = ptr_type.const_null();
     let zero = i32_type.const_int(0, false);
 
     let mut size_args: Vec<BasicValueEnum> = vec![null_ptr.into(), zero.into(), fmt_ptr.into()];
     size_args.extend_from_slice(&interp_values);
     let size_args_meta: Vec<_> = size_args.iter().map(|v| (*v).into()).collect();
 
-    let needed = c
+    let needed = compiler
         .call(snprintf, &size_args_meta, "interp_len")
         .ok_or("snprintf did not return a value")?
         .into_int_value();
 
     let one = i32_type.const_int(1, false);
-    let buf_size = c.builder.build_int_add(needed, one, "buf_size").unwrap();
+    let buf_size = compiler
+        .builder
+        .build_int_add(needed, one, "buf_size")
+        .unwrap();
 
-    let malloc_fn = *c.functions.get("malloc").ok_or("malloc not declared")?;
-    let i64_type = c.context.i64_type();
-    let i8_type = c.context.i8_type();
-    let needed_i64 = c
+    let malloc_fn = *compiler
+        .functions
+        .get("malloc")
+        .ok_or("malloc not declared")?;
+    let i64_type = compiler.context.i64_type();
+    let i8_type = compiler.context.i8_type();
+    let needed_i64 = compiler
         .builder
         .build_int_z_extend(needed, i64_type, "needed_i64")
         .unwrap();
-    let alloc_size = c
+    let alloc_size = compiler
         .builder
         .build_int_add(needed_i64, i64_type.const_int(9, false), "interp_alloc_sz")
         .unwrap();
-    let base_ptr = c
+    let base_ptr = compiler
         .call(malloc_fn, &[alloc_size.into()], "interp_base")
         .ok_or("malloc did not return a value")?
         .into_pointer_value();
 
-    let bit_length = c
+    let bit_length = compiler
         .builder
         .build_int_mul(needed_i64, i64_type.const_int(8, false), "bit_length")
         .unwrap();
-    c.builder.build_store(base_ptr, bit_length).unwrap();
+    compiler.builder.build_store(base_ptr, bit_length).unwrap();
 
     let payload = unsafe {
-        c.builder
+        compiler
+            .builder
             .build_in_bounds_gep(
                 i8_type,
                 base_ptr,
@@ -383,7 +433,7 @@ fn compile_string<'ctx>(
     write_args.extend_from_slice(&interp_values);
     let write_args_meta: Vec<_> = write_args.iter().map(|v| (*v).into()).collect();
 
-    c.call_void(snprintf, &write_args_meta, "interp_write");
+    compiler.call_void(snprintf, &write_args_meta, "interp_write");
 
     Ok(Some(TypedValue::new(
         payload.into(),
@@ -392,7 +442,7 @@ fn compile_string<'ctx>(
 }
 
 fn resolve_closure_params<'ctx>(
-    c: &Compiler<'ctx>,
+    compiler: &Compiler<'ctx>,
     params: &[ClosureParam],
     span: Span,
 ) -> Vec<Type> {
@@ -411,25 +461,25 @@ fn resolve_closure_params<'ctx>(
             .iter()
             .map(|p| match p {
                 ClosureParam::Name {
-                    type_expr: Some(te),
+                    type_expr: Some(type_expr),
                     ..
-                } => c.resolve_type_expr(te),
+                } => compiler.resolve_type_expr(type_expr),
                 _ => unreachable!(),
             })
             .collect();
     }
 
-    if let Some(ci) = c.type_ctx.closure_info.get(&span) {
-        return ci.param_types.clone();
+    if let Some(closure_info) = compiler.type_ctx.closure_info.get(&span) {
+        return closure_info.param_types.clone();
     }
 
     params
         .iter()
         .map(|p| match p {
             ClosureParam::Name {
-                type_expr: Some(te),
+                type_expr: Some(type_expr),
                 ..
-            } => c.resolve_type_expr(te),
+            } => compiler.resolve_type_expr(type_expr),
             _ => Type::Primitive(Primitive::I32),
         })
         .collect()
@@ -439,74 +489,80 @@ fn resolve_closure_params<'ctx>(
 /// LLVM function and returns a fat pointer `{ fn_ptr, env_ptr }`. Every closure
 /// function receives an implicit `env_ptr: ptr` as its first parameter.
 fn compile_closure<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     params: &[ClosureParam],
     return_type: &Option<TypeExpr>,
     body: &[Statement],
-    parent_fn: FunctionValue<'ctx>,
+    parent_function: FunctionValue<'ctx>,
     span: Span,
 ) -> ExprResult<'ctx> {
     let ret_type = match return_type {
-        Some(te) => c.resolve_type_expr(te),
+        Some(type_expr) => compiler.resolve_type_expr(type_expr),
         None => Type::Unit,
     };
-    compile_closure_core(c, params, ret_type, body, parent_fn, span)
+    compile_closure_core(compiler, params, ret_type, body, parent_function, span)
 }
 
 /// Core closure compilation shared by block closures and short closures.
 fn compile_closure_core<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     params: &[ClosureParam],
     ret_type: Type,
     body: &[Statement],
-    _parent_fn: FunctionValue<'ctx>,
+    _parent_function: FunctionValue<'ctx>,
     span: Span,
 ) -> ExprResult<'ctx> {
-    let param_types = resolve_closure_params(c, params, span);
+    let param_types = resolve_closure_params(compiler, params, span);
 
-    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+    let ptr_ty = compiler.context.ptr_type(AddressSpace::default());
 
-    let mut llvm_meta_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
+    let mut llvm_meta_params: Vec<BasicMetadataTypeEnum> = vec![ptr_ty.into()];
     for ty in &param_types {
-        if let Some(lt) = to_llvm_type(ty, c.context, &c.types.structs) {
-            llvm_meta_params.push(lt.into());
+        if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types.structs) {
+            llvm_meta_params.push(llvm_ty.into());
         }
     }
 
-    let fn_type = match to_llvm_type(&ret_type, c.context, &c.types.structs) {
+    let fn_type = match to_llvm_type(&ret_type, compiler.context, &compiler.types.structs) {
         Some(ret_llvm) => ret_llvm.fn_type(&llvm_meta_params, false),
-        None => c.context.void_type().fn_type(&llvm_meta_params, false),
+        None => compiler
+            .context
+            .void_type()
+            .fn_type(&llvm_meta_params, false),
     };
 
-    let closure_name = format!("__closure_{}", c.fn_state.closure_counter);
-    c.fn_state.closure_counter += 1;
+    let closure_name = format!("__closure_{}", compiler.fn_state.closure_counter);
+    compiler.fn_state.closure_counter += 1;
 
-    let captures = c
+    let captures = compiler
         .type_ctx
         .closure_info
         .get(&span)
         .map(|ci| ci.captures.clone());
 
-    // Read captured values from parent scope before saving variables
-    let captured_values: Vec<(String, inkwell::values::BasicValueEnum<'ctx>, Type)> =
-        if let Some(ref caps) = captures {
-            caps.iter()
+    let captured_values: Vec<(String, BasicValueEnum<'ctx>, Type)> =
+        if let Some(ref captures) = captures {
+            captures
+                .iter()
                 .filter_map(|cap| {
-                    let (ptr, ty, _) = c.fn_state.variables.get(&cap.name)?;
-                    let llvm_ty = to_llvm_type(ty, c.context, &c.types.structs)?;
-                    let val = c.builder.build_load(llvm_ty, *ptr, &cap.name).unwrap();
-                    Some((cap.name.clone(), val, ty.clone()))
+                    let (ptr, ty, _) = compiler.fn_state.variables.get(&cap.name)?;
+                    let llvm_ty = to_llvm_type(ty, compiler.context, &compiler.types.structs)?;
+                    let value = compiler
+                        .builder
+                        .build_load(llvm_ty, *ptr, &cap.name)
+                        .unwrap();
+                    Some((cap.name.clone(), value, ty.clone()))
                 })
                 .collect()
         } else {
             Vec::new()
         };
 
-    let closure_fn = c.module.add_function(&closure_name, fn_type, None);
-    let entry = c.context.append_basic_block(closure_fn, "entry");
+    let closure_fn = compiler.module.add_function(&closure_name, fn_type, None);
+    let entry = compiler.context.append_basic_block(closure_fn, "entry");
 
-    let saved_vars = std::mem::take(&mut c.fn_state.variables);
-    let saved_block = c.builder.get_insert_block();
+    let saved_vars = std::mem::take(&mut compiler.fn_state.variables);
+    let saved_block = compiler.builder.get_insert_block();
     let saved_subst = {
         let mut extra = HashMap::<String, Type>::new();
         if let Type::Named {
@@ -514,108 +570,111 @@ fn compile_closure_core<'ctx>(
             type_args,
         } = &ret_type
             && !type_args.is_empty()
+            && let Some(type_params) = compiler
+                .type_ctx
+                .get_type(identifier)
+                .map(|ti| &ti.type_params)
         {
-            let type_params = c.type_ctx.get_type(identifier).map(|ti| &ti.type_params);
-            if let Some(tps) = type_params {
-                for (tp, ta) in tps.iter().zip(type_args.iter()) {
-                    extra.insert(tp.name.clone(), ta.clone());
-                }
+            for (type_param, type_arg) in type_params.iter().zip(type_args.iter()) {
+                extra.insert(type_param.name.clone(), type_arg.clone());
             }
         }
         if extra.is_empty() {
             None
         } else {
-            let mut merged = c.fn_state.type_subst.clone();
+            let mut merged = compiler.fn_state.type_subst.clone();
             merged.extend(extra);
-            Some(std::mem::replace(&mut c.fn_state.type_subst, merged))
+            Some(std::mem::replace(&mut compiler.fn_state.type_subst, merged))
         }
     };
 
-    c.builder.position_at_end(entry);
+    compiler.builder.position_at_end(entry);
 
-    // Bind user params (offset by 1 for the env_ptr param)
     for (i, param) in params.iter().enumerate() {
         if let ClosureParam::Name { name, .. } = param {
             let ty = &param_types[i];
-            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.types.structs) {
-                let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
+            if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types.structs) {
+                let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
                 let param_val = closure_fn.get_nth_param((i + 1) as u32).unwrap();
-                c.builder.build_store(alloca, param_val).unwrap();
-                c.fn_state
+                compiler.builder.build_store(alloca, param_val).unwrap();
+                compiler
+                    .fn_state
                     .variables
                     .insert(name.clone(), (alloca, ty.clone(), Ownership::Unowned));
             }
         }
     }
 
-    // Load captured variables from the env struct into local allocas
     if !captured_values.is_empty() {
         let env_ptr = closure_fn.get_nth_param(0).unwrap().into_pointer_value();
-        let env_field_types: Vec<inkwell::types::BasicTypeEnum> = captured_values
+        let env_field_types: Vec<BasicTypeEnum> = captured_values
             .iter()
-            .filter_map(|(_, _, ty)| to_llvm_type(ty, c.context, &c.types.structs))
+            .filter_map(|(_, _, ty)| to_llvm_type(ty, compiler.context, &compiler.types.structs))
             .collect();
-        let env_struct_ty = c.context.struct_type(&env_field_types, false);
+        let env_struct_ty = compiler.context.struct_type(&env_field_types, false);
 
         for (i, (name, _, ty)) in captured_values.iter().enumerate() {
-            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.types.structs) {
-                let field_ptr = c
+            if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types.structs) {
+                let field_ptr = compiler
                     .builder
                     .build_struct_gep(env_struct_ty, env_ptr, i as u32, &format!("cap_{name}"))
                     .unwrap();
-                let val = c
+                let value = compiler
                     .builder
                     .build_load(llvm_ty, field_ptr, &format!("load_{name}"))
                     .unwrap();
-                let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
-                c.builder.build_store(alloca, val).unwrap();
-                c.fn_state
+                let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
+                compiler.builder.build_store(alloca, value).unwrap();
+                compiler
+                    .fn_state
                     .variables
                     .insert(name.clone(), (alloca, ty.clone(), Ownership::Unowned));
             }
         }
     }
 
-    let last_tv = crate::control::compile_body_as_value(c, body, closure_fn)?;
-    if !c.current_block_terminated() {
-        match last_tv {
-            Some(tv) => c.builder.build_return(Some(&tv.value)).unwrap(),
-            None => c.builder.build_return(None).unwrap(),
+    let last_typed_value = compile_body_as_value(compiler, body, closure_fn)?;
+    if !compiler.current_block_terminated() {
+        match last_typed_value {
+            Some(typed_value) => compiler
+                .builder
+                .build_return(Some(&typed_value.value))
+                .unwrap(),
+            None => compiler.builder.build_return(None).unwrap(),
         };
     }
 
-    c.fn_state.variables = saved_vars;
+    compiler.fn_state.variables = saved_vars;
     if let Some(old) = saved_subst {
-        c.fn_state.type_subst = old;
+        compiler.fn_state.type_subst = old;
     }
-    if let Some(bb) = saved_block {
-        c.builder.position_at_end(bb);
+    if let Some(block) = saved_block {
+        compiler.builder.position_at_end(block);
     }
 
-    // Build the env_ptr: malloc + store captures, or null for non-capturing
     let env_ptr_val = if !captured_values.is_empty() {
-        let env_field_types: Vec<inkwell::types::BasicTypeEnum> = captured_values
+        let env_field_types: Vec<BasicTypeEnum> = captured_values
             .iter()
-            .filter_map(|(_, _, ty)| to_llvm_type(ty, c.context, &c.types.structs))
+            .filter_map(|(_, _, ty)| to_llvm_type(ty, compiler.context, &compiler.types.structs))
             .collect();
-        let env_struct_ty = c.context.struct_type(&env_field_types, false);
+        let env_struct_ty = compiler.context.struct_type(&env_field_types, false);
         let env_size = env_struct_ty.size_of().unwrap();
 
-        let malloc = *c
+        let malloc = *compiler
             .functions
             .get("malloc")
             .expect("malloc not declared in builtins");
-        let raw_ptr = c
+        let raw_ptr = compiler
             .call(malloc, &[env_size.into()], "env_alloc")
             .unwrap()
             .into_pointer_value();
 
-        for (i, (name, val, _)) in captured_values.iter().enumerate() {
-            let field_ptr = c
+        for (i, (name, value, _)) in captured_values.iter().enumerate() {
+            let field_ptr = compiler
                 .builder
                 .build_struct_gep(env_struct_ty, raw_ptr, i as u32, &format!("env_{name}"))
                 .unwrap();
-            c.builder.build_store(field_ptr, *val).unwrap();
+            compiler.builder.build_store(field_ptr, *value).unwrap();
         }
 
         raw_ptr
@@ -623,18 +682,17 @@ fn compile_closure_core<'ctx>(
         ptr_ty.const_null()
     };
 
-    // Build the fat pointer struct { fn_ptr, env_ptr }
-    let closure_struct_ty = c
+    let closure_struct_ty = compiler
         .context
         .struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
     let fn_ptr = closure_fn.as_global_value().as_pointer_value();
     let mut fat_ptr = closure_struct_ty.get_undef();
-    fat_ptr = c
+    fat_ptr = compiler
         .builder
         .build_insert_value(fat_ptr, fn_ptr, 0, "insert_fn")
         .unwrap()
         .into_struct_value();
-    fat_ptr = c
+    fat_ptr = compiler
         .builder
         .build_insert_value(fat_ptr, env_ptr_val, 1, "insert_env")
         .unwrap()
@@ -648,19 +706,19 @@ fn compile_closure_core<'ctx>(
 }
 
 fn compile_list_literal<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     elements: &[Expr],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let compiled: Vec<TypedValue<'ctx>> = elements
         .iter()
-        .map(|e| {
-            compile_expr(c, e, function)
+        .map(|element| {
+            compile_expr(compiler, element, function)
                 .and_then(|v| v.ok_or("list element produced no value".into()))
         })
         .collect::<Result<_, _>>()?;
 
-    let elem_type = if let Some(subst) = c.fn_state.type_subst.get("T") {
+    let elem_type = if let Some(subst) = compiler.fn_state.type_subst.get("T") {
         subst.clone()
     } else if let Some(first) = compiled.first() {
         first.expo_type.clone()
@@ -670,54 +728,59 @@ fn compile_list_literal<'ctx>(
     let type_args = vec![elem_type.clone()];
     let mangled_type = mangle_name("List", &type_args);
 
-    if !c.types.structs.contains_key(&mangled_type) {
-        monomorphize_struct(c, "List", &type_args)?;
+    if !compiler.types.structs.contains_key(&mangled_type) {
+        monomorphize_struct(compiler, "List", &type_args)?;
     }
 
     let new_fn_name = format!("{mangled_type}_new");
-    if !c.functions.contains_key(&new_fn_name) {
-        monomorphize_impl_method(c, "List", "new", &type_args, &[])?;
+    if !compiler.functions.contains_key(&new_fn_name) {
+        monomorphize_impl_method(compiler, "List", "new", &type_args, &[])?;
     }
     let append_fn_name = format!("{mangled_type}_append");
-    if !c.functions.contains_key(&append_fn_name) {
-        monomorphize_impl_method(c, "List", "append", &type_args, &[])?;
+    if !compiler.functions.contains_key(&append_fn_name) {
+        monomorphize_impl_method(compiler, "List", "append", &type_args, &[])?;
     }
 
-    let new_fn = *c.functions.get(&new_fn_name).ok_or("List.new not found")?;
-    let append_fn = *c
+    let new_fn = *compiler
+        .functions
+        .get(&new_fn_name)
+        .ok_or("List.new not found")?;
+    let append_fn = *compiler
         .functions
         .get(&append_fn_name)
         .ok_or("List.append not found")?;
 
-    let mut list_val = c
+    let mut list_val = compiler
         .call(new_fn, &[], "list_new")
         .ok_or("List.new returned void")?;
 
-    for elem in &compiled {
-        let coerced = coerce_numeric(c, elem.value, &elem_type);
-        list_val = c
+    for element in &compiled {
+        let coerced = coerce_numeric(compiler, element.value, &elem_type);
+        list_val = compiler
             .call(append_fn, &[list_val.into(), coerced.into()], "list_append")
             .ok_or("List.append returned void")?;
     }
 
-    let list_type = named_generic("List", vec![elem_type], c.type_ctx);
+    let list_type = named_generic("List", vec![elem_type], compiler.type_ctx);
     Ok(Some(TypedValue::new(list_val, list_type)))
 }
 
 fn compile_map_literal<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     entries: &[(Expr, Expr)],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let (key_type, val_type) = if let (Some(k_subst), Some(v_subst)) = (
-        c.fn_state.type_subst.get("K"),
-        c.fn_state.type_subst.get("V"),
+    let (key_type, val_type) = if let (Some(key_subst), Some(val_subst)) = (
+        compiler.fn_state.type_subst.get("K"),
+        compiler.fn_state.type_subst.get("V"),
     ) {
-        (k_subst.clone(), v_subst.clone())
-    } else if let Some((first_k, first_v)) = entries.first() {
-        let k_tv = compile_expr(c, first_k, function)?.ok_or("map key produced no value")?;
-        let v_tv = compile_expr(c, first_v, function)?.ok_or("map value produced no value")?;
-        (k_tv.expo_type, v_tv.expo_type)
+        (key_subst.clone(), val_subst.clone())
+    } else if let Some((first_key, first_val)) = entries.first() {
+        let key_typed =
+            compile_expr(compiler, first_key, function)?.ok_or("map key produced no value")?;
+        let val_typed =
+            compile_expr(compiler, first_val, function)?.ok_or("map value produced no value")?;
+        (key_typed.expo_type, val_typed.expo_type)
     } else {
         return Err("empty map literal requires a type annotation".to_string());
     };
@@ -725,41 +788,47 @@ fn compile_map_literal<'ctx>(
     let type_args = vec![key_type.clone(), val_type.clone()];
     let mangled_type = mangle_name("Map", &type_args);
 
-    if !c.types.structs.contains_key(&mangled_type) {
-        monomorphize_struct(c, "Map", &type_args)?;
+    if !compiler.types.structs.contains_key(&mangled_type) {
+        monomorphize_struct(compiler, "Map", &type_args)?;
     }
 
     let new_fn_name = format!("{mangled_type}_new");
-    if !c.functions.contains_key(&new_fn_name) {
-        monomorphize_impl_method(c, "Map", "new", &type_args, &[])?;
+    if !compiler.functions.contains_key(&new_fn_name) {
+        monomorphize_impl_method(compiler, "Map", "new", &type_args, &[])?;
     }
     let put_fn_name = format!("{mangled_type}_put");
-    if !c.functions.contains_key(&put_fn_name) {
-        monomorphize_impl_method(c, "Map", "put", &type_args, &[])?;
+    if !compiler.functions.contains_key(&put_fn_name) {
+        monomorphize_impl_method(compiler, "Map", "put", &type_args, &[])?;
     }
 
-    let new_fn = *c.functions.get(&new_fn_name).ok_or("Map.new not found")?;
-    let put_fn = *c.functions.get(&put_fn_name).ok_or("Map.put not found")?;
+    let new_fn = *compiler
+        .functions
+        .get(&new_fn_name)
+        .ok_or("Map.new not found")?;
+    let put_fn = *compiler
+        .functions
+        .get(&put_fn_name)
+        .ok_or("Map.put not found")?;
 
-    let mut map_val = c
+    let mut map_val = compiler
         .call(new_fn, &[], "map_new")
         .ok_or("Map.new returned void")?;
 
     for (key_expr, val_expr) in entries {
-        let key = compile_expr(c, key_expr, function)?
+        let key = compile_expr(compiler, key_expr, function)?
             .ok_or("map key produced no value")?
             .value;
-        let val = compile_expr(c, val_expr, function)?
+        let val = compile_expr(compiler, val_expr, function)?
             .ok_or("map value produced no value")?
             .value;
-        let key = coerce_numeric(c, key, &key_type);
-        let val = coerce_numeric(c, val, &val_type);
-        map_val = c
+        let key = coerce_numeric(compiler, key, &key_type);
+        let val = coerce_numeric(compiler, val, &val_type);
+        map_val = compiler
             .call(put_fn, &[map_val.into(), key.into(), val.into()], "map_put")
             .ok_or("Map.put returned void")?;
     }
 
-    let map_type = named_generic("Map", vec![key_type, val_type], c.type_ctx);
+    let map_type = named_generic("Map", vec![key_type, val_type], compiler.type_ctx);
     Ok(Some(TypedValue::new(map_val, map_type)))
 }
 
@@ -768,12 +837,10 @@ fn compile_map_literal<'ctx>(
 /// Delegates to [`crate::spawn`] helpers for each phase: AST extraction,
 /// config serialization, wrapper generation, and `Ref<M, R>` construction.
 fn compile_spawn<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     expr: &Expr,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    use crate::spawn;
-
     let target = spawn::extract_spawn_target(expr)?;
 
     let config_expr = target
@@ -781,7 +848,7 @@ fn compile_spawn<'ctx>(
         .first()
         .map(|a| &a.value)
         .ok_or("spawn T.start(config) requires a config argument")?;
-    let config_value = compile_expr(c, config_expr, function)?
+    let config_value = compile_expr(compiler, config_expr, function)?
         .ok_or_else(|| {
             format!(
                 "{}.start() config argument produced no value",
@@ -790,27 +857,27 @@ fn compile_spawn<'ctx>(
         })?
         .value;
 
-    let serialized = spawn::serialize_config(c, config_value)?;
+    let serialized = spawn::serialize_config(compiler, config_value)?;
     let mangled_state = spawn::resolve_mangled_state(&target.type_name, config_value);
 
-    if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(&mangled_state, c) {
-        monomorphize_impl_method(c, &base, "start", &type_args, &[])?;
-        monomorphize_impl_method(c, &base, "run", &type_args, &[])?;
+    if let Some((base, type_args)) = try_parse_mangled_name(&mangled_state, compiler) {
+        monomorphize_impl_method(compiler, &base, "start", &type_args, &[])?;
+        monomorphize_impl_method(compiler, &base, "run", &type_args, &[])?;
     }
 
     let start_fn_name = format!("{mangled_state}_start");
-    let start_fn = c
+    let start_fn = compiler
         .module
         .get_function(&start_fn_name)
         .ok_or_else(|| format!("undefined start function: {start_fn_name}"))?;
 
     let run_fn_name = format!("{mangled_state}_run");
-    let run_fn = c
+    let run_fn = compiler
         .module
         .get_function(&run_fn_name)
         .ok_or_else(|| format!("undefined run function: {run_fn_name}"))?;
 
-    let state_struct_type = c
+    let state_struct_type = compiler
         .types
         .structs
         .get(&mangled_state)
@@ -818,11 +885,11 @@ fn compile_spawn<'ctx>(
         .ok_or_else(|| format!("no LLVM struct for `{mangled_state}`"))?;
 
     let wrapper_name = format!("__spawn_{mangled_state}");
-    let wrapper = if let Some(existing) = c.module.get_function(&wrapper_name) {
+    let wrapper = if let Some(existing) = compiler.module.get_function(&wrapper_name) {
         existing
     } else {
         spawn::build_spawn_wrapper(
-            c,
+            compiler,
             &wrapper_name,
             serialized.llvm_type,
             state_struct_type,
@@ -833,12 +900,12 @@ fn compile_spawn<'ctx>(
     };
 
     let wrapper_ptr = wrapper.as_global_value().as_pointer_value();
-    let spawn_fn = *c
+    let spawn_fn = *compiler
         .functions
         .get("expo_rt_spawn")
         .ok_or("expo_rt_spawn not declared")?;
 
-    let pid = c
+    let pid = compiler
         .call(
             spawn_fn,
             &[
@@ -852,13 +919,13 @@ fn compile_spawn<'ctx>(
         .into_int_value();
 
     let (msg_type, reply_type) =
-        spawn::resolve_process_msg_reply(c, &target.type_name, &mangled_state)?;
+        spawn::resolve_process_msg_reply(compiler, &target.type_name, &mangled_state)?;
 
-    spawn::build_ref_value(c, pid, msg_type, reply_type).map(Some)
+    spawn::build_ref_value(compiler, pid, msg_type, reply_type).map(Some)
 }
 
 fn compile_receive<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     arms: &[MatchArm],
     after_timeout: Option<&Expr>,
     after_body: &[Statement],
@@ -867,71 +934,82 @@ fn compile_receive<'ctx>(
     let has_after = after_timeout.is_some();
 
     let raw_ptr = if let Some(timeout_expr) = after_timeout {
-        let receive_timeout_fn = *c
+        let receive_timeout_fn = *compiler
             .functions
             .get("expo_rt_receive_timeout")
             .ok_or("expo_rt_receive_timeout not declared")?;
 
-        let timeout_val = compile_expr(c, timeout_expr, function)?
+        let timeout_val = compile_expr(compiler, timeout_expr, function)?
             .ok_or("after timeout expression produced no value")?
             .value;
 
-        c.call(receive_timeout_fn, &[timeout_val.into()], "receive_msg")
+        compiler
+            .call(receive_timeout_fn, &[timeout_val.into()], "receive_msg")
             .ok_or("expo_rt_receive_timeout did not return a value")?
     } else {
-        let receive_fn = *c
+        let receive_fn = *compiler
             .functions
             .get("expo_rt_receive")
             .ok_or("expo_rt_receive not declared")?;
 
-        c.call(receive_fn, &[], "receive_msg")
+        compiler
+            .call(receive_fn, &[], "receive_msg")
             .ok_or("expo_rt_receive did not return a value")?
     };
 
-    let merge_bb = c.context.append_basic_block(function, "recv_end");
+    let merge_block = compiler.context.append_basic_block(function, "recv_end");
 
     {
         let ptr_val = raw_ptr.into_pointer_value();
-        let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+        let ptr_ty = compiler.context.ptr_type(AddressSpace::default());
         let null_ptr = ptr_ty.const_null();
-        let is_null = c
+        let is_null = compiler
             .builder
-            .build_int_compare(inkwell::IntPredicate::EQ, ptr_val, null_ptr, "is_timeout")
+            .build_int_compare(IntPredicate::EQ, ptr_val, null_ptr, "is_timeout")
             .unwrap();
 
         if has_after {
-            let after_bb = c.context.append_basic_block(function, "recv_after");
-            let got_msg_bb = c.context.append_basic_block(function, "recv_got_msg");
+            let after_block = compiler.context.append_basic_block(function, "recv_after");
+            let got_msg_block = compiler
+                .context
+                .append_basic_block(function, "recv_got_msg");
 
-            c.builder
-                .build_conditional_branch(is_null, after_bb, got_msg_bb)
+            compiler
+                .builder
+                .build_conditional_branch(is_null, after_block, got_msg_block)
                 .unwrap();
 
-            c.builder.position_at_end(after_bb);
+            compiler.builder.position_at_end(after_block);
             for stmt in after_body {
-                crate::stmt::compile_statement(c, stmt, function)?;
+                compile_statement(compiler, stmt, function)?;
             }
-            if !c.current_block_terminated() {
-                c.builder.build_unconditional_branch(merge_bb).unwrap();
+            if !compiler.current_block_terminated() {
+                compiler
+                    .builder
+                    .build_unconditional_branch(merge_block)
+                    .unwrap();
             }
 
-            c.builder.position_at_end(got_msg_bb);
+            compiler.builder.position_at_end(got_msg_block);
         } else {
-            let got_msg_bb = c.context.append_basic_block(function, "recv_got_msg");
-            let empty_bb = c.context.append_basic_block(function, "recv_empty");
+            let got_msg_block = compiler
+                .context
+                .append_basic_block(function, "recv_got_msg");
+            let empty_block = compiler.context.append_basic_block(function, "recv_empty");
 
-            c.builder
-                .build_conditional_branch(is_null, empty_bb, got_msg_bb)
+            compiler
+                .builder
+                .build_conditional_branch(is_null, empty_block, got_msg_block)
                 .unwrap();
 
-            c.builder.position_at_end(empty_bb);
-            c.builder.build_unreachable().unwrap();
+            compiler.builder.position_at_end(empty_block);
+            compiler.builder.build_unreachable().unwrap();
 
-            c.builder.position_at_end(got_msg_bb);
+            compiler.builder.position_at_end(got_msg_block);
         }
     }
 
-    let msg_type = c.fn_state.process_msg_type.clone();
+    let msg_type = compiler.fn_state.process_msg_type.clone();
     let is_process = msg_type.is_some()
         && !matches!(
             msg_type.as_ref().unwrap(),
@@ -939,7 +1017,7 @@ fn compile_receive<'ctx>(
         );
 
     if is_process {
-        return compile_receive_tagged(c, arms, raw_ptr, merge_bb, function);
+        return compile_receive_tagged(compiler, arms, raw_ptr, merge_block, function);
     }
 
     let is_string = msg_type
@@ -947,13 +1025,14 @@ fn compile_receive<'ctx>(
         .is_none_or(|t| matches!(t, Type::Primitive(Primitive::String)));
 
     let subject_val = if is_string {
-        let i8_type = c.context.i8_type();
+        let i8_type = compiler.context.i8_type();
         let payload = unsafe {
-            c.builder
+            compiler
+                .builder
                 .build_in_bounds_gep(
                     i8_type,
                     raw_ptr.into_pointer_value(),
-                    &[c.context.i64_type().const_int(16, false)],
+                    &[compiler.context.i64_type().const_int(16, false)],
                     "recv_str_payload",
                 )
                 .unwrap()
@@ -961,30 +1040,35 @@ fn compile_receive<'ctx>(
         payload.into()
     } else {
         let msg_ty = msg_type.unwrap();
-        let llvm_ty = crate::types::to_llvm_type(&msg_ty, c.context, &c.types.structs)
+        let llvm_ty = to_llvm_type(&msg_ty, compiler.context, &compiler.types.structs)
             .ok_or_else(|| format!("no LLVM type for receive message `{msg_ty:?}`"))?;
-        let i8_type = c.context.i8_type();
+        let i8_type = compiler.context.i8_type();
         let payload_ptr = unsafe {
-            c.builder
+            compiler
+                .builder
                 .build_in_bounds_gep(
                     i8_type,
                     raw_ptr.into_pointer_value(),
-                    &[c.context.i64_type().const_int(8, false)],
+                    &[compiler.context.i64_type().const_int(8, false)],
                     "recv_payload_ptr",
                 )
                 .unwrap()
         };
-        c.builder
+        compiler
+            .builder
             .build_load(llvm_ty, payload_ptr, "msg_val")
             .unwrap()
     };
 
     if arms.is_empty() {
-        if !c.current_block_terminated() {
-            c.builder.build_unconditional_branch(merge_bb).unwrap();
+        if !compiler.current_block_terminated() {
+            compiler
+                .builder
+                .build_unconditional_branch(merge_block)
+                .unwrap();
         }
-        c.builder.position_at_end(merge_bb);
-        let ty = c
+        compiler.builder.position_at_end(merge_block);
+        let ty = compiler
             .fn_state
             .process_msg_type
             .clone()
@@ -992,52 +1076,58 @@ fn compile_receive<'ctx>(
         return Ok(Some(TypedValue::new(subject_val, ty)));
     }
 
-    let subject_type = c.fn_state.process_msg_type.clone().unwrap_or(Type::Unknown);
+    let subject_type = compiler
+        .fn_state
+        .process_msg_type
+        .clone()
+        .unwrap_or(Type::Unknown);
 
-    let subject_alloca = c
+    let subject_alloca = compiler
         .builder
         .build_alloca(subject_val.get_type(), "recv_subject")
         .unwrap();
-    c.builder.build_store(subject_alloca, subject_val).unwrap();
+    compiler
+        .builder
+        .build_store(subject_alloca, subject_val)
+        .unwrap();
 
-    let fallthrough_bb = c.context.append_basic_block(function, "recv_none");
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-        Vec::new();
+    let fallthrough_block = compiler.context.append_basic_block(function, "recv_none");
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
     let mut reachable_arm_count = 0usize;
 
     let arm_refs: Vec<&MatchArm> = arms.iter().collect();
-    let arm_ctx = ReceiveArmCtx {
+    let arm_context = ReceiveArmCtx {
         subject_alloca,
         subject_type: &subject_type,
-        merge_bb,
-        fallthrough_bb,
+        merge_block,
+        fallthrough_block,
         prefix: "recv",
         function,
     };
     compile_receive_arms(
-        c,
+        compiler,
         &arm_refs,
-        &arm_ctx,
+        &arm_context,
         &mut incoming,
         &mut reachable_arm_count,
     )?;
 
-    c.builder.position_at_end(merge_bb);
+    compiler.builder.position_at_end(merge_block);
     build_receive_phi(
-        c,
+        compiler,
         &mut incoming,
         reachable_arm_count,
-        &[fallthrough_bb],
+        &[fallthrough_block],
         &subject_type,
     )
 }
 
 /// Control-flow context for compiling a set of receive arms.
 struct ReceiveArmCtx<'a, 'ctx> {
-    subject_alloca: inkwell::values::PointerValue<'ctx>,
+    subject_alloca: PointerValue<'ctx>,
     subject_type: &'a Type,
-    merge_bb: inkwell::basic_block::BasicBlock<'ctx>,
-    fallthrough_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    merge_block: BasicBlock<'ctx>,
+    fallthrough_block: BasicBlock<'ctx>,
     prefix: &'a str,
     function: FunctionValue<'ctx>,
 }
@@ -1046,90 +1136,103 @@ struct ReceiveArmCtx<'a, 'ctx> {
 /// Shared by both the plain and tagged receive paths. Appends to
 /// `incoming` and `reachable_arm_count` for the caller's phi node.
 fn compile_receive_arms<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     arms: &[&MatchArm],
-    ctx: &ReceiveArmCtx<'_, 'ctx>,
-    incoming: &mut Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
+    arm_context: &ReceiveArmCtx<'_, 'ctx>,
+    incoming: &mut Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)>,
     reachable_arm_count: &mut usize,
 ) -> Result<(), String> {
     for (i, arm) in arms.iter().enumerate() {
-        let body_bb = c
-            .context
-            .append_basic_block(ctx.function, &format!("{}_body_{i}", ctx.prefix));
-        let next_bb = if i + 1 < arms.len() {
-            c.context
-                .append_basic_block(ctx.function, &format!("{}_test_{}", ctx.prefix, i + 1))
+        let body_block = compiler.context.append_basic_block(
+            arm_context.function,
+            &format!("{}_body_{i}", arm_context.prefix),
+        );
+        let next_block = if i + 1 < arms.len() {
+            compiler.context.append_basic_block(
+                arm_context.function,
+                &format!("{}_test_{}", arm_context.prefix, i + 1),
+            )
         } else {
-            ctx.fallthrough_bb
+            arm_context.fallthrough_block
         };
 
-        let saved_vars = c.fn_state.variables.clone();
+        let saved_vars = compiler.fn_state.variables.clone();
 
-        let condition = crate::control::compile_pattern(
-            c,
+        let condition = compile_pattern(
+            compiler,
             &arm.pattern,
-            ctx.subject_alloca,
-            ctx.subject_type,
-            ctx.function,
+            arm_context.subject_alloca,
+            arm_context.subject_type,
+            arm_context.function,
         )?;
 
         let final_cond = if let Some(guard) = &arm.guard {
-            let guard_val = compile_expr(c, guard, ctx.function)?
+            let guard_val = compile_expr(compiler, guard, arm_context.function)?
                 .ok_or("receive guard produced no value")?
                 .value;
-            c.builder
+            compiler
+                .builder
                 .build_and(condition, guard_val.into_int_value(), "guard_and")
                 .unwrap()
         } else {
             condition
         };
 
-        c.builder
-            .build_conditional_branch(final_cond, body_bb, next_bb)
+        compiler
+            .builder
+            .build_conditional_branch(final_cond, body_block, next_block)
             .unwrap();
 
-        c.builder.position_at_end(body_bb);
-        let arm_tv = crate::control::compile_body_as_value(c, &arm.body, ctx.function)?;
-        if !c.current_block_terminated() {
-            c.builder.build_unconditional_branch(ctx.merge_bb).unwrap();
+        compiler.builder.position_at_end(body_block);
+        let arm_typed_value = compile_body_as_value(compiler, &arm.body, arm_context.function)?;
+        if !compiler.current_block_terminated() {
+            compiler
+                .builder
+                .build_unconditional_branch(arm_context.merge_block)
+                .unwrap();
             *reachable_arm_count += 1;
         }
-        let arm_end_bb = c.builder.get_insert_block().unwrap();
-        if let Some(tv) = arm_tv {
-            incoming.push((tv.value, arm_end_bb));
+        let arm_end_block = compiler.builder.get_insert_block().unwrap();
+        if let Some(typed_value) = arm_typed_value {
+            incoming.push((typed_value.value, arm_end_block));
         }
 
-        c.fn_state.variables = saved_vars;
-        c.builder.position_at_end(next_bb);
+        compiler.fn_state.variables = saved_vars;
+        compiler.builder.position_at_end(next_block);
     }
 
-    c.builder.position_at_end(ctx.fallthrough_bb);
-    c.builder.build_unconditional_branch(ctx.merge_bb).unwrap();
+    compiler
+        .builder
+        .position_at_end(arm_context.fallthrough_block);
+    compiler
+        .builder
+        .build_unconditional_branch(arm_context.merge_block)
+        .unwrap();
     Ok(())
 }
 
 /// Builds a phi node from `incoming` values if they all share the same
 /// LLVM type, adding zero-valued entries for each fallthrough block.
 fn build_receive_phi<'ctx>(
-    c: &Compiler<'ctx>,
-    incoming: &mut Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
+    compiler: &Compiler<'ctx>,
+    incoming: &mut Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)>,
     reachable_arm_count: usize,
-    fallthrough_bbs: &[inkwell::basic_block::BasicBlock<'ctx>],
+    fallthrough_blocks: &[BasicBlock<'ctx>],
     result_type: &Type,
 ) -> ExprResult<'ctx> {
     if !incoming.is_empty() && incoming.len() == reachable_arm_count {
         let first_ty = incoming[0].0.get_type();
         if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
             let undef = first_ty.const_zero();
-            for &bb in fallthrough_bbs {
-                incoming.push((undef, bb));
+            for &block in fallthrough_blocks {
+                incoming.push((undef, block));
             }
-            let phi = c.builder.build_phi(first_ty, "recv_result").unwrap();
-            let refs: Vec<_> = incoming
+            let phi = compiler.builder.build_phi(first_ty, "recv_result").unwrap();
+            let phi_entries: Vec<_> = incoming
                 .iter()
-                .map(|(v, bb)| (v as &dyn inkwell::values::BasicValue, *bb))
+                .map(|(v, block)| (v as &dyn BasicValue, *block))
                 .collect();
-            phi.add_incoming(&refs);
+            phi.add_incoming(&phi_entries);
             return Ok(Some(TypedValue::new(
                 phi.as_basic_value(),
                 result_type.clone(),
@@ -1147,26 +1250,25 @@ fn build_receive_phi<'ctx>(
 /// resolved type matches `Lifecycle` go to the lifecycle branch, all others
 /// go to the business branch.
 fn compile_receive_tagged<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     arms: &[MatchArm],
     raw_ptr: BasicValueEnum<'ctx>,
-    merge_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    merge_block: BasicBlock<'ctx>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    use expo_ast::ast::Pattern;
+    let i8_type = compiler.context.i8_type();
+    let i64_type = compiler.context.i64_type();
+    let envelope_type = compiler.fn_state.process_msg_type.clone().unwrap();
 
-    let i8_type = c.context.i8_type();
-    let i64_type = c.context.i64_type();
-    let envelope_type = c.fn_state.process_msg_type.clone().unwrap();
-
-    let tag_val = c
+    let tag_val = compiler
         .builder
         .build_load(i8_type, raw_ptr.into_pointer_value(), "recv_tag")
         .unwrap()
         .into_int_value();
 
     let payload_ptr = unsafe {
-        c.builder
+        compiler
+            .builder
             .build_in_bounds_gep(
                 i8_type,
                 raw_ptr.into_pointer_value(),
@@ -1181,7 +1283,7 @@ fn compile_receive_tagged<'ctx>(
 
     for arm in arms {
         if let Pattern::TypedBinding { type_expr, .. } = &arm.pattern {
-            let resolved = c.resolve_type_expr(type_expr);
+            let resolved = compiler.resolve_type_expr(type_expr);
             if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "Lifecycle" && type_args.is_empty())
             {
                 lifecycle_arms.push(arm);
@@ -1193,108 +1295,129 @@ fn compile_receive_tagged<'ctx>(
 
     let has_lifecycle = !lifecycle_arms.is_empty();
 
-    let biz_bb = c.context.append_basic_block(function, "recv_tag_business");
-    let lc_bb = if has_lifecycle {
-        c.context.append_basic_block(function, "recv_tag_lifecycle")
+    let business_block = compiler
+        .context
+        .append_basic_block(function, "recv_tag_business");
+    let lifecycle_block = if has_lifecycle {
+        compiler
+            .context
+            .append_basic_block(function, "recv_tag_lifecycle")
     } else {
-        merge_bb
+        merge_block
     };
-    let default_bb = c.context.append_basic_block(function, "recv_tag_default");
+    let default_block = compiler
+        .context
+        .append_basic_block(function, "recv_tag_default");
 
-    c.builder
+    compiler
+        .builder
         .build_switch(
             tag_val,
-            default_bb,
+            default_block,
             &[
-                (i8_type.const_int(0, false), biz_bb),
-                (i8_type.const_int(1, false), lc_bb),
+                (i8_type.const_int(0, false), business_block),
+                (i8_type.const_int(1, false), lifecycle_block),
             ],
         )
         .unwrap();
 
-    c.builder.position_at_end(default_bb);
-    c.builder.build_unreachable().unwrap();
+    compiler.builder.position_at_end(default_block);
+    compiler.builder.build_unreachable().unwrap();
 
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-        Vec::new();
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
     let mut reachable_arm_count = 0usize;
-    let mut fallthrough_bbs: Vec<inkwell::basic_block::BasicBlock<'ctx>> = Vec::new();
+    let mut fallthrough_blocks: Vec<BasicBlock<'ctx>> = Vec::new();
 
     // --- Business arms (tag 0) ---
-    c.builder.position_at_end(biz_bb);
-    let env_llvm = crate::types::to_llvm_type(&envelope_type, c.context, &c.types.structs)
+    compiler.builder.position_at_end(business_block);
+    let env_llvm = to_llvm_type(&envelope_type, compiler.context, &compiler.types.structs)
         .ok_or_else(|| format!("no LLVM type for envelope `{}`", envelope_type.display()))?;
-    let biz_val = c
+    let business_value = compiler
         .builder
         .build_load(env_llvm, payload_ptr, "biz_msg")
         .unwrap();
-    let biz_alloca = c
+    let business_alloca = compiler
         .builder
-        .build_alloca(biz_val.get_type(), "biz_subject")
+        .build_alloca(business_value.get_type(), "biz_subject")
         .unwrap();
-    c.builder.build_store(biz_alloca, biz_val).unwrap();
+    compiler
+        .builder
+        .build_store(business_alloca, business_value)
+        .unwrap();
 
-    let biz_fallthrough = c.context.append_basic_block(function, "recv_biz_none");
-    let biz_ctx = ReceiveArmCtx {
-        subject_alloca: biz_alloca,
+    let business_fallthrough = compiler
+        .context
+        .append_basic_block(function, "recv_biz_none");
+    let business_context = ReceiveArmCtx {
+        subject_alloca: business_alloca,
         subject_type: &envelope_type,
-        merge_bb,
-        fallthrough_bb: biz_fallthrough,
+        merge_block,
+        fallthrough_block: business_fallthrough,
         prefix: "recv_biz",
         function,
     };
     compile_receive_arms(
-        c,
+        compiler,
         &business_arms,
-        &biz_ctx,
+        &business_context,
         &mut incoming,
         &mut reachable_arm_count,
     )?;
-    fallthrough_bbs.push(biz_fallthrough);
+    fallthrough_blocks.push(business_fallthrough);
 
     // --- Lifecycle arms (tag 1) ---
     if has_lifecycle {
-        c.builder.position_at_end(lc_bb);
+        compiler.builder.position_at_end(lifecycle_block);
 
         let lifecycle_type = named("Lifecycle");
-        let lc_llvm = crate::types::to_llvm_type(&lifecycle_type, c.context, &c.types.structs)
-            .ok_or("no LLVM type for Lifecycle enum")?;
-        let lc_val = c
+        let lifecycle_llvm =
+            to_llvm_type(&lifecycle_type, compiler.context, &compiler.types.structs)
+                .ok_or("no LLVM type for Lifecycle enum")?;
+        let lifecycle_value = compiler
             .builder
-            .build_load(lc_llvm, payload_ptr, "lc_msg")
+            .build_load(lifecycle_llvm, payload_ptr, "lc_msg")
             .unwrap();
-        let lc_alloca = c
+        let lifecycle_alloca = compiler
             .builder
-            .build_alloca(lc_val.get_type(), "lc_subject")
+            .build_alloca(lifecycle_value.get_type(), "lc_subject")
             .unwrap();
-        c.builder.build_store(lc_alloca, lc_val).unwrap();
+        compiler
+            .builder
+            .build_store(lifecycle_alloca, lifecycle_value)
+            .unwrap();
 
-        let lc_fallthrough = c.context.append_basic_block(function, "recv_lc_none");
-        let lc_ctx = ReceiveArmCtx {
-            subject_alloca: lc_alloca,
+        let lifecycle_fallthrough = compiler
+            .context
+            .append_basic_block(function, "recv_lc_none");
+        let lifecycle_context = ReceiveArmCtx {
+            subject_alloca: lifecycle_alloca,
             subject_type: &lifecycle_type,
-            merge_bb,
-            fallthrough_bb: lc_fallthrough,
+            merge_block,
+            fallthrough_block: lifecycle_fallthrough,
             prefix: "recv_lc",
             function,
         };
         compile_receive_arms(
-            c,
+            compiler,
             &lifecycle_arms,
-            &lc_ctx,
+            &lifecycle_context,
             &mut incoming,
             &mut reachable_arm_count,
         )?;
-        fallthrough_bbs.push(lc_fallthrough);
+        fallthrough_blocks.push(lifecycle_fallthrough);
     }
 
-    c.builder.position_at_end(merge_bb);
-    let result_type = c.fn_state.process_msg_type.clone().unwrap_or(Type::Unknown);
+    compiler.builder.position_at_end(merge_block);
+    let result_type = compiler
+        .fn_state
+        .process_msg_type
+        .clone()
+        .unwrap_or(Type::Unknown);
     build_receive_phi(
-        c,
+        compiler,
         &mut incoming,
         reachable_arm_count,
-        &fallthrough_bbs,
+        &fallthrough_blocks,
         &result_type,
     )
 }

@@ -105,6 +105,7 @@ impl Parser {
                         variant: seg,
                         data: EnumConstructionData::Unit,
                         span: self.span_from(start),
+                        resolved_type: None,
                     };
                 }
             } else {
@@ -134,6 +135,7 @@ impl Parser {
                 type_path: path,
                 fields,
                 span: self.span_from(start),
+                resolved_type: None,
             }
         } else if self.at(&TokenKind::LParen) {
             self.advance(); // (
@@ -187,6 +189,7 @@ impl Parser {
                 variant,
                 data,
                 span: self.span_from(start),
+                resolved_type: None,
             }
         } else if self.eat(&TokenKind::LBrace).is_some() {
             self.skip_newlines();
@@ -210,6 +213,7 @@ impl Parser {
                 variant,
                 data: EnumConstructionData::Struct(fields),
                 span: self.span_from(start),
+                resolved_type: None,
             }
         } else {
             Expr::EnumConstruction {
@@ -217,6 +221,7 @@ impl Parser {
                 variant,
                 data: EnumConstructionData::Unit,
                 span: self.span_from(start),
+                resolved_type: None,
             }
         }
     }

@@ -637,6 +637,7 @@ pub fn compile_struct_construction<'ctx>(
     c: &mut Compiler<'ctx>,
     type_path: &[String],
     fields: &[FieldInit],
+    resolved_type: Option<&TypeIdentifier>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let raw_name = type_path
@@ -644,8 +645,12 @@ pub fn compile_struct_construction<'ctx>(
         .ok_or("empty type path in struct construction")?;
     let struct_name = &resolve_type_alias_name(raw_name, &c.type_ctx.type_aliases);
 
-    let type_info_lookup = resolve_type_alias_id(raw_name, &c.type_ctx.type_aliases)
-        .and_then(|id| c.type_ctx.get_type(&id))
+    let type_info_lookup = resolved_type
+        .and_then(|id| c.type_ctx.get_type(id))
+        .or_else(|| {
+            resolve_type_alias_id(raw_name, &c.type_ctx.type_aliases)
+                .and_then(|id| c.type_ctx.get_type(&id))
+        })
         .or_else(|| c.type_ctx.find_type(struct_name));
 
     // For generic structs, compile field values first, infer type args, and monomorphize

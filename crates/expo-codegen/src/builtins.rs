@@ -5,8 +5,10 @@
 
 use std::collections::HashMap;
 
+use inkwell::AddressSpace;
 use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
+use inkwell::types::FunctionType;
 use inkwell::values::FunctionValue;
 
 /// Declares all external C and Expo runtime functions that codegen may call.
@@ -18,9 +20,9 @@ pub(crate) fn declare_builtins<'ctx>(
     let void = context.void_type();
     let i32 = context.i32_type();
     let i64 = context.i64_type();
-    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let ptr = context.ptr_type(AddressSpace::default());
 
-    let mut decl = |name: &str, ty: inkwell::types::FunctionType<'ctx>| {
+    let mut decl = |name: &str, ty: FunctionType<'ctx>| {
         let f = module.add_function(name, ty, None);
         functions.insert(name.to_string(), f);
     };

@@ -21,13 +21,13 @@ use crate::types::{
 
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
-pub fn check_module(module: &Module, ctx: &mut TypeContext) {
+pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
     let struct_names = ctx.struct_names();
     let struct_name_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
     let enum_names = ctx.enum_names();
     let enum_name_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
 
-    for item in &module.items {
+    for item in &mut module.items {
         match item {
             Item::Function(f) => {
                 if f.type_params.is_empty() {
@@ -41,7 +41,7 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 let mut self_type = named(&s.name);
                 ctx.resolve_type(&mut self_type);
                 check_inline_functions(
-                    &s.functions,
+                    &mut s.functions,
                     &s.name,
                     &self_type,
                     ctx,
@@ -56,7 +56,7 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 let mut self_type = named(&e.name);
                 ctx.resolve_type(&mut self_type);
                 check_inline_functions(
-                    &e.functions,
+                    &mut e.functions,
                     &e.name,
                     &self_type,
                     ctx,
@@ -96,7 +96,7 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                             )
                         });
 
-                for member in &impl_block.members {
+                for member in &mut impl_block.members {
                     if let ImplMember::Function(f) = member
                         && f.type_params.is_empty()
                     {
@@ -110,12 +110,12 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                         );
                     }
                 }
-                let synth_fns = ctx
+                let mut synth_fns = ctx
                     .synthesized_default_fns
                     .get(target_name.as_str())
                     .cloned()
                     .unwrap_or_default();
-                for f in &synth_fns {
+                for f in &mut synth_fns {
                     if f.type_params.is_empty() {
                         check_function_with_msg(
                             f,
@@ -135,7 +135,7 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
 
 /// Type-checks inline functions defined inside a struct or enum body.
 fn check_inline_functions(
-    functions: &[Function],
+    functions: &mut [Function],
     type_name: &str,
     self_type: &Type,
     ctx: &mut TypeContext,
@@ -168,7 +168,7 @@ fn check_inline_functions(
 
 /// Type-checks a single function body using the default message type.
 fn check_function(
-    f: &Function,
+    f: &mut Function,
     ctx: &mut TypeContext,
     self_type: Option<&Type>,
     struct_names: &[&str],
@@ -181,7 +181,7 @@ fn check_function(
 /// and verifying the return type against the declared signature. When
 /// `override_msg_type` is `Some`, it replaces the process mailbox type.
 fn check_function_with_msg(
-    f: &Function,
+    f: &mut Function,
     ctx: &mut TypeContext,
     self_type: Option<&Type>,
     struct_names: &[&str],
@@ -275,8 +275,9 @@ fn check_function_with_msg(
     let last_is_expr = matches!(f.body.last(), Some(Statement::Expr(_)));
 
     if check_implicit_return && last_is_expr {
-        check_body(&f.body[..f.body.len() - 1], ctx, &mut ce);
-        if let Some(Statement::Expr(expr)) = f.body.last() {
+        let len = f.body.len();
+        check_body(&mut f.body[..len - 1], ctx, &mut ce);
+        if let Some(Statement::Expr(expr)) = f.body.last_mut() {
             let actual = infer_expr(expr, ctx, &mut ce);
             if actual.is_known()
                 && !types_compatible(&actual, &declared_return)
@@ -299,7 +300,7 @@ fn check_function_with_msg(
             }
         }
     } else {
-        check_body(&f.body, ctx, &mut ce);
+        check_body(&mut f.body, ctx, &mut ce);
     }
 }
 
@@ -308,7 +309,7 @@ fn check_function_with_msg(
 pub(crate) fn check_call_args(
     display_name: &str,
     params: &[ParamInfo],
-    args: &[Arg],
+    args: &mut [Arg],
     sig_prefix: &str,
     span: Span,
     ctx: &mut TypeContext,
@@ -335,9 +336,9 @@ pub(crate) fn check_call_args(
             span,
         );
     } else {
-        for (i, arg) in args.iter().enumerate() {
+        for (i, arg) in args.iter_mut().enumerate() {
             let param = &params[i];
-            let arg_ty = infer_expr_with_expected(&arg.value, Some(&param.ty), ctx, ce);
+            let arg_ty = infer_expr_with_expected(&mut arg.value, Some(&param.ty), ctx, ce);
             if param.ty.is_known() && arg_ty.is_known() {
                 if !types_compatible(&arg_ty, &param.ty) {
                     ctx.error(

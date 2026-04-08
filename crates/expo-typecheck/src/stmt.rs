@@ -13,14 +13,14 @@ use crate::expr::{expr_span, infer_expr, resolve_receiver_base_name};
 use crate::types::{Type, resolve_type_expr};
 
 /// Checks all statements in a body sequentially.
-pub(crate) fn check_body(stmts: &[Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) {
+pub(crate) fn check_body(stmts: &mut [Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) {
     for stmt in stmts {
         check_statement(stmt, ctx, ce);
     }
 }
 
 /// Type-checks a single statement, handling assignments, returns, breaks, and expressions.
-pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
+pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &mut CheckEnv) {
     match stmt {
         Statement::Assignment {
             target,
@@ -236,7 +236,7 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
         }
         Statement::Return { value, span } => {
             let actual = value
-                .as_ref()
+                .as_mut()
                 .map(|v| infer_expr(v, ctx, ce))
                 .unwrap_or(Type::Unit);
             if ce.return_type.is_known() && actual.is_known() {

@@ -34,7 +34,7 @@ fn fqn_to_package(fqn: &str) -> String {
 ///
 /// Returns the per-module type contexts and whether any errors were found.
 pub fn typecheck_graph(
-    graph: &ModuleGraph,
+    graph: &mut ModuleGraph,
     color: bool,
 ) -> (BTreeMap<String, expo_typecheck::context::TypeContext>, bool) {
     let mut module_contexts: BTreeMap<String, expo_typecheck::context::TypeContext> =
@@ -101,12 +101,12 @@ pub fn typecheck_graph(
 
     // Check: type-check each project module against the unified context.
     for name in &project_names {
-        let rm = &graph.modules[*name];
+        let rm = graph.modules.get_mut(*name).unwrap();
         let mut ctx = module_contexts.remove(*name).unwrap();
         ctx.merge(&unified_project_ctx);
         resolve_module_aliases(&rm.module, &mut ctx);
         expo_typecheck::resolve_packages(&mut ctx);
-        expo_typecheck::check_module(&rm.module, &mut ctx);
+        expo_typecheck::check_module(&mut rm.module, &mut ctx);
         module_contexts.insert((*name).clone(), ctx);
     }
 
@@ -172,7 +172,7 @@ fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
 /// The graph must include stdlib modules (via [`resolve::insert_stdlib`]).
 /// When `emit_llvm` is true, prints LLVM IR to stdout instead of linking.
 pub fn build_from_graph(
-    graph: &ModuleGraph,
+    graph: &mut ModuleGraph,
     output: &str,
     quiet: bool,
     color: bool,
@@ -254,7 +254,7 @@ pub fn build_project(
     emit_llvm: bool,
     release: bool,
 ) {
-    let graph = match resolve::resolve_project_modules(config, project_root) {
+    let mut graph = match resolve::resolve_project_modules(config, project_root) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: {e}");
@@ -279,7 +279,7 @@ pub fn build_project(
             default_output.to_str().unwrap()
         }
     };
-    build_from_graph(&graph, output, quiet, color, emit_llvm, release);
+    build_from_graph(&mut graph, output, quiet, color, emit_llvm, release);
 }
 
 /// Full single-file build pipeline: resolve modules from an entry file,
@@ -315,7 +315,14 @@ pub fn build(args: BuildArgs, quiet: bool, color: bool) {
     };
 
     prepend_stdlib(&mut graph);
-    build_from_graph(&graph, &output, quiet, color, args.emit_llvm, args.release);
+    build_from_graph(
+        &mut graph,
+        &output,
+        quiet,
+        color,
+        args.emit_llvm,
+        args.release,
+    );
 }
 
 /// Type-checks a single-file module graph (without compiling).
@@ -329,13 +336,13 @@ pub fn check_single_file(entry_path: &Path, color: bool) -> bool {
     };
 
     prepend_stdlib(&mut graph);
-    let (_, has_errors) = typecheck_graph(&graph, color);
+    let (_, has_errors) = typecheck_graph(&mut graph, color);
     has_errors
 }
 
 /// Type-checks a project module graph (without compiling).
 pub fn check_project(config: &ProjectConfig, project_root: &Path, color: bool) -> bool {
-    let graph = match resolve::resolve_project_modules(config, project_root) {
+    let mut graph = match resolve::resolve_project_modules(config, project_root) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: {e}");
@@ -343,7 +350,7 @@ pub fn check_project(config: &ProjectConfig, project_root: &Path, color: bool) -
         }
     };
 
-    let (_, has_errors) = typecheck_graph(&graph, color);
+    let (_, has_errors) = typecheck_graph(&mut graph, color);
     has_errors
 }
 
@@ -412,7 +419,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     let binary = target_dir.join(format!("{}_test", config.name));
     let output = binary.to_str().unwrap().to_string();
 
-    build_from_graph(&graph, &output, true, color, false, false);
+    build_from_graph(&mut graph, &output, true, color, false, false);
 
     let status = process::Command::new(&binary).status();
     let _ = fs::remove_file(&binary);

@@ -105,6 +105,7 @@ impl Parser {
                                         method: name,
                                         args,
                                         span,
+                                        resolved_type: None,
                                     };
                                 } else {
                                     let span = Span::new(expr_span(&lhs).start, self.prev_end());

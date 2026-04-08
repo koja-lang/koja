@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use expo_ast::ast::*;
+use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
 
 use crate::check::{
@@ -22,14 +23,14 @@ use crate::env::CheckEnv;
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
 use crate::stmt::{check_body, check_statement};
 use crate::types::{
-    Primitive, Type, TypeIdentifier, build_substitution, named, named_generic,
-    resolve_type_alias_name, resolve_type_expr, substitute_preserving, unify, unwrap_indirect,
+    Primitive, Type, build_substitution, named, named_generic, resolve_type_alias_name,
+    resolve_type_expr, substitute_preserving, unify, unwrap_indirect,
 };
 
 /// Infers the type of an expression, emitting diagnostics for any type errors
 /// encountered during traversal. Returns `Type::Unknown` when the type cannot
 /// be determined.
-pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
+pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
     match expr {
         Expr::Binary {
             op,
@@ -54,9 +55,9 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         } => {
             let mut arm_types: Vec<Type> = Vec::new();
             for arm in arms {
-                infer_expr(&arm.condition, ctx, ce);
+                infer_expr(&mut arm.condition, ctx, ce);
                 let mut child = ce.child(Type::Unknown);
-                arm_types.push(infer_body_type(&arm.body, ctx, &mut child));
+                arm_types.push(infer_body_type(&mut arm.body, ctx, &mut child));
             }
             if let Some(body) = else_body {
                 let mut child = ce.child(Type::Unknown);
@@ -94,7 +95,8 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             variant,
             data,
             span,
-        } => infer_enum_construction(type_path, variant, data, *span, ctx, ce),
+            resolved_type,
+        } => infer_enum_construction(type_path, variant, data, *span, resolved_type, ctx, ce),
 
         Expr::FieldAccess {
             receiver,
@@ -163,15 +165,11 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             condition,
             then_body,
             else_body,
-            ..
+            span,
         } => {
+            let span = *span;
             let cond_ty = infer_expr(condition, ctx, ce);
-            check_type(
-                &cond_ty,
-                &Type::Primitive(Primitive::Bool),
-                expr_span(expr),
-                ctx,
-            );
+            check_type(&cond_ty, &Type::Primitive(Primitive::Bool), span, ctx);
             let mut then_ce = ce.child(Type::Unknown);
             let then_ty = infer_body_type(then_body, ctx, &mut then_ce);
             if let Some(else_stmts) = else_body {
@@ -264,15 +262,15 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         } => {
             let subject_type = infer_expr(subject, ctx, ce);
             let mut result_type = Type::Unknown;
-            for arm in arms {
+            for arm in arms.iter_mut() {
                 let mut arm_ce = ce.child(Type::Unknown);
                 let bound_vars = collect_pattern_bindings(&arm.pattern);
                 check_pattern(&arm.pattern, &subject_type, ctx, &mut arm_ce.env);
-                if let Some(guard) = &arm.guard {
+                if let Some(guard) = &mut arm.guard {
                     let guard_ty = infer_expr(guard, ctx, &mut arm_ce);
                     check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);
                 }
-                let arm_ty = infer_body_type(&arm.body, ctx, &mut arm_ce);
+                let arm_ty = infer_body_type(&mut arm.body, ctx, &mut arm_ce);
                 if result_type == Type::Unknown && arm_ty.is_known() {
                     result_type = arm_ty;
                 }
@@ -291,8 +289,8 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             method,
             args,
             span,
-            ..
-        } => infer_method_call(receiver, method, args, *span, ctx, ce),
+            resolved_type,
+        } => infer_method_call(receiver, method, args, *span, resolved_type, ctx, ce),
 
         Expr::ShortClosure { params, body, span } => {
             infer_short_closure(params, None, body, *span, ctx, ce)
@@ -409,11 +407,11 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             for arm in arms {
                 let mut arm_ce = ce.child(Type::Unknown);
                 check_pattern(&arm.pattern, &subject_type, ctx, &mut arm_ce.env);
-                if let Some(guard) = &arm.guard {
+                if let Some(guard) = &mut arm.guard {
                     let guard_ty = infer_expr(guard, ctx, &mut arm_ce);
                     check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);
                 }
-                check_body(&arm.body, ctx, &mut arm_ce);
+                check_body(&mut arm.body, ctx, &mut arm_ce);
             }
             if let Some(timeout) = after_timeout {
                 infer_expr(timeout, ctx, ce);
@@ -427,7 +425,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         Expr::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {
-                    infer_expr(expr, ctx, ce);
+                    infer_expr(&mut *expr, ctx, ce);
                 }
             }
             Type::Primitive(Primitive::String)
@@ -437,7 +435,8 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             type_path,
             fields,
             span,
-        } => infer_struct_construction(type_path, fields, *span, ctx, ce),
+            resolved_type,
+        } => infer_struct_construction(type_path, fields, *span, resolved_type, ctx, ce),
 
         Expr::Ternary {
             condition,
@@ -488,15 +487,13 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         }
 
         Expr::While {
-            condition, body, ..
+            condition,
+            body,
+            span,
         } => {
+            let span = *span;
             let cond_ty = infer_expr(condition, ctx, ce);
-            check_type(
-                &cond_ty,
-                &Type::Primitive(Primitive::Bool),
-                expr_span(expr),
-                ctx,
-            );
+            check_type(&cond_ty, &Type::Primitive(Primitive::Bool), span, ctx);
             let mut child = ce.child(Type::Unknown);
             child.loop_depth += 1;
             check_body(body, ctx, &mut child);
@@ -504,15 +501,13 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
         }
 
         Expr::Unless {
-            condition, body, ..
+            condition,
+            body,
+            span,
         } => {
+            let span = *span;
             let cond_ty = infer_expr(condition, ctx, ce);
-            check_type(
-                &cond_ty,
-                &Type::Primitive(Primitive::Bool),
-                expr_span(expr),
-                ctx,
-            );
+            check_type(&cond_ty, &Type::Primitive(Primitive::Bool), span, ctx);
             let mut child = ce.child(Type::Unknown);
             check_body(body, ctx, &mut child);
             Type::Unknown
@@ -539,12 +534,13 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
 
 /// Checks a statement list and infers the type of its last expression.
 /// Non-expression trailing statements yield `Type::Unit`.
-fn infer_body_type(body: &[Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
+fn infer_body_type(body: &mut [Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
     if body.is_empty() {
         return Type::Unit;
     }
-    check_body(&body[..body.len() - 1], ctx, ce);
-    match body.last().unwrap() {
+    let len = body.len();
+    check_body(&mut body[..len - 1], ctx, ce);
+    match body.last_mut().unwrap() {
         Statement::Expr(expr) => infer_expr(expr, ctx, ce),
         stmt => {
             check_statement(stmt, ctx, ce);
@@ -556,8 +552,8 @@ fn infer_body_type(body: &[Statement], ctx: &mut TypeContext, ce: &mut CheckEnv)
 /// Type-checks a binary operation, handling pipe desugaring and arithmetic/comparison/logical ops.
 fn infer_binary(
     op: &BinOp,
-    left: &Expr,
-    right: &Expr,
+    left: &mut Expr,
+    right: &mut Expr,
     span: Span,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
@@ -656,7 +652,7 @@ fn infer_binary(
 /// segment and computing whether the result is `Binary` (byte-aligned) or
 /// `Bits` (non-byte-aligned).
 fn infer_binary_literal(
-    segments: &[BinarySegment],
+    segments: &mut [BinarySegment],
     _span: Span,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
@@ -668,9 +664,9 @@ fn infer_binary_literal(
     let mut total_bits: Option<u64> = Some(0);
 
     for seg in segments {
-        let val_ty = infer_expr(&seg.value, ctx, ce);
+        let val_ty = infer_expr(&mut seg.value, ctx, ce);
 
-        let seg_bits: Option<u64> = if let Some(size_expr) = &seg.size {
+        let seg_bits: Option<u64> = if let Some(size_expr) = &mut seg.size {
             let size_ty = infer_expr(size_expr, ctx, ce);
             if size_ty.is_known() && !matches!(size_ty, Type::Primitive(p) if p.is_integer()) {
                 ctx.error(
@@ -794,8 +790,8 @@ fn infer_binary_literal(
 
 /// Type-checks a function call expression, resolving the callee and validating arguments.
 fn infer_call(
-    callee: &Expr,
-    args: &[Arg],
+    callee: &mut Expr,
+    args: &mut [Arg],
     span: Span,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
@@ -827,20 +823,20 @@ fn infer_call(
             *return_type
         } else if ce.env.contains_key(name) || ctx.resolve_name(name).is_some() {
             for arg in args {
-                infer_expr(&arg.value, ctx, ce);
+                infer_expr(&mut arg.value, ctx, ce);
             }
             Type::Unknown
         } else {
             ctx.error(format!("undefined function `{name}`"), span);
             for arg in args {
-                infer_expr(&arg.value, ctx, ce);
+                infer_expr(&mut arg.value, ctx, ce);
             }
             Type::Error
         }
     } else {
         infer_expr(callee, ctx, ce);
         for arg in args {
-            infer_expr(&arg.value, ctx, ce);
+            infer_expr(&mut arg.value, ctx, ce);
         }
         Type::Unknown
     }
@@ -883,7 +879,7 @@ fn expand_mangled_generic_type(ty: &Type, ctx: &TypeContext) -> Type {
 fn infer_generic_call(
     name: &str,
     sig: &FunctionSig,
-    args: &[Arg],
+    args: &mut [Arg],
     span: Span,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
@@ -898,7 +894,7 @@ fn infer_generic_call(
             span,
         );
         for arg in args {
-            infer_expr(&arg.value, ctx, ce);
+            infer_expr(&mut arg.value, ctx, ce);
         }
         return Type::Error;
     }
@@ -906,11 +902,11 @@ fn infer_generic_call(
     let mut subst = HashMap::new();
 
     // Pass 1: infer non-closure arguments to bind type parameters
-    for (i, arg) in args.iter().enumerate() {
+    for (i, arg) in args.iter_mut().enumerate() {
         if is_closure_expr(&arg.value) {
             continue;
         }
-        let arg_ty = infer_expr(&arg.value, ctx, ce);
+        let arg_ty = infer_expr(&mut arg.value, ctx, ce);
         let arg_ty = expand_mangled_generic_type(&arg_ty, ctx);
         let param_ty = &sig.params[i].ty;
         if arg_ty_participates_in_unification(&arg_ty) && !unify(param_ty, &arg_ty, &mut subst) {
@@ -927,13 +923,13 @@ fn infer_generic_call(
     }
 
     // Pass 2: infer closure arguments with partially-substituted expected types
-    for (i, arg) in args.iter().enumerate() {
+    for (i, arg) in args.iter_mut().enumerate() {
         if !is_closure_expr(&arg.value) {
             continue;
         }
         let param_ty = &sig.params[i].ty;
         let expected = substitute_preserving(param_ty, &subst);
-        let arg_ty = infer_expr_with_expected(&arg.value, Some(&expected), ctx, ce);
+        let arg_ty = infer_expr_with_expected(&mut arg.value, Some(&expected), ctx, ce);
         let arg_ty = expand_mangled_generic_type(&arg_ty, ctx);
         if arg_ty_participates_in_unification(&arg_ty) && !unify(param_ty, &arg_ty, &mut subst) {
             ctx.error(
@@ -1007,13 +1003,15 @@ fn infer_generic_call(
 fn infer_enum_construction(
     type_path: &[String],
     variant: &str,
-    data: &EnumConstructionData,
+    data: &mut EnumConstructionData,
     span: Span,
+    resolved_type: &mut Option<TypeIdentifier>,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
     let enum_name = type_path.join(".");
     if let Some(type_info) = ctx.find_type(&enum_name).cloned().filter(|ti| ti.is_enum()) {
+        *resolved_type = Some(type_info.identifier.clone());
         let enum_variants = type_info.variants().unwrap();
         if let Some(vi) = enum_variants.iter().find(|v| v.name == *variant) {
             let is_generic = !type_info.type_params.is_empty();
@@ -1034,7 +1032,7 @@ fn infer_enum_construction(
                             span,
                         );
                     } else {
-                        for (i, arg_expr) in args.iter().enumerate() {
+                        for (i, arg_expr) in args.iter_mut().enumerate() {
                             let arg_ty = infer_expr(arg_expr, ctx, ce);
                             let expected_ty = &expected[i];
                             if is_generic {
@@ -1060,7 +1058,7 @@ fn infer_enum_construction(
                 }
                 (EnumConstructionData::Struct(fields), VariantData::Struct(expected_fields)) => {
                     for fi in fields {
-                        let value_ty = infer_expr(&fi.value, ctx, ce);
+                        let value_ty = infer_expr(&mut fi.value, ctx, ce);
                         if let Some((_, field_ty)) =
                             expected_fields.iter().find(|(n, _)| *n == fi.name)
                         {
@@ -1113,7 +1111,7 @@ fn infer_enum_construction(
                 }
                 (EnumConstructionData::Struct(fields), _) => {
                     for fi in fields {
-                        infer_expr(&fi.value, ctx, ce);
+                        infer_expr(&mut fi.value, ctx, ce);
                     }
                     ctx.error(
                         format!(
@@ -1156,7 +1154,7 @@ fn infer_enum_construction(
             }
             EnumConstructionData::Struct(fields) => {
                 for fi in fields {
-                    infer_expr(&fi.value, ctx, ce);
+                    infer_expr(&mut fi.value, ctx, ce);
                 }
             }
             EnumConstructionData::Unit => {}
@@ -1171,7 +1169,7 @@ fn infer_enum_construction(
 
 /// Type-checks a field access expression, resolving struct fields and reporting mismatches.
 fn infer_field_access(
-    receiver: &Expr,
+    receiver: &mut Expr,
     field: &str,
     span: Span,
     ctx: &mut TypeContext,
@@ -1285,10 +1283,11 @@ pub(crate) fn resolve_receiver_base_name(
 
 /// Type-checks a method call, resolving type functions.
 fn infer_method_call(
-    receiver: &Expr,
+    receiver: &mut Expr,
     method: &str,
-    args: &[Arg],
+    args: &mut [Arg],
     span: Span,
+    resolved_type: &mut Option<TypeIdentifier>,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
@@ -1375,6 +1374,9 @@ fn infer_method_call(
     }
 
     let (base_id, subst) = resolve_receiver_base_name(&recv_ty, ctx);
+    if let Some(ref id) = base_id {
+        *resolved_type = Some(id.clone());
+    }
 
     let method_sig = base_id
         .as_ref()
@@ -1422,7 +1424,7 @@ fn infer_method_call(
         return_type
     } else {
         for arg in args {
-            infer_expr(&arg.value, ctx, ce);
+            infer_expr(&mut arg.value, ctx, ce);
         }
         if let Some(id) = &base_id {
             let ti = ctx.get_type(id);
@@ -1451,8 +1453,9 @@ fn infer_method_call(
 /// Type-checks a struct construction expression, validating fields and their types.
 fn infer_struct_construction(
     type_path: &[String],
-    fields: &[FieldInit],
+    fields: &mut [FieldInit],
     span: Span,
+    resolved_type: &mut Option<TypeIdentifier>,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
@@ -1461,8 +1464,9 @@ fn infer_struct_construction(
         .find_type(&name)
         .map(|ti| (ti.identifier.clone(), ti.fields().cloned()));
     if let Some((resolved_id, Some(struct_fields))) = lookup {
+        *resolved_type = Some(resolved_id.clone());
         for fi in fields {
-            let value_ty = infer_expr(&fi.value, ctx, ce);
+            let value_ty = infer_expr(&mut fi.value, ctx, ce);
             if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
                 if field_ty.is_known()
                     && value_ty.is_known()
@@ -1493,7 +1497,7 @@ fn infer_struct_construction(
         }
     } else {
         for fi in fields {
-            infer_expr(&fi.value, ctx, ce);
+            infer_expr(&mut fi.value, ctx, ce);
         }
         if ce.struct_names.contains(&name.as_str()) {
             named(&name)
@@ -1508,7 +1512,7 @@ fn infer_struct_construction(
 /// When the expression is a closure and `expected` is `Type::Function`, the
 /// expected parameter types are used to fill in unannotated closure parameters.
 pub(crate) fn infer_expr_with_expected(
-    expr: &Expr,
+    expr: &mut Expr,
     expected: Option<&Type>,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
@@ -1533,7 +1537,7 @@ pub(crate) fn infer_expr_with_expected(
 fn infer_closure(
     params: &[ClosureParam],
     expected_param_types: Option<&[FnParam]>,
-    body: &[Statement],
+    body: &mut [Statement],
     span: Span,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
@@ -1567,7 +1571,7 @@ fn infer_closure(
 
     check_body(body, ctx, &mut closure_env);
     let return_type = body
-        .last()
+        .last_mut()
         .and_then(|s| match s {
             Statement::Expr(e) => Some(infer_expr(e, ctx, &mut closure_env)),
             _ => None,
@@ -1595,7 +1599,7 @@ fn infer_closure(
 fn infer_short_closure(
     params: &[ClosureParam],
     expected_param_types: Option<&[FnParam]>,
-    body: &Expr,
+    body: &mut Expr,
     span: Span,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
