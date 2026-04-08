@@ -4,7 +4,7 @@
 //! with linear probing. Layout matches the shared hashtable struct:
 //! `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`
 
-use expo_typecheck::types::{GenericKind, Type, mangle_name};
+use expo_typecheck::types::{Type, mangle_name, named_generic};
 
 use crate::compiler::{Compiler, EmitResult};
 use crate::generics::ensure_types_exist;
@@ -532,14 +532,7 @@ pub fn emit_map_method<'ctx>(
         "get" => {
             let option_type_args = vec![val_type.clone()];
             let option_mangled = mangle_name("Option", &option_type_args);
-            ensure_types_exist(
-                c,
-                &Type::GenericInstance {
-                    base: "Option".to_string(),
-                    type_args: option_type_args.clone(),
-                    kind: GenericKind::Enum,
-                },
-            )?;
+            ensure_types_exist(c, &named_generic("Option", option_type_args.clone()))?;
             let option_struct = *c
                 .types
                 .structs

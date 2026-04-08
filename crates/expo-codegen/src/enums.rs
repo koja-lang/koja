@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use expo_ast::ast::EnumConstructionData;
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{GenericKind, Type, mangle_name, unify, unwrap_indirect};
+use expo_typecheck::types::{
+    Type, TypeIdentifier, mangle_name, named_generic, unify, unwrap_indirect,
+};
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 
@@ -174,7 +176,10 @@ fn compile_concrete_enum<'ctx>(
     let enum_val = c.builder.build_load(enum_type, alloca, enum_name).unwrap();
     Ok(Some(TypedValue::new(
         enum_val,
-        Type::Enum(enum_name.to_string()),
+        Type::Named {
+            identifier: TypeIdentifier::unresolved(enum_name),
+            type_args: vec![],
+        },
     )))
 }
 
@@ -236,14 +241,15 @@ fn compile_generic_enum_construction<'ctx>(
     let has_unknown = type_args.contains(&Type::Unknown);
     if has_unknown && let Some(ref hint) = c.fn_state.return_type_hint {
         let hint_args = match hint {
-            Type::GenericInstance {
-                base,
+            Type::Named {
+                identifier,
                 type_args: ha,
-                ..
-            } if base == enum_name => Some(ha.clone()),
-            Type::Enum(n) | Type::Struct(n) => crate::generics::try_parse_mangled_name(n, c)
-                .filter(|(base, _)| base == enum_name)
-                .map(|(_, ha)| ha),
+            } if identifier.name == enum_name && !ha.is_empty() => Some(ha.clone()),
+            Type::Named { identifier, .. } => {
+                crate::generics::try_parse_mangled_name(&identifier.name, c)
+                    .filter(|(base, _)| base == enum_name)
+                    .map(|(_, ha)| ha)
+            }
             _ => None,
         };
         if let Some(ha) = hint_args {
@@ -327,11 +333,7 @@ fn compile_generic_enum_construction<'ctx>(
     }
 
     let enum_val = c.builder.build_load(enum_type, alloca, &mangled).unwrap();
-    let result_type = Type::GenericInstance {
-        base: enum_name.to_string(),
-        kind: GenericKind::Enum,
-        type_args: type_args.clone(),
-    };
+    let result_type = named_generic(enum_name, type_args.clone());
     Ok(Some(TypedValue::new(enum_val, result_type)))
 }
 
@@ -342,13 +344,11 @@ fn compile_generic_enum_construction<'ctx>(
 /// Resolves the mangled LLVM enum name from an Expo type.
 pub(crate) fn enum_mangled_name(ty: &Type) -> Option<String> {
     match unwrap_indirect(ty) {
-        Type::Enum(name) => Some(name.clone()),
-        Type::GenericInstance {
-            base,
-            kind: GenericKind::Enum,
+        Type::Named {
+            identifier,
             type_args,
-            ..
-        } => Some(mangle_name(base, type_args)),
+        } if !type_args.is_empty() => Some(mangle_name(&identifier.name, type_args)),
+        Type::Named { identifier, .. } => Some(identifier.name.clone()),
         _ => None,
     }
 }

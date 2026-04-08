@@ -237,11 +237,14 @@ fn resolve_enumerable_info<'ctx>(
     String,
 > {
     let (base, type_args) = match ty {
-        Type::GenericInstance {
-            base, type_args, ..
-        } => (base.clone(), type_args.clone()),
-        Type::Struct(name) => {
-            if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(name, c) {
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => (identifier.name.clone(), type_args.clone()),
+        Type::Named { identifier, .. } => {
+            if let Some((base, type_args)) =
+                crate::generics::try_parse_mangled_name(&identifier.name, c)
+            {
                 (base, type_args)
             } else {
                 return Err(format!(
@@ -291,11 +294,10 @@ fn resolve_enumerable_info<'ctx>(
         substitute_preserving(&get_sig.return_type, &subst)
     };
     let elem_expo_ty = match &option_ty {
-        Type::GenericInstance {
-            base: b,
+        Type::Named {
+            identifier,
             type_args: ta,
-            ..
-        } if b == "Option" && !ta.is_empty() => ta[0].clone(),
+        } if identifier.name == "Option" && !ta.is_empty() => ta[0].clone(),
         other => other.clone(),
     };
 

@@ -2,7 +2,7 @@
 //! structs, and provides `call_format` to invoke `{Type}_format` on any value.
 
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{Primitive, Type};
+use expo_typecheck::types::{Primitive, Type, named};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
 
 use crate::compiler::Compiler;
@@ -75,7 +75,7 @@ fn infer_type_from_llvm(val: BasicValueEnum) -> Type {
     } else if val.is_struct_value() {
         let st = val.into_struct_value().get_type();
         if let Some(name) = st.get_name().and_then(|n| n.to_str().ok()) {
-            Type::Struct(name.to_string())
+            named(name)
         } else {
             Type::Unknown
         }
@@ -114,14 +114,15 @@ pub fn synthesize_all_formats<'ctx>(c: &mut Compiler<'ctx>) -> Result<(), String
 }
 
 fn is_complex_type(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Indirect(_) | Type::GenericInstance { .. } | Type::Unknown
-    )
+    match ty {
+        Type::Indirect(_) | Type::Unknown => true,
+        Type::Named { type_args, .. } => !type_args.is_empty(),
+        _ => false,
+    }
 }
 
 fn has_unsynthesizable_fields(c: &Compiler, name: &str) -> bool {
-    if let Some(ti) = c.type_ctx.types.get(name) {
+    if let Some(ti) = c.type_ctx.get_type(name) {
         if let Some(fields) = ti.fields() {
             return fields.iter().any(|(_, ty)| is_complex_type(ty));
         }

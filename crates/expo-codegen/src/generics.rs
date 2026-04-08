@@ -8,7 +8,7 @@ use std::mem;
 use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr, TypeParam};
 use expo_typecheck::context::{FunctionKind, VariantData};
 use expo_typecheck::types::{
-    GenericKind, Primitive, Type, build_substitution, mangle_name, mangle_type, substitute,
+    Primitive, Type, build_substitution, mangle_name, mangle_type, named, substitute,
 };
 use inkwell::types::BasicType;
 use inkwell::values::{FunctionValue, PointerValue};
@@ -138,10 +138,8 @@ pub(crate) fn compile_method_body<'ctx>(
     {
         let self_ty = if let Some(p) = Primitive::from_name(base) {
             Type::Primitive(p)
-        } else if c.type_ctx.is_enum(base) {
-            Type::Enum(mangled.to_string())
         } else {
-            Type::Struct(mangled.to_string())
+            named(mangled)
         };
         if let Some(llvm_ty) = to_llvm_type(&self_ty, c.context, &c.types.structs) {
             let alloca = c.builder.build_alloca(llvm_ty, "self").unwrap();
@@ -644,33 +642,32 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
 /// For mangled generic names, triggers monomorphization if needed.
 pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Result<(), String> {
     match ty {
-        Type::Struct(name) => {
-            if !c.types.structs.contains_key(name)
-                && let Some((base, type_args)) = parse_mangled_name(name, c)
-            {
-                monomorphize_struct(c, &base, &type_args)?;
-            }
-        }
-        Type::Enum(name) => {
-            if !c.types.structs.contains_key(name)
-                && let Some((base, type_args)) = parse_mangled_name(name, c)
-            {
-                monomorphize_enum(c, &base, &type_args)?;
-            }
-        }
-        Type::GenericInstance {
-            base,
+        Type::Named {
+            identifier,
             type_args,
-            kind,
         } => {
-            for arg in type_args {
-                ensure_types_exist(c, arg)?;
-            }
-            let mangled = mangle_name(base, type_args);
-            if !c.types.structs.contains_key(&mangled) {
-                match kind {
-                    GenericKind::Struct => monomorphize_struct(c, base, type_args)?,
-                    GenericKind::Enum => monomorphize_enum(c, base, type_args)?,
+            let name = &identifier.name;
+            if type_args.is_empty() {
+                if !c.types.structs.contains_key(name)
+                    && let Some((base, args)) = parse_mangled_name(name, c)
+                {
+                    if c.type_ctx.is_enum(&base) {
+                        monomorphize_enum(c, &base, &args)?;
+                    } else {
+                        monomorphize_struct(c, &base, &args)?;
+                    }
+                }
+            } else {
+                for arg in type_args {
+                    ensure_types_exist(c, arg)?;
+                }
+                let mangled = mangle_name(name, type_args);
+                if !c.types.structs.contains_key(&mangled) {
+                    if c.type_ctx.is_enum(name) {
+                        monomorphize_enum(c, name, type_args)?;
+                    } else {
+                        monomorphize_struct(c, name, type_args)?;
+                    }
                 }
             }
         }
@@ -766,5 +763,5 @@ fn parse_mangled_type(s: &str) -> Type {
     if let Some(p) = Primitive::from_name(s) {
         return Type::Primitive(p);
     }
-    Type::Struct(s.to_string())
+    named(s)
 }

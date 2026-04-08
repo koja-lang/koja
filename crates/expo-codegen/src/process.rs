@@ -3,7 +3,9 @@
 //! Both types are represented as a bare i64 (the pid) at runtime.
 //! `Ref<M, R>` supports `cast` and `call`; `ReplyTo<R>` supports `send`.
 
-use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name, process_envelope_type};
+use expo_typecheck::types::{
+    Primitive, Type, mangle_name, named, named_generic, process_envelope_type,
+};
 use inkwell::AddressSpace;
 use inkwell::types::BasicType;
 
@@ -202,15 +204,10 @@ pub fn emit_ref_method<'ctx>(
 
             let msg_val = fn_val.get_nth_param(1).unwrap();
 
-            let option_reply_type = Type::GenericInstance {
-                base: "Option".to_string(),
-                kind: GenericKind::Enum,
-                type_args: vec![Type::GenericInstance {
-                    base: "ReplyTo".to_string(),
-                    kind: GenericKind::Struct,
-                    type_args: vec![reply_type.clone()],
-                }],
-            };
+            let option_reply_type = named_generic(
+                "Option",
+                vec![named_generic("ReplyTo", vec![reply_type.clone()])],
+            );
             ensure_types_exist(c, &option_reply_type)?;
             let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
@@ -305,7 +302,7 @@ pub fn emit_ref_method<'ctx>(
             };
 
             // Monomorphize Result<R, CallError> as return type.
-            let callerror_type = Type::Enum("CallError".to_string());
+            let callerror_type = named("CallError");
             let result_type_args = vec![reply_type.clone(), callerror_type.clone()];
             let result_mangled = mangle_name("Result", &result_type_args);
             if !c.types.structs.contains_key(&result_mangled) {
@@ -328,21 +325,13 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("no LLVM type for Pair envelope")?
                 .into_struct_type();
 
-            let reply_to_type = Type::GenericInstance {
-                base: "ReplyTo".to_string(),
-                kind: GenericKind::Struct,
-                type_args: vec![reply_type.clone()],
-            };
+            let reply_to_type = named_generic("ReplyTo", vec![reply_type.clone()]);
             ensure_types_exist(c, &reply_to_type)?;
             let reply_to_llvm = to_llvm_type(&reply_to_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for ReplyTo<R>")?
                 .into_struct_type();
 
-            let option_from_type = Type::GenericInstance {
-                base: "Option".to_string(),
-                kind: GenericKind::Enum,
-                type_args: vec![reply_to_type],
-            };
+            let option_from_type = named_generic("Option", vec![reply_to_type]);
             ensure_types_exist(c, &option_from_type)?;
             let option_from_llvm = to_llvm_type(&option_from_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
@@ -589,12 +578,8 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             // Lifecycle is an enum with unit variants; its LLVM repr is { i8 }.
-            let lifecycle_llvm = to_llvm_type(
-                &Type::Enum("Lifecycle".to_string()),
-                c.context,
-                &c.types.structs,
-            )
-            .ok_or("no LLVM type for Lifecycle enum")?;
+            let lifecycle_llvm = to_llvm_type(&named("Lifecycle"), c.context, &c.types.structs)
+                .ok_or("no LLVM type for Lifecycle enum")?;
 
             let fn_type = c
                 .context

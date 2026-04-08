@@ -21,7 +21,7 @@ pub(crate) fn resolve_receiver_type(
     }
 
     let first_char = receiver.chars().next()?;
-    if first_char.is_uppercase() && ctx.types.contains_key(receiver) {
+    if first_char.is_uppercase() && ctx.get_type(receiver).is_some() {
         return Some(receiver.to_string());
     }
 
@@ -56,7 +56,7 @@ fn infer_variable_type(name: &str, source: &str, ctx: &TypeContext) -> Option<St
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
-            if !type_name.is_empty() && ctx.types.contains_key(&type_name) {
+            if !type_name.is_empty() && ctx.get_type(&type_name).is_some() {
                 return Some(type_name);
             }
         }
@@ -75,7 +75,7 @@ fn extract_constructor_type(text: &str, ctx: &TypeContext) -> Option<String> {
         return None;
     }
 
-    if ctx.types.contains_key(&type_name) {
+    if ctx.get_type(&type_name).is_some() {
         return Some(type_name);
     }
 

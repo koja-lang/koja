@@ -7,8 +7,8 @@ use expo_ast::ast::PassMode;
 use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit, TypeParam};
 use expo_typecheck::context::{FnParam, FunctionKind, TypeInfo};
 use expo_typecheck::types::{
-    GenericKind, Type, build_substitution, mangle_name, resolve_type_alias_name, substitute, unify,
-    unwrap_indirect,
+    Type, TypeIdentifier, build_substitution, mangle_name, named_generic, resolve_type_alias_name,
+    substitute, unify, unwrap_indirect,
 };
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
@@ -222,7 +222,7 @@ pub fn compile_method_call<'ctx>(
 
     if let Expr::Ident { name, .. } = receiver {
         let resolved = resolve_type_alias_name(name, &c.type_ctx.type_aliases);
-        if c.type_ctx.types.contains_key(&resolved) {
+        if c.type_ctx.get_type(&resolved).is_some() {
             return compile_static_call(c, &resolved, method, args, function);
         }
     }
@@ -300,7 +300,7 @@ pub fn compile_method_call<'ctx>(
             sig.return_type.clone(),
         )
     } else if let Some((base_name, ta)) = try_parse_mangled_name(&struct_name, c)
-        && let Some(ti) = c.type_ctx.types.get(&base_name)
+        && let Some(ti) = c.type_ctx.get_type(&base_name)
         && let Some(sig) = ti.functions.get(method)
     {
         let mut subst = build_substitution(&ti.type_params, &ta);
@@ -315,7 +315,7 @@ pub fn compile_method_call<'ctx>(
                 .collect(),
             substitute(&sig.return_type, &subst),
         )
-    } else if let Some(ti) = c.type_ctx.types.get(&base)
+    } else if let Some(ti) = c.type_ctx.get_type(&base)
         && let Some(sig) = ti.functions.get(method)
     {
         (
@@ -362,7 +362,7 @@ pub fn compile_method_call<'ctx>(
 
     let result = c.call(callee, &llvm_args, &format!("{mangled}_ret"));
 
-    if let Some(ti) = c.type_ctx.types.get(&base)
+    if let Some(ti) = c.type_ctx.get_type(&base)
         && let Some(sig) = ti.functions.get(method)
         && sig.kind == FunctionKind::Instance(PassMode::Move)
     {
@@ -383,7 +383,7 @@ pub fn compile_method_call<'ctx>(
 }
 
 fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<TypeParam> {
-    let methods = c.type_ctx.types.get(base_type).map(|ti| &ti.functions);
+    let methods = c.type_ctx.get_type(base_type).map(|ti| &ti.functions);
     if let Some(methods) = methods
         && let Some(sig) = methods.get(method)
     {
@@ -440,20 +440,12 @@ fn infer_method_type_args(
 fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
     match ty {
         Type::Indirect(inner) => Type::Indirect(Box::new(expand_mangled_arg_type(c, inner))),
-        Type::Struct(name) | Type::Enum(name) => {
-            if let Some((base, type_args)) = try_parse_mangled_name(name, c) {
-                let kind = if c.type_ctx.is_enum(&base)
-                    || c.type_ctx.generic_enum_asts.contains_key(&base)
-                {
-                    GenericKind::Enum
-                } else {
-                    GenericKind::Struct
-                };
-                Type::GenericInstance {
-                    base,
-                    kind,
-                    type_args,
-                }
+        Type::Named {
+            identifier,
+            type_args: ta,
+        } if ta.is_empty() => {
+            if let Some((base, type_args)) = try_parse_mangled_name(&identifier.name, c) {
+                named_generic(&base, type_args)
             } else {
                 ty.clone()
             }
@@ -619,14 +611,16 @@ fn push_generic_type_subst<'ctx>(
     field_type: &Type,
 ) -> Option<HashMap<String, Type>> {
     let ty = unwrap_indirect(field_type);
-    if let Type::GenericInstance {
-        base, type_args, ..
+    if let Type::Named {
+        identifier,
+        type_args,
     } = ty
+        && !type_args.is_empty()
     {
         let type_params = c
             .type_ctx
             .types
-            .get(base.as_str())
+            .get(identifier.name.as_str())
             .map(|ti| ti.type_params.clone())?;
         let saved = c.fn_state.type_subst.clone();
         for (param, arg) in type_params.iter().zip(type_args.iter()) {
@@ -652,7 +646,7 @@ pub fn compile_struct_construction<'ctx>(
     let struct_name = &resolve_type_alias_name(raw_name, &c.type_ctx.type_aliases);
 
     // For generic structs, compile field values first, infer type args, and monomorphize
-    if let Some(info) = c.type_ctx.types.get(struct_name)
+    if let Some(info) = c.type_ctx.get_type(struct_name)
         && info.is_struct()
         && !info.type_params.is_empty()
     {
@@ -714,7 +708,10 @@ pub fn compile_struct_construction<'ctx>(
         .unwrap();
     Ok(Some(TypedValue::new(
         struct_val,
-        Type::Struct(struct_name.clone()),
+        Type::Named {
+            identifier: TypeIdentifier::unresolved(struct_name),
+            type_args: vec![],
+        },
     )))
 }
 
@@ -817,11 +814,7 @@ fn compile_generic_struct_construction<'ctx>(
     }
 
     let struct_val = c.builder.build_load(struct_type, alloca, &mangled).unwrap();
-    let result_type = Type::GenericInstance {
-        base: struct_name.to_string(),
-        kind: GenericKind::Struct,
-        type_args: type_args.clone(),
-    };
+    let result_type = named_generic(struct_name, type_args.clone());
     Ok(Some(TypedValue::new(struct_val, result_type)))
 }
 
@@ -858,11 +851,12 @@ fn resolve_struct_name<'ctx>(
 fn struct_name_from_type(ty: &Type) -> Option<String> {
     match ty {
         Type::Indirect(inner) => struct_name_from_type(inner),
-        Type::Struct(n) | Type::Enum(n) => Some(n.clone()),
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => Some(mangle_name(&identifier.name, type_args)),
+        Type::Named { identifier, .. } => Some(identifier.name.clone()),
         Type::Primitive(p) => Some(p.display().to_string()),
-        Type::GenericInstance {
-            base, type_args, ..
-        } => Some(mangle_name(base, type_args)),
         _ => None,
     }
 }
@@ -874,7 +868,7 @@ fn compile_static_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let type_params = c.type_ctx.types.get(type_name).map(|ti| &ti.type_params);
+    let type_params = c.type_ctx.get_type(type_name).map(|ti| &ti.type_params);
 
     let mut type_args: Vec<Type> = if let Some(tp) = type_params
         && !tp.is_empty()
@@ -933,7 +927,7 @@ fn compile_static_call<'ctx>(
             (pts, sig.return_type.clone())
         })
         .or_else(|| {
-            let ti = c.type_ctx.types.get(type_name)?;
+            let ti = c.type_ctx.get_type(type_name)?;
             let sig = ti.functions.get(method)?;
             if !type_args.is_empty() {
                 let subst = build_substitution(&ti.type_params, &type_args);

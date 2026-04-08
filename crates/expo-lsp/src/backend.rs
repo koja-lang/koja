@@ -12,7 +12,7 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
-use expo_ast::ast::{Item, Module};
+use expo_ast::ast::Module;
 use expo_typecheck::context::TypeContext;
 
 /// Cached state for a single open document, including the parsed AST
@@ -64,39 +64,20 @@ impl Backend {
         let stdlib_refs: Vec<&Module> = stdlib_modules.iter().collect();
         let global_names = expo_typecheck::collect_all_names(&stdlib_refs);
 
-        // Only auto-import std modules. Qualified packages (net, json, etc.)
-        // are handled via package_types and alias resolution at check time.
+        // Collect all stdlib modules. Auto-imported modules (std.*) use
+        // package "std". Qualified modules (json, net, etc.) use their
+        // package name as the identifier, making them accessible via
+        // ctx.is_package_type() for alias resolution.
         for (i, module) in stdlib_modules.iter().enumerate() {
             let name = source_names[i];
-            if !name.starts_with("std.") {
-                continue;
-            }
-            let mut mod_ctx = expo_typecheck::collect_module(module, &global_names);
+            let pkg = if name.starts_with("std.") {
+                "std"
+            } else {
+                name.split('.').next().unwrap_or(name)
+            };
+            let mut mod_ctx = expo_typecheck::collect_module(module, &global_names, pkg);
             mod_ctx.merge(&ctx);
             ctx.merge(&mod_ctx);
-        }
-
-        // Register qualified stdlib package types for alias resolution.
-        for &pkg in expo_stdlib::QUALIFIED_MODULES {
-            for (i, module) in stdlib_modules.iter().enumerate() {
-                let name = source_names[i];
-                if name != pkg && !name.starts_with(&format!("{pkg}.")) {
-                    continue;
-                }
-                for item in &module.items {
-                    let type_name = match item {
-                        Item::Struct(s) => Some(&s.name),
-                        Item::Enum(e) => Some(&e.name),
-                        _ => None,
-                    };
-                    if let Some(tn) = type_name {
-                        ctx.package_types
-                            .entry(pkg.to_string())
-                            .or_default()
-                            .insert(tn.clone());
-                    }
-                }
-            }
         }
 
         Self {

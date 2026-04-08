@@ -239,10 +239,16 @@ pub fn type_display_name(ty: &Type) -> String {
             Primitive::F64 => "Float".to_string(),
             Primitive::String => "String".to_string(),
         },
-        Type::Enum(name) | Type::Struct(name) => name.clone(),
-        Type::GenericInstance {
-            base, type_args, ..
-        } => mangle_name(base, type_args),
+        Type::Named {
+            identifier,
+            type_args,
+        } => {
+            if type_args.is_empty() {
+                identifier.name.clone()
+            } else {
+                mangle_name(&identifier.name, type_args)
+            }
+        }
         _ => format!("{ty:?}"),
     }
 }

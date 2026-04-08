@@ -24,8 +24,8 @@ use expo_ast::ast::{
 };
 use expo_typecheck::context::{TypeContext, VariantData};
 use expo_typecheck::types::{
-    Type, build_substitution, process_envelope_type, resolve_type_expr_with_params, substitute,
-    substitute_preserving,
+    Type, build_substitution, named, process_envelope_type, resolve_type_expr_with_params,
+    substitute, substitute_preserving,
 };
 use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -466,7 +466,7 @@ impl<'ctx> Compiler<'ctx> {
                 .position(|(name, _)| name == field_name)
                 .map(|i| i as u32);
         }
-        self.type_ctx.types.get(struct_name).and_then(|info| {
+        self.type_ctx.get_type(struct_name).and_then(|info| {
             info.fields().and_then(|fields| {
                 fields
                     .iter()
@@ -484,7 +484,7 @@ impl<'ctx> Compiler<'ctx> {
                 .find(|(name, _)| name == field_name)
                 .map(|(_, ty)| ty.clone());
         }
-        self.type_ctx.types.get(struct_name).and_then(|info| {
+        self.type_ctx.get_type(struct_name).and_then(|info| {
             info.fields().and_then(|fields| {
                 fields
                     .iter()
@@ -530,10 +530,8 @@ impl<'ctx> Compiler<'ctx> {
             &self.type_ctx.type_aliases,
         );
         if let Some(ref name) = self.fn_state.self_type_name {
-            let self_ty = if self.type_ctx.is_struct(name) {
-                Type::Struct(name.clone())
-            } else if self.type_ctx.is_enum(name) {
-                Type::Enum(name.clone())
+            let self_ty = if self.type_ctx.is_struct(name) || self.type_ctx.is_enum(name) {
+                named(name)
             } else {
                 return substitute_preserving(&ty, &self.fn_state.type_subst);
             };
@@ -660,7 +658,7 @@ impl<'ctx> Compiler<'ctx> {
                         let Some(&struct_type) = self.types.structs.get(&struct_name) else {
                             continue;
                         };
-                        let Some(info) = self.type_ctx.types.get(&struct_name) else {
+                        let Some(info) = self.type_ctx.get_type(&struct_name) else {
                             continue;
                         };
                         let Some(struct_fields) = info.fields() else {
@@ -1523,7 +1521,7 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(target, c) {
         let impls = c.type_ctx.protocol_impls.get(&base)?;
         let (_, proto_args) = impls.iter().find(|(proto, _)| proto == "Process")?;
-        let ti = c.type_ctx.types.get(&base)?;
+        let ti = c.type_ctx.get_type(&base)?;
         let subst = build_substitution(&ti.type_params, &type_args);
         let m = substitute(proto_args.get(1)?, &subst);
         let r = substitute(proto_args.get(2)?, &subst);

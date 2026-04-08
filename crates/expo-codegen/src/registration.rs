@@ -275,7 +275,7 @@ fn collect_union_types(ty: &Type, out: &mut Vec<Type>) {
             }
             collect_union_types(return_type, out);
         }
-        Type::GenericInstance { type_args, .. } => {
+        Type::Named { type_args, .. } => {
             for ta in type_args {
                 collect_union_types(ta, out);
             }

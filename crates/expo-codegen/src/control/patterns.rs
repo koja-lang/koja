@@ -6,7 +6,7 @@ use crate::binary::patterns::compile_binary_pattern;
 use crate::drop::Ownership;
 use expo_ast::ast::{Expr, FieldPattern, Literal, MatchArm, Pattern};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{GenericKind, Type, mangle_name, mangle_type, unwrap_indirect};
+use expo_typecheck::types::{Type, mangle_name, mangle_type, named, unwrap_indirect};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -514,15 +514,12 @@ fn enum_name_from_path<'ctx>(
 ) -> Result<String, String> {
     let ty = unwrap_indirect(subject_type);
     match ty {
-        Type::GenericInstance {
-            base,
+        Type::Named {
+            identifier,
             type_args,
-            kind: GenericKind::Enum,
-            ..
-        } => Ok(mangle_name(base, type_args)),
-        Type::Enum(name) => Ok(name.clone()),
-        Type::Union(_) => Ok(mangle_type(ty)),
-        Type::Struct(name) => {
+        } if !type_args.is_empty() => Ok(mangle_name(&identifier.name, type_args)),
+        Type::Named { identifier, .. } => {
+            let name = &identifier.name;
             if let Some((base, _)) = crate::generics::try_parse_mangled_name(name, c)
                 && c.type_ctx.is_enum(&base)
             {
@@ -566,19 +563,15 @@ fn find_constructor_enum<'ctx>(
     subject_type: &Type,
 ) -> Result<String, String> {
     let subject_type = unwrap_indirect(subject_type);
-    if let Type::GenericInstance {
-        base,
+    if let Type::Named {
+        identifier,
         type_args,
-        kind: GenericKind::Enum,
-        ..
     } = subject_type
     {
-        return Ok(mangle_name(base, type_args));
-    }
-    if let Type::Enum(name) = subject_type {
-        return Ok(name.clone());
-    }
-    if let Type::Struct(name) = subject_type {
+        let name = &identifier.name;
+        if !type_args.is_empty() {
+            return Ok(mangle_name(name, type_args));
+        }
         if let Some((base, _)) = crate::generics::try_parse_mangled_name(name, c)
             && c.type_ctx.is_enum(&base)
         {
@@ -589,7 +582,7 @@ fn find_constructor_enum<'ctx>(
         }
     }
     if let Type::Union(members) = subject_type {
-        let member_mangled = mangle_type(&Type::Struct(variant_name.to_string()));
+        let member_mangled = mangle_type(&named(variant_name));
         if members.iter().any(|m| mangle_type(m) == member_mangled) {
             return Ok(mangle_type(subject_type));
         }
@@ -656,7 +649,7 @@ pub(crate) fn lookup_variant_data(
     enum_name: &str,
     variant: &str,
 ) -> Result<VariantData, String> {
-    if let Some(ti) = c.type_ctx.types.get(enum_name)
+    if let Some(ti) = c.type_ctx.get_type(enum_name)
         && let Some(vs) = ti.variants()
         && let Some(vi) = vs.iter().find(|v| v.name == variant)
     {

@@ -5,7 +5,7 @@ use expo_ast::ast::{ClosureParam, Expr, Literal, MatchArm, Statement, StringPart
 use expo_ast::span::Span;
 
 use expo_typecheck::context::FnParam;
-use expo_typecheck::types::{GenericKind, Primitive, Type, mangle_name};
+use expo_typecheck::types::{Primitive, Type, mangle_name, named, named_generic};
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use std::collections::HashMap;
@@ -509,14 +509,16 @@ fn compile_closure_core<'ctx>(
     let saved_block = c.builder.get_insert_block();
     let saved_subst = {
         let mut extra = HashMap::<String, Type>::new();
-        if let Type::GenericInstance {
-            base, type_args, ..
+        if let Type::Named {
+            identifier,
+            type_args,
         } = &ret_type
+            && !type_args.is_empty()
         {
             let type_params = c
                 .type_ctx
                 .types
-                .get(base.as_str())
+                .get(identifier.name.as_str())
                 .map(|ti| &ti.type_params);
             if let Some(tps) = type_params {
                 for (tp, ta) in tps.iter().zip(type_args.iter()) {
@@ -702,11 +704,7 @@ fn compile_list_literal<'ctx>(
             .ok_or("List.append returned void")?;
     }
 
-    let list_type = Type::GenericInstance {
-        base: "List".to_string(),
-        kind: GenericKind::Struct,
-        type_args: vec![elem_type],
-    };
+    let list_type = named_generic("List", vec![elem_type]);
     Ok(Some(TypedValue::new(list_val, list_type)))
 }
 
@@ -765,11 +763,7 @@ fn compile_map_literal<'ctx>(
             .ok_or("Map.put returned void")?;
     }
 
-    let map_type = Type::GenericInstance {
-        base: "Map".to_string(),
-        kind: GenericKind::Struct,
-        type_args: vec![key_type, val_type],
-    };
+    let map_type = named_generic("Map", vec![key_type, val_type]);
     Ok(Some(TypedValue::new(map_val, map_type)))
 }
 
@@ -1192,7 +1186,8 @@ fn compile_receive_tagged<'ctx>(
     for arm in arms {
         if let Pattern::TypedBinding { type_expr, .. } = &arm.pattern {
             let resolved = c.resolve_type_expr(type_expr);
-            if matches!(&resolved, Type::Enum(n) if n == "Lifecycle") {
+            if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "Lifecycle" && type_args.is_empty())
+            {
                 lifecycle_arms.push(arm);
                 continue;
             }
@@ -1265,7 +1260,7 @@ fn compile_receive_tagged<'ctx>(
     if has_lifecycle {
         c.builder.position_at_end(lc_bb);
 
-        let lifecycle_type = Type::Enum("Lifecycle".to_string());
+        let lifecycle_type = named("Lifecycle");
         let lc_llvm = crate::types::to_llvm_type(&lifecycle_type, c.context, &c.types.structs)
             .ok_or("no LLVM type for Lifecycle enum")?;
         let lc_val = c

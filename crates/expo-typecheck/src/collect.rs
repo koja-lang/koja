@@ -10,7 +10,7 @@ use crate::context::{
     FunctionKind, FunctionSig, ParamInfo, PassMode, ProtocolInfo, TypeContext, TypeInfo, TypeKind,
     VariantData, VariantInfo, Visibility,
 };
-use crate::types::{Primitive, Type, resolve_type_expr_with_params};
+use crate::types::{Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params};
 
 /// Pre-collected struct and enum names across all modules in the program.
 /// Passed into [`collect`] so that type resolution sees every type name
@@ -50,7 +50,10 @@ pub fn collect_all_names(modules: &[&Module]) -> GlobalNames {
 /// function signatures, struct definitions, and enum definitions.
 /// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-module
 /// type references (e.g. imported struct names) resolve correctly.
-pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
+/// The `package` parameter identifies which package this module belongs to
+/// (e.g. `"std"`, `"json"`, or the project name). It's stored on each
+/// [`TypeInfo`]'s [`TypeIdentifier`] for package-aware collision detection.
+pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> TypeContext {
     let mut ctx = TypeContext::new();
 
     let struct_names: Vec<&str> = global_names
@@ -138,17 +141,23 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                         }
                     })
                     .collect();
+                let type_id = if package == "std" {
+                    TypeIdentifier::std(&e.name)
+                } else {
+                    TypeIdentifier::new(package, &e.name)
+                };
                 ctx.generic_enum_asts.insert(e.name.clone(), e.clone());
-                ctx.types.insert(
-                    e.name.clone(),
+                ctx.insert_type(
+                    type_id,
                     TypeInfo {
+                        identifier: TypeIdentifier::unresolved(&e.name),
                         functions: BTreeMap::new(),
                         kind: TypeKind::Enum { variants },
                         span: e.span,
                         type_params: e.type_params.clone(),
                     },
                 );
-                let self_type = Type::Enum(e.name.clone());
+                let self_type = named(&e.name);
                 let resolve = ResolveCtx {
                     struct_names: &struct_names,
                     enum_names: &enum_names,
@@ -243,7 +252,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                             }
                         }
 
-                        let ti = ctx.types.get_mut(&target_name);
+                        let ti = ctx.get_type_mut(&target_name);
                         if let Some(ti) = ti {
                             if ti.functions.contains_key(&f.name) {
                                 ctx.error(
@@ -261,6 +270,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                                 ctx.types
                                     .entry(target_name.clone())
                                     .or_insert_with(|| TypeInfo {
+                                        identifier: TypeIdentifier::std(&target_name),
                                         functions: BTreeMap::new(),
                                         kind: TypeKind::Primitive,
                                         span: f.span,
@@ -327,7 +337,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                             );
                             if let Some(sig) = sig {
                                 let sig = substitute_self_type(sig, &self_type);
-                                if let Some(ti) = ctx.types.get_mut(&target_name) {
+                                if let Some(ti) = ctx.get_type_mut(&target_name) {
                                     ti.functions.insert(name.clone(), sig);
                                 }
                             }
@@ -395,7 +405,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                         } => {
                             let enum_name = type_path.join(".");
                             if enum_names.contains(&enum_name.as_str()) {
-                                Type::Enum(enum_name)
+                                named(&enum_name)
                             } else {
                                 ctx.error(
                                     format!("constant `{}`: unknown enum `{}`", c.name, enum_name),
@@ -409,7 +419,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                         } if fields.iter().all(|f| is_const_expr(&f.value)) => {
                             let name = type_path.join(".");
                             if struct_names.contains(&name.as_str()) {
-                                Type::Struct(name)
+                                named(&name)
                             } else {
                                 ctx.error(
                                     format!("constant `{}`: unknown struct `{}`", c.name, name),
@@ -432,7 +442,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                 };
                 if ctx.constants.contains_key(&c.name) {
                     ctx.error(format!("duplicate constant `{}`", c.name), c.span);
-                } else if ctx.functions.contains_key(&c.name) || ctx.types.contains_key(&c.name) {
+                } else if ctx.functions.contains_key(&c.name) || ctx.get_type(&c.name).is_some() {
                     ctx.error(
                         format!(
                             "constant `{}` conflicts with an existing declaration",
@@ -491,17 +501,23 @@ pub fn collect(module: &Module, global_names: &GlobalNames) -> TypeContext {
                         (f.name.clone(), ty)
                     })
                     .collect();
+                let type_id = if package == "std" {
+                    TypeIdentifier::std(&s.name)
+                } else {
+                    TypeIdentifier::new(package, &s.name)
+                };
                 ctx.generic_struct_asts.insert(s.name.clone(), s.clone());
-                ctx.types.insert(
-                    s.name.clone(),
+                ctx.insert_type(
+                    type_id,
                     TypeInfo {
+                        identifier: TypeIdentifier::unresolved(&s.name),
                         functions: BTreeMap::new(),
                         kind: TypeKind::Struct { fields },
                         span: s.span,
                         type_params: s.type_params.clone(),
                     },
                 );
-                let self_type = Type::Struct(s.name.clone());
+                let self_type = named(&s.name);
                 let resolve = ResolveCtx {
                     struct_names: &struct_names,
                     enum_names: &enum_names,
@@ -631,10 +647,8 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
                 continue;
             }
 
-            let self_type = if ctx.is_struct(&target_name) {
-                Type::Struct(target_name.clone())
-            } else if ctx.is_enum(&target_name) {
-                Type::Enum(target_name.clone())
+            let self_type = if ctx.is_struct(&target_name) || ctx.is_enum(&target_name) {
+                named(&target_name)
             } else if let Some(p) = Primitive::from_name(&target_name) {
                 Type::Primitive(p)
             } else {
@@ -675,7 +689,7 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
                     );
                     if let Some(sig) = sig {
                         let sig = substitute_self_type(sig, &self_type);
-                        if let Some(ti) = ctx.types.get_mut(&target_name) {
+                        if let Some(ti) = ctx.get_type_mut(&target_name) {
                             ti.functions.insert(name.clone(), sig);
                         }
                     }
@@ -722,7 +736,7 @@ fn register_method_on_type(
     };
     let sig = substitute_self_type(sig, self_type);
 
-    let Some(ti) = ctx.types.get_mut(type_name) else {
+    let Some(ti) = ctx.get_type_mut(type_name) else {
         return;
     };
     if ti.functions.contains_key(&f.name) {
@@ -920,7 +934,7 @@ pub fn auto_derive_debug(ctx: &mut TypeContext) {
     };
 
     for name in &type_names {
-        if let Some(ti) = ctx.types.get_mut(name) {
+        if let Some(ti) = ctx.get_type_mut(name) {
             if !ti.functions.contains_key("format") {
                 ti.functions
                     .insert("format".to_string(), format_sig.clone());

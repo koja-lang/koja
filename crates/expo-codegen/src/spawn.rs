@@ -12,7 +12,7 @@
 
 use expo_ast::ast::{Arg, Expr};
 use expo_typecheck::types::{
-    GenericKind, Primitive, Type, build_substitution, mangle_name, substitute,
+    Primitive, Type, build_substitution, mangle_name, named_generic, substitute,
 };
 use inkwell::IntPredicate;
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
@@ -378,11 +378,7 @@ pub(crate) fn build_ref_value<'ctx>(
         .unwrap()
         .into_struct_value();
 
-    let ref_type = Type::GenericInstance {
-        base: "Ref".to_string(),
-        kind: GenericKind::Struct,
-        type_args,
-    };
+    let ref_type = named_generic("Ref", type_args);
     Ok(TypedValue::new(sv.into(), ref_type))
 }
 

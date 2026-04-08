@@ -7,7 +7,7 @@ use expo_ast::ast::{
 use expo_ast::span::Span;
 use expo_typecheck::context::{Coercion, FnParam};
 use expo_typecheck::types::{
-    GenericKind, Primitive, Type, mangle_name, mangle_type, substitute, substitute_preserving,
+    Primitive, Type, mangle_name, mangle_type, substitute, substitute_preserving,
 };
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
@@ -55,14 +55,16 @@ pub fn compile_statement<'ctx>(
             let mut saved_subst = None;
             if let Some(te) = type_annotation {
                 let annotated = c.resolve_type_expr(te);
-                if let Type::GenericInstance {
-                    base, type_args, ..
+                if let Type::Named {
+                    identifier,
+                    type_args,
                 } = &annotated
+                    && !type_args.is_empty()
                 {
                     let type_params = c
                         .type_ctx
                         .types
-                        .get(base.as_str())
+                        .get(identifier.name.as_str())
                         .map(|ti| ti.type_params.clone());
                     if let Some(tp) = type_params {
                         saved_subst = Some(c.fn_state.type_subst.clone());
@@ -86,18 +88,16 @@ pub fn compile_statement<'ctx>(
             let ty = if let Some(te) = type_annotation {
                 let annotated = c.resolve_type_expr(te);
                 let annotated = match annotated {
-                    Type::GenericInstance {
-                        base,
-                        kind,
+                    Type::Named {
+                        identifier,
                         type_args,
-                    } => {
+                    } if !type_args.is_empty() => {
                         let resolved_args: Vec<Type> = type_args
                             .iter()
                             .map(|t| substitute_preserving(t, &c.fn_state.type_subst))
                             .collect();
-                        Type::GenericInstance {
-                            base,
-                            kind,
+                        Type::Named {
+                            identifier,
                             type_args: resolved_args,
                         }
                     }
@@ -267,12 +267,11 @@ fn resolve_field_ptr<'ctx>(
 
     for field_name in &segments[1..] {
         let struct_name = match &current_type {
-            Type::Struct(n) => n.clone(),
-            Type::GenericInstance {
-                base,
+            Type::Named {
+                identifier,
                 type_args,
-                kind: GenericKind::Struct,
-            } => mangle_name(base, type_args),
+            } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
+            Type::Named { identifier, .. } => identifier.name.clone(),
             _ => {
                 return Err(format!(
                     "cannot access field `{field_name}` on non-struct type"
@@ -336,7 +335,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             name: type_name, ..
         } = receiver.as_ref()
         {
-            let is_type_name = c.type_ctx.types.contains_key(type_name);
+            let is_type_name = c.type_ctx.get_type(type_name).is_some();
             if is_type_name {
                 return infer_static_method_return_type(c, type_name, method, args);
             }
@@ -433,35 +432,31 @@ fn infer_instance_method_return_type(c: &Compiler, recv_ty: &Type, method: &str)
             .get(p.display())
             .and_then(|ti| ti.functions.get(method))
             .map(|sig| sig.return_type.clone()),
-        Type::Struct(name) => c
-            .type_ctx
-            .types
-            .get(name)
-            .and_then(|ti| ti.functions.get(method))
-            .map(|sig| sig.return_type.clone()),
-        Type::Enum(name) => c
-            .type_ctx
-            .types
-            .get(name)
-            .and_then(|ti| ti.functions.get(method))
-            .map(|sig| sig.return_type.clone()),
-        Type::GenericInstance {
-            base,
+        Type::Named {
+            identifier,
             type_args,
-            kind: _,
         } => {
-            let (methods, type_params) = c
-                .type_ctx
-                .types
-                .get(base)
-                .map(|ti| (&ti.functions, &ti.type_params))?;
-            let sig = methods.get(method)?;
-            let subst: HashMap<String, Type> = type_params
-                .iter()
-                .zip(type_args.iter())
-                .map(|(p, a)| (p.name.clone(), a.clone()))
-                .collect();
-            Some(substitute(&sig.return_type, &subst))
+            let name = &identifier.name;
+            if type_args.is_empty() {
+                c.type_ctx
+                    .types
+                    .get(name)
+                    .and_then(|ti| ti.functions.get(method))
+                    .map(|sig| sig.return_type.clone())
+            } else {
+                let (methods, type_params) = c
+                    .type_ctx
+                    .types
+                    .get(name)
+                    .map(|ti| (&ti.functions, &ti.type_params))?;
+                let sig = methods.get(method)?;
+                let subst: HashMap<String, Type> = type_params
+                    .iter()
+                    .zip(type_args.iter())
+                    .map(|(p, a)| (p.name.clone(), a.clone()))
+                    .collect();
+                Some(substitute(&sig.return_type, &subst))
+            }
         }
         _ => None,
     }
@@ -580,9 +575,12 @@ fn convert_list_literal_if_needed<'ctx>(
     target_type: &Type,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let (base, type_args) = match target_type {
-        Type::GenericInstance {
-            base, type_args, ..
-        } if base != "List" => (base.clone(), type_args.clone()),
+        Type::Named {
+            identifier,
+            type_args,
+        } if identifier.name != "List" && !type_args.is_empty() => {
+            (identifier.name.clone(), type_args.clone())
+        }
         _ => return Ok(list_val),
     };
 

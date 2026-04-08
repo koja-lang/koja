@@ -33,6 +33,9 @@ pub struct ModuleGraph {
     /// When the entry is a PascalCase type name (Process entry mode), this
     /// holds the type name (e.g. `"App"`). `None` for legacy `fn main` mode.
     pub entry_type: Option<String>,
+    /// The project name from `expo.toml`. For single-file mode this is the
+    /// entry file stem. Used to construct [`TypeIdentifier`]s for user types.
+    pub project_name: String,
 }
 
 // =============================================================================
@@ -59,6 +62,7 @@ pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
         order: Vec::new(),
         dep_packages: Vec::new(),
         entry_type: None,
+        project_name: entry_name.clone(),
     };
 
     graph.order.push(entry_name.clone());
@@ -110,6 +114,7 @@ pub fn resolve_project_modules(
         order: Vec::new(),
         dep_packages: Vec::new(),
         entry_type: config.entry_type_name().map(|s| s.to_string()),
+        project_name: config.name.clone(),
     };
 
     insert_stdlib(&mut graph);
@@ -224,6 +229,7 @@ pub fn resolve_test_project_modules(
         order: Vec::new(),
         dep_packages: Vec::new(),
         entry_type: None,
+        project_name: config.name.clone(),
     };
 
     insert_stdlib(&mut graph);

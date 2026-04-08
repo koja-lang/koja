@@ -89,7 +89,7 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
     }
 
     for (type_name, slots) in &wrap_slots {
-        if let Some(ti) = ctx.types.get_mut(type_name) {
+        if let Some(ti) = ctx.get_type_mut(type_name) {
             for slot in slots {
                 match (&mut ti.kind, slot) {
                     (TypeKind::Struct { fields }, Slot::StructField(idx))
@@ -162,16 +162,12 @@ fn referenced_type_names(ty: &Type, known: &HashSet<String>) -> HashSet<String> 
 /// Recursively collects type names from `ty` that appear in `known`, appending to `refs`.
 fn collect_refs(ty: &Type, known: &HashSet<String>, refs: &mut HashSet<String>) {
     match ty {
-        Type::Struct(name) | Type::Enum(name) => {
-            if known.contains(name) {
-                refs.insert(name.clone());
-            }
-        }
-        Type::GenericInstance {
-            base, type_args, ..
+        Type::Named {
+            identifier,
+            type_args,
         } => {
-            if known.contains(base) {
-                refs.insert(base.clone());
+            if known.contains(&identifier.name) {
+                refs.insert(identifier.name.clone());
             }
             for arg in type_args {
                 collect_refs(arg, known, refs);

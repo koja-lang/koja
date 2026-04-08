@@ -169,11 +169,11 @@ impl Backend {
 
             let mut unified_ctx = self.stdlib_ctx.clone();
             for m in &sibling_modules {
-                let mod_ctx = expo_typecheck::collect_module(m, &global_names);
+                let mod_ctx = expo_typecheck::collect_module(m, &global_names, "");
                 unified_ctx.merge(&mod_ctx);
             }
 
-            let mut ctx = expo_typecheck::collect_module(&parse_result.module, &global_names);
+            let mut ctx = expo_typecheck::collect_module(&parse_result.module, &global_names, "");
             ctx.merge(&unified_ctx);
             expo_typecheck::auto_derive_debug(&mut ctx);
             expo_typecheck::mark_recursive_fields(&mut ctx);

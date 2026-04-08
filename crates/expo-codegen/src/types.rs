@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type};
+use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type, named};
 use inkwell::context::Context;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
 
@@ -17,15 +17,19 @@ pub fn to_llvm_type<'ctx>(
     match ty {
         Type::Indirect(_) => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
         Type::Primitive(p) => Some(primitive_to_llvm(p, context)),
-        Type::Struct(name) | Type::Enum(name) => structs.get(name).map(|st| (*st).into()),
+        Type::Named {
+            identifier,
+            type_args,
+        } => {
+            if type_args.is_empty() {
+                structs.get(&identifier.name).map(|st| (*st).into())
+            } else {
+                let mangled = mangle_name(&identifier.name, type_args);
+                structs.get(&mangled).map(|st| (*st).into())
+            }
+        }
         Type::Union(_) => {
             let mangled = mangle_type(ty);
-            structs.get(&mangled).map(|st| (*st).into())
-        }
-        Type::GenericInstance {
-            base, type_args, ..
-        } => {
-            let mangled = mangle_name(base, type_args);
             structs.get(&mangled).map(|st| (*st).into())
         }
         Type::Function { .. } => {
@@ -69,7 +73,7 @@ pub fn primitive_name_to_type(name: &str) -> Type {
         "String" => Type::Primitive(Primitive::String),
         "Float" => Type::Primitive(Primitive::F64),
         "Float32" => Type::Primitive(Primitive::F32),
-        _ => Type::Struct(name.to_string()),
+        _ => named(name),
     }
 }
 

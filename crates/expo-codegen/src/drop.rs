@@ -86,24 +86,24 @@ pub fn drop_live_variables<'ctx>(c: &mut Compiler<'ctx>, skip: Option<&str>) {
 
 fn is_list_type(ty: &Type) -> bool {
     match ty {
-        Type::GenericInstance { base, .. } if base == "List" => true,
-        Type::Struct(name) if name.starts_with("List_$") => true,
+        Type::Named { identifier, .. } if identifier.name == "List" => true,
+        Type::Named { identifier, .. } if identifier.name.starts_with("List_$") => true,
         _ => false,
     }
 }
 
 fn is_map_type(ty: &Type) -> bool {
     match ty {
-        Type::GenericInstance { base, .. } if base == "Map" => true,
-        Type::Struct(name) if name.starts_with("Map_$") => true,
+        Type::Named { identifier, .. } if identifier.name == "Map" => true,
+        Type::Named { identifier, .. } if identifier.name.starts_with("Map_$") => true,
         _ => false,
     }
 }
 
 fn is_set_type(ty: &Type) -> bool {
     match ty {
-        Type::GenericInstance { base, .. } if base == "Set" => true,
-        Type::Struct(name) if name.starts_with("Set_$") => true,
+        Type::Named { identifier, .. } if identifier.name == "Set" => true,
+        Type::Named { identifier, .. } if identifier.name.starts_with("Set_$") => true,
         _ => false,
     }
 }
@@ -117,13 +117,14 @@ fn needs_heap_drop(c: &Compiler, ty: &Type) -> bool {
 fn has_indirect_fields(c: &Compiler, ty: &Type) -> bool {
     match ty {
         Type::Indirect(_) => true,
-        Type::GenericInstance {
-            base, type_args, ..
-        } => {
-            let mangled = mangle_name(base, type_args);
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => {
+            let mangled = mangle_name(&identifier.name, type_args);
             has_indirect_fields_by_name(c, &mangled)
         }
-        Type::Struct(name) | Type::Enum(name) => has_indirect_fields_by_name(c, name),
+        Type::Named { identifier, .. } => has_indirect_fields_by_name(c, &identifier.name),
         _ => false,
     }
 }
@@ -134,7 +135,7 @@ fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
     }
-    if let Some(info) = c.type_ctx.types.get(name)
+    if let Some(info) = c.type_ctx.get_type(name)
         && let Some(fields) = info.fields()
     {
         return fields
@@ -146,7 +147,7 @@ fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
             .iter()
             .any(|(_, vdata)| variant_has_indirect(vdata));
     }
-    if let Some(info) = c.type_ctx.types.get(name)
+    if let Some(info) = c.type_ctx.get_type(name)
         && let Some(vs) = info.variants()
     {
         return vs.iter().any(|v| variant_has_indirect(&v.data));
@@ -208,10 +209,11 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
 
     let struct_name = match ty {
-        Type::GenericInstance {
-            base, type_args, ..
-        } => mangle_name(base, type_args),
-        Type::Struct(n) | Type::Enum(n) => n.clone(),
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
+        Type::Named { identifier, .. } => identifier.name.clone(),
         _ => return,
     };
 
@@ -231,7 +233,7 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
                 .collect()
         })
         .or_else(|| {
-            c.type_ctx.types.get(&struct_name).and_then(|ti| {
+            c.type_ctx.get_type(&struct_name).and_then(|ti| {
                 ti.fields().map(|fields| {
                     fields
                         .iter()
@@ -266,10 +268,11 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
 /// Drops a List value: extracts the data pointer (field 0) and frees it.
 fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
     let mangled = match ty {
-        Type::GenericInstance {
-            base, type_args, ..
-        } => mangle_name(base, type_args),
-        Type::Struct(name) => name.clone(),
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
+        Type::Named { identifier, .. } => identifier.name.clone(),
         _ => return,
     };
     let Some(list_struct) = c.types.structs.get(&mangled).copied() else {
@@ -296,10 +299,11 @@ fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: 
 /// Drops a Map or Set value: frees entries_ptr (field 0) and states_ptr (field 1).
 fn emit_drop_hash_collection<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
     let mangled = match ty {
-        Type::GenericInstance {
-            base, type_args, ..
-        } => mangle_name(base, type_args),
-        Type::Struct(name) => name.clone(),
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
+        Type::Named { identifier, .. } => identifier.name.clone(),
         _ => return,
     };
     let Some(coll_struct) = c.types.structs.get(&mangled).copied() else {

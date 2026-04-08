@@ -108,7 +108,7 @@ fn add_dot_completions(
     ctx: &TypeContext,
     items: &mut Vec<CompletionItem>,
 ) {
-    let info = match ctx.types.get(type_name) {
+    let info = match ctx.get_type(type_name) {
         Some(i) => i,
         None => return,
     };

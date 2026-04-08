@@ -12,9 +12,7 @@ use expo_ast::span::Span;
 use crate::check::check_literal_overflow;
 use crate::context::{TypeContext, VariantData};
 use crate::env::{VarInfo, VarState};
-use crate::types::{
-    GenericKind, Primitive, Type, build_substitution, resolve_type_expr, substitute_preserving,
-};
+use crate::types::{Primitive, Type, build_substitution, resolve_type_expr, substitute_preserving};
 
 fn pattern_is_catch_all(pat: &Pattern) -> bool {
     match pat {
@@ -64,8 +62,9 @@ pub(crate) fn check_match_exhaustiveness(
                 );
             }
         }
-        Type::Enum(enum_name) => {
-            let Some(type_info) = ctx.types.get(enum_name) else {
+        Type::Named { identifier, .. } if ctx.is_enum(&identifier.name) => {
+            let enum_name = &identifier.name;
+            let Some(type_info) = ctx.get_type(enum_name) else {
                 return;
             };
             let Some(variants) = type_info.variants() else {
@@ -163,16 +162,13 @@ pub(crate) fn resolve_variant_data(
         Type::Indirect(inner) => inner.as_ref(),
         other => other,
     };
-    let type_info = ctx.types.get(enum_name)?;
+    let type_info = ctx.get_type(enum_name)?;
     let variants = type_info.variants()?;
     let vi = variants.iter().find(|v| v.name == *variant)?;
     let data = vi.data.clone();
 
-    if let Type::GenericInstance {
-        type_args,
-        kind: GenericKind::Enum,
-        ..
-    } = effective_ty
+    if let Type::Named { type_args, .. } = effective_ty
+        && !type_args.is_empty()
         && !type_info.type_params.is_empty()
     {
         let subst = build_substitution(&type_info.type_params, type_args);
@@ -354,7 +350,7 @@ pub(crate) fn check_pattern(
             span,
         } => {
             let enum_name = type_path.join(".");
-            if let Some(type_info) = ctx.types.get(&enum_name).filter(|ti| ti.is_enum()) {
+            if let Some(type_info) = ctx.get_type(&enum_name).filter(|ti| ti.is_enum()) {
                 let variants = type_info.variants().unwrap();
                 if let Some(vi) = variants.iter().find(|v| v.name == *variant) {
                     if !matches!(vi.data, VariantData::Unit) {

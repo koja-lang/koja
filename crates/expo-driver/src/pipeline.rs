@@ -10,11 +10,18 @@ use std::{env, fs, process};
 use expo_ast::ast::{AnnotationValue, Item, Module, Severity};
 
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::is_package_type;
+use expo_typecheck::types::named;
 
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
 use crate::resolve::{self, ModuleGraph};
+
+/// Extracts the package name from a fully-qualified module name.
+/// e.g. `"json.decoder"` → `"json"`, `"my_app.main"` → `"my_app"`,
+/// `"json"` → `"json"` (single-segment FQN).
+fn fqn_to_package(fqn: &str) -> String {
+    fqn.split('.').next().unwrap_or(fqn).to_string()
+}
 
 /// Runs the type-checking pipeline for every module in a graph.
 ///
@@ -67,7 +74,7 @@ pub fn typecheck_graph(
     // Auto-imported std modules: merge into stdlib_ctx directly.
     for name in &stdlib_names {
         let rm = &graph.modules[*name];
-        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
+        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, "std");
         ctx.merge(&stdlib_ctx);
 
         stdlib_ctx.merge(&ctx);
@@ -77,7 +84,8 @@ pub fn typecheck_graph(
     // Gather: collect signatures from every project module.
     for name in &project_names {
         let rm = &graph.modules[*name];
-        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names);
+        let pkg = fqn_to_package(name);
+        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, &pkg);
         ctx.merge(&stdlib_ctx);
         expo_typecheck::auto_derive_debug(&mut ctx);
         expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
@@ -89,38 +97,6 @@ pub fn typecheck_graph(
     let mut unified_project_ctx = stdlib_ctx.clone();
     for name in &project_names {
         unified_project_ctx.merge(&module_contexts[*name]);
-    }
-
-    // Populate package_types: map each package name to the types it provides.
-    // Covers both external dependency packages and qualified stdlib packages.
-    let all_packages: Vec<String> = graph
-        .dep_packages
-        .iter()
-        .cloned()
-        .chain(expo_stdlib::QUALIFIED_MODULES.iter().map(|s| s.to_string()))
-        .collect();
-
-    for pkg in &all_packages {
-        let prefix = format!("{pkg}.");
-        for fqn in &graph.order {
-            if fqn.starts_with(&prefix) || fqn == pkg {
-                let rm = &graph.modules[fqn];
-                for item in &rm.module.items {
-                    let type_name = match item {
-                        expo_ast::ast::Item::Struct(s) => Some(&s.name),
-                        expo_ast::ast::Item::Enum(e) => Some(&e.name),
-                        _ => None,
-                    };
-                    if let Some(name) = type_name {
-                        unified_project_ctx
-                            .package_types
-                            .entry(pkg.clone())
-                            .or_default()
-                            .insert(name.clone());
-                    }
-                }
-            }
-        }
     }
 
     // Check: type-check each project module against the unified context.
@@ -160,8 +136,6 @@ pub fn typecheck_graph(
 /// types and inserting resolved aliases into `ctx.type_aliases` so they are
 /// visible during type checking of this module.
 fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
-    use expo_typecheck::types::Type;
-
     for item in &module.items {
         if let Item::Alias(a) = item {
             if a.path.len() != 2 {
@@ -176,15 +150,11 @@ fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
             }
             let pkg = &a.path[0];
             let type_name = &a.path[1];
-            if !is_package_type(pkg, type_name, &ctx.package_types) {
+            if !ctx.is_package_type(pkg, type_name) {
                 ctx.error(format!("unknown package type `{pkg}.{type_name}`"), a.span);
                 continue;
             }
-            let resolved = if ctx.types.contains_key(type_name) {
-                Type::Struct(type_name.clone())
-            } else {
-                Type::Enum(type_name.clone())
-            };
+            let resolved = named(type_name);
             ctx.module_aliases
                 .insert(a.local_name.clone(), resolved.clone());
             ctx.type_aliases.insert(a.local_name.clone(), resolved);

@@ -17,7 +17,7 @@ pub use collect::{GlobalNames, collect_all_names};
 /// Uses module-local names only (for single-file / test usage).
 pub fn check(module: &Module) -> TypeContext {
     let global = collect_all_names(&[module]);
-    let mut ctx = collect::collect(module, &global);
+    let mut ctx = collect::collect(module, &global, "");
     check::check_module(module, &mut ctx);
     ctx
 }
@@ -30,8 +30,10 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
 /// Walks the AST to collect type signatures for functions, structs, and enums.
 /// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-module
 /// type references resolve correctly on the first pass.
-pub fn collect_module(module: &Module, global_names: &GlobalNames) -> TypeContext {
-    collect::collect(module, global_names)
+/// The `package` identifies which package the module belongs to (e.g. `"std"`,
+/// `"json"`, or the project name from `expo.toml`).
+pub fn collect_module(module: &Module, global_names: &GlobalNames, package: &str) -> TypeContext {
+    collect::collect(module, global_names, package)
 }
 
 /// Synthesizes default protocol methods for impls whose protocols were unknown

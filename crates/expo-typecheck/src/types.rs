@@ -1,40 +1,137 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 
 use expo_ast::ast::{PassMode, TypeExpr, TypeParam};
 
 use crate::context::FnParam;
 
+/// Which package a type belongs to. Used by [`TypeIdentifier`] to distinguish
+/// types with the same name from different packages.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Package {
+    /// The built-in standard library (auto-imported).
+    Std,
+    /// A named package (e.g. `json`, `net`, or the user's project name).
+    Named(String),
+    /// Package not yet determined. Present only during early pipeline stages;
+    /// resolved to a concrete package before codegen.
+    Unresolved,
+}
+
+impl fmt::Display for Package {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Package::Std => write!(f, "std"),
+            Package::Named(name) => write!(f, "{name}"),
+            Package::Unresolved => Ok(()),
+        }
+    }
+}
+
+/// A canonical, package-qualified identifier for a user-defined type.
+/// Every struct, enum, and protocol carries one of these throughout the
+/// compiler pipeline, ensuring types from different packages never collide.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeIdentifier {
+    pub package: Package,
+    pub name: String,
+}
+
+impl TypeIdentifier {
+    /// Creates a TypeIdentifier for a type in the `std` package.
+    pub fn std(name: &str) -> Self {
+        Self {
+            package: Package::Std,
+            name: name.to_string(),
+        }
+    }
+
+    /// Creates a TypeIdentifier with an explicit named package.
+    pub fn new(package: &str, name: &str) -> Self {
+        Self {
+            package: Package::Named(package.to_string()),
+            name: name.to_string(),
+        }
+    }
+
+    /// Creates a TypeIdentifier with an unresolved package. All call sites
+    /// will be updated in Phase 3 to use real packages.
+    pub fn unresolved(name: &str) -> Self {
+        Self {
+            package: Package::Unresolved,
+            name: name.to_string(),
+        }
+    }
+
+    /// Same as [`Self::unresolved`] but takes an owned String to avoid cloning.
+    pub fn unresolved_owned(name: String) -> Self {
+        Self {
+            package: Package::Unresolved,
+            name,
+        }
+    }
+
+    pub fn is_std(&self) -> bool {
+        self.package == Package::Std
+    }
+
+    /// Returns a mangled name suitable for LLVM symbols.
+    /// Std and unresolved packages use the bare name; named packages
+    /// use `pkg_Name` to guarantee uniqueness.
+    pub fn mangled(&self) -> String {
+        match &self.package {
+            Package::Std | Package::Unresolved => self.name.clone(),
+            Package::Named(pkg) => format!("{pkg}_{}", self.name),
+        }
+    }
+}
+
+impl fmt::Display for TypeIdentifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.package {
+            Package::Std | Package::Unresolved => write!(f, "{}", self.name),
+            Package::Named(pkg) => write!(f, "{pkg}.{}", self.name),
+        }
+    }
+}
+
 /// The resolved type representation used throughout the type checker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Enum(String),
+    /// A user-defined type (struct or enum), optionally with type arguments.
+    /// Point, Direction, List<Int>, Option<String>
+    Named {
+        identifier: TypeIdentifier,
+        type_args: Vec<Type>,
+    },
+
+    /// Error recovery sentinel (type-check failed, continue checking)
     Error,
+
+    /// A function type: fn (A, B) -> C
     Function {
         params: Vec<crate::context::FnParam>,
         return_type: Box<Type>,
     },
-    GenericInstance {
-        base: String,
-        kind: GenericKind,
-        type_args: Vec<Type>,
-    },
-    /// A heap-allocated indirection inserted by cycle detection for recursive
-    /// types. Transparent to the user: display, mangling, and unification all
-    /// delegate to the inner type.
-    Indirect(Box<Type>),
-    Primitive(Primitive),
-    Struct(String),
-    TypeVar(String),
-    Union(Vec<Type>),
-    Unit,
-    Unknown,
-}
 
-/// Whether a generic instance refers to a struct or enum.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GenericKind {
-    Struct,
-    Enum,
+    /// Indirection for recursive types. Transparent to the user: display,
+    /// mangling, and unification all delegate to the inner type.
+    Indirect(Box<Type>),
+
+    /// A built-in primitive: Int, Float, Bool, String, Binary, Bits
+    Primitive(Primitive),
+
+    /// An unresolved type parameter: T in List<T>
+    Parameter(String),
+
+    /// A union type: A | B | C
+    Union(Vec<Type>),
+
+    /// The unit type: ()
+    Unit,
+
+    /// Type could not be resolved
+    Unknown,
 }
 
 /// Built-in primitive types with known sizes.
@@ -79,7 +176,17 @@ impl Type {
     /// Returns a human-readable string representation of this type for diagnostics.
     pub fn display(&self) -> String {
         match self {
-            Type::Enum(name) => name.clone(),
+            Type::Named {
+                identifier,
+                type_args,
+            } => {
+                if type_args.is_empty() {
+                    identifier.to_string()
+                } else {
+                    let args: Vec<String> = type_args.iter().map(|t| t.display()).collect();
+                    format!("{}<{}>", identifier, args.join(", "))
+                }
+            }
             Type::Error => "<error>".to_string(),
             Type::Function {
                 params,
@@ -97,16 +204,9 @@ impl Type {
                     .collect();
                 format!("fn ({}) -> {}", p.join(", "), return_type.display())
             }
-            Type::GenericInstance {
-                base, type_args, ..
-            } => {
-                let args: Vec<String> = type_args.iter().map(|t| t.display()).collect();
-                format!("{}<{}>", base, args.join(", "))
-            }
             Type::Indirect(inner) => inner.display(),
             Type::Primitive(p) => p.display().to_string(),
-            Type::Struct(name) => name.clone(),
-            Type::TypeVar(name) => name.clone(),
+            Type::Parameter(name) => name.clone(),
             Type::Union(members) => {
                 let parts: Vec<String> = members.iter().map(|t| t.display()).collect();
                 parts.join(" | ")
@@ -127,18 +227,18 @@ impl Type {
             Type::Primitive(_) => true,
             Type::Unit => true,
             Type::Function { .. } => true,
-            Type::Indirect(_) | Type::Struct(_) | Type::Enum(_) | Type::GenericInstance { .. } => {
-                false
-            }
+            Type::Indirect(_) | Type::Named { .. } => false,
             Type::Union(members) => members.iter().all(|m| m.is_copy()),
-            Type::TypeVar(_) | Type::Unknown | Type::Error => true,
+            Type::Parameter(_) | Type::Unknown | Type::Error => true,
         }
     }
 
-    /// Returns true if this type is a concrete, resolved type (not `Unknown`, `Error`, or `TypeVar`).
+    /// Returns true if this type is a concrete, resolved type (not `Unknown`,
+    /// `Error`, or `Parameter`).
     pub fn is_known(&self) -> bool {
         match self {
-            Type::Unknown | Type::Error | Type::TypeVar(_) | Type::GenericInstance { .. } => false,
+            Type::Unknown | Type::Error | Type::Parameter(_) => false,
+            Type::Named { type_args, .. } => type_args.is_empty(),
             Type::Indirect(inner) => inner.is_known(),
             Type::Union(members) => members.iter().all(|m| m.is_known()),
             _ => true,
@@ -262,23 +362,24 @@ pub fn resolve_alias(
         .cloned()
 }
 
-/// If `name` is a type alias pointing to a struct or enum, returns the
-/// underlying type name. Otherwise returns `name` unchanged. Used by the
-/// type checker and codegen to resolve aliases before type-info lookup.
+/// If `name` is a type alias pointing to a named type, returns the underlying
+/// type name. Otherwise returns `name` unchanged. Used by the type checker
+/// and codegen to resolve aliases before type-info lookup.
 pub fn resolve_type_alias_name(name: &str, type_aliases: &BTreeMap<String, Type>) -> String {
     type_aliases
         .get(name)
         .and_then(|ty| match ty {
-            Type::Struct(s) | Type::Enum(s) => Some(s.clone()),
+            Type::Named { identifier, .. } => Some(identifier.name.clone()),
             _ => None,
         })
         .unwrap_or_else(|| name.to_string())
 }
 
-/// Checks if a two-segment qualified type path like `json.Decoder` is valid
-/// according to the package_types registry. Returns `true` if the package
-/// exists and contains the named type.
-pub fn is_package_type(
+/// Checks if a two-segment qualified type path like `json.Decoder` is valid.
+/// Retained for backward compatibility within [`resolve_type_expr_full`] which
+/// still receives a standalone map. Prefer [`TypeContext::is_package_type`]
+/// in all new code.
+fn is_package_type(
     package: &str,
     type_name: &str,
     package_types: &BTreeMap<String, BTreeSet<String>>,
@@ -289,7 +390,7 @@ pub fn is_package_type(
 }
 
 /// Like [`resolve_type_expr`] but also resolves type parameter names (e.g. `T`, `A`)
-/// to [`Type::TypeVar`] when they appear in generic function/struct definitions,
+/// to [`Type::Parameter`] when they appear in generic function/struct definitions,
 /// and named type aliases from the provided map.
 pub fn resolve_type_expr_with_params(
     type_expr: &TypeExpr,
@@ -346,14 +447,8 @@ pub fn resolve_type_expr_full(
                         )
                     })
                     .collect();
-                let kind = if known_structs.contains(&name) {
-                    GenericKind::Struct
-                } else {
-                    GenericKind::Enum
-                };
-                return Type::GenericInstance {
-                    base: name.to_string(),
-                    kind,
+                return Type::Named {
+                    identifier: TypeIdentifier::unresolved(name),
                     type_args: resolved_args,
                 };
             }
@@ -363,7 +458,7 @@ pub fn resolve_type_expr_full(
             if path.len() == 1 {
                 let name = path[0].as_str();
                 if known_type_params.contains(&name) {
-                    return Type::TypeVar(name.to_string());
+                    return Type::Parameter(name.to_string());
                 }
                 if let Some(aliased) = resolve_alias(name, known_type_aliases, module_aliases) {
                     return aliased;
@@ -384,10 +479,11 @@ pub fn resolve_type_expr_full(
                     "UInt32" => Type::Primitive(Primitive::U32),
                     "UInt64" => Type::Primitive(Primitive::U64),
                     name => {
-                        if known_structs.contains(&name) {
-                            Type::Struct(name.to_string())
-                        } else if known_enums.contains(&name) {
-                            Type::Enum(name.to_string())
+                        if known_structs.contains(&name) || known_enums.contains(&name) {
+                            Type::Named {
+                                identifier: TypeIdentifier::unresolved(name),
+                                type_args: vec![],
+                            }
                         } else {
                             Type::Unknown
                         }
@@ -395,10 +491,11 @@ pub fn resolve_type_expr_full(
                 }
             } else if path.len() == 2 && is_package_type(&path[0], &path[1], package_types) {
                 let name = path[1].as_str();
-                if known_structs.contains(&name) {
-                    Type::Struct(name.to_string())
-                } else if known_enums.contains(&name) {
-                    Type::Enum(name.to_string())
+                if known_structs.contains(&name) || known_enums.contains(&name) {
+                    Type::Named {
+                        identifier: TypeIdentifier::unresolved(name),
+                        type_args: vec![],
+                    }
                 } else {
                     Type::Unknown
                 }
@@ -408,7 +505,7 @@ pub fn resolve_type_expr_full(
         }
         TypeExpr::Self_ { .. } => {
             if known_type_params.contains(&"Self") {
-                Type::TypeVar("Self".to_string())
+                Type::Parameter("Self".to_string())
             } else {
                 Type::Unknown
             }
@@ -479,7 +576,7 @@ pub fn numeric_compatible(a: &Type, b: &Type) -> bool {
     }
 }
 
-/// Attempts to unify a parameter type (possibly containing [`Type::TypeVar`]s) with a
+/// Attempts to unify a parameter type (possibly containing [`Type::Parameter`]s) with a
 /// concrete argument type. Binds type variables in `subst` on first encounter, and
 /// checks consistency on subsequent encounters. Returns `false` if the types conflict.
 pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) -> bool {
@@ -487,7 +584,7 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
         (Type::Indirect(inner), other) | (other, Type::Indirect(inner)) => {
             unify(inner, other, subst)
         }
-        (Type::TypeVar(name), _) => {
+        (Type::Parameter(name), _) => {
             if let Some(existing) = subst.get(name) {
                 existing == arg_ty || numeric_compatible(existing, arg_ty)
             } else {
@@ -495,21 +592,23 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
                 true
             }
         }
-        (Type::Struct(a), Type::Struct(b)) => a == b,
-        (Type::Enum(a), Type::Enum(b)) => a == b,
         (
-            Type::GenericInstance {
-                base: a,
+            Type::Named {
+                identifier: a,
                 type_args: aa,
-                ..
             },
-            Type::GenericInstance {
-                base: b,
+            Type::Named {
+                identifier: b,
                 type_args: ba,
-                ..
             },
         ) => {
-            if a != b || aa.len() != ba.len() {
+            if a.name != b.name {
+                return false;
+            }
+            if aa.is_empty() || ba.is_empty() {
+                return true;
+            }
+            if aa.len() != ba.len() {
                 return false;
             }
             for (x, y) in aa.iter().zip(ba.iter()) {
@@ -542,10 +641,6 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
             }
             unify(ra, rb, subst)
         }
-        (Type::GenericInstance { base, .. }, Type::Enum(name))
-        | (Type::Enum(name), Type::GenericInstance { base, .. })
-        | (Type::GenericInstance { base, .. }, Type::Struct(name))
-        | (Type::Struct(name), Type::GenericInstance { base, .. }) => base == name,
         (Type::Union(a), Type::Union(b)) => a == b,
         (Type::Unit, Type::Unit) => true,
         (Type::Unknown, _) | (_, Type::Unknown) => true,
@@ -553,10 +648,10 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
     }
 }
 
-/// Replaces all [`Type::TypeVar`]s in `ty` with their concrete bindings from `subst`.
+/// Replaces all [`Type::Parameter`]s in `ty` with their concrete bindings from `subst`.
 pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
     match ty {
-        Type::TypeVar(name) => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Parameter(name) => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
         Type::Function {
             params,
             return_type,
@@ -570,23 +665,24 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
                 .collect(),
             return_type: Box::new(substitute(return_type, subst)),
         },
-        Type::GenericInstance {
-            base,
-            kind,
+        Type::Named {
+            identifier,
             type_args,
-        } => {
+        } if !type_args.is_empty() => {
             let substituted: Vec<Type> = type_args.iter().map(|t| substitute(t, subst)).collect();
-            if substituted.iter().any(contains_type_var) {
-                Type::GenericInstance {
-                    base: base.clone(),
-                    kind: kind.clone(),
+            if substituted.iter().any(contains_parameter) {
+                Type::Named {
+                    identifier: identifier.clone(),
                     type_args: substituted,
                 }
             } else {
-                let mangled = mangle_name(base, &substituted);
-                match kind {
-                    GenericKind::Struct => Type::Struct(mangled),
-                    GenericKind::Enum => Type::Enum(mangled),
+                let mangled = mangle_name(&identifier.name, &substituted);
+                Type::Named {
+                    identifier: TypeIdentifier {
+                        package: identifier.package.clone(),
+                        name: mangled,
+                    },
+                    type_args: vec![],
                 }
             }
         }
@@ -596,13 +692,13 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
     }
 }
 
-/// Like [`substitute`], but preserves [`Type::GenericInstance`] instead of
-/// collapsing fully-resolved instances to mangled `Struct`/`Enum` names.
+/// Like [`substitute`], but preserves [`Type::Named`] with type args instead of
+/// collapsing fully-resolved instances to mangled names.
 /// Used by `resolve_type_expr` so downstream code can inspect the structured
 /// generic form without re-parsing mangled names.
 pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
     match ty {
-        Type::TypeVar(name) => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Parameter(name) => subst.get(name).cloned().unwrap_or_else(|| ty.clone()),
         Type::Function {
             params,
             return_type,
@@ -616,13 +712,11 @@ pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
                 .collect(),
             return_type: Box::new(substitute_preserving(return_type, subst)),
         },
-        Type::GenericInstance {
-            base,
-            kind,
+        Type::Named {
+            identifier,
             type_args,
-        } => Type::GenericInstance {
-            base: base.clone(),
-            kind: kind.clone(),
+        } if !type_args.is_empty() => Type::Named {
+            identifier: identifier.clone(),
             type_args: type_args
                 .iter()
                 .map(|t| substitute_preserving(t, subst))
@@ -654,12 +748,18 @@ pub fn mangle_type(ty: &Type) -> String {
     match ty {
         Type::Indirect(inner) => mangle_type(inner),
         Type::Primitive(p) => p.display().to_string(),
-        Type::Struct(n) | Type::Enum(n) => n.clone(),
-        Type::TypeVar(n) => n.clone(),
+        Type::Named {
+            identifier,
+            type_args,
+        } => {
+            if type_args.is_empty() {
+                identifier.mangled()
+            } else {
+                mangle_name(&identifier.mangled(), type_args)
+            }
+        }
+        Type::Parameter(n) => n.clone(),
         Type::Unit => "unit".to_string(),
-        Type::GenericInstance {
-            base, type_args, ..
-        } => mangle_name(base, type_args),
         Type::Function {
             params,
             return_type,
@@ -694,17 +794,17 @@ pub fn build_substitution(type_params: &[TypeParam], type_args: &[Type]) -> Hash
         .collect()
 }
 
-/// Returns true if the type or any nested type contains a [`Type::TypeVar`].
-pub fn contains_type_var(ty: &Type) -> bool {
+/// Returns true if the type or any nested type contains a [`Type::Parameter`].
+pub fn contains_parameter(ty: &Type) -> bool {
     match ty {
-        Type::TypeVar(_) => true,
+        Type::Parameter(_) => true,
         Type::Function {
             params,
             return_type,
-        } => params.iter().any(|fp| contains_type_var(&fp.ty)) || contains_type_var(return_type),
-        Type::GenericInstance { type_args, .. } => type_args.iter().any(contains_type_var),
-        Type::Indirect(inner) => contains_type_var(inner),
-        Type::Union(members) => members.iter().any(contains_type_var),
+        } => params.iter().any(|fp| contains_parameter(&fp.ty)) || contains_parameter(return_type),
+        Type::Named { type_args, .. } => type_args.iter().any(contains_parameter),
+        Type::Indirect(inner) => contains_parameter(inner),
+        Type::Union(members) => members.iter().any(contains_parameter),
         _ => false,
     }
 }
@@ -719,21 +819,34 @@ pub fn unwrap_indirect(ty: &Type) -> &Type {
 
 /// Builds the mailbox envelope type `Pair<M, Option<ReplyTo<R>>>` from M and R.
 pub fn process_envelope_type(m: &Type, r: &Type) -> Type {
-    Type::GenericInstance {
-        base: "Pair".to_string(),
-        kind: GenericKind::Struct,
+    Type::Named {
+        identifier: TypeIdentifier::unresolved("Pair"),
         type_args: vec![
             m.clone(),
-            Type::GenericInstance {
-                base: "Option".to_string(),
-                kind: GenericKind::Enum,
-                type_args: vec![Type::GenericInstance {
-                    base: "ReplyTo".to_string(),
-                    kind: GenericKind::Struct,
+            Type::Named {
+                identifier: TypeIdentifier::unresolved("Option"),
+                type_args: vec![Type::Named {
+                    identifier: TypeIdentifier::unresolved("ReplyTo"),
                     type_args: vec![r.clone()],
                 }],
             },
         ],
+    }
+}
+
+/// Helper to construct a non-generic Named type with an unresolved package.
+pub fn named(name: &str) -> Type {
+    Type::Named {
+        identifier: TypeIdentifier::unresolved(name),
+        type_args: vec![],
+    }
+}
+
+/// Helper to construct a generic Named type with an unresolved package.
+pub fn named_generic(name: &str, type_args: Vec<Type>) -> Type {
+    Type::Named {
+        identifier: TypeIdentifier::unresolved(name),
+        type_args,
     }
 }
 
@@ -763,8 +876,8 @@ mod tests {
 
     #[test]
     fn union_sorts_by_display() {
-        let a = Type::Struct("Zebra".into());
-        let b = Type::Struct("Apple".into());
+        let a = named("Zebra");
+        let b = named("Apple");
         let result = Type::union(vec![a.clone(), b.clone()]);
         assert_eq!(result, Type::Union(vec![b, a]));
     }
@@ -797,35 +910,26 @@ mod tests {
     }
 
     #[test]
-    fn display_struct_and_enum() {
-        assert_eq!(Type::Struct("Point".into()).display(), "Point");
-        assert_eq!(Type::Enum("Color".into()).display(), "Color");
+    fn display_named_types() {
+        assert_eq!(named("Point").display(), "Point");
+        assert_eq!(named("Color").display(), "Color");
     }
 
     #[test]
     fn display_generic_instance() {
-        let ty = Type::GenericInstance {
-            base: "Option".into(),
-            kind: GenericKind::Enum,
-            type_args: vec![Type::Primitive(Primitive::I64)],
-        };
+        let ty = named_generic("Option", vec![Type::Primitive(Primitive::I64)]);
         assert_eq!(ty.display(), "Option<Int>");
     }
 
     #[test]
     fn display_nested_generic() {
-        let ty = Type::GenericInstance {
-            base: "Result".into(),
-            kind: GenericKind::Enum,
-            type_args: vec![
-                Type::GenericInstance {
-                    base: "List".into(),
-                    kind: GenericKind::Struct,
-                    type_args: vec![Type::Primitive(Primitive::I64)],
-                },
+        let ty = named_generic(
+            "Result",
+            vec![
+                named_generic("List", vec![Type::Primitive(Primitive::I64)]),
                 Type::Primitive(Primitive::String),
             ],
-        };
+        );
         assert_eq!(ty.display(), "Result<List<Int>, String>");
     }
 
@@ -849,13 +953,13 @@ mod tests {
 
     #[test]
     fn display_union() {
-        let ty = Type::Union(vec![Type::Struct("Cat".into()), Type::Struct("Dog".into())]);
+        let ty = Type::Union(vec![named("Cat"), named("Dog")]);
         assert_eq!(ty.display(), "Cat | Dog");
     }
 
     #[test]
     fn display_indirect_delegates() {
-        let inner = Type::Struct("Node".into());
+        let inner = named("Node");
         let ty = Type::Indirect(Box::new(inner));
         assert_eq!(ty.display(), "Node");
     }
@@ -884,7 +988,7 @@ mod tests {
 
     #[test]
     fn is_copy_struct_is_move() {
-        assert!(!Type::Struct("Point".into()).is_copy());
+        assert!(!named("Point").is_copy());
     }
 
     #[test]
@@ -912,10 +1016,7 @@ mod tests {
 
     #[test]
     fn is_copy_union_with_move() {
-        let ty = Type::Union(vec![
-            Type::Primitive(Primitive::I64),
-            Type::Struct("Foo".into()),
-        ]);
+        let ty = Type::Union(vec![Type::Primitive(Primitive::I64), named("Foo")]);
         assert!(!ty.is_copy());
     }
 
@@ -924,8 +1025,8 @@ mod tests {
     #[test]
     fn is_known_concrete_types() {
         assert!(Type::Primitive(Primitive::I64).is_known());
-        assert!(Type::Struct("Foo".into()).is_known());
-        assert!(Type::Enum("Color".into()).is_known());
+        assert!(named("Foo").is_known());
+        assert!(named("Color").is_known());
         assert!(Type::Unit.is_known());
     }
 
@@ -936,22 +1037,19 @@ mod tests {
     }
 
     #[test]
-    fn is_known_type_var() {
-        assert!(!Type::TypeVar("T".into()).is_known());
+    fn is_known_parameter() {
+        assert!(!Type::Parameter("T".into()).is_known());
     }
 
     #[test]
     fn is_known_indirect_delegates() {
-        assert!(Type::Indirect(Box::new(Type::Struct("X".into()))).is_known());
+        assert!(Type::Indirect(Box::new(named("X"))).is_known());
         assert!(!Type::Indirect(Box::new(Type::Unknown)).is_known());
     }
 
     #[test]
     fn is_known_union_all_known() {
-        let ty = Type::Union(vec![
-            Type::Primitive(Primitive::I64),
-            Type::Struct("Foo".into()),
-        ]);
+        let ty = Type::Union(vec![Type::Primitive(Primitive::I64), named("Foo")]);
         assert!(ty.is_known());
     }
 
@@ -976,7 +1074,7 @@ mod tests {
     fn is_numeric_non_numeric() {
         assert!(!Type::Primitive(Primitive::Bool).is_numeric());
         assert!(!Type::Primitive(Primitive::String).is_numeric());
-        assert!(!Type::Struct("Foo".into()).is_numeric());
+        assert!(!named("Foo").is_numeric());
     }
 
     // ---- Primitive::display / from_name round-trip ----

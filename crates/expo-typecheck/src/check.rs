@@ -14,7 +14,7 @@ use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr, infer_expr_with_expected};
 use crate::stmt::check_body;
 use crate::types::numeric_compatible;
-use crate::types::{Primitive, Type, resolve_type_expr_with_params, substitute_preserving};
+use crate::types::{Primitive, Type, named, resolve_type_expr_with_params, substitute_preserving};
 
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
@@ -35,7 +35,7 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 // Generic -- checked during monomorphization
             }
             Item::Struct(s) => {
-                let self_type = Type::Struct(s.name.clone());
+                let self_type = named(&s.name);
                 check_inline_functions(
                     &s.functions,
                     &s.name,
@@ -49,7 +49,7 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 // Generic -- checked during monomorphization
             }
             Item::Enum(e) => {
-                let self_type = Type::Enum(e.name.clone());
+                let self_type = named(&e.name);
                 check_inline_functions(
                     &e.functions,
                     &e.name,
@@ -68,10 +68,8 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 if is_generic_impl {
                     continue;
                 }
-                let self_type = if ctx.is_struct(target_name) {
-                    Type::Struct(target_name.clone())
-                } else if ctx.is_enum(target_name) {
-                    Type::Enum(target_name.clone())
+                let self_type = if ctx.is_struct(target_name) || ctx.is_enum(target_name) {
+                    named(target_name)
                 } else if let Some(p) = Primitive::from_name(target_name) {
                     Type::Primitive(p)
                 } else {
@@ -376,9 +374,7 @@ pub(crate) fn try_parse_mangled_generic(
 ) -> Option<(String, Vec<Type>)> {
     let sep_pos = name.find("_$")?;
     let base = &name[..sep_pos];
-    if !ctx.types.contains_key(base) {
-        return None;
-    }
+    ctx.get_type(base)?;
     if !name.ends_with('$') {
         return None;
     }
@@ -392,7 +388,7 @@ pub(crate) fn try_parse_mangled_generic(
             } else if s == "unit" {
                 Type::Unit
             } else {
-                Type::Struct(s.to_string())
+                named(s)
             }
         })
         .collect();
@@ -463,19 +459,17 @@ pub(crate) fn types_compatible(a: &Type, b: &Type) -> bool {
         return ma == mb;
     }
     if let (
-        Type::GenericInstance {
-            base: ba,
+        Type::Named {
+            identifier: ia,
             type_args: ta,
-            ..
         },
-        Type::GenericInstance {
-            base: bb,
+        Type::Named {
+            identifier: ib,
             type_args: tb,
-            ..
         },
     ) = (a, b)
     {
-        return ba == bb
+        return ia.name == ib.name
             && ta.len() == tb.len()
             && ta
                 .iter()

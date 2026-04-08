@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, ProtocolMethod, Severity, StructDecl,
@@ -7,7 +7,7 @@ use expo_ast::ast::{
 pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::span::Span;
 
-use crate::types::Type;
+use crate::types::{Package, Type, TypeIdentifier};
 
 /// Holds all type information gathered during collection and checking for a single module.
 #[derive(Clone)]
@@ -27,8 +27,6 @@ pub struct TypeContext {
     pub synthesized_default_fns: BTreeMap<String, Vec<Function>>,
     pub type_aliases: BTreeMap<String, Type>,
     pub types: BTreeMap<String, TypeInfo>,
-    /// Maps package name to the set of type names it provides (e.g. "json" -> {"Decoder", "Encoder"}).
-    pub package_types: BTreeMap<String, BTreeSet<String>>,
     /// File-private aliases from `alias` declarations. NOT merged across modules.
     pub module_aliases: BTreeMap<String, Type>,
 }
@@ -119,6 +117,7 @@ pub struct ProtocolInfo {
 /// kind-specific data (fields for structs, variants for enums).
 #[derive(Clone, PartialEq)]
 pub struct TypeInfo {
+    pub identifier: TypeIdentifier,
     pub functions: BTreeMap<String, FunctionSig>,
     pub kind: TypeKind,
     pub span: Span,
@@ -275,6 +274,32 @@ impl TypeContext {
             .collect()
     }
 
+    /// Inserts a type into the registry, keyed by bare name, with its
+    /// [`TypeIdentifier`] stored on the [`TypeInfo`] for package-aware lookups.
+    pub fn insert_type(&mut self, id: TypeIdentifier, mut info: TypeInfo) {
+        info.identifier = id.clone();
+        self.types.insert(id.name, info);
+    }
+
+    /// Returns the [`TypeInfo`] for the given bare name, if registered.
+    pub fn get_type(&self, name: &str) -> Option<&TypeInfo> {
+        self.types.get(name)
+    }
+
+    /// Returns a mutable reference to the [`TypeInfo`] for the given bare name.
+    pub fn get_type_mut(&mut self, name: &str) -> Option<&mut TypeInfo> {
+        self.types.get_mut(name)
+    }
+
+    /// Returns `true` if the given package provides a type with the given name.
+    /// Replaces the `package_types` side-table lookup.
+    pub fn is_package_type(&self, pkg: &str, type_name: &str) -> bool {
+        self.types.get(type_name).is_some_and(|ti| {
+            ti.identifier.package == Package::Named(pkg.to_string())
+                || (pkg == "std" && ti.identifier.package == Package::Std)
+        })
+    }
+
     /// Creates an empty context with no registered types or diagnostics.
     pub fn new() -> Self {
         Self {
@@ -293,7 +318,6 @@ impl TypeContext {
             synthesized_default_fns: BTreeMap::new(),
             type_aliases: BTreeMap::new(),
             types: BTreeMap::new(),
-            package_types: BTreeMap::new(),
             module_aliases: BTreeMap::new(),
         }
     }
@@ -301,6 +325,11 @@ impl TypeContext {
     /// Merges all type information from `other` into `self`. Entries already
     /// present in `self` are kept (first-writer-wins), except for
     /// `generic_impl_asts` and `protocol_impls` which accumulate across modules.
+    ///
+    /// When two types share the same bare name but come from different packages,
+    /// the first-writer (already in `self`) wins for the flat namespace. Functions
+    /// are only merged when the types come from the same package (or either side
+    /// has an unresolved package, for backwards compatibility during migration).
     pub fn merge(&mut self, other: &TypeContext) {
         for (name, sig) in &other.functions {
             if !self.functions.contains_key(name) {
@@ -309,9 +338,14 @@ impl TypeContext {
         }
         for (name, info) in &other.types {
             if let Some(existing) = self.types.get_mut(name) {
-                for (fn_name, sig) in &info.functions {
-                    if !existing.functions.contains_key(fn_name) {
-                        existing.functions.insert(fn_name.clone(), sig.clone());
+                let same_package = existing.identifier.package == info.identifier.package
+                    || existing.identifier.package == Package::Unresolved
+                    || info.identifier.package == Package::Unresolved;
+                if same_package {
+                    for (fn_name, sig) in &info.functions {
+                        if !existing.functions.contains_key(fn_name) {
+                            existing.functions.insert(fn_name.clone(), sig.clone());
+                        }
                     }
                 }
             } else {
@@ -389,12 +423,6 @@ impl TypeContext {
             self.coercions
                 .entry(*span)
                 .or_insert_with(|| coercion.clone());
-        }
-        for (pkg, types) in &other.package_types {
-            self.package_types
-                .entry(pkg.clone())
-                .or_default()
-                .extend(types.iter().cloned());
         }
         // module_aliases intentionally NOT merged (file-private)
     }

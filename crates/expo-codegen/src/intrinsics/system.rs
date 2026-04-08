@@ -1,4 +1,4 @@
-use expo_typecheck::types::{GenericKind, Primitive, Type};
+use expo_typecheck::types::{Primitive, Type, named_generic};
 use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
 
@@ -21,11 +21,7 @@ pub fn emit_system_intrinsic<'ctx>(
             let option_mangled = "Option_$String$";
             ensure_types_exist(
                 c,
-                &Type::GenericInstance {
-                    base: "Option".to_string(),
-                    type_args: vec![Type::Primitive(Primitive::String)],
-                    kind: GenericKind::Enum,
-                },
+                &named_generic("Option", vec![Type::Primitive(Primitive::String)]),
             )?;
             let option_struct = *c
                 .types

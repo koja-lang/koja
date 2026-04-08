@@ -10,7 +10,7 @@ use crate::check::{record_coercion_if_needed, types_compatible};
 use crate::context::{FunctionKind, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarState};
 use crate::expr::{expr_span, infer_expr, resolve_receiver_base_name};
-use crate::types::{GenericKind, Type, resolve_type_expr};
+use crate::types::{Type, resolve_type_expr};
 
 /// Checks all statements in a body sequentially.
 pub(crate) fn check_body(stmts: &[Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) {
@@ -205,7 +205,7 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
             {
                 let is_static = matches!(
                     receiver.as_ref(),
-                    Expr::Ident { name, .. } if ctx.types.contains_key(name.as_str())
+                    Expr::Ident { name, .. } if ctx.get_type(name.as_str()).is_some()
                 );
                 if !is_static {
                     let recv_ty = infer_expr(receiver, ctx, ce);
@@ -215,7 +215,7 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
                     };
                     let (base_name, _) = resolve_receiver_base_name(&recv_ty, ctx);
                     if let Some(base) = base_name
-                        && let Some(ti) = ctx.types.get(&base)
+                        && let Some(ti) = ctx.get_type(&base)
                         && let Some(sig) = ti.functions.get(method.as_str())
                         && sig.kind == FunctionKind::Instance(PassMode::Move)
                         && sig.return_type != Type::Unit
@@ -263,15 +263,10 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
 /// type is not a struct or the field doesn't exist.
 fn resolve_field_type(ty: &Type, field: &str, ctx: &TypeContext) -> Option<Type> {
     let struct_name = match ty {
-        Type::Struct(n) => n.as_str(),
-        Type::GenericInstance {
-            base,
-            kind: GenericKind::Struct,
-            ..
-        } => base.as_str(),
+        Type::Named { identifier, .. } => identifier.name.as_str(),
         _ => return None,
     };
-    let ti = ctx.types.get(struct_name)?;
+    let ti = ctx.get_type(struct_name)?;
     let fields = ti.fields()?;
     fields
         .iter()

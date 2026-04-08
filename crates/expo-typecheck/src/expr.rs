@@ -22,8 +22,8 @@ use crate::env::CheckEnv;
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
 use crate::stmt::{check_body, check_statement};
 use crate::types::{
-    GenericKind, Primitive, Type, build_substitution, resolve_type_alias_name, resolve_type_expr,
-    substitute_preserving, unify, unwrap_indirect,
+    Primitive, Type, build_substitution, named, named_generic, resolve_type_alias_name,
+    resolve_type_expr, substitute_preserving, unify, unwrap_indirect,
 };
 
 /// Infers the type of an expression, emitting diagnostics for any type errors
@@ -203,11 +203,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                     );
                 }
             }
-            Type::GenericInstance {
-                base: "List".to_string(),
-                type_args: vec![elem_type],
-                kind: GenericKind::Struct,
-            }
+            named_generic("List", vec![elem_type])
         }
 
         Expr::Map { entries, span } => {
@@ -243,11 +239,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                     );
                 }
             }
-            Type::GenericInstance {
-                base: "Map".to_string(),
-                type_args: vec![key_type, val_type],
-                kind: GenericKind::Struct,
-            }
+            named_generic("Map", vec![key_type, val_type])
         }
 
         Expr::Literal { value, .. } => match value {
@@ -370,18 +362,26 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
             let inner_ty = infer_expr(inner, ctx, ce);
 
             let state_ty = match &inner_ty {
-                Type::GenericInstance {
-                    base, type_args, ..
-                } if base == "Result" => type_args.first().cloned().unwrap_or(inner_ty.clone()),
+                Type::Named {
+                    identifier,
+                    type_args,
+                } if identifier.name == "Result" => {
+                    type_args.first().cloned().unwrap_or(inner_ty.clone())
+                }
                 _ => inner_ty.clone(),
             };
 
             let reply_type = match &state_ty {
-                Type::GenericInstance {
-                    base, type_args, ..
-                } if *base == target && type_args.len() == 1 => type_args[0].clone(),
-                Type::Struct(name) => {
-                    if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx)
+                Type::Named {
+                    identifier,
+                    type_args,
+                } if identifier.name == target && type_args.len() == 1 => type_args[0].clone(),
+                Type::Named {
+                    identifier,
+                    type_args,
+                } if type_args.is_empty() => {
+                    if let Some((base, type_args)) =
+                        try_parse_mangled_generic(&identifier.name, ctx)
                         && base == target
                         && type_args.len() == 1
                     {
@@ -393,11 +393,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 _ => reply_type_template.clone(),
             };
 
-            Type::GenericInstance {
-                base: "Ref".to_string(),
-                type_args: vec![msg_type, reply_type],
-                kind: crate::types::GenericKind::Struct,
-            }
+            named_generic("Ref", vec![msg_type, reply_type])
         }
 
         Expr::Receive {
@@ -828,7 +824,7 @@ fn infer_call(
                 .collect();
             check_call_args(name, &param_infos, args, "", span, ctx, ce);
             *return_type
-        } else if ce.env.contains_key(name) || ctx.types.contains_key(name) {
+        } else if ce.env.contains_key(name) || ctx.get_type(name).is_some() {
             for arg in args {
                 infer_expr(&arg.value, ctx, ce);
             }
@@ -854,32 +850,26 @@ fn is_closure_expr(expr: &Expr) -> bool {
 }
 
 /// Whether an argument type should drive generic parameter unification.
-/// [`Type::is_known`] is false for [`Type::GenericInstance`], but concrete
+/// [`Type::is_known`] is false for [`Type::Named`] with unknown args, but concrete
 /// instances like `Ref<(), Int>` must still unify with `Ref<(), R>` to bind `R`.
 fn arg_ty_participates_in_unification(ty: &Type) -> bool {
     !matches!(unwrap_indirect(ty), Type::Unknown | Type::Error)
 }
 
-/// If `ty` is a monomorphized struct name (`Ref_$unit.Int$`), expand to [`Type::GenericInstance`]
-/// so it unifies with generic signatures that still use [`Type::GenericInstance`].
+/// If `ty` is a monomorphized named type (`Ref_$unit.Int$`), expand to [`Type::Named`]
+/// with populated type_args so it unifies with generic signatures.
 fn expand_mangled_generic_type(ty: &Type, ctx: &TypeContext) -> Type {
     let ty = match ty {
         Type::Indirect(inner) => inner.as_ref(),
         other => other,
     };
     match ty {
-        Type::Struct(name) => {
-            if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
-                let kind = if ctx.types.get(&base).is_some_and(|ti| ti.is_struct()) {
-                    GenericKind::Struct
-                } else {
-                    GenericKind::Enum
-                };
-                Type::GenericInstance {
-                    base,
-                    kind,
-                    type_args,
-                }
+        Type::Named {
+            identifier,
+            type_args,
+        } if type_args.is_empty() => {
+            if let Some((base, type_args)) = try_parse_mangled_generic(&identifier.name, ctx) {
+                named_generic(&base, type_args)
             } else {
                 ty.clone()
             }
@@ -984,9 +974,8 @@ fn infer_generic_call(
             continue;
         };
         let type_name = match concrete {
-            Type::Struct(n) | Type::Enum(n) => Some(n.clone()),
+            Type::Named { identifier, .. } => Some(identifier.name.clone()),
             Type::Primitive(p) => Some(p.display().to_string()),
-            Type::GenericInstance { base, .. } => Some(base.clone()),
             _ => None,
         };
         let Some(type_name) = type_name else {
@@ -1023,7 +1012,7 @@ fn infer_enum_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let enum_name = type_path.join(".");
-    if let Some(type_info) = ctx.types.get(&enum_name).cloned().filter(|ti| ti.is_enum()) {
+    if let Some(type_info) = ctx.get_type(&enum_name).cloned().filter(|ti| ti.is_enum()) {
         let enum_variants = type_info.variants().unwrap();
         if let Some(vi) = enum_variants.iter().find(|v| v.name == *variant) {
             let is_generic = !type_info.type_params.is_empty();
@@ -1140,13 +1129,9 @@ fn infer_enum_construction(
                     .iter()
                     .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
                     .collect();
-                Type::GenericInstance {
-                    base: enum_name,
-                    type_args,
-                    kind: GenericKind::Enum,
-                }
+                named_generic(&enum_name, type_args)
             } else {
-                Type::Enum(enum_name)
+                named(&enum_name)
             }
         } else {
             ctx.error(
@@ -1170,7 +1155,7 @@ fn infer_enum_construction(
             EnumConstructionData::Unit => {}
         }
         if ce.enum_names.contains(&enum_name.as_str()) {
-            Type::Enum(enum_name)
+            named(&enum_name)
         } else {
             Type::Unknown
         }
@@ -1192,12 +1177,16 @@ fn infer_field_access(
     };
 
     let (struct_name, generic_args) = match effective_ty {
-        Type::Struct(name) => (name.as_str(), None),
-        Type::GenericInstance {
-            base,
+        Type::Named {
+            identifier,
             type_args,
-            kind: GenericKind::Struct,
-        } => (base.as_str(), Some(type_args)),
+        } => {
+            if type_args.is_empty() {
+                (identifier.name.as_str(), None)
+            } else {
+                (identifier.name.as_str(), Some(type_args))
+            }
+        }
         Type::Unknown | Type::Error => return recv_ty,
         _ => {
             ctx.error(
@@ -1208,7 +1197,7 @@ fn infer_field_access(
         }
     };
 
-    let Some(type_info) = ctx.types.get(struct_name) else {
+    let Some(type_info) = ctx.get_type(struct_name) else {
         return Type::Unknown;
     };
 
@@ -1246,27 +1235,31 @@ pub(crate) fn resolve_receiver_base_name(
     ctx: &TypeContext,
 ) -> (Option<String>, Option<HashMap<String, Type>>) {
     match recv_ty {
-        Type::Struct(name) | Type::Enum(name) => {
-            if ctx.types.contains_key(name) {
-                (Some(name.clone()), None)
-            } else if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
+        Type::Named {
+            identifier,
+            type_args,
+        } => {
+            if type_args.is_empty() {
+                if ctx.get_type(&identifier.name).is_some() {
+                    (Some(identifier.name.clone()), None)
+                } else if let Some((base, type_args)) =
+                    try_parse_mangled_generic(&identifier.name, ctx)
+                {
+                    let subst = ctx
+                        .types
+                        .get(&base)
+                        .map(|ti| build_substitution(&ti.type_params, &type_args));
+                    (Some(base), subst)
+                } else {
+                    (None, None)
+                }
+            } else {
                 let subst = ctx
                     .types
-                    .get(&base)
-                    .map(|ti| build_substitution(&ti.type_params, &type_args));
-                (Some(base), subst)
-            } else {
-                (None, None)
+                    .get(&identifier.name)
+                    .map(|ti| build_substitution(&ti.type_params, type_args));
+                (Some(identifier.name.clone()), subst)
             }
-        }
-        Type::GenericInstance {
-            base, type_args, ..
-        } => {
-            let subst = ctx
-                .types
-                .get(base)
-                .map(|ti| build_substitution(&ti.type_params, type_args));
-            (Some(base.clone()), subst)
         }
         Type::Primitive(p) => (Some(p.display().to_string()), None),
         _ => (None, None),
@@ -1287,7 +1280,7 @@ fn infer_method_call(
     } = receiver
     {
         let resolved_name = resolve_type_alias_name(type_name, &ctx.type_aliases);
-        let static_sig_info = ctx.types.get(&resolved_name).and_then(|ti| {
+        let static_sig_info = ctx.get_type(&resolved_name).and_then(|ti| {
             ti.functions.get(method).and_then(|sig| {
                 if sig.kind == FunctionKind::Static {
                     Some((sig.clone(), ti.type_params.clone()))
@@ -1330,7 +1323,7 @@ fn infer_method_call(
         return recv_ty;
     }
 
-    if let Type::TypeVar(ref tv_name) = recv_ty
+    if let Type::Parameter(ref tv_name) = recv_ty
         && let Some(tp) = ce.fn_type_params.iter().find(|tp| &tp.name == tv_name)
     {
         for bound in &tp.bounds {
@@ -1338,7 +1331,7 @@ fn infer_method_call(
                 && let Some(proto_sig) = pi.methods.get(method)
             {
                 let subst_self =
-                    HashMap::from([("Self".to_string(), Type::TypeVar(tv_name.clone()))]);
+                    HashMap::from([("Self".to_string(), Type::Parameter(tv_name.clone()))]);
                 let return_type = substitute_preserving(&proto_sig.return_type, &subst_self);
                 let params: Vec<ParamInfo> = proto_sig
                     .params
@@ -1368,7 +1361,7 @@ fn infer_method_call(
 
     let method_sig = base_name
         .as_deref()
-        .and_then(|name| ctx.types.get(name))
+        .and_then(|name| ctx.get_type(name))
         .and_then(|ti| ti.functions.get(method))
         .cloned();
 
@@ -1415,7 +1408,7 @@ fn infer_method_call(
             infer_expr(&arg.value, ctx, ce);
         }
         if let Some(name) = &base_name {
-            let ti = ctx.types.get(name.as_str());
+            let ti = ctx.get_type(name.as_str());
             let kind_label = ti.map(|t| t.kind_label()).unwrap_or("type");
             let available: Vec<&str> = ti
                 .map(|t| t.functions.keys().map(|k| k.as_str()).collect())
@@ -1446,7 +1439,7 @@ fn infer_struct_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let name = type_path.join(".");
-    if let Some(struct_fields) = ctx.types.get(&name).and_then(|ti| ti.fields()).cloned() {
+    if let Some(struct_fields) = ctx.get_type(&name).and_then(|ti| ti.fields()).cloned() {
         for fi in fields {
             let value_ty = infer_expr(&fi.value, ctx, ce);
             if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
@@ -1473,13 +1466,13 @@ fn infer_struct_construction(
                 );
             }
         }
-        Type::Struct(name)
+        named(&name)
     } else {
         for fi in fields {
             infer_expr(&fi.value, ctx, ce);
         }
         if ce.struct_names.contains(&name.as_str()) {
-            Type::Struct(name)
+            named(&name)
         } else {
             ctx.error(format!("unknown struct `{}`", name), span);
             Type::Error
@@ -1748,14 +1741,18 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
 /// protocol by looking up the `get` method and substituting concrete type args.
 fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type> {
     let (base, type_args) = match ty {
-        Type::GenericInstance {
-            base, type_args, ..
-        } => (base.clone(), type_args.clone()),
-        Type::Struct(name) => {
-            if let Some((base, type_args)) = try_parse_mangled_generic(name, ctx) {
-                (base, type_args)
+        Type::Named {
+            identifier,
+            type_args,
+        } => {
+            if type_args.is_empty() {
+                if let Some((base, type_args)) = try_parse_mangled_generic(&identifier.name, ctx) {
+                    (base, type_args)
+                } else {
+                    (identifier.name.clone(), vec![])
+                }
             } else {
-                return None;
+                (identifier.name.clone(), type_args.clone())
             }
         }
         Type::Primitive(p) => (p.display().to_string(), Vec::new()),
@@ -1767,7 +1764,7 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
         return None;
     }
 
-    let ti = ctx.types.get(&base)?;
+    let ti = ctx.get_type(&base)?;
     let get_sig = ti.functions.get("get")?;
 
     let option_ty = if type_args.is_empty() {
@@ -1778,11 +1775,10 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
     };
 
     match &option_ty {
-        Type::GenericInstance {
-            base: b,
-            type_args: ta,
-            ..
-        } if b == "Option" && !ta.is_empty() => Some(ta[0].clone()),
+        Type::Named {
+            identifier,
+            type_args,
+        } if identifier.name == "Option" && !type_args.is_empty() => Some(type_args[0].clone()),
         other => Some(other.clone()),
     }
 }
