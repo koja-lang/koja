@@ -7,8 +7,8 @@ use expo_ast::ast::PassMode;
 use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit, TypeParam};
 use expo_typecheck::context::{FnParam, FunctionKind, TypeInfo};
 use expo_typecheck::types::{
-    Type, TypeIdentifier, build_substitution, mangle_name, named_generic, resolve_type_alias_name,
-    substitute, unify, unwrap_indirect,
+    Type, TypeIdentifier, build_substitution, mangle_name, named_generic, resolve_type_alias_id,
+    resolve_type_alias_name, substitute, unify, unwrap_indirect,
 };
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
@@ -222,7 +222,11 @@ pub fn compile_method_call<'ctx>(
 
     if let Expr::Ident { name, .. } = receiver {
         let resolved = resolve_type_alias_name(name, &c.type_ctx.type_aliases);
-        if c.type_ctx.get_type(&resolved).is_some() {
+        if let Some(id) = resolve_type_alias_id(name, &c.type_ctx.type_aliases) {
+            if c.type_ctx.get_type(&id).is_some() {
+                return compile_static_call(c, &resolved, method, args, function);
+            }
+        } else if c.type_ctx.find_type(&resolved).is_some() {
             return compile_static_call(c, &resolved, method, args, function);
         }
     }
@@ -242,8 +246,7 @@ pub fn compile_method_call<'ctx>(
         .unwrap_or_else(|| struct_name.clone());
     let has_impl_method = c
         .type_ctx
-        .types
-        .get(&base)
+        .find_type(&base)
         .and_then(|ti| ti.functions.get(method))
         .is_some();
     if !has_impl_method && let Some(field_ty) = c.get_field_type(&struct_name, method) {
@@ -300,7 +303,7 @@ pub fn compile_method_call<'ctx>(
             sig.return_type.clone(),
         )
     } else if let Some((base_name, ta)) = try_parse_mangled_name(&struct_name, c)
-        && let Some(ti) = c.type_ctx.get_type(&base_name)
+        && let Some(ti) = c.type_ctx.find_type(&base_name)
         && let Some(sig) = ti.functions.get(method)
     {
         let mut subst = build_substitution(&ti.type_params, &ta);
@@ -315,7 +318,7 @@ pub fn compile_method_call<'ctx>(
                 .collect(),
             substitute(&sig.return_type, &subst),
         )
-    } else if let Some(ti) = c.type_ctx.get_type(&base)
+    } else if let Some(ti) = c.type_ctx.find_type(&base)
         && let Some(sig) = ti.functions.get(method)
     {
         (
@@ -362,7 +365,7 @@ pub fn compile_method_call<'ctx>(
 
     let result = c.call(callee, &llvm_args, &format!("{mangled}_ret"));
 
-    if let Some(ti) = c.type_ctx.get_type(&base)
+    if let Some(ti) = c.type_ctx.find_type(&base)
         && let Some(sig) = ti.functions.get(method)
         && sig.kind == FunctionKind::Instance(PassMode::Move)
     {
@@ -383,7 +386,7 @@ pub fn compile_method_call<'ctx>(
 }
 
 fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<TypeParam> {
-    let methods = c.type_ctx.get_type(base_type).map(|ti| &ti.functions);
+    let methods = c.type_ctx.find_type(base_type).map(|ti| &ti.functions);
     if let Some(methods) = methods
         && let Some(sig) = methods.get(method)
     {
@@ -401,8 +404,7 @@ fn infer_method_type_args(
 ) -> Result<Vec<Type>, String> {
     let (methods, type_params) = c
         .type_ctx
-        .types
-        .get(base_type)
+        .find_type(base_type)
         .map(|ti| (&ti.functions, &ti.type_params))
         .ok_or_else(|| format!("no type info for `{base_type}`"))?;
 
@@ -445,7 +447,7 @@ fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
             type_args: ta,
         } if ta.is_empty() => {
             if let Some((base, type_args)) = try_parse_mangled_name(&identifier.name, c) {
-                named_generic(&base, type_args)
+                named_generic(&base, type_args, c.type_ctx)
             } else {
                 ty.clone()
             }
@@ -483,8 +485,7 @@ fn infer_static_struct_type_args_from_args(
     }
     let methods = c
         .type_ctx
-        .types
-        .get(type_name)
+        .find_type(type_name)
         .map(|ti| &ti.functions)
         .ok_or_else(|| format!("unknown type `{type_name}`"))?;
     let sig = methods
@@ -526,8 +527,7 @@ pub fn infer_static_method_return_type(
 ) -> Option<Type> {
     let (methods, type_params) = c
         .type_ctx
-        .types
-        .get(type_name)
+        .find_type(type_name)
         .map(|ti| (&ti.functions, &ti.type_params))?;
     let sig = methods.get(method)?;
     if type_params.is_empty() {
@@ -619,8 +619,7 @@ fn push_generic_type_subst<'ctx>(
     {
         let type_params = c
             .type_ctx
-            .types
-            .get(identifier.name.as_str())
+            .get_type(identifier)
             .map(|ti| ti.type_params.clone())?;
         let saved = c.fn_state.type_subst.clone();
         for (param, arg) in type_params.iter().zip(type_args.iter()) {
@@ -645,8 +644,12 @@ pub fn compile_struct_construction<'ctx>(
         .ok_or("empty type path in struct construction")?;
     let struct_name = &resolve_type_alias_name(raw_name, &c.type_ctx.type_aliases);
 
+    let type_info_lookup = resolve_type_alias_id(raw_name, &c.type_ctx.type_aliases)
+        .and_then(|id| c.type_ctx.get_type(&id))
+        .or_else(|| c.type_ctx.find_type(struct_name));
+
     // For generic structs, compile field values first, infer type args, and monomorphize
-    if let Some(info) = c.type_ctx.get_type(struct_name)
+    if let Some(info) = type_info_lookup
         && info.is_struct()
         && !info.type_params.is_empty()
     {
@@ -661,8 +664,7 @@ pub fn compile_struct_construction<'ctx>(
 
     let struct_info = c
         .type_ctx
-        .types
-        .get(struct_name)
+        .find_type(struct_name)
         .filter(|ti| ti.is_struct())
         .ok_or_else(|| format!("unknown struct: {struct_name}"))?;
 
@@ -814,7 +816,7 @@ fn compile_generic_struct_construction<'ctx>(
     }
 
     let struct_val = c.builder.build_load(struct_type, alloca, &mangled).unwrap();
-    let result_type = named_generic(struct_name, type_args.clone());
+    let result_type = named_generic(struct_name, type_args.clone(), c.type_ctx);
     Ok(Some(TypedValue::new(struct_val, result_type)))
 }
 
@@ -868,7 +870,7 @@ fn compile_static_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let type_params = c.type_ctx.get_type(type_name).map(|ti| &ti.type_params);
+    let type_params = c.type_ctx.find_type(type_name).map(|ti| &ti.type_params);
 
     let mut type_args: Vec<Type> = if let Some(tp) = type_params
         && !tp.is_empty()
@@ -927,7 +929,7 @@ fn compile_static_call<'ctx>(
             (pts, sig.return_type.clone())
         })
         .or_else(|| {
-            let ti = c.type_ctx.get_type(type_name)?;
+            let ti = c.type_ctx.find_type(type_name)?;
             let sig = ti.functions.get(method)?;
             if !type_args.is_empty() {
                 let subst = build_substitution(&ti.type_params, &type_args);

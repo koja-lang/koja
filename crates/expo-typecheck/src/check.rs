@@ -12,9 +12,12 @@ use expo_ast::span::Span;
 use crate::context::{Coercion, FunctionKind, ParamInfo, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr, infer_expr_with_expected};
+use crate::resolve::resolve_type_inline;
 use crate::stmt::check_body;
 use crate::types::numeric_compatible;
-use crate::types::{Primitive, Type, named, resolve_type_expr_with_params, substitute_preserving};
+use crate::types::{
+    Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params, substitute_preserving,
+};
 
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
@@ -35,7 +38,8 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 // Generic -- checked during monomorphization
             }
             Item::Struct(s) => {
-                let self_type = named(&s.name);
+                let mut self_type = named(&s.name);
+                ctx.resolve_type(&mut self_type);
                 check_inline_functions(
                     &s.functions,
                     &s.name,
@@ -49,7 +53,8 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                 // Generic -- checked during monomorphization
             }
             Item::Enum(e) => {
-                let self_type = named(&e.name);
+                let mut self_type = named(&e.name);
+                ctx.resolve_type(&mut self_type);
                 check_inline_functions(
                     &e.functions,
                     &e.name,
@@ -69,7 +74,9 @@ pub fn check_module(module: &Module, ctx: &mut TypeContext) {
                     continue;
                 }
                 let self_type = if ctx.is_struct(target_name) || ctx.is_enum(target_name) {
-                    named(target_name)
+                    let mut ty = named(target_name);
+                    ctx.resolve_type(&mut ty);
+                    ty
                 } else if let Some(p) = Primitive::from_name(target_name) {
                     Type::Primitive(p)
                 } else {
@@ -185,14 +192,21 @@ fn check_function_with_msg(
         self_type.map(|ty| HashMap::from([("Self".to_string(), ty.clone())]));
     let self_params: &[&str] = if self_type.is_some() { &["Self"] } else { &[] };
 
+    let name_index: BTreeMap<String, TypeIdentifier> = ctx
+        .types
+        .keys()
+        .map(|id| (id.name.clone(), id.clone()))
+        .collect();
+
     let resolve = |te: &TypeExpr| -> Type {
-        let ty = resolve_type_expr_with_params(
+        let mut ty = resolve_type_expr_with_params(
             te,
             struct_names,
             enum_names,
             self_params,
             &BTreeMap::new(),
         );
+        resolve_type_inline(&mut ty, &name_index);
         match &self_subst {
             Some(subst) => substitute_preserving(&ty, subst),
             None => ty,
@@ -374,7 +388,7 @@ pub(crate) fn try_parse_mangled_generic(
 ) -> Option<(String, Vec<Type>)> {
     let sep_pos = name.find("_$")?;
     let base = &name[..sep_pos];
-    ctx.get_type(base)?;
+    ctx.resolve_name(base)?;
     if !name.ends_with('$') {
         return None;
     }
@@ -387,6 +401,11 @@ pub(crate) fn try_parse_mangled_generic(
                 Type::Primitive(p)
             } else if s == "unit" {
                 Type::Unit
+            } else if let Some(id) = ctx.resolve_name(s) {
+                Type::Named {
+                    identifier: id.clone(),
+                    type_args: vec![],
+                }
             } else {
                 named(s)
             }

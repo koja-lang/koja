@@ -63,8 +63,7 @@ pub(crate) fn check_match_exhaustiveness(
             }
         }
         Type::Named { identifier, .. } if ctx.is_enum(&identifier.name) => {
-            let enum_name = &identifier.name;
-            let Some(type_info) = ctx.get_type(enum_name) else {
+            let Some(type_info) = ctx.get_type(identifier) else {
                 return;
             };
             let Some(variants) = type_info.variants() else {
@@ -120,7 +119,8 @@ pub(crate) fn check_match_exhaustiveness(
                     Pattern::EnumStruct { type_path, .. } => Some(type_path.join(".")),
                     Pattern::Constructor { name, .. } => Some(name.clone()),
                     Pattern::TypedBinding { type_expr, .. } => {
-                        let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+                        let mut resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+                        ctx.resolve_type(&mut resolved);
                         Some(resolved.display())
                     }
                     Pattern::Binding { .. } => None,
@@ -162,7 +162,7 @@ pub(crate) fn resolve_variant_data(
         Type::Indirect(inner) => inner.as_ref(),
         other => other,
     };
-    let type_info = ctx.get_type(enum_name)?;
+    let type_info = ctx.find_type(enum_name)?;
     let variants = type_info.variants()?;
     let vi = variants.iter().find(|v| v.name == *variant)?;
     let data = vi.data.clone();
@@ -350,7 +350,7 @@ pub(crate) fn check_pattern(
             span,
         } => {
             let enum_name = type_path.join(".");
-            if let Some(type_info) = ctx.get_type(&enum_name).filter(|ti| ti.is_enum()) {
+            if let Some(type_info) = ctx.find_type(&enum_name).filter(|ti| ti.is_enum()) {
                 let variants = type_info.variants().unwrap();
                 if let Some(vi) = variants.iter().find(|v| v.name == *variant) {
                     if !matches!(vi.data, VariantData::Unit) {
@@ -403,7 +403,8 @@ pub(crate) fn check_pattern(
             let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
             let enum_names = ctx.enum_names();
             let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
-            let resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+            let mut resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+            ctx.resolve_type(&mut resolved);
 
             if let Type::Union(members) = subject_type {
                 if !members.contains(&resolved) {
@@ -501,8 +502,9 @@ fn check_binary_pattern(
         );
 
         let is_greedy_rest = seg.type_ann.is_some() && seg.size.is_none() && {
-            let ann_ty =
+            let mut ann_ty =
                 resolve_type_expr(seg.type_ann.as_ref().unwrap(), &struct_refs, &enum_refs);
+            ctx.resolve_type(&mut ann_ty);
             matches!(
                 ann_ty,
                 Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
@@ -524,8 +526,9 @@ fn check_binary_pattern(
             }
             has_greedy = true;
 
-            let ann_ty =
+            let mut ann_ty =
                 resolve_type_expr(seg.type_ann.as_ref().unwrap(), &struct_refs, &enum_refs);
+            ctx.resolve_type(&mut ann_ty);
             if matches!(ann_ty, Type::Primitive(Primitive::Binary))
                 && !total_fixed_bits.is_multiple_of(8)
             {
@@ -578,7 +581,8 @@ fn check_binary_pattern(
                 None
             }
         } else if let Some(type_ann) = &seg.type_ann {
-            let ann_ty = resolve_type_expr(type_ann, &struct_refs, &enum_refs);
+            let mut ann_ty = resolve_type_expr(type_ann, &struct_refs, &enum_refs);
+            ctx.resolve_type(&mut ann_ty);
             match &ann_ty {
                 Type::Primitive(p) => {
                     if let Some(w) = p.bit_width() {
@@ -616,7 +620,9 @@ fn check_binary_pattern(
         if is_binding {
             if let Expr::Ident { name, .. } = seg.value.as_ref() {
                 let binding_ty = if let Some(type_ann) = &seg.type_ann {
-                    resolve_type_expr(type_ann, &struct_refs, &enum_refs)
+                    let mut ty = resolve_type_expr(type_ann, &struct_refs, &enum_refs);
+                    ctx.resolve_type(&mut ty);
+                    ty
                 } else if seg.size.is_some() && seg.unit == BinaryUnit::Byte {
                     Type::Primitive(Primitive::Binary)
                 } else {

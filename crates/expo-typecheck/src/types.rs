@@ -375,6 +375,19 @@ pub fn resolve_type_alias_name(name: &str, type_aliases: &BTreeMap<String, Type>
         .unwrap_or_else(|| name.to_string())
 }
 
+/// Like [`resolve_type_alias_name`] but returns the full [`TypeIdentifier`]
+/// (preserving the package) so callers can do package-aware lookups via
+/// [`TypeContext::get_type`]. Returns `None` when no alias matches.
+pub fn resolve_type_alias_id(
+    name: &str,
+    type_aliases: &BTreeMap<String, Type>,
+) -> Option<TypeIdentifier> {
+    type_aliases.get(name).and_then(|ty| match ty {
+        Type::Named { identifier, .. } => Some(identifier.clone()),
+        _ => None,
+    })
+}
+
 /// Checks if a two-segment qualified type path like `json.Decoder` is valid.
 /// Retained for backward compatibility within [`resolve_type_expr_full`] which
 /// still receives a standalone map. Prefer [`TypeContext::is_package_type`]
@@ -753,9 +766,9 @@ pub fn mangle_type(ty: &Type) -> String {
             type_args,
         } => {
             if type_args.is_empty() {
-                identifier.mangled()
+                identifier.name.clone()
             } else {
-                mangle_name(&identifier.mangled(), type_args)
+                mangle_name(&identifier.name, type_args)
             }
         }
         Type::Parameter(n) => n.clone(),
@@ -842,10 +855,15 @@ pub fn named(name: &str) -> Type {
     }
 }
 
-/// Helper to construct a generic Named type with an unresolved package.
-pub fn named_generic(name: &str, type_args: Vec<Type>) -> Type {
+/// Helper to construct a generic Named type, resolving the package via the
+/// type context's name index when available.
+pub fn named_generic(name: &str, type_args: Vec<Type>, ctx: &crate::context::TypeContext) -> Type {
+    let identifier = ctx
+        .resolve_name(name)
+        .cloned()
+        .unwrap_or_else(|| TypeIdentifier::unresolved(name));
     Type::Named {
-        identifier: TypeIdentifier::unresolved(name),
+        identifier,
         type_args,
     }
 }
@@ -853,6 +871,13 @@ pub fn named_generic(name: &str, type_args: Vec<Type>) -> Type {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named_generic_unresolved(name: &str, type_args: Vec<Type>) -> Type {
+        Type::Named {
+            identifier: TypeIdentifier::unresolved(name),
+            type_args,
+        }
+    }
 
     // ---- Type::union ----
 
@@ -917,16 +942,16 @@ mod tests {
 
     #[test]
     fn display_generic_instance() {
-        let ty = named_generic("Option", vec![Type::Primitive(Primitive::I64)]);
+        let ty = named_generic_unresolved("Option", vec![Type::Primitive(Primitive::I64)]);
         assert_eq!(ty.display(), "Option<Int>");
     }
 
     #[test]
     fn display_nested_generic() {
-        let ty = named_generic(
+        let ty = named_generic_unresolved(
             "Result",
             vec![
-                named_generic("List", vec![Type::Primitive(Primitive::I64)]),
+                named_generic_unresolved("List", vec![Type::Primitive(Primitive::I64)]),
                 Type::Primitive(Primitive::String),
             ],
         );

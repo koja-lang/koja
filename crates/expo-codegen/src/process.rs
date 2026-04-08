@@ -206,7 +206,12 @@ pub fn emit_ref_method<'ctx>(
 
             let option_reply_type = named_generic(
                 "Option",
-                vec![named_generic("ReplyTo", vec![reply_type.clone()])],
+                vec![named_generic(
+                    "ReplyTo",
+                    vec![reply_type.clone()],
+                    c.type_ctx,
+                )],
+                c.type_ctx,
             );
             ensure_types_exist(c, &option_reply_type)?;
             let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.types.structs)
@@ -325,13 +330,13 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("no LLVM type for Pair envelope")?
                 .into_struct_type();
 
-            let reply_to_type = named_generic("ReplyTo", vec![reply_type.clone()]);
+            let reply_to_type = named_generic("ReplyTo", vec![reply_type.clone()], c.type_ctx);
             ensure_types_exist(c, &reply_to_type)?;
             let reply_to_llvm = to_llvm_type(&reply_to_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for ReplyTo<R>")?
                 .into_struct_type();
 
-            let option_from_type = named_generic("Option", vec![reply_to_type]);
+            let option_from_type = named_generic("Option", vec![reply_to_type], c.type_ctx);
             ensure_types_exist(c, &option_from_type)?;
             let option_from_llvm = to_llvm_type(&option_from_type, c.context, &c.types.structs)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?

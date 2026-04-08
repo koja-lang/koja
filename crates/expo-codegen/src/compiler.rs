@@ -466,7 +466,7 @@ impl<'ctx> Compiler<'ctx> {
                 .position(|(name, _)| name == field_name)
                 .map(|i| i as u32);
         }
-        self.type_ctx.get_type(struct_name).and_then(|info| {
+        self.type_ctx.find_type(struct_name).and_then(|info| {
             info.fields().and_then(|fields| {
                 fields
                     .iter()
@@ -484,7 +484,7 @@ impl<'ctx> Compiler<'ctx> {
                 .find(|(name, _)| name == field_name)
                 .map(|(_, ty)| ty.clone());
         }
-        self.type_ctx.get_type(struct_name).and_then(|info| {
+        self.type_ctx.find_type(struct_name).and_then(|info| {
             info.fields().and_then(|fields| {
                 fields
                     .iter()
@@ -504,14 +504,14 @@ impl<'ctx> Compiler<'ctx> {
             .types
             .iter()
             .filter(|(_, ti)| ti.is_struct())
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _)| name.name.as_str())
             .collect();
         let enum_names: Vec<&str> = self
             .type_ctx
             .types
             .iter()
             .filter(|(_, ti)| ti.is_enum())
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _)| name.name.as_str())
             .collect();
         let mut type_params: Vec<&str> = self
             .fn_state
@@ -522,13 +522,14 @@ impl<'ctx> Compiler<'ctx> {
         if self.fn_state.self_type_name.is_some() && !type_params.contains(&"Self") {
             type_params.push("Self");
         }
-        let ty = resolve_type_expr_with_params(
+        let mut ty = resolve_type_expr_with_params(
             type_expr,
             &struct_names,
             &enum_names,
             &type_params,
             &self.type_ctx.type_aliases,
         );
+        self.type_ctx.resolve_type(&mut ty);
         if let Some(ref name) = self.fn_state.self_type_name {
             let self_ty = if self.type_ctx.is_struct(name) || self.type_ctx.is_enum(name) {
                 named(name)
@@ -658,7 +659,7 @@ impl<'ctx> Compiler<'ctx> {
                         let Some(&struct_type) = self.types.structs.get(&struct_name) else {
                             continue;
                         };
-                        let Some(info) = self.type_ctx.get_type(&struct_name) else {
+                        let Some(info) = self.type_ctx.find_type(&struct_name) else {
                             continue;
                         };
                         let Some(struct_fields) = info.fields() else {
@@ -1521,7 +1522,7 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(target, c) {
         let impls = c.type_ctx.protocol_impls.get(&base)?;
         let (_, proto_args) = impls.iter().find(|(proto, _)| proto == "Process")?;
-        let ti = c.type_ctx.get_type(&base)?;
+        let ti = c.type_ctx.find_type(&base)?;
         let subst = build_substitution(&ti.type_params, &type_args);
         let m = substitute(proto_args.get(1)?, &subst);
         let r = substitute(proto_args.get(2)?, &subst);

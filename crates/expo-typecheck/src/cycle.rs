@@ -31,14 +31,14 @@ struct Edge {
 pub fn mark_recursive_fields(ctx: &mut TypeContext) {
     let all_type_names: HashSet<String> = ctx
         .types
-        .iter()
-        .filter(|(_, ti)| ti.is_struct() || ti.is_enum())
-        .map(|(n, _)| n.clone())
+        .values()
+        .filter(|ti| ti.is_struct() || ti.is_enum())
+        .map(|ti| ti.identifier.name.clone())
         .collect();
 
     let mut graph: HashMap<String, Vec<Edge>> = HashMap::new();
 
-    for (name, ti) in &ctx.types {
+    for (id, ti) in &ctx.types {
         match &ti.kind {
             TypeKind::Struct { fields } => {
                 let mut edges = Vec::new();
@@ -50,7 +50,7 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
                         });
                     }
                 }
-                graph.insert(name.clone(), edges);
+                graph.insert(id.name.clone(), edges);
             }
             TypeKind::Enum { variants } => {
                 let mut edges = Vec::new();
@@ -69,7 +69,7 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
                         }
                     }
                 }
-                graph.insert(name.clone(), edges);
+                graph.insert(id.name.clone(), edges);
             }
             TypeKind::Primitive => {}
         }
@@ -89,7 +89,10 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
     }
 
     for (type_name, slots) in &wrap_slots {
-        if let Some(ti) = ctx.get_type_mut(type_name) {
+        let Some(tid) = ctx.types.keys().find(|id| id.name == *type_name).cloned() else {
+            continue;
+        };
+        if let Some(ti) = ctx.get_type_mut(&tid) {
             for slot in slots {
                 match (&mut ti.kind, slot) {
                     (TypeKind::Struct { fields }, Slot::StructField(idx))

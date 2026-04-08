@@ -515,11 +515,7 @@ fn compile_closure_core<'ctx>(
         } = &ret_type
             && !type_args.is_empty()
         {
-            let type_params = c
-                .type_ctx
-                .types
-                .get(identifier.name.as_str())
-                .map(|ti| &ti.type_params);
+            let type_params = c.type_ctx.get_type(identifier).map(|ti| &ti.type_params);
             if let Some(tps) = type_params {
                 for (tp, ta) in tps.iter().zip(type_args.iter()) {
                     extra.insert(tp.name.clone(), ta.clone());
@@ -704,7 +700,7 @@ fn compile_list_literal<'ctx>(
             .ok_or("List.append returned void")?;
     }
 
-    let list_type = named_generic("List", vec![elem_type]);
+    let list_type = named_generic("List", vec![elem_type], c.type_ctx);
     Ok(Some(TypedValue::new(list_val, list_type)))
 }
 
@@ -763,7 +759,7 @@ fn compile_map_literal<'ctx>(
             .ok_or("Map.put returned void")?;
     }
 
-    let map_type = named_generic("Map", vec![key_type, val_type]);
+    let map_type = named_generic("Map", vec![key_type, val_type], c.type_ctx);
     Ok(Some(TypedValue::new(map_val, map_type)))
 }
 

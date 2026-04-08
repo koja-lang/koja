@@ -29,7 +29,8 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
             span,
         } => {
             if let Some(te) = type_annotation {
-                let hint = resolve_type_expr(te, ce.struct_names, ce.enum_names);
+                let mut hint = resolve_type_expr(te, ce.struct_names, ce.enum_names);
+                ctx.resolve_type(&mut hint);
                 ce.type_hint = Some(hint);
             } else {
                 ce.type_hint = None;
@@ -39,7 +40,8 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
             ce.type_hint = None;
 
             let effective_type = if let Some(te) = type_annotation {
-                let annotated = resolve_type_expr(te, ce.struct_names, ce.enum_names);
+                let mut annotated = resolve_type_expr(te, ce.struct_names, ce.enum_names);
+                ctx.resolve_type(&mut annotated);
                 if value_type.is_known() && annotated.is_known() {
                     if !types_compatible(&value_type, &annotated) {
                         ctx.error_with_hint(
@@ -205,7 +207,7 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
             {
                 let is_static = matches!(
                     receiver.as_ref(),
-                    Expr::Ident { name, .. } if ctx.get_type(name.as_str()).is_some()
+                    Expr::Ident { name, .. } if ctx.resolve_name(name.as_str()).is_some()
                 );
                 if !is_static {
                     let recv_ty = infer_expr(receiver, ctx, ce);
@@ -213,9 +215,9 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
                         Type::Indirect(inner) => inner.as_ref().clone(),
                         other => other.clone(),
                     };
-                    let (base_name, _) = resolve_receiver_base_name(&recv_ty, ctx);
-                    if let Some(base) = base_name
-                        && let Some(ti) = ctx.get_type(&base)
+                    let (base_id, _) = resolve_receiver_base_name(&recv_ty, ctx);
+                    if let Some(id) = base_id
+                        && let Some(ti) = ctx.get_type(&id)
                         && let Some(sig) = ti.functions.get(method.as_str())
                         && sig.kind == FunctionKind::Instance(PassMode::Move)
                         && sig.return_type != Type::Unit
@@ -262,11 +264,11 @@ pub(crate) fn check_statement(stmt: &Statement, ctx: &mut TypeContext, ce: &mut 
 /// Resolves the type of a struct field by name, returning `None` if the
 /// type is not a struct or the field doesn't exist.
 fn resolve_field_type(ty: &Type, field: &str, ctx: &TypeContext) -> Option<Type> {
-    let struct_name = match ty {
-        Type::Named { identifier, .. } => identifier.name.as_str(),
+    let struct_id = match ty {
+        Type::Named { identifier, .. } => identifier,
         _ => return None,
     };
-    let ti = ctx.get_type(struct_name)?;
+    let ti = ctx.get_type(struct_id)?;
     let fields = ti.fields()?;
     fields
         .iter()

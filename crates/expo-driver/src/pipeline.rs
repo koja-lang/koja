@@ -10,7 +10,7 @@ use std::{env, fs, process};
 use expo_ast::ast::{AnnotationValue, Item, Module, Severity};
 
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::named;
+use expo_typecheck::types::{Type, TypeIdentifier};
 
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
@@ -88,7 +88,7 @@ pub fn typecheck_graph(
         let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, &pkg);
         ctx.merge(&stdlib_ctx);
         expo_typecheck::auto_derive_debug(&mut ctx);
-        expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx);
+        expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx, &pkg);
         expo_typecheck::mark_recursive_fields(&mut ctx);
         module_contexts.insert((*name).clone(), ctx);
     }
@@ -105,6 +105,7 @@ pub fn typecheck_graph(
         let mut ctx = module_contexts.remove(*name).unwrap();
         ctx.merge(&unified_project_ctx);
         resolve_module_aliases(&rm.module, &mut ctx);
+        expo_typecheck::resolve_packages(&mut ctx);
         expo_typecheck::check_module(&rm.module, &mut ctx);
         module_contexts.insert((*name).clone(), ctx);
     }
@@ -154,7 +155,10 @@ fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
                 ctx.error(format!("unknown package type `{pkg}.{type_name}`"), a.span);
                 continue;
             }
-            let resolved = named(type_name);
+            let resolved = Type::Named {
+                identifier: TypeIdentifier::new(pkg, type_name),
+                type_args: vec![],
+            };
             ctx.module_aliases
                 .insert(a.local_name.clone(), resolved.clone());
             ctx.type_aliases.insert(a.local_name.clone(), resolved);
@@ -180,10 +184,11 @@ pub fn build_from_graph(
         process::exit(1);
     }
 
-    let mut merged_ctx = expo_typecheck::context::TypeContext::new();
+    let mut merged_ctx = TypeContext::new();
     for name in &graph.order {
         merged_ctx.merge(&module_contexts[name]);
     }
+    expo_typecheck::resolve_packages(&mut merged_ctx);
 
     let modules_ast: Vec<&Module> = graph
         .order

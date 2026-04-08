@@ -532,7 +532,10 @@ pub fn emit_map_method<'ctx>(
         "get" => {
             let option_type_args = vec![val_type.clone()];
             let option_mangled = mangle_name("Option", &option_type_args);
-            ensure_types_exist(c, &named_generic("Option", option_type_args.clone()))?;
+            ensure_types_exist(
+                c,
+                &named_generic("Option", option_type_args.clone(), c.type_ctx),
+            )?;
             let option_struct = *c
                 .types
                 .structs

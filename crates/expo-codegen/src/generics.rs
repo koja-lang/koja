@@ -333,8 +333,7 @@ pub(crate) fn monomorphize_struct<'ctx>(
 
     let info = c
         .type_ctx
-        .types
-        .get(name)
+        .find_type(name)
         .ok_or_else(|| format!("no struct info for generic struct `{name}`"))?;
     let fields = info
         .fields()
@@ -395,8 +394,7 @@ pub(crate) fn monomorphize_enum<'ctx>(
 
     let info = c
         .type_ctx
-        .types
-        .get(name)
+        .find_type(name)
         .ok_or_else(|| format!("no enum info for generic enum `{name}`"))?;
     let variants = info
         .variants()
@@ -568,8 +566,7 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
 
     let info = c
         .type_ctx
-        .types
-        .get(base_type)
+        .find_type(base_type)
         .map(|ti| (&ti.functions, &ti.type_params));
 
     let (return_type, param_types, is_static) = if let Some((methods, _)) = info {

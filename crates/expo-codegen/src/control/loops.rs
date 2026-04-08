@@ -280,8 +280,7 @@ fn resolve_enumerable_info<'ctx>(
 
     let ti = c
         .type_ctx
-        .types
-        .get(&base)
+        .find_type(&base)
         .ok_or_else(|| format!("no type info for `{base}`"))?;
     let get_sig = ti
         .functions

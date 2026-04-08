@@ -93,7 +93,7 @@ pub fn synthesize_all_formats<'ctx>(c: &mut Compiler<'ctx>) -> Result<(), String
         .types
         .iter()
         .filter(|(_, ti)| (ti.is_struct() || ti.is_enum()) && ti.type_params.is_empty())
-        .map(|(n, _)| n.clone())
+        .map(|(n, _)| n.name.clone())
         .collect();
 
     for name in &type_names {
@@ -122,7 +122,7 @@ fn is_complex_type(ty: &Type) -> bool {
 }
 
 fn has_unsynthesizable_fields(c: &Compiler, name: &str) -> bool {
-    if let Some(ti) = c.type_ctx.get_type(name) {
+    if let Some(ti) = c.type_ctx.find_type(name) {
         if let Some(fields) = ti.fields() {
             return fields.iter().any(|(_, ty)| is_complex_type(ty));
         }
@@ -267,8 +267,7 @@ fn synthesize_enum_format<'ctx>(c: &mut Compiler<'ctx>, enum_name: &str) -> Resu
 
     let variants = c
         .type_ctx
-        .types
-        .get(enum_name)
+        .find_type(enum_name)
         .and_then(|ti| ti.variants())
         .cloned()
         .unwrap_or_default();
@@ -392,8 +391,7 @@ fn synthesize_struct_format<'ctx>(c: &mut Compiler<'ctx>, struct_name: &str) -> 
 
     let fields: Vec<(String, Type)> = c
         .type_ctx
-        .types
-        .get(struct_name)
+        .find_type(struct_name)
         .and_then(|ti| ti.fields())
         .cloned()
         .unwrap_or_default();

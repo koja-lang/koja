@@ -16,15 +16,13 @@ impl Process<Ponger, PingMsg, String> for Ponger
     -> Step<Self>
     match msg
       PingMsg.Ping(name) ->
-        print("#{self.label}: pong #{name}")
         match from
-          Option.Some(r) -> r.send("pong")
+          Option.Some(r) -> r.send("pong #{name}")
           Option.None -> ()
         end
         Step.Continue(self)
 
       PingMsg.Stop ->
-        print("#{self.label}: stopping")
         match from
           Option.Some(r) -> r.send("bye")
           Option.None -> ()
@@ -53,13 +51,27 @@ impl Process<Coordinator, CoordMsg, String> for Coordinator
     match msg
       CoordMsg.RunTest ->
         p = spawn Ponger.start(Ponger{label: "ponger"})
-        p.call(PingMsg.Ping("multi"), 5000)
-        p.call(PingMsg.Stop, 5000)
-        print("coordinator: test done")
+        ping_result = p.call(PingMsg.Ping("multi"), 5000)
+        match ping_result
+          Result.Ok(v) -> print("ping: #{v}")
+          Result.Err(_) -> print("ping: failed")
+        end
+        stop_result = p.call(PingMsg.Stop, 5000)
+        match stop_result
+          Result.Ok(v) -> print("stop: #{v}")
+          Result.Err(_) -> print("stop: failed")
+        end
+        match from
+          Option.Some(r) -> r.send("done")
+          Option.None -> ()
+        end
         Step.Continue(self)
 
       CoordMsg.Done ->
-        print("coordinator: shutting down")
+        match from
+          Option.Some(r) -> r.send("shutting down")
+          Option.None -> ()
+        end
         Step.Done(StopReason.Normal)
     end
   end
@@ -67,7 +79,8 @@ end
 
 fn main
   c = spawn Coordinator.start(Coordinator{label: "coord"})
-  c.cast(CoordMsg.RunTest)
+  c.call(CoordMsg.RunTest, 5000)
+  print("coordinator: test done")
   c.call(CoordMsg.Done, 5000)
   print("main: all done")
 end

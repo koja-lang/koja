@@ -33,8 +33,7 @@ pub fn compile_enum_construction<'ctx>(
 
     let is_generic = c
         .type_ctx
-        .types
-        .get(base_name.as_str())
+        .find_type(base_name.as_str())
         .is_some_and(|ti| ti.is_enum() && !ti.type_params.is_empty());
 
     if is_generic {
@@ -89,8 +88,7 @@ fn compile_concrete_enum<'ctx>(
 
             let expected_types = c
                 .type_ctx
-                .types
-                .get(enum_name)
+                .find_type(enum_name)
                 .and_then(|ti| ti.variants())
                 .and_then(|vs| vs.iter().find(|v| v.name == variant))
                 .and_then(|vi| match &vi.data {
@@ -137,8 +135,7 @@ fn compile_concrete_enum<'ctx>(
 
             let variant_info = c
                 .type_ctx
-                .types
-                .get(enum_name)
+                .find_type(enum_name)
                 .and_then(|ti| ti.variants())
                 .and_then(|vs| vs.iter().find(|v| v.name == variant))
                 .ok_or_else(|| format!("variant info not found for {enum_name}.{variant}"))?;
@@ -192,8 +189,7 @@ fn compile_generic_enum_construction<'ctx>(
 ) -> ExprResult<'ctx> {
     let enum_info = c
         .type_ctx
-        .types
-        .get(enum_name)
+        .find_type(enum_name)
         .filter(|ti| ti.is_enum())
         .cloned()
         .ok_or_else(|| format!("no enum info for `{enum_name}`"))?;
@@ -333,7 +329,7 @@ fn compile_generic_enum_construction<'ctx>(
     }
 
     let enum_val = c.builder.build_load(enum_type, alloca, &mangled).unwrap();
-    let result_type = named_generic(enum_name, type_args.clone());
+    let result_type = named_generic(enum_name, type_args.clone(), c.type_ctx);
     Ok(Some(TypedValue::new(enum_val, result_type)))
 }
 

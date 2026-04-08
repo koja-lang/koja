@@ -245,7 +245,11 @@ pub fn emit_string_intrinsic<'ctx>(
             let option_mangled = "Option_$String$";
             ensure_types_exist(
                 c,
-                &named_generic("Option", vec![Type::Primitive(Primitive::String)]),
+                &named_generic(
+                    "Option",
+                    vec![Type::Primitive(Primitive::String)],
+                    c.type_ctx,
+                ),
             )?;
             let option_struct = *c
                 .types
