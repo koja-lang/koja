@@ -592,7 +592,7 @@ fn find_constructor_enum<'ctx>(
             .variants()
             .is_some_and(|vs| vs.iter().any(|v| v.name == variant_name))
         {
-            return Ok(enum_name.clone());
+            return Ok(enum_name.name.clone());
         }
     }
     Err(format!("no enum found with variant `{variant_name}`"))
@@ -649,7 +649,7 @@ pub(crate) fn lookup_variant_data(
     enum_name: &str,
     variant: &str,
 ) -> Result<VariantData, String> {
-    if let Some(ti) = c.type_ctx.get_type(enum_name)
+    if let Some(ti) = c.type_ctx.find_type(enum_name)
         && let Some(vs) = ti.variants()
         && let Some(vi) = vs.iter().find(|v| v.name == variant)
     {

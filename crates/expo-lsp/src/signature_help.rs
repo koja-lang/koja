@@ -220,15 +220,13 @@ fn find_method_sig<'a>(
         .or_else(|| resolve_receiver_type(receiver, source, stdlib_ctx))
     {
         if let Some(sig) = ctx
-            .types
-            .get(&type_name)
+            .find_type(&type_name)
             .and_then(|ti| ti.functions.get(method))
         {
             return Some(sig);
         }
         if let Some(sig) = stdlib_ctx
-            .types
-            .get(&type_name)
+            .find_type(&type_name)
             .and_then(|ti| ti.functions.get(method))
         {
             return Some(sig);

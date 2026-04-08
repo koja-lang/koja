@@ -12,6 +12,24 @@ use crate::context::{
 };
 use crate::types::{Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params};
 
+/// Resolves a bare type name to a [`TypeIdentifier`] by trying the current
+/// package first, then falling back to `Package::Std`.
+fn resolve_type_key(ctx: &TypeContext, name: &str, package: &str) -> Option<TypeIdentifier> {
+    let id = if package == "std" {
+        TypeIdentifier::std(name)
+    } else {
+        TypeIdentifier::new(package, name)
+    };
+    if ctx.types.contains_key(&id) {
+        return Some(id);
+    }
+    let std_id = TypeIdentifier::std(name);
+    if ctx.types.contains_key(&std_id) {
+        return Some(std_id);
+    }
+    None
+}
+
 /// Pre-collected struct and enum names across all modules in the program.
 /// Passed into [`collect`] so that type resolution sees every type name
 /// from the start, eliminating the need for re-resolution patches.
@@ -165,7 +183,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                     type_aliases: &type_aliases,
                 };
                 for f in &e.functions {
-                    register_method_on_type(&mut ctx, f, &e.name, &self_type, &resolve);
+                    register_method_on_type(&mut ctx, f, &e.name, &self_type, &resolve, package);
                 }
             }
             Item::Function(f) => {
@@ -252,7 +270,8 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                             }
                         }
 
-                        let ti = ctx.get_type_mut(&target_name);
+                        let ti = resolve_type_key(&ctx, &target_name, package)
+                            .and_then(|id| ctx.get_type_mut(&id));
                         if let Some(ti) = ti {
                             if ti.functions.contains_key(&f.name) {
                                 ctx.error(
@@ -266,16 +285,17 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                                 ti.functions.insert(f.name.clone(), sig);
                             }
                         } else if Primitive::from_name(&target_name).is_some() {
-                            let ti =
-                                ctx.types
-                                    .entry(target_name.clone())
-                                    .or_insert_with(|| TypeInfo {
-                                        identifier: TypeIdentifier::std(&target_name),
-                                        functions: BTreeMap::new(),
-                                        kind: TypeKind::Primitive,
-                                        span: f.span,
-                                        type_params: Vec::new(),
-                                    });
+                            let prim_id = TypeIdentifier::std(&target_name);
+                            let ti = ctx
+                                .types
+                                .entry(prim_id.clone())
+                                .or_insert_with(|| TypeInfo {
+                                    identifier: prim_id,
+                                    functions: BTreeMap::new(),
+                                    kind: TypeKind::Primitive,
+                                    span: f.span,
+                                    type_params: Vec::new(),
+                                });
                             if ti.functions.contains_key(&f.name) {
                                 ctx.error(
                                     format!(
@@ -337,7 +357,9 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                             );
                             if let Some(sig) = sig {
                                 let sig = substitute_self_type(sig, &self_type);
-                                if let Some(ti) = ctx.get_type_mut(&target_name) {
+                                if let Some(id) = resolve_type_key(&ctx, &target_name, package)
+                                    && let Some(ti) = ctx.get_type_mut(&id)
+                                {
                                     ti.functions.insert(name.clone(), sig);
                                 }
                             }
@@ -442,7 +464,9 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                 };
                 if ctx.constants.contains_key(&c.name) {
                     ctx.error(format!("duplicate constant `{}`", c.name), c.span);
-                } else if ctx.functions.contains_key(&c.name) || ctx.get_type(&c.name).is_some() {
+                } else if ctx.functions.contains_key(&c.name)
+                    || resolve_type_key(&ctx, &c.name, package).is_some()
+                {
                     ctx.error(
                         format!(
                             "constant `{}` conflicts with an existing declaration",
@@ -525,7 +549,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                     type_aliases: &type_aliases,
                 };
                 for f in &s.functions {
-                    register_method_on_type(&mut ctx, f, &s.name, &self_type, &resolve);
+                    register_method_on_type(&mut ctx, f, &s.name, &self_type, &resolve, package);
                 }
             }
             Item::TypeAlias(_) => {} // handled in pre-pass above
@@ -571,18 +595,18 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
 /// Synthesizes default protocol method implementations for impl blocks whose
 /// protocol info wasn't available during initial collection (e.g. stdlib
 /// protocols like `Process`). Must be called after merging the stdlib context.
-pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
+pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, package: &str) {
     let struct_names: Vec<String> = ctx
         .types
-        .iter()
-        .filter(|(_, ti)| ti.is_struct())
-        .map(|(n, _)| n.clone())
+        .values()
+        .filter(|ti| ti.is_struct())
+        .map(|ti| ti.identifier.name.clone())
         .collect();
     let enum_names: Vec<String> = ctx
         .types
-        .iter()
-        .filter(|(_, ti)| ti.is_enum())
-        .map(|(n, _)| n.clone())
+        .values()
+        .filter(|ti| ti.is_enum())
+        .map(|ti| ti.identifier.name.clone())
         .collect();
     let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
     let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
@@ -689,7 +713,9 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
                     );
                     if let Some(sig) = sig {
                         let sig = substitute_self_type(sig, &self_type);
-                        if let Some(ti) = ctx.get_type_mut(&target_name) {
+                        if let Some(id) = resolve_type_key(ctx, &target_name, package)
+                            && let Some(ti) = ctx.get_type_mut(&id)
+                        {
                             ti.functions.insert(name.clone(), sig);
                         }
                     }
@@ -724,6 +750,7 @@ fn register_method_on_type(
     type_name: &str,
     self_type: &Type,
     resolve: &ResolveCtx<'_>,
+    package: &str,
 ) {
     let Some(sig) = build_function_sig_with_params(
         f,
@@ -736,7 +763,10 @@ fn register_method_on_type(
     };
     let sig = substitute_self_type(sig, self_type);
 
-    let Some(ti) = ctx.get_type_mut(type_name) else {
+    let Some(id) = resolve_type_key(ctx, type_name, package) else {
+        return;
+    };
+    let Some(ti) = ctx.get_type_mut(&id) else {
         return;
     };
     if ti.functions.contains_key(&f.name) {
@@ -908,11 +938,11 @@ fn build_protocol_method_sig(
 /// and enum types that don't already have them. Must be called after merging
 /// the stdlib context so the `Debug` protocol definition is available.
 pub fn auto_derive_debug(ctx: &mut TypeContext) {
-    let type_names: Vec<String> = ctx
+    let type_ids: Vec<TypeIdentifier> = ctx
         .types
         .iter()
         .filter(|(_, ti)| ti.is_struct() || ti.is_enum())
-        .map(|(n, _)| n.clone())
+        .map(|(id, _)| id.clone())
         .collect();
 
     let format_sig = FunctionSig {
@@ -933,8 +963,8 @@ pub fn auto_derive_debug(ctx: &mut TypeContext) {
         type_params: Vec::new(),
     };
 
-    for name in &type_names {
-        if let Some(ti) = ctx.get_type_mut(name) {
+    for id in &type_ids {
+        if let Some(ti) = ctx.get_type_mut(id) {
             if !ti.functions.contains_key("format") {
                 ti.functions
                     .insert("format".to_string(), format_sig.clone());

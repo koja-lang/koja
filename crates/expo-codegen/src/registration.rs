@@ -15,19 +15,19 @@ use crate::types::to_llvm_type;
 /// cross-referencing types resolve correctly.
 pub(crate) fn register_types(c: &mut Compiler) {
     // Pass 1: create opaque types so cross-references resolve
-    for (name, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
+    for (id, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
         if !info.type_params.is_empty() {
             continue;
         }
-        let st = c.context.opaque_struct_type(name);
-        c.types.structs.insert(name.clone(), st);
+        let st = c.context.opaque_struct_type(&id.name);
+        c.types.structs.insert(id.name.clone(), st);
     }
-    for (name, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
+    for (id, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
         if !info.type_params.is_empty() {
             continue;
         }
-        let et = c.context.opaque_struct_type(name);
-        c.types.structs.insert(name.clone(), et);
+        let et = c.context.opaque_struct_type(&id.name);
+        c.types.structs.insert(id.name.clone(), et);
     }
 
     // Pass 1b: ensure all field/variant types exist (triggers monomorphization
@@ -66,11 +66,11 @@ pub(crate) fn register_types(c: &mut Compiler) {
     }
 
     // Pass 2: set struct bodies (skip generic templates)
-    for (name, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
+    for (id, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
         if !info.type_params.is_empty() {
             continue;
         }
-        let struct_type = *c.types.structs.get(name).unwrap();
+        let struct_type = *c.types.structs.get(&id.name).unwrap();
         let field_types: Vec<_> = info
             .fields()
             .unwrap()
@@ -81,18 +81,18 @@ pub(crate) fn register_types(c: &mut Compiler) {
     }
 
     // Pass 3: set enum bodies (skip generic templates)
-    for (name, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
+    for (id, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
         if !info.type_params.is_empty() {
             continue;
         }
-        let enum_type = *c.types.structs.get(name).unwrap();
+        let enum_type = *c.types.structs.get(&id.name).unwrap();
         let variants: Vec<_> = info
             .variants()
             .unwrap()
             .iter()
             .map(|v| (v.name.clone(), v.data.clone()))
             .collect();
-        build_enum_layout(c, name, enum_type, &variants);
+        build_enum_layout(c, &id.name, enum_type, &variants);
     }
 
     // Pass 4: register union types (tagged-union layout reusing enum infrastructure)

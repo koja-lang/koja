@@ -108,7 +108,7 @@ fn add_dot_completions(
     ctx: &TypeContext,
     items: &mut Vec<CompletionItem>,
 ) {
-    let info = match ctx.get_type(type_name) {
+    let info = match ctx.find_type(type_name) {
         Some(i) => i,
         None => return,
     };
@@ -202,8 +202,8 @@ fn add_symbol_completions(ctx: &TypeContext, prefix_lower: &str, items: &mut Vec
         });
     }
 
-    for (name, info) in ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
-        if !matches(name) {
+    for (id, info) in ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
+        if !matches(&id.name) {
             continue;
         }
         let detail = if info.type_params.is_empty() {
@@ -219,15 +219,15 @@ fn add_symbol_completions(ctx: &TypeContext, prefix_lower: &str, items: &mut Vec
             ))
         };
         items.push(CompletionItem {
-            label: name.clone(),
+            label: id.name.clone(),
             kind: Some(CompletionItemKind::STRUCT),
             detail,
             ..Default::default()
         });
     }
 
-    for (name, info) in ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
-        if !matches(name) {
+    for (id, info) in ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
+        if !matches(&id.name) {
             continue;
         }
         let detail = if info.type_params.is_empty() {
@@ -243,7 +243,7 @@ fn add_symbol_completions(ctx: &TypeContext, prefix_lower: &str, items: &mut Vec
             ))
         };
         items.push(CompletionItem {
-            label: name.clone(),
+            label: id.name.clone(),
             kind: Some(CompletionItemKind::ENUM),
             detail,
             ..Default::default()

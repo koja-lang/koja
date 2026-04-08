@@ -113,8 +113,7 @@ pub(crate) fn resolve_process_msg_reply(
             .ok_or_else(|| format!("`{base}` does not implement Process"))?;
         let ti = c
             .type_ctx
-            .types
-            .get(&base)
+            .find_type(&base)
             .ok_or_else(|| format!("no type `{base}` for Process impl"))?;
         let subst = build_substitution(&ti.type_params, &type_args);
         let default = Type::Primitive(Primitive::String);
@@ -378,7 +377,7 @@ pub(crate) fn build_ref_value<'ctx>(
         .unwrap()
         .into_struct_value();
 
-    let ref_type = named_generic("Ref", type_args);
+    let ref_type = named_generic("Ref", type_args, c.type_ctx);
     Ok(TypedValue::new(sv.into(), ref_type))
 }
 

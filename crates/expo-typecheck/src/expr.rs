@@ -22,8 +22,8 @@ use crate::env::CheckEnv;
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
 use crate::stmt::{check_body, check_statement};
 use crate::types::{
-    Primitive, Type, build_substitution, named, named_generic, resolve_type_alias_name,
-    resolve_type_expr, substitute_preserving, unify, unwrap_indirect,
+    Primitive, Type, TypeIdentifier, build_substitution, named, named_generic,
+    resolve_type_alias_name, resolve_type_expr, substitute_preserving, unify, unwrap_indirect,
 };
 
 /// Infers the type of an expression, emitting diagnostics for any type errors
@@ -203,7 +203,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                     );
                 }
             }
-            named_generic("List", vec![elem_type])
+            named_generic("List", vec![elem_type], ctx)
         }
 
         Expr::Map { entries, span } => {
@@ -239,7 +239,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                     );
                 }
             }
-            named_generic("Map", vec![key_type, val_type])
+            named_generic("Map", vec![key_type, val_type], ctx)
         }
 
         Expr::Literal { value, .. } => match value {
@@ -393,7 +393,7 @@ pub(crate) fn infer_expr(expr: &Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) 
                 _ => reply_type_template.clone(),
             };
 
-            named_generic("Ref", vec![msg_type, reply_type])
+            named_generic("Ref", vec![msg_type, reply_type], ctx)
         }
 
         Expr::Receive {
@@ -702,7 +702,8 @@ fn infer_binary_literal(
                 None
             }
         } else if let Some(type_ann) = &seg.type_ann {
-            let ann_ty = resolve_type_expr(type_ann, ce.struct_names, ce.enum_names);
+            let mut ann_ty = resolve_type_expr(type_ann, ce.struct_names, ce.enum_names);
+            ctx.resolve_type(&mut ann_ty);
             match &ann_ty {
                 Type::Primitive(p) => {
                     if let Some(w) = p.bit_width() {
@@ -824,7 +825,7 @@ fn infer_call(
                 .collect();
             check_call_args(name, &param_infos, args, "", span, ctx, ce);
             *return_type
-        } else if ce.env.contains_key(name) || ctx.get_type(name).is_some() {
+        } else if ce.env.contains_key(name) || ctx.resolve_name(name).is_some() {
             for arg in args {
                 infer_expr(&arg.value, ctx, ce);
             }
@@ -869,7 +870,7 @@ fn expand_mangled_generic_type(ty: &Type, ctx: &TypeContext) -> Type {
             type_args,
         } if type_args.is_empty() => {
             if let Some((base, type_args)) = try_parse_mangled_generic(&identifier.name, ctx) {
-                named_generic(&base, type_args)
+                named_generic(&base, type_args, ctx)
             } else {
                 ty.clone()
             }
@@ -1012,7 +1013,7 @@ fn infer_enum_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let enum_name = type_path.join(".");
-    if let Some(type_info) = ctx.get_type(&enum_name).cloned().filter(|ti| ti.is_enum()) {
+    if let Some(type_info) = ctx.find_type(&enum_name).cloned().filter(|ti| ti.is_enum()) {
         let enum_variants = type_info.variants().unwrap();
         if let Some(vi) = enum_variants.iter().find(|v| v.name == *variant) {
             let is_generic = !type_info.type_params.is_empty();
@@ -1129,9 +1130,15 @@ fn infer_enum_construction(
                     .iter()
                     .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
                     .collect();
-                named_generic(&enum_name, type_args)
+                Type::Named {
+                    identifier: type_info.identifier.clone(),
+                    type_args,
+                }
             } else {
-                named(&enum_name)
+                Type::Named {
+                    identifier: type_info.identifier.clone(),
+                    type_args: vec![],
+                }
             }
         } else {
             ctx.error(
@@ -1176,15 +1183,15 @@ fn infer_field_access(
         other => other,
     };
 
-    let (struct_name, generic_args) = match effective_ty {
+    let (struct_id, generic_args) = match effective_ty {
         Type::Named {
             identifier,
             type_args,
         } => {
             if type_args.is_empty() {
-                (identifier.name.as_str(), None)
+                (identifier, None)
             } else {
-                (identifier.name.as_str(), Some(type_args))
+                (identifier, Some(type_args))
             }
         }
         Type::Unknown | Type::Error => return recv_ty,
@@ -1197,7 +1204,7 @@ fn infer_field_access(
         }
     };
 
-    let Some(type_info) = ctx.get_type(struct_name) else {
+    let Some(type_info) = ctx.get_type(struct_id) else {
         return Type::Unknown;
     };
 
@@ -1208,7 +1215,7 @@ fn infer_field_access(
     let Some((_, field_ty)) = fields.iter().find(|(n, _)| n == field) else {
         let available: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
         ctx.error_with_hint(
-            format!("struct `{}` has no field `{}`", struct_name, field),
+            format!("struct `{}` has no field `{}`", struct_id.name, field),
             format!("available fields: {}", available.join(", ")),
             span,
         );
@@ -1228,40 +1235,50 @@ fn infer_field_access(
     }
 }
 
-/// Maps a receiver type to the type name used for function lookup in `ctx.types`,
-/// plus an optional generic substitution map when the receiver is a generic instance.
+/// Maps a receiver type to the [`TypeIdentifier`] used for function lookup in
+/// `ctx.types`, plus an optional generic substitution map when the receiver is
+/// a generic instance.
 pub(crate) fn resolve_receiver_base_name(
     recv_ty: &Type,
     ctx: &TypeContext,
-) -> (Option<String>, Option<HashMap<String, Type>>) {
+) -> (Option<TypeIdentifier>, Option<HashMap<String, Type>>) {
     match recv_ty {
         Type::Named {
             identifier,
             type_args,
         } => {
             if type_args.is_empty() {
-                if ctx.get_type(&identifier.name).is_some() {
-                    (Some(identifier.name.clone()), None)
+                if ctx.get_type(identifier).is_some() {
+                    (Some(identifier.clone()), None)
+                } else if let Some(resolved) = ctx.resolve_name(&identifier.name) {
+                    (Some(resolved.clone()), None)
                 } else if let Some((base, type_args)) =
                     try_parse_mangled_generic(&identifier.name, ctx)
                 {
-                    let subst = ctx
-                        .types
-                        .get(&base)
+                    let base_id = ctx.resolve_name(&base).cloned();
+                    let subst = base_id
+                        .as_ref()
+                        .and_then(|id| ctx.get_type(id))
                         .map(|ti| build_substitution(&ti.type_params, &type_args));
-                    (Some(base), subst)
+                    (base_id, subst)
                 } else {
                     (None, None)
                 }
             } else {
+                let resolved_id = if ctx.get_type(identifier).is_some() {
+                    identifier.clone()
+                } else {
+                    ctx.resolve_name(&identifier.name)
+                        .cloned()
+                        .unwrap_or_else(|| identifier.clone())
+                };
                 let subst = ctx
-                    .types
-                    .get(&identifier.name)
+                    .get_type(&resolved_id)
                     .map(|ti| build_substitution(&ti.type_params, type_args));
-                (Some(identifier.name.clone()), subst)
+                (Some(resolved_id), subst)
             }
         }
-        Type::Primitive(p) => (Some(p.display().to_string()), None),
+        Type::Primitive(p) => (ctx.resolve_name(p.display()).cloned(), None),
         _ => (None, None),
     }
 }
@@ -1280,7 +1297,7 @@ fn infer_method_call(
     } = receiver
     {
         let resolved_name = resolve_type_alias_name(type_name, &ctx.type_aliases);
-        let static_sig_info = ctx.get_type(&resolved_name).and_then(|ti| {
+        let static_sig_info = ctx.find_type(&resolved_name).and_then(|ti| {
             ti.functions.get(method).and_then(|sig| {
                 if sig.kind == FunctionKind::Static {
                     Some((sig.clone(), ti.type_params.clone()))
@@ -1357,11 +1374,11 @@ fn infer_method_call(
         return Type::Error;
     }
 
-    let (base_name, subst) = resolve_receiver_base_name(&recv_ty, ctx);
+    let (base_id, subst) = resolve_receiver_base_name(&recv_ty, ctx);
 
-    let method_sig = base_name
-        .as_deref()
-        .and_then(|name| ctx.get_type(name))
+    let method_sig = base_id
+        .as_ref()
+        .and_then(|id| ctx.get_type(id))
         .and_then(|ti| ti.functions.get(method))
         .cloned();
 
@@ -1407,12 +1424,13 @@ fn infer_method_call(
         for arg in args {
             infer_expr(&arg.value, ctx, ce);
         }
-        if let Some(name) = &base_name {
-            let ti = ctx.get_type(name.as_str());
+        if let Some(id) = &base_id {
+            let ti = ctx.get_type(id);
             let kind_label = ti.map(|t| t.kind_label()).unwrap_or("type");
             let available: Vec<&str> = ti
                 .map(|t| t.functions.keys().map(|k| k.as_str()).collect())
                 .unwrap_or_default();
+            let name = &id.name;
             let hint = if available.is_empty() {
                 format!("{kind_label} `{name}` has no functions defined")
             } else {
@@ -1439,7 +1457,10 @@ fn infer_struct_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let name = type_path.join(".");
-    if let Some(struct_fields) = ctx.get_type(&name).and_then(|ti| ti.fields()).cloned() {
+    let lookup = ctx
+        .find_type(&name)
+        .map(|ti| (ti.identifier.clone(), ti.fields().cloned()));
+    if let Some((resolved_id, Some(struct_fields))) = lookup {
         for fi in fields {
             let value_ty = infer_expr(&fi.value, ctx, ce);
             if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
@@ -1466,7 +1487,10 @@ fn infer_struct_construction(
                 );
             }
         }
-        named(&name)
+        Type::Named {
+            identifier: resolved_id,
+            type_args: vec![],
+        }
     } else {
         for fi in fields {
             infer_expr(&fi.value, ctx, ce);
@@ -1672,7 +1696,9 @@ fn bind_closure_params(
                 ..
             } => {
                 let ty = if let Some(te) = type_expr {
-                    resolve_type_expr(te, ce.struct_names, ce.enum_names)
+                    let mut ty = resolve_type_expr(te, ce.struct_names, ce.enum_names);
+                    ctx.resolve_type(&mut ty);
+                    ty
                 } else if let Some(exp) = expected {
                     exp.ty.clone()
                 } else {
@@ -1764,7 +1790,7 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
         return None;
     }
 
-    let ti = ctx.get_type(&base)?;
+    let ti = ctx.find_type(&base)?;
     let get_sig = ti.functions.get("get")?;
 
     let option_ty = if type_args.is_empty() {

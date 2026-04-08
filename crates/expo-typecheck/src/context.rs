@@ -7,7 +7,7 @@ use expo_ast::ast::{
 pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::span::Span;
 
-use crate::types::{Package, Type, TypeIdentifier};
+use crate::types::{Type, TypeIdentifier};
 
 /// Holds all type information gathered during collection and checking for a single module.
 #[derive(Clone)]
@@ -26,9 +26,12 @@ pub struct TypeContext {
     pub protocols: BTreeMap<String, ProtocolInfo>,
     pub synthesized_default_fns: BTreeMap<String, Vec<Function>>,
     pub type_aliases: BTreeMap<String, Type>,
-    pub types: BTreeMap<String, TypeInfo>,
+    pub types: BTreeMap<TypeIdentifier, TypeInfo>,
     /// File-private aliases from `alias` declarations. NOT merged across modules.
     pub module_aliases: BTreeMap<String, Type>,
+    /// Reverse index from bare type name to its fully qualified
+    /// [`TypeIdentifier`]. Populated by the resolution pass; empty before that.
+    pub name_index: BTreeMap<String, TypeIdentifier>,
 }
 
 /// Whether a function in an impl block takes a `self` receiver or is static.
@@ -248,56 +251,78 @@ impl TypeContext {
 
     /// Returns `true` if `name` is registered as a struct in the type registry.
     pub fn is_struct(&self, name: &str) -> bool {
-        self.types.get(name).is_some_and(|ti| ti.is_struct())
+        self.types
+            .values()
+            .any(|ti| ti.identifier.name == name && ti.is_struct())
     }
 
     /// Returns `true` if `name` is registered as an enum in the type registry.
     pub fn is_enum(&self, name: &str) -> bool {
-        self.types.get(name).is_some_and(|ti| ti.is_enum())
+        self.types
+            .values()
+            .any(|ti| ti.identifier.name == name && ti.is_enum())
     }
 
     /// Collects the names of all registered struct types.
     pub fn struct_names(&self) -> Vec<String> {
         self.types
-            .iter()
-            .filter(|(_, ti)| ti.is_struct())
-            .map(|(n, _)| n.clone())
+            .values()
+            .filter(|ti| ti.is_struct())
+            .map(|ti| ti.identifier.name.clone())
             .collect()
     }
 
     /// Collects the names of all registered enum types.
     pub fn enum_names(&self) -> Vec<String> {
         self.types
-            .iter()
-            .filter(|(_, ti)| ti.is_enum())
-            .map(|(n, _)| n.clone())
+            .values()
+            .filter(|ti| ti.is_enum())
+            .map(|ti| ti.identifier.name.clone())
             .collect()
     }
 
-    /// Inserts a type into the registry, keyed by bare name, with its
-    /// [`TypeIdentifier`] stored on the [`TypeInfo`] for package-aware lookups.
+    /// Inserts a type into the registry keyed by its [`TypeIdentifier`].
     pub fn insert_type(&mut self, id: TypeIdentifier, mut info: TypeInfo) {
         info.identifier = id.clone();
-        self.types.insert(id.name, info);
+        self.types.insert(id, info);
     }
 
-    /// Returns the [`TypeInfo`] for the given bare name, if registered.
-    pub fn get_type(&self, name: &str) -> Option<&TypeInfo> {
-        self.types.get(name)
+    /// Returns the [`TypeInfo`] for the given [`TypeIdentifier`].
+    pub fn get_type(&self, id: &TypeIdentifier) -> Option<&TypeInfo> {
+        self.types.get(id)
     }
 
-    /// Returns a mutable reference to the [`TypeInfo`] for the given bare name.
-    pub fn get_type_mut(&mut self, name: &str) -> Option<&mut TypeInfo> {
-        self.types.get_mut(name)
+    /// Returns a mutable reference to the [`TypeInfo`] for the given [`TypeIdentifier`].
+    pub fn get_type_mut(&mut self, id: &TypeIdentifier) -> Option<&mut TypeInfo> {
+        self.types.get_mut(id)
+    }
+
+    /// Resolves a bare type name to its fully qualified [`TypeIdentifier`]
+    /// using the reverse index built by the resolution pass.
+    pub fn resolve_name(&self, name: &str) -> Option<&TypeIdentifier> {
+        self.name_index.get(name)
+    }
+
+    /// Looks up a type by bare name: resolves the name to a [`TypeIdentifier`],
+    /// then fetches the corresponding [`TypeInfo`].
+    pub fn find_type(&self, name: &str) -> Option<&TypeInfo> {
+        self.resolve_name(name).and_then(|id| self.get_type(id))
+    }
+
+    /// Resolves `Package::Unresolved` identifiers inside a [`Type`] using the
+    /// name index built by the resolution pass.
+    pub fn resolve_type(&self, ty: &mut Type) {
+        crate::resolve::resolve_type_inline(ty, &self.name_index);
     }
 
     /// Returns `true` if the given package provides a type with the given name.
-    /// Replaces the `package_types` side-table lookup.
     pub fn is_package_type(&self, pkg: &str, type_name: &str) -> bool {
-        self.types.get(type_name).is_some_and(|ti| {
-            ti.identifier.package == Package::Named(pkg.to_string())
-                || (pkg == "std" && ti.identifier.package == Package::Std)
-        })
+        let id = if pkg == "std" {
+            TypeIdentifier::std(type_name)
+        } else {
+            TypeIdentifier::new(pkg, type_name)
+        };
+        self.types.contains_key(&id)
     }
 
     /// Creates an empty context with no registered types or diagnostics.
@@ -319,6 +344,7 @@ impl TypeContext {
             type_aliases: BTreeMap::new(),
             types: BTreeMap::new(),
             module_aliases: BTreeMap::new(),
+            name_index: BTreeMap::new(),
         }
     }
 
@@ -336,20 +362,15 @@ impl TypeContext {
                 self.functions.insert(name.clone(), sig.clone());
             }
         }
-        for (name, info) in &other.types {
-            if let Some(existing) = self.types.get_mut(name) {
-                let same_package = existing.identifier.package == info.identifier.package
-                    || existing.identifier.package == Package::Unresolved
-                    || info.identifier.package == Package::Unresolved;
-                if same_package {
-                    for (fn_name, sig) in &info.functions {
-                        if !existing.functions.contains_key(fn_name) {
-                            existing.functions.insert(fn_name.clone(), sig.clone());
-                        }
+        for (id, info) in &other.types {
+            if let Some(existing) = self.types.get_mut(id) {
+                for (fn_name, sig) in &info.functions {
+                    if !existing.functions.contains_key(fn_name) {
+                        existing.functions.insert(fn_name.clone(), sig.clone());
                     }
                 }
             } else {
-                self.types.insert(name.clone(), info.clone());
+                self.types.insert(id.clone(), info.clone());
             }
         }
         for (name, ast) in &other.generic_function_asts {

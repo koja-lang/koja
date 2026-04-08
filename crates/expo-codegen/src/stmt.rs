@@ -63,8 +63,7 @@ pub fn compile_statement<'ctx>(
                 {
                     let type_params = c
                         .type_ctx
-                        .types
-                        .get(identifier.name.as_str())
+                        .get_type(identifier)
                         .map(|ti| ti.type_params.clone());
                     if let Some(tp) = type_params {
                         saved_subst = Some(c.fn_state.type_subst.clone());
@@ -335,7 +334,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             name: type_name, ..
         } = receiver.as_ref()
         {
-            let is_type_name = c.type_ctx.get_type(type_name).is_some();
+            let is_type_name = c.type_ctx.find_type(type_name).is_some();
             if is_type_name {
                 return infer_static_method_return_type(c, type_name, method, args);
             }
@@ -428,26 +427,22 @@ fn infer_instance_method_return_type(c: &Compiler, recv_ty: &Type, method: &str)
     match recv_ty {
         Type::Primitive(p) => c
             .type_ctx
-            .types
-            .get(p.display())
+            .find_type(p.display())
             .and_then(|ti| ti.functions.get(method))
             .map(|sig| sig.return_type.clone()),
         Type::Named {
             identifier,
             type_args,
         } => {
-            let name = &identifier.name;
             if type_args.is_empty() {
                 c.type_ctx
-                    .types
-                    .get(name)
+                    .get_type(identifier)
                     .and_then(|ti| ti.functions.get(method))
                     .map(|sig| sig.return_type.clone())
             } else {
                 let (methods, type_params) = c
                     .type_ctx
-                    .types
-                    .get(name)
+                    .get_type(identifier)
                     .map(|ti| (&ti.functions, &ti.type_params))?;
                 let sig = methods.get(method)?;
                 let subst: HashMap<String, Type> = type_params

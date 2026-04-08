@@ -5,6 +5,7 @@ mod cycle;
 mod env;
 mod expr;
 mod pattern;
+mod resolve;
 mod stmt;
 pub mod types;
 
@@ -18,6 +19,7 @@ pub use collect::{GlobalNames, collect_all_names};
 pub fn check(module: &Module) -> TypeContext {
     let global = collect_all_names(&[module]);
     let mut ctx = collect::collect(module, &global, "");
+    resolve::resolve_packages(&mut ctx);
     check::check_module(module, &mut ctx);
     ctx
 }
@@ -38,8 +40,8 @@ pub fn collect_module(module: &Module, global_names: &GlobalNames, package: &str
 
 /// Synthesizes default protocol methods for impls whose protocols were unknown
 /// during initial collection (e.g. after merging stdlib context).
-pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext) {
-    collect::synthesize_protocol_defaults(module, ctx);
+pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, package: &str) {
+    collect::synthesize_protocol_defaults(module, ctx, package);
 }
 
 /// Detects recursive struct/enum fields and wraps them in [`types::Type::Indirect`]
@@ -52,6 +54,13 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
 /// and enum types that don't already have them. Call after merging stdlib.
 pub fn auto_derive_debug(ctx: &mut TypeContext) {
     collect::auto_derive_debug(ctx);
+}
+
+/// Resolves all `Package::Unresolved` identifiers in a [`TypeContext`] by
+/// matching bare names against the type registry's map keys (which carry real
+/// packages from collection). Must be called after merging and before checking.
+pub fn resolve_packages(ctx: &mut TypeContext) {
+    resolve::resolve_packages(ctx);
 }
 
 #[cfg(test)]

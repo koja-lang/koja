@@ -135,7 +135,7 @@ fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
     }
-    if let Some(info) = c.type_ctx.get_type(name)
+    if let Some(info) = c.type_ctx.find_type(name)
         && let Some(fields) = info.fields()
     {
         return fields
@@ -147,7 +147,7 @@ fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
             .iter()
             .any(|(_, vdata)| variant_has_indirect(vdata));
     }
-    if let Some(info) = c.type_ctx.get_type(name)
+    if let Some(info) = c.type_ctx.find_type(name)
         && let Some(vs) = info.variants()
     {
         return vs.iter().any(|v| variant_has_indirect(&v.data));
@@ -233,7 +233,7 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
                 .collect()
         })
         .or_else(|| {
-            c.type_ctx.get_type(&struct_name).and_then(|ti| {
+            c.type_ctx.find_type(&struct_name).and_then(|ti| {
                 ti.fields().map(|fields| {
                     fields
                         .iter()
