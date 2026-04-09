@@ -27,10 +27,9 @@ pub fn emit_system_intrinsic<'ctx>(
                     c.type_ctx,
                 ),
             )?;
-            let option_struct = *c
+            let option_struct = c
                 .types
-                .structs
-                .get(option_mangled)
+                .get_monomorphized(option_mangled)
                 .ok_or("no LLVM type for Option_$String$")?;
 
             let key_ptr = fn_val.get_nth_param(0).unwrap();
@@ -184,10 +183,9 @@ pub fn emit_time_intrinsic<'ctx>(
                 .ok_or("expo_time_now_millis not declared")?;
             let millis = c.call(rt_fn, &[], "millis").unwrap().into_int_value();
 
-            let dt_struct_ty = *c
+            let dt_struct_ty = c
                 .types
-                .structs
-                .get("DateTime")
+                .get_stdlib("DateTime")
                 .ok_or("DateTime struct type not found")?;
             let alloca = c.builder.build_alloca(dt_struct_ty, "dt_tmp").unwrap();
             let field_ptr = c

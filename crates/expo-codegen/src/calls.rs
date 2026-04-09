@@ -40,11 +40,11 @@ pub fn invoke_closure_fat_ptr<'ctx>(
 
     let mut llvm_call_params: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
     for fp in params {
-        if let Some(lt) = to_llvm_type(&fp.ty, c.context, &c.types.structs) {
+        if let Some(lt) = to_llvm_type(&fp.ty, c.context, &c.types) {
             llvm_call_params.push(lt.into());
         }
     }
-    let fn_type = match to_llvm_type(return_type, c.context, &c.types.structs) {
+    let fn_type = match to_llvm_type(return_type, c.context, &c.types) {
         Some(ret) => ret.fn_type(&llvm_call_params, false),
         None => c.context.void_type().fn_type(&llvm_call_params, false),
     };
@@ -80,7 +80,7 @@ pub fn compile_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    if c.types.structs.contains_key(name) {
+    if c.types.get_stdlib(name).is_some() || c.types.contains_monomorphized(name) {
         return compile_call_as_struct(c, name, args, function);
     }
 

@@ -300,7 +300,7 @@ fn resolve_enumerable_info<'ctx>(
         other => other.clone(),
     };
 
-    let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.types.structs)
+    let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.types)
         .ok_or("cannot resolve element LLVM type")?;
     let mangled = mangle_name(&base, &type_args);
 

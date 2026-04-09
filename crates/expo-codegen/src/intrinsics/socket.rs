@@ -60,9 +60,7 @@ pub fn emit_socket_intrinsic<'ctx>(
             c.builder.position_at_end(ok_bb);
             let socket_struct_ty = c
                 .types
-                .structs
-                .get("Socket")
-                .copied()
+                .get_stdlib("Socket")
                 .ok_or("Socket struct type not found")?;
             let alloca = c
                 .builder
@@ -72,12 +70,7 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .builder
                 .build_struct_gep(socket_struct_ty, alloca, 0, "fd_field")
                 .unwrap();
-            let fd_struct_ty = c
-                .types
-                .structs
-                .get("Fd")
-                .copied()
-                .ok_or("Fd struct type not found")?;
+            let fd_struct_ty = c.types.get_stdlib("Fd").ok_or("Fd struct type not found")?;
             let fd_desc_ptr = c
                 .builder
                 .build_struct_gep(fd_struct_ty, fd_field_ptr, 0, "fd_desc")
@@ -220,12 +213,7 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .unwrap();
 
             c.builder.position_at_end(ok_bb);
-            let fd_struct_ty = c
-                .types
-                .structs
-                .get("Fd")
-                .copied()
-                .ok_or("Fd struct type not found")?;
+            let fd_struct_ty = c.types.get_stdlib("Fd").ok_or("Fd struct type not found")?;
             let alloca = c.builder.build_alloca(fd_struct_ty, "fd_tmp").unwrap();
             let fd_desc_ptr = c
                 .builder
@@ -300,17 +288,14 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .into_int_value();
 
             let list_type_name = "List_$IPAddress$";
-            let list_struct = *c
+            let list_struct = c
                 .types
-                .structs
-                .get(list_type_name)
+                .get_monomorphized(list_type_name)
                 .ok_or(format!("{list_type_name} struct type not found"))?;
 
             let ip_struct_ty = c
                 .types
-                .structs
-                .get("IPAddress")
-                .copied()
+                .get_stdlib("IPAddress")
                 .ok_or("IPAddress struct type not found")?;
             let ip_size = crate::compiler::llvm_field_byte_size(ip_struct_ty.into()) as u64;
             let alloc_size = c
@@ -534,9 +519,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let ip_struct_ty = c
                 .types
-                .structs
-                .get("IPAddress")
-                .copied()
+                .get_stdlib("IPAddress")
                 .ok_or("IPAddress struct type not found")?;
             let ip_val = ip_struct_ty.get_undef();
             let ip_val = c
@@ -547,9 +530,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let sa_struct_ty = c
                 .types
-                .structs
-                .get("SocketAddress")
-                .copied()
+                .get_stdlib("SocketAddress")
                 .ok_or("SocketAddress struct type not found")?;
             let sa_val = sa_struct_ty.get_undef();
             let sa_val = c
@@ -564,10 +545,9 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .into_struct_value();
 
             let pair_type_name = "Pair_$String.SocketAddress$";
-            let pair_struct = *c
+            let pair_struct = c
                 .types
-                .structs
-                .get(pair_type_name)
+                .get_monomorphized(pair_type_name)
                 .ok_or(format!("{pair_type_name} struct type not found"))?;
             let pair_val = pair_struct.get_undef();
             let pair_val = c

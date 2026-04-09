@@ -64,7 +64,7 @@ pub fn compile_expr<'ctx>(
         ExprKind::Ident { name, .. } => {
             if let Some((ptr, ty, _)) = compiler.fn_state.variables.get(name) {
                 let ty = ty.clone();
-                let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.types.structs)
+                let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.types)
                     .ok_or_else(|| format!("cannot load variable of unsupported type: {name}"))?;
                 let value = compiler.builder.build_load(llvm_ty, *ptr, name).unwrap();
                 return Ok(Some(TypedValue::new(value, ty)));
@@ -167,7 +167,7 @@ pub fn compile_expr<'ctx>(
                 .get("self")
                 .ok_or("self used outside of impl method")?;
             let ty = ty.clone();
-            let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.types.structs)
+            let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.types)
                 .ok_or("cannot load self of unsupported type")?;
             let value = compiler.builder.build_load(llvm_ty, *ptr, "self").unwrap();
             Ok(Some(TypedValue::new(value, ty)))
@@ -504,12 +504,12 @@ fn compile_closure_core<'ctx>(
 
     let mut llvm_meta_params: Vec<BasicMetadataTypeEnum> = vec![ptr_ty.into()];
     for ty in &param_types {
-        if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types.structs) {
+        if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types) {
             llvm_meta_params.push(llvm_ty.into());
         }
     }
 
-    let fn_type = match to_llvm_type(&ret_type, compiler.context, &compiler.types.structs) {
+    let fn_type = match to_llvm_type(&ret_type, compiler.context, &compiler.types) {
         Some(ret_llvm) => ret_llvm.fn_type(&llvm_meta_params, false),
         None => compiler
             .context
@@ -532,7 +532,7 @@ fn compile_closure_core<'ctx>(
                 .iter()
                 .filter_map(|cap| {
                     let (ptr, ty, _) = compiler.fn_state.variables.get(&cap.name)?;
-                    let llvm_ty = to_llvm_type(ty, compiler.context, &compiler.types.structs)?;
+                    let llvm_ty = to_llvm_type(ty, compiler.context, &compiler.types)?;
                     let value = compiler
                         .builder
                         .build_load(llvm_ty, *ptr, &cap.name)
@@ -579,7 +579,7 @@ fn compile_closure_core<'ctx>(
     for (i, param) in params.iter().enumerate() {
         if let ClosureParam::Name { name, .. } = param {
             let ty = &param_types[i];
-            if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types.structs) {
+            if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types) {
                 let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
                 let param_val = closure_fn.get_nth_param((i + 1) as u32).unwrap();
                 compiler.builder.build_store(alloca, param_val).unwrap();
@@ -595,12 +595,12 @@ fn compile_closure_core<'ctx>(
         let env_ptr = closure_fn.get_nth_param(0).unwrap().into_pointer_value();
         let env_field_types: Vec<BasicTypeEnum> = captured_values
             .iter()
-            .filter_map(|(_, _, ty)| to_llvm_type(ty, compiler.context, &compiler.types.structs))
+            .filter_map(|(_, _, ty)| to_llvm_type(ty, compiler.context, &compiler.types))
             .collect();
         let env_struct_ty = compiler.context.struct_type(&env_field_types, false);
 
         for (i, (name, _, ty)) in captured_values.iter().enumerate() {
-            if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types.structs) {
+            if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types) {
                 let field_ptr = compiler
                     .builder
                     .build_struct_gep(env_struct_ty, env_ptr, i as u32, &format!("cap_{name}"))
@@ -641,7 +641,7 @@ fn compile_closure_core<'ctx>(
     let env_ptr_val = if !captured_values.is_empty() {
         let env_field_types: Vec<BasicTypeEnum> = captured_values
             .iter()
-            .filter_map(|(_, _, ty)| to_llvm_type(ty, compiler.context, &compiler.types.structs))
+            .filter_map(|(_, _, ty)| to_llvm_type(ty, compiler.context, &compiler.types))
             .collect();
         let env_struct_ty = compiler.context.struct_type(&env_field_types, false);
         let env_size = env_struct_ty.size_of().unwrap();
@@ -714,7 +714,7 @@ fn compile_list_literal<'ctx>(
     let type_args = vec![elem_type.clone()];
     let mangled_type = mangle_name("List", &type_args);
 
-    if !compiler.types.structs.contains_key(&mangled_type) {
+    if !compiler.types.contains_monomorphized(&mangled_type) {
         monomorphize_struct(compiler, "List", &type_args)?;
     }
 
@@ -774,7 +774,7 @@ fn compile_map_literal<'ctx>(
     let type_args = vec![key_type.clone(), val_type.clone()];
     let mangled_type = mangle_name("Map", &type_args);
 
-    if !compiler.types.structs.contains_key(&mangled_type) {
+    if !compiler.types.contains_monomorphized(&mangled_type) {
         monomorphize_struct(compiler, "Map", &type_args)?;
     }
 
@@ -865,9 +865,8 @@ fn compile_spawn<'ctx>(
 
     let state_struct_type = compiler
         .types
-        .structs
-        .get(&mangled_state)
-        .copied()
+        .get_stdlib(&mangled_state)
+        .or_else(|| compiler.types.get_monomorphized(&mangled_state))
         .ok_or_else(|| format!("no LLVM struct for `{mangled_state}`"))?;
 
     let wrapper_name = format!("__spawn_{mangled_state}");
@@ -1026,7 +1025,7 @@ fn compile_receive<'ctx>(
         payload.into()
     } else {
         let msg_ty = msg_type.unwrap();
-        let llvm_ty = to_llvm_type(&msg_ty, compiler.context, &compiler.types.structs)
+        let llvm_ty = to_llvm_type(&msg_ty, compiler.context, &compiler.types)
             .ok_or_else(|| format!("no LLVM type for receive message `{msg_ty:?}`"))?;
         let i8_type = compiler.context.i8_type();
         let payload_ptr = unsafe {
@@ -1316,7 +1315,7 @@ fn compile_receive_tagged<'ctx>(
 
     // --- Business arms (tag 0) ---
     compiler.builder.position_at_end(business_block);
-    let env_llvm = to_llvm_type(&envelope_type, compiler.context, &compiler.types.structs)
+    let env_llvm = to_llvm_type(&envelope_type, compiler.context, &compiler.types)
         .ok_or_else(|| format!("no LLVM type for envelope `{}`", envelope_type.display()))?;
     let business_value = compiler
         .builder
@@ -1356,9 +1355,8 @@ fn compile_receive_tagged<'ctx>(
         compiler.builder.position_at_end(lifecycle_block);
 
         let lifecycle_type = named("Lifecycle");
-        let lifecycle_llvm =
-            to_llvm_type(&lifecycle_type, compiler.context, &compiler.types.structs)
-                .ok_or("no LLVM type for Lifecycle enum")?;
+        let lifecycle_llvm = to_llvm_type(&lifecycle_type, compiler.context, &compiler.types)
+            .ok_or("no LLVM type for Lifecycle enum")?;
         let lifecycle_value = compiler
             .builder
             .build_load(lifecycle_llvm, payload_ptr, "lc_msg")

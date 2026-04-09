@@ -1,18 +1,18 @@
 //! Type mapping: converts Expo types to their LLVM representations (basic
 //! types, metadata types, and struct type lookups).
 
-use std::collections::HashMap;
-
 use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type, named};
 use inkwell::context::Context;
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
+
+use crate::compiler::TypeRegistry;
 
 /// Converts an Expo type to an LLVM basic type. Returns `None` for `Unit`
 /// and other types without an LLVM representation.
 pub fn to_llvm_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
-    structs: &HashMap<String, StructType<'ctx>>,
+    registry: &TypeRegistry<'ctx>,
 ) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
         Type::Indirect(_) => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
@@ -22,15 +22,19 @@ pub fn to_llvm_type<'ctx>(
             type_args,
         } => {
             if type_args.is_empty() {
-                structs.get(&identifier.name).map(|st| (*st).into())
+                registry
+                    .get_concrete(identifier)
+                    .or_else(|| registry.get_stdlib(&identifier.name))
+                    .or_else(|| registry.get_monomorphized(&identifier.name))
+                    .map(|st| st.into())
             } else {
                 let mangled = mangle_name(&identifier.name, type_args);
-                structs.get(&mangled).map(|st| (*st).into())
+                registry.get_monomorphized(&mangled).map(|st| st.into())
             }
         }
         Type::Union(_) => {
             let mangled = mangle_type(ty);
-            structs.get(&mangled).map(|st| (*st).into())
+            registry.get_monomorphized(&mangled).map(|st| st.into())
         }
         Type::Function { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
@@ -50,9 +54,9 @@ pub fn to_llvm_type<'ctx>(
 pub fn to_llvm_metadata_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
-    structs: &HashMap<String, StructType<'ctx>>,
+    registry: &TypeRegistry<'ctx>,
 ) -> Option<BasicMetadataTypeEnum<'ctx>> {
-    to_llvm_type(ty, context, structs).map(|t| t.into())
+    to_llvm_type(ty, context, registry).map(|t| t.into())
 }
 
 /// Converts a type name like `"Int32"` or `"String"` to its Expo `Type`.

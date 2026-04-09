@@ -235,10 +235,10 @@ pub fn snprintf_to_expo_string<'ctx>(
 // ---------------------------------------------------------------------------
 
 fn synthesize_enum_format<'ctx>(c: &mut Compiler<'ctx>, enum_name: &str) -> Result<(), String> {
-    let enum_type = *c
+    let enum_type = c
         .types
-        .structs
-        .get(enum_name)
+        .get_stdlib(enum_name)
+        .or_else(|| c.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
@@ -371,10 +371,10 @@ fn concat_variant_name<'ctx>(
 // ---------------------------------------------------------------------------
 
 fn synthesize_struct_format<'ctx>(c: &mut Compiler<'ctx>, struct_name: &str) -> Result<(), String> {
-    let struct_type = *c
+    let struct_type = c
         .types
-        .structs
-        .get(struct_name)
+        .get_stdlib(struct_name)
+        .or_else(|| c.types.get_monomorphized(struct_name))
         .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());

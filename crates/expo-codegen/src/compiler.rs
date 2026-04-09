@@ -22,6 +22,7 @@ use expo_ast::ast::{
     Diagnostic, EnumConstructionData, ExprKind, FieldInit, Function, ImplMember, Item, Literal,
     Module, Param, Severity, StringPart, TypeExpr,
 };
+use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::{TypeContext, VariantData};
 use expo_typecheck::types::{
     Type, build_substitution, named, process_envelope_type, resolve_type_expr_with_params,
@@ -152,7 +153,14 @@ impl<'ctx> TailCallCtx<'ctx> {
 /// Populated during type registration / monomorphisation and read during body
 /// compilation. Mirrors the read-only `TypeContext` pattern from COMPILER.md.
 pub struct TypeRegistry<'ctx> {
-    pub structs: HashMap<String, StructType<'ctx>>,
+    /// Collision-safe map for non-generic types, keyed by package-qualified
+    /// `TypeIdentifier`. Used for concrete structs and enums.
+    pub concrete: HashMap<TypeIdentifier, StructType<'ctx>>,
+
+    /// Map for monomorphized generic types and unions, keyed by mangled name
+    /// strings (e.g. `"List_$Int32$"`, `"Union_$Int.String$"`).
+    pub monomorphized: HashMap<String, StructType<'ctx>>,
+
     pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
     pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
     pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
@@ -162,12 +170,49 @@ pub struct TypeRegistry<'ctx> {
 impl<'ctx> TypeRegistry<'ctx> {
     pub fn new() -> Self {
         Self {
-            structs: HashMap::new(),
+            concrete: HashMap::new(),
+            monomorphized: HashMap::new(),
             enum_variant_payloads: HashMap::new(),
             enum_name_tables: HashMap::new(),
             mono_struct_info: HashMap::new(),
             mono_enum_variants: HashMap::new(),
         }
+    }
+
+    /// Register a non-generic struct or enum type by its package-qualified
+    /// identifier.
+    pub fn register_concrete(&mut self, id: &TypeIdentifier, ty: StructType<'ctx>) {
+        self.concrete.insert(id.clone(), ty);
+    }
+
+    /// Register a monomorphized generic or union type by its mangled name.
+    pub fn register_monomorphized(&mut self, mangled: String, ty: StructType<'ctx>) {
+        self.monomorphized.insert(mangled, ty);
+    }
+
+    /// Look up a non-generic type by its package-qualified identifier.
+    pub fn get_concrete(&self, id: &TypeIdentifier) -> Option<StructType<'ctx>> {
+        self.concrete.get(id).copied()
+    }
+
+    /// Look up a monomorphized generic or union type by its mangled name.
+    pub fn get_monomorphized(&self, mangled: &str) -> Option<StructType<'ctx>> {
+        self.monomorphized.get(mangled).copied()
+    }
+
+    /// Look up a type by bare name in the concrete map regardless of
+    /// package. Used for intrinsic/stdlib lookups where the caller only
+    /// knows the type name (e.g. `"Fd"`, `"Socket"`, `"StopReason"`).
+    pub fn get_stdlib(&self, name: &str) -> Option<StructType<'ctx>> {
+        self.concrete
+            .iter()
+            .find(|(id, _)| id.name == name)
+            .map(|(_, ty)| *ty)
+    }
+
+    /// Check whether a monomorphized type is registered.
+    pub fn contains_monomorphized(&self, mangled: &str) -> bool {
+        self.monomorphized.contains_key(mangled)
     }
 
     /// Returns the LLVM struct type for an enum variant's payload, if it has one.
@@ -562,11 +607,11 @@ impl<'ctx> Compiler<'ctx> {
                 .first()
                 .is_some_and(|p| matches!(p, Param::Self_ { .. }))
         {
-            if let Some(st) = self.types.structs.get(name) {
-                param_types.push((*st).into());
+            if let Some(st) = self.types.get_stdlib(name) {
+                param_types.push(st.into());
             } else {
                 let prim_ty = crate::types::primitive_name_to_type(name);
-                if let Some(llvm_ty) = to_llvm_type(&prim_ty, self.context, &self.types.structs) {
+                if let Some(llvm_ty) = to_llvm_type(&prim_ty, self.context, &self.types) {
                     param_types.push(llvm_ty.into());
                 }
             }
@@ -582,7 +627,7 @@ impl<'ctx> Compiler<'ctx> {
         let fn_type = if func.name == "main" && self_type_name.is_none() {
             self.context.i32_type().fn_type(&param_types, false)
         } else {
-            match to_llvm_type(&return_type, self.context, &self.types.structs) {
+            match to_llvm_type(&return_type, self.context, &self.types) {
                 Some(ret_ty) => ret_ty.fn_type(&param_types, false),
                 None => self.context.void_type().fn_type(&param_types, false),
             }
@@ -634,7 +679,7 @@ impl<'ctx> Compiler<'ctx> {
                         ..
                     } => {
                         let enum_name = type_path.join(".");
-                        let Some(&enum_type) = self.types.structs.get(&enum_name) else {
+                        let Some(enum_type) = self.types.get_stdlib(&enum_name) else {
                             continue;
                         };
                         let Some(tag) = self.types.get_variant_tag(&enum_name, variant) else {
@@ -656,7 +701,7 @@ impl<'ctx> Compiler<'ctx> {
                         type_path, fields, ..
                     } => {
                         let struct_name = type_path.join(".");
-                        let Some(&struct_type) = self.types.structs.get(&struct_name) else {
+                        let Some(struct_type) = self.types.get_stdlib(&struct_name) else {
                             continue;
                         };
                         let Some(info) = self.type_ctx.find_type(&struct_name) else {
@@ -1063,8 +1108,7 @@ impl<'ctx> Compiler<'ctx> {
         for param in params {
             if let Param::Regular { type_expr, .. } = param {
                 let ty = self.resolve_type_expr(type_expr);
-                if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context, &self.types.structs)
-                {
+                if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context, &self.types) {
                     types.push(llvm_ty);
                 }
             }
@@ -1151,13 +1195,11 @@ impl<'ctx> Compiler<'ctx> {
 
         let struct_type = self
             .types
-            .structs
-            .get(type_name)
-            .copied()
+            .get_stdlib(type_name)
             .ok_or_else(|| format!("entry type `{type_name}` has no LLVM struct layout"))?;
 
         let config_llvm =
-            to_llvm_type(config_type, self.context, &self.types.structs).ok_or_else(|| {
+            to_llvm_type(config_type, self.context, &self.types).ok_or_else(|| {
                 format!(
                     "could not resolve LLVM type for config type `{}`",
                     config_type.display()
@@ -1183,9 +1225,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let stop_reason_llvm = self
             .types
-            .structs
-            .get("StopReason")
-            .copied()
+            .get_stdlib("StopReason")
             .ok_or("StopReason LLVM type not found")?;
 
         let i32_ty = self.context.i32_type();

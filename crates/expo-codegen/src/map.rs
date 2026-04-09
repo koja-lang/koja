@@ -18,10 +18,9 @@ pub fn emit_map_method<'ctx>(
     method_name: &str,
     type_args: &[Type],
 ) -> Result<EmitResult, String> {
-    let map_struct = *c
+    let map_struct = c
         .types
-        .structs
-        .get(mangled_type)
+        .get_monomorphized(mangled_type)
         .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
     if type_args.len() < 2 {
@@ -30,9 +29,9 @@ pub fn emit_map_method<'ctx>(
     let key_type = &type_args[0];
     let val_type = &type_args[1];
 
-    let key_llvm = to_llvm_type(key_type, c.context, &c.types.structs)
+    let key_llvm = to_llvm_type(key_type, c.context, &c.types)
         .ok_or_else(|| format!("no LLVM type for Map key `{key_type:?}`"))?;
-    let val_llvm = to_llvm_type(val_type, c.context, &c.types.structs)
+    let val_llvm = to_llvm_type(val_type, c.context, &c.types)
         .ok_or_else(|| format!("no LLVM type for Map value `{val_type:?}`"))?;
 
     let key_size = crate::compiler::llvm_field_byte_size(key_llvm) as u64;
@@ -536,10 +535,9 @@ pub fn emit_map_method<'ctx>(
                 c,
                 &named_generic("Option", option_type_args.clone(), c.type_ctx),
             )?;
-            let option_struct = *c
+            let option_struct = c
                 .types
-                .structs
-                .get(&option_mangled)
+                .get_monomorphized(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
             let fn_type = option_struct.fn_type(&[map_struct.into(), key_llvm.into()], false);

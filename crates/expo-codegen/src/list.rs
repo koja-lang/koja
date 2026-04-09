@@ -14,7 +14,7 @@ pub fn monomorphize_list_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
     let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = c.context.i64_type();
     st.set_body(&[ptr_type.into(), i64_type.into(), i64_type.into()], false);
-    c.types.structs.insert(mangled.to_string(), st);
+    c.types.register_monomorphized(mangled.to_string(), st);
     c.types.mono_struct_info.insert(
         mangled.to_string(),
         vec![
@@ -33,14 +33,13 @@ pub fn emit_list_method<'ctx>(
     method_name: &str,
     type_args: &[Type],
 ) -> Result<EmitResult, String> {
-    let list_struct = *c
+    let list_struct = c
         .types
-        .structs
-        .get(mangled_type)
+        .get_monomorphized(mangled_type)
         .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
     let elem_ty = &type_args[0];
-    let elem_llvm = to_llvm_type(elem_ty, c.context, &c.types.structs)
+    let elem_llvm = to_llvm_type(elem_ty, c.context, &c.types)
         .ok_or_else(|| format!("cannot map element type `{}` to LLVM", elem_ty.display()))?;
     let elem_size = crate::compiler::llvm_field_byte_size(elem_llvm) as u64;
 
@@ -194,10 +193,9 @@ pub fn emit_list_method<'ctx>(
             let option_type_args = vec![elem_ty.clone()];
             let option_mangled = mangle_name("Option", &option_type_args);
             ensure_types_exist(c, &named_generic("Option", option_type_args, c.type_ctx))?;
-            let option_struct = *c
+            let option_struct = c
                 .types
-                .structs
-                .get(&option_mangled)
+                .get_monomorphized(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
             let i8_ty = c.context.i8_type();
@@ -368,10 +366,9 @@ pub fn emit_list_method<'ctx>(
                 &named_generic("Option", option_type_args.clone(), c.type_ctx),
             )?;
             let option_mangled = mangle_name("Option", &option_type_args);
-            let option_struct = *c
+            let option_struct = c
                 .types
-                .structs
-                .get(&option_mangled)
+                .get_monomorphized(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
             let list_type = named_generic("List", vec![elem_ty.clone()], c.type_ctx);
@@ -382,10 +379,9 @@ pub fn emit_list_method<'ctx>(
                 &named_generic("Pair", pair_type_args.clone(), c.type_ctx),
             )?;
             let pair_mangled = mangle_name("Pair", &pair_type_args);
-            let pair_struct = *c
+            let pair_struct = c
                 .types
-                .structs
-                .get(&pair_mangled)
+                .get_monomorphized(&pair_mangled)
                 .ok_or_else(|| format!("no LLVM type for {pair_mangled}"))?;
 
             let i8_ty = c.context.i8_type();

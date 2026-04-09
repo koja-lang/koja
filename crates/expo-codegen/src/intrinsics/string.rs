@@ -251,10 +251,9 @@ pub fn emit_string_intrinsic<'ctx>(
                     c.type_ctx,
                 ),
             )?;
-            let option_struct = *c
+            let option_struct = c
                 .types
-                .structs
-                .get(option_mangled)
+                .get_monomorphized(option_mangled)
                 .ok_or("no LLVM type for Option_$String$")?;
 
             let self_ptr = fn_val.get_nth_param(0).unwrap();

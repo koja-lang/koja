@@ -192,21 +192,14 @@ fn emit_file_open_result<'ctx>(
     c.builder.position_at_end(ok_bb);
     let file_struct_ty = c
         .types
-        .structs
-        .get("File")
-        .copied()
+        .get_stdlib("File")
         .ok_or("File struct type not found")?;
     let alloca = c.builder.build_alloca(file_struct_ty, "file_tmp").unwrap();
     let fd_field_ptr = c
         .builder
         .build_struct_gep(file_struct_ty, alloca, 0, "fd_field")
         .unwrap();
-    let fd_struct_ty = c
-        .types
-        .structs
-        .get("Fd")
-        .copied()
-        .ok_or("Fd struct type not found")?;
+    let fd_struct_ty = c.types.get_stdlib("Fd").ok_or("Fd struct type not found")?;
     let fd_desc_ptr = c
         .builder
         .build_struct_gep(fd_struct_ty, fd_field_ptr, 0, "fd_desc")

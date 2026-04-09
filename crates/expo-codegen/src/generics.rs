@@ -141,7 +141,7 @@ pub(crate) fn compile_method_body<'ctx>(
         } else {
             named(mangled)
         };
-        if let Some(llvm_ty) = to_llvm_type(&self_ty, c.context, &c.types.structs) {
+        if let Some(llvm_ty) = to_llvm_type(&self_ty, c.context, &c.types) {
             let alloca = c.builder.build_alloca(llvm_ty, "self").unwrap();
             let param_val = fn_value.get_nth_param(param_idx).unwrap();
             c.builder.build_store(alloca, param_val).unwrap();
@@ -160,7 +160,7 @@ pub(crate) fn compile_method_body<'ctx>(
         {
             let ty = &param_types[type_idx];
             type_idx += 1;
-            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.types.structs) {
+            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.types) {
                 let alloca = c.builder.build_alloca(llvm_ty, pname).unwrap();
                 let param_val = fn_value.get_nth_param(param_idx).unwrap();
                 c.builder.build_store(alloca, param_val).unwrap();
@@ -249,11 +249,11 @@ pub(crate) fn monomorphize_function<'ctx>(
 
     let llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = param_types
         .iter()
-        .filter_map(|ty| to_llvm_type(ty, c.context, &c.types.structs))
+        .filter_map(|ty| to_llvm_type(ty, c.context, &c.types))
         .map(|t| t.into())
         .collect();
 
-    let fn_type = match to_llvm_type(&return_type, c.context, &c.types.structs) {
+    let fn_type = match to_llvm_type(&return_type, c.context, &c.types) {
         Some(ret) => ret.fn_type(&llvm_param_types, false),
         None => c.context.void_type().fn_type(&llvm_param_types, false),
     };
@@ -281,7 +281,7 @@ pub(crate) fn monomorphize_function<'ctx>(
     for (i, param) in func_ast.params.iter().enumerate() {
         if let Param::Regular { name: pname, .. } = param {
             let ty = &param_types[i];
-            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.types.structs) {
+            if let Some(llvm_ty) = to_llvm_type(ty, c.context, &c.types) {
                 let alloca = c.builder.build_alloca(llvm_ty, pname).unwrap();
                 let param_val = fn_value.get_nth_param(i as u32).unwrap();
                 c.builder.build_store(alloca, param_val).unwrap();
@@ -314,7 +314,7 @@ pub(crate) fn monomorphize_struct<'ctx>(
     type_args: &[Type],
 ) -> Result<(), String> {
     let mangled = mangle_name(name, type_args);
-    if c.types.structs.contains_key(&mangled) {
+    if c.types.contains_monomorphized(&mangled) {
         return Ok(());
     }
 
@@ -347,7 +347,7 @@ pub(crate) fn monomorphize_struct<'ctx>(
         .collect();
 
     let st = c.context.opaque_struct_type(&mangled);
-    c.types.structs.insert(mangled.clone(), st);
+    c.types.register_monomorphized(mangled.clone(), st);
 
     let mut deferred_indirect = Vec::new();
     for (_, fty) in &concrete_fields {
@@ -364,8 +364,7 @@ pub(crate) fn monomorphize_struct<'ctx>(
     let field_llvm_types: Vec<_> = concrete_fields
         .iter()
         .map(|(_, ty)| {
-            to_llvm_type(ty, c.context, &c.types.structs)
-                .unwrap_or_else(|| c.context.i8_type().into())
+            to_llvm_type(ty, c.context, &c.types).unwrap_or_else(|| c.context.i8_type().into())
         })
         .collect();
     st.set_body(&field_llvm_types, false);
@@ -388,7 +387,7 @@ pub(crate) fn monomorphize_enum<'ctx>(
     type_args: &[Type],
 ) -> Result<(), String> {
     let mangled = mangle_name(name, type_args);
-    if c.types.structs.contains_key(&mangled) {
+    if c.types.contains_monomorphized(&mangled) {
         return Ok(());
     }
 
@@ -422,7 +421,7 @@ pub(crate) fn monomorphize_enum<'ctx>(
         .collect();
 
     let enum_type = c.context.opaque_struct_type(&mangled);
-    c.types.structs.insert(mangled.clone(), enum_type);
+    c.types.register_monomorphized(mangled.clone(), enum_type);
 
     for (_, vdata) in &concrete_variants {
         match vdata {
@@ -596,22 +595,21 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
     let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
 
     if !is_static {
-        let self_llvm_type = *c
+        let self_llvm_type = c
             .types
-            .structs
-            .get(&mangled_type)
+            .get_monomorphized(&mangled_type)
             .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
         llvm_param_types.push(self_llvm_type.into());
     }
 
     for ty in &param_types {
-        let lt = to_llvm_type(ty, c.context, &c.types.structs).ok_or_else(|| {
+        let lt = to_llvm_type(ty, c.context, &c.types).ok_or_else(|| {
             format!("no LLVM type for method parameter type `{ty:?}` in `{mangled_fn}`")
         })?;
         llvm_param_types.push(lt.into());
     }
 
-    let fn_type = match to_llvm_type(&return_type, c.context, &c.types.structs) {
+    let fn_type = match to_llvm_type(&return_type, c.context, &c.types) {
         Some(ret) => ret.fn_type(&llvm_param_types, false),
         None => c.context.void_type().fn_type(&llvm_param_types, false),
     };
@@ -645,7 +643,8 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
         } => {
             let name = &identifier.name;
             if type_args.is_empty() {
-                if !c.types.structs.contains_key(name)
+                if c.types.get_stdlib(name).is_none()
+                    && !c.types.contains_monomorphized(name)
                     && let Some((base, args)) = parse_mangled_name(name, c)
                 {
                     if c.type_ctx.is_enum(&base) {
@@ -659,7 +658,7 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
                     ensure_types_exist(c, arg)?;
                 }
                 let mangled = mangle_name(name, type_args);
-                if !c.types.structs.contains_key(&mangled) {
+                if !c.types.contains_monomorphized(&mangled) {
                     if c.type_ctx.is_enum(name) {
                         monomorphize_enum(c, name, type_args)?;
                     } else {
@@ -685,9 +684,9 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
                 ensure_types_exist(c, m)?;
             }
             let mangled = mangle_type(ty);
-            if !c.types.structs.contains_key(&mangled) {
+            if !c.types.contains_monomorphized(&mangled) {
                 let opaque = c.context.opaque_struct_type(&mangled);
-                c.types.structs.insert(mangled.clone(), opaque);
+                c.types.register_monomorphized(mangled.clone(), opaque);
                 build_union_layout(c, &mangled, opaque, members);
             }
         }

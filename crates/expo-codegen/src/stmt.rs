@@ -129,8 +129,8 @@ pub fn compile_statement<'ctx>(
                             c.builder.build_store(ptr, store_val).unwrap();
                         } else {
                             let ownership = ownership_for_expr(value, &ty);
-                            let alloca_ty = to_llvm_type(&ty, c.context, &c.types.structs)
-                                .unwrap_or(val.get_type());
+                            let alloca_ty =
+                                to_llvm_type(&ty, c.context, &c.types).unwrap_or(val.get_type());
                             let alloca = c.build_entry_alloca(alloca_ty, name);
                             c.builder.build_store(alloca, val).unwrap();
                             c.fn_state
@@ -150,7 +150,7 @@ pub fn compile_statement<'ctx>(
 
                     let ownership = ownership_for_expr(value, &ty);
                     let alloca_ty =
-                        to_llvm_type(&ty, c.context, &c.types.structs).unwrap_or(val.get_type());
+                        to_llvm_type(&ty, c.context, &c.types).unwrap_or(val.get_type());
                     let alloca = c.build_entry_alloca(alloca_ty, name);
                     c.builder.build_store(alloca, val).unwrap();
                     c.fn_state
@@ -212,7 +212,7 @@ pub fn compile_statement<'ctx>(
                 resolve_field_ptr(c, &target.segments)?
             };
 
-            let llvm_ty = to_llvm_type(&target_ty, c.context, &c.types.structs)
+            let llvm_ty = to_llvm_type(&target_ty, c.context, &c.types)
                 .ok_or("cannot load variable of unsupported type")?;
             let current = c.builder.build_load(llvm_ty, ptr, "cur").unwrap();
             let rhs = compile_expr(c, value, function)?
@@ -279,10 +279,8 @@ fn resolve_field_ptr<'ctx>(
             }
         };
 
-        let struct_type = *c
-            .types
-            .structs
-            .get(&struct_name)
+        let struct_type = to_llvm_type(&current_type, c.context, &c.types)
+            .map(|t| t.into_struct_type())
             .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
         let field_idx = c
@@ -625,10 +623,9 @@ pub(crate) fn compile_union_wrap<'ctx>(
             )
         })? as u64;
 
-    let union_llvm_ty = *c
+    let union_llvm_ty = c
         .types
-        .structs
-        .get(&union_mangled)
+        .get_monomorphized(&union_mangled)
         .ok_or_else(|| format!("union type {} not registered", union_mangled))?;
 
     let alloca = c.builder.build_alloca(union_llvm_ty, "union_wrap").unwrap();
@@ -667,7 +664,7 @@ pub(crate) fn apply_coercion<'ctx>(
         match coercion {
             Coercion::UnionWiden { source, target } => {
                 let target_mangled = mangle_type(&target);
-                if let Some(&target_llvm) = c.types.structs.get(&target_mangled)
+                if let Some(target_llvm) = c.types.get_monomorphized(&target_mangled)
                     && val.get_type() == target_llvm.into()
                 {
                     return Ok(val);

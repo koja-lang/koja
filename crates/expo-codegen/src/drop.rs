@@ -8,6 +8,7 @@ use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Primitive, Type, mangle_name};
 
 use crate::compiler::Compiler;
+use crate::types::to_llvm_type;
 
 /// Tracks whether a variable owns its backing memory and is responsible for
 /// freeing it. Used to distinguish heap-allocated strings (interpolated,
@@ -217,7 +218,8 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
         _ => return,
     };
 
-    let Some(struct_type) = c.types.structs.get(&struct_name).copied() else {
+    let Some(struct_type) = to_llvm_type(ty, c.context, &c.types).map(|t| t.into_struct_type())
+    else {
         return;
     };
 
@@ -267,15 +269,8 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
 
 /// Drops a List value: extracts the data pointer (field 0) and frees it.
 fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
-    let mangled = match ty {
-        Type::Named {
-            identifier,
-            type_args,
-        } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
-        Type::Named { identifier, .. } => identifier.name.clone(),
-        _ => return,
-    };
-    let Some(list_struct) = c.types.structs.get(&mangled).copied() else {
+    let Some(list_struct) = to_llvm_type(ty, c.context, &c.types).map(|t| t.into_struct_type())
+    else {
         return;
     };
 
@@ -298,15 +293,8 @@ fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: 
 
 /// Drops a Map or Set value: frees entries_ptr (field 0) and states_ptr (field 1).
 fn emit_drop_hash_collection<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
-    let mangled = match ty {
-        Type::Named {
-            identifier,
-            type_args,
-        } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
-        Type::Named { identifier, .. } => identifier.name.clone(),
-        _ => return,
-    };
-    let Some(coll_struct) = c.types.structs.get(&mangled).copied() else {
+    let Some(coll_struct) = to_llvm_type(ty, c.context, &c.types).map(|t| t.into_struct_type())
+    else {
         return;
     };
 

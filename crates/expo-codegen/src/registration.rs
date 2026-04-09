@@ -20,14 +20,14 @@ pub(crate) fn register_types(c: &mut Compiler) {
             continue;
         }
         let st = c.context.opaque_struct_type(&id.name);
-        c.types.structs.insert(id.name.clone(), st);
+        c.types.register_concrete(id, st);
     }
     for (id, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
         if !info.type_params.is_empty() {
             continue;
         }
         let et = c.context.opaque_struct_type(&id.name);
-        c.types.structs.insert(id.name.clone(), et);
+        c.types.register_concrete(id, et);
     }
 
     // Pass 1b: ensure all field/variant types exist (triggers monomorphization
@@ -70,12 +70,12 @@ pub(crate) fn register_types(c: &mut Compiler) {
         if !info.type_params.is_empty() {
             continue;
         }
-        let struct_type = *c.types.structs.get(&id.name).unwrap();
+        let struct_type = c.types.get_concrete(id).unwrap();
         let field_types: Vec<_> = info
             .fields()
             .unwrap()
             .iter()
-            .filter_map(|(_, ty)| to_llvm_type(ty, c.context, &c.types.structs))
+            .filter_map(|(_, ty)| to_llvm_type(ty, c.context, &c.types))
             .collect();
         struct_type.set_body(&field_types, false);
     }
@@ -85,7 +85,7 @@ pub(crate) fn register_types(c: &mut Compiler) {
         if !info.type_params.is_empty() {
             continue;
         }
-        let enum_type = *c.types.structs.get(&id.name).unwrap();
+        let enum_type = c.types.get_concrete(id).unwrap();
         let variants: Vec<_> = info
             .variants()
             .unwrap()
@@ -125,12 +125,12 @@ pub(crate) fn register_types(c: &mut Compiler) {
             continue;
         };
         let mangled = mangle_type(union_ty);
-        if c.types.structs.contains_key(&mangled) {
+        if c.types.contains_monomorphized(&mangled) {
             continue;
         }
 
         let opaque = c.context.opaque_struct_type(&mangled);
-        c.types.structs.insert(mangled.clone(), opaque);
+        c.types.register_monomorphized(mangled.clone(), opaque);
 
         build_union_layout(c, &mangled, opaque, members);
     }
@@ -156,7 +156,7 @@ pub(crate) fn build_enum_layout<'ctx>(
             VariantData::Tuple(types) => {
                 let mut field_llvm: Vec<_> = types
                     .iter()
-                    .filter_map(|ty| to_llvm_type(ty, c.context, &c.types.structs))
+                    .filter_map(|ty| to_llvm_type(ty, c.context, &c.types))
                     .collect();
                 if field_llvm.is_empty() && !types.is_empty() {
                     field_llvm.push(c.context.i8_type().into());
@@ -169,7 +169,7 @@ pub(crate) fn build_enum_layout<'ctx>(
             VariantData::Struct(fields) => {
                 let mut field_llvm: Vec<_> = fields
                     .iter()
-                    .filter_map(|(_, ty)| to_llvm_type(ty, c.context, &c.types.structs))
+                    .filter_map(|(_, ty)| to_llvm_type(ty, c.context, &c.types))
                     .collect();
                 if field_llvm.is_empty() && !fields.is_empty() {
                     field_llvm.push(c.context.i8_type().into());
@@ -235,7 +235,7 @@ pub(crate) fn build_union_layout<'ctx>(
 
     for member in members {
         let member_name = mangle_type(member);
-        if let Some(llvm_ty) = to_llvm_type(member, c.context, &c.types.structs) {
+        if let Some(llvm_ty) = to_llvm_type(member, c.context, &c.types) {
             let payload = c.context.struct_type(&[llvm_ty], true);
             let size = llvm_field_byte_size(llvm_ty);
             max_payload_size = max_payload_size.max(size);

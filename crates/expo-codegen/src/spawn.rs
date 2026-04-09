@@ -361,13 +361,12 @@ pub(crate) fn build_ref_value<'ctx>(
 ) -> Result<TypedValue<'ctx>, String> {
     let type_args = vec![msg_type, reply_type];
     let mangled = mangle_name("Ref", &type_args);
-    if !compiler.types.structs.contains_key(&mangled) {
+    if !compiler.types.contains_monomorphized(&mangled) {
         monomorphize_struct(compiler, "Ref", &type_args)?;
     }
-    let ref_struct = *compiler
+    let ref_struct = compiler
         .types
-        .structs
-        .get(&mangled)
+        .get_monomorphized(&mangled)
         .ok_or("Ref struct type not found")?;
 
     let mut struct_value = ref_struct.get_undef();

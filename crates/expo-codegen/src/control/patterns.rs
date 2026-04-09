@@ -120,7 +120,11 @@ pub fn compile_match<'ctx>(
                     || members.iter().any(|m| mangle_type(m) == mangle_type(ty))
             });
             if all_members {
-                c.types.structs.get(&target_mangled).map(|_| target)
+                if c.types.contains_monomorphized(&target_mangled) {
+                    Some(target)
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -210,7 +214,7 @@ pub(crate) fn compile_pattern<'ctx>(
         Pattern::Wildcard { .. } => Ok(true_val),
 
         Pattern::Binding { name, .. } => {
-            let llvm_ty = to_llvm_type(subject_type, c.context, &c.types.structs)
+            let llvm_ty = to_llvm_type(subject_type, c.context, &c.types)
                 .unwrap_or_else(|| c.context.i8_type().into());
             let val = c.builder.build_load(llvm_ty, subject_ptr, name).unwrap();
             let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
@@ -223,7 +227,7 @@ pub(crate) fn compile_pattern<'ctx>(
         }
 
         Pattern::Literal { value, .. } => {
-            let llvm_ty = to_llvm_type(subject_type, c.context, &c.types.structs)
+            let llvm_ty = to_llvm_type(subject_type, c.context, &c.types)
                 .ok_or("cannot load subject for literal comparison")?;
             let subject_val = c
                 .builder
@@ -318,10 +322,9 @@ pub(crate) fn compile_pattern<'ctx>(
             let resolved = c.resolve_type_expr(type_expr);
 
             if mangle_type(&resolved) == mangle_type(unwrap_indirect(subject_type)) {
-                let llvm_ty =
-                    to_llvm_type(&resolved, c.context, &c.types.structs).ok_or_else(|| {
-                        format!("unsupported type in typed binding: {}", resolved.display())
-                    })?;
+                let llvm_ty = to_llvm_type(&resolved, c.context, &c.types).ok_or_else(|| {
+                    format!("unsupported type in typed binding: {}", resolved.display())
+                })?;
                 let val = c.builder.build_load(llvm_ty, subject_ptr, name).unwrap();
                 let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
                 c.builder.build_store(alloca, val).unwrap();
@@ -337,10 +340,9 @@ pub(crate) fn compile_pattern<'ctx>(
 
                 let (_payload_type, payload_ptr) =
                     get_payload_ptr(c, subject_ptr, &union_mangled, &member_mangled)?;
-                let llvm_ty =
-                    to_llvm_type(&resolved, c.context, &c.types.structs).ok_or_else(|| {
-                        format!("unsupported type in typed binding: {}", resolved.display())
-                    })?;
+                let llvm_ty = to_llvm_type(&resolved, c.context, &c.types).ok_or_else(|| {
+                    format!("unsupported type in typed binding: {}", resolved.display())
+                })?;
                 let val = c.builder.build_load(llvm_ty, payload_ptr, name).unwrap();
                 let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
                 c.builder.build_store(alloca, val).unwrap();
@@ -386,7 +388,7 @@ fn compile_field_pattern<'ctx>(
         .ok_or_else(|| format!("unknown field `{}` in {enum_name}.{variant}", fp.name))?;
 
     let inner_ty = unwrap_indirect(field_type);
-    let inner_llvm_ty = to_llvm_type(inner_ty, c.context, &c.types.structs)
+    let inner_llvm_ty = to_llvm_type(inner_ty, c.context, &c.types)
         .ok_or_else(|| format!("unsupported field type for `{}`", fp.name))?;
     let field_ptr = c
         .builder
@@ -447,10 +449,10 @@ fn compile_tag_check<'ctx>(
     enum_name: &str,
     variant: &str,
 ) -> Result<IntValue<'ctx>, String> {
-    let enum_type = *c
+    let enum_type = c
         .types
-        .structs
-        .get(enum_name)
+        .get_stdlib(enum_name)
+        .or_else(|| c.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
     let tag = c
         .types
@@ -485,7 +487,7 @@ fn compile_tuple_elements<'ctx>(
         let inner_ty = unwrap_indirect(field_type);
         // Align with monomorphized enum payloads: ZST fields use an i8 placeholder when
         // `to_llvm_type` is `None` (e.g. `()`), so LLVM layout and pattern loads stay in sync.
-        let inner_llvm_ty = to_llvm_type(inner_ty, c.context, &c.types.structs)
+        let inner_llvm_ty = to_llvm_type(inner_ty, c.context, &c.types)
             .unwrap_or_else(|| c.context.i8_type().into());
         let field_ptr = c
             .builder
@@ -526,7 +528,8 @@ fn enum_name_from_path<'ctx>(
                 Ok(name.clone())
             } else if !type_path.is_empty() {
                 let joined = type_path.join(".");
-                if c.types.structs.contains_key(&joined)
+                if c.types.get_stdlib(&joined).is_some()
+                    || c.types.contains_monomorphized(&joined)
                     || c.types.mono_enum_variants.contains_key(&joined)
                 {
                     Ok(joined)
@@ -542,7 +545,8 @@ fn enum_name_from_path<'ctx>(
         }
         _ if !type_path.is_empty() => {
             let joined = type_path.join(".");
-            if c.types.structs.contains_key(&joined)
+            if c.types.get_stdlib(&joined).is_some()
+                || c.types.contains_monomorphized(&joined)
                 || c.types.mono_enum_variants.contains_key(&joined)
             {
                 Ok(joined)
@@ -608,10 +612,10 @@ pub(crate) fn get_payload_ptr<'ctx>(
         .types
         .get_variant_payload_type(enum_name, variant)
         .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
-    let enum_type = *c
+    let enum_type = c
         .types
-        .structs
-        .get(enum_name)
+        .get_stdlib(enum_name)
+        .or_else(|| c.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
     let payload_ptr = c
         .builder

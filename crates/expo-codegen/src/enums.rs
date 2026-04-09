@@ -15,6 +15,7 @@ use crate::control::{get_payload_ptr, lookup_variant_data, match_values};
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::monomorphize_enum;
 use crate::structs::{load_maybe_indirect, store_maybe_indirect};
+use crate::types::to_llvm_type;
 
 /// Compiles an enum variant construction (`EnumName.Variant(...)` or
 /// `EnumName.Variant { ... }`). Sets the tag byte and populates the payload
@@ -52,10 +53,9 @@ fn compile_concrete_enum<'ctx>(
     data: &EnumConstructionData,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let enum_type = *c
+    let enum_type = c
         .types
-        .structs
-        .get(enum_name)
+        .get_stdlib(enum_name)
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
     let tag = c
@@ -261,14 +261,13 @@ fn compile_generic_enum_construction<'ctx>(
 
     let mangled = mangle_name(enum_name, &type_args);
 
-    if !c.types.structs.contains_key(&mangled) {
+    if !c.types.contains_monomorphized(&mangled) {
         monomorphize_enum(c, enum_name, &type_args)?;
     }
 
-    let enum_type = *c
+    let enum_type = c
         .types
-        .structs
-        .get(&mangled)
+        .get_monomorphized(&mangled)
         .ok_or_else(|| format!("monomorphized enum `{mangled}` not found"))?;
 
     let tag = c
@@ -392,10 +391,8 @@ pub(crate) fn compile_enum_struct_eq<'ctx>(
         .map(|(name, _)| name.clone())
         .collect();
 
-    let enum_type = *c
-        .types
-        .structs
-        .get(&mangled)
+    let enum_type = to_llvm_type(ty, c.context, &c.types)
+        .map(|t| t.into_struct_type())
         .ok_or_else(|| format!("unknown enum LLVM type: {mangled}"))?;
 
     let lhs_ptr = c.builder.build_alloca(enum_type, "enum_eq_l").unwrap();

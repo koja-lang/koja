@@ -98,6 +98,7 @@ See [GAPS.md](GAPS.md) for known compiler limitations and workarounds.
 - **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `archive/20260323-CONCURRENCY.md` (processes, native runtime, supervision)
 - **Project config format** -- `expo.toml` (TOML-based, replacing `project.expo`)
 - **Module system redesign** -- documented in `archive/20260403-IMPORT.md` (files as transparent, types as namespaces, no intra-project imports, qualified package access, `import` keyword removed)
+- **ExpoIR design** -- documented in [EXPOIR.md](EXPOIR.md) (SIL-style intermediate representation, ownership instructions, shared type ARC, incremental self-hosting strategy)
 
 ### Tooling (pulled forward)
 
@@ -532,6 +533,8 @@ Exploration of treating modules as `TypeKind::Module` in the unified registry. N
 - **`std.io`**: `IO.puts`, `IO.warn`, `IO.write` accept `String` only -- callers use interpolation or `.format()` for non-string types. `IO.gets` reads a line from stdin.
 
 ### ExpoIR and codegen backend protocol
+
+See [EXPOIR.md](EXPOIR.md) for the full design (SIL-style IR, instruction set, ownership operations, shared type ARC, data structures, incremental self-hosting strategy).
 
 - **Planned**: introduce an intermediate representation (`expo-ir`) between the type checker and codegen. The IR is a lowered, flat representation -- no generics (already monomorphized), no closures (already desugared to structs + function pointers), no high-level control flow (already lowered to branches). Just functions, calls, loads, stores, branches.
 - **Motivation**: the current `expo-codegen` crate mixes two concerns -- lowering (closure desugaring, monomorphization, drop insertion) and emission (inkwell LLVM calls). Separating them creates a clean interface for multiple codegen backends.
