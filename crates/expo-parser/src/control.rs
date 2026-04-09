@@ -26,12 +26,14 @@ impl Parser {
         };
         self.expect(&TokenKind::End);
 
-        Expr::If {
-            condition: Box::new(condition),
-            then_body,
-            else_body,
-            span: self.span_from(start),
-        }
+        Expr::new(
+            ExprKind::If {
+                condition: Box::new(condition),
+                then_body,
+                else_body,
+            },
+            self.span_from(start),
+        )
     }
 
     pub(crate) fn parse_unless_expr(&mut self) -> Expr {
@@ -42,11 +44,13 @@ impl Parser {
         let body = self.parse_block();
         self.expect(&TokenKind::End);
 
-        Expr::Unless {
-            condition: Box::new(condition),
-            body,
-            span: self.span_from(start),
-        }
+        Expr::new(
+            ExprKind::Unless {
+                condition: Box::new(condition),
+                body,
+            },
+            self.span_from(start),
+        )
     }
 
     pub(crate) fn parse_match_expr(&mut self) -> Expr {
@@ -71,11 +75,13 @@ impl Parser {
         }
         self.expect(&TokenKind::End);
 
-        Expr::Match {
-            subject: Box::new(subject),
-            arms,
-            span: self.span_from(start),
-        }
+        Expr::new(
+            ExprKind::Match {
+                subject: Box::new(subject),
+                arms,
+            },
+            self.span_from(start),
+        )
     }
 
     fn parse_match_arm(&mut self, extra_stops: &[TokenKind]) -> MatchArm {
@@ -194,11 +200,7 @@ impl Parser {
         }
         self.expect(&TokenKind::End);
 
-        Expr::Cond {
-            arms,
-            else_body,
-            span: self.span_from(start),
-        }
+        Expr::new(ExprKind::Cond { arms, else_body }, self.span_from(start))
     }
 
     pub(crate) fn parse_for_expr(&mut self) -> Expr {
@@ -211,12 +213,14 @@ impl Parser {
         let body = self.parse_block();
         self.expect(&TokenKind::End);
 
-        Expr::For {
-            pattern,
-            iterable: Box::new(iterable),
-            body,
-            span: self.span_from(start),
-        }
+        Expr::new(
+            ExprKind::For {
+                pattern,
+                iterable: Box::new(iterable),
+                body,
+            },
+            self.span_from(start),
+        )
     }
 
     pub(crate) fn parse_loop_expr(&mut self) -> Expr {
@@ -225,10 +229,7 @@ impl Parser {
         let body = self.parse_block();
         self.expect(&TokenKind::End);
 
-        Expr::Loop {
-            body,
-            span: self.span_from(start),
-        }
+        Expr::new(ExprKind::Loop { body }, self.span_from(start))
     }
 
     pub(crate) fn parse_while_expr(&mut self) -> Expr {
@@ -238,11 +239,13 @@ impl Parser {
         let body = self.parse_block();
         self.expect(&TokenKind::End);
 
-        Expr::While {
-            condition: Box::new(condition),
-            body,
-            span: self.span_from(start),
-        }
+        Expr::new(
+            ExprKind::While {
+                condition: Box::new(condition),
+                body,
+            },
+            self.span_from(start),
+        )
     }
 
     pub(crate) fn parse_arena_expr(&mut self) -> Expr {
@@ -251,10 +254,7 @@ impl Parser {
         let body = self.parse_block();
         self.expect(&TokenKind::End);
 
-        Expr::Arena {
-            body,
-            span: self.span_from(start),
-        }
+        Expr::new(ExprKind::Arena { body }, self.span_from(start))
     }
 
     pub(crate) fn parse_receive_expr(&mut self) -> Expr {
@@ -286,11 +286,13 @@ impl Parser {
 
         self.expect(&TokenKind::End);
 
-        Expr::Receive {
-            arms,
-            after_timeout,
-            after_body,
-            span: self.span_from(start),
-        }
+        Expr::new(
+            ExprKind::Receive {
+                arms,
+                after_timeout,
+                after_body,
+            },
+            self.span_from(start),
+        )
     }
 }

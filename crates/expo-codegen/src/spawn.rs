@@ -10,7 +10,7 @@
 //! infrastructure but extends it with exit-code tracking so `main()` can
 //! return an OS-level exit code derived from `StopReason`.
 
-use expo_ast::ast::{Arg, Expr};
+use expo_ast::ast::{Arg, Expr, ExprKind};
 use expo_typecheck::types::{
     Primitive, Type, build_substitution, mangle_name, named_generic, substitute,
 };
@@ -36,21 +36,21 @@ pub(crate) struct SpawnTarget<'a> {
 /// Extracts the type name and config arguments from a `spawn T.start(config)`
 /// AST node.
 ///
-/// Handles both `Expr::MethodCall` and `Expr::Call` forms produced by the
+/// Handles both `ExprKind::MethodCall` and `ExprKind::Call` forms produced by the
 /// parser. Returns an error if the expression doesn't match the required
 /// `Type.start(config)` shape.
 pub(crate) fn extract_spawn_target(expr: &Expr) -> Result<SpawnTarget<'_>, String> {
-    match expr {
-        Expr::MethodCall { receiver, args, .. }
-        | Expr::Call {
+    match &expr.kind {
+        ExprKind::MethodCall { receiver, args, .. }
+        | ExprKind::Call {
             callee: receiver,
             args,
             ..
         } => {
-            let type_name = match receiver.as_ref() {
-                Expr::Ident { name, .. } => name.clone(),
-                Expr::FieldAccess { receiver: r, .. } => {
-                    if let Expr::Ident { name, .. } = r.as_ref() {
+            let type_name = match &receiver.kind {
+                ExprKind::Ident { name, .. } => name.clone(),
+                ExprKind::FieldAccess { receiver: r, .. } => {
+                    if let ExprKind::Ident { name, .. } = &r.kind {
                         name.clone()
                     } else {
                         return Err("spawn requires T.start(config) form".to_string());

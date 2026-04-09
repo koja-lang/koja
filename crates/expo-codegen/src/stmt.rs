@@ -2,7 +2,8 @@
 //! return, break, and expression statements.
 
 use expo_ast::ast::{
-    AssignTarget, BinOp, ClosureParam, CompoundOp, Expr, Literal, Pattern, Statement, StringPart,
+    AssignTarget, BinOp, ClosureParam, CompoundOp, Expr, ExprKind, Literal, Pattern, Statement,
+    StringPart,
 };
 use expo_ast::span::Span;
 use expo_typecheck::context::{Coercion, FnParam};
@@ -110,7 +111,7 @@ pub fn compile_statement<'ctx>(
                 infer_type_from_expr(c, value).unwrap_or(Type::Unknown)
             };
 
-            let raw_val = if matches!(value, Expr::List { .. }) {
+            let raw_val = if matches!(&value.kind, ExprKind::List { .. }) {
                 convert_list_literal_if_needed(c, raw_val, &ty)?
             } else {
                 raw_val
@@ -166,8 +167,8 @@ pub fn compile_statement<'ctx>(
                 let val = compile_expr(c, expr, function)?.map(|tv| tv.value);
                 c.fn_state.tco.clear_tail();
                 if !c.current_block_terminated() {
-                    let skip = match expr {
-                        Expr::Ident { name, .. } => Some(name.as_str()),
+                    let skip = match &expr.kind {
+                        ExprKind::Ident { name, .. } => Some(name.as_str()),
                         _ => None,
                     };
                     crate::drop::drop_live_variables(c, skip);
@@ -323,16 +324,16 @@ fn compile_field_assignment<'ctx>(
 /// `Some(Type::Function{..})` for closures so the variable is stored with the
 /// correct callable type rather than being misidentified as a string pointer.
 fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
-    if let Expr::MethodCall {
+    if let ExprKind::MethodCall {
         receiver,
         method,
         args,
         ..
-    } = expr
+    } = &expr.kind
     {
-        if let Expr::Ident {
+        if let ExprKind::Ident {
             name: type_name, ..
-        } = receiver.as_ref()
+        } = &receiver.kind
         {
             let is_type_name = c.type_ctx.find_type(type_name).is_some();
             if is_type_name {
@@ -359,11 +360,11 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             }
         }
     }
-    if let Expr::Closure {
+    if let ExprKind::Closure {
         params,
         return_type,
         ..
-    } = expr
+    } = &expr.kind
     {
         let param_types: Vec<Type> = params
             .iter()
@@ -384,7 +385,7 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             return_type: Box::new(ret),
         });
     }
-    if let Expr::Ident { name, .. } = expr
+    if let ExprKind::Ident { name, .. } = &expr.kind
         && let Some(sig) = c.type_ctx.functions.get(name)
         && sig.type_params.is_empty()
     {
@@ -393,26 +394,26 @@ fn infer_type_from_expr(c: &Compiler, expr: &Expr) -> Option<Type> {
             return_type: Box::new(sig.return_type.clone()),
         });
     }
-    if let Expr::Call { callee, .. } = expr
-        && let Expr::Ident { name, .. } = callee.as_ref()
+    if let ExprKind::Call { callee, .. } = &expr.kind
+        && let ExprKind::Ident { name, .. } = &callee.kind
         && let Some(sig) = c.type_ctx.functions.get(name)
         && sig.type_params.is_empty()
     {
         return Some(sig.return_type.clone());
     }
-    if matches!(expr, Expr::Receive { .. }) {
+    if matches!(&expr.kind, ExprKind::Receive { .. }) {
         return c.fn_state.process_msg_type.clone();
     }
-    if let Expr::Binary {
+    if let ExprKind::Binary {
         op: BinOp::Concat,
         left,
         ..
-    } = expr
+    } = &expr.kind
     {
         return infer_type_from_expr(c, left).or_else(|| {
-            if let Expr::Ident { name, .. } = left.as_ref() {
+            if let ExprKind::Ident { name, .. } = &left.kind {
                 c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone())
-            } else if matches!(left.as_ref(), Expr::BinaryLiteral { .. }) {
+            } else if matches!(&left.kind, ExprKind::BinaryLiteral { .. }) {
                 Some(Type::Primitive(Primitive::Binary))
             } else {
                 None
@@ -459,24 +460,24 @@ fn infer_instance_method_return_type(c: &Compiler, recv_ty: &Type, method: &str)
 
 /// Infers the Expo type of a receiver expression without compiling it.
 fn infer_receiver_type(c: &Compiler, expr: &Expr) -> Option<Type> {
-    match expr {
-        Expr::String { .. } => Some(Type::Primitive(Primitive::String)),
-        Expr::Literal { value, .. } => match value {
+    match &expr.kind {
+        ExprKind::String { .. } => Some(Type::Primitive(Primitive::String)),
+        ExprKind::Literal { value, .. } => match value {
             Literal::Int(_) => Some(Type::Primitive(Primitive::I64)),
             Literal::Float(_) => Some(Type::Primitive(Primitive::F64)),
             Literal::Bool(_) => Some(Type::Primitive(Primitive::Bool)),
             Literal::String(_) => Some(Type::Primitive(Primitive::String)),
             Literal::Unit => Some(Type::Unit),
         },
-        Expr::Ident { name, .. } => c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone()),
-        Expr::MethodCall {
+        ExprKind::Ident { name, .. } => c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone()),
+        ExprKind::MethodCall {
             receiver, method, ..
         } => {
             let recv_ty = infer_receiver_type(c, receiver)?;
             infer_instance_method_return_type(c, &recv_ty, method)
         }
-        Expr::Call { callee, .. } => {
-            if let Expr::Ident { name, .. } = callee.as_ref() {
+        ExprKind::Call { callee, .. } => {
+            if let ExprKind::Ident { name, .. } = &callee.kind {
                 c.type_ctx
                     .functions
                     .get(name)
@@ -680,36 +681,7 @@ pub(crate) fn apply_coercion<'ctx>(
 }
 
 fn expr_span(expr: &Expr) -> Span {
-    match expr {
-        Expr::Arena { span, .. }
-        | Expr::Binary { span, .. }
-        | Expr::BinaryLiteral { span, .. }
-        | Expr::Call { span, .. }
-        | Expr::Closure { span, .. }
-        | Expr::Cond { span, .. }
-        | Expr::EnumConstruction { span, .. }
-        | Expr::FieldAccess { span, .. }
-        | Expr::For { span, .. }
-        | Expr::Group { span, .. }
-        | Expr::Ident { span, .. }
-        | Expr::If { span, .. }
-        | Expr::List { span, .. }
-        | Expr::Map { span, .. }
-        | Expr::Literal { span, .. }
-        | Expr::Loop { span, .. }
-        | Expr::Match { span, .. }
-        | Expr::MethodCall { span, .. }
-        | Expr::Receive { span, .. }
-        | Expr::Self_ { span, .. }
-        | Expr::ShortClosure { span, .. }
-        | Expr::Spawn { span, .. }
-        | Expr::String { span, .. }
-        | Expr::StructConstruction { span, .. }
-        | Expr::Ternary { span, .. }
-        | Expr::Unary { span, .. }
-        | Expr::Unless { span, .. }
-        | Expr::While { span, .. } => *span,
-    }
+    expr.span
 }
 
 fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
@@ -720,17 +692,17 @@ fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
         ty,
         Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
     ) {
-        return match expr {
-            Expr::BinaryLiteral { .. } => Ownership::Owned,
-            Expr::Receive { .. } => Ownership::Owned,
+        return match &expr.kind {
+            ExprKind::BinaryLiteral { .. } => Ownership::Owned,
+            ExprKind::Receive { .. } => Ownership::Owned,
             _ => Ownership::Unowned,
         };
     }
     if !matches!(ty, Type::Primitive(Primitive::String)) {
         return Ownership::Owned;
     }
-    match expr {
-        Expr::String { parts, .. } => {
+    match &expr.kind {
+        ExprKind::String { parts, .. } => {
             let has_interpolation = parts
                 .iter()
                 .any(|p| matches!(p, StringPart::Interpolation { .. }));
@@ -740,15 +712,15 @@ fn ownership_for_expr(expr: &Expr, ty: &Type) -> Ownership {
                 Ownership::Unowned
             }
         }
-        Expr::Receive { .. } => Ownership::Owned,
+        ExprKind::Receive { .. } => Ownership::Owned,
         _ => Ownership::Unowned,
     }
 }
 
 fn is_concat_expr(expr: &Expr) -> bool {
     matches!(
-        expr,
-        Expr::Binary {
+        &expr.kind,
+        ExprKind::Binary {
             op: BinOp::Concat,
             ..
         }

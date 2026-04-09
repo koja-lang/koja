@@ -19,3 +19,4 @@ pub mod ast;
 pub mod identifier;
 pub mod span;
 pub mod token;
+pub mod types;

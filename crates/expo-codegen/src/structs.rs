@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::PassMode;
-use expo_ast::ast::{Arg, ClosureParam, Expr, FieldInit, TypeParam};
+use expo_ast::ast::{Arg, ClosureParam, Expr, ExprKind, FieldInit, TypeParam};
 use expo_typecheck::context::{FnParam, FunctionKind, TypeInfo};
 use expo_typecheck::types::{
     Type, TypeIdentifier, build_substitution, mangle_name, named_generic, resolve_type_alias_id,
@@ -109,18 +109,18 @@ fn resolve_field_chain<'ctx>(
     receiver: &Expr,
     field: &str,
 ) -> Option<(PointerValue<'ctx>, Type)> {
-    let (base_ptr, base_struct_name) = match receiver {
-        Expr::Ident { name, .. } => {
+    let (base_ptr, base_struct_name) = match &receiver.kind {
+        ExprKind::Ident { name, .. } => {
             let (ptr, ty, _) = c.fn_state.variables.get(name.as_str()).cloned()?;
             let sn = struct_name_from_type(&ty)?;
             (ptr, sn)
         }
-        Expr::Self_ { .. } => {
+        ExprKind::Self_ => {
             let (ptr, ty, _) = c.fn_state.variables.get("self").cloned()?;
             let sn = struct_name_from_type(&ty)?;
             (ptr, sn)
         }
-        Expr::FieldAccess {
+        ExprKind::FieldAccess {
             receiver: inner_recv,
             field: inner_field,
             ..
@@ -220,7 +220,7 @@ pub fn compile_method_call<'ctx>(
 ) -> ExprResult<'ctx> {
     let was_tail = c.fn_state.tco.save_tail();
 
-    if let Expr::Ident { name, .. } = receiver {
+    if let ExprKind::Ident { name, .. } = &receiver.kind {
         let resolved = resolve_type_alias_name(name, &c.type_ctx.type_aliases);
         if let Some(id) = resolve_type_alias_id(name, &c.type_ctx.type_aliases) {
             if c.type_ctx.get_type(&id).is_some() {
@@ -369,9 +369,9 @@ pub fn compile_method_call<'ctx>(
         && let Some(sig) = ti.functions.get(method)
         && sig.kind == FunctionKind::Instance(PassMode::Move)
     {
-        let recv_name = match receiver {
-            Expr::Ident { name, .. } => Some(name.as_str()),
-            Expr::Self_ { .. } => Some("self"),
+        let recv_name = match &receiver.kind {
+            ExprKind::Ident { name, .. } => Some(name.as_str()),
+            ExprKind::Self_ => Some("self"),
             _ => None,
         };
         if let Some(name) = recv_name
@@ -540,8 +540,8 @@ pub fn infer_static_method_return_type(
 }
 
 fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
-    match expr {
-        Expr::Ident { name, .. } => c
+    match &expr.kind {
+        ExprKind::Ident { name, .. } => c
             .fn_state
             .variables
             .get(name)
@@ -558,7 +558,7 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
                 }
             })
             .unwrap_or(Type::Unknown),
-        Expr::Closure {
+        ExprKind::Closure {
             params,
             return_type,
             ..
@@ -586,10 +586,10 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
                 return_type: Box::new(ret),
             }
         }
-        Expr::ShortClosure { span, .. } => c
+        ExprKind::ShortClosure { .. } => c
             .type_ctx
             .closure_info
-            .get(span)
+            .get(&expr.span)
             .map(|ci| Type::Function {
                 params: ci
                     .param_types
@@ -731,17 +731,17 @@ fn concrete_type_for_field_init<'ctx>(
     if *compiled_type != Type::Unknown {
         return compiled_type.clone();
     }
-    match expr {
-        Expr::Ident { name, .. } => c
+    match &expr.kind {
+        ExprKind::Ident { name, .. } => c
             .fn_state
             .variables
             .get(name)
             .map(|(_, ty, _)| ty.clone())
             .unwrap_or(Type::Unknown),
-        Expr::FieldAccess {
+        ExprKind::FieldAccess {
             receiver, field, ..
         } => {
-            if let Expr::Ident { name, .. } = receiver.as_ref()
+            if let ExprKind::Ident { name, .. } = &receiver.as_ref().kind
                 && let Some((_, recv_ty, _)) = c.fn_state.variables.get(name)
                 && let Some(sn) = struct_name_from_type(recv_ty)
                 && let Some(ft) = c.get_field_type(&sn, field)
@@ -835,7 +835,7 @@ fn resolve_struct_name<'ctx>(
         return Ok(sn);
     }
 
-    if let Expr::Ident { name, .. } = receiver
+    if let ExprKind::Ident { name, .. } = &receiver.kind
         && let Some((_, ty, _)) = c.fn_state.variables.get(name)
         && let Some(sn) = struct_name_from_type(ty)
     {

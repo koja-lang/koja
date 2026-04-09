@@ -1,7 +1,7 @@
 //! Operator compilation: arithmetic, comparison, logical, and unary operators
 //! with dispatch based on operand types (integer vs. floating-point).
 
-use expo_ast::ast::{BinOp, Expr, UnaryOp};
+use expo_ast::ast::{BinOp, Expr, ExprKind, UnaryOp};
 use expo_typecheck::types::{Primitive, Type};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, IntPredicate};
@@ -222,12 +222,12 @@ fn compile_concat<'ctx>(
 }
 
 fn concat_operand_type(c: &Compiler, expr: &Expr) -> Type {
-    if let Expr::Ident { name, .. } = expr
+    if let ExprKind::Ident { name, .. } = &expr.kind
         && let Some((_, ty, _)) = c.fn_state.variables.get(name)
     {
         return ty.clone();
     }
-    if matches!(expr, Expr::BinaryLiteral { .. }) {
+    if matches!(expr.kind, ExprKind::BinaryLiteral { .. }) {
         return Type::Primitive(Primitive::Binary);
     }
     Type::Primitive(Primitive::String)

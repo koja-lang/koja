@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use expo_ast::ast::{
-    EnumConstructionData, EnumVariantData, Expr, Function, ImplMember, Item, Literal, Module,
-    Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
+    EnumConstructionData, EnumVariantData, Expr, ExprKind, Function, ImplMember, Item, Literal,
+    Module, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
 };
 use expo_ast::span::Span;
 
@@ -406,21 +406,18 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                         &ctx.type_aliases,
                     )
                 } else {
-                    match &c.value {
-                        Expr::Literal {
+                    match &c.value.kind {
+                        ExprKind::Literal {
                             value: Literal::Bool(_),
-                            ..
                         } => Type::Primitive(Primitive::Bool),
-                        Expr::Literal {
+                        ExprKind::Literal {
                             value: Literal::Int(_),
-                            ..
                         } => Type::Primitive(Primitive::I64),
-                        Expr::Literal {
+                        ExprKind::Literal {
                             value: Literal::Float(_),
-                            ..
                         } => Type::Primitive(Primitive::F64),
-                        Expr::String { .. } => Type::Primitive(Primitive::String),
-                        Expr::EnumConstruction {
+                        ExprKind::String { .. } => Type::Primitive(Primitive::String),
+                        ExprKind::EnumConstruction {
                             type_path,
                             data: EnumConstructionData::Unit,
                             ..
@@ -436,7 +433,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                                 Type::Error
                             }
                         }
-                        Expr::StructConstruction {
+                        ExprKind::StructConstruction {
                             type_path, fields, ..
                         } if fields.iter().all(|f| is_const_expr(&f.value)) => {
                             let name = type_path.join(".");
@@ -1094,15 +1091,15 @@ fn substitute_named_in_arms(arms: &mut [expo_ast::ast::MatchArm], from: &str, to
 
 /// Recursively replaces type references from `from` to `to` inside an expression tree.
 fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
-    match expr {
-        Expr::Match { subject, arms, .. } => {
+    match &mut expr.kind {
+        ExprKind::Match { subject, arms, .. } => {
             substitute_named_in_expr(subject, from, to);
             substitute_named_in_arms(arms, from, to);
         }
-        Expr::Receive { arms, .. } => {
+        ExprKind::Receive { arms, .. } => {
             substitute_named_in_arms(arms, from, to);
         }
-        Expr::Closure {
+        ExprKind::Closure {
             return_type, body, ..
         } => {
             if let Some(rt) = return_type {
@@ -1112,24 +1109,24 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
                 substitute_named_in_statement(s, from, to);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        ExprKind::Call { callee, args, .. } => {
             substitute_named_in_expr(callee, from, to);
             for a in args {
                 substitute_named_in_expr(&mut a.value, from, to);
             }
         }
-        Expr::MethodCall { receiver, args, .. } => {
+        ExprKind::MethodCall { receiver, args, .. } => {
             substitute_named_in_expr(receiver, from, to);
             for a in args {
                 substitute_named_in_expr(&mut a.value, from, to);
             }
         }
-        Expr::Binary { left, right, .. } => {
+        ExprKind::Binary { left, right, .. } => {
             substitute_named_in_expr(left, from, to);
             substitute_named_in_expr(right, from, to);
         }
-        Expr::Unary { operand, .. } => substitute_named_in_expr(operand, from, to),
-        Expr::If {
+        ExprKind::Unary { operand, .. } => substitute_named_in_expr(operand, from, to),
+        ExprKind::If {
             condition,
             then_body,
             else_body,
@@ -1145,7 +1142,7 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
                 }
             }
         }
-        Expr::For {
+        ExprKind::For {
             pattern,
             iterable,
             body,
@@ -1157,7 +1154,7 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
                 substitute_named_in_statement(s, from, to);
             }
         }
-        Expr::While {
+        ExprKind::While {
             condition, body, ..
         } => {
             substitute_named_in_expr(condition, from, to);
@@ -1165,16 +1162,16 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
                 substitute_named_in_statement(s, from, to);
             }
         }
-        Expr::Loop { body, .. } | Expr::Arena { body, .. } => {
+        ExprKind::Loop { body, .. } | ExprKind::Arena { body, .. } => {
             for s in body {
                 substitute_named_in_statement(s, from, to);
             }
         }
-        Expr::FieldAccess { receiver, .. } => substitute_named_in_expr(receiver, from, to),
-        Expr::Group { expr, .. } | Expr::Spawn { expr, .. } => {
+        ExprKind::FieldAccess { receiver, .. } => substitute_named_in_expr(receiver, from, to),
+        ExprKind::Group { expr, .. } | ExprKind::Spawn { expr, .. } => {
             substitute_named_in_expr(expr, from, to)
         }
-        Expr::Cond {
+        ExprKind::Cond {
             arms, else_body, ..
         } => {
             for arm in arms {
@@ -1189,24 +1186,24 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
                 }
             }
         }
-        Expr::String { parts, .. } => {
+        ExprKind::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {
                     substitute_named_in_expr(expr, from, to);
                 }
             }
         }
-        Expr::List { elements, .. } => {
+        ExprKind::List { elements, .. } => {
             for e in elements {
                 substitute_named_in_expr(e, from, to);
             }
         }
-        Expr::StructConstruction { fields, .. } => {
+        ExprKind::StructConstruction { fields, .. } => {
             for f in fields {
                 substitute_named_in_expr(&mut f.value, from, to);
             }
         }
-        Expr::Ternary {
+        ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
@@ -1216,7 +1213,7 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
             substitute_named_in_expr(then_expr, from, to);
             substitute_named_in_expr(else_expr, from, to);
         }
-        Expr::Unless {
+        ExprKind::Unless {
             condition, body, ..
         } => {
             substitute_named_in_expr(condition, from, to);
@@ -1224,14 +1221,14 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
                 substitute_named_in_statement(s, from, to);
             }
         }
-        Expr::ShortClosure { body, .. } => substitute_named_in_expr(body, from, to),
-        Expr::Map { entries, .. } => {
+        ExprKind::ShortClosure { body, .. } => substitute_named_in_expr(body, from, to),
+        ExprKind::Map { entries, .. } => {
             for (k, v) in entries {
                 substitute_named_in_expr(k, from, to);
                 substitute_named_in_expr(v, from, to);
             }
         }
-        Expr::BinaryLiteral { segments, .. } => {
+        ExprKind::BinaryLiteral { segments, .. } => {
             for seg in segments {
                 substitute_named_in_expr(&mut seg.value, from, to);
                 if let Some(sz) = &mut seg.size {
@@ -1239,10 +1236,10 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
                 }
             }
         }
-        Expr::Ident { .. }
-        | Expr::Literal { .. }
-        | Expr::Self_ { .. }
-        | Expr::EnumConstruction { .. } => {}
+        ExprKind::Ident { .. }
+        | ExprKind::Literal { .. }
+        | ExprKind::Self_
+        | ExprKind::EnumConstruction { .. } => {}
     }
 }
 
@@ -1321,8 +1318,8 @@ fn substitute_self_in_statement(stmt: &mut Statement, target: &str) {
 
 /// Replaces `Self` type references with the concrete `target` name in an expression tree.
 fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
-    match expr {
-        Expr::Match { subject, arms, .. } => {
+    match &mut expr.kind {
+        ExprKind::Match { subject, arms, .. } => {
             substitute_self_in_expr(subject, target);
             for arm in arms {
                 substitute_self_in_pattern(&mut arm.pattern, target);
@@ -1334,7 +1331,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 }
             }
         }
-        Expr::Receive { arms, .. } => {
+        ExprKind::Receive { arms, .. } => {
             for arm in arms {
                 substitute_self_in_pattern(&mut arm.pattern, target);
                 if let Some(g) = &mut arm.guard {
@@ -1345,7 +1342,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 }
             }
         }
-        Expr::Closure {
+        ExprKind::Closure {
             return_type, body, ..
         } => {
             if let Some(rt) = return_type {
@@ -1355,24 +1352,24 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 substitute_self_in_statement(s, target);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        ExprKind::Call { callee, args, .. } => {
             substitute_self_in_expr(callee, target);
             for a in args {
                 substitute_self_in_expr(&mut a.value, target);
             }
         }
-        Expr::MethodCall { receiver, args, .. } => {
+        ExprKind::MethodCall { receiver, args, .. } => {
             substitute_self_in_expr(receiver, target);
             for a in args {
                 substitute_self_in_expr(&mut a.value, target);
             }
         }
-        Expr::Binary { left, right, .. } => {
+        ExprKind::Binary { left, right, .. } => {
             substitute_self_in_expr(left, target);
             substitute_self_in_expr(right, target);
         }
-        Expr::Unary { operand, .. } => substitute_self_in_expr(operand, target),
-        Expr::If {
+        ExprKind::Unary { operand, .. } => substitute_self_in_expr(operand, target),
+        ExprKind::If {
             condition,
             then_body,
             else_body,
@@ -1388,7 +1385,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 }
             }
         }
-        Expr::For {
+        ExprKind::For {
             pattern,
             iterable,
             body,
@@ -1400,7 +1397,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 substitute_self_in_statement(s, target);
             }
         }
-        Expr::While {
+        ExprKind::While {
             condition, body, ..
         } => {
             substitute_self_in_expr(condition, target);
@@ -1408,16 +1405,16 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 substitute_self_in_statement(s, target);
             }
         }
-        Expr::Loop { body, .. } | Expr::Arena { body, .. } => {
+        ExprKind::Loop { body, .. } | ExprKind::Arena { body, .. } => {
             for s in body {
                 substitute_self_in_statement(s, target);
             }
         }
-        Expr::FieldAccess { receiver, .. } => substitute_self_in_expr(receiver, target),
-        Expr::Group { expr, .. } | Expr::Spawn { expr, .. } => {
+        ExprKind::FieldAccess { receiver, .. } => substitute_self_in_expr(receiver, target),
+        ExprKind::Group { expr, .. } | ExprKind::Spawn { expr, .. } => {
             substitute_self_in_expr(expr, target)
         }
-        Expr::Cond {
+        ExprKind::Cond {
             arms, else_body, ..
         } => {
             for arm in arms {
@@ -1432,24 +1429,24 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 }
             }
         }
-        Expr::String { parts, .. } => {
+        ExprKind::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {
                     substitute_self_in_expr(expr, target);
                 }
             }
         }
-        Expr::List { elements, .. } => {
+        ExprKind::List { elements, .. } => {
             for e in elements {
                 substitute_self_in_expr(e, target);
             }
         }
-        Expr::StructConstruction { fields, .. } => {
+        ExprKind::StructConstruction { fields, .. } => {
             for f in fields {
                 substitute_self_in_expr(&mut f.value, target);
             }
         }
-        Expr::Ternary {
+        ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
@@ -1459,7 +1456,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
             substitute_self_in_expr(then_expr, target);
             substitute_self_in_expr(else_expr, target);
         }
-        Expr::Unless {
+        ExprKind::Unless {
             condition, body, ..
         } => {
             substitute_self_in_expr(condition, target);
@@ -1467,14 +1464,14 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 substitute_self_in_statement(s, target);
             }
         }
-        Expr::ShortClosure { body, .. } => substitute_self_in_expr(body, target),
-        Expr::Map { entries, .. } => {
+        ExprKind::ShortClosure { body, .. } => substitute_self_in_expr(body, target),
+        ExprKind::Map { entries, .. } => {
             for (k, v) in entries {
                 substitute_self_in_expr(k, target);
                 substitute_self_in_expr(v, target);
             }
         }
-        Expr::BinaryLiteral { segments, .. } => {
+        ExprKind::BinaryLiteral { segments, .. } => {
             for seg in segments {
                 substitute_self_in_expr(&mut seg.value, target);
                 if let Some(sz) = &mut seg.size {
@@ -1482,10 +1479,10 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 }
             }
         }
-        Expr::Ident { .. }
-        | Expr::Literal { .. }
-        | Expr::Self_ { .. }
-        | Expr::EnumConstruction { .. } => {}
+        ExprKind::Ident { .. }
+        | ExprKind::Literal { .. }
+        | ExprKind::Self_
+        | ExprKind::EnumConstruction { .. } => {}
     }
 }
 
@@ -1587,9 +1584,9 @@ fn substitute_self_type(mut sig: FunctionSig, self_type: &Type) -> FunctionSig {
 
 /// Whether an expression is valid as a compile-time constant initializer.
 fn is_const_expr(expr: &Expr) -> bool {
-    match expr {
-        Expr::Literal { .. } => true,
-        Expr::String { parts, .. } => parts
+    match &expr.kind {
+        ExprKind::Literal { .. } => true,
+        ExprKind::String { parts, .. } => parts
             .iter()
             .all(|p| matches!(p, StringPart::Literal { .. })),
         _ => false,

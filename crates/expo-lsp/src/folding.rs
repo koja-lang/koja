@@ -8,7 +8,7 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::{Comment, Expr, ImplMember, Item, Module, Statement};
+use expo_ast::ast::{Comment, Expr, ExprKind, ImplMember, Item, Module, Statement};
 use expo_ast::span::Span;
 
 use crate::backend::Backend;
@@ -114,14 +114,13 @@ fn collect_statement_folds(stmts: &[Statement], ranges: &mut Vec<FoldingRange>) 
 }
 
 fn collect_expr_folds(expr: &Expr, ranges: &mut Vec<FoldingRange>) {
-    match expr {
-        Expr::If {
+    match &expr.kind {
+        ExprKind::If {
             then_body,
             else_body,
-            span,
             ..
         } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             collect_statement_folds(then_body, ranges);
@@ -129,21 +128,18 @@ fn collect_expr_folds(expr: &Expr, ranges: &mut Vec<FoldingRange>) {
                 collect_statement_folds(eb, ranges);
             }
         }
-        Expr::Match { arms, span, .. } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+        ExprKind::Match { arms, .. } => {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             for arm in arms {
                 collect_statement_folds(&arm.body, ranges);
             }
         }
-        Expr::Cond {
-            arms,
-            else_body,
-            span,
-            ..
+        ExprKind::Cond {
+            arms, else_body, ..
         } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             for arm in arms {
@@ -153,37 +149,34 @@ fn collect_expr_folds(expr: &Expr, ranges: &mut Vec<FoldingRange>) {
                 collect_statement_folds(eb, ranges);
             }
         }
-        Expr::For { body, span, .. } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+        ExprKind::For { body, .. } => {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             collect_statement_folds(body, ranges);
         }
-        Expr::While { body, span, .. } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+        ExprKind::While { body, .. } => {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             collect_statement_folds(body, ranges);
         }
-        Expr::Loop { body, span, .. } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+        ExprKind::Loop { body, .. } => {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             collect_statement_folds(body, ranges);
         }
-        Expr::Unless { body, span, .. } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+        ExprKind::Unless { body, .. } => {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             collect_statement_folds(body, ranges);
         }
-        Expr::Receive {
-            arms,
-            span,
-            after_body,
-            ..
+        ExprKind::Receive {
+            arms, after_body, ..
         } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             for arm in arms {
@@ -191,14 +184,14 @@ fn collect_expr_folds(expr: &Expr, ranges: &mut Vec<FoldingRange>) {
             }
             collect_statement_folds(after_body, ranges);
         }
-        Expr::Closure { body, span, .. } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+        ExprKind::Closure { body, .. } => {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             collect_statement_folds(body, ranges);
         }
-        Expr::Arena { body, span, .. } => {
-            if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+        ExprKind::Arena { body, .. } => {
+            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }
             collect_statement_folds(body, ranges);

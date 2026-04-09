@@ -79,11 +79,13 @@ impl Parser {
                 let params = self.expr_to_closure_params(&lhs, expr_span(&lhs));
                 let body = self.parse_expr_bp(BP_ARROW);
                 let span = Span::new(expr_span(&lhs).start, expr_span(&body).end);
-                lhs = Expr::ShortClosure {
-                    params,
-                    body: Box::new(body),
+                lhs = Expr::new(
+                    ExprKind::ShortClosure {
+                        params,
+                        body: Box::new(body),
+                    },
                     span,
-                };
+                );
                 continue;
             }
 
@@ -100,20 +102,23 @@ impl Parser {
                                     let args = self.parse_arg_list();
                                     self.expect(&TokenKind::RParen);
                                     let span = Span::new(expr_span(&lhs).start, self.prev_end());
-                                    lhs = Expr::MethodCall {
-                                        receiver: Box::new(lhs),
-                                        method: name,
-                                        args,
+                                    lhs = Expr::new(
+                                        ExprKind::MethodCall {
+                                            receiver: Box::new(lhs),
+                                            method: name,
+                                            args,
+                                        },
                                         span,
-                                        resolved_type: None,
-                                    };
+                                    );
                                 } else {
                                     let span = Span::new(expr_span(&lhs).start, self.prev_end());
-                                    lhs = Expr::FieldAccess {
-                                        receiver: Box::new(lhs),
-                                        field: name,
+                                    lhs = Expr::new(
+                                        ExprKind::FieldAccess {
+                                            receiver: Box::new(lhs),
+                                            field: name,
+                                        },
                                         span,
-                                    };
+                                    );
                                 }
                                 continue;
                             }
@@ -144,15 +149,17 @@ impl Parser {
                         let args = self.parse_arg_list();
                         self.expect(&TokenKind::RParen);
                         let span = Span::new(expr_span(&lhs).start, self.prev_end());
-                        lhs = Expr::Call {
-                            callee: Box::new(lhs),
-                            args,
+                        lhs = Expr::new(
+                            ExprKind::Call {
+                                callee: Box::new(lhs),
+                                args,
+                            },
                             span,
-                        };
+                        );
                         continue;
                     }
                     TokenKind::Question if BP_TERNARY >= min_bp => {
-                        if matches!(lhs, Expr::Ternary { .. }) {
+                        if matches!(lhs.kind, ExprKind::Ternary { .. }) {
                             let espan = self.current_span();
                             self.error(
                                 "nested ternary not allowed, use `cond` instead".into(),
@@ -162,7 +169,7 @@ impl Parser {
                         self.advance(); // ?
                         self.skip_newlines();
                         let then_expr = self.parse_expr_bp(0);
-                        if matches!(then_expr, Expr::Ternary { .. }) {
+                        if matches!(then_expr.kind, ExprKind::Ternary { .. }) {
                             self.error(
                                 "nested ternary not allowed, use `cond` instead".into(),
                                 expr_span(&then_expr),
@@ -171,19 +178,21 @@ impl Parser {
                         self.skip_newlines();
                         self.expect(&TokenKind::Colon);
                         let else_expr = self.parse_expr_bp(BP_TERNARY + 1);
-                        if matches!(else_expr, Expr::Ternary { .. }) {
+                        if matches!(else_expr.kind, ExprKind::Ternary { .. }) {
                             self.error(
                                 "nested ternary not allowed, use `cond` instead".into(),
                                 expr_span(&else_expr),
                             );
                         }
                         let span = Span::new(expr_span(&lhs).start, expr_span(&else_expr).end);
-                        lhs = Expr::Ternary {
-                            condition: Box::new(lhs),
-                            then_expr: Box::new(then_expr),
-                            else_expr: Box::new(else_expr),
+                        lhs = Expr::new(
+                            ExprKind::Ternary {
+                                condition: Box::new(lhs),
+                                then_expr: Box::new(then_expr),
+                                else_expr: Box::new(else_expr),
+                            },
                             span,
-                        };
+                        );
                         continue;
                     }
                     _ => {}
@@ -209,12 +218,14 @@ impl Parser {
                 let op = token_to_binop(&op_token.kind);
                 let rhs = self.parse_expr_bp(r_bp);
                 let span = Span::new(expr_span(&lhs).start, expr_span(&rhs).end);
-                lhs = Expr::Binary {
-                    op,
-                    left: Box::new(lhs),
-                    right: Box::new(rhs),
+                lhs = Expr::new(
+                    ExprKind::Binary {
+                        op,
+                        left: Box::new(lhs),
+                        right: Box::new(rhs),
+                    },
                     span,
-                };
+                );
                 continue;
             }
 
@@ -233,34 +244,42 @@ impl Parser {
             TokenKind::IntLit(s) => {
                 let start = self.current_span();
                 self.advance();
-                Expr::Literal {
-                    value: Literal::Int(s),
-                    span: self.span_from(start),
-                }
+                Expr::new(
+                    ExprKind::Literal {
+                        value: Literal::Int(s),
+                    },
+                    self.span_from(start),
+                )
             }
             TokenKind::FloatLit(s) => {
                 let start = self.current_span();
                 self.advance();
-                Expr::Literal {
-                    value: Literal::Float(s),
-                    span: self.span_from(start),
-                }
+                Expr::new(
+                    ExprKind::Literal {
+                        value: Literal::Float(s),
+                    },
+                    self.span_from(start),
+                )
             }
             TokenKind::True => {
                 let start = self.current_span();
                 self.advance();
-                Expr::Literal {
-                    value: Literal::Bool(true),
-                    span: self.span_from(start),
-                }
+                Expr::new(
+                    ExprKind::Literal {
+                        value: Literal::Bool(true),
+                    },
+                    self.span_from(start),
+                )
             }
             TokenKind::False => {
                 let start = self.current_span();
                 self.advance();
-                Expr::Literal {
-                    value: Literal::Bool(false),
-                    span: self.span_from(start),
-                }
+                Expr::new(
+                    ExprKind::Literal {
+                        value: Literal::Bool(false),
+                    },
+                    self.span_from(start),
+                )
             }
             TokenKind::StringStart => self.parse_string_expr(false),
             TokenKind::MultilineStringStart => self.parse_string_expr(true),
@@ -268,10 +287,7 @@ impl Parser {
             TokenKind::Ident(name) => {
                 let start = self.current_span();
                 self.advance();
-                Expr::Ident {
-                    name,
-                    span: self.span_from(start),
-                }
+                Expr::new(ExprKind::Ident { name }, self.span_from(start))
             }
 
             TokenKind::TypeIdent(_) => self.parse_type_construction(),
@@ -279,9 +295,7 @@ impl Parser {
             TokenKind::Self_ => {
                 let start = self.current_span();
                 self.advance();
-                Expr::Self_ {
-                    span: self.span_from(start),
-                }
+                Expr::new(ExprKind::Self_, self.span_from(start))
             }
 
             TokenKind::LParen => self.parse_paren_expr(),
@@ -292,22 +306,26 @@ impl Parser {
                 let start = self.current_span();
                 self.advance();
                 let operand = self.parse_expr_bp(BP_UNARY_R);
-                Expr::Unary {
-                    op: UnaryOp::Neg,
-                    operand: Box::new(operand),
-                    span: self.span_from(start),
-                }
+                Expr::new(
+                    ExprKind::Unary {
+                        op: UnaryOp::Neg,
+                        operand: Box::new(operand),
+                    },
+                    self.span_from(start),
+                )
             }
 
             TokenKind::Not => {
                 let start = self.current_span();
                 self.advance();
                 let operand = self.parse_expr_bp(BP_NOT_R);
-                Expr::Unary {
-                    op: UnaryOp::Not,
-                    operand: Box::new(operand),
-                    span: self.span_from(start),
-                }
+                Expr::new(
+                    ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        operand: Box::new(operand),
+                    },
+                    self.span_from(start),
+                )
             }
 
             TokenKind::If => self.parse_if_expr(),
@@ -325,10 +343,12 @@ impl Parser {
             TokenKind::Break => {
                 let start = self.current_span();
                 self.advance();
-                Expr::Literal {
-                    value: Literal::Unit,
-                    span: self.span_from(start),
-                }
+                Expr::new(
+                    ExprKind::Literal {
+                        value: Literal::Unit,
+                    },
+                    self.span_from(start),
+                )
             }
 
             TokenKind::Return => {
@@ -345,10 +365,12 @@ impl Parser {
                 if let Some(val) = value {
                     val
                 } else {
-                    Expr::Literal {
-                        value: Literal::Unit,
-                        span: self.span_from(start),
-                    }
+                    Expr::new(
+                        ExprKind::Literal {
+                            value: Literal::Unit,
+                        },
+                        self.span_from(start),
+                    )
                 }
             }
 
@@ -359,10 +381,12 @@ impl Parser {
                     span,
                 );
                 self.advance();
-                Expr::Literal {
-                    value: Literal::Unit,
+                Expr::new(
+                    ExprKind::Literal {
+                        value: Literal::Unit,
+                    },
                     span,
-                }
+                )
             }
         }
     }
@@ -448,36 +472,7 @@ impl Parser {
 // =========================================================================
 
 pub(crate) fn expr_span(expr: &Expr) -> Span {
-    match expr {
-        Expr::Arena { span, .. }
-        | Expr::Binary { span, .. }
-        | Expr::BinaryLiteral { span, .. }
-        | Expr::Call { span, .. }
-        | Expr::Closure { span, .. }
-        | Expr::Cond { span, .. }
-        | Expr::EnumConstruction { span, .. }
-        | Expr::FieldAccess { span, .. }
-        | Expr::For { span, .. }
-        | Expr::Group { span, .. }
-        | Expr::Ident { span, .. }
-        | Expr::If { span, .. }
-        | Expr::List { span, .. }
-        | Expr::Map { span, .. }
-        | Expr::Literal { span, .. }
-        | Expr::Loop { span, .. }
-        | Expr::Match { span, .. }
-        | Expr::MethodCall { span, .. }
-        | Expr::Receive { span, .. }
-        | Expr::Self_ { span, .. }
-        | Expr::ShortClosure { span, .. }
-        | Expr::Spawn { span, .. }
-        | Expr::String { span, .. }
-        | Expr::StructConstruction { span, .. }
-        | Expr::Ternary { span, .. }
-        | Expr::Unary { span, .. }
-        | Expr::Unless { span, .. }
-        | Expr::While { span, .. } => *span,
-    }
+    expr.span
 }
 
 #[cfg(test)]
@@ -504,7 +499,7 @@ mod tests {
     }
 
     fn is_binop(expr: &Expr, expected_op: BinOp) -> bool {
-        matches!(expr, Expr::Binary { op, .. } if *op == expected_op)
+        matches!(expr.kind, ExprKind::Binary { op, .. } if op == expected_op)
     }
 
     // ---- Arithmetic precedence ----
@@ -512,21 +507,21 @@ mod tests {
     #[test]
     fn mul_binds_tighter_than_add() {
         let expr = parse_first_expr("1 + 2 * 3");
-        let Expr::Binary {
+        let ExprKind::Binary {
             op, left, right, ..
-        } = &expr
+        } = &expr.kind
         else {
             panic!("expected Binary, got {:?}", expr);
         };
         assert_eq!(*op, BinOp::Add);
-        assert!(matches!(left.as_ref(), Expr::Literal { .. }));
+        assert!(matches!(left.kind, ExprKind::Literal { .. }));
         assert!(is_binop(right, BinOp::Mul));
     }
 
     #[test]
     fn sub_and_div_precedence() {
         let expr = parse_first_expr("a - b / c");
-        let Expr::Binary { op, right, .. } = &expr else {
+        let ExprKind::Binary { op, right, .. } = &expr.kind else {
             panic!("expected Binary, got {:?}", expr);
         };
         assert_eq!(*op, BinOp::Sub);
@@ -536,7 +531,7 @@ mod tests {
     #[test]
     fn left_associativity_add() {
         let expr = parse_first_expr("1 + 2 + 3");
-        let Expr::Binary { op, left, .. } = &expr else {
+        let ExprKind::Binary { op, left, .. } = &expr.kind else {
             panic!("expected Binary, got {:?}", expr);
         };
         assert_eq!(*op, BinOp::Add);
@@ -560,9 +555,9 @@ mod tests {
     #[test]
     fn comparison_lower_than_arithmetic() {
         let expr = parse_first_expr("a + 1 == b * 2");
-        let Expr::Binary {
+        let ExprKind::Binary {
             op, left, right, ..
-        } = &expr
+        } = &expr.kind
         else {
             panic!("expected Binary, got {:?}", expr);
         };
@@ -576,7 +571,7 @@ mod tests {
     #[test]
     fn and_binds_tighter_than_or() {
         let expr = parse_first_expr("a or b and c");
-        let Expr::Binary { op, right, .. } = &expr else {
+        let ExprKind::Binary { op, right, .. } = &expr.kind else {
             panic!("expected Binary, got {:?}", expr);
         };
         assert_eq!(*op, BinOp::Or);
@@ -586,9 +581,9 @@ mod tests {
     #[test]
     fn logical_lower_than_comparison() {
         let expr = parse_first_expr("x > 0 and y < 10");
-        let Expr::Binary {
+        let ExprKind::Binary {
             op, left, right, ..
-        } = &expr
+        } = &expr.kind
         else {
             panic!("expected Binary, got {:?}", expr);
         };
@@ -602,7 +597,7 @@ mod tests {
     #[test]
     fn unary_neg() {
         let expr = parse_first_expr("-x");
-        let Expr::Unary { op, .. } = &expr else {
+        let ExprKind::Unary { op, .. } = &expr.kind else {
             panic!("expected Unary, got {:?}", expr);
         };
         assert_eq!(*op, UnaryOp::Neg);
@@ -611,13 +606,13 @@ mod tests {
     #[test]
     fn unary_binds_tighter_than_binary() {
         let expr = parse_first_expr("-a + b");
-        let Expr::Binary { op, left, .. } = &expr else {
+        let ExprKind::Binary { op, left, .. } = &expr.kind else {
             panic!("expected Binary, got {:?}", expr);
         };
         assert_eq!(*op, BinOp::Add);
         assert!(matches!(
-            left.as_ref(),
-            Expr::Unary {
+            left.kind,
+            ExprKind::Unary {
                 op: UnaryOp::Neg,
                 ..
             }
@@ -629,13 +624,13 @@ mod tests {
     #[test]
     fn ternary_parses() {
         let expr = parse_first_expr("x ? 1 : 0");
-        assert!(matches!(expr, Expr::Ternary { .. }));
+        assert!(matches!(expr.kind, ExprKind::Ternary { .. }));
     }
 
     #[test]
     fn ternary_lower_than_comparison() {
         let expr = parse_first_expr("a > b ? 1 : 0");
-        let Expr::Ternary { condition, .. } = &expr else {
+        let ExprKind::Ternary { condition, .. } = &expr.kind else {
             panic!("expected Ternary, got {:?}", expr);
         };
         assert!(is_binop(condition, BinOp::Gt));
@@ -646,7 +641,7 @@ mod tests {
     #[test]
     fn field_access() {
         let expr = parse_first_expr("point.x");
-        let Expr::FieldAccess { field, .. } = &expr else {
+        let ExprKind::FieldAccess { field, .. } = &expr.kind else {
             panic!("expected FieldAccess, got {:?}", expr);
         };
         assert_eq!(field, "x");
@@ -655,20 +650,20 @@ mod tests {
     #[test]
     fn chained_field_access() {
         let expr = parse_first_expr("a.b.c");
-        let Expr::FieldAccess {
+        let ExprKind::FieldAccess {
             field, receiver, ..
-        } = &expr
+        } = &expr.kind
         else {
             panic!("expected FieldAccess, got {:?}", expr);
         };
         assert_eq!(field, "c");
-        assert!(matches!(receiver.as_ref(), Expr::FieldAccess { field, .. } if field == "b"));
+        assert!(matches!(receiver.kind, ExprKind::FieldAccess { ref field, .. } if field == "b"));
     }
 
     #[test]
     fn method_call() {
         let expr = parse_first_expr("list.push(42)");
-        let Expr::MethodCall { method, args, .. } = &expr else {
+        let ExprKind::MethodCall { method, args, .. } = &expr.kind else {
             panic!("expected MethodCall, got {:?}", expr);
         };
         assert_eq!(method, "push");
@@ -680,7 +675,7 @@ mod tests {
     #[test]
     fn modulus_same_precedence_as_mul() {
         let expr = parse_first_expr("a * b % c");
-        let Expr::Binary { op, left, .. } = &expr else {
+        let ExprKind::Binary { op, left, .. } = &expr.kind else {
             panic!("expected Binary, got {:?}", expr);
         };
         assert_eq!(*op, BinOp::Mod);
@@ -692,7 +687,7 @@ mod tests {
     #[test]
     fn short_closure_single_param() {
         let expr = parse_first_expr("x -> x * 2");
-        let Expr::ShortClosure { params, body, .. } = &expr else {
+        let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
             panic!("expected ShortClosure, got {:?}", expr);
         };
         assert_eq!(params.len(), 1);
@@ -705,18 +700,18 @@ mod tests {
     #[test]
     fn short_closure_wildcard_param() {
         let expr = parse_first_expr("_ -> 42");
-        let Expr::ShortClosure { params, body, .. } = &expr else {
+        let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
             panic!("expected ShortClosure, got {:?}", expr);
         };
         assert_eq!(params.len(), 1);
         assert!(matches!(&params[0], ClosureParam::Wildcard { .. }));
-        assert!(matches!(body.as_ref(), Expr::Literal { .. }));
+        assert!(matches!(body.kind, ExprKind::Literal { .. }));
     }
 
     #[test]
     fn short_closure_body_is_full_expr() {
         let expr = parse_first_expr("x -> x + 1 * 2");
-        let Expr::ShortClosure { body, .. } = &expr else {
+        let ExprKind::ShortClosure { body, .. } = &expr.kind else {
             panic!("expected ShortClosure, got {:?}", expr);
         };
         assert!(is_binop(body, BinOp::Add));
@@ -725,7 +720,7 @@ mod tests {
     #[test]
     fn short_closure_lower_precedence_than_arithmetic() {
         let expr = parse_first_expr("a -> a + b");
-        let Expr::ShortClosure { params, body, .. } = &expr else {
+        let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
             panic!("expected ShortClosure, got {:?}", expr);
         };
         assert_eq!(params.len(), 1);
@@ -746,7 +741,11 @@ mod tests {
         });
         let f = func.expect("expected a function");
         let call = f.body.into_iter().find_map(|s| {
-            if let Statement::Expr(Expr::Call { args, .. }) = s {
+            if let Statement::Expr(Expr {
+                kind: ExprKind::Call { args, .. },
+                ..
+            }) = s
+            {
                 Some(args)
             } else {
                 None
@@ -754,6 +753,6 @@ mod tests {
         });
         let args = call.expect("expected a call expression");
         assert_eq!(args.len(), 2);
-        assert!(matches!(&args[1].value, Expr::ShortClosure { .. }));
+        assert!(matches!(args[1].value.kind, ExprKind::ShortClosure { .. }));
     }
 }

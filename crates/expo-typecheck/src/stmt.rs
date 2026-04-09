@@ -62,7 +62,7 @@ pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &
                 value_type
             };
 
-            if let Expr::Ident { name: src_name, .. } = value
+            if let ExprKind::Ident { name: src_name, .. } = &value.kind
                 && let Some(src_info) = ce.env.get(src_name)
                 && !src_info.ty.is_copy()
             {
@@ -198,16 +198,14 @@ pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &
         Statement::Expr(expr) => {
             infer_expr(expr, ctx, ce);
 
-            if let Expr::MethodCall {
-                receiver,
-                method,
-                span,
-                ..
-            } = expr
+            if let ExprKind::MethodCall {
+                receiver, method, ..
+            } = &mut expr.kind
             {
+                let span = expr.span;
                 let is_static = matches!(
-                    receiver.as_ref(),
-                    Expr::Ident { name, .. } if ctx.resolve_name(name.as_str()).is_some()
+                    &receiver.kind,
+                    ExprKind::Ident { name, .. } if ctx.resolve_name(name.as_str()).is_some()
                 );
                 if !is_static {
                     let recv_ty = infer_expr(receiver, ctx, ce);
@@ -228,7 +226,7 @@ pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &
                                  method consumes its receiver via `move self`"
                             ),
                             format!("assign the result: `x = x.{method}(...)`"),
-                            *span,
+                            span,
                         );
                     }
                 }

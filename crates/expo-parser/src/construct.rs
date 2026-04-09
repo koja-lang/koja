@@ -61,20 +61,18 @@ impl Parser {
         }
 
         if parts.is_empty() {
-            Expr::String {
-                parts: vec![StringPart::Literal {
-                    value: String::new(),
-                    span: self.span_from(start),
-                }],
-                multiline,
-                span: self.span_from(start),
-            }
+            Expr::new(
+                ExprKind::String {
+                    parts: vec![StringPart::Literal {
+                        value: String::new(),
+                        span: self.span_from(start),
+                    }],
+                    multiline,
+                },
+                self.span_from(start),
+            )
         } else {
-            Expr::String {
-                parts,
-                multiline,
-                span: self.span_from(start),
-            }
+            Expr::new(ExprKind::String { parts, multiline }, self.span_from(start))
         }
     }
 
@@ -100,13 +98,14 @@ impl Parser {
                     }
                     return self.parse_enum_construction_tail(path, seg, start);
                 } else {
-                    return Expr::EnumConstruction {
-                        type_path: path,
-                        variant: seg,
-                        data: EnumConstructionData::Unit,
-                        span: self.span_from(start),
-                        resolved_type: None,
-                    };
+                    return Expr::new(
+                        ExprKind::EnumConstruction {
+                            type_path: path,
+                            variant: seg,
+                            data: EnumConstructionData::Unit,
+                        },
+                        self.span_from(start),
+                    );
                 }
             } else {
                 break;
@@ -131,30 +130,37 @@ impl Parser {
                 self.skip_newlines();
             }
             self.expect(&TokenKind::RBrace);
-            Expr::StructConstruction {
-                type_path: path,
-                fields,
-                span: self.span_from(start),
-                resolved_type: None,
-            }
+            Expr::new(
+                ExprKind::StructConstruction {
+                    type_path: path,
+                    fields,
+                },
+                self.span_from(start),
+            )
         } else if self.at(&TokenKind::LParen) {
             self.advance(); // (
             let args = self.parse_arg_list();
             self.expect(&TokenKind::RParen);
-            let callee = Expr::Ident {
-                name: path.into_iter().collect::<Vec<_>>().join("."),
-                span: self.span_from(start),
-            };
-            Expr::Call {
-                callee: Box::new(callee),
-                args,
-                span: self.span_from(start),
-            }
+            let callee = Expr::new(
+                ExprKind::Ident {
+                    name: path.into_iter().collect::<Vec<_>>().join("."),
+                },
+                self.span_from(start),
+            );
+            Expr::new(
+                ExprKind::Call {
+                    callee: Box::new(callee),
+                    args,
+                },
+                self.span_from(start),
+            )
         } else {
-            Expr::Ident {
-                name: path.join("."),
-                span: self.span_from(start),
-            }
+            Expr::new(
+                ExprKind::Ident {
+                    name: path.join("."),
+                },
+                self.span_from(start),
+            )
         }
     }
 
@@ -184,13 +190,14 @@ impl Parser {
             } else {
                 EnumConstructionData::Tuple(args)
             };
-            Expr::EnumConstruction {
-                type_path,
-                variant,
-                data,
-                span: self.span_from(start),
-                resolved_type: None,
-            }
+            Expr::new(
+                ExprKind::EnumConstruction {
+                    type_path,
+                    variant,
+                    data,
+                },
+                self.span_from(start),
+            )
         } else if self.eat(&TokenKind::LBrace).is_some() {
             self.skip_newlines();
             let mut fields = Vec::new();
@@ -208,21 +215,23 @@ impl Parser {
                 self.skip_newlines();
             }
             self.expect(&TokenKind::RBrace);
-            Expr::EnumConstruction {
-                type_path,
-                variant,
-                data: EnumConstructionData::Struct(fields),
-                span: self.span_from(start),
-                resolved_type: None,
-            }
+            Expr::new(
+                ExprKind::EnumConstruction {
+                    type_path,
+                    variant,
+                    data: EnumConstructionData::Struct(fields),
+                },
+                self.span_from(start),
+            )
         } else {
-            Expr::EnumConstruction {
-                type_path,
-                variant,
-                data: EnumConstructionData::Unit,
-                span: self.span_from(start),
-                resolved_type: None,
-            }
+            Expr::new(
+                ExprKind::EnumConstruction {
+                    type_path,
+                    variant,
+                    data: EnumConstructionData::Unit,
+                },
+                self.span_from(start),
+            )
         }
     }
 
@@ -232,10 +241,12 @@ impl Parser {
 
         self.skip_newlines();
         if self.eat(&TokenKind::RParen).is_some() {
-            return Expr::Literal {
-                value: Literal::Unit,
-                span: self.span_from(start),
-            };
+            return Expr::new(
+                ExprKind::Literal {
+                    value: Literal::Unit,
+                },
+                self.span_from(start),
+            );
         }
 
         let first = self.parse_expr();
@@ -256,17 +267,21 @@ impl Parser {
                 "tuples are not supported, use a struct instead".to_string(),
                 span,
             );
-            Expr::Literal {
-                value: Literal::Unit,
+            Expr::new(
+                ExprKind::Literal {
+                    value: Literal::Unit,
+                },
                 span,
-            }
+            )
         } else {
             self.skip_newlines();
             self.expect(&TokenKind::RParen);
-            Expr::Group {
-                expr: Box::new(first),
-                span: self.span_from(start),
-            }
+            Expr::new(
+                ExprKind::Group {
+                    expr: Box::new(first),
+                },
+                self.span_from(start),
+            )
         }
     }
 
@@ -280,18 +295,22 @@ impl Parser {
         if self.at(&TokenKind::Colon) && self.peek_nth(1) == &TokenKind::RBracket {
             self.advance(); // :
             self.advance(); // ]
-            return Expr::Map {
-                entries: Vec::new(),
-                span: self.span_from(start),
-            };
+            return Expr::new(
+                ExprKind::Map {
+                    entries: Vec::new(),
+                },
+                self.span_from(start),
+            );
         }
 
         if self.at(&TokenKind::RBracket) {
             self.advance(); // ]
-            return Expr::List {
-                elements: Vec::new(),
-                span: self.span_from(start),
-            };
+            return Expr::new(
+                ExprKind::List {
+                    elements: Vec::new(),
+                },
+                self.span_from(start),
+            );
         }
 
         let first = self.parse_expr();
@@ -314,10 +333,7 @@ impl Parser {
             }
             self.skip_newlines();
             self.expect(&TokenKind::RBracket);
-            return Expr::Map {
-                entries,
-                span: self.span_from(start),
-            };
+            return Expr::new(ExprKind::Map { entries }, self.span_from(start));
         }
 
         // Otherwise it's a list literal
@@ -332,10 +348,7 @@ impl Parser {
         self.skip_newlines();
         self.expect(&TokenKind::RBracket);
 
-        Expr::List {
-            elements,
-            span: self.span_from(start),
-        }
+        Expr::new(ExprKind::List { elements }, self.span_from(start))
     }
 
     pub(crate) fn parse_spawn_expr(&mut self) -> Expr {
@@ -343,10 +356,12 @@ impl Parser {
         self.advance(); // spawn
         let expr = self.parse_expr();
 
-        Expr::Spawn {
-            expr: Box::new(expr),
-            span: self.span_from(start),
-        }
+        Expr::new(
+            ExprKind::Spawn {
+                expr: Box::new(expr),
+            },
+            self.span_from(start),
+        )
     }
 
     pub(crate) fn parse_closure_expr(&mut self) -> Expr {
@@ -372,12 +387,14 @@ impl Parser {
         let body = self.parse_block();
         self.expect(&TokenKind::End);
 
-        Expr::Closure {
-            params,
-            return_type,
-            body,
-            span: self.span_from(start),
-        }
+        Expr::new(
+            ExprKind::Closure {
+                params,
+                return_type,
+                body,
+            },
+            self.span_from(start),
+        )
     }
 
     fn parse_closure_params(&mut self) -> Vec<ClosureParam> {
@@ -452,19 +469,19 @@ impl Parser {
     }
 
     pub(crate) fn expr_to_closure_params(&mut self, expr: &Expr, span: Span) -> Vec<ClosureParam> {
-        match expr {
-            Expr::Ident { name, span } if name == "_" => {
-                vec![ClosureParam::Wildcard { span: *span }]
+        match &expr.kind {
+            ExprKind::Ident { name } if name == "_" => {
+                vec![ClosureParam::Wildcard { span: expr.span }]
             }
-            Expr::Ident { name, span } => {
+            ExprKind::Ident { name } => {
                 vec![ClosureParam::Name {
                     mode: PassMode::Borrow,
                     name: name.clone(),
                     type_expr: None,
-                    span: *span,
+                    span: expr.span,
                 }]
             }
-            Expr::Group { expr: inner, .. } => self.expr_to_closure_params(inner, span),
+            ExprKind::Group { expr: inner, .. } => self.expr_to_closure_params(inner, span),
             _ => {
                 self.error("invalid closure parameter list".to_string(), span);
                 vec![ClosureParam::Wildcard { span }]
@@ -478,10 +495,7 @@ impl Parser {
 
         let mut segments = Vec::new();
         if self.eat(&TokenKind::GtGt).is_some() {
-            return Expr::BinaryLiteral {
-                segments,
-                span: self.span_from(start),
-            };
+            return Expr::new(ExprKind::BinaryLiteral { segments }, self.span_from(start));
         }
 
         self.skip_newlines();
@@ -496,10 +510,7 @@ impl Parser {
         self.skip_newlines();
         self.expect(&TokenKind::GtGt);
 
-        Expr::BinaryLiteral {
-            segments,
-            span: self.span_from(start),
-        }
+        Expr::new(ExprKind::BinaryLiteral { segments }, self.span_from(start))
     }
 
     pub(crate) fn parse_binary_segment(&mut self) -> BinarySegment {
@@ -558,9 +569,9 @@ impl Parser {
     }
 
     pub(crate) fn extract_type_path(&self, expr: &Expr) -> Vec<String> {
-        match expr {
-            Expr::Ident { name, .. } => vec![name.clone()],
-            Expr::FieldAccess {
+        match &expr.kind {
+            ExprKind::Ident { name, .. } => vec![name.clone()],
+            ExprKind::FieldAccess {
                 receiver, field, ..
             } => {
                 let mut path = self.extract_type_path(receiver);
@@ -621,7 +632,7 @@ fn dedent_string(s: &str, indent: usize, dedent_first_line: bool) -> String {
 #[cfg(test)]
 mod tests {
     use crate::parse;
-    use expo_ast::ast::{Expr, Statement, StringPart};
+    use expo_ast::ast::{Expr, ExprKind, Statement, StringPart};
 
     fn parse_string_parts(source: &str) -> Vec<StringPart> {
         let result = parse(source);
@@ -629,7 +640,11 @@ mod tests {
             if let expo_ast::ast::Item::Function(func) = item {
                 for stmt in &func.body {
                     if let Statement::Assignment {
-                        value: Expr::String { parts, .. },
+                        value:
+                            Expr {
+                                kind: ExprKind::String { parts, .. },
+                                ..
+                            },
                         ..
                     } = stmt
                     {
@@ -721,7 +736,11 @@ mod tests {
         };
         match &func.body[0] {
             Statement::Assignment {
-                value: Expr::BinaryLiteral { segments, .. },
+                value:
+                    Expr {
+                        kind: ExprKind::BinaryLiteral { segments, .. },
+                        ..
+                    },
                 ..
             } => assert!(segments.is_empty()),
             other => panic!("expected binary literal, got {:?}", other),
@@ -738,7 +757,11 @@ mod tests {
         };
         match &func.body[0] {
             Statement::Assignment {
-                value: Expr::BinaryLiteral { segments, .. },
+                value:
+                    Expr {
+                        kind: ExprKind::BinaryLiteral { segments, .. },
+                        ..
+                    },
                 ..
             } => assert_eq!(segments.len(), 2),
             other => panic!("expected binary literal, got {:?}", other),
@@ -755,7 +778,11 @@ mod tests {
         };
         match &func.body[0] {
             Statement::Assignment {
-                value: Expr::BinaryLiteral { segments, .. },
+                value:
+                    Expr {
+                        kind: ExprKind::BinaryLiteral { segments, .. },
+                        ..
+                    },
                 ..
             } => {
                 assert_eq!(segments.len(), 2);
@@ -780,7 +807,11 @@ mod tests {
         };
         match &func.body[0] {
             Statement::Assignment {
-                value: Expr::BinaryLiteral { segments, .. },
+                value:
+                    Expr {
+                        kind: ExprKind::BinaryLiteral { segments, .. },
+                        ..
+                    },
                 ..
             } => {
                 assert_eq!(segments.len(), 1);
@@ -801,7 +832,11 @@ mod tests {
         };
         match &func.body[0] {
             Statement::Assignment {
-                value: Expr::BinaryLiteral { segments, .. },
+                value:
+                    Expr {
+                        kind: ExprKind::BinaryLiteral { segments, .. },
+                        ..
+                    },
                 ..
             } => {
                 assert_eq!(segments.len(), 1);

@@ -17,13 +17,29 @@ use traverse::{find_in_ident_at_name, find_in_params, find_in_statement, find_in
 /// Describes the kind and identity of a symbol found at a cursor position.
 #[derive(Debug)]
 pub(crate) enum SymbolInfo {
-    Constant { name: String },
-    Enum { name: String },
-    Function { name: String },
-    Protocol { name: String },
-    Struct { name: String },
-    TypeAlias { name: String },
-    Variable { name: String },
+    Constant {
+        name: String,
+    },
+    Enum {
+        name: String,
+    },
+    Function {
+        name: String,
+    },
+    Protocol {
+        name: String,
+    },
+    Struct {
+        name: String,
+    },
+    TypeAlias {
+        name: String,
+    },
+    Variable {
+        name: String,
+        /// Human-readable type string from `resolved_type`, if available.
+        type_display: Option<String>,
+    },
 }
 
 /// Finds the symbol at the given 1-indexed `(line, col)` position in
@@ -274,6 +290,7 @@ pub(crate) fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo>
     } else {
         Some(SymbolInfo::Variable {
             name: name.to_string(),
+            type_display: None,
         })
     }
 }

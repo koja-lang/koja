@@ -219,10 +219,7 @@ fn resolve_enum_id(
 
 /// Resolves the `TypeIdentifier` from the subject type alone (for shorthand
 /// `Constructor` patterns like `Some(x)` where no explicit type path exists).
-fn resolve_enum_id_from_subject(
-    subject_type: &Type,
-    _ctx: &TypeContext,
-) -> Option<TypeIdentifier> {
+fn resolve_enum_id_from_subject(subject_type: &Type, _ctx: &TypeContext) -> Option<TypeIdentifier> {
     match subject_type {
         Type::Named { identifier, .. } => Some(identifier.clone()),
         Type::Indirect(inner) => match inner.as_ref() {
@@ -358,8 +355,7 @@ pub(crate) fn check_pattern(
                             *span,
                         );
                     } else {
-                        for (sub_pat, expected_ty) in
-                            elements.iter_mut().zip(expected_types.iter())
+                        for (sub_pat, expected_ty) in elements.iter_mut().zip(expected_types.iter())
                         {
                             check_pattern(sub_pat, expected_ty, ctx, env);
                         }
@@ -543,11 +539,11 @@ fn check_binary_pattern(
     for (i, seg) in segments.iter().enumerate() {
         let is_last = i == segments.len() - 1;
 
-        let is_binding = matches!(seg.value.as_ref(), Expr::Ident { name, .. } if name != "_");
-        let is_discard = matches!(seg.value.as_ref(), Expr::Ident { name, .. } if name == "_");
+        let is_binding = matches!(&seg.value.kind, ExprKind::Ident { name, .. } if name != "_");
+        let is_discard = matches!(&seg.value.kind, ExprKind::Ident { name, .. } if name == "_");
         let is_literal = matches!(
-            seg.value.as_ref(),
-            Expr::Literal { .. } | Expr::Unary { .. }
+            &seg.value.kind,
+            ExprKind::Literal { .. } | ExprKind::Unary { .. }
         );
 
         let is_greedy_rest = seg.type_ann.is_some() && seg.size.is_none() && {
@@ -590,7 +586,7 @@ fn check_binary_pattern(
                 );
             }
 
-            if is_binding && let Expr::Ident { name, .. } = seg.value.as_ref() {
+            if is_binding && let ExprKind::Ident { name, .. } = &seg.value.kind {
                 env.insert(
                     name.clone(),
                     VarInfo {
@@ -603,10 +599,9 @@ fn check_binary_pattern(
         }
 
         let seg_bits: Option<u64> = if let Some(size_expr) = &seg.size {
-            if let Expr::Literal {
+            if let ExprKind::Literal {
                 value: Literal::Int(n),
-                ..
-            } = size_expr.as_ref()
+            } = &size_expr.kind
             {
                 if let Ok(bits) = n.parse::<u64>() {
                     let actual = if seg.unit == BinaryUnit::Byte {
@@ -667,7 +662,7 @@ fn check_binary_pattern(
         }
 
         if is_binding {
-            if let Expr::Ident { name, .. } = seg.value.as_ref() {
+            if let ExprKind::Ident { name, .. } = &seg.value.kind {
                 let binding_ty = if let Some(type_ann) = &seg.type_ann {
                     let mut ty = resolve_type_expr(type_ann, &struct_refs, &enum_refs);
                     ctx.resolve_type(&mut ty);
@@ -752,9 +747,9 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
 
 /// Extracts binding identifiers from binary segment value expressions.
 fn collect_bindings_inner_expr(expr: &Expr, out: &mut Vec<(String, Span)>) {
-    if let Expr::Ident { name, span } = expr
+    if let ExprKind::Ident { name } = &expr.kind
         && name != "_"
     {
-        out.push((name.clone(), *span));
+        out.push((name.clone(), expr.span));
     }
 }

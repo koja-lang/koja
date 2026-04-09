@@ -9,8 +9,8 @@
 use std::path::PathBuf;
 
 use crate::identifier::TypeIdentifier;
-
 use crate::span::Span;
+use crate::types::Type;
 
 // Semantic enums
 
@@ -440,99 +440,99 @@ pub enum EnumConstructionData {
 }
 
 /// An expression node in the AST.
+///
+/// Every expression carries a `span` for source location and a `resolved_type`
+/// that the type checker populates after inference. Downstream consumers
+/// (codegen, LSP, formatter) read the type from this struct instead of
+/// re-deriving it.
 #[derive(Debug, Clone)]
-pub enum Expr {
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+    /// The resolved type of this expression. Populated by the type checker;
+    /// `None` before type checking.
+    pub resolved_type: Option<Type>,
+}
+
+impl Expr {
+    /// Convenience constructor: wraps a kind + span with `resolved_type: None`.
+    pub fn new(kind: ExprKind, span: Span) -> Self {
+        Self {
+            kind,
+            span,
+            resolved_type: None,
+        }
+    }
+}
+
+/// The specific kind of an expression node.
+#[derive(Debug, Clone)]
+pub enum ExprKind {
     /// An arena allocation block: `arena ... end`.
-    Arena { body: Vec<Statement>, span: Span },
+    Arena { body: Vec<Statement> },
     /// A binary operation: `a + b`, `x * y`.
     Binary {
         op: BinOp,
         left: Box<Expr>,
         right: Box<Expr>,
-        span: Span,
     },
     /// A binary/bitstring literal: `<<0xFF, 0x00, length::16>>`.
-    BinaryLiteral {
-        segments: Vec<BinarySegment>,
-        span: Span,
-    },
+    BinaryLiteral { segments: Vec<BinarySegment> },
     /// A function call: `f(args)`.
-    Call {
-        callee: Box<Expr>,
-        args: Vec<Arg>,
-        span: Span,
-    },
+    Call { callee: Box<Expr>, args: Vec<Arg> },
     /// A block closure: `fn (x: Int) -> Int ... end`.
     Closure {
         params: Vec<ClosureParam>,
         return_type: Option<TypeExpr>,
         body: Vec<Statement>,
-        span: Span,
     },
     /// A multi-branch conditional: `cond ... end`.
     Cond {
         arms: Vec<CondArm>,
         else_body: Option<Vec<Statement>>,
-        span: Span,
     },
     /// An enum variant construction: `Color.Red`, `Option.Some(42)`.
     EnumConstruction {
         type_path: Vec<String>,
         variant: String,
         data: EnumConstructionData,
-        span: Span,
-        /// Resolved identity of the enum type. Populated by the type checker.
-        resolved_type: Option<TypeIdentifier>,
     },
     /// A field access: `point.x`.
-    FieldAccess {
-        receiver: Box<Expr>,
-        field: String,
-        span: Span,
-    },
+    FieldAccess { receiver: Box<Expr>, field: String },
     /// A for loop: `for x in items ... end`.
     For {
         pattern: Pattern,
         iterable: Box<Expr>,
         body: Vec<Statement>,
-        span: Span,
     },
     /// A parenthesized grouping: `(expr)`.
-    Group { expr: Box<Expr>, span: Span },
+    Group { expr: Box<Expr> },
     /// A variable reference: `x`, `my_var`.
-    Ident { name: String, span: Span },
+    Ident { name: String },
     /// An if/else expression: `if cond ... end`.
     If {
         condition: Box<Expr>,
         then_body: Vec<Statement>,
         else_body: Option<Vec<Statement>>,
-        span: Span,
     },
     /// A list literal: `[1, 2, 3]`.
-    List { elements: Vec<Expr>, span: Span },
+    List { elements: Vec<Expr> },
     /// A map literal: `["key": value, ...]` or `[:]` for an empty map.
-    Map {
-        entries: Vec<(Expr, Expr)>,
-        span: Span,
-    },
+    Map { entries: Vec<(Expr, Expr)> },
     /// A literal value: `42`, `true`, `"hello"`.
-    Literal { value: Literal, span: Span },
+    Literal { value: Literal },
     /// An infinite loop: `loop ... end`.
-    Loop { body: Vec<Statement>, span: Span },
+    Loop { body: Vec<Statement> },
     /// A pattern match expression: `match subject ... end`.
     Match {
         subject: Box<Expr>,
         arms: Vec<MatchArm>,
-        span: Span,
     },
     /// A method or qualified call: `obj.method(args)`, `math.add(1, 2)`.
     MethodCall {
         receiver: Box<Expr>,
         method: String,
         args: Vec<Arg>,
-        span: Span,
-        /// Resolved identity of the receiver's base type. Populated by the type checker.
-        resolved_type: Option<TypeIdentifier>,
     },
     /// A receive block with match arms and optional timeout:
     /// `receive ... after timeout -> ... end`.
@@ -540,56 +540,43 @@ pub enum Expr {
         arms: Vec<MatchArm>,
         after_timeout: Option<Box<Expr>>,
         after_body: Vec<Statement>,
-        span: Span,
     },
     /// A self reference: `self`.
-    Self_ { span: Span },
+    Self_,
     /// An inline closure: `x -> x * 2`.
     ShortClosure {
         params: Vec<ClosureParam>,
         body: Box<Expr>,
-        span: Span,
     },
     /// A spawn expression: `spawn expr`.
-    Spawn { expr: Box<Expr>, span: Span },
+    Spawn { expr: Box<Expr> },
     /// A string literal, possibly with interpolation: `"hello #{name}"`.
     String {
         parts: Vec<StringPart>,
         multiline: bool,
-        span: Span,
     },
     /// A struct construction: `Point { x: 1, y: 2 }`.
     StructConstruction {
         type_path: Vec<String>,
         fields: Vec<FieldInit>,
-        span: Span,
-        /// Resolved identity of the struct type. Populated by the type checker.
-        resolved_type: Option<TypeIdentifier>,
     },
     /// A ternary expression: `cond ? then_expr : else_expr`.
     Ternary {
         condition: Box<Expr>,
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
-        span: Span,
     },
     /// A unary operation: `-x`, `not flag`.
-    Unary {
-        op: UnaryOp,
-        operand: Box<Expr>,
-        span: Span,
-    },
+    Unary { op: UnaryOp, operand: Box<Expr> },
     /// An unless guard: `unless cond ... end`.
     Unless {
         condition: Box<Expr>,
         body: Vec<Statement>,
-        span: Span,
     },
     /// A while loop: `while cond ... end`.
     While {
         condition: Box<Expr>,
         body: Vec<Statement>,
-        span: Span,
     },
 }
 

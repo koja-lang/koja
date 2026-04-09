@@ -7,7 +7,7 @@ use expo_ast::ast::{
 pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::span::Span;
 
-use crate::types::{Type, TypeIdentifier};
+pub use crate::types::{FnParam, Type, TypeIdentifier};
 
 /// Holds all type information gathered during collection and checking for a single module.
 #[derive(Clone)]
@@ -61,31 +61,6 @@ pub struct ParamInfo {
     pub mode: PassMode,
     pub name: String,
     pub ty: Type,
-}
-
-/// A function parameter at the type level -- type + pass mode, no name.
-/// This is the structural primitive that `Type::Function` uses.
-/// `ParamInfo` is `FnParam` + a name (for named function signatures).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FnParam {
-    pub ty: Type,
-    pub mode: PassMode,
-}
-
-impl FnParam {
-    pub fn borrow(ty: Type) -> Self {
-        Self {
-            ty,
-            mode: PassMode::Borrow,
-        }
-    }
-
-    pub fn moved(ty: Type) -> Self {
-        Self {
-            ty,
-            mode: PassMode::Move,
-        }
-    }
 }
 
 impl From<&ParamInfo> for FnParam {

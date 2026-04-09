@@ -55,14 +55,14 @@ impl Parser {
         let start_span = expr_span(&expr);
 
         match self.peek() {
-            TokenKind::Colon if matches!(&expr, Expr::Ident { .. }) => {
+            TokenKind::Colon if matches!(&expr.kind, ExprKind::Ident { .. }) => {
                 self.advance();
                 let type_annotation = self.parse_type_expr();
                 self.expect(&TokenKind::Eq);
                 let value = self.parse_expr();
                 let span = self.span_from(start_span);
 
-                let name = if let Expr::Ident { name, .. } = &expr {
+                let name = if let ExprKind::Ident { name, .. } = &expr.kind {
                     name.clone()
                 } else {
                     unreachable!()
@@ -144,11 +144,11 @@ impl Parser {
     }
 
     fn try_expr_to_pattern(&mut self, expr: &Expr) -> Option<Pattern> {
-        match expr {
-            Expr::Ident { name, span } if name == "_" => Some(Pattern::Wildcard { span: *span }),
-            Expr::Ident { name, span } => Some(Pattern::Binding {
+        match &expr.kind {
+            ExprKind::Ident { name } if name == "_" => Some(Pattern::Wildcard { span: expr.span }),
+            ExprKind::Ident { name } => Some(Pattern::Binding {
                 name: name.clone(),
-                span: *span,
+                span: expr.span,
             }),
             _ => None,
         }
@@ -156,24 +156,21 @@ impl Parser {
 }
 
 fn try_expr_to_lvalue(expr: &Expr) -> Option<LValue> {
-    match expr {
-        Expr::Ident { name, span } => Some(LValue {
+    match &expr.kind {
+        ExprKind::Ident { name } => Some(LValue {
             segments: vec![name.clone()],
-            span: *span,
+            span: expr.span,
         }),
-        Expr::Self_ { span } => Some(LValue {
+        ExprKind::Self_ => Some(LValue {
             segments: vec!["self".to_string()],
-            span: *span,
+            span: expr.span,
         }),
-        Expr::FieldAccess {
-            receiver,
-            field,
-            span,
-            ..
+        ExprKind::FieldAccess {
+            receiver, field, ..
         } => {
             let mut lvalue = try_expr_to_lvalue(receiver)?;
             lvalue.segments.push(field.clone());
-            lvalue.span = *span;
+            lvalue.span = expr.span;
             Some(lvalue)
         }
         _ => None,

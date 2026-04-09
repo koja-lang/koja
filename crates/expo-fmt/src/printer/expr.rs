@@ -13,12 +13,12 @@ use super::util::*;
 impl<'a> Printer<'a> {
     /// Formats any expression AST node into a `Doc`.
     pub(super) fn expr_to_doc(&mut self, expr: &Expr) -> Doc {
-        match expr {
-            Expr::Literal { value, .. } => literal_to_doc(value),
-            Expr::Ident { name, .. } => text(name.clone()),
-            Expr::Self_ { .. } => text("self"),
+        match &expr.kind {
+            ExprKind::Literal { value } => literal_to_doc(value),
+            ExprKind::Ident { name } => text(name.clone()),
+            ExprKind::Self_ => text("self"),
 
-            Expr::Binary {
+            ExprKind::Binary {
                 op: op @ (BinOp::Or | BinOp::And),
                 ..
             } => {
@@ -36,9 +36,7 @@ impl<'a> Printer<'a> {
                 fill(items)
             }
 
-            Expr::Binary {
-                op, left, right, ..
-            } => {
+            ExprKind::Binary { op, left, right } => {
                 let op_str = binop_str(op);
                 group(concat(vec![
                     self.expr_to_doc(left),
@@ -49,7 +47,7 @@ impl<'a> Printer<'a> {
                 ]))
             }
 
-            Expr::Unary { op, operand, .. } => {
+            ExprKind::Unary { op, operand } => {
                 let op_str = match op {
                     UnaryOp::Neg => "-",
                     UnaryOp::Not => "not ",
@@ -57,19 +55,18 @@ impl<'a> Printer<'a> {
                 concat(vec![text(op_str), self.expr_to_doc(operand)])
             }
 
-            Expr::Group { expr: inner, .. } => {
+            ExprKind::Group { expr: inner } => {
                 concat(vec![text("("), self.expr_to_doc(inner), text(")")])
             }
 
-            Expr::Call { callee, args, .. } => {
+            ExprKind::Call { callee, args } => {
                 concat(vec![self.expr_to_doc(callee), self.call_args_to_doc(args)])
             }
 
-            Expr::MethodCall {
+            ExprKind::MethodCall {
                 receiver,
                 method,
                 args,
-                ..
             } => concat(vec![
                 self.expr_to_doc(receiver),
                 text("."),
@@ -77,15 +74,13 @@ impl<'a> Printer<'a> {
                 self.call_args_to_doc(args),
             ]),
 
-            Expr::FieldAccess {
-                receiver, field, ..
-            } => concat(vec![
+            ExprKind::FieldAccess { receiver, field } => concat(vec![
                 self.expr_to_doc(receiver),
                 text("."),
                 text(field.clone()),
             ]),
 
-            Expr::List { elements, .. } => {
+            ExprKind::List { elements } => {
                 if elements.is_empty() {
                     text("[]")
                 } else {
@@ -94,7 +89,7 @@ impl<'a> Printer<'a> {
                 }
             }
 
-            Expr::Map { entries, .. } => {
+            ExprKind::Map { entries } => {
                 if entries.is_empty() {
                     text("[:]")
                 } else {
@@ -108,68 +103,49 @@ impl<'a> Printer<'a> {
                 }
             }
 
-            Expr::String {
-                parts, multiline, ..
-            } => self.string_to_doc(parts, *multiline),
+            ExprKind::String { parts, multiline } => self.string_to_doc(parts, *multiline),
 
-            Expr::If {
+            ExprKind::If {
                 condition,
                 then_body,
                 else_body,
-                span,
-                ..
             } => {
                 let mut parts = vec![
                     text("if "),
                     self.expr_to_doc(condition),
-                    self.body_to_doc(then_body, span.end.line),
+                    self.body_to_doc(then_body, expr.span.end.line),
                 ];
                 if let Some(eb) = else_body {
                     parts.push(hardline());
                     parts.push(text("else"));
-                    parts.push(self.body_to_doc(eb, span.end.line));
+                    parts.push(self.body_to_doc(eb, expr.span.end.line));
                 }
                 parts.push(hardline());
                 parts.push(text("end"));
                 concat(parts)
             }
 
-            Expr::Unless {
-                condition,
-                body,
-                span,
-                ..
-            } => concat(vec![
+            ExprKind::Unless { condition, body } => concat(vec![
                 text("unless "),
                 self.expr_to_doc(condition),
-                self.body_to_doc(body, span.end.line),
+                self.body_to_doc(body, expr.span.end.line),
                 hardline(),
                 text("end"),
             ]),
 
-            Expr::Match {
-                subject,
-                arms,
-                span,
-                ..
-            } => {
+            ExprKind::Match { subject, arms } => {
                 let any_multiline = arms
                     .iter()
                     .any(|a| arm_is_multiline(&a.body) || pattern_is_multiline(&a.pattern));
                 let rendered: Vec<Doc> = arms
                     .iter()
-                    .map(|arm| self.match_arm_to_doc(arm, any_multiline, span.end.line))
+                    .map(|arm| self.match_arm_to_doc(arm, any_multiline, expr.span.end.line))
                     .collect();
                 let header = concat(vec![text("match "), self.expr_to_doc(subject)]);
                 arms_block(header, rendered, any_multiline, vec![])
             }
 
-            Expr::Cond {
-                arms,
-                else_body,
-                span,
-                ..
-            } => {
+            ExprKind::Cond { arms, else_body } => {
                 let else_multiline = else_body.as_ref().is_some_and(|b| arm_is_multiline(b));
                 let any_multiline = else_multiline
                     || arms
@@ -177,20 +153,18 @@ impl<'a> Printer<'a> {
                         .any(|a| arm_is_multiline(&a.body) || expr_or_is_multiline(&a.condition));
                 let mut rendered: Vec<Doc> = arms
                     .iter()
-                    .map(|arm| self.cond_arm_to_doc(arm, any_multiline, span.end.line))
+                    .map(|arm| self.cond_arm_to_doc(arm, any_multiline, expr.span.end.line))
                     .collect();
                 if let Some(body) = else_body {
-                    rendered.push(self.else_arm_to_doc(body, any_multiline, span.end.line));
+                    rendered.push(self.else_arm_to_doc(body, any_multiline, expr.span.end.line));
                 }
                 arms_block(text("cond"), rendered, any_multiline, vec![])
             }
 
-            Expr::Receive {
+            ExprKind::Receive {
                 arms,
                 after_timeout,
                 after_body,
-                span,
-                ..
             } => {
                 let any_multiline = arms
                     .iter()
@@ -198,65 +172,58 @@ impl<'a> Printer<'a> {
                     || arm_is_multiline(after_body);
                 let rendered: Vec<Doc> = arms
                     .iter()
-                    .map(|arm| self.match_arm_to_doc(arm, any_multiline, span.end.line))
+                    .map(|arm| self.match_arm_to_doc(arm, any_multiline, expr.span.end.line))
                     .collect();
                 let mut suffix = Vec::new();
                 if let Some(timeout) = after_timeout {
                     suffix.push(hardline());
                     suffix.push(text("after "));
                     suffix.push(self.expr_to_doc(timeout));
-                    suffix.push(self.body_to_doc(after_body, span.end.line));
+                    suffix.push(self.body_to_doc(after_body, expr.span.end.line));
                 }
                 arms_block(text("receive"), rendered, any_multiline, suffix)
             }
 
-            Expr::For {
+            ExprKind::For {
                 pattern,
                 iterable,
                 body,
-                span,
-                ..
             } => concat(vec![
                 text("for "),
                 pattern_to_doc(pattern),
                 text(" in "),
                 self.expr_to_doc(iterable),
-                self.body_to_doc(body, span.end.line),
+                self.body_to_doc(body, expr.span.end.line),
                 hardline(),
                 text("end"),
             ]),
 
-            Expr::Loop { body, span, .. } => concat(vec![
+            ExprKind::Loop { body } => concat(vec![
                 text("loop"),
-                self.body_to_doc(body, span.end.line),
+                self.body_to_doc(body, expr.span.end.line),
                 hardline(),
                 text("end"),
             ]),
 
-            Expr::While {
-                condition,
-                body,
-                span,
-            } => concat(vec![
+            ExprKind::While { condition, body } => concat(vec![
                 text("while "),
                 self.expr_to_doc(condition),
-                self.body_to_doc(body, span.end.line),
+                self.body_to_doc(body, expr.span.end.line),
                 hardline(),
                 text("end"),
             ]),
 
-            Expr::Arena { body, span, .. } => concat(vec![
+            ExprKind::Arena { body } => concat(vec![
                 text("arena"),
-                self.body_to_doc(body, span.end.line),
+                self.body_to_doc(body, expr.span.end.line),
                 hardline(),
                 text("end"),
             ]),
 
-            Expr::Closure {
+            ExprKind::Closure {
                 params,
                 return_type,
                 body,
-                span,
             } => {
                 let params_doc: Vec<Doc> = params.iter().map(closure_param_to_doc).collect();
                 let mut sig_parts =
@@ -267,7 +234,7 @@ impl<'a> Printer<'a> {
                 }
                 let sig = concat(sig_parts);
                 if body.len() == 1 {
-                    let body_doc = self.statements_to_doc(body, span.end.line);
+                    let body_doc = self.statements_to_doc(body, expr.span.end.line);
                     group(concat(vec![
                         sig,
                         indent(2, concat(vec![line(), body_doc])),
@@ -277,14 +244,14 @@ impl<'a> Printer<'a> {
                 } else {
                     concat(vec![
                         sig,
-                        self.body_to_doc(body, span.end.line),
+                        self.body_to_doc(body, expr.span.end.line),
                         hardline(),
                         text("end"),
                     ])
                 }
             }
 
-            Expr::ShortClosure { params, body, .. } => {
+            ExprKind::ShortClosure { params, body } => {
                 let params_doc: Vec<Doc> = params.iter().map(closure_param_to_doc).collect();
                 group(concat(vec![
                     intersperse(params_doc, text(", ")),
@@ -293,15 +260,14 @@ impl<'a> Printer<'a> {
                 ]))
             }
 
-            Expr::Spawn { expr: inner, .. } => {
+            ExprKind::Spawn { expr: inner } => {
                 concat(vec![text("spawn "), self.expr_to_doc(inner)])
             }
 
-            Expr::Ternary {
+            ExprKind::Ternary {
                 condition,
                 then_expr,
                 else_expr,
-                ..
             } => {
                 let cond_doc = self.expr_to_doc(condition);
                 let then_doc = self.expr_to_doc(then_expr);
@@ -322,9 +288,7 @@ impl<'a> Printer<'a> {
                 ]))
             }
 
-            Expr::StructConstruction {
-                type_path, fields, ..
-            } => {
+            ExprKind::StructConstruction { type_path, fields } => {
                 let path_str = type_path.join(".");
                 if fields.is_empty() {
                     text(format!("{}{{}}", path_str))
@@ -338,7 +302,7 @@ impl<'a> Printer<'a> {
                 }
             }
 
-            Expr::BinaryLiteral { segments, .. } => {
+            ExprKind::BinaryLiteral { segments } => {
                 if segments.is_empty() {
                     text("<<>>")
                 } else {
@@ -361,11 +325,10 @@ impl<'a> Printer<'a> {
                 }
             }
 
-            Expr::EnumConstruction {
+            ExprKind::EnumConstruction {
                 type_path,
                 variant,
                 data,
-                ..
             } => {
                 let prefix = if type_path.is_empty() {
                     variant.clone()
@@ -475,9 +438,7 @@ impl<'a> Printer<'a> {
     }
 
     fn collect_binop_operands(&mut self, expr: &Expr, target_op: &BinOp, out: &mut Vec<Doc>) {
-        if let Expr::Binary {
-            op, left, right, ..
-        } = expr
+        if let ExprKind::Binary { op, left, right } = &expr.kind
             && std::mem::discriminant(op) == std::mem::discriminant(target_op)
         {
             self.collect_binop_operands(left, target_op, out);

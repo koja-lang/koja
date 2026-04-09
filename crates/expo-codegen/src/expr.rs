@@ -2,7 +2,7 @@
 //! binary/unary ops, calls, closures, string interpolation, etc.) into LLVM IR.
 
 use expo_ast::ast::{
-    ClosureParam, Expr, Literal, MatchArm, Pattern, Statement, StringPart, TypeExpr,
+    ClosureParam, Expr, ExprKind, Literal, MatchArm, Pattern, Statement, StringPart, TypeExpr,
 };
 use expo_ast::span::Span;
 
@@ -58,10 +58,10 @@ pub fn compile_expr<'ctx>(
     expr: &Expr,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    match expr {
-        Expr::Literal { value, .. } => compile_literal(compiler, value),
+    match &expr.kind {
+        ExprKind::Literal { value, .. } => compile_literal(compiler, value),
 
-        Expr::Ident { name, .. } => {
+        ExprKind::Ident { name, .. } => {
             if let Some((ptr, ty, _)) = compiler.fn_state.variables.get(name) {
                 let ty = ty.clone();
                 let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.types.structs)
@@ -114,62 +114,53 @@ pub fn compile_expr<'ctx>(
             Err(format!("undefined variable: {name}"))
         }
 
-        Expr::Group { expr, .. } => compile_expr(compiler, expr, function),
+        ExprKind::Group { expr: inner, .. } => compile_expr(compiler, inner, function),
 
-        Expr::Binary {
+        ExprKind::Binary {
             op, left, right, ..
         } => compile_binary(compiler, op, left, right, function),
 
-        Expr::Unary { op, operand, .. } => compile_unary(compiler, op, operand, function),
+        ExprKind::Unary { op, operand, .. } => compile_unary(compiler, op, operand, function),
 
-        Expr::Call { callee, args, .. } => {
-            if let Expr::Ident { name, .. } = callee.as_ref() {
+        ExprKind::Call { callee, args, .. } => {
+            if let ExprKind::Ident { name, .. } = &callee.kind {
                 compile_call(compiler, name, args, function)
             } else {
                 Err("only named function calls are supported".to_string())
             }
         }
 
-        Expr::If {
+        ExprKind::If {
             condition,
             then_body,
             else_body,
             ..
         } => compile_if(compiler, condition, then_body, else_body, function),
 
-        Expr::StructConstruction {
-            type_path,
-            fields,
-            resolved_type,
-            ..
-        } => compile_struct_construction(
-            compiler,
-            type_path,
-            fields,
-            resolved_type.as_ref(),
-            function,
-        ),
+        ExprKind::StructConstruction {
+            type_path, fields, ..
+        } => compile_struct_construction(compiler, type_path, fields, None, function),
 
-        Expr::FieldAccess {
+        ExprKind::FieldAccess {
             receiver, field, ..
         } => compile_field_access(compiler, receiver, field, function),
 
-        Expr::MethodCall {
+        ExprKind::MethodCall {
             receiver,
             method,
             args,
             ..
         } => compile_method_call(compiler, receiver, method, args, function),
 
-        Expr::String { parts, .. } => compile_string(compiler, parts, function),
+        ExprKind::String { parts, .. } => compile_string(compiler, parts, function),
 
-        Expr::Loop { body, .. } => compile_loop(compiler, body, function),
+        ExprKind::Loop { body, .. } => compile_loop(compiler, body, function),
 
-        Expr::While {
+        ExprKind::While {
             condition, body, ..
         } => compile_while(compiler, condition, body, function),
 
-        Expr::Self_ { .. } => {
+        ExprKind::Self_ => {
             let (ptr, ty, _) = compiler
                 .fn_state
                 .variables
@@ -182,74 +173,67 @@ pub fn compile_expr<'ctx>(
             Ok(Some(TypedValue::new(value, ty)))
         }
 
-        Expr::Cond {
+        ExprKind::Cond {
             arms, else_body, ..
         } => compile_cond(compiler, arms, else_body, function),
 
-        Expr::EnumConstruction {
+        ExprKind::EnumConstruction {
             type_path,
             variant,
             data,
-            resolved_type,
             ..
-        } => compile_enum_construction(
-            compiler,
-            type_path,
-            variant,
-            data,
-            resolved_type.as_ref(),
-            function,
-        ),
+        } => compile_enum_construction(compiler, type_path, variant, data, None, function),
 
-        Expr::Match { subject, arms, .. } => compile_match(compiler, subject, arms, function),
+        ExprKind::Match { subject, arms, .. } => compile_match(compiler, subject, arms, function),
 
-        Expr::Ternary {
+        ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
             ..
         } => compile_ternary(compiler, condition, then_expr, else_expr, function),
 
-        Expr::Closure {
+        ExprKind::Closure {
             params,
             return_type,
             body,
-            span,
-        } => compile_closure(compiler, params, return_type, body, function, *span),
+        } => compile_closure(compiler, params, return_type, body, function, expr.span),
 
-        Expr::ShortClosure { params, body, span } => {
+        ExprKind::ShortClosure { params, body } => {
             let body_stmts = vec![Statement::Expr((**body).clone())];
             let ret_type = compiler
                 .type_ctx
                 .closure_info
-                .get(span)
+                .get(&expr.span)
                 .and_then(|ci| ci.return_type.clone())
                 .unwrap_or(Type::Unit);
-            compile_closure_core(compiler, params, ret_type, &body_stmts, function, *span)
+            compile_closure_core(compiler, params, ret_type, &body_stmts, function, expr.span)
         }
 
-        Expr::For {
+        ExprKind::For {
             pattern,
             iterable,
             body,
             ..
         } => compile_for(compiler, pattern, iterable, body, function),
 
-        Expr::Unless {
+        ExprKind::Unless {
             condition, body, ..
         } => compile_unless(compiler, condition, body, function),
 
-        Expr::List { elements, .. } => compile_list_literal(compiler, elements, function),
+        ExprKind::List { elements, .. } => compile_list_literal(compiler, elements, function),
 
-        Expr::Map { entries, .. } => compile_map_literal(compiler, entries, function),
+        ExprKind::Map { entries, .. } => compile_map_literal(compiler, entries, function),
 
-        Expr::BinaryLiteral { segments, .. } => {
+        ExprKind::BinaryLiteral { segments, .. } => {
             compile_binary_literal(compiler, segments, function)
         }
 
-        Expr::Spawn { expr, .. } => compile_spawn(compiler, expr, function),
+        ExprKind::Spawn {
+            expr: spawn_expr, ..
+        } => compile_spawn(compiler, spawn_expr, function),
 
-        Expr::Receive {
+        ExprKind::Receive {
             arms,
             after_timeout,
             after_body,
@@ -264,7 +248,7 @@ pub fn compile_expr<'ctx>(
 
         _ => Err(format!(
             "not yet supported in compilation: {:?}",
-            std::mem::discriminant(expr)
+            std::mem::discriminant(&expr.kind)
         )),
     }
 }
@@ -297,7 +281,9 @@ fn compile_literal<'ctx>(compiler: &Compiler<'ctx>, literal: &Literal) -> ExprRe
                 .into(),
             Type::Primitive(Primitive::Bool),
         ))),
-        Literal::String(_) => unreachable!("string literals use Expr::String, not Expr::Literal"),
+        Literal::String(_) => {
+            unreachable!("string literals use ExprKind::String, not ExprKind::Literal")
+        }
         Literal::Unit => Ok(None),
     }
 }

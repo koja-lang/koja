@@ -4,7 +4,7 @@
 
 use crate::binary::patterns::compile_binary_pattern;
 use crate::drop::Ownership;
-use expo_ast::ast::{Expr, FieldPattern, Literal, MatchArm, Pattern};
+use expo_ast::ast::{Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Type, mangle_name, mangle_type, named, unwrap_indirect};
 use inkwell::FloatPredicate;
@@ -182,12 +182,12 @@ pub fn compile_match<'ctx>(
 /// Infers the Expo type for a match subject from variable bindings when
 /// the TypedValue carries `Type::Unknown`.
 fn infer_subject_type(c: &Compiler, subject: &Expr) -> Type {
-    if let Expr::Ident { name, .. } = subject
+    if let ExprKind::Ident { name, .. } = &subject.kind
         && let Some((_, ty, _)) = c.fn_state.variables.get(name)
     {
         return ty.clone();
     }
-    if matches!(subject, Expr::Self_ { .. })
+    if matches!(subject.kind, ExprKind::Self_)
         && let Some((_, ty, _)) = c.fn_state.variables.get("self")
     {
         return ty.clone();

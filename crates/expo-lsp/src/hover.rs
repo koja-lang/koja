@@ -48,7 +48,13 @@ impl Backend {
             SymbolInfo::TypeAlias { name } => {
                 build_type_alias_hover(name, state, &self.stdlib_modules)
             }
-            SymbolInfo::Variable { name } => Some(format!("```expo\n{}\n```", name)),
+            SymbolInfo::Variable { name, type_display } => {
+                let sig = match type_display {
+                    Some(ty) => format!("{}: {}", name, ty),
+                    None => name.to_string(),
+                };
+                Some(format!("```expo\n{}\n```", sig))
+            }
         };
 
         match hover_text {

@@ -31,28 +31,17 @@ use crate::types::{
 /// encountered during traversal. Returns `Type::Unknown` when the type cannot
 /// be determined.
 pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckEnv) -> Type {
-    match expr {
-        Expr::Binary {
-            op,
-            left,
-            right,
-            span,
-            ..
-        } => infer_binary(op, left, right, *span, ctx, ce),
+    let span = expr.span;
+    let ty = match &mut expr.kind {
+        ExprKind::Binary {
+            op, left, right, ..
+        } => infer_binary(op, left, right, span, ctx, ce),
 
-        Expr::Call {
-            callee, args, span, ..
-        } => infer_call(callee, args, *span, ctx, ce),
+        ExprKind::Call { callee, args, .. } => infer_call(callee, args, span, ctx, ce),
 
-        Expr::Closure {
-            params, body, span, ..
-        } => infer_closure(params, None, body, *span, ctx, ce),
+        ExprKind::Closure { params, body, .. } => infer_closure(params, None, body, span, ctx, ce),
 
-        Expr::Cond {
-            arms,
-            else_body,
-            span,
-        } => {
+        ExprKind::Cond { arms, else_body } => {
             let mut arm_types: Vec<Type> = Vec::new();
             for arm in arms {
                 infer_expr(&mut arm.condition, ctx, ce);
@@ -80,7 +69,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                                 result_type.display(),
                                 arm_ty.display()
                             ),
-                            *span,
+                            span,
                         );
                         break;
                     }
@@ -90,25 +79,20 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             result_type
         }
 
-        Expr::EnumConstruction {
+        ExprKind::EnumConstruction {
             type_path,
             variant,
             data,
-            span,
-            resolved_type,
-        } => infer_enum_construction(type_path, variant, data, *span, resolved_type, ctx, ce),
+        } => infer_enum_construction(type_path, variant, data, span, ctx, ce),
 
-        Expr::FieldAccess {
-            receiver,
-            field,
-            span,
-        } => infer_field_access(receiver, field, *span, ctx, ce),
+        ExprKind::FieldAccess { receiver, field } => {
+            infer_field_access(receiver, field, span, ctx, ce)
+        }
 
-        Expr::For {
+        ExprKind::For {
             pattern,
             iterable,
             body,
-            span,
         } => {
             let iter_ty = infer_expr(iterable, ctx, ce);
             let elem_ty = resolve_enumerable_element_type(&iter_ty, ctx).unwrap_or_else(|| {
@@ -118,7 +102,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                             "`for` requires an Enumeration type, found `{}`",
                             iter_ty.display()
                         ),
-                        *span,
+                        span,
                     );
                 }
                 Type::Unknown
@@ -133,11 +117,11 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             Type::Unit
         }
 
-        Expr::Group { expr: inner, .. } => infer_expr(inner, ctx, ce),
+        ExprKind::Group { expr: inner, .. } => infer_expr(inner, ctx, ce),
 
-        Expr::Ident { name, span } => {
+        ExprKind::Ident { name } => {
             if let Some(info) = ce.env.get(name) {
-                ce.check_not_moved(name, *span, ctx);
+                ce.check_not_moved(name, span, ctx);
                 ce.used_vars.insert(name.clone());
                 info.ty.clone()
             } else if let Some(ty) = ctx.constants.get(name) {
@@ -155,19 +139,17 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 ctx.error_with_hint(
                     format!("unknown variable `{}`", name),
                     "check the spelling or make sure it is defined before this line".into(),
-                    *span,
+                    span,
                 );
                 Type::Error
             }
         }
 
-        Expr::If {
+        ExprKind::If {
             condition,
             then_body,
             else_body,
-            span,
         } => {
-            let span = *span;
             let cond_ty = infer_expr(condition, ctx, ce);
             check_type(&cond_ty, &Type::Primitive(Primitive::Bool), span, ctx);
             let mut then_ce = ce.child(Type::Unknown);
@@ -183,7 +165,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             }
         }
 
-        Expr::List { elements, span } => {
+        ExprKind::List { elements } => {
             let mut elem_type = Type::Unknown;
             for e in elements {
                 let t = infer_expr(e, ctx, ce);
@@ -197,14 +179,14 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                             elem_type.display(),
                             t.display()
                         ),
-                        *span,
+                        span,
                     );
                 }
             }
             named_generic("List", vec![elem_type], ctx)
         }
 
-        Expr::Map { entries, span } => {
+        ExprKind::Map { entries } => {
             let mut key_type = Type::Unknown;
             let mut val_type = Type::Unknown;
             for (k, v) in entries {
@@ -220,7 +202,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                             key_type.display(),
                             kt.display()
                         ),
-                        *span,
+                        span,
                     );
                 }
                 if val_type == Type::Unknown {
@@ -233,14 +215,14 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                             val_type.display(),
                             vt.display()
                         ),
-                        *span,
+                        span,
                     );
                 }
             }
             named_generic("Map", vec![key_type, val_type], ctx)
         }
 
-        Expr::Literal { value, .. } => match value {
+        ExprKind::Literal { value, .. } => match value {
             Literal::Bool(_) => Type::Primitive(Primitive::Bool),
             Literal::Float(_) => Type::Primitive(Primitive::F64),
             Literal::Int(_) => Type::Primitive(Primitive::I64),
@@ -248,18 +230,14 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             Literal::Unit => Type::Unit,
         },
 
-        Expr::Loop { body, .. } => {
+        ExprKind::Loop { body, .. } => {
             let mut child = ce.child(Type::Unknown);
             child.loop_depth += 1;
             check_body(body, ctx, &mut child);
             Type::Unit
         }
 
-        Expr::Match {
-            subject,
-            arms,
-            span,
-        } => {
+        ExprKind::Match { subject, arms } => {
             let subject_type = infer_expr(subject, ctx, ce);
             let mut result_type = Type::Unknown;
             for arm in arms.iter_mut() {
@@ -280,38 +258,36 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                     }
                 }
             }
-            check_match_exhaustiveness(&subject_type, arms, *span, ctx);
+            check_match_exhaustiveness(&subject_type, arms, span, ctx);
             result_type
         }
 
-        Expr::MethodCall {
+        ExprKind::MethodCall {
             receiver,
             method,
             args,
-            span,
-            resolved_type,
-        } => infer_method_call(receiver, method, args, *span, resolved_type, ctx, ce),
+        } => infer_method_call(receiver, method, args, span, ctx, ce),
 
-        Expr::ShortClosure { params, body, span } => {
-            infer_short_closure(params, None, body, *span, ctx, ce)
+        ExprKind::ShortClosure { params, body, .. } => {
+            infer_short_closure(params, None, body, span, ctx, ce)
         }
 
-        Expr::Spawn { expr: inner, span } => {
-            let type_name = match inner.as_ref() {
-                Expr::MethodCall {
+        ExprKind::Spawn { expr: inner } => {
+            let type_name = match &inner.kind {
+                ExprKind::MethodCall {
                     receiver, method, ..
                 } if method == "start" => {
-                    if let Expr::Ident { name, .. } = receiver.as_ref() {
+                    if let ExprKind::Ident { name, .. } = &receiver.kind {
                         Some(name.clone())
                     } else {
                         None
                     }
                 }
-                Expr::Call { callee, .. } => match callee.as_ref() {
-                    Expr::FieldAccess {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::FieldAccess {
                         receiver, field, ..
                     } if field == "start" => {
-                        if let Expr::Ident { name, .. } = receiver.as_ref() {
+                        if let ExprKind::Ident { name, .. } = &receiver.kind {
                             Some(name.clone())
                         } else {
                             None
@@ -326,7 +302,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 ctx.error(
                     "spawn requires `Type.start(config)` form where Type implements Process"
                         .to_string(),
-                    *span,
+                    span,
                 );
                 return Type::Unknown;
             };
@@ -341,7 +317,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             let Some(args) = process_args else {
                 ctx.error(
                     format!("`{target}` does not implement the Process protocol"),
-                    *span,
+                    span,
                 );
                 return Type::Unknown;
             };
@@ -349,7 +325,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             if args.len() < 3 {
                 ctx.error(
                     format!("Process impl for `{target}` is missing type arguments"),
-                    *span,
+                    span,
                 );
                 return Type::Unknown;
             }
@@ -394,7 +370,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             named_generic("Ref", vec![msg_type, reply_type], ctx)
         }
 
-        Expr::Receive {
+        ExprKind::Receive {
             arms,
             after_timeout,
             after_body,
@@ -422,7 +398,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             subject_type
         }
 
-        Expr::String { parts, .. } => {
+        ExprKind::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {
                     infer_expr(&mut *expr, ctx, ce);
@@ -431,21 +407,17 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             Type::Primitive(Primitive::String)
         }
 
-        Expr::StructConstruction {
-            type_path,
-            fields,
-            span,
-            resolved_type,
-        } => infer_struct_construction(type_path, fields, *span, resolved_type, ctx, ce),
+        ExprKind::StructConstruction { type_path, fields } => {
+            infer_struct_construction(type_path, fields, span, ctx, ce)
+        }
 
-        Expr::Ternary {
+        ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
-            span,
         } => {
             let cond_ty = infer_expr(condition, ctx, ce);
-            check_type(&cond_ty, &Type::Primitive(Primitive::Bool), *span, ctx);
+            check_type(&cond_ty, &Type::Primitive(Primitive::Bool), span, ctx);
             let then_ty = infer_expr(then_expr, ctx, ce);
             let else_ty = infer_expr(else_expr, ctx, ce);
             if then_ty.is_known() && else_ty.is_known() && then_ty != else_ty {
@@ -455,13 +427,13 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                         then_ty.display(),
                         else_ty.display()
                     ),
-                    *span,
+                    span,
                 );
             }
             if then_ty.is_known() { then_ty } else { else_ty }
         }
 
-        Expr::Unary { op, operand, span } => {
+        ExprKind::Unary { op, operand } => {
             let operand_ty = infer_expr(operand, ctx, ce);
             match op {
                 UnaryOp::Neg => {
@@ -472,7 +444,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                                 operand_ty.display()
                             ),
                             "expected Int, Int32, Float, or Float32".into(),
-                            *span,
+                            span,
                         );
                         Type::Error
                     } else {
@@ -480,18 +452,13 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                     }
                 }
                 UnaryOp::Not => {
-                    check_type(&operand_ty, &Type::Primitive(Primitive::Bool), *span, ctx);
+                    check_type(&operand_ty, &Type::Primitive(Primitive::Bool), span, ctx);
                     Type::Primitive(Primitive::Bool)
                 }
             }
         }
 
-        Expr::While {
-            condition,
-            body,
-            span,
-        } => {
-            let span = *span;
+        ExprKind::While { condition, body } => {
             let cond_ty = infer_expr(condition, ctx, ce);
             check_type(&cond_ty, &Type::Primitive(Primitive::Bool), span, ctx);
             let mut child = ce.child(Type::Unknown);
@@ -500,12 +467,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             Type::Unit
         }
 
-        Expr::Unless {
-            condition,
-            body,
-            span,
-        } => {
-            let span = *span;
+        ExprKind::Unless { condition, body } => {
             let cond_ty = infer_expr(condition, ctx, ce);
             check_type(&cond_ty, &Type::Primitive(Primitive::Bool), span, ctx);
             let mut child = ce.child(Type::Unknown);
@@ -513,23 +475,25 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             Type::Unknown
         }
 
-        Expr::BinaryLiteral { segments, span } => infer_binary_literal(segments, *span, ctx, ce),
+        ExprKind::BinaryLiteral { segments } => infer_binary_literal(segments, span, ctx, ce),
 
-        Expr::Self_ { span } => {
+        ExprKind::Self_ => {
             if let Some(ty) = ce.get_type("self") {
                 ty.clone()
             } else {
                 ctx.error_with_hint(
                     "`self` used outside of impl block".to_string(),
                     "'self' is only available inside functions defined in an 'impl' block".into(),
-                    *span,
+                    span,
                 );
                 Type::Error
             }
         }
 
-        Expr::Arena { .. } => Type::Unknown,
-    }
+        ExprKind::Arena { .. } => Type::Unknown,
+    };
+    expr.resolved_type = Some(ty.clone());
+    ty
 }
 
 /// Checks a statement list and infers the type of its last expression.
@@ -678,10 +642,9 @@ fn infer_binary_literal(
                 );
             }
 
-            if let Expr::Literal {
+            if let ExprKind::Literal {
                 value: Literal::Int(n),
-                ..
-            } = size_expr.as_ref()
+            } = &size_expr.kind
             {
                 if let Ok(bits) = n.parse::<u64>() {
                     let actual_bits = if seg.unit == BinaryUnit::Byte {
@@ -736,7 +699,7 @@ fn infer_binary_literal(
                     seg.span,
                 );
             }
-            if let Expr::String { parts, .. } = seg.value.as_ref() {
+            if let ExprKind::String { parts, .. } = &seg.value.kind {
                 let byte_len: usize = parts
                     .iter()
                     .map(|p| match p {
@@ -796,7 +759,7 @@ fn infer_call(
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
-    if let Expr::Ident { name, .. } = callee {
+    if let ExprKind::Ident { name, .. } = &callee.kind {
         if let Some(sig) = ctx.functions.get(name).cloned() {
             if !sig.type_params.is_empty() {
                 return infer_generic_call(name, &sig, args, span, ctx, ce);
@@ -843,7 +806,10 @@ fn infer_call(
 }
 
 fn is_closure_expr(expr: &Expr) -> bool {
-    matches!(expr, Expr::ShortClosure { .. } | Expr::Closure { .. })
+    matches!(
+        expr.kind,
+        ExprKind::ShortClosure { .. } | ExprKind::Closure { .. }
+    )
 }
 
 /// Whether an argument type should drive generic parameter unification.
@@ -1005,13 +971,11 @@ fn infer_enum_construction(
     variant: &str,
     data: &mut EnumConstructionData,
     span: Span,
-    resolved_type: &mut Option<TypeIdentifier>,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
     let enum_name = type_path.join(".");
     if let Some(type_info) = ctx.find_type(&enum_name).cloned().filter(|ti| ti.is_enum()) {
-        *resolved_type = Some(type_info.identifier.clone());
         let enum_variants = type_info.variants().unwrap();
         if let Some(vi) = enum_variants.iter().find(|v| v.name == *variant) {
             let is_generic = !type_info.type_params.is_empty();
@@ -1287,13 +1251,12 @@ fn infer_method_call(
     method: &str,
     args: &mut [Arg],
     span: Span,
-    resolved_type: &mut Option<TypeIdentifier>,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
-    if let Expr::Ident {
+    if let ExprKind::Ident {
         name: type_name, ..
-    } = receiver
+    } = &receiver.kind
     {
         let resolved_name = resolve_type_alias_name(type_name, &ctx.type_aliases);
         let static_sig_info = ctx.find_type(&resolved_name).and_then(|ti| {
@@ -1374,9 +1337,6 @@ fn infer_method_call(
     }
 
     let (base_id, subst) = resolve_receiver_base_name(&recv_ty, ctx);
-    if let Some(ref id) = base_id {
-        *resolved_type = Some(id.clone());
-    }
 
     let method_sig = base_id
         .as_ref()
@@ -1403,7 +1363,7 @@ fn infer_method_call(
 
         if sig.kind == FunctionKind::Instance(PassMode::Move)
             && !recv_ty.is_copy()
-            && let Expr::Ident { name, .. } = receiver
+            && let ExprKind::Ident { name, .. } = &receiver.kind
         {
             ce.mark_moved(name, span);
         }
@@ -1455,7 +1415,6 @@ fn infer_struct_construction(
     type_path: &[String],
     fields: &mut [FieldInit],
     span: Span,
-    resolved_type: &mut Option<TypeIdentifier>,
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
@@ -1464,7 +1423,6 @@ fn infer_struct_construction(
         .find_type(&name)
         .map(|ti| (ti.identifier.clone(), ti.fields().cloned()));
     if let Some((resolved_id, Some(struct_fields))) = lookup {
-        *resolved_type = Some(resolved_id.clone());
         for fi in fields {
             let value_ty = infer_expr(&mut fi.value, ctx, ce);
             if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
@@ -1522,15 +1480,25 @@ pub(crate) fn infer_expr_with_expected(
         _ => None,
     };
 
-    match expr {
-        Expr::ShortClosure { params, body, span } => {
-            infer_short_closure(params, expected_params, body, *span, ctx, ce)
-        }
-        Expr::Closure {
-            params, body, span, ..
-        } => infer_closure(params, expected_params, body, *span, ctx, ce),
-        _ => infer_expr(expr, ctx, ce),
+    if !matches!(
+        &expr.kind,
+        ExprKind::ShortClosure { .. } | ExprKind::Closure { .. }
+    ) {
+        return infer_expr(expr, ctx, ce);
     }
+
+    let span = expr.span;
+    let ty = match &mut expr.kind {
+        ExprKind::ShortClosure { params, body, .. } => {
+            infer_short_closure(params, expected_params, body, span, ctx, ce)
+        }
+        ExprKind::Closure { params, body, .. } => {
+            infer_closure(params, expected_params, body, span, ctx, ce)
+        }
+        _ => unreachable!(),
+    };
+    expr.resolved_type = Some(ty.clone());
+    ty
 }
 
 /// Shared inference for block closures (`fn (params) -> Type ... end`).
@@ -1691,7 +1659,7 @@ fn bind_closure_params(
 ) -> Vec<FnParam> {
     let mut result = Vec::new();
     for (i, p) in params.iter().enumerate() {
-        let expected = expected_param_types.and_then(|e| e.get(i));
+        let expected = expected_param_types.and_then(|e: &[FnParam]| e.get(i));
         match p {
             ClosureParam::Name {
                 mode,
@@ -1735,36 +1703,7 @@ fn bind_closure_params(
 
 /// Returns the source span of an expression node.
 pub(crate) fn expr_span(expr: &Expr) -> Span {
-    match expr {
-        Expr::Arena { span, .. }
-        | Expr::Binary { span, .. }
-        | Expr::BinaryLiteral { span, .. }
-        | Expr::Call { span, .. }
-        | Expr::Closure { span, .. }
-        | Expr::Cond { span, .. }
-        | Expr::EnumConstruction { span, .. }
-        | Expr::FieldAccess { span, .. }
-        | Expr::For { span, .. }
-        | Expr::Group { span, .. }
-        | Expr::Ident { span, .. }
-        | Expr::If { span, .. }
-        | Expr::List { span, .. }
-        | Expr::Map { span, .. }
-        | Expr::Literal { span, .. }
-        | Expr::Loop { span, .. }
-        | Expr::Match { span, .. }
-        | Expr::MethodCall { span, .. }
-        | Expr::Receive { span, .. }
-        | Expr::Self_ { span, .. }
-        | Expr::ShortClosure { span, .. }
-        | Expr::Spawn { span, .. }
-        | Expr::String { span, .. }
-        | Expr::StructConstruction { span, .. }
-        | Expr::Ternary { span, .. }
-        | Expr::Unary { span, .. }
-        | Expr::Unless { span, .. }
-        | Expr::While { span, .. } => *span,
-    }
+    expr.span
 }
 
 /// Resolves the element type for any type that implements the `Enumeration<T>`

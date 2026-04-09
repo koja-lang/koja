@@ -356,7 +356,7 @@ pub(crate) fn check_call_args(
             }
             if param.mode == PassMode::Move
                 && !arg_ty.is_copy()
-                && let Expr::Ident { name, .. } = &arg.value
+                && let ExprKind::Ident { name, .. } = &arg.value.kind
             {
                 ce.mark_moved(name, arg.span);
             }
@@ -450,9 +450,9 @@ fn split_mangled_args(s: &str) -> Vec<String> {
 /// whose return type should be treated as compatible with any declared type.
 fn is_diverging(expr: &Expr) -> bool {
     matches!(
-        expr,
-        Expr::Call { callee, .. }
-            if matches!(callee.as_ref(), Expr::Ident { name, .. } if name == "panic")
+        &expr.kind,
+        ExprKind::Call { callee, .. }
+            if matches!(&callee.kind, ExprKind::Ident { name, .. } if name == "panic")
     )
 }
 
@@ -534,20 +534,17 @@ pub(crate) fn check_literal_overflow(
         return;
     }
 
-    let val = match value_expr {
-        Expr::Literal {
+    let val = match &value_expr.kind {
+        ExprKind::Literal {
             value: Literal::Int(n),
-            ..
         } => n.parse::<i128>().ok(),
-        Expr::Unary {
+        ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
-            ..
         } => {
-            if let Expr::Literal {
+            if let ExprKind::Literal {
                 value: Literal::Int(n),
-                ..
-            } = operand.as_ref()
+            } = &operand.kind
             {
                 n.parse::<i128>().ok().map(|v| -v)
             } else {

@@ -340,9 +340,9 @@ fn binary_segment_pat_to_doc(seg: &BinarySegment) -> Doc {
 }
 
 fn expr_value_to_doc(expr: &Expr) -> Doc {
-    match expr {
-        Expr::Ident { name, .. } => text(name.clone()),
-        Expr::Literal { value, .. } => literal_to_doc(value),
+    match &expr.kind {
+        ExprKind::Ident { name } => text(name.clone()),
+        ExprKind::Literal { value } => literal_to_doc(value),
         _ => text("<expr>"),
     }
 }
@@ -408,17 +408,17 @@ pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
 /// (if, match, cond, for, loop, unless, while, closure, receive, arena).
 pub(super) fn is_block_expr(expr: &Expr) -> bool {
     matches!(
-        expr,
-        Expr::If { .. }
-            | Expr::Match { .. }
-            | Expr::Cond { .. }
-            | Expr::For { .. }
-            | Expr::Loop { .. }
-            | Expr::Unless { .. }
-            | Expr::While { .. }
-            | Expr::Closure { .. }
-            | Expr::Receive { .. }
-            | Expr::Arena { .. }
+        expr.kind,
+        ExprKind::If { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::Cond { .. }
+            | ExprKind::For { .. }
+            | ExprKind::Loop { .. }
+            | ExprKind::Unless { .. }
+            | ExprKind::While { .. }
+            | ExprKind::Closure { .. }
+            | ExprKind::Receive { .. }
+            | ExprKind::Arena { .. }
     )
 }
 
@@ -434,17 +434,16 @@ pub(super) fn expr_contains_block(expr: &Expr) -> bool {
     if is_block_expr(expr) {
         return true;
     }
-    match expr {
-        Expr::Call { args, .. } => args.iter().any(|a| expr_contains_block(&a.value)),
-        Expr::MethodCall { receiver, args, .. } => {
+    match &expr.kind {
+        ExprKind::Call { args, .. } => args.iter().any(|a| expr_contains_block(&a.value)),
+        ExprKind::MethodCall { receiver, args, .. } => {
             expr_contains_block(receiver) || args.iter().any(|a| expr_contains_block(&a.value))
         }
-        Expr::Binary { right, .. } => expr_contains_block(right),
-        Expr::Ternary {
+        ExprKind::Binary { right, .. } => expr_contains_block(right),
+        ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
-            ..
         } => {
             expr_contains_block(condition)
                 || expr_contains_block(then_expr)
@@ -502,17 +501,17 @@ fn pattern_text_len(pattern: &Pattern) -> usize {
 
 /// Estimates whether a chained `or` or `and` expression would exceed the page width.
 pub(super) fn expr_or_is_multiline(expr: &Expr) -> bool {
-    if let Expr::Binary {
+    if let ExprKind::Binary {
         op: op @ (BinOp::Or | BinOp::And),
         ..
-    } = expr
+    } = &expr.kind
     {
         let mut operands = Vec::new();
         collect_binop_exprs(expr, op, &mut operands);
         if operands.len() <= 1 {
             return false;
         }
-        let sep_len = binop_str(op).len() + 2; // " or " or " and "
+        let sep_len = binop_str(op).len() + 2;
         let estimated_width: usize = operands.iter().map(|e| expr_text_len(e)).sum::<usize>()
             + (operands.len().saturating_sub(1)) * sep_len;
         return estimated_width > 60;
@@ -521,9 +520,7 @@ pub(super) fn expr_or_is_multiline(expr: &Expr) -> bool {
 }
 
 fn collect_binop_exprs<'a>(expr: &'a Expr, target_op: &BinOp, out: &mut Vec<&'a Expr>) {
-    if let Expr::Binary {
-        op, left, right, ..
-    } = expr
+    if let ExprKind::Binary { op, left, right } = &expr.kind
         && std::mem::discriminant(op) == std::mem::discriminant(target_op)
     {
         collect_binop_exprs(left, target_op, out);
@@ -534,8 +531,8 @@ fn collect_binop_exprs<'a>(expr: &'a Expr, target_op: &BinOp, out: &mut Vec<&'a 
 }
 
 fn expr_text_len(expr: &Expr) -> usize {
-    match expr {
-        Expr::Literal { value, .. } => match value {
+    match &expr.kind {
+        ExprKind::Literal { value } => match value {
             Literal::Int(n) => n.to_string().len(),
             Literal::Float(f) => f.to_string().len(),
             Literal::String(s) => s.len() + 2,
@@ -548,12 +545,12 @@ fn expr_text_len(expr: &Expr) -> usize {
             }
             Literal::Unit => 2,
         },
-        Expr::Ident { name, .. } => name.len(),
-        Expr::Binary {
-            op, left, right, ..
-        } => expr_text_len(left) + expr_text_len(right) + binop_str(op).len() + 2,
-        Expr::Unary { operand, .. } => expr_text_len(operand) + 4,
-        Expr::Call { callee, args, .. } => {
+        ExprKind::Ident { name } => name.len(),
+        ExprKind::Binary { op, left, right } => {
+            expr_text_len(left) + expr_text_len(right) + binop_str(op).len() + 2
+        }
+        ExprKind::Unary { operand, .. } => expr_text_len(operand) + 4,
+        ExprKind::Call { callee, args } => {
             expr_text_len(callee)
                 + args.iter().map(|a| expr_text_len(&a.value)).sum::<usize>()
                 + args.len().saturating_sub(1) * 2
@@ -710,39 +707,8 @@ pub(super) fn type_expr_text_len(ty: &TypeExpr) -> usize {
     }
 }
 
-/// Extracts the source span from any expression node.
 fn expr_span(expr: &Expr) -> &Span {
-    use expo_ast::ast::Expr::*;
-    match expr {
-        Arena { span, .. }
-        | Binary { span, .. }
-        | BinaryLiteral { span, .. }
-        | Call { span, .. }
-        | Closure { span, .. }
-        | Cond { span, .. }
-        | EnumConstruction { span, .. }
-        | FieldAccess { span, .. }
-        | For { span, .. }
-        | Group { span, .. }
-        | Ident { span, .. }
-        | If { span, .. }
-        | List { span, .. }
-        | Map { span, .. }
-        | Literal { span, .. }
-        | Loop { span, .. }
-        | Match { span, .. }
-        | MethodCall { span, .. }
-        | Receive { span, .. }
-        | Self_ { span, .. }
-        | ShortClosure { span, .. }
-        | Spawn { span, .. }
-        | String { span, .. }
-        | StructConstruction { span, .. }
-        | Ternary { span, .. }
-        | Unary { span, .. }
-        | Unless { span, .. }
-        | While { span, .. } => span,
-    }
+    &expr.span
 }
 
 /// Returns the first source line of a statement.

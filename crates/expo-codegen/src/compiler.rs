@@ -19,8 +19,8 @@ pub enum EmitResult {
     NotIntrinsic,
 }
 use expo_ast::ast::{
-    Diagnostic, EnumConstructionData, Expr, FieldInit, Function, ImplMember, Item, Literal, Module,
-    Param, Severity, StringPart, TypeExpr,
+    Diagnostic, EnumConstructionData, ExprKind, FieldInit, Function, ImplMember, Item, Literal,
+    Module, Param, Severity, StringPart, TypeExpr,
 };
 use expo_typecheck::context::{TypeContext, VariantData};
 use expo_typecheck::types::{
@@ -594,22 +594,22 @@ impl<'ctx> Compiler<'ctx> {
     fn declare_constants(&mut self, module: &Module) -> Result<(), String> {
         for item in &module.items {
             if let Item::Constant(c) = item {
-                let val: BasicValueEnum = match &c.value {
-                    Expr::Literal {
+                let val: BasicValueEnum = match &c.value.kind {
+                    ExprKind::Literal {
                         value: Literal::Int(s),
                         ..
                     } => {
                         let v = parse_int_literal(s)?;
                         self.context.i64_type().const_int(v as u64, true).into()
                     }
-                    Expr::Literal {
+                    ExprKind::Literal {
                         value: Literal::Float(s),
                         ..
                     } => {
                         let v: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
                         self.context.f64_type().const_float(v).into()
                     }
-                    Expr::Literal {
+                    ExprKind::Literal {
                         value: Literal::Bool(b),
                         ..
                     } => self
@@ -617,7 +617,7 @@ impl<'ctx> Compiler<'ctx> {
                         .bool_type()
                         .const_int(if *b { 1 } else { 0 }, false)
                         .into(),
-                    Expr::String { parts, .. } => {
+                    ExprKind::String { parts, .. } => {
                         let mut combined = String::new();
                         for part in parts {
                             if let StringPart::Literal { value, .. } = part {
@@ -627,7 +627,7 @@ impl<'ctx> Compiler<'ctx> {
                         self.create_string_global(combined.as_bytes(), &c.name)
                             .into()
                     }
-                    Expr::EnumConstruction {
+                    ExprKind::EnumConstruction {
                         type_path,
                         variant,
                         data: EnumConstructionData::Unit,
@@ -652,7 +652,7 @@ impl<'ctx> Compiler<'ctx> {
                             enum_type.const_named_struct(&[tag_val.into()]).into()
                         }
                     }
-                    Expr::StructConstruction {
+                    ExprKind::StructConstruction {
                         type_path, fields, ..
                     } => {
                         let struct_name = type_path.join(".");
@@ -688,22 +688,22 @@ impl<'ctx> Compiler<'ctx> {
             vec![self.context.i8_type().const_zero().into(); struct_fields.len()];
         for fi in field_inits {
             let idx = struct_fields.iter().position(|(n, _)| *n == fi.name)?;
-            let val: BasicValueEnum = match &fi.value {
-                Expr::Literal {
+            let val: BasicValueEnum = match &fi.value.kind {
+                ExprKind::Literal {
                     value: Literal::Int(s),
                     ..
                 } => {
                     let v = parse_int_literal(s).ok()?;
                     self.context.i64_type().const_int(v as u64, true).into()
                 }
-                Expr::Literal {
+                ExprKind::Literal {
                     value: Literal::Float(s),
                     ..
                 } => {
                     let v: f64 = s.parse().ok()?;
                     self.context.f64_type().const_float(v).into()
                 }
-                Expr::Literal {
+                ExprKind::Literal {
                     value: Literal::Bool(b),
                     ..
                 } => self
@@ -711,7 +711,7 @@ impl<'ctx> Compiler<'ctx> {
                     .bool_type()
                     .const_int(if *b { 1 } else { 0 }, false)
                     .into(),
-                Expr::String { parts, .. } => {
+                ExprKind::String { parts, .. } => {
                     let mut combined = String::new();
                     for part in parts {
                         if let StringPart::Literal { value, .. } = part {

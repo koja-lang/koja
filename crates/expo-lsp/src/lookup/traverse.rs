@@ -253,16 +253,18 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Opt
 /// Recursively searches an expression tree for a symbol at the cursor
 /// position, descending into sub-expressions and statement bodies.
 fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
-    match expr {
-        Expr::Ident { name, span } => {
-            if span_contains(span, line, col) {
-                return classify_name(name, ctx);
+    match &expr.kind {
+        ExprKind::Ident { name } => {
+            if span_contains(&expr.span, line, col) {
+                let mut info = classify_name(name, ctx);
+                if let Some(SymbolInfo::Variable { type_display, .. }) = &mut info {
+                    *type_display = expr.resolved_type.as_ref().map(|ty| ty.display());
+                }
+                return info;
             }
         }
-        Expr::Call {
-            callee, args, span, ..
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::Call { callee, args, .. } => {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(callee, line, col, ctx) {
                     return Some(info);
                 }
@@ -273,24 +275,20 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::MethodCall {
+        ExprKind::MethodCall {
             receiver,
             method,
             args,
-            span,
             ..
         } => {
-            if span_contains(span, line, col) {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(receiver, line, col, ctx) {
                     return Some(info);
                 }
-                if let Expr::Ident {
-                    span: recv_span, ..
-                } = receiver.as_ref()
-                {
-                    let method_start = recv_span.end.column + 2;
+                if let ExprKind::Ident { .. } = &receiver.kind {
+                    let method_start = receiver.span.end.column + 2;
                     let method_end = method_start + method.len() as u32;
-                    if line == recv_span.end.line
+                    if line == receiver.span.end.line
                         && col >= method_start
                         && col <= method_end
                         && let Some(mangled) = resolve_method_name(receiver, method, ctx)
@@ -298,7 +296,7 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                         return Some(SymbolInfo::Function { name: mangled });
                     }
                 } else if let Some(mangled) = resolve_method_name(receiver, method, ctx)
-                    && cursor_on_method(receiver, method, span, line, col)
+                    && cursor_on_method(receiver, method, &expr.span, line, col)
                 {
                     return Some(SymbolInfo::Function { name: mangled });
                 }
@@ -309,17 +307,15 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::FieldAccess { receiver, span, .. } => {
-            if span_contains(span, line, col)
+        ExprKind::FieldAccess { receiver, .. } => {
+            if span_contains(&expr.span, line, col)
                 && let Some(info) = find_in_expr(receiver, line, col, ctx)
             {
                 return Some(info);
             }
         }
-        Expr::Binary {
-            left, right, span, ..
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::Binary { left, right, .. } => {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(left, line, col, ctx) {
                     return Some(info);
                 }
@@ -328,13 +324,12 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::If {
+        ExprKind::If {
             condition,
             then_body,
             else_body,
-            span,
         } => {
-            if span_contains(span, line, col) {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(condition, line, col, ctx) {
                     return Some(info);
                 }
@@ -348,12 +343,8 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Match {
-            subject,
-            arms,
-            span,
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::Match { subject, arms } => {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(subject, line, col, ctx) {
                     return Some(info);
                 }
@@ -372,12 +363,8 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Cond {
-            arms,
-            else_body,
-            span,
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::Cond { arms, else_body } => {
+            if span_contains(&expr.span, line, col) {
                 for arm in arms {
                     if let Some(info) = find_in_expr(&arm.condition, line, col, ctx) {
                         return Some(info);
@@ -393,33 +380,25 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Group { expr, span } => {
-            if span_contains(span, line, col) {
-                return find_in_expr(expr, line, col, ctx);
+        ExprKind::Group { expr: inner } => {
+            if span_contains(&expr.span, line, col) {
+                return find_in_expr(inner, line, col, ctx);
             }
         }
-        Expr::StructConstruction {
-            type_path, span, ..
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::StructConstruction { type_path, .. } => {
+            if span_contains(&expr.span, line, col) {
                 let name = type_path.last()?;
                 return classify_name(name, ctx);
             }
         }
-        Expr::EnumConstruction {
-            type_path, span, ..
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::EnumConstruction { type_path, .. } => {
+            if span_contains(&expr.span, line, col) {
                 let name = type_path.first()?;
                 return classify_name(name, ctx);
             }
         }
-        Expr::While {
-            condition,
-            body,
-            span,
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::While { condition, body } => {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(condition, line, col, ctx) {
                     return Some(info);
                 }
@@ -428,31 +407,27 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Loop { body, span } => {
-            if span_contains(span, line, col)
+        ExprKind::Loop { body } => {
+            if span_contains(&expr.span, line, col)
                 && let Some(info) = find_in_body(body, line, col, ctx)
             {
                 return Some(info);
             }
         }
-        Expr::Closure { body, span, .. } => {
-            if span_contains(span, line, col)
+        ExprKind::Closure { body, .. } => {
+            if span_contains(&expr.span, line, col)
                 && let Some(info) = find_in_body(body, line, col, ctx)
             {
                 return Some(info);
             }
         }
-        Expr::ShortClosure { body, span, .. } => {
-            if span_contains(span, line, col) {
+        ExprKind::ShortClosure { body, .. } => {
+            if span_contains(&expr.span, line, col) {
                 return find_in_expr(body, line, col, ctx);
             }
         }
-        Expr::Unless {
-            condition,
-            body,
-            span,
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::Unless { condition, body } => {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(condition, line, col, ctx) {
                     return Some(info);
                 }
@@ -461,8 +436,8 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::List { elements, span } => {
-            if span_contains(span, line, col) {
+        ExprKind::List { elements } => {
+            if span_contains(&expr.span, line, col) {
                 for e in elements {
                     if let Some(info) = find_in_expr(e, line, col, ctx) {
                         return Some(info);
@@ -470,8 +445,8 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Map { entries, span } => {
-            if span_contains(span, line, col) {
+        ExprKind::Map { entries } => {
+            if span_contains(&expr.span, line, col) {
                 for (k, v) in entries {
                     if let Some(info) = find_in_expr(k, line, col, ctx) {
                         return Some(info);
@@ -482,19 +457,18 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Spawn { expr, span, .. } => {
-            if span_contains(span, line, col) {
-                return find_in_expr(expr, line, col, ctx);
+        ExprKind::Spawn { expr: inner, .. } => {
+            if span_contains(&expr.span, line, col) {
+                return find_in_expr(inner, line, col, ctx);
             }
         }
-        Expr::Receive {
+        ExprKind::Receive {
             arms,
             after_timeout,
             after_body,
-            span: recv_span,
             ..
         } => {
-            if span_contains(recv_span, line, col) {
+            if span_contains(&expr.span, line, col) {
                 for arm in arms {
                     if let Some(r) = find_in_pattern(&arm.pattern, line, col, ctx) {
                         return Some(r);
@@ -520,13 +494,8 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::For {
-            iterable,
-            body,
-            span,
-            ..
-        } => {
-            if span_contains(span, line, col) {
+        ExprKind::For { iterable, body, .. } => {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(iterable, line, col, ctx) {
                     return Some(info);
                 }
@@ -535,8 +504,8 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::String { parts, span, .. } => {
-            if span_contains(span, line, col) {
+        ExprKind::String { parts, .. } => {
+            if span_contains(&expr.span, line, col) {
                 for part in parts {
                     if let StringPart::Interpolation { expr, .. } = part
                         && let Some(info) = find_in_expr(expr, line, col, ctx)
@@ -546,13 +515,12 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Ternary {
+        ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
-            span,
         } => {
-            if span_contains(span, line, col) {
+            if span_contains(&expr.span, line, col) {
                 if let Some(info) = find_in_expr(condition, line, col, ctx) {
                     return Some(info);
                 }
@@ -564,13 +532,13 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Unary { operand, span, .. } => {
-            if span_contains(span, line, col) {
+        ExprKind::Unary { operand, .. } => {
+            if span_contains(&expr.span, line, col) {
                 return find_in_expr(operand, line, col, ctx);
             }
         }
-        Expr::BinaryLiteral { segments, span } => {
-            if span_contains(span, line, col) {
+        ExprKind::BinaryLiteral { segments } => {
+            if span_contains(&expr.span, line, col) {
                 for seg in segments {
                     if let Some(info) = find_in_expr(&seg.value, line, col, ctx) {
                         return Some(info);
@@ -583,7 +551,7 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        Expr::Arena { .. } | Expr::Literal { .. } | Expr::Self_ { .. } => {}
+        ExprKind::Arena { .. } | ExprKind::Literal { .. } | ExprKind::Self_ => {}
     }
     None
 }
@@ -591,15 +559,23 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
 /// Resolves the mangled function name for a method call by inferring the
 /// receiver's type from the type context (e.g. `Int_band` for `5.band(3)`).
 fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Option<String> {
-    let type_name = match receiver {
-        Expr::Literal { value, .. } => match value {
+    if let Some(ref resolved) = receiver.resolved_type {
+        let type_name = resolved.display();
+        let mangled = format!("{type_name}_{method}");
+        if ctx.functions.contains_key(&mangled) {
+            return Some(mangled);
+        }
+    }
+
+    let type_name = match &receiver.kind {
+        ExprKind::Literal { value, .. } => match value {
             Literal::Int(_) => Some("Int"),
             Literal::Float(_) => Some("Float"),
             Literal::Bool(_) => Some("Bool"),
             Literal::String(_) => Some("String"),
             Literal::Unit => None,
         },
-        Expr::Ident { name, .. } => {
+        ExprKind::Ident { name } => {
             if ctx.is_struct(name) || ctx.is_enum(name) {
                 Some(name.as_str())
             } else {
@@ -614,7 +590,6 @@ fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Opti
             return Some(mangled);
         }
     }
-    // For variable receivers where we don't know the type, try all known types
     ctx.functions
         .keys()
         .find(|k| k.ends_with(&format!("_{method}")))
@@ -624,13 +599,13 @@ fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Opti
 /// Returns true if the cursor is positioned on the method name portion of a
 /// method call (after the `.`), not on the receiver or arguments.
 fn cursor_on_method(receiver: &Expr, method: &str, span: &Span, line: u32, col: u32) -> bool {
-    let recv_end = match receiver {
-        Expr::Literal { span: s, .. }
-        | Expr::Ident { span: s, .. }
-        | Expr::Group { span: s, .. }
-        | Expr::Call { span: s, .. }
-        | Expr::MethodCall { span: s, .. }
-        | Expr::FieldAccess { span: s, .. } => s.end.column,
+    let recv_end = match &receiver.kind {
+        ExprKind::Literal { .. }
+        | ExprKind::Ident { .. }
+        | ExprKind::Group { .. }
+        | ExprKind::Call { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::FieldAccess { .. } => receiver.span.end.column,
         _ => return span_contains(span, line, col),
     };
     let method_start = recv_end + 2;

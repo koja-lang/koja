@@ -2,7 +2,7 @@
 //! in `match` arms into LLVM IR length checks, segment extraction, literal
 //! comparison, variable binding, and greedy rest capture.
 
-use expo_ast::ast::{BinaryEndianness, BinarySegment, BinaryUnit, Expr, TypeExpr};
+use expo_ast::ast::{BinaryEndianness, BinarySegment, BinaryUnit, ExprKind, TypeExpr};
 use expo_typecheck::types::{Primitive, Type};
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -144,11 +144,11 @@ pub(crate) fn compile_binary_pattern<'ctx>(
 
         let is_little = matches!(seg.endianness, Some(BinaryEndianness::Little));
         let is_literal = matches!(
-            seg.value.as_ref(),
-            Expr::Literal { .. } | Expr::Unary { .. }
+            seg.value.kind,
+            ExprKind::Literal { .. } | ExprKind::Unary { .. }
         );
-        let is_binding = matches!(seg.value.as_ref(), Expr::Ident { name, .. } if name != "_");
-        let is_discard = matches!(seg.value.as_ref(), Expr::Ident { name, .. } if name == "_");
+        let is_binding = matches!(&seg.value.kind, ExprKind::Ident { name, .. } if name != "_");
+        let is_discard = matches!(&seg.value.kind, ExprKind::Ident { name, .. } if name == "_");
 
         if is_discard {
             byte_offset += num_bytes;
@@ -181,7 +181,7 @@ pub(crate) fn compile_binary_pattern<'ctx>(
                 .build_int_compare(IntPredicate::EQ, masked_ext, masked_lit, "seg_eq")
                 .unwrap();
             result = c.builder.build_and(result, cmp, "seg_and").unwrap();
-        } else if is_binding && let Expr::Ident { name, .. } = seg.value.as_ref() {
+        } else if is_binding && let ExprKind::Ident { name, .. } = &seg.value.kind {
             let binding_ty = binding_type(seg);
             let is_float = is_float_segment(seg);
 
@@ -227,8 +227,8 @@ fn compile_greedy_rest<'ctx>(
     fixed_offset: u64,
     _function: FunctionValue<'ctx>,
 ) -> Result<(), String> {
-    let name = match seg.value.as_ref() {
-        Expr::Ident { name, .. } if name != "_" => name.clone(),
+    let name = match &seg.value.kind {
+        ExprKind::Ident { name, .. } if name != "_" => name.clone(),
         _ => return Ok(()),
     };
 
