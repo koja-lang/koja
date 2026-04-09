@@ -202,6 +202,7 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Opt
             name,
             elements,
             span,
+            ..
         } => {
             if span_contains(span, line, col) {
                 for sub in elements {

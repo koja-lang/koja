@@ -12,7 +12,9 @@ use expo_ast::span::Span;
 use crate::check::check_literal_overflow;
 use crate::context::{TypeContext, VariantData};
 use crate::env::{VarInfo, VarState};
-use crate::types::{Primitive, Type, build_substitution, resolve_type_expr, substitute_preserving};
+use crate::types::{
+    Primitive, Type, TypeIdentifier, build_substitution, resolve_type_expr, substitute_preserving,
+};
 
 fn pattern_is_catch_all(pat: &Pattern) -> bool {
     match pat {
@@ -196,10 +198,45 @@ fn substitute_variant_data(data: &VariantData, subst: &HashMap<String, Type>) ->
     }
 }
 
+/// Resolves the `TypeIdentifier` for an enum by name (from `type_path`), or
+/// falls back to the subject type's identifier for shorthand patterns.
+fn resolve_enum_id(
+    enum_name: &str,
+    subject_type: &Type,
+    ctx: &TypeContext,
+) -> Option<TypeIdentifier> {
+    ctx.resolve_name(enum_name)
+        .cloned()
+        .or_else(|| match subject_type {
+            Type::Named { identifier, .. } => Some(identifier.clone()),
+            Type::Indirect(inner) => match inner.as_ref() {
+                Type::Named { identifier, .. } => Some(identifier.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
+/// Resolves the `TypeIdentifier` from the subject type alone (for shorthand
+/// `Constructor` patterns like `Some(x)` where no explicit type path exists).
+fn resolve_enum_id_from_subject(
+    subject_type: &Type,
+    _ctx: &TypeContext,
+) -> Option<TypeIdentifier> {
+    match subject_type {
+        Type::Named { identifier, .. } => Some(identifier.clone()),
+        Type::Indirect(inner) => match inner.as_ref() {
+            Type::Named { identifier, .. } => Some(identifier.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Recursively validates a match pattern against the expected subject type,
 /// binding pattern variables into the environment.
 pub(crate) fn check_pattern(
-    pat: &Pattern,
+    pat: &mut Pattern,
     subject_type_raw: &Type,
     ctx: &mut TypeContext,
     env: &mut HashMap<String, VarInfo>,
@@ -220,8 +257,12 @@ pub(crate) fn check_pattern(
         }
 
         Pattern::Constructor {
-            name: _, elements, ..
+            name: _,
+            elements,
+            resolved_type,
+            ..
         } => {
+            *resolved_type = resolve_enum_id_from_subject(subject_type, ctx);
             for sub_pat in elements {
                 check_pattern(sub_pat, &Type::Unknown, ctx, env);
             }
@@ -232,8 +273,10 @@ pub(crate) fn check_pattern(
             variant,
             fields,
             span,
+            resolved_type,
         } => {
             let enum_name = type_path.join(".");
+            *resolved_type = resolve_enum_id(&enum_name, subject_type, ctx);
             let variant_data = resolve_variant_data(&enum_name, variant, subject_type, ctx);
 
             match variant_data {
@@ -242,7 +285,7 @@ pub(crate) fn check_pattern(
                         if let Some((_, field_ty)) =
                             expected_fields.iter().find(|(n, _)| *n == fp.name)
                         {
-                            if let Some(sub_pat) = &fp.pattern {
+                            if let Some(sub_pat) = &mut fp.pattern {
                                 check_pattern(sub_pat, field_ty, ctx, env);
                             } else {
                                 env.insert(
@@ -295,8 +338,10 @@ pub(crate) fn check_pattern(
             variant,
             elements,
             span,
+            resolved_type,
         } => {
             let enum_name = type_path.join(".");
+            *resolved_type = resolve_enum_id(&enum_name, subject_type, ctx);
             let variant_data = resolve_variant_data(&enum_name, variant, subject_type, ctx);
 
             match variant_data {
@@ -313,7 +358,9 @@ pub(crate) fn check_pattern(
                             *span,
                         );
                     } else {
-                        for (sub_pat, expected_ty) in elements.iter().zip(expected_types.iter()) {
+                        for (sub_pat, expected_ty) in
+                            elements.iter_mut().zip(expected_types.iter())
+                        {
                             check_pattern(sub_pat, expected_ty, ctx, env);
                         }
                     }
@@ -348,8 +395,10 @@ pub(crate) fn check_pattern(
             type_path,
             variant,
             span,
+            resolved_type,
         } => {
             let enum_name = type_path.join(".");
+            *resolved_type = resolve_enum_id(&enum_name, subject_type, ctx);
             if let Some(type_info) = ctx.find_type(&enum_name).filter(|ti| ti.is_enum()) {
                 let variants = type_info.variants().unwrap();
                 if let Some(vi) = variants.iter().find(|v| v.name == *variant) {
@@ -369,7 +418,7 @@ pub(crate) fn check_pattern(
         }
 
         Pattern::List { elements, .. } => {
-            for sub_pat in elements {
+            for sub_pat in elements.iter_mut() {
                 check_pattern(sub_pat, &Type::Unknown, ctx, env);
             }
         }
@@ -441,7 +490,7 @@ pub(crate) fn check_pattern(
         }
 
         Pattern::Or { patterns, span } => {
-            for sub in patterns {
+            for sub in patterns.iter_mut() {
                 let bindings = collect_pattern_bindings(sub);
                 if !bindings.is_empty() {
                     ctx.error(

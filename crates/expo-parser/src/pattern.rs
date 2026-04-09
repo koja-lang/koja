@@ -188,6 +188,7 @@ impl Parser {
                 name: first,
                 elements,
                 span: self.span_from(start),
+                resolved_type: None,
             };
         }
 
@@ -195,6 +196,7 @@ impl Parser {
             name: first,
             elements: vec![],
             span: self.span_from(start),
+            resolved_type: None,
         }
     }
 
@@ -224,6 +226,7 @@ impl Parser {
                 variant,
                 elements,
                 span: self.span_from(start),
+                resolved_type: None,
             }
         } else if self.eat(&TokenKind::LBrace).is_some() {
             let mut fields = Vec::new();
@@ -239,12 +242,14 @@ impl Parser {
                 variant,
                 fields,
                 span: self.span_from(start),
+                resolved_type: None,
             }
         } else {
             Pattern::EnumUnit {
                 type_path,
                 variant,
                 span: self.span_from(start),
+                resolved_type: None,
             }
         }
     }

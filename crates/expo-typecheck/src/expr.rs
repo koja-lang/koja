@@ -265,7 +265,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             for arm in arms.iter_mut() {
                 let mut arm_ce = ce.child(Type::Unknown);
                 let bound_vars = collect_pattern_bindings(&arm.pattern);
-                check_pattern(&arm.pattern, &subject_type, ctx, &mut arm_ce.env);
+                check_pattern(&mut arm.pattern, &subject_type, ctx, &mut arm_ce.env);
                 if let Some(guard) = &mut arm.guard {
                     let guard_ty = infer_expr(guard, ctx, &mut arm_ce);
                     check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);
@@ -406,7 +406,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 .unwrap_or(Type::Primitive(Primitive::String));
             for arm in arms {
                 let mut arm_ce = ce.child(Type::Unknown);
-                check_pattern(&arm.pattern, &subject_type, ctx, &mut arm_ce.env);
+                check_pattern(&mut arm.pattern, &subject_type, ctx, &mut arm_ce.env);
                 if let Some(guard) = &mut arm.guard {
                     let guard_ty = infer_expr(guard, ctx, &mut arm_ce);
                     check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);

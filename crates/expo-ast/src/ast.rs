@@ -714,6 +714,8 @@ pub enum Pattern {
         type_path: Vec<String>,
         variant: String,
         span: Span,
+        /// Resolved identity of the enum type. Populated by the type checker.
+        resolved_type: Option<TypeIdentifier>,
     },
     /// A tuple enum variant: `Option.Some(x)`.
     EnumTuple {
@@ -721,6 +723,8 @@ pub enum Pattern {
         variant: String,
         elements: Vec<Pattern>,
         span: Span,
+        /// Resolved identity of the enum type. Populated by the type checker.
+        resolved_type: Option<TypeIdentifier>,
     },
     /// A struct enum variant: `Shape.Rect { width, height }`.
     EnumStruct {
@@ -728,12 +732,16 @@ pub enum Pattern {
         variant: String,
         fields: Vec<FieldPattern>,
         span: Span,
+        /// Resolved identity of the enum type. Populated by the type checker.
+        resolved_type: Option<TypeIdentifier>,
     },
     /// Shorthand constructors: `Some(x)`, `Ok(x)`, `Err(x)`.
     Constructor {
         name: String,
         elements: Vec<Pattern>,
         span: Span,
+        /// Resolved identity of the enum type. Populated by the type checker.
+        resolved_type: Option<TypeIdentifier>,
     },
     /// A typed binding: `p: Post` -- matches a union member by type
     /// and binds the unwrapped value.
