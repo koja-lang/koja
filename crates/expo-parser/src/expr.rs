@@ -133,14 +133,16 @@ impl Parser {
                                 continue;
                             }
                             _ => {
-                                let span = self.current_span();
-                                self.error(
-                                    format!(
-                                        "expected field name or variant after '.', found {:?}",
-                                        self.peek()
-                                    ),
+                                let span = Span::new(expr_span(&lhs).start, self.prev_end());
+                                self.error("expected field name or method after '.'".into(), span);
+                                lhs = Expr::new(
+                                    ExprKind::FieldAccess {
+                                        receiver: Box::new(lhs),
+                                        field: String::new(),
+                                    },
                                     span,
                                 );
+                                continue;
                             }
                         }
                     }

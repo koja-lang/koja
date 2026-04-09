@@ -230,7 +230,15 @@ No locks, no coordination, no data races.
 ## LSP: the compilation topology persists
 
 The batch compiler's actor topology maps directly onto the LSP. Module checker
-actors stay alive between edits instead of being spawned and discarded:
+actors stay alive between edits instead of being spawned and discarded.
+
+After typechecking, every `Expr` node in the AST carries a `resolved_type:
+Option<Type>`. The LSP reads these annotations directly for hover (showing
+inferred variable types), dot completion (reading `receiver.resolved_type` to
+find available methods/fields), signature help (using `find_enclosing_call` to
+locate the call site and `resolved_type` to resolve the method owner), and
+go-to-definition (mangling `TypeName_method` from `resolved_type` for precise
+lookup). No source-text scanning or type re-inference is needed.
 
 ```
 LSP Backend

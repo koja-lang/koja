@@ -37,7 +37,7 @@ impl Parser {
                     };
                     self.expect(&TokenKind::InterpolEnd);
                     parts.push(StringPart::Interpolation {
-                        expr,
+                        expr: Box::new(expr),
                         format,
                         span: self.span_from(interp_start),
                     });

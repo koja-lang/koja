@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- LSP hover for variables now shows inferred types (e.g. `x: Int32` instead of just `x`).
+- LSP dot-completion rewritten to use the typed AST instead of source-text scanning. Now works for `self.`, chained method calls (`foo.bar().`), and expressions with inferred types.
+- LSP signature help rewritten to use AST-based call-site detection instead of backward parenthesis scanning.
+- LSP method resolution uses `resolved_type` for precise go-to-definition instead of suffix matching.
+- Parser emits partial `FieldAccess` nodes for incomplete `foo.` expressions, improving editor completion at the dot position.
+- **Internal**: `Expr` restructured from a flat enum to `struct Expr { kind: ExprKind, span, resolved_type }`. Every expression carries its resolved type after type checking.
+- **Internal**: `Type`, `Primitive`, and `FnParam` moved from `expo-typecheck` to `expo-ast`. Re-exported from `expo-typecheck` for backwards compatibility.
+- **Internal**: LSP `lookup/receiver.rs` module deleted -- all type inference for completions and signature help now reads `resolved_type` directly from the AST.
 - **Breaking**: `Process<C, M, R>` protocol redesigned. `new(config) -> Self` replaced by `start(move config) -> Result<Self, StopReason>` -- initialization now runs in the child process context after spawn. `handle` and `handle_signal` return `Step<Self>` instead of `Self | StopReason`. `spawn T.new(config)` becomes `spawn T.start(config)`.
 - **Breaking**: `Ref.call` now returns `Result<R, CallError>` instead of `Option<R>`. `Task.await` follows suit.
 - **Breaking**: `handle_lifecycle` renamed to `handle_signal` on the `Process` protocol.

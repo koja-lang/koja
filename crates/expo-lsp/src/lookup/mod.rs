@@ -4,7 +4,6 @@
 //! handlers: given a cursor position, determine which symbol (if any) is
 //! under it.
 
-pub(crate) mod receiver;
 mod span;
 mod traverse;
 
@@ -12,6 +11,7 @@ use expo_ast::ast::*;
 use expo_typecheck::context::TypeContext;
 
 use span::{span_contains, span_contains_name};
+pub(crate) use traverse::{find_enclosing_call, find_expr_at};
 use traverse::{find_in_ident_at_name, find_in_params, find_in_statement, find_in_type_expr};
 
 /// Describes the kind and identity of a symbol found at a cursor position.

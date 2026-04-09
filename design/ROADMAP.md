@@ -10,7 +10,7 @@ Solo developer + AI assistance. Bootstrap in Rust, self-host in Expo.
 
 An 11-crate Rust workspace that compiles Expo source to native binaries via LLVM:
 
-- `expo-ast` -- tokens, spans, AST node definitions
+- `expo-ast` -- tokens, spans, AST node definitions, type representations (`Type`, `Primitive`, `FnParam`). Every `Expr` node carries a `resolved_type: Option<Type>` populated by the type checker.
 - `expo-lexer` -- custom tokenizer
 - `expo-parser` -- recursive descent parser (Pratt precedence for expressions)
 - `expo-typecheck` -- type inference and semantic analysis
@@ -20,7 +20,7 @@ An 11-crate Rust workspace that compiles Expo source to native binaries via LLVM
 - `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
 - `expo-runtime` -- multi-threaded process scheduler (C ABI static library linked into compiled binaries)
 - `expo-driver` -- CLI binary (`expo`)
-- `expo-lsp` -- language server (diagnostics, formatting, hover, go-to-definition, pattern symbol resolution)
+- `expo-lsp` -- language server (diagnostics, formatting, hover with inferred types, go-to-definition, AST-based dot completion and signature help)
 
 ### CLI
 
@@ -103,7 +103,7 @@ See [GAPS.md](GAPS.md) for known compiler limitations and workarounds.
 
 - **Project scaffolding** -- `expo new <name>` creates a project directory with `expo.toml` and `src/main.expo`
 - **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@doc` annotations
-- **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc`), and go-to-definition (including qualified module calls) over stdio, integrated with the VSCode/Cursor extension
+- **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc` + inferred variable types), go-to-definition (including qualified module calls), AST-based dot completion, and signature help over stdio, integrated with the VSCode/Cursor extension
 - **VSCode extension** -- syntax highlighting and LSP client for `.expo` files
 - **Vim plugin** -- syntax highlighting, auto-indentation (`indentexpr`), `matchit` block matching (`fn`/`end`, `if`/`end`), and `:make` compiler integration with `expo check` and `errorformat` for quickfix
 - **DWARF debug info** -- always-on source-level debug metadata. Every function and statement carries file/line/column metadata. `.dSYM` bundles generated on macOS. Enables debugger attachment and runtime stacktraces.
@@ -343,8 +343,10 @@ Dual entry mode is implemented. `expo.toml` `entry` field determines behavior by
 - ~~Go-to-definition for functions, structs, enums, and imports (jumps to module file)~~
 - ~~Hover showing type signatures and `@doc`~~
 - ~~Restart Language Server command~~
-- Autocomplete for module names, function names, struct fields
-- Inline type hints for inferred types
+- ~~Autocomplete for struct fields and methods (AST-based dot completion using `resolved_type`)~~
+- ~~Signature help for function and method calls (AST-based `find_enclosing_call`)~~
+- ~~Hover shows inferred types for variables (e.g. `x: Int32`)~~
+- Inline type hints for inferred types (inlay hints)
 - Multi-module resolution (cross-file diagnostics)
 - **Done when**: editing `.expo` files in Cursor shows real-time errors and supports go-to-definition
 
@@ -534,7 +536,7 @@ Exploration of treating modules as `TypeKind::Module` in the unified registry. N
 - **Planned**: introduce an intermediate representation (`expo-ir`) between the type checker and codegen. The IR is a lowered, flat representation -- no generics (already monomorphized), no closures (already desugared to structs + function pointers), no high-level control flow (already lowered to branches). Just functions, calls, loads, stores, branches.
 - **Motivation**: the current `expo-codegen` crate mixes two concerns -- lowering (closure desugaring, monomorphization, drop insertion) and emission (inkwell LLVM calls). Separating them creates a clean interface for multiple codegen backends.
 - **Backend protocol**: codegen backends implement a `CodeEmitter` protocol against ExpoIR. The LLVM backend (current) is the first implementation, not a special case. Other backends become possible: Cranelift (fast compilation for the REPL), direct WASM emission (smaller output for edge), C emission (maximum portability), or an interpreter (scripting, hot-reload).
-- **Compiler pipeline**: `Source → AST → TypedAST → ExpoIR → [CodeEmitter backend] → output`. Lowering happens once; backends only handle "emit a function call" and "emit a branch," not "figure out how closures capture variables."
+- **Compiler pipeline**: `Source → AST (with resolved_type) → ExpoIR → [CodeEmitter backend] → output`. The AST carries resolved types on every expression after typechecking -- there is no separate TypedAST struct. Lowering happens once; backends only handle "emit a function call" and "emit a branch," not "figure out how closures capture variables."
 - **Public API**: ExpoIR and the backend protocol would be published as packages after self-hosting, enabling third-party codegen backends. During bootstrap, they're Rust crates wrapping inkwell.
 - **Build-time selection**: `expo.toml` or `expo build --backend cranelift` selects the backend. One backend per binary. The compiler monomorphizes all emitter calls against the selected implementation -- no vtable overhead.
 - **Timing**: the IR split is Phase 6 (self-hosting) work. The current crate boundaries (codegen depends on ast + typecheck, clean downward dependencies) already support this separation. Keeping `expo-codegen` internals organized now avoids a painful refactor later.
@@ -567,7 +569,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, ~~`random`~~, package manager, C FFI, stdlib packages (`net`, `http`, `json`, `crypto`), first-party packages |
 | 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                                          |
-| 5     | Documentation (doctests, search), LSP (autocomplete, type hints), REPL                                                                                                                                          |
+| 5     | Documentation (doctests, search), LSP (~~autocomplete~~, ~~signature help~~, inlay hints), REPL                                                                                                                  |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                                                      |
 | 6B    | auth-manager-expo runs for real, second project                                                                                                                                                                 |
 

@@ -1140,6 +1140,9 @@ fn infer_field_access(
     ce: &mut CheckEnv,
 ) -> Type {
     let recv_ty = infer_expr(receiver, ctx, ce);
+    if field.is_empty() {
+        return recv_ty;
+    }
     let effective_ty = match &recv_ty {
         Type::Indirect(inner) => inner.as_ref(),
         other => other,

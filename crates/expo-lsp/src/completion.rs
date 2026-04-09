@@ -6,11 +6,12 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::Visibility;
+use expo_ast::ast::{ExprKind, Visibility};
+use expo_ast::types::Type;
 use expo_typecheck::context::{FunctionKind, TypeContext};
 
 use crate::backend::Backend;
-use crate::lookup::receiver::resolve_receiver_type;
+use crate::lookup::find_expr_at;
 
 /// Expo language keywords offered as completions.
 const KEYWORDS: &[&str] = &[
@@ -37,13 +38,17 @@ impl Backend {
             None => return Ok(Some(CompletionResponse::Array(items))),
         };
 
-        if let Some(receiver) = detect_dot_context(&state.source, pos) {
-            let is_uppercase = receiver.chars().next().is_some_and(|c| c.is_uppercase());
-            if let Some(type_name) = resolve_receiver_type(&receiver, &state.source, &state.ctx) {
-                add_dot_completions(&type_name, is_uppercase, &state.ctx, &mut items);
-                add_dot_completions(&type_name, is_uppercase, &self.stdlib_ctx, &mut items);
+        let line = pos.line + 1;
+        let col = pos.character + 1;
+        if let Some(expr) = find_expr_at(&state.module, line, col)
+            && let ExprKind::FieldAccess { receiver, .. } = &expr.kind
+        {
+            let (type_name, is_static) = resolve_dot_type(receiver, &state.ctx);
+            if let Some(type_name) = type_name {
+                add_dot_completions(&type_name, is_static, &state.ctx, &mut items);
+                add_dot_completions(&type_name, is_static, &self.stdlib_ctx, &mut items);
+                return Ok(Some(CompletionResponse::Array(items)));
             }
-            return Ok(Some(CompletionResponse::Array(items)));
         }
 
         let prefix = word_prefix_at(&state.source, pos);
@@ -66,39 +71,33 @@ impl Backend {
     }
 }
 
-/// Checks if the cursor is immediately after a `.` and returns the receiver
-/// token (the identifier before the dot).
-fn detect_dot_context(source: &str, pos: Position) -> Option<String> {
-    let lines: Vec<&str> = source.lines().collect();
-    let line_idx = pos.line as usize;
-    if line_idx >= lines.len() {
-        return None;
-    }
-    let line = lines[line_idx];
-    let col = (pos.character as usize).min(line.len());
-    let before = &line[..col];
-
-    // Strip any partial identifier the user has typed after the dot
-    let before = before.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
-
-    // Must end with a dot
-    let before = before.strip_suffix('.')?;
-
-    // Extract the receiver token before the dot
-    let receiver: String = before
-        .chars()
-        .rev()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-
-    if receiver.is_empty() {
-        return None;
+/// Extracts the base type name and static/instance distinction from a
+/// dot-completion receiver expression using its `resolved_type`.
+fn resolve_dot_type(receiver: &expo_ast::ast::Expr, ctx: &TypeContext) -> (Option<String>, bool) {
+    if let Some(ty) = &receiver.resolved_type {
+        let base = type_base_name(ty);
+        if base.is_some() {
+            return (base, false);
+        }
     }
 
-    Some(receiver)
+    if let ExprKind::Ident { name } = &receiver.kind
+        && (ctx.is_struct(name) || ctx.is_enum(name))
+    {
+        return (Some(name.clone()), true);
+    }
+
+    (None, false)
+}
+
+/// Returns the simple name of a type (without generic arguments) for
+/// looking up methods and fields via `TypeContext::find_type`.
+fn type_base_name(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Named { identifier, .. } => Some(identifier.name.clone()),
+        Type::Primitive(p) => Some(p.display().to_string()),
+        _ => None,
+    }
 }
 
 /// Adds completion items for methods and fields available on a type.

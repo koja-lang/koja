@@ -605,7 +605,7 @@ pub enum StringPart {
     Literal { value: String, span: Span },
     /// An interpolated expression: `#{expr}`.
     Interpolation {
-        expr: Expr,
+        expr: Box<Expr>,
         format: Option<String>,
         span: Span,
     },

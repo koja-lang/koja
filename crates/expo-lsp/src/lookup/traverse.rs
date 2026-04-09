@@ -556,44 +556,458 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
     None
 }
 
-/// Resolves the mangled function name for a method call by inferring the
-/// receiver's type from the type context (e.g. `Int_band` for `5.band(3)`).
-fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Option<String> {
-    if let Some(ref resolved) = receiver.resolved_type {
-        let type_name = resolved.display();
-        let mangled = format!("{type_name}_{method}");
-        if ctx.functions.contains_key(&mangled) {
-            return Some(mangled);
+// ---------------------------------------------------------------------------
+// find_expr_at: returns the innermost Expr at a cursor position
+// ---------------------------------------------------------------------------
+
+/// A call site found by `find_enclosing_call`.
+pub(crate) struct CallSite<'a> {
+    pub expr: &'a Expr,
+    pub active_param: usize,
+}
+
+/// Returns a reference to the innermost `Expr` node whose span contains the
+/// given cursor position, walking through all items in the module.
+pub(crate) fn find_expr_at(module: &Module, line: u32, col: u32) -> Option<&Expr> {
+    for item in &module.items {
+        let result = match item {
+            Item::Function(f) => {
+                if !span_contains(&f.span, line, col) {
+                    continue;
+                }
+                find_expr_at_in_body(&f.body, line, col)
+            }
+            Item::Impl(imp) => imp.members.iter().find_map(|m| {
+                if let ImplMember::Function(f) = m
+                    && span_contains(&f.span, line, col)
+                {
+                    return find_expr_at_in_body(&f.body, line, col);
+                }
+                None
+            }),
+            Item::Protocol(p) => {
+                if !span_contains(&p.span, line, col) {
+                    continue;
+                }
+                p.methods.iter().find_map(|m| {
+                    if span_contains(&m.span, line, col) {
+                        m.body
+                            .as_ref()
+                            .and_then(|b| find_expr_at_in_body(b, line, col))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Item::Struct(s) => {
+                if !span_contains(&s.span, line, col) {
+                    continue;
+                }
+                s.functions
+                    .iter()
+                    .find_map(|f| find_expr_at_in_body(&f.body, line, col))
+            }
+            Item::Enum(e) => {
+                if !span_contains(&e.span, line, col) {
+                    continue;
+                }
+                e.functions
+                    .iter()
+                    .find_map(|f| find_expr_at_in_body(&f.body, line, col))
+            }
+            _ => None,
+        };
+        if result.is_some() {
+            return result;
         }
     }
+    None
+}
 
-    let type_name = match &receiver.kind {
-        ExprKind::Literal { value, .. } => match value {
-            Literal::Int(_) => Some("Int"),
-            Literal::Float(_) => Some("Float"),
-            Literal::Bool(_) => Some("Bool"),
-            Literal::String(_) => Some("String"),
-            Literal::Unit => None,
-        },
-        ExprKind::Ident { name } => {
-            if ctx.is_struct(name) || ctx.is_enum(name) {
-                Some(name.as_str())
+fn find_expr_at_in_body(body: &[Statement], line: u32, col: u32) -> Option<&Expr> {
+    body.iter()
+        .find_map(|stmt| find_expr_at_in_stmt(stmt, line, col))
+}
+
+fn find_expr_at_in_stmt(stmt: &Statement, line: u32, col: u32) -> Option<&Expr> {
+    match stmt {
+        Statement::Expr(expr) => find_expr_at_inner(expr, line, col),
+        Statement::Assignment { value, .. } => find_expr_at_inner(value, line, col),
+        Statement::CompoundAssign { value, .. } => find_expr_at_inner(value, line, col),
+        Statement::Return {
+            value: Some(expr), ..
+        } => find_expr_at_inner(expr, line, col),
+        _ => None,
+    }
+}
+
+/// Recursively descends into the expression tree and returns the innermost
+/// `Expr` whose span contains the cursor.
+fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
+    if !span_contains(&expr.span, line, col) {
+        return None;
+    }
+
+    let child = match &expr.kind {
+        ExprKind::Call { callee, args } => find_expr_at_inner(callee, line, col).or_else(|| {
+            args.iter()
+                .find_map(|a| find_expr_at_inner(&a.value, line, col))
+        }),
+        ExprKind::MethodCall { receiver, args, .. } => find_expr_at_inner(receiver, line, col)
+            .or_else(|| {
+                args.iter()
+                    .find_map(|a| find_expr_at_inner(&a.value, line, col))
+            }),
+        ExprKind::FieldAccess { receiver, .. } => find_expr_at_inner(receiver, line, col),
+        ExprKind::Binary { left, right, .. } => {
+            find_expr_at_inner(left, line, col).or_else(|| find_expr_at_inner(right, line, col))
+        }
+        ExprKind::If {
+            condition,
+            then_body,
+            else_body,
+        } => find_expr_at_inner(condition, line, col)
+            .or_else(|| find_expr_at_in_body(then_body, line, col))
+            .or_else(|| {
+                else_body
+                    .as_ref()
+                    .and_then(|b| find_expr_at_in_body(b, line, col))
+            }),
+        ExprKind::Match { subject, arms } => find_expr_at_inner(subject, line, col).or_else(|| {
+            arms.iter().find_map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .and_then(|g| find_expr_at_inner(g, line, col))
+                    .or_else(|| find_expr_at_in_body(&arm.body, line, col))
+            })
+        }),
+        ExprKind::Cond { arms, else_body } => arms
+            .iter()
+            .find_map(|arm| {
+                find_expr_at_inner(&arm.condition, line, col)
+                    .or_else(|| find_expr_at_in_body(&arm.body, line, col))
+            })
+            .or_else(|| {
+                else_body
+                    .as_ref()
+                    .and_then(|b| find_expr_at_in_body(b, line, col))
+            }),
+        ExprKind::Group { expr: inner } => find_expr_at_inner(inner, line, col),
+        ExprKind::While { condition, body } => find_expr_at_inner(condition, line, col)
+            .or_else(|| find_expr_at_in_body(body, line, col)),
+        ExprKind::Loop { body } | ExprKind::Closure { body, .. } => {
+            find_expr_at_in_body(body, line, col)
+        }
+        ExprKind::ShortClosure { body, .. } => find_expr_at_inner(body, line, col),
+        ExprKind::Unless { condition, body } => find_expr_at_inner(condition, line, col)
+            .or_else(|| find_expr_at_in_body(body, line, col)),
+        ExprKind::List { elements } => elements
+            .iter()
+            .find_map(|e| find_expr_at_inner(e, line, col)),
+        ExprKind::Map { entries } => entries.iter().find_map(|(k, v)| {
+            find_expr_at_inner(k, line, col).or_else(|| find_expr_at_inner(v, line, col))
+        }),
+        ExprKind::Spawn { expr: inner, .. } => find_expr_at_inner(inner, line, col),
+        ExprKind::Receive {
+            arms,
+            after_timeout,
+            after_body,
+            ..
+        } => arms
+            .iter()
+            .find_map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .and_then(|g| find_expr_at_inner(g, line, col))
+                    .or_else(|| find_expr_at_in_body(&arm.body, line, col))
+            })
+            .or_else(|| {
+                after_timeout
+                    .as_ref()
+                    .and_then(|t| find_expr_at_inner(t, line, col))
+            })
+            .or_else(|| find_expr_at_in_body(after_body, line, col)),
+        ExprKind::For { iterable, body, .. } => find_expr_at_inner(iterable, line, col)
+            .or_else(|| find_expr_at_in_body(body, line, col)),
+        ExprKind::String { parts, .. } => parts.iter().find_map(|p| {
+            if let StringPart::Interpolation { expr, .. } = p {
+                find_expr_at_inner(expr, line, col)
             } else {
                 None
             }
-        }
-        _ => None,
+        }),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => find_expr_at_inner(condition, line, col)
+            .or_else(|| find_expr_at_inner(then_expr, line, col))
+            .or_else(|| find_expr_at_inner(else_expr, line, col)),
+        ExprKind::Unary { operand, .. } => find_expr_at_inner(operand, line, col),
+        ExprKind::BinaryLiteral { segments } => segments.iter().find_map(|seg| {
+            find_expr_at_inner(&seg.value, line, col).or_else(|| {
+                seg.size
+                    .as_ref()
+                    .and_then(|s| find_expr_at_inner(s, line, col))
+            })
+        }),
+        ExprKind::StructConstruction { fields, .. } => fields
+            .iter()
+            .find_map(|f| find_expr_at_inner(&f.value, line, col)),
+        ExprKind::EnumConstruction { data, .. } => match data {
+            EnumConstructionData::Tuple(args) => {
+                args.iter().find_map(|a| find_expr_at_inner(a, line, col))
+            }
+            EnumConstructionData::Struct(fields) => fields
+                .iter()
+                .find_map(|f| find_expr_at_inner(&f.value, line, col)),
+            EnumConstructionData::Unit => None,
+        },
+        ExprKind::Arena { body } => find_expr_at_in_body(body, line, col),
+        ExprKind::Literal { .. } | ExprKind::Self_ | ExprKind::Ident { .. } => None,
     };
-    if let Some(tn) = type_name {
-        let mangled = format!("{tn}_{method}");
-        if ctx.functions.contains_key(&mangled) {
-            return Some(mangled);
+
+    Some(child.unwrap_or(expr))
+}
+
+// ---------------------------------------------------------------------------
+// find_enclosing_call: returns the innermost Call/MethodCall at a position
+// ---------------------------------------------------------------------------
+
+/// Returns the innermost `Call` or `MethodCall` expression enclosing the
+/// cursor, along with the index of the argument the cursor falls within.
+pub(crate) fn find_enclosing_call(module: &Module, line: u32, col: u32) -> Option<CallSite<'_>> {
+    for item in &module.items {
+        let result = match item {
+            Item::Function(f) => {
+                if !span_contains(&f.span, line, col) {
+                    continue;
+                }
+                find_call_in_body(&f.body, line, col)
+            }
+            Item::Impl(imp) => imp.members.iter().find_map(|m| {
+                if let ImplMember::Function(f) = m
+                    && span_contains(&f.span, line, col)
+                {
+                    return find_call_in_body(&f.body, line, col);
+                }
+                None
+            }),
+            Item::Protocol(p) => {
+                if !span_contains(&p.span, line, col) {
+                    continue;
+                }
+                p.methods.iter().find_map(|m| {
+                    if span_contains(&m.span, line, col) {
+                        m.body
+                            .as_ref()
+                            .and_then(|b| find_call_in_body(b, line, col))
+                    } else {
+                        None
+                    }
+                })
+            }
+            Item::Struct(s) => {
+                if !span_contains(&s.span, line, col) {
+                    continue;
+                }
+                s.functions
+                    .iter()
+                    .find_map(|f| find_call_in_body(&f.body, line, col))
+            }
+            Item::Enum(e) => {
+                if !span_contains(&e.span, line, col) {
+                    continue;
+                }
+                e.functions
+                    .iter()
+                    .find_map(|f| find_call_in_body(&f.body, line, col))
+            }
+            _ => None,
+        };
+        if result.is_some() {
+            return result;
         }
     }
-    ctx.functions
-        .keys()
-        .find(|k| k.ends_with(&format!("_{method}")))
-        .cloned()
+    None
+}
+
+fn find_call_in_body<'a>(body: &'a [Statement], line: u32, col: u32) -> Option<CallSite<'a>> {
+    body.iter().find_map(|stmt| match stmt {
+        Statement::Expr(expr) => find_call_inner(expr, line, col),
+        Statement::Assignment { value, .. } => find_call_inner(value, line, col),
+        Statement::CompoundAssign { value, .. } => find_call_inner(value, line, col),
+        Statement::Return {
+            value: Some(expr), ..
+        } => find_call_inner(expr, line, col),
+        _ => None,
+    })
+}
+
+/// Recursively descends into the expression tree looking for the innermost
+/// `Call` or `MethodCall` that encloses the cursor position.
+fn find_call_inner<'a>(expr: &'a Expr, line: u32, col: u32) -> Option<CallSite<'a>> {
+    if !span_contains(&expr.span, line, col) {
+        return None;
+    }
+
+    // Always try children first so we find the innermost call.
+    let child = match &expr.kind {
+        ExprKind::Call { callee, args } => find_call_inner(callee, line, col).or_else(|| {
+            args.iter()
+                .find_map(|a| find_call_inner(&a.value, line, col))
+        }),
+        ExprKind::MethodCall { receiver, args, .. } => find_call_inner(receiver, line, col)
+            .or_else(|| {
+                args.iter()
+                    .find_map(|a| find_call_inner(&a.value, line, col))
+            }),
+        ExprKind::FieldAccess { receiver, .. } => find_call_inner(receiver, line, col),
+        ExprKind::Binary { left, right, .. } => {
+            find_call_inner(left, line, col).or_else(|| find_call_inner(right, line, col))
+        }
+        ExprKind::If {
+            condition,
+            then_body,
+            else_body,
+        } => find_call_inner(condition, line, col)
+            .or_else(|| find_call_in_body(then_body, line, col))
+            .or_else(|| {
+                else_body
+                    .as_ref()
+                    .and_then(|b| find_call_in_body(b, line, col))
+            }),
+        ExprKind::Match { subject, arms } => find_call_inner(subject, line, col).or_else(|| {
+            arms.iter().find_map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .and_then(|g| find_call_inner(g, line, col))
+                    .or_else(|| find_call_in_body(&arm.body, line, col))
+            })
+        }),
+        ExprKind::Cond { arms, else_body } => arms
+            .iter()
+            .find_map(|arm| {
+                find_call_inner(&arm.condition, line, col)
+                    .or_else(|| find_call_in_body(&arm.body, line, col))
+            })
+            .or_else(|| {
+                else_body
+                    .as_ref()
+                    .and_then(|b| find_call_in_body(b, line, col))
+            }),
+        ExprKind::Group { expr: inner } => find_call_inner(inner, line, col),
+        ExprKind::While { condition, body } => {
+            find_call_inner(condition, line, col).or_else(|| find_call_in_body(body, line, col))
+        }
+        ExprKind::Loop { body } | ExprKind::Closure { body, .. } => {
+            find_call_in_body(body, line, col)
+        }
+        ExprKind::ShortClosure { body, .. } => find_call_inner(body, line, col),
+        ExprKind::Unless { condition, body } => {
+            find_call_inner(condition, line, col).or_else(|| find_call_in_body(body, line, col))
+        }
+        ExprKind::List { elements } => elements.iter().find_map(|e| find_call_inner(e, line, col)),
+        ExprKind::Map { entries } => entries.iter().find_map(|(k, v)| {
+            find_call_inner(k, line, col).or_else(|| find_call_inner(v, line, col))
+        }),
+        ExprKind::Spawn { expr: inner, .. } => find_call_inner(inner, line, col),
+        ExprKind::Receive {
+            arms,
+            after_timeout,
+            after_body,
+            ..
+        } => arms
+            .iter()
+            .find_map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .and_then(|g| find_call_inner(g, line, col))
+                    .or_else(|| find_call_in_body(&arm.body, line, col))
+            })
+            .or_else(|| {
+                after_timeout
+                    .as_ref()
+                    .and_then(|t| find_call_inner(t, line, col))
+            })
+            .or_else(|| find_call_in_body(after_body, line, col)),
+        ExprKind::For { iterable, body, .. } => {
+            find_call_inner(iterable, line, col).or_else(|| find_call_in_body(body, line, col))
+        }
+        ExprKind::String { parts, .. } => parts.iter().find_map(|p| {
+            if let StringPart::Interpolation { expr, .. } = p {
+                find_call_inner(expr, line, col)
+            } else {
+                None
+            }
+        }),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => find_call_inner(condition, line, col)
+            .or_else(|| find_call_inner(then_expr, line, col))
+            .or_else(|| find_call_inner(else_expr, line, col)),
+        ExprKind::Unary { operand, .. } => find_call_inner(operand, line, col),
+        ExprKind::BinaryLiteral { segments } => segments.iter().find_map(|seg| {
+            find_call_inner(&seg.value, line, col).or_else(|| {
+                seg.size
+                    .as_ref()
+                    .and_then(|s| find_call_inner(s, line, col))
+            })
+        }),
+        ExprKind::StructConstruction { fields, .. } => fields
+            .iter()
+            .find_map(|f| find_call_inner(&f.value, line, col)),
+        ExprKind::EnumConstruction { data, .. } => match data {
+            EnumConstructionData::Tuple(args) => {
+                args.iter().find_map(|a| find_call_inner(a, line, col))
+            }
+            EnumConstructionData::Struct(fields) => fields
+                .iter()
+                .find_map(|f| find_call_inner(&f.value, line, col)),
+            EnumConstructionData::Unit => None,
+        },
+        ExprKind::Arena { body } => find_call_in_body(body, line, col),
+        _ => None,
+    };
+
+    if child.is_some() {
+        return child;
+    }
+
+    // If no deeper call was found, check whether *this* node is a call.
+    match &expr.kind {
+        ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+            let active_param = compute_active_param(args, line, col);
+            Some(CallSite { expr, active_param })
+        }
+        _ => None,
+    }
+}
+
+/// Determines which parameter index the cursor is on by comparing its
+/// position against the argument spans.
+fn compute_active_param(args: &[Arg], line: u32, col: u32) -> usize {
+    for (i, arg) in args.iter().enumerate() {
+        if span_contains(&arg.span, line, col) {
+            return i;
+        }
+    }
+    // Cursor is past all args (e.g. after trailing comma or in empty parens).
+    args.len()
+}
+
+/// Resolves the mangled function name for a method call using the
+/// receiver's `resolved_type` (e.g. `Int_band` for `5.band(3)`).
+fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Option<String> {
+    let resolved = receiver.resolved_type.as_ref()?;
+    let type_name = resolved.display();
+    let mangled = format!("{type_name}_{method}");
+    if ctx.functions.contains_key(&mangled) {
+        return Some(mangled);
+    }
+    None
 }
 
 /// Returns true if the cursor is positioned on the method name portion of a

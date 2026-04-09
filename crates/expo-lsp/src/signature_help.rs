@@ -8,10 +8,12 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
+use expo_ast::ast::ExprKind;
+use expo_ast::types::Type;
 use expo_typecheck::context::{FunctionSig, TypeContext};
 
 use crate::backend::Backend;
-use crate::lookup::receiver::resolve_receiver_type;
+use crate::lookup::find_enclosing_call;
 
 impl Backend {
     /// Handles `textDocument/signatureHelp` requests by finding the
@@ -29,20 +31,28 @@ impl Backend {
             None => return Ok(None),
         };
 
-        let call = match find_call_context(&state.source, pos) {
+        let line = pos.line + 1;
+        let col = pos.character + 1;
+        let call_site = match find_enclosing_call(&state.module, line, col) {
             Some(c) => c,
             None => return Ok(None),
         };
 
-        let sig = match &call.receiver {
-            Some(receiver) => find_method_sig(
-                receiver,
-                &call.function_name,
-                &state.source,
-                &state.ctx,
-                &self.stdlib_ctx,
-            ),
-            None => find_function_sig(&call.function_name, &state.ctx, &self.stdlib_ctx),
+        let (function_name, sig) = match &call_site.expr.kind {
+            ExprKind::Call { callee, .. } => {
+                let ExprKind::Ident { name } = &callee.kind else {
+                    return Ok(None);
+                };
+                let sig = find_function_sig(name, &state.ctx, &self.stdlib_ctx);
+                (name.clone(), sig)
+            }
+            ExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                let sig = find_method_sig(receiver, method, &state.ctx, &self.stdlib_ctx);
+                (method.clone(), sig)
+            }
+            _ => return Ok(None),
         };
 
         let sig = match sig {
@@ -68,131 +78,25 @@ impl Backend {
             .collect();
         let label = format!(
             "fn {}({}) -> {}",
-            call.function_name,
+            function_name,
             params_str.join(", "),
             sig.return_type.display()
         );
 
+        let active_param = call_site.active_param as u32;
         let signature = SignatureInformation {
             label,
             documentation: None,
             parameters: Some(params),
-            active_parameter: Some(call.active_param),
+            active_parameter: Some(active_param),
         };
 
         Ok(Some(SignatureHelp {
             signatures: vec![signature],
             active_signature: Some(0),
-            active_parameter: Some(call.active_param),
+            active_parameter: Some(active_param),
         }))
     }
-}
-
-struct CallContext {
-    function_name: String,
-    /// If the call is `receiver.method(...)`, the receiver token.
-    receiver: Option<String>,
-    active_param: u32,
-}
-
-/// Scans the source text backwards from the cursor to find the enclosing
-/// function call and determine which parameter is active. Also detects
-/// method calls by checking for `.` before the function name.
-fn find_call_context(source: &str, pos: Position) -> Option<CallContext> {
-    let lines: Vec<&str> = source.lines().collect();
-    let line_idx = pos.line as usize;
-    if line_idx >= lines.len() {
-        return None;
-    }
-
-    let col = pos.character as usize;
-    let current_line = lines[line_idx];
-    let col = col.min(current_line.len());
-
-    let mut flat_offset = 0usize;
-    for (i, line) in lines.iter().enumerate() {
-        if i == line_idx {
-            flat_offset += col;
-            break;
-        }
-        flat_offset += line.len() + 1;
-    }
-
-    let bytes = source.as_bytes();
-    if flat_offset > bytes.len() {
-        return None;
-    }
-
-    let mut depth = 0i32;
-    let mut commas = 0u32;
-    let mut paren_pos = None;
-
-    let mut i = flat_offset;
-    while i > 0 {
-        i -= 1;
-        match bytes[i] {
-            b')' => depth += 1,
-            b'(' => {
-                if depth == 0 {
-                    paren_pos = Some(i);
-                    break;
-                }
-                depth -= 1;
-            }
-            b',' if depth == 0 => commas += 1,
-            _ => {}
-        }
-    }
-
-    let paren_pos = paren_pos?;
-
-    let name_end = paren_pos;
-    let mut name_start = name_end;
-    while name_start > 0 {
-        let c = bytes[name_start - 1];
-        if c.is_ascii_alphanumeric() || c == b'_' {
-            name_start -= 1;
-        } else {
-            break;
-        }
-    }
-
-    if name_start == name_end {
-        return None;
-    }
-
-    let function_name = std::str::from_utf8(&bytes[name_start..name_end])
-        .ok()?
-        .to_string();
-
-    let receiver = if name_start > 0 && bytes[name_start - 1] == b'.' {
-        let dot_pos = name_start - 1;
-        let recv_end = dot_pos;
-        let mut recv_start = recv_end;
-        while recv_start > 0 {
-            let c = bytes[recv_start - 1];
-            if c.is_ascii_alphanumeric() || c == b'_' {
-                recv_start -= 1;
-            } else {
-                break;
-            }
-        }
-        if recv_start < recv_end {
-            std::str::from_utf8(&bytes[recv_start..recv_end])
-                .ok()
-                .map(|s| s.to_string())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    Some(CallContext {
-        function_name,
-        receiver,
-        active_param: commas,
-    })
 }
 
 /// Looks up a free function signature by name.
@@ -206,49 +110,45 @@ fn find_function_sig<'a>(
         .or_else(|| stdlib_ctx.functions.get(name))
 }
 
-/// Looks up a method signature by resolving the receiver type, then
-/// searching for the method in that type's functions. Falls back to
-/// the mangled `Type_method` name in the global function table.
+/// Looks up a method signature using the receiver's `resolved_type` to
+/// find the owning type, then retrieves the method from that type's
+/// function table.
 fn find_method_sig<'a>(
-    receiver: &str,
+    receiver: &expo_ast::ast::Expr,
     method: &str,
-    source: &str,
     ctx: &'a TypeContext,
     stdlib_ctx: &'a TypeContext,
 ) -> Option<&'a FunctionSig> {
-    if let Some(type_name) = resolve_receiver_type(receiver, source, ctx)
-        .or_else(|| resolve_receiver_type(receiver, source, stdlib_ctx))
-    {
-        if let Some(sig) = ctx
-            .find_type(&type_name)
-            .and_then(|ti| ti.functions.get(method))
-        {
-            return Some(sig);
-        }
-        if let Some(sig) = stdlib_ctx
-            .find_type(&type_name)
-            .and_then(|ti| ti.functions.get(method))
-        {
-            return Some(sig);
-        }
-    }
-
-    let mangled = format!("{}_{}", receiver, method);
-    ctx.functions
-        .get(&mangled)
-        .or_else(|| stdlib_ctx.functions.get(&mangled))
+    let type_name = receiver_type_name(receiver, ctx)?;
+    ctx.find_type(&type_name)
+        .and_then(|ti| ti.functions.get(method))
         .or_else(|| {
-            let suffix = format!("_{}", method);
-            ctx.functions
-                .iter()
-                .find(|(k, _)| k.ends_with(&suffix))
-                .map(|(_, v)| v)
-                .or_else(|| {
-                    stdlib_ctx
-                        .functions
-                        .iter()
-                        .find(|(k, _)| k.ends_with(&suffix))
-                        .map(|(_, v)| v)
-                })
+            stdlib_ctx
+                .find_type(&type_name)
+                .and_then(|ti| ti.functions.get(method))
         })
+        .or_else(|| {
+            let mangled = format!("{type_name}_{method}");
+            ctx.functions
+                .get(&mangled)
+                .or_else(|| stdlib_ctx.functions.get(&mangled))
+        })
+}
+
+/// Extracts the base type name from a receiver expression, preferring
+/// `resolved_type` and falling back to ident-based struct/enum lookup.
+fn receiver_type_name(receiver: &expo_ast::ast::Expr, ctx: &TypeContext) -> Option<String> {
+    if let Some(ty) = &receiver.resolved_type {
+        return match ty {
+            Type::Named { identifier, .. } => Some(identifier.name.clone()),
+            Type::Primitive(p) => Some(p.display().to_string()),
+            _ => None,
+        };
+    }
+    if let ExprKind::Ident { name } = &receiver.kind
+        && (ctx.is_struct(name) || ctx.is_enum(name))
+    {
+        return Some(name.clone());
+    }
+    None
 }

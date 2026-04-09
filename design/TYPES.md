@@ -10,6 +10,17 @@ and [ROADMAP.md](ROADMAP.md).
 
 ---
 
+## Type representation and storage
+
+`Type`, `Primitive`, and `FnParam` are defined in `expo-ast` (re-exported by
+`expo-typecheck` for backwards compatibility). After typechecking, every `Expr`
+node carries `resolved_type: Option<Type>` -- the canonical way downstream
+consumers (codegen, LSP, formatter) access inferred type information. There is
+no separate "typed AST" struct; the same AST flows from parser through
+typechecker to codegen with types populated in place.
+
+---
+
 ## Type algebra
 
 ### The four algebraic types
