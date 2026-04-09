@@ -31,7 +31,18 @@ pub struct DebugContext<'ctx> {
 impl<'ctx> DebugContext<'ctx> {
     /// Creates a new debug context, initializing the `DIBuilder` and
     /// `DICompileUnit` for the given LLVM module.
-    pub fn new(llvm_module: &LlvmModule<'ctx>, filename: &str, directory: &str) -> Self {
+    pub fn new(
+        llvm_module: &LlvmModule<'ctx>,
+        filename: &str,
+        directory: &str,
+        release: bool,
+    ) -> Self {
+        let emission = if release {
+            DWARFEmissionKind::LineTablesOnly
+        } else {
+            DWARFEmissionKind::Full
+        };
+
         let (builder, compile_unit) = llvm_module.create_debug_info_builder(
             true,
             DWARFSourceLanguage::C,
@@ -42,7 +53,7 @@ impl<'ctx> DebugContext<'ctx> {
             "",
             0,
             "",
-            DWARFEmissionKind::Full,
+            emission,
             0,
             false,
             false,

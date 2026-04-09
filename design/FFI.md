@@ -57,7 +57,7 @@ a C binding. It can coexist with normal Expo functions in the same struct.
 
 ```expo
 struct Argon2
-  @link "argon2", @extern "C"
+  @link "argon2" @extern "C"
   priv fn argon2id_hash_encoded(
     t_cost: UInt32, m_cost: UInt32, parallelism: UInt32,
     pwd: Ptr<UInt8>, pwdlen: UInt32,
@@ -65,7 +65,7 @@ struct Argon2
     hashlen: UInt32, encoded: Ptr<UInt8>, encodedlen: UInt32
   ) -> Int32
 
-  @link "argon2", @extern "C"
+  @link "argon2" @extern "C"
   priv fn argon2id_verify(
     encoded: Ptr<UInt8>, pwd: Ptr<UInt8>, pwdlen: UInt32
   ) -> Int32
@@ -95,17 +95,23 @@ struct Argon2
 end
 ```
 
-### Annotation chaining
+### Multiple annotations
 
-Multiple annotations on one line, separated by commas:
+Multiple annotations on a declaration, either stacked or inline:
 
 ```expo
-@link "argon2", @extern "C"
+@link "argon2" @extern "C"
+priv fn argon2id_hash_encoded(...) -> Int32
+
+# or stacked:
+@link "argon2"
+@extern "C"
 priv fn argon2id_hash_encoded(...) -> Int32
 ```
 
 This is a general-purpose annotation feature, not FFI-specific. Works for
-any annotation combination (e.g. `@doc "...", @test`).
+any annotation combination (e.g. `@doc "..." @test`). Each `@` is a
+self-delimiting boundary -- no separator needed between annotations.
 
 ### Rules
 
@@ -168,7 +174,7 @@ expo_str = c_result.to_string() # CString -> Expo String
 - `@link "libname"` annotation
 - Pass and return primitives only (`Int32`, `UInt32`, `Float`, `Bool`)
 - `-l` flag wired through to linker
-- Annotation chaining (`,` between annotations)
+- ~~Multiple annotations per declaration (space-separated or stacked)~~ **Done**
 
 ### Phase 2: pointers and strings
 
@@ -477,7 +483,7 @@ the Apple ecosystem, bridging header complexity.
   users don't touch FFI.
 - **Expo's own path**: annotations on structs instead of keyword blocks.
   Types as namespaces. No `unsafe` (open question, but leaning away).
-  Annotation chaining for conciseness.
+  Multiple annotations per declaration (stacked or inline).
 
 ---
 

@@ -25,10 +25,10 @@ pub(crate) fn span_contains_name(_name: &str, span: &Span, line: u32, col: u32) 
 }
 
 /// Extracts the doc string from a `@doc` annotation, if present.
-pub(crate) fn annotation_doc(annotation: &Option<Annotation>) -> Option<String> {
-    annotation
-        .as_ref()
-        .filter(|a| a.name == "doc")
+pub(crate) fn annotation_doc(annotations: &[Annotation]) -> Option<String> {
+    annotations
+        .iter()
+        .find(|a| a.name == "doc")
         .and_then(|a| match &a.value {
             Some(AnnotationValue::String(s)) => Some(s.clone()),
             _ => None,

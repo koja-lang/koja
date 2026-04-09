@@ -1007,7 +1007,7 @@ fn synthesize_default_fn(
         }
     }
     Function {
-        annotation: pm.annotation.clone(),
+        annotations: pm.annotations.clone(),
         visibility: Visibility::Public,
         name: pm.name.clone(),
         type_params: pm.type_params.clone(),

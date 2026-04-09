@@ -194,11 +194,14 @@ pub fn finalize_project(project: &mut DocProject) {
     project.items.sort_by(|a, b| a.name.cmp(&b.name));
 }
 
-fn annotation_string(annotation: &Option<expo_ast::ast::Annotation>) -> Option<String> {
-    annotation.as_ref().and_then(|a| match &a.value {
-        Some(AnnotationValue::String(s)) => Some(s.clone()),
-        _ => None,
-    })
+fn annotation_string(annotations: &[expo_ast::ast::Annotation]) -> Option<String> {
+    annotations
+        .iter()
+        .find(|a| a.name == "doc")
+        .and_then(|a| match &a.value {
+            Some(AnnotationValue::String(s)) => Some(s.clone()),
+            _ => None,
+        })
 }
 
 fn attach_impl_functions(
@@ -255,18 +258,18 @@ fn attach_impl_functions(
 }
 
 fn extract_constant(c: &expo_ast::ast::Constant) -> Option<DocConstant> {
-    if has_doc_false(&c.annotation) {
+    if has_doc_false(&c.annotations) {
         return None;
     }
 
     Some(DocConstant {
-        doc: annotation_string(&c.annotation),
+        doc: annotation_string(&c.annotations),
         name: c.name.clone(),
     })
 }
 
 fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
-    if has_doc_false(&e.annotation) {
+    if has_doc_false(&e.annotations) {
         return None;
     }
 
@@ -274,7 +277,7 @@ fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
     let functions = e.functions.iter().filter_map(extract_function).collect();
 
     Some(DocEnum {
-        doc: annotation_string(&e.annotation),
+        doc: annotation_string(&e.annotations),
         functions,
         name: e.name.clone(),
         variants,
@@ -282,14 +285,14 @@ fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
 }
 
 fn extract_function(f: &Function) -> Option<DocFunction> {
-    if has_doc_false(&f.annotation) {
+    if has_doc_false(&f.annotations) {
         return None;
     }
 
     let params = extract_params(&f.params);
 
     Some(DocFunction {
-        doc: annotation_string(&f.annotation),
+        doc: annotation_string(&f.annotations),
         name: f.name.clone(),
         params,
         return_type: f.return_type.as_ref().map(type_expr_to_string),
@@ -316,7 +319,7 @@ fn extract_params(params: &[Param]) -> Vec<DocParam> {
 }
 
 fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
-    if has_doc_false(&p.annotation) {
+    if has_doc_false(&p.annotations) {
         return None;
     }
 
@@ -327,7 +330,7 @@ fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
         .collect();
 
     Some(DocProtocol {
-        doc: annotation_string(&p.annotation),
+        doc: annotation_string(&p.annotations),
         functions,
         name: p.name.clone(),
         type_params: p.type_params.iter().map(|tp| tp.name.clone()).collect(),
@@ -335,14 +338,14 @@ fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
 }
 
 fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
-    if has_doc_false(&m.annotation) {
+    if has_doc_false(&m.annotations) {
         return None;
     }
 
     let params = extract_params(&m.params);
 
     Some(DocFunction {
-        doc: annotation_string(&m.annotation),
+        doc: annotation_string(&m.annotations),
         name: m.name.clone(),
         params,
         return_type: m.return_type.as_ref().map(type_expr_to_string),
@@ -351,7 +354,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
 }
 
 fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
-    if has_doc_false(&s.annotation) {
+    if has_doc_false(&s.annotations) {
         return None;
     }
 
@@ -366,7 +369,7 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
     let functions = s.functions.iter().filter_map(extract_function).collect();
 
     Some(DocStruct {
-        doc: annotation_string(&s.annotation),
+        doc: annotation_string(&s.annotations),
         fields,
         functions,
         name: s.name.clone(),
@@ -374,10 +377,10 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
     })
 }
 
-fn has_doc_false(annotation: &Option<expo_ast::ast::Annotation>) -> bool {
-    annotation
-        .as_ref()
-        .is_some_and(|a| a.name == "doc" && a.value == Some(AnnotationValue::False))
+fn has_doc_false(annotations: &[expo_ast::ast::Annotation]) -> bool {
+    annotations
+        .iter()
+        .any(|a| a.name == "doc" && a.value == Some(AnnotationValue::False))
 }
 
 /// Format a type expression as a human-readable string.

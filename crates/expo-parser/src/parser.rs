@@ -235,31 +235,28 @@ impl Parser {
         match self.peek().clone() {
             TokenKind::Struct => Some(self.parse_struct_item()),
             TokenKind::Enum => Some(self.parse_enum_item()),
-            TokenKind::Protocol => Some(self.parse_protocol_item(None)),
+            TokenKind::Protocol => Some(self.parse_protocol_item(Vec::new())),
             TokenKind::Impl => Some(self.parse_impl_item()),
-            TokenKind::Fn => Some(self.parse_function_item(None, Visibility::Public)),
+            TokenKind::Fn => Some(self.parse_function_item(Vec::new(), Visibility::Public)),
             TokenKind::Priv => {
                 self.advance();
-                Some(self.parse_function_item(None, Visibility::Private))
+                Some(self.parse_function_item(Vec::new(), Visibility::Private))
             }
             TokenKind::At => {
-                let annotation = self.parse_annotation();
-                self.skip_newlines();
+                let annotations = self.parse_annotations();
                 match self.peek().clone() {
-                    TokenKind::Struct => {
-                        Some(self.parse_struct_item_with_annotation(Some(annotation)))
-                    }
-                    TokenKind::Enum => Some(self.parse_enum_item_with_annotation(Some(annotation))),
-                    TokenKind::Protocol => Some(self.parse_protocol_item(Some(annotation))),
+                    TokenKind::Struct => Some(self.parse_struct_item_with_annotations(annotations)),
+                    TokenKind::Enum => Some(self.parse_enum_item_with_annotations(annotations)),
+                    TokenKind::Protocol => Some(self.parse_protocol_item(annotations)),
                     TokenKind::Fn => {
-                        Some(self.parse_function_item(Some(annotation), Visibility::Public))
+                        Some(self.parse_function_item(annotations, Visibility::Public))
                     }
                     TokenKind::Priv => {
                         self.advance();
-                        Some(self.parse_function_item(Some(annotation), Visibility::Private))
+                        Some(self.parse_function_item(annotations, Visibility::Private))
                     }
-                    TokenKind::Const => Some(self.parse_constant_item(Some(annotation))),
-                    TokenKind::Type => Some(self.parse_type_alias_item(Some(annotation))),
+                    TokenKind::Const => Some(self.parse_constant_item(annotations)),
+                    TokenKind::Type => Some(self.parse_type_alias_item(annotations)),
                     _ => {
                         let span = self.current_span();
                         self.error(
@@ -270,10 +267,10 @@ impl Parser {
                     }
                 }
             }
-            TokenKind::Type => Some(self.parse_type_alias_item(None)),
+            TokenKind::Type => Some(self.parse_type_alias_item(Vec::new())),
             TokenKind::Alias => Some(self.parse_alias_item()),
             TokenKind::Shared => Some(self.parse_shared_item()),
-            TokenKind::Const => Some(self.parse_constant_item(None)),
+            TokenKind::Const => Some(self.parse_constant_item(Vec::new())),
             _ => {
                 let span = self.current_span();
                 self.error(

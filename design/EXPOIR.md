@@ -605,15 +605,41 @@ new code before anything works), the preferred strategy is to refactor
 `expo-codegen` in-place, splitting lowering from emission incrementally.
 Tests pass at every step.
 
-**Phase 1: TypeRegistry API** (~2 days)
+**Phase 1: Typed foundation** (done)
 
-`TypeRegistry` currently uses bare-name `HashMap<String, StructType>` keys
-(`"Point"`, `"StopReason"`). There are ~10 insert sites and ~70 read sites.
-Wrap the raw HashMap behind methods that accept `TypeIdentifier` and
-internally key by `"package::TypeName"`. This is mechanical find-and-replace
-across ~80 call sites.
+The original plan was a narrow TypeRegistry key migration, but implementation
+revealed three tightly coupled pieces that needed to move together.
 
-This alone fixes the package-qualified type collision problem and unblocks
+*TypeRegistry migration.* `TypeRegistry.concrete` is now
+`HashMap<TypeIdentifier, StructType>` with `register_concrete()` /
+`get_concrete()` methods. Monomorphized generics and unions remain as
+mangled `String` keys in a separate `monomorphized` map -- these are
+synthesized names like `"List_$Int32$"`, not package-qualified types.
+`get_stdlib()` provides bare-name lookup for intrinsic/stdlib types where
+the caller only knows `"Fd"` or `"Socket"`, not the full identifier.
+
+*Typed AST.* `Expr` was restructured from a flat enum to
+`struct Expr { kind: ExprKind, span, resolved_type: Option<Type> }` --
+every expression carries its resolved type after type checking.
+`Type`, `Primitive`, `FnParam`, and `TypeIdentifier` were moved from
+`expo-typecheck` to `expo-ast` so they're available across all compiler
+crates. Struct and enum construction AST nodes carry
+`resolved_type: Option<TypeIdentifier>`.
+
+*TypedValue threading.* `compile_expr` now returns `TypedValue`, which
+pairs every LLVM value with its Expo `Type`. Downstream codegen reads
+`expo_type` instead of reverse-engineering types from LLVM bit widths or
+struct names. ~75 usages across all codegen files.
+
+*Remaining.* `TypeContext.find_type(&str)` still has ~35 call sites in
+codegen (heaviest in `structs.rs`, `enums.rs`, `compiler.rs`). These look
+up type metadata (fields, methods, type params) by bare string. Reducing
+them is ongoing -- `resolved_type` on AST nodes provides the
+`TypeIdentifier` at construction sites, but method resolution and drop
+analysis still rely on `find_type`.
+
+This phase fixes the package-qualified type collision problem, gives
+codegen reliable type information without string-key lookups, and unblocks
 C FFI without waiting for the full IR.
 
 **Phase 2: Extract decision types** (~1-2 weeks)
@@ -660,6 +686,6 @@ is just "ExpoIR → LLVM" and the lowering lives in `expo-ir`.
 ### Why incremental over big-bang
 
 - Tests pass at every step (no "nothing works for 4 weeks" phase).
-- Phase 1 alone unblocks C FFI (2 days vs 4-6 weeks for the full IR).
+- Phase 1 (done) unblocked C FFI without waiting for the full IR.
 - Natural IR discovery -- instructions emerge from real code, not speculation.
 - Total effort ~4-6 weeks, comparable to big-bang but with continuous progress.

@@ -107,8 +107,8 @@ impl<'a> Printer<'a> {
     /// Formats a `struct` declaration with its fields and trailing comments.
     fn struct_to_doc(&mut self, s: &StructDecl) -> Doc {
         let mut parts = Vec::new();
-        if let Some(ann) = &s.annotation {
-            parts.push(annotation_to_doc(ann));
+        if let Some(doc) = annotations_to_doc(&s.annotations) {
+            parts.push(doc);
             parts.push(hardline());
         }
         let mut header = format!("struct {}", s.name);
@@ -166,8 +166,8 @@ impl<'a> Printer<'a> {
     /// Formats an `enum` declaration with its variants.
     fn enum_to_doc(&mut self, e: &EnumDecl) -> Doc {
         let mut parts = Vec::new();
-        if let Some(ann) = &e.annotation {
-            parts.push(annotation_to_doc(ann));
+        if let Some(doc) = annotations_to_doc(&e.annotations) {
+            parts.push(doc);
             parts.push(hardline());
         }
         let mut header = format!("enum {}", e.name);
@@ -244,8 +244,8 @@ impl<'a> Printer<'a> {
     fn function_to_doc(&mut self, f: &Function) -> Doc {
         let mut parts = Vec::new();
 
-        if let Some(ann) = &f.annotation {
-            parts.push(annotation_to_doc(ann));
+        if let Some(doc) = annotations_to_doc(&f.annotations) {
+            parts.push(doc);
             parts.push(hardline());
         }
 
@@ -354,8 +354,8 @@ impl<'a> Printer<'a> {
     /// Formats a `protocol` declaration with its method signatures.
     fn protocol_to_doc(&mut self, p: &ProtocolDecl) -> Doc {
         let mut parts = Vec::new();
-        if let Some(ann) = &p.annotation {
-            parts.push(annotation_to_doc(ann));
+        if let Some(doc) = annotations_to_doc(&p.annotations) {
+            parts.push(doc);
             parts.push(hardline());
         }
         let mut header = format!("protocol {}", p.name);
@@ -383,8 +383,8 @@ impl<'a> Printer<'a> {
     /// Formats a protocol method (signature only, or with default body).
     fn protocol_method_to_doc(&mut self, m: &ProtocolMethod) -> Doc {
         let mut parts = Vec::new();
-        if let Some(ann) = &m.annotation {
-            parts.push(annotation_to_doc(ann));
+        if let Some(doc) = annotations_to_doc(&m.annotations) {
+            parts.push(doc);
             parts.push(hardline());
         }
 
@@ -468,8 +468,8 @@ impl<'a> Printer<'a> {
     /// Formats a `const` declaration.
     fn constant_to_doc(&mut self, c: &Constant) -> Doc {
         let mut parts = Vec::new();
-        if let Some(ann) = &c.annotation {
-            parts.push(annotation_to_doc(ann));
+        if let Some(doc) = annotations_to_doc(&c.annotations) {
+            parts.push(doc);
             parts.push(hardline());
         }
         parts.push(text("const "));

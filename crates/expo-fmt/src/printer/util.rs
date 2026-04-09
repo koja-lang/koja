@@ -108,8 +108,8 @@ pub(super) fn alias_to_doc(a: &AliasDecl) -> Doc {
 /// Formats a `type` alias declaration (`type Name = TypeExpr`).
 pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
     let mut parts = Vec::new();
-    if let Some(ann) = &t.annotation {
-        parts.push(annotation_to_doc(ann));
+    if let Some(doc) = annotations_to_doc(&t.annotations) {
+        parts.push(doc);
         parts.push(hardline());
     }
     parts.push(text("type "));
@@ -129,7 +129,29 @@ pub(super) fn shared_to_doc(s: &SharedDecl) -> Doc {
     ])
 }
 
-/// Formats an annotation (`@doc`, `@spec`, etc.).
+/// Formats a list of annotations, preserving the stacked/inline layout.
+/// Annotations on the same line are joined with a space; annotations on
+/// separate lines are joined with hardlines.
+pub(super) fn annotations_to_doc(annotations: &[Annotation]) -> Option<Doc> {
+    if annotations.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for (i, ann) in annotations.iter().enumerate() {
+        if i > 0 {
+            let prev = &annotations[i - 1];
+            if ann.span.start.line == prev.span.start.line {
+                parts.push(text(" "));
+            } else {
+                parts.push(hardline());
+            }
+        }
+        parts.push(annotation_to_doc(ann));
+    }
+    Some(concat(parts))
+}
+
+/// Formats a single annotation (`@doc`, `@spec`, etc.).
 pub(super) fn annotation_to_doc(ann: &Annotation) -> Doc {
     match &ann.value {
         Some(AnnotationValue::String(val)) => {

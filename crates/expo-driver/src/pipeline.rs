@@ -241,7 +241,7 @@ pub fn build_from_graph(
         process::exit(1);
     }
 
-    link(&obj_path, output, quiet);
+    link(&obj_path, output, quiet, release);
 }
 
 /// Builds a project from its config: resolves modules, type-checks, compiles, links.
@@ -445,8 +445,7 @@ fn discover_tests(graph: &ModuleGraph, _project_name: &str) -> Vec<TestCase> {
         let rm = &graph.modules[name];
         for item in &rm.module.items {
             if let Item::Function(func) = item
-                && let Some(ref ann) = func.annotation
-                && ann.name == "test"
+                && let Some(ann) = func.annotations.iter().find(|a| a.name == "test")
             {
                 let description = match &ann.value {
                     Some(AnnotationValue::String(s)) => s.clone(),
@@ -503,7 +502,7 @@ pub struct BuildArgs {
 }
 
 /// Links an object file with the embedded runtime library to produce an executable.
-fn link(obj_path: &str, output: &str, quiet: bool) {
+fn link(obj_path: &str, output: &str, quiet: bool, release: bool) {
     let runtime_lib_bytes: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
     let tmp_dir = env::temp_dir().join(format!("expo-link-{}", process::id()));
     fs::create_dir_all(&tmp_dir).expect("failed to create temp dir for linking");
@@ -517,7 +516,7 @@ fn link(obj_path: &str, output: &str, quiet: bool) {
 
     match status {
         Ok(s) if s.success() => {
-            if cfg!(target_os = "macos") {
+            if cfg!(target_os = "macos") && !release {
                 let _ = process::Command::new("dsymutil")
                     .arg(output)
                     .stderr(process::Stdio::null())

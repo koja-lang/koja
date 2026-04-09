@@ -296,10 +296,11 @@ impl<'ctx> Compiler<'ctx> {
         type_ctx: &'ctx TypeContext,
         filename: &str,
         directory: &str,
+        release: bool,
     ) -> Self {
         let module = context.create_module("expo_module");
         let builder = context.create_builder();
-        let debug = DebugContext::new(&module, filename, directory);
+        let debug = DebugContext::new(&module, filename, directory, release);
         Self {
             context,
             module,
@@ -1348,6 +1349,7 @@ fn run_codegen<'ctx>(
     modules: &[&Module],
     type_ctx: &'ctx TypeContext,
     context: &'ctx Context,
+    release: bool,
     app_name: &str,
     entry_type: Option<&str>,
 ) -> Result<Compiler<'ctx>, Vec<Diagnostic>> {
@@ -1361,7 +1363,7 @@ fn run_codegen<'ctx>(
         })
         .unwrap_or_else(|| ("unknown".to_string(), ".".to_string()));
 
-    let mut compiler = Compiler::new(context, type_ctx, &filename, &directory);
+    let mut compiler = Compiler::new(context, type_ctx, &filename, &directory, release);
 
     let app_name_val = context.const_string(app_name.as_bytes(), true);
     let global = compiler
@@ -1448,7 +1450,7 @@ pub fn compile_modules(
     entry_type: Option<&str>,
 ) -> Result<(), Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(modules, type_ctx, &context, app_name, entry_type)?;
+    let compiler = run_codegen(modules, type_ctx, &context, release, app_name, entry_type)?;
 
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
@@ -1485,7 +1487,7 @@ pub fn emit_llvm_ir(
     entry_type: Option<&str>,
 ) -> Result<String, Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(modules, type_ctx, &context, app_name, entry_type)?;
+    let compiler = run_codegen(modules, type_ctx, &context, false, app_name, entry_type)?;
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
     Ok(compiler.module.print_to_string().to_string())

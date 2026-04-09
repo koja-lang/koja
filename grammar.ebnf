@@ -30,8 +30,7 @@ top_level_decl = struct_decl
                | constant_decl
                | shared_decl
                | type_alias_decl
-               | alias_decl
-               | annotation ;
+               | alias_decl ;
 
 
 (* ========================================================================== *)
@@ -40,7 +39,7 @@ top_level_decl = struct_decl
 
 struct_member = struct_field | function_decl ;
 
-struct_decl = [ annotation ] , "struct" , TYPE_IDENT , [ type_params ] ,
+struct_decl = { annotation } , "struct" , TYPE_IDENT , [ type_params ] ,
               { struct_member } ,
               "end" ;
 
@@ -48,7 +47,7 @@ struct_field = IDENT , ":" , type_expr , [ "=" , expr ] ;
 
 enum_member = enum_variant | function_decl ;
 
-enum_decl = [ annotation ] , "enum" , TYPE_IDENT , [ type_params ] ,
+enum_decl = { annotation } , "enum" , TYPE_IDENT , [ type_params ] ,
             { enum_member } ,
             "end" ;
 
@@ -60,7 +59,7 @@ type_params = "<" , type_param , { "," , type_param } , ">" ;
 
 type_param = TYPE_IDENT , [ ":" , TYPE_IDENT , { "&" , TYPE_IDENT } ] ;
 
-type_alias_decl = [ annotation ] , "type" , TYPE_IDENT , "=" , type_expr ;
+type_alias_decl = { annotation } , "type" , TYPE_IDENT , "=" , type_expr ;
 
 alias_decl = "alias" , IDENT , "." , TYPE_IDENT , [ "as" , TYPE_IDENT ] ;
 
@@ -69,11 +68,11 @@ alias_decl = "alias" , IDENT , "." , TYPE_IDENT , [ "as" , TYPE_IDENT ] ;
 (* 3. Protocols                                                               *)
 (* ========================================================================== *)
 
-protocol_decl = [ annotation ] , "protocol" , TYPE_IDENT , [ type_params ] ,
+protocol_decl = { annotation } , "protocol" , TYPE_IDENT , [ type_params ] ,
                 { protocol_method } ,
                 "end" ;
 
-protocol_method = [ annotation ] , "fn" , IDENT , [ type_params ] ,
+protocol_method = { annotation } , "fn" , IDENT , [ type_params ] ,
                   [ "(" , [ param_list ] , ")" ] , [ "->" , type_expr ] ,
                   [ { statement } , "end" ] ;
 
@@ -96,7 +95,7 @@ type_alias = "type" , TYPE_IDENT , "=" , type_expr ;
 (* 5. Functions                                                               *)
 (* ========================================================================== *)
 
-function_decl = [ annotation ] , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
+function_decl = { annotation } , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
                 [ "(" , [ param_list ] , ")" ] , [ "->" , type_expr ] ,
                 { statement } ,
                 "end" ;
@@ -432,6 +431,17 @@ annotation_value = string_lit
                  | multiline_string_lit
                  | "false" ;
 
+(* Multiple annotations can appear on the same declaration, either stacked
+   on separate lines or inline on the same line separated by whitespace:
+     @link "argon2"          -- stacked
+     @extern "C"
+     struct Argon2C
+   or:
+     @link "argon2" @extern "C"   -- inline
+     struct Argon2C
+   The formatter normalizes inline spacing but preserves the stacked/inline
+   choice. *)
+
 
 (* ========================================================================== *)
 (* 17. Comments                                                               *)
@@ -447,7 +457,7 @@ comment = "#" , { any_char_except_newline } ;
 (* 18. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
-constant_decl = [ annotation ] , "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
+constant_decl = { annotation } , "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
 
 shared_decl = "shared" , IDENT , ":" , type_expr ;
 

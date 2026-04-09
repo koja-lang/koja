@@ -145,7 +145,7 @@ pub struct TypeParam {
 /// A module-level constant: `const NAME = expr` or `const NAME: Type = expr`.
 #[derive(Debug, Clone)]
 pub struct Constant {
-    pub annotation: Option<Annotation>,
+    pub annotations: Vec<Annotation>,
     pub name: String,
     pub type_annotation: Option<TypeExpr>,
     pub value: Expr,
@@ -155,7 +155,7 @@ pub struct Constant {
 /// An enum declaration: `enum Color ... end`.
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
-    pub annotation: Option<Annotation>,
+    pub annotations: Vec<Annotation>,
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariant>,
@@ -185,7 +185,7 @@ pub enum EnumVariantData {
 /// A function declaration: `fn name(params) -> ReturnType ... end`.
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub annotation: Option<Annotation>,
+    pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
     pub name: String,
     pub type_params: Vec<TypeParam>,
@@ -214,7 +214,7 @@ pub enum ImplMember {
 /// A protocol declaration: `protocol Display ... end`.
 #[derive(Debug, Clone)]
 pub struct ProtocolDecl {
-    pub annotation: Option<Annotation>,
+    pub annotations: Vec<Annotation>,
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub methods: Vec<ProtocolMethod>,
@@ -226,7 +226,7 @@ pub struct ProtocolDecl {
 /// If `body` is `Some`, it serves as the default implementation.
 #[derive(Debug, Clone)]
 pub struct ProtocolMethod {
-    pub annotation: Option<Annotation>,
+    pub annotations: Vec<Annotation>,
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
@@ -265,7 +265,7 @@ pub struct SharedDecl {
 /// A struct declaration: `struct Point ... end`.
 #[derive(Debug, Clone)]
 pub struct StructDecl {
-    pub annotation: Option<Annotation>,
+    pub annotations: Vec<Annotation>,
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructField>,
@@ -294,7 +294,7 @@ pub struct AliasDecl {
 /// A type alias within an `impl` block: `type Name = TypeExpr`.
 #[derive(Debug, Clone)]
 pub struct TypeAlias {
-    pub annotation: Option<Annotation>,
+    pub annotations: Vec<Annotation>,
     pub name: String,
     pub type_expr: TypeExpr,
     pub span: Span,

@@ -216,28 +216,28 @@ pub(crate) fn find_doc_for(module: &Module, name: &str) -> Option<String> {
         match item {
             Item::Alias(_) => {}
             Item::Function(f) if f.name == name => {
-                return span::annotation_doc(&f.annotation);
+                return span::annotation_doc(&f.annotations);
             }
             Item::Struct(s) if s.name == name => {
-                return span::annotation_doc(&s.annotation);
+                return span::annotation_doc(&s.annotations);
             }
             Item::Enum(e) if e.name == name => {
-                return span::annotation_doc(&e.annotation);
+                return span::annotation_doc(&e.annotations);
             }
             Item::Constant(c) if c.name == name => {
-                return span::annotation_doc(&c.annotation);
+                return span::annotation_doc(&c.annotations);
             }
             Item::Protocol(p) if p.name == name => {
-                return span::annotation_doc(&p.annotation);
+                return span::annotation_doc(&p.annotations);
             }
             Item::TypeAlias(t) if t.name == name => {
-                return span::annotation_doc(&t.annotation);
+                return span::annotation_doc(&t.annotations);
             }
             Item::Impl(imp) => {
                 for member in &imp.members {
                     if let ImplMember::Function(f) = member {
                         if f.name == name {
-                            return span::annotation_doc(&f.annotation);
+                            return span::annotation_doc(&f.annotations);
                         }
                         let impl_type_name = match &imp.target {
                             TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
@@ -249,7 +249,7 @@ pub(crate) fn find_doc_for(module: &Module, name: &str) -> Option<String> {
                             .map(|t| format!("{t}_{}", f.name))
                             .unwrap_or_default();
                         if mangled == name {
-                            return span::annotation_doc(&f.annotation);
+                            return span::annotation_doc(&f.annotations);
                         }
                     }
                 }

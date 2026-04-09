@@ -374,6 +374,64 @@ mod tests {
     }
 
     #[test]
+    fn single_annotation_on_function() {
+        assert_fmt(
+            r#"
+            @doc "Adds two numbers."
+            fn add(a: Int, b: Int) -> Int
+              a + b
+            end
+        "#,
+            r#"
+            @doc "Adds two numbers."
+            fn add(a: Int, b: Int) -> Int
+              a + b
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn stacked_annotations_on_struct() {
+        assert_fmt(
+            "
+            @link \"argon2\"
+            @extern \"C\"
+            struct Argon2C
+              x: Int
+            end
+        ",
+            "
+            @link \"argon2\"
+            @extern \"C\"
+            struct Argon2C
+              x: Int
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn stacked_annotations_on_function() {
+        assert_fmt(
+            "
+            @doc \"Hashes a password.\"
+            @test
+            fn test_hash
+              x = 1
+            end
+        ",
+            "
+            @doc \"Hashes a password.\"
+            @test
+            fn test_hash
+              x = 1
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn cond_or_chain_packs_like_fill() {
         assert_fmt(
             r#"

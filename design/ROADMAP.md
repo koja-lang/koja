@@ -103,7 +103,7 @@ See [GAPS.md](GAPS.md) for known compiler limitations and workarounds.
 ### Tooling (pulled forward)
 
 - **Project scaffolding** -- `expo new <name>` creates a project directory with `expo.toml` and `src/main.expo`
-- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves `@doc` annotations
+- **Formatter** -- `expo format --write` / `--check`, opinionated and zero-config, handles escape re-encoding for round-trip correctness, preserves annotations (including multiple annotations per declaration -- stacked or inline)
 - **LSP** -- `expo-lsp` binary providing real-time diagnostics, document formatting, hover (Markdown-rendered type signatures + `@doc` + inferred variable types), go-to-definition (including qualified module calls), AST-based dot completion, and signature help over stdio, integrated with the VSCode/Cursor extension
 - **VSCode extension** -- syntax highlighting and LSP client for `.expo` files
 - **Vim plugin** -- syntax highlighting, auto-indentation (`indentexpr`), `matchit` block matching (`fn`/`end`, `if`/`end`), and `:make` compiler integration with `expo check` and `errorformat` for quickfix
@@ -187,7 +187,7 @@ The litmus test: does the compiler or language runtime need it to function, or i
 
 User-facing foreign function interface for calling C libraries. Expo already calls C internally (the runtime is a C library, and codegen emits calls to it via intrinsics). The FFI exposes this capability to user code. See [FFI.md](FFI.md) for the full design.
 
-- `@extern "C"` annotation on structs (pure binding namespace) or individual functions (mixed with Expo code). No new keywords -- uses existing annotation system.
+- `@extern "C"` annotation on structs (pure binding namespace) or individual functions (mixed with Expo code). No new keywords -- uses existing annotation system. Multiple annotations per declaration supported (`@link "argon2" @extern "C"`).
 - `@link "libname"` annotation on structs or functions; `[link]` table in `expo.toml` for search paths
 - `Ptr<T>` type for raw pointers (`Ptr.null()`, `Ptr.offset()`, `Ptr.read()`, `Ptr.write()`, `Ptr.alloc()`, `Ptr.free()`). `Ptr<T>` is `Copy` (just a machine word).
 - `CString` for null-terminated C string interop (`string.to_cstring()`, `cstring.to_string()`)

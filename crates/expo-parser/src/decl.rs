@@ -9,12 +9,12 @@ impl Parser {
     // =========================================================================
 
     pub(crate) fn parse_struct_item(&mut self) -> Item {
-        self.parse_struct_item_with_annotation(None)
+        self.parse_struct_item_with_annotations(Vec::new())
     }
 
-    pub(crate) fn parse_struct_item_with_annotation(
+    pub(crate) fn parse_struct_item_with_annotations(
         &mut self,
-        annotation: Option<Annotation>,
+        annotations: Vec<Annotation>,
     ) -> Item {
         let start = self.current_span();
         self.advance(); // struct
@@ -39,7 +39,7 @@ impl Parser {
         self.expect(&TokenKind::End);
 
         Item::Struct(StructDecl {
-            annotation,
+            annotations,
             name,
             type_params,
             fields,
@@ -74,19 +74,19 @@ impl Parser {
     /// Handles `fn`, `priv fn`, and `@annotation fn` / `@annotation priv fn`.
     fn parse_type_body_function(&mut self, context: &str) -> Function {
         match self.peek().clone() {
-            TokenKind::Fn => self.parse_function_decl(None, Visibility::Public),
+            TokenKind::Fn => self.parse_function_decl(Vec::new(), Visibility::Public),
             TokenKind::Priv => {
                 self.advance();
-                self.parse_function_decl(None, Visibility::Private)
+                self.parse_function_decl(Vec::new(), Visibility::Private)
             }
             TokenKind::At => {
-                let annotation = self.parse_annotation();
+                let annotations = self.parse_annotations();
                 self.skip_newlines();
                 match self.peek() {
-                    TokenKind::Fn => self.parse_function_decl(Some(annotation), Visibility::Public),
+                    TokenKind::Fn => self.parse_function_decl(annotations, Visibility::Public),
                     TokenKind::Priv => {
                         self.advance();
-                        self.parse_function_decl(Some(annotation), Visibility::Private)
+                        self.parse_function_decl(annotations, Visibility::Private)
                     }
                     _ => {
                         let span = self.current_span();
@@ -94,7 +94,7 @@ impl Parser {
                             format!("annotation in {context} block must be followed by a function"),
                             span,
                         );
-                        self.parse_function_decl(Some(annotation), Visibility::Public)
+                        self.parse_function_decl(annotations, Visibility::Public)
                     }
                 }
             }
@@ -107,12 +107,12 @@ impl Parser {
     // =========================================================================
 
     pub(crate) fn parse_enum_item(&mut self) -> Item {
-        self.parse_enum_item_with_annotation(None)
+        self.parse_enum_item_with_annotations(Vec::new())
     }
 
-    pub(crate) fn parse_enum_item_with_annotation(
+    pub(crate) fn parse_enum_item_with_annotations(
         &mut self,
-        annotation: Option<Annotation>,
+        annotations: Vec<Annotation>,
     ) -> Item {
         let start = self.current_span();
         self.advance(); // enum
@@ -137,7 +137,7 @@ impl Parser {
         self.expect(&TokenKind::End);
 
         Item::Enum(EnumDecl {
-            annotation,
+            annotations,
             name,
             type_params,
             variants,
@@ -194,7 +194,7 @@ impl Parser {
     // Protocol
     // =========================================================================
 
-    pub(crate) fn parse_protocol_item(&mut self, annotation: Option<Annotation>) -> Item {
+    pub(crate) fn parse_protocol_item(&mut self, annotations: Vec<Annotation>) -> Item {
         let start = self.current_span();
         self.advance(); // protocol
 
@@ -210,13 +210,13 @@ impl Parser {
             }
             match self.peek().clone() {
                 TokenKind::Fn => {
-                    methods.push(self.parse_protocol_method(None));
+                    methods.push(self.parse_protocol_method(Vec::new()));
                 }
                 TokenKind::At => {
-                    let ann = self.parse_annotation();
+                    let anns = self.parse_annotations();
                     self.skip_newlines();
                     if self.at(&TokenKind::Fn) {
-                        methods.push(self.parse_protocol_method(Some(ann)));
+                        methods.push(self.parse_protocol_method(anns));
                     } else {
                         let span = self.current_span();
                         self.error(
@@ -243,7 +243,7 @@ impl Parser {
         self.expect(&TokenKind::End);
 
         Item::Protocol(ProtocolDecl {
-            annotation,
+            annotations,
             name,
             type_params,
             methods,
@@ -251,7 +251,7 @@ impl Parser {
         })
     }
 
-    fn parse_protocol_method(&mut self, annotation: Option<Annotation>) -> ProtocolMethod {
+    fn parse_protocol_method(&mut self, annotations: Vec<Annotation>) -> ProtocolMethod {
         let start = self.current_span();
         self.advance(); // fn
 
@@ -289,7 +289,7 @@ impl Parser {
             };
 
         ProtocolMethod {
-            annotation,
+            annotations,
             name,
             type_params,
             params,
@@ -329,7 +329,7 @@ impl Parser {
                     members.push(ImplMember::Function(func));
                 }
                 TokenKind::Type => {
-                    let alias = self.parse_type_alias(None);
+                    let alias = self.parse_type_alias(Vec::new());
                     members.push(ImplMember::TypeAlias(alias));
                 }
                 _ => {
@@ -356,22 +356,22 @@ impl Parser {
         })
     }
 
-    fn parse_type_alias(&mut self, annotation: Option<Annotation>) -> TypeAlias {
+    fn parse_type_alias(&mut self, annotations: Vec<Annotation>) -> TypeAlias {
         let start = self.current_span();
         self.advance(); // type
         let name = self.expect_type_ident();
         self.expect(&TokenKind::Eq);
         let type_expr = self.parse_type_expr();
         TypeAlias {
-            annotation,
+            annotations,
             name,
             type_expr,
             span: self.span_from(start),
         }
     }
 
-    pub(crate) fn parse_type_alias_item(&mut self, annotation: Option<Annotation>) -> Item {
-        let alias = self.parse_type_alias(annotation);
+    pub(crate) fn parse_type_alias_item(&mut self, annotations: Vec<Annotation>) -> Item {
+        let alias = self.parse_type_alias(annotations);
         Item::TypeAlias(alias)
     }
 
@@ -430,15 +430,15 @@ impl Parser {
 
     pub(crate) fn parse_function_item(
         &mut self,
-        annotation: Option<Annotation>,
+        annotations: Vec<Annotation>,
         visibility: Visibility,
     ) -> Item {
-        Item::Function(self.parse_function_decl(annotation, visibility))
+        Item::Function(self.parse_function_decl(annotations, visibility))
     }
 
     pub(crate) fn parse_function_decl(
         &mut self,
-        annotation: Option<Annotation>,
+        annotations: Vec<Annotation>,
         visibility: Visibility,
     ) -> Function {
         let start = self.current_span();
@@ -471,7 +471,7 @@ impl Parser {
         self.expect(&TokenKind::End);
 
         Function {
-            annotation,
+            annotations,
             visibility,
             name,
             type_params,
@@ -539,6 +539,15 @@ impl Parser {
     // =========================================================================
     // Annotation
     // =========================================================================
+
+    pub(crate) fn parse_annotations(&mut self) -> Vec<Annotation> {
+        let mut annotations = Vec::new();
+        while self.at(&TokenKind::At) {
+            annotations.push(self.parse_annotation());
+            self.skip_newlines();
+        }
+        annotations
+    }
 
     pub(crate) fn parse_annotation(&mut self) -> Annotation {
         let start = self.current_span();
@@ -615,7 +624,7 @@ impl Parser {
         })
     }
 
-    pub(crate) fn parse_constant_item(&mut self, annotation: Option<Annotation>) -> Item {
+    pub(crate) fn parse_constant_item(&mut self, annotations: Vec<Annotation>) -> Item {
         let start = self.current_span();
         self.expect(&TokenKind::Const);
         let name = match self.peek().clone() {
@@ -642,7 +651,7 @@ impl Parser {
         self.expect(&TokenKind::Eq);
         let value = self.parse_expr();
         Item::Constant(Constant {
-            annotation,
+            annotations,
             name,
             type_annotation,
             value,
