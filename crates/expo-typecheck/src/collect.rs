@@ -999,13 +999,15 @@ fn synthesize_default_fn(
             substitute_named_in_type_expr(rt, from, to);
         }
     }
-    let mut body = pm.body.clone().unwrap_or_default();
-    for stmt in &mut body {
-        substitute_self_in_statement(stmt, target_type);
-        for (from, to) in type_param_map {
-            substitute_named_in_statement(stmt, from, to);
+    let body = pm.body.clone().map(|mut stmts| {
+        for stmt in &mut stmts {
+            substitute_self_in_statement(stmt, target_type);
+            for (from, to) in type_param_map {
+                substitute_named_in_statement(stmt, from, to);
+            }
         }
-    }
+        stmts
+    });
     Function {
         annotations: pm.annotations.clone(),
         visibility: Visibility::Public,

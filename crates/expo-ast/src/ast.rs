@@ -183,6 +183,7 @@ pub enum EnumVariantData {
 }
 
 /// A function declaration: `fn name(params) -> ReturnType ... end`.
+/// `body` is `None` for extern declarations (`@extern "C"`) that have no body.
 #[derive(Debug, Clone)]
 pub struct Function {
     pub annotations: Vec<Annotation>,
@@ -191,7 +192,7 @@ pub struct Function {
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
-    pub body: Vec<Statement>,
+    pub body: Option<Vec<Statement>>,
     pub span: Span,
 }
 

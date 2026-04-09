@@ -68,9 +68,11 @@ pub(crate) fn find_symbol_at(
                 {
                     return Some(info);
                 }
-                for stmt in &f.body {
-                    if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                        return Some(info);
+                if let Some(body) = &f.body {
+                    for stmt in body {
+                        if let Some(info) = find_in_statement(stmt, line, col, ctx) {
+                            return Some(info);
+                        }
                     }
                 }
             }
@@ -88,9 +90,11 @@ pub(crate) fn find_symbol_at(
                         {
                             return Some(info);
                         }
-                        for stmt in &f.body {
-                            if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                                return Some(info);
+                        if let Some(body) = &f.body {
+                            for stmt in body {
+                                if let Some(info) = find_in_statement(stmt, line, col, ctx) {
+                                    return Some(info);
+                                }
                             }
                         }
                     }
@@ -200,9 +204,11 @@ fn find_in_inline_functions(
         {
             return Some(info);
         }
-        for stmt in &f.body {
-            if let Some(info) = find_in_statement(stmt, line, col, ctx) {
-                return Some(info);
+        if let Some(body) = &f.body {
+            for stmt in body {
+                if let Some(info) = find_in_statement(stmt, line, col, ctx) {
+                    return Some(info);
+                }
             }
         }
     }

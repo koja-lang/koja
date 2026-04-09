@@ -638,7 +638,7 @@ mod tests {
         let result = parse(source);
         for item in &result.module.items {
             if let expo_ast::ast::Item::Function(func) = item {
-                for stmt in &func.body {
+                for stmt in func.body.as_ref().unwrap() {
                     if let Statement::Assignment {
                         value:
                             Expr {
@@ -734,7 +734,7 @@ mod tests {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
-        match &func.body[0] {
+        match &func.body.as_ref().unwrap()[0] {
             Statement::Assignment {
                 value:
                     Expr {
@@ -755,7 +755,7 @@ mod tests {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
-        match &func.body[0] {
+        match &func.body.as_ref().unwrap()[0] {
             Statement::Assignment {
                 value:
                     Expr {
@@ -776,7 +776,7 @@ mod tests {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
-        match &func.body[0] {
+        match &func.body.as_ref().unwrap()[0] {
             Statement::Assignment {
                 value:
                     Expr {
@@ -805,7 +805,7 @@ mod tests {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
-        match &func.body[0] {
+        match &func.body.as_ref().unwrap()[0] {
             Statement::Assignment {
                 value:
                     Expr {
@@ -830,7 +830,7 @@ mod tests {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
-        match &func.body[0] {
+        match &func.body.as_ref().unwrap()[0] {
             Statement::Assignment {
                 value:
                     Expr {
@@ -866,5 +866,49 @@ mod tests {
     fn test_generics_still_work_after_gtgt() {
         let result = parse("fn main\n  x: List<Option<Int>> = []\nend\n");
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn test_extern_c_bodyless_function() {
+        let result = parse("@extern \"C\"\nfn argon2id_hash(t: UInt32, m: UInt32) -> Int32\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let func = match &result.module.items[0] {
+            expo_ast::ast::Item::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        assert_eq!(func.name, "argon2id_hash");
+        assert!(func.body.is_none(), "extern C function should have no body");
+        assert_eq!(func.annotations.len(), 1);
+        assert_eq!(func.annotations[0].name, "extern");
+    }
+
+    #[test]
+    fn test_extern_c_struct_per_function_annotations() {
+        let result = parse(
+            "struct Argon2C\n  @extern \"C\" @link \"argon2\"\n  fn hash(t: UInt32) -> Int32\n  @extern \"C\" @link \"argon2\"\n  fn verify(e: UInt32) -> Int32\nend\n",
+        );
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let s = match &result.module.items[0] {
+            expo_ast::ast::Item::Struct(s) => s,
+            _ => panic!("expected struct"),
+        };
+        assert_eq!(s.name, "Argon2C");
+        assert_eq!(s.functions.len(), 2);
+        assert!(s.functions[0].body.is_none());
+        assert!(s.functions[1].body.is_none());
+        assert_eq!(s.functions[0].annotations.len(), 2);
+        assert_eq!(s.functions[1].annotations.len(), 2);
+    }
+
+    #[test]
+    fn test_regular_function_still_has_body() {
+        let result = parse("fn add(a: Int32, b: Int32) -> Int32\n  a + b\nend\n");
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let func = match &result.module.items[0] {
+            expo_ast::ast::Item::Function(f) => f,
+            _ => panic!("expected function"),
+        };
+        assert!(func.body.is_some(), "regular function should have body");
+        assert!(!func.body.as_ref().unwrap().is_empty());
     }
 }

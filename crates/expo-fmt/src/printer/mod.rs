@@ -256,9 +256,11 @@ impl<'a> Printer<'a> {
             parts.push(hardline());
         }
 
-        parts.push(self.body_to_doc(&f.body, f.span.end.line));
-        parts.push(hardline());
-        parts.push(text("end"));
+        if let Some(body) = &f.body {
+            parts.push(self.body_to_doc(body, f.span.end.line));
+            parts.push(hardline());
+            parts.push(text("end"));
+        }
         concat(parts)
     }
 

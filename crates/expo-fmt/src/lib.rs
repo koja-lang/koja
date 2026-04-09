@@ -432,6 +432,44 @@ mod tests {
     }
 
     #[test]
+    fn extern_c_function_no_body() {
+        assert_fmt(
+            "
+            @extern \"C\"
+            fn argon2id_hash_encoded(t_cost: UInt32, m_cost: UInt32) -> Int32
+        ",
+            "
+            @extern \"C\"
+            fn argon2id_hash_encoded(t_cost: UInt32, m_cost: UInt32) -> Int32
+        ",
+        );
+    }
+
+    #[test]
+    fn extern_c_struct_per_function() {
+        assert_fmt(
+            "
+            struct Argon2C
+              @extern \"C\" @link \"argon2\"
+              fn hash_encoded(t_cost: UInt32) -> Int32
+              @extern \"C\" @link \"argon2\"
+              fn verify(encoded: UInt32) -> Int32
+            end
+        ",
+            "
+            struct Argon2C
+
+              @extern \"C\" @link \"argon2\"
+              fn hash_encoded(t_cost: UInt32) -> Int32
+
+              @extern \"C\" @link \"argon2\"
+              fn verify(encoded: UInt32) -> Int32
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn cond_or_chain_packs_like_fill() {
         assert_fmt(
             r#"

@@ -57,7 +57,9 @@ fn collect_item_folds(module: &Module, ranges: &mut Vec<FoldingRange>) {
                 if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);
                 }
-                collect_statement_folds(&f.body, ranges);
+                if let Some(body) = &f.body {
+                    collect_statement_folds(body, ranges);
+                }
             }
             Item::Struct(s) => {
                 if let Some(r) = span_fold(&s.span, Some(FoldingRangeKind::Region)) {
@@ -78,7 +80,9 @@ fn collect_item_folds(module: &Module, ranges: &mut Vec<FoldingRange>) {
                         if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
                             ranges.push(r);
                         }
-                        collect_statement_folds(&f.body, ranges);
+                        if let Some(body) = &f.body {
+                            collect_statement_folds(body, ranges);
+                        }
                     }
                 }
             }

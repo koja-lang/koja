@@ -191,7 +191,13 @@ pub(crate) fn compile_method_body<'ctx>(
         .enter_fn(fn_value.get_name().to_str().unwrap_or("").to_string());
     let saved_loop = c.fn_state.tco.set_loop(loop_header, param_allocas);
 
-    let result = compile_function_body(c, &func.body, return_type, fn_value, false);
+    let result = compile_function_body(
+        c,
+        func.body.as_deref().unwrap_or(&[]),
+        return_type,
+        fn_value,
+        false,
+    );
 
     c.fn_state.tco.leave_fn(saved_fn);
     c.fn_state.tco.restore_loop(saved_loop);
@@ -292,7 +298,13 @@ pub(crate) fn monomorphize_function<'ctx>(
         }
     }
 
-    compile_function_body(c, &func_ast.body, &return_type, fn_value, false)?;
+    compile_function_body(
+        c,
+        func_ast.body.as_deref().unwrap_or(&[]),
+        &return_type,
+        fn_value,
+        false,
+    )?;
 
     c.fn_state.variables = saved_vars;
     c.fn_state.type_subst = saved_subst;

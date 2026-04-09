@@ -361,6 +361,63 @@ lang_test_dir!(lang_process_exit, "process_exit", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
 
 #[test]
+fn lang_ffi() {
+    let dir = lang_dir().join("ffi");
+    assert!(dir.exists(), "test fixture ffi/ not found");
+
+    let c_src = dir.join("ffi_helper.c");
+    let lib_path = dir.join("libffi_helper.a");
+
+    let obj = dir.join("ffi_helper.o");
+    let cc_status = Command::new("cc")
+        .args(["-c", "-o"])
+        .arg(&obj)
+        .arg(&c_src)
+        .status()
+        .expect("failed to run cc");
+    assert!(cc_status.success(), "C compilation failed");
+
+    let ar_status = Command::new("ar")
+        .args(["rcs"])
+        .arg(&lib_path)
+        .arg(&obj)
+        .status()
+        .expect("failed to run ar");
+    assert!(ar_status.success(), "ar failed");
+
+    let _ = fs::remove_file(&obj);
+
+    let ffi_lib_path = match library_path() {
+        Some(existing) => format!("{}:{}", dir.display(), existing),
+        None => dir.display().to_string(),
+    };
+    let output = Command::new(expo_bin())
+        .arg("run")
+        .current_dir(&dir)
+        .env("LIBRARY_PATH", &ffi_lib_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to execute expo");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+
+    let _ = fs::remove_file(&lib_path);
+
+    assert!(
+        code == 0,
+        "ffi: expected exit code 0, got {code}\nstderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+
+    let expected = fs::read_to_string(dir.join("expected.stdout")).unwrap();
+    if stdout != expected {
+        let diff = diff_lines(&stdout, &expected);
+        panic!("\n--- FAIL: ffi ---\n{diff}");
+    }
+}
+
+#[test]
 fn lang_process_lifecycle() {
     run_signal_test(
         &lang_dir().join("process_lifecycle"),

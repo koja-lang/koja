@@ -1,0 +1,15 @@
+struct FFI
+  @extern "C" @link "ffi_helper"
+  fn add_c(a: Int32, b: Int32) -> Int32
+
+  @extern "C" @link "ffi_helper"
+  fn mul_c(a: Int32, b: Int32) -> Int32
+end
+
+fn main
+  sum = FFI.add_c(3, 4)
+  print(sum)
+
+  product = FFI.mul_c(5, 6)
+  print(product)
+end

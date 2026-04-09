@@ -467,8 +467,22 @@ impl Parser {
             None
         };
 
-        let body = self.parse_block();
-        self.expect(&TokenKind::End);
+        self.skip_newlines();
+        let has_extern = annotations.iter().any(|a| a.name == "extern");
+        let body = if has_extern
+            || self.at(&TokenKind::Fn)
+            || self.at(&TokenKind::At)
+            || (self.at(&TokenKind::Priv) && matches!(self.peek_nth(1), TokenKind::Fn))
+        {
+            None
+        } else if self.at(&TokenKind::End) {
+            self.advance();
+            Some(Vec::new())
+        } else {
+            let stmts = self.parse_block();
+            self.expect(&TokenKind::End);
+            Some(stmts)
+        };
 
         Function {
             annotations,

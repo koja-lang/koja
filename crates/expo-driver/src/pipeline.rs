@@ -3,11 +3,11 @@
 //! This module contains the shared infrastructure that powers `build`, `run`,
 //! and `check`. No CLI command functions live here -- those are in [`crate::commands`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::{env, fs, process};
 
-use expo_ast::ast::{AnnotationValue, Item, Module, Severity};
+use expo_ast::ast::{Annotation, AnnotationValue, ImplMember, Item, Module, Severity};
 
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{Type, TypeIdentifier};
@@ -241,7 +241,50 @@ pub fn build_from_graph(
         process::exit(1);
     }
 
-    link(&obj_path, output, quiet, release);
+    let link_libs = collect_link_libraries(&modules_ast);
+    link(&obj_path, output, quiet, release, &link_libs);
+}
+
+/// Walks all modules and collects unique `@link` library names from
+/// function annotations across structs, enums, impl blocks, and top-level items.
+fn collect_link_libraries(modules: &[&Module]) -> Vec<String> {
+    fn collect_from(annotations: &[Annotation], libs: &mut BTreeSet<String>) {
+        for ann in annotations {
+            if ann.name == "link"
+                && let Some(AnnotationValue::String(lib)) = &ann.value
+            {
+                libs.insert(lib.clone());
+            }
+        }
+    }
+
+    let mut libs = BTreeSet::new();
+    for module in modules {
+        for item in &module.items {
+            match item {
+                Item::Function(f) => collect_from(&f.annotations, &mut libs),
+                Item::Struct(s) => {
+                    for f in &s.functions {
+                        collect_from(&f.annotations, &mut libs);
+                    }
+                }
+                Item::Enum(e) => {
+                    for f in &e.functions {
+                        collect_from(&f.annotations, &mut libs);
+                    }
+                }
+                Item::Impl(imp) => {
+                    for member in &imp.members {
+                        if let ImplMember::Function(f) = member {
+                            collect_from(&f.annotations, &mut libs);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    libs.into_iter().collect()
 }
 
 /// Builds a project from its config: resolves modules, type-checks, compiles, links.
@@ -502,7 +545,8 @@ pub struct BuildArgs {
 }
 
 /// Links an object file with the embedded runtime library to produce an executable.
-fn link(obj_path: &str, output: &str, quiet: bool, release: bool) {
+/// `link_libraries` contains library names from `@link` annotations (passed as `-l` flags).
+fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries: &[String]) {
     let runtime_lib_bytes: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
     let tmp_dir = env::temp_dir().join(format!("expo-link-{}", process::id()));
     fs::create_dir_all(&tmp_dir).expect("failed to create temp dir for linking");
@@ -510,9 +554,19 @@ fn link(obj_path: &str, output: &str, quiet: bool, release: bool) {
     fs::write(&tmp_lib, runtime_lib_bytes).expect("failed to write embedded runtime library");
     let tmp_dir_str = tmp_dir.to_string_lossy();
 
-    let status = process::Command::new("cc")
-        .args([obj_path, "-lexpo_runtime", "-L", &tmp_dir_str, "-o", output])
-        .status();
+    let mut args = vec![
+        obj_path.to_string(),
+        "-lexpo_runtime".to_string(),
+        "-L".to_string(),
+        tmp_dir_str.to_string(),
+        "-o".to_string(),
+        output.to_string(),
+    ];
+    for lib in link_libraries {
+        args.push(format!("-l{lib}"));
+    }
+
+    let status = process::Command::new("cc").args(&args).status();
 
     match status {
         Ok(s) if s.success() => {

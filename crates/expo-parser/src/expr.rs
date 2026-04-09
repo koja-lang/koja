@@ -487,7 +487,7 @@ mod tests {
         let result = parse(&wrapped);
         for item in result.module.items {
             if let Item::Function(f) = item {
-                for stmt in f.body {
+                for stmt in f.body.unwrap_or_default() {
                     if let Statement::Expr(e) = stmt {
                         return e;
                     }
@@ -742,7 +742,7 @@ mod tests {
             }
         });
         let f = func.expect("expected a function");
-        let call = f.body.into_iter().find_map(|s| {
+        let call = f.body.unwrap_or_default().into_iter().find_map(|s| {
             if let Statement::Expr(Expr {
                 kind: ExprKind::Call { args, .. },
                 ..

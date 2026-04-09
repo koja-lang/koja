@@ -575,13 +575,18 @@ pub(crate) fn find_expr_at(module: &Module, line: u32, col: u32) -> Option<&Expr
                 if !span_contains(&f.span, line, col) {
                     continue;
                 }
-                find_expr_at_in_body(&f.body, line, col)
+                f.body
+                    .as_ref()
+                    .and_then(|b| find_expr_at_in_body(b, line, col))
             }
             Item::Impl(imp) => imp.members.iter().find_map(|m| {
                 if let ImplMember::Function(f) = m
                     && span_contains(&f.span, line, col)
                 {
-                    return find_expr_at_in_body(&f.body, line, col);
+                    return f
+                        .body
+                        .as_ref()
+                        .and_then(|b| find_expr_at_in_body(b, line, col));
                 }
                 None
             }),
@@ -603,17 +608,21 @@ pub(crate) fn find_expr_at(module: &Module, line: u32, col: u32) -> Option<&Expr
                 if !span_contains(&s.span, line, col) {
                     continue;
                 }
-                s.functions
-                    .iter()
-                    .find_map(|f| find_expr_at_in_body(&f.body, line, col))
+                s.functions.iter().find_map(|f| {
+                    f.body
+                        .as_ref()
+                        .and_then(|b| find_expr_at_in_body(b, line, col))
+                })
             }
             Item::Enum(e) => {
                 if !span_contains(&e.span, line, col) {
                     continue;
                 }
-                e.functions
-                    .iter()
-                    .find_map(|f| find_expr_at_in_body(&f.body, line, col))
+                e.functions.iter().find_map(|f| {
+                    f.body
+                        .as_ref()
+                        .and_then(|b| find_expr_at_in_body(b, line, col))
+                })
             }
             _ => None,
         };
@@ -783,13 +792,18 @@ pub(crate) fn find_enclosing_call(module: &Module, line: u32, col: u32) -> Optio
                 if !span_contains(&f.span, line, col) {
                     continue;
                 }
-                find_call_in_body(&f.body, line, col)
+                f.body
+                    .as_ref()
+                    .and_then(|b| find_call_in_body(b, line, col))
             }
             Item::Impl(imp) => imp.members.iter().find_map(|m| {
                 if let ImplMember::Function(f) = m
                     && span_contains(&f.span, line, col)
                 {
-                    return find_call_in_body(&f.body, line, col);
+                    return f
+                        .body
+                        .as_ref()
+                        .and_then(|b| find_call_in_body(b, line, col));
                 }
                 None
             }),
@@ -811,17 +825,21 @@ pub(crate) fn find_enclosing_call(module: &Module, line: u32, col: u32) -> Optio
                 if !span_contains(&s.span, line, col) {
                     continue;
                 }
-                s.functions
-                    .iter()
-                    .find_map(|f| find_call_in_body(&f.body, line, col))
+                s.functions.iter().find_map(|f| {
+                    f.body
+                        .as_ref()
+                        .and_then(|b| find_call_in_body(b, line, col))
+                })
             }
             Item::Enum(e) => {
                 if !span_contains(&e.span, line, col) {
                     continue;
                 }
-                e.functions
-                    .iter()
-                    .find_map(|f| find_call_in_body(&f.body, line, col))
+                e.functions.iter().find_map(|f| {
+                    f.body
+                        .as_ref()
+                        .and_then(|b| find_call_in_body(b, line, col))
+                })
             }
             _ => None,
         };

@@ -243,7 +243,31 @@ fn check_function_with_msg(
 
     let declared_return = f.return_type.as_ref().map(&resolve).unwrap_or(Type::Unit);
 
-    if f.body.is_empty() {
+    let is_extern_c = f.annotations.iter().any(|a| {
+        a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")
+    });
+
+    if is_extern_c {
+        if f.body.is_some() {
+            ctx.error(
+                "`@extern \"C\"` functions must not have a body".to_string(),
+                f.span,
+            );
+        }
+        validate_ffi_signature(f, ctx);
+        return;
+    }
+
+    if f.body.is_none() {
+        ctx.error(
+            "function has no body — did you mean to add `@extern \"C\"`?".to_string(),
+            f.span,
+        );
+        return;
+    }
+
+    let body = f.body.as_mut().unwrap();
+    if body.is_empty() {
         return;
     }
 
@@ -272,12 +296,12 @@ fn check_function_with_msg(
     };
 
     let check_implicit_return = declared_return != Type::Unit && declared_return != Type::Unknown;
-    let last_is_expr = matches!(f.body.last(), Some(Statement::Expr(_)));
+    let last_is_expr = matches!(body.last(), Some(Statement::Expr(_)));
 
     if check_implicit_return && last_is_expr {
-        let len = f.body.len();
-        check_body(&mut f.body[..len - 1], ctx, &mut ce);
-        if let Some(Statement::Expr(expr)) = f.body.last_mut() {
+        let len = body.len();
+        check_body(&mut body[..len - 1], ctx, &mut ce);
+        if let Some(Statement::Expr(expr)) = body.last_mut() {
             let actual = infer_expr(expr, ctx, &mut ce);
             if actual.is_known()
                 && !types_compatible(&actual, &declared_return)
@@ -300,7 +324,64 @@ fn check_function_with_msg(
             }
         }
     } else {
-        check_body(&mut f.body, ctx, &mut ce);
+        check_body(body, ctx, &mut ce);
+    }
+}
+
+/// Validates that an `@extern "C"` function's parameter and return types are
+/// FFI-compatible (explicit-width primitives only).
+fn validate_ffi_signature(f: &Function, ctx: &mut TypeContext) {
+    for param in &f.params {
+        if let Param::Self_ { span, .. } = param {
+            ctx.error(
+                "`@extern \"C\"` functions cannot have a `self` parameter".to_string(),
+                *span,
+            );
+            continue;
+        }
+        if let Param::Regular {
+            type_expr, span, ..
+        } = param
+        {
+            check_ffi_type_expr(type_expr, *span, ctx);
+        }
+    }
+    if let Some(ret) = &f.return_type {
+        check_ffi_type_expr(ret, f.span, ctx);
+    }
+}
+
+fn check_ffi_type_expr(te: &TypeExpr, span: Span, ctx: &mut TypeContext) {
+    match te {
+        TypeExpr::Named { path, .. } if path.len() == 1 => {
+            let name = &path[0];
+            match name.as_str() {
+                "Int8" | "Int16" | "Int32" | "Int64" | "UInt8" | "UInt16" | "UInt32"
+                | "UInt64" | "Float32" | "Float64" | "Bool" => {}
+                "Int" => ctx.error(
+                    "type `Int` is not allowed in `@extern \"C\"` functions — use `Int64` for the explicit 64-bit type".to_string(),
+                    span,
+                ),
+                "Float" => ctx.error(
+                    "type `Float` is not allowed in `@extern \"C\"` functions — use `Float64` for the explicit 64-bit type".to_string(),
+                    span,
+                ),
+                "String" => ctx.error(
+                    "type `String` is not FFI-compatible — use `Ptr<UInt8>` with `CString` (requires FFI Phase 2)".to_string(),
+                    span,
+                ),
+                other => ctx.error(
+                    format!("type `{other}` is not FFI-compatible in `@extern \"C\"` functions"),
+                    span,
+                ),
+            }
+        }
+        TypeExpr::Unit { .. } => {}
+        _ => ctx.error(
+            "only explicit-width primitive types are allowed in `@extern \"C\"` functions"
+                .to_string(),
+            span,
+        ),
     }
 }
 

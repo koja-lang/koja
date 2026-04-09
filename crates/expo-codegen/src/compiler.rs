@@ -19,8 +19,8 @@ pub enum EmitResult {
     NotIntrinsic,
 }
 use expo_ast::ast::{
-    Diagnostic, EnumConstructionData, ExprKind, FieldInit, Function, ImplMember, Item, Literal,
-    Module, Param, Severity, StringPart, TypeExpr,
+    AnnotationValue, Diagnostic, EnumConstructionData, ExprKind, FieldInit, Function, ImplMember,
+    Item, Literal, Module, Param, Severity, StringPart, TypeExpr,
 };
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::{TypeContext, VariantData};
@@ -620,9 +620,17 @@ impl<'ctx> Compiler<'ctx> {
 
         param_types.extend(self.resolve_param_types(&func.params)?);
 
-        let mangled = match self_type_name {
-            Some(tn) => format!("{}_{}", tn, func.name),
-            None => func.name.clone(),
+        let is_extern_c = func.annotations.iter().any(|a| {
+            a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")
+        });
+
+        let mangled = if is_extern_c {
+            func.name.clone()
+        } else {
+            match self_type_name {
+                Some(tn) => format!("{}_{}", tn, func.name),
+                None => func.name.clone(),
+            }
         };
 
         let fn_type = if func.name == "main" && self_type_name.is_none() {
@@ -925,6 +933,9 @@ impl<'ctx> Compiler<'ctx> {
         func: &Function,
         self_type_name: Option<&str>,
     ) -> Result<(), String> {
+        if func.body.is_none() {
+            return Ok(());
+        }
         self.fn_state.self_type_name = self_type_name.map(|s| s.to_string());
 
         let mangled = match self_type_name {
@@ -976,7 +987,13 @@ impl<'ctx> Compiler<'ctx> {
                 func.span.start.column,
             );
             self.fn_state.variables.clear();
-            compile_function_body(self, &func.body, &Type::Unit, user_main, false)?;
+            compile_function_body(
+                self,
+                func.body.as_deref().unwrap_or(&[]),
+                &Type::Unit,
+                user_main,
+                false,
+            )?;
 
             self.debug.pop_scope(self.context, &self.builder);
 
