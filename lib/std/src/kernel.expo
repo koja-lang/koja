@@ -355,6 +355,9 @@ end
 Cryptographically secure random data from the operating system.
 """
 struct Random
+  @extern "C"
+  priv fn expo_random_int(min: Int64, max: Int64) -> Int64
+
   @doc """
   Returns `count` random bytes from the OS entropy source.
   """
@@ -366,7 +369,7 @@ struct Random
   Returns a random integer in the inclusive range [min, max].
   """
   fn int(min: Int, max: Int) -> Int
-    panic("intrinsic")
+    expo_random_int(min, max)
   end
 end
 

@@ -784,6 +784,20 @@ fn infer_call(
                 .collect();
             check_call_args(name, &param_infos, args, "", span, ctx, ce);
             *return_type
+        } else if let Some(sig) = ce
+            .enclosing_type
+            .as_ref()
+            .and_then(|id| ctx.get_type(id))
+            .and_then(|ti| ti.functions.get(name))
+            .cloned()
+        {
+            if !sig.type_params.is_empty() {
+                return infer_generic_call(name, &sig, args, span, ctx, ce);
+            }
+            let return_type = sig.return_type.clone();
+            let params = sig.params.clone();
+            check_call_args(name, &params, args, "", span, ctx, ce);
+            return_type
         } else if ce.env.contains_key(name) || ctx.resolve_name(name).is_some() {
             for arg in args {
                 infer_expr(&mut arg.value, ctx, ce);
@@ -1351,14 +1365,41 @@ fn infer_method_call(
 
     let (base_id, subst) = resolve_receiver_base_name(&recv_ty, ctx);
 
-    let method_sig = base_id
-        .as_ref()
-        .and_then(|id| ctx.get_type(id))
-        .and_then(|ti| ti.functions.get(method))
-        .cloned();
+    let recv_type_args: Vec<Type> = match &recv_ty {
+        Type::Named { type_args, .. } => type_args.clone(),
+        Type::Pointer(inner) => vec![*inner.clone()],
+        _ => Vec::new(),
+    };
+
+    let found_specialized = base_id.as_ref().and_then(|id| {
+        ctx.specialized_methods.get(id).and_then(|entries| {
+            entries
+                .iter()
+                .find(|(concrete_args, _)| *concrete_args == recv_type_args)
+                .and_then(|(_, sigs)| sigs.get(method).cloned())
+        })
+    });
+    let is_specialized = found_specialized.is_some();
+
+    let has_specialization_elsewhere = !is_specialized
+        && base_id.as_ref().is_some_and(|id| {
+            ctx.specialized_methods
+                .get(id)
+                .is_some_and(|entries| entries.iter().any(|(_, sigs)| sigs.contains_key(method)))
+        });
+
+    let method_sig = found_specialized.or_else(|| {
+        base_id
+            .as_ref()
+            .and_then(|id| ctx.get_type(id))
+            .and_then(|ti| ti.functions.get(method))
+            .cloned()
+    });
 
     if let Some(sig) = method_sig {
-        let (return_type, params) = if let Some(ref s) = subst {
+        let (return_type, params) = if let Some(ref s) = subst
+            && !is_specialized
+        {
             let ret = substitute_preserving(&sig.return_type, s);
             let ps: Vec<_> = sig
                 .params
@@ -1399,7 +1440,38 @@ fn infer_method_call(
         for arg in args {
             infer_expr(&mut arg.value, ctx, ce);
         }
-        if let Some(id) = &base_id {
+        if has_specialization_elsewhere {
+            if let Some(id) = &base_id {
+                let available_on: Vec<String> = ctx
+                    .specialized_methods
+                    .get(id)
+                    .into_iter()
+                    .flat_map(|entries| entries.iter())
+                    .filter(|(_, sigs)| sigs.contains_key(method))
+                    .map(|(args, _)| {
+                        let args_str = args
+                            .iter()
+                            .map(|t| t.display())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{}<{}>", id.name, args_str)
+                    })
+                    .collect();
+                let hint = format!(
+                    "`{method}` is only available on {}",
+                    available_on.join(", ")
+                );
+                ctx.error_with_hint(
+                    format!(
+                        "`{}` has no function `{method}` for this type specialization",
+                        id.name
+                    ),
+                    hint,
+                    span,
+                );
+            }
+            Type::Error
+        } else if let Some(id) = &base_id {
             let ti = ctx.get_type(id);
             let kind_label = ti.map(|t| t.kind_label()).unwrap_or("type");
             let available: Vec<&str> = ti
@@ -1536,6 +1608,7 @@ fn infer_closure(
         type_hint: None,
         process_msg_type: ce.process_msg_type.clone(),
         fn_type_params: ce.fn_type_params.clone(),
+        enclosing_type: ce.enclosing_type.clone(),
     };
     let fn_params = bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
 
@@ -1598,6 +1671,7 @@ fn infer_short_closure(
         type_hint: None,
         process_msg_type: ce.process_msg_type.clone(),
         fn_type_params: ce.fn_type_params.clone(),
+        enclosing_type: ce.enclosing_type.clone(),
     };
     let fn_params = bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
 

@@ -24,6 +24,9 @@ pub struct TypeContext {
     pub generic_struct_asts: BTreeMap<String, StructDecl>,
     pub protocol_impls: BTreeMap<String, Vec<(String, Vec<Type>)>>,
     pub protocols: BTreeMap<String, ProtocolInfo>,
+    pub specialized_impl_asts: BTreeMap<TypeIdentifier, Vec<(Vec<Type>, ImplBlock)>>,
+    pub specialized_methods:
+        BTreeMap<TypeIdentifier, Vec<(Vec<Type>, BTreeMap<String, FunctionSig>)>>,
     pub synthesized_default_fns: BTreeMap<String, Vec<Function>>,
     pub type_aliases: BTreeMap<String, Type>,
     pub types: BTreeMap<TypeIdentifier, TypeInfo>,
@@ -315,6 +318,8 @@ impl TypeContext {
             generic_struct_asts: BTreeMap::new(),
             protocol_impls: BTreeMap::new(),
             protocols: BTreeMap::new(),
+            specialized_impl_asts: BTreeMap::new(),
+            specialized_methods: BTreeMap::new(),
             synthesized_default_fns: BTreeMap::new(),
             type_aliases: BTreeMap::new(),
             types: BTreeMap::new(),
@@ -325,7 +330,8 @@ impl TypeContext {
 
     /// Merges all type information from `other` into `self`. Entries already
     /// present in `self` are kept (first-writer-wins), except for
-    /// `generic_impl_asts` and `protocol_impls` which accumulate across modules.
+    /// `generic_impl_asts`, `specialized_impl_asts`, `specialized_methods`,
+    /// and `protocol_impls` which accumulate across modules.
     ///
     /// When two types share the same bare name but come from different packages,
     /// the first-writer (already in `self`) wins for the flat namespace. Functions
@@ -369,6 +375,24 @@ impl TypeContext {
                 let dominated = existing.iter().any(|b| b.span == block.span);
                 if !dominated {
                     existing.push(block.clone());
+                }
+            }
+        }
+        for (id, entries) in &other.specialized_impl_asts {
+            let existing = self.specialized_impl_asts.entry(id.clone()).or_default();
+            for entry in entries {
+                let dominated = existing.iter().any(|e| e.1.span == entry.1.span);
+                if !dominated {
+                    existing.push(entry.clone());
+                }
+            }
+        }
+        for (id, entries) in &other.specialized_methods {
+            let existing = self.specialized_methods.entry(id.clone()).or_default();
+            for entry in entries {
+                let dominated = existing.iter().any(|e| e.0 == entry.0);
+                if !dominated {
+                    existing.push(entry.clone());
                 }
             }
         }

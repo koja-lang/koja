@@ -49,6 +49,39 @@ pub fn resolve_packages(ctx: &mut TypeContext) {
         resolve_function_sigs(&mut pi.methods, &index);
     }
 
+    let spec_keys: Vec<TypeIdentifier> = ctx.specialized_methods.keys().cloned().collect();
+    for mut key in spec_keys {
+        if let Some(mut entries) = ctx.specialized_methods.remove(&key) {
+            for (type_args, sigs) in &mut entries {
+                for ty in type_args.iter_mut() {
+                    resolve_type(ty, &index);
+                }
+                resolve_function_sigs(sigs, &index);
+            }
+            resolve_identifier(&mut key, &index);
+            ctx.specialized_methods
+                .entry(key)
+                .or_default()
+                .extend(entries);
+        }
+    }
+
+    let spec_ast_keys: Vec<TypeIdentifier> = ctx.specialized_impl_asts.keys().cloned().collect();
+    for mut key in spec_ast_keys {
+        if let Some(mut entries) = ctx.specialized_impl_asts.remove(&key) {
+            for (type_args, _) in &mut entries {
+                for ty in type_args.iter_mut() {
+                    resolve_type(ty, &index);
+                }
+            }
+            resolve_identifier(&mut key, &index);
+            ctx.specialized_impl_asts
+                .entry(key)
+                .or_default()
+                .extend(entries);
+        }
+    }
+
     ctx.name_index = index;
 }
 

@@ -325,6 +325,16 @@ pub fn compile_method_call<'ctx>(
             sig.params.iter().map(|p| p.ty.clone()).collect(),
             sig.return_type.clone(),
         )
+    } else if let Some((base_name, ta)) = try_parse_mangled_name(&struct_name, c)
+        && let Some(spec_id) = c.type_ctx.resolve_name(&base_name).cloned()
+        && let Some(entries) = c.type_ctx.specialized_methods.get(&spec_id)
+        && let Some((_, sigs)) = entries.iter().find(|(args, _)| *args == ta)
+        && let Some(sig) = sigs.get(method)
+    {
+        (
+            sig.params.iter().map(|p| p.ty.clone()).collect(),
+            sig.return_type.clone(),
+        )
     } else {
         (Vec::new(), Type::Unknown)
     };

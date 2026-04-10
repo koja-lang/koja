@@ -8,9 +8,9 @@ use std::mem;
 use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr, TypeParam};
 use expo_typecheck::context::{FunctionKind, VariantData};
 use expo_typecheck::types::{
-    Primitive, Type, build_substitution, mangle_name, mangle_type, named, substitute,
+    Primitive, Type, build_substitution, mangle_name, mangle_type, named, named_generic, substitute,
 };
-use inkwell::types::BasicType;
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{FunctionValue, PointerValue};
 
 use crate::compiler::{Compiler, EmitResult, resolve_process_envelope_type};
@@ -137,7 +137,9 @@ pub(crate) fn compile_method_body<'ctx>(
         .is_some_and(|p| matches!(p, Param::Self_ { .. }))
         && let Some((mangled, base)) = self_type
     {
-        let self_ty = if let Some(p) = Primitive::from_name(base) {
+        let self_ty = if base == "CPtr" {
+            Type::Pointer(Box::new(Type::Unknown))
+        } else if let Some(p) = Primitive::from_name(base) {
             Type::Primitive(p)
         } else {
             named(mangled)
@@ -534,78 +536,139 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         }
     }
 
-    let impl_blocks = c
-        .type_ctx
-        .generic_impl_asts
-        .get(base_type)
-        .ok_or_else(|| format!("no generic impl for `{base_type}`"))?
-        .clone();
+    let spec_id = c.type_ctx.resolve_name(base_type).cloned();
+    let specialized_match = spec_id.as_ref().and_then(|id| {
+        c.type_ctx
+            .specialized_impl_asts
+            .get(id)
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|(concrete_args, _)| concrete_args == type_args)
+                    .cloned()
+            })
+    });
 
-    let mut method_ast = None;
-    let mut impl_type_params: Vec<TypeParam> = Vec::new();
-    for block in &impl_blocks {
-        if let TypeExpr::Generic { args, .. } = &block.target {
-            let impl_tps: Vec<TypeParam> = args
-                .iter()
-                .filter_map(|a| {
-                    if let TypeExpr::Named { path, span, .. } = a
-                        && path.len() == 1
-                    {
-                        return Some(TypeParam {
-                            name: path[0].clone(),
-                            bounds: Vec::new(),
-                            span: *span,
-                        });
-                    }
-                    None
-                })
-                .collect();
-            for member in &block.members {
+    let (func_ast, subst, return_type, param_types, is_static) =
+        if let Some((concrete_args, spec_block)) = specialized_match {
+            let mut method_ast = None;
+            for member in &spec_block.members {
                 if let ImplMember::Function(f) = member
                     && f.name == method_name
                 {
                     method_ast = Some(f.clone());
-                    impl_type_params = impl_tps;
                     break;
                 }
             }
-            if method_ast.is_some() {
-                break;
+            let func_ast = method_ast.ok_or_else(|| {
+                format!("method `{method_name}` not found in specialized impl for `{base_type}`")
+            })?;
+
+            let mut subst = HashMap::new();
+            for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
+                subst.insert(tp.name.clone(), ta.clone());
             }
-        }
-    }
 
-    let func_ast = method_ast
-        .ok_or_else(|| format!("method `{method_name}` not found in impl for `{base_type}`"))?;
+            let spec_sig = spec_id
+            .as_ref()
+            .and_then(|id| {
+                c.type_ctx.specialized_methods.get(id).and_then(|entries| {
+                    entries
+                        .iter()
+                        .find(|(args, _)| *args == concrete_args)
+                        .and_then(|(_, sigs)| sigs.get(method_name))
+                })
+            })
+            .ok_or_else(|| {
+                format!(
+                    "no signature for method `{method_name}` in specialized impl for `{base_type}`"
+                )
+            })?;
 
-    let mut subst = build_substitution(&impl_type_params, type_args);
-    for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
-        subst.insert(tp.name.clone(), ta.clone());
-    }
-
-    let info = c
-        .type_ctx
-        .find_type(base_type)
-        .map(|ti| (&ti.functions, &ti.type_params));
-
-    let (return_type, param_types, is_static) = if let Some((methods, _)) = info {
-        if let Some(sig) = methods.get(method_name) {
-            let ret = substitute(&sig.return_type, &subst);
-            let pts: Vec<Type> = sig
+            let ret = substitute(&spec_sig.return_type, &subst);
+            let pts: Vec<Type> = spec_sig
                 .params
                 .iter()
                 .map(|p| substitute(&p.ty, &subst))
                 .collect();
-            let is_static = sig.kind == FunctionKind::Static;
-            (ret, pts, is_static)
+            let is_static = spec_sig.kind == FunctionKind::Static;
+            (func_ast, subst, ret, pts, is_static)
         } else {
-            return Err(format!(
-                "no signature for method `{method_name}` on `{base_type}`"
-            ));
-        }
-    } else {
-        return Err(format!("no type info for `{base_type}`"));
-    };
+            let impl_blocks = c
+                .type_ctx
+                .generic_impl_asts
+                .get(base_type)
+                .ok_or_else(|| format!("no generic impl for `{base_type}`"))?
+                .clone();
+
+            let mut method_ast = None;
+            let mut impl_type_params: Vec<TypeParam> = Vec::new();
+            for block in &impl_blocks {
+                if let TypeExpr::Generic { args, .. } = &block.target {
+                    let impl_tps: Vec<TypeParam> = args
+                        .iter()
+                        .filter_map(|a| {
+                            if let TypeExpr::Named { path, span, .. } = a
+                                && path.len() == 1
+                            {
+                                return Some(TypeParam {
+                                    name: path[0].clone(),
+                                    bounds: Vec::new(),
+                                    span: *span,
+                                });
+                            }
+                            None
+                        })
+                        .collect();
+                    for member in &block.members {
+                        if let ImplMember::Function(f) = member
+                            && f.name == method_name
+                        {
+                            method_ast = Some(f.clone());
+                            impl_type_params = impl_tps;
+                            break;
+                        }
+                    }
+                    if method_ast.is_some() {
+                        break;
+                    }
+                }
+            }
+
+            let func_ast = method_ast.ok_or_else(|| {
+                format!("method `{method_name}` not found in impl for `{base_type}`")
+            })?;
+
+            let mut subst = build_substitution(&impl_type_params, type_args);
+            for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
+                subst.insert(tp.name.clone(), ta.clone());
+            }
+
+            let info = c
+                .type_ctx
+                .find_type(base_type)
+                .map(|ti| (&ti.functions, &ti.type_params));
+
+            let (return_type, param_types, is_static) = if let Some((methods, _)) = info {
+                if let Some(sig) = methods.get(method_name) {
+                    let ret = substitute(&sig.return_type, &subst);
+                    let pts: Vec<Type> = sig
+                        .params
+                        .iter()
+                        .map(|p| substitute(&p.ty, &subst))
+                        .collect();
+                    let is_static = sig.kind == FunctionKind::Static;
+                    (ret, pts, is_static)
+                } else {
+                    return Err(format!(
+                        "no signature for method `{method_name}` on `{base_type}`"
+                    ));
+                }
+            } else {
+                return Err(format!("no type info for `{base_type}`"));
+            };
+            (func_ast, subst, return_type, param_types, is_static)
+        };
 
     ensure_types_exist(c, &return_type)?;
     for pt in &param_types {
@@ -618,6 +681,17 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         let self_llvm_type = c
             .types
             .get_monomorphized(&mangled_type)
+            .map(|st| -> BasicTypeEnum { st.into() })
+            .or_else(|| {
+                let self_ty = if base_type == "CPtr" {
+                    Type::Pointer(Box::new(
+                        type_args.first().cloned().unwrap_or(Type::Unknown),
+                    ))
+                } else {
+                    named_generic(base_type, type_args.to_vec(), c.type_ctx)
+                };
+                to_llvm_type(&self_ty, c.context, &c.types)
+            })
             .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
         llvm_param_types.push(self_llvm_type.into());
     }

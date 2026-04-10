@@ -31,7 +31,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
         match item {
             Item::Function(f) => {
                 if f.type_params.is_empty() {
-                    check_function(f, ctx, None, &struct_name_refs, &enum_name_refs);
+                    check_function(f, ctx, None, &struct_name_refs, &enum_name_refs, None);
                 }
             }
             Item::Struct(s) if !s.type_params.is_empty() => {
@@ -96,6 +96,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
                             )
                         });
 
+                let type_id = ctx.resolve_name(target_name).cloned();
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(f) = member
                         && f.type_params.is_empty()
@@ -107,6 +108,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
                             &struct_name_refs,
                             &enum_name_refs,
                             impl_process_msg.clone(),
+                            type_id.as_ref(),
                         );
                     }
                 }
@@ -124,6 +126,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
                             &struct_name_refs,
                             &enum_name_refs,
                             impl_process_msg.clone(),
+                            type_id.as_ref(),
                         );
                     }
                 }
@@ -152,6 +155,7 @@ fn check_inline_functions(
                 Some(crate::types::process_envelope_type(m, r))
             })
     });
+    let type_id = ctx.resolve_name(type_name).cloned();
     for f in functions {
         if f.type_params.is_empty() {
             check_function_with_msg(
@@ -161,6 +165,7 @@ fn check_inline_functions(
                 struct_names,
                 enum_names,
                 process_msg.clone(),
+                type_id.as_ref(),
             );
         }
     }
@@ -173,8 +178,17 @@ fn check_function(
     self_type: Option<&Type>,
     struct_names: &[&str],
     enum_names: &[&str],
+    enclosing_type: Option<&TypeIdentifier>,
 ) {
-    check_function_with_msg(f, ctx, self_type, struct_names, enum_names, None);
+    check_function_with_msg(
+        f,
+        ctx,
+        self_type,
+        struct_names,
+        enum_names,
+        None,
+        enclosing_type,
+    );
 }
 
 /// Type-checks a function body, building a [`CheckEnv`] from its parameters
@@ -187,6 +201,7 @@ fn check_function_with_msg(
     struct_names: &[&str],
     enum_names: &[&str],
     override_msg_type: Option<Type>,
+    enclosing_type: Option<&TypeIdentifier>,
 ) {
     let self_subst: Option<HashMap<String, Type>> =
         self_type.map(|ty| HashMap::from([("Self".to_string(), ty.clone())]));
@@ -293,6 +308,7 @@ fn check_function_with_msg(
         type_hint: None,
         process_msg_type,
         fn_type_params: f.type_params.clone(),
+        enclosing_type: enclosing_type.cloned(),
     };
 
     let check_implicit_return = declared_return != Type::Unit && declared_return != Type::Unknown;

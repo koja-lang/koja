@@ -10,7 +10,7 @@ use expo_ast::ast::TypeParam;
 use expo_ast::span::Span;
 
 use crate::context::{FunctionKind, TypeContext};
-use crate::types::Type;
+use crate::types::{Type, TypeIdentifier};
 
 /// Ownership state of a local variable during type checking.
 #[derive(Debug, Clone)]
@@ -46,6 +46,9 @@ pub(crate) struct CheckEnv<'a> {
     /// Type parameters with bounds from the current function, used to resolve
     /// protocol method calls on bounded type variables.
     pub fn_type_params: Vec<TypeParam>,
+    /// The enclosing type when checking a function inside a struct/enum.
+    /// Used by `infer_call` to resolve bare calls to same-type methods.
+    pub enclosing_type: Option<TypeIdentifier>,
 }
 
 impl<'a> CheckEnv<'a> {
@@ -63,6 +66,7 @@ impl<'a> CheckEnv<'a> {
             type_hint: None,
             process_msg_type: self.process_msg_type.clone(),
             fn_type_params: self.fn_type_params.clone(),
+            enclosing_type: self.enclosing_type.clone(),
         }
     }
 

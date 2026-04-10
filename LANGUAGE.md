@@ -446,6 +446,31 @@ end
 config = Config.default()
 ```
 
+#### Concrete Impl Specialization
+
+`impl` blocks can target a specific instantiation of a generic type. Methods defined in a specialized impl are only available when the type argument matches:
+
+```expo
+impl CPtr<UInt8>
+  fn to_cstring(self) -> CString
+    CString{ptr: self, len: strlen(self)}
+  end
+end
+```
+
+`to_cstring` is only available on `CPtr<UInt8>`, not on `CPtr<Int32>` or other instantiations. Calling a specialized method on the wrong type argument produces a compile error with a hint showing which specialization provides the method.
+
+Mixing concrete types and type parameters in the same impl block is not allowed:
+
+```expo
+# Error: mixes concrete types and type parameters
+impl Map<String, V>
+  fn lookup(self, key: String) -> Option<V>
+    self.get(key)
+  end
+end
+```
+
 ### Enums
 
 #### Variants

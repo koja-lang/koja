@@ -65,7 +65,10 @@ pub fn compile_expr<'ctx>(
             if let Some((ptr, ty, _)) = compiler.fn_state.variables.get(name) {
                 let ty = ty.clone();
                 let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.types)
-                    .ok_or_else(|| format!("cannot load variable of unsupported type: {name}"))?;
+                    .ok_or_else(|| {
+                        let fn_name = compiler.fn_state.self_type_name.as_deref().unwrap_or("(top)");
+                        format!("cannot load variable of unsupported type: {name} (type: {ty:?}, in fn {fn_name})")
+                    })?;
                 let value = compiler.builder.build_load(llvm_ty, *ptr, name).unwrap();
                 return Ok(Some(TypedValue::new(value, ty)));
             }

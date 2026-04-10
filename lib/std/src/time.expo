@@ -3,14 +3,15 @@ Wall-clock time as an epoch-millisecond timestamp.
 """
 struct DateTime
   millis: Int
-end
 
-impl DateTime
+  @extern "C"
+  priv fn expo_time_now_millis() -> Int64
+
   @doc """
   Returns the current wall-clock time as a `DateTime`.
   """
   fn now() -> DateTime
-    panic("intrinsic")
+    DateTime{millis: expo_time_now_millis()}
   end
 
   @doc """

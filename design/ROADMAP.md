@@ -494,6 +494,14 @@ Active design discussions about the type system, code organization, and function
 - ~~**Open**: trait bounds on generic type parameters (`fn foo<T: Display>(x: T)`)~~ -- **Done.** `<T: Protocol>` and `<T: Proto1 & Proto2>` syntax with `&` as the protocol composition operator.
 - ~~**Open**: whether bare `impl Type` eventually migrates to inline functions in type bodies, or both coexist permanently.~~ -- **Done.** Inline functions are now supported in both `struct` and `enum` bodies. Both `fn` and `priv fn` can appear alongside fields/variants. `impl` remains for external extensions and protocol conformance (analogous to Swift extensions). Static functions (no `self`) are also allowed, making types act as namespaces.
 
+### Concrete impl specialization (implemented)
+
+- **Decided**: `impl Type<ConcreteArg>` blocks define methods that only exist for a specific type argument. Methods in specialized impls are not available on other instantiations of the generic type.
+- **Implemented**: `impl CPtr<UInt8>` adds `strlen` and `to_cstring` methods that only exist on `CPtr<UInt8>`, not on `CPtr<Int32>` or other instantiations. The type checker emits a targeted error with a hint when a specialized method is called on the wrong type argument.
+- **Storage**: specialized impls are stored separately from generic impls in `TypeContext` (`specialized_impl_asts` and `specialized_methods`, keyed by `TypeIdentifier`). This avoids incorrect generic substitution that would occur if concrete type arguments were treated as type parameters.
+- **Codegen**: `monomorphize_impl_method` checks specialized impl ASTs before falling back to generic impl ASTs. Self-type resolution handles non-struct types like `CPtr<T>` (which maps to `Type::Pointer`).
+- **Constraint**: mixing concrete types and type parameters in the same impl block is a compile error (e.g., `impl Map<String, V>` is rejected).
+
 ### Struct field defaults and trailing keyword syntax (open)
 
 Open design for default field values and trailing keyword call syntax. See [TYPES.md](TYPES.md) for full details.

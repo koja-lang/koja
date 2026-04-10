@@ -196,27 +196,103 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                 }
             }
             Item::Impl(impl_block) => {
-                let (target_name, impl_type_params) = match &impl_block.target {
+                let (target_name, impl_type_params, is_specialized) = match &impl_block.target {
                     TypeExpr::Named { path, .. } if path.len() == 1 => {
-                        (path[0].clone(), Vec::new())
+                        (path[0].clone(), Vec::new(), false)
                     }
                     TypeExpr::Generic { path, args, .. } if path.len() == 1 => {
-                        let tp_names: Vec<String> = args
-                            .iter()
-                            .filter_map(|a| {
-                                if let TypeExpr::Named { path, .. } = a
-                                    && path.len() == 1
+                        let mut params = Vec::new();
+                        let mut concrete_count = 0;
+                        for a in args {
+                            if let TypeExpr::Named { path: p, .. } = a
+                                && p.len() == 1
+                            {
+                                let name = &p[0];
+                                if Primitive::from_name(name).is_some()
+                                    || struct_names.contains(&name.as_str())
+                                    || enum_names.contains(&name.as_str())
                                 {
-                                    return Some(path[0].clone());
+                                    concrete_count += 1;
+                                } else {
+                                    params.push(name.clone());
                                 }
-                                None
-                            })
-                            .collect();
-                        (path[0].clone(), tp_names)
+                            }
+                        }
+                        let specialized = concrete_count > 0 && params.is_empty();
+                        if concrete_count > 0 && !params.is_empty() {
+                            ctx.error(
+                                format!(
+                                    "impl `{}` mixes concrete types and type parameters",
+                                    path[0]
+                                ),
+                                impl_block.span,
+                            );
+                            continue;
+                        }
+                        (path[0].clone(), params, specialized)
                     }
                     _ => continue,
                 };
                 let is_generic_impl = !impl_type_params.is_empty();
+
+                if is_specialized {
+                    let concrete_types: Vec<Type> =
+                        if let TypeExpr::Generic { args, .. } = &impl_block.target {
+                            args.iter()
+                                .map(|a| {
+                                    resolve_type_expr_with_params(
+                                        a,
+                                        &struct_names,
+                                        &enum_names,
+                                        &[],
+                                        &type_aliases,
+                                    )
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+
+                    let type_id = resolve_type_key(&ctx, &target_name, package)
+                        .unwrap_or_else(|| TypeIdentifier::std(&target_name));
+
+                    ctx.specialized_impl_asts
+                        .entry(type_id.clone())
+                        .or_default()
+                        .push((concrete_types.clone(), impl_block.clone()));
+
+                    let self_type = resolve_type_expr_with_params(
+                        &impl_block.target,
+                        &struct_names,
+                        &enum_names,
+                        &[],
+                        &type_aliases,
+                    );
+
+                    let mut method_sigs: BTreeMap<String, FunctionSig> = BTreeMap::new();
+                    for member in &impl_block.members {
+                        if let ImplMember::Function(f) = member {
+                            let sig = build_function_sig_with_params(
+                                f,
+                                &struct_names,
+                                &enum_names,
+                                &[],
+                                &type_aliases,
+                            );
+                            let Some(sig) = sig else { continue };
+                            let sig = substitute_self_type(sig, &self_type);
+                            method_sigs.insert(f.name.clone(), sig);
+                        }
+                    }
+
+                    ctx.specialized_methods
+                        .entry(type_id)
+                        .or_default()
+                        .push((concrete_types, method_sigs));
+
+                    continue;
+                }
+
                 if is_generic_impl {
                     ctx.generic_impl_asts
                         .entry(target_name.clone())

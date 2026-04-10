@@ -91,7 +91,13 @@ pub fn compile_call<'ctx>(
         "panic" => compile_panic(c, args, function),
         _ => {
             if let Some(callee) = c.functions.get(name).copied() {
-                let sig = c.type_ctx.functions.get(name);
+                let sig = c.type_ctx.functions.get(name).or_else(|| {
+                    c.fn_state
+                        .self_type_name
+                        .as_ref()
+                        .and_then(|tn| c.type_ctx.find_type(tn))
+                        .and_then(|ti| ti.functions.get(name))
+                });
                 let param_types: Vec<Type> = sig
                     .map(|s| s.params.iter().map(|p| p.ty.clone()).collect())
                     .unwrap_or_default();

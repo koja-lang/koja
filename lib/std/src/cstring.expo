@@ -6,9 +6,7 @@ an Expo string, and `to_string()` to convert back.
 struct CString
   ptr: CPtr<UInt8>
   len: Int
-end
 
-impl CString
   @doc "Frees the underlying C memory."
   fn free(move self)
     self.ptr.free()

@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CPtr<T>` -- raw C pointer type for FFI interop. `Copy` semantics (just a machine word). Methods: `CPtr.null()`, `CPtr.alloc(count)`, `ptr.free()`, `ptr.offset(n)`, `ptr.read()`, `ptr.write(value)`, `ptr.is_null?()`. Backed by `malloc`/`free`. All methods are compiler intrinsics.
 - `CString` -- null-terminated C string type with `ptr: CPtr<UInt8>` and `len: Int` fields. `String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies bytes back into an Expo `String`. `CString.free()` releases the underlying memory.
 - `CPtr<T>` accepted in `@extern "C"` signatures, enabling pointer-passing FFI with C libraries. Expo-allocated buffers can be passed to C functions that read or write through pointers.
+- Concrete impl specialization -- `impl Type<ConcreteArg>` blocks define methods only available for a specific type argument. `impl CPtr<UInt8>` adds `to_cstring()` without affecting other `CPtr<T>` instantiations. Targeted error messages when specialized methods are called on the wrong type argument.
+- Bare function calls within a type now resolve same-type methods. `@extern "C"` private functions declared inline in a struct can be called by name from sibling methods in the same type.
 
 ### Changed
 
