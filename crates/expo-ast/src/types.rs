@@ -60,6 +60,9 @@ pub enum Type {
     /// An unresolved type parameter: T in List<T>
     Parameter(String),
 
+    /// A raw C pointer: CPtr<T>
+    Pointer(Box<Type>),
+
     /// A union type: A | B | C
     Union(Vec<Type>),
 
@@ -142,6 +145,7 @@ impl Type {
                 format!("fn ({}) -> {}", p.join(", "), return_type.display())
             }
             Type::Indirect(inner) => inner.display(),
+            Type::Pointer(inner) => format!("CPtr<{}>", inner.display()),
             Type::Primitive(p) => p.display().to_string(),
             Type::Parameter(name) => name.clone(),
             Type::Union(members) => {
@@ -161,6 +165,7 @@ impl Type {
             Type::Primitive(_) => true,
             Type::Unit => true,
             Type::Function { .. } => true,
+            Type::Pointer(_) => true,
             Type::Indirect(_) | Type::Named { .. } => false,
             Type::Union(members) => members.iter().all(|m| m.is_copy()),
             Type::Parameter(_) | Type::Unknown | Type::Error => true,
@@ -174,6 +179,7 @@ impl Type {
             Type::Unknown | Type::Error | Type::Parameter(_) => false,
             Type::Named { type_args, .. } => type_args.is_empty(),
             Type::Indirect(inner) => inner.is_known(),
+            Type::Pointer(inner) => inner.is_known(),
             Type::Union(members) => members.iter().all(|m| m.is_known()),
             _ => true,
         }
@@ -347,6 +353,7 @@ pub fn unify(param_ty: &Type, arg_ty: &Type, subst: &mut HashMap<String, Type>) 
             }
             unify(ra, rb, subst)
         }
+        (Type::Pointer(a), Type::Pointer(b)) => unify(a, b, subst),
         (Type::Union(a), Type::Union(b)) => a == b,
         (Type::Unit, Type::Unit) => true,
         (Type::Unknown, _) | (_, Type::Unknown) => true,
@@ -393,6 +400,7 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
             }
         }
         Type::Indirect(inner) => Type::Indirect(Box::new(substitute(inner, subst))),
+        Type::Pointer(inner) => Type::Pointer(Box::new(substitute(inner, subst))),
         Type::Union(members) => Type::union(members.iter().map(|m| substitute(m, subst)).collect()),
         _ => ty.clone(),
     }
@@ -427,6 +435,7 @@ pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
                 .collect(),
         },
         Type::Indirect(inner) => Type::Indirect(Box::new(substitute_preserving(inner, subst))),
+        Type::Pointer(inner) => Type::Pointer(Box::new(substitute_preserving(inner, subst))),
         Type::Union(members) => Type::union(
             members
                 .iter()
@@ -462,6 +471,7 @@ pub fn mangle_type(ty: &Type) -> std::string::String {
                 mangle_name(&identifier.name, type_args)
             }
         }
+        Type::Pointer(inner) => format!("CPtr_${}$", mangle_type(inner)),
         Type::Parameter(n) => n.clone(),
         Type::Unit => "unit".to_string(),
         Type::Function {
@@ -499,6 +509,7 @@ pub fn contains_parameter(ty: &Type) -> bool {
         } => params.iter().any(|fp| contains_parameter(&fp.ty)) || contains_parameter(return_type),
         Type::Named { type_args, .. } => type_args.iter().any(contains_parameter),
         Type::Indirect(inner) => contains_parameter(inner),
+        Type::Pointer(inner) => contains_parameter(inner),
         Type::Union(members) => members.iter().any(contains_parameter),
         _ => false,
     }

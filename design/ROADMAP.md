@@ -61,13 +61,14 @@ Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, 
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
 - `Self` type expression in `protocol` and `impl` blocks
 - `Hash` and `Equality` protocols with intrinsic implementations for all primitives
-- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Step<S>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `std.process`)
+- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Step<S>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `std.process`); `CPtr<T>`, `CString` (auto-imported from `std.cptr`, `std.cstring`)
 - `List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) implemented as pure Expo code in `std.kernel`
 - Bare function names as references (`f = double; f(5)`, `list.map(double)`) -- top-level functions produce closure-compatible fat pointers via thunk wrappers
 - Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support with typed binding patterns (`p: Post -> p.title`)
 - Named union aliases (`type FeedItem = Post | Comment | Ad`) -- `type` keyword declarations resolved in the type context
 - Trait bounds on generic type parameters (`<T: Protocol>`, `<T: Proto1 & Proto2>`) -- bounds verified at call sites, protocol method resolution on bounded type vars in function bodies, `&` as protocol composition operator
 - `alias` keyword for file-private package type shorthands (`alias json.Decoder`, `alias json.Decoder as JSONDecoder`) -- qualified type resolution via `package.Type` syntax
+- C FFI Phase 1 (primitives) and Phase 2 (pointers and strings): `@extern "C"` and `@link "libname"` annotations for calling C functions. `CPtr<T>` raw pointer type (`Copy`, backed by `malloc`/`free`). `CString` null-terminated string type with `String.to_cstring()` and `CString.to_string()` conversions. `CPtr<T>` accepted in `@extern "C"` signatures for pointer-passing FFI.
 
 ### Parsed and type-checked but NOT yet in codegen
 
@@ -183,18 +184,18 @@ The litmus test: does the compiler or language runtime need it to function, or i
 - ~~`alias` keyword~~ -- **Done.** File-private shorthand for qualified package types. `alias json.Encoder` or `alias json.Decoder as JSONDecoder`. Scoped to the declaring file, doesn't pollute the flat project namespace. Parser, type checker, formatter, LSP, and doc extractor all handle `Item::Alias`. Package types tracked via `ModuleGraph.dep_packages` and `TypeContext.package_types`.
 - **Done when**: `expo.toml` resolves git dependencies and builds the project
 
-#### C FFI
+#### C FFI -- started
 
 User-facing foreign function interface for calling C libraries. Expo already calls C internally (the runtime is a C library, and codegen emits calls to it via intrinsics). The FFI exposes this capability to user code. See [FFI.md](FFI.md) for the full design.
 
-- `@extern "C"` annotation on structs (pure binding namespace) or individual functions (mixed with Expo code). No new keywords -- uses existing annotation system. Multiple annotations per declaration supported (`@link "argon2" @extern "C"`).
-- `@link "libname"` annotation on structs or functions; `[link]` table in `expo.toml` for search paths
-- `Ptr<T>` type for raw pointers (`Ptr.null()`, `Ptr.offset()`, `Ptr.read()`, `Ptr.write()`, `Ptr.alloc()`, `Ptr.free()`). `Ptr<T>` is `Copy` (just a machine word).
-- `CString` for null-terminated C string interop (`string.to_cstring()`, `cstring.to_string()`)
+- ~~`@extern "C"` annotation on structs (pure binding namespace) or individual functions (mixed with Expo code). No new keywords -- uses existing annotation system. Multiple annotations per declaration supported (`@link "argon2" @extern "C"`).~~ **Done** (Phase 1)
+- ~~`@link "libname"` annotation on structs or functions; `[link]` table in `expo.toml` for search paths~~ **Done** (Phase 1)
+- ~~`CPtr<T>` type for raw pointers (`CPtr.null()`, `CPtr.alloc()`, `ptr.free()`, `ptr.offset()`, `ptr.read()`, `ptr.write()`, `ptr.is_null?()`). `CPtr<T>` is `Copy` (just a machine word).~~ **Done** (Phase 2)
+- ~~`CString` for null-terminated C string interop (`string.to_cstring()`, `cstring.to_string()`)~~ **Done** (Phase 2)
+- ~~Codegen: extern functions emit LLVM `declare` with C calling convention. Same pattern the compiler already uses for runtime intrinsics. Extern function names are unmangled.~~ **Done** (Phase 1)
+- ~~Linker: `-l` flags for system libraries, static archive paths for vendored libraries. Already works for `libc` and `expo-runtime`.~~ **Done** (Phase 1)
 - `@compat "C"` on structs for C-compatible memory layout
-- Codegen: extern functions emit LLVM `declare` with C calling convention. Same pattern the compiler already uses for runtime intrinsics. Extern function names are unmangled.
-- Linker: `-l` flags for system libraries, static archive paths for vendored libraries. Already works for `libc` and `expo-runtime`.
-- Phased: primitives-only first, then `Ptr<T>`/`CString`, then `@compat "C"` structs and callbacks
+- Phased: ~~primitives-only first~~ **Done**, ~~then `CPtr<T>`/`CString`~~ **Done**, then `@compat "C"` structs and callbacks
 - **Done when**: an `argon2` wrapper package calls `libargon2` to hash and verify passwords
 
 #### Standard library packages
@@ -570,7 +571,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase | Milestone                                                                                                                                                                                                       |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, ~~`random`~~, package manager, C FFI, stdlib packages (`net`, `http`, `json`, `crypto`), first-party packages |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, ~~`random`~~, package manager, ~~C FFI Phase 1-2~~, C FFI Phase 3, stdlib packages (`net`, `http`, `json`, `crypto`), first-party packages |
 | 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                                          |
 | 5     | Documentation (doctests, search), LSP (~~autocomplete~~, ~~signature help~~, inlay hints), REPL                                                                                                                  |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                                                      |

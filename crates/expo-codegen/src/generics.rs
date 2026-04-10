@@ -17,6 +17,7 @@ use crate::compiler::{Compiler, EmitResult, resolve_process_envelope_type};
 use crate::drop::{Ownership, drop_live_variables};
 use crate::expr::compile_expr;
 use crate::hashtable::monomorphize_hashtable_struct;
+use crate::intrinsics::cptr::emit_cptr_method;
 use crate::list::{emit_list_method, monomorphize_list_struct};
 use crate::map::emit_map_method;
 use crate::process::{
@@ -522,6 +523,13 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
                     return Ok(());
                 }
             }
+            "CPtr" => {
+                if let EmitResult::Emitted =
+                    emit_cptr_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
+                {
+                    return Ok(());
+                }
+            }
             _ => {}
         }
     }
@@ -689,6 +697,9 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
             ensure_types_exist(c, return_type)?;
         }
         Type::Indirect(inner) => {
+            ensure_types_exist(c, inner)?;
+        }
+        Type::Pointer(inner) => {
             ensure_types_exist(c, inner)?;
         }
         Type::Union(members) => {

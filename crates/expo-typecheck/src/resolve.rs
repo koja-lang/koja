@@ -79,7 +79,7 @@ fn resolve_type(ty: &mut Type, index: &BTreeMap<String, TypeIdentifier>) {
             }
             resolve_type(return_type, index);
         }
-        Type::Indirect(inner) => resolve_type(inner, index),
+        Type::Indirect(inner) | Type::Pointer(inner) => resolve_type(inner, index),
         Type::Union(members) => {
             for m in members {
                 resolve_type(m, index);

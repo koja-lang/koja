@@ -1,0 +1,43 @@
+fn main
+  # null pointer
+  null_ptr: CPtr<Int32> = CPtr.null()
+  print(null_ptr.is_null?())
+
+  # alloc, write, read
+  ptr: CPtr<Int32> = CPtr.alloc(3)
+  print(ptr.is_null?())
+  ptr.write(42)
+  print(ptr.read())
+
+  # offset write/read
+  ptr.offset(1).write(100)
+  ptr.offset(2).write(200)
+  print(ptr.offset(1).read())
+  print(ptr.offset(2).read())
+
+  # re-read first element unchanged
+  print(ptr.read())
+
+  # overwrite and verify
+  ptr.write(99)
+  print(ptr.read())
+
+  # different type: UInt8
+  byte_ptr: CPtr<UInt8> = CPtr.alloc(2)
+  byte_ptr.write(65)
+  byte_ptr.offset(1).write(0)
+  print(byte_ptr.read())
+  print(byte_ptr.offset(1).read())
+
+  # different type: Float
+  fp: CPtr<Float> = CPtr.alloc(1)
+  fp.write(3.14)
+  print(fp.read())
+
+  # cleanup
+  ptr.free()
+  byte_ptr.free()
+  fp.free()
+
+  print("done")
+end

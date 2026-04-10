@@ -208,26 +208,32 @@ pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &
                     ExprKind::Ident { name, .. } if ctx.resolve_name(name.as_str()).is_some()
                 );
                 if !is_static {
-                    let recv_ty = infer_expr(receiver, ctx, ce);
-                    let recv_ty = match &recv_ty {
-                        Type::Indirect(inner) => inner.as_ref().clone(),
-                        other => other.clone(),
+                    let recv_ty = if let ExprKind::Ident { name, .. } = &receiver.kind {
+                        ce.get_type(name).cloned()
+                    } else {
+                        None
                     };
-                    let (base_id, _) = resolve_receiver_base_name(&recv_ty, ctx);
-                    if let Some(id) = base_id
-                        && let Some(ti) = ctx.get_type(&id)
-                        && let Some(sig) = ti.functions.get(method.as_str())
-                        && sig.kind == FunctionKind::Instance(PassMode::Move)
-                        && sig.return_type != Type::Unit
-                    {
-                        ctx.warning_with_hint(
-                            format!(
-                                "return value of `{method}` discarded; \
-                                 method consumes its receiver via `move self`"
-                            ),
-                            format!("assign the result: `x = x.{method}(...)`"),
-                            span,
-                        );
+                    if let Some(recv_ty) = recv_ty {
+                        let recv_ty = match &recv_ty {
+                            Type::Indirect(inner) => inner.as_ref().clone(),
+                            other => other.clone(),
+                        };
+                        let (base_id, _) = resolve_receiver_base_name(&recv_ty, ctx);
+                        if let Some(id) = base_id
+                            && let Some(ti) = ctx.get_type(&id)
+                            && let Some(sig) = ti.functions.get(method.as_str())
+                            && sig.kind == FunctionKind::Instance(PassMode::Move)
+                            && sig.return_type != Type::Unit
+                        {
+                            ctx.warning_with_hint(
+                                format!(
+                                    "return value of `{method}` discarded; \
+                                     method consumes its receiver via `move self`"
+                                ),
+                                format!("assign the result: `x = x.{method}(...)`"),
+                                span,
+                            );
+                        }
                     }
                 }
             }

@@ -176,7 +176,7 @@ fn collect_refs(ty: &Type, known: &HashSet<String>, refs: &mut HashSet<String>) 
                 collect_refs(arg, known, refs);
             }
         }
-        Type::Indirect(inner) => collect_refs(inner, known, refs),
+        Type::Indirect(inner) | Type::Pointer(inner) => collect_refs(inner, known, refs),
         Type::Union(members) => {
             for m in members {
                 collect_refs(m, known, refs);

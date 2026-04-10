@@ -1,0 +1,21 @@
+@doc """
+A null-terminated C string. Allocated with `malloc`, must be freed
+explicitly via `free()`. Use `String.to_cstring()` to create one from
+an Expo string, and `to_string()` to convert back.
+"""
+struct CString
+  ptr: CPtr<UInt8>
+  len: Int
+end
+
+impl CString
+  @doc "Frees the underlying C memory."
+  fn free(move self)
+    self.ptr.free()
+  end
+
+  @doc "Converts this C string to an Expo String by copying the bytes."
+  fn to_string(self) -> String
+    panic("intrinsic")
+  end
+end

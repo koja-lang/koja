@@ -1,3 +1,4 @@
+pub(crate) mod cptr;
 mod format;
 mod hash;
 mod io;
@@ -18,6 +19,7 @@ pub(crate) const OPTION_NONE_TAG: u64 = 1;
 /// Size in bytes of the length header prepended to String/Binary payloads.
 pub(crate) const STRING_HEADER_BYTES: u64 = 8;
 
+use self::cptr::{emit_cptr_intrinsic, emit_cstring_intrinsic, is_cptr_intrinsic};
 use self::format::emit_debug_format_intrinsic;
 use self::hash::{emit_bitwise_intrinsic, emit_eq_intrinsic, emit_hash_intrinsic};
 use self::io::{emit_fd_intrinsic, emit_file_intrinsic};
@@ -91,6 +93,8 @@ const TIME_INTRINSICS: &[&str] = &["DateTime_now"];
 
 const RANDOM_INTRINSICS: &[&str] = &["Random_bytes", "Random_int"];
 
+const CSTRING_INTRINSICS: &[&str] = &["String_to_cstring", "CString_to_string"];
+
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     for prim in PRIMITIVE_TYPES {
         if mangled == format!("{prim}_hash") || mangled == format!("{prim}_eq") {
@@ -118,6 +122,8 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
         || SYSTEM_INTRINSICS.contains(&mangled)
         || TIME_INTRINSICS.contains(&mangled)
         || RANDOM_INTRINSICS.contains(&mangled)
+        || is_cptr_intrinsic(mangled)
+        || CSTRING_INTRINSICS.contains(&mangled)
     {
         return true;
     }
@@ -164,6 +170,14 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
 
     if RANDOM_INTRINSICS.contains(&mangled) {
         return emit_random_intrinsic(c, fn_val, mangled);
+    }
+
+    if is_cptr_intrinsic(mangled) {
+        return emit_cptr_intrinsic(c, fn_val, mangled);
+    }
+
+    if CSTRING_INTRINSICS.contains(&mangled) {
+        return emit_cstring_intrinsic(c, fn_val, mangled);
     }
 
     if let Some(type_name) = mangled.strip_suffix("_format") {

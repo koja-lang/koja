@@ -56,23 +56,34 @@ pub fn compile_statement<'ctx>(
             let mut saved_subst = None;
             if let Some(te) = type_annotation {
                 let annotated = c.resolve_type_expr(te);
-                if let Type::Named {
-                    identifier,
-                    type_args,
-                } = &annotated
-                    && !type_args.is_empty()
-                {
-                    let type_params = c
-                        .type_ctx
-                        .get_type(identifier)
-                        .map(|ti| ti.type_params.clone());
-                    if let Some(tp) = type_params {
-                        saved_subst = Some(c.fn_state.type_subst.clone());
-                        for (param, arg) in tp.iter().zip(type_args.iter()) {
-                            let concrete = substitute(arg, &c.fn_state.type_subst);
-                            c.fn_state.type_subst.insert(param.name.clone(), concrete);
+                match &annotated {
+                    Type::Named {
+                        identifier,
+                        type_args,
+                    } if !type_args.is_empty() => {
+                        let type_params = c
+                            .type_ctx
+                            .get_type(identifier)
+                            .map(|ti| ti.type_params.clone());
+                        if let Some(tp) = type_params {
+                            saved_subst = Some(c.fn_state.type_subst.clone());
+                            for (param, arg) in tp.iter().zip(type_args.iter()) {
+                                let concrete = substitute(arg, &c.fn_state.type_subst);
+                                c.fn_state.type_subst.insert(param.name.clone(), concrete);
+                            }
                         }
                     }
+                    Type::Pointer(inner) => {
+                        if let Some(ti) = c.type_ctx.find_type("CPtr")
+                            && !ti.type_params.is_empty()
+                        {
+                            saved_subst = Some(c.fn_state.type_subst.clone());
+                            c.fn_state
+                                .type_subst
+                                .insert(ti.type_params[0].name.clone(), *inner.clone());
+                        }
+                    }
+                    _ => {}
                 }
             }
 

@@ -442,6 +442,7 @@ fn infer_method_type_args(
 fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
     match ty {
         Type::Indirect(inner) => Type::Indirect(Box::new(expand_mangled_arg_type(c, inner))),
+        Type::Pointer(inner) => Type::Pointer(Box::new(expand_mangled_arg_type(c, inner))),
         Type::Named {
             identifier,
             type_args: ta,
@@ -856,6 +857,7 @@ fn resolve_struct_name<'ctx>(
 fn struct_name_from_type(ty: &Type) -> Option<String> {
     match ty {
         Type::Indirect(inner) => struct_name_from_type(inner),
+        Type::Pointer(inner) => Some(mangle_name("CPtr", &[*inner.clone()])),
         Type::Named {
             identifier,
             type_args,

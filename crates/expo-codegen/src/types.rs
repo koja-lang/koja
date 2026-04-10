@@ -15,7 +15,9 @@ pub fn to_llvm_type<'ctx>(
     registry: &TypeRegistry<'ctx>,
 ) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
-        Type::Indirect(_) => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
+        Type::Indirect(_) | Type::Pointer(_) => {
+            Some(context.ptr_type(inkwell::AddressSpace::default()).into())
+        }
         Type::Primitive(primitive) => Some(primitive_to_llvm(primitive, context)),
         Type::Named {
             identifier,
@@ -75,7 +77,7 @@ pub fn primitive_name_to_type(name: &str) -> Type {
         "UInt32" => Type::Primitive(Primitive::U32),
         "UInt64" => Type::Primitive(Primitive::U64),
         "String" => Type::Primitive(Primitive::String),
-        "Float" => Type::Primitive(Primitive::F64),
+        "Float" | "Float64" => Type::Primitive(Primitive::F64),
         "Float32" => Type::Primitive(Primitive::F32),
         _ => named(name),
     }

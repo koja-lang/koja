@@ -4,12 +4,62 @@ struct FFI
 
   @extern "C" @link "ffi_helper"
   fn mul_c(a: Int32, b: Int32) -> Int32
+
+  @extern "C" @link "ffi_helper"
+  fn fill_array(buf: CPtr<Int32>, count: Int32, value: Int32)
+
+  @extern "C" @link "ffi_helper"
+  fn sum_array(buf: CPtr<Int32>, count: Int32) -> Int32
+
+  @extern "C" @link "ffi_helper"
+  fn read_at(buf: CPtr<Int32>, index: Int32) -> Int32
+
+  @extern "C" @link "ffi_helper"
+  fn make_greeting(name: CPtr<UInt8>, name_len: Int64) -> CPtr<UInt8>
 end
 
 fn main
+  # Phase 1: primitive FFI
   sum = FFI.add_c(3, 4)
   print(sum)
 
   product = FFI.mul_c(5, 6)
   print(product)
+
+  # Phase 2: pointer FFI
+  # Allocate a buffer, let C fill it, read it back
+  buf: CPtr<Int32> = CPtr.alloc(4)
+  FFI.fill_array(buf, 4, 10)
+  print(FFI.read_at(buf, 0))
+  print(FFI.read_at(buf, 1))
+  print(FFI.read_at(buf, 2))
+  print(FFI.read_at(buf, 3))
+
+  # Sum the filled array via C
+  total = FFI.sum_array(buf, 4)
+  print(total)
+  buf.free()
+
+  # Pass a CString to C and get back a pointer
+  name = "Expo"
+  cs = name.to_cstring()
+  greeting_ptr = FFI.make_greeting(cs.ptr, cs.len)
+  cs.free()
+
+  # Build a CString from the returned pointer to read the greeting
+  greeting_len: Int = 0
+  i: Int = 0
+  loop
+    byte = greeting_ptr.offset(i).read()
+    if byte == 0
+      break
+    end
+    i += 1
+  end
+  greeting_len = i
+
+  greeting_cs = CString{ptr: greeting_ptr, len: greeting_len}
+  greeting = greeting_cs.to_string()
+  print(greeting)
+  greeting_cs.free()
 end

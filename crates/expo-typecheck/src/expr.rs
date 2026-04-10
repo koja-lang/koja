@@ -1244,6 +1244,16 @@ pub(crate) fn resolve_receiver_base_name(
             }
         }
         Type::Primitive(p) => (ctx.resolve_name(p.display()).cloned(), None),
+        Type::Pointer(inner) => {
+            let id = ctx
+                .resolve_name("CPtr")
+                .cloned()
+                .unwrap_or_else(|| TypeIdentifier::unresolved("CPtr"));
+            let subst = ctx
+                .get_type(&id)
+                .map(|ti| build_substitution(&ti.type_params, &[*inner.clone()]));
+            (Some(id), subst)
+        }
         _ => (None, None),
     }
 }

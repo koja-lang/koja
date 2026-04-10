@@ -103,6 +103,18 @@ pub fn resolve_type_expr_full(
 ) -> Type {
     match type_expr {
         TypeExpr::Generic { path, args, .. } => {
+            if path.len() == 1 && path[0] == "CPtr" && args.len() == 1 {
+                let inner = resolve_type_expr_full(
+                    &args[0],
+                    known_structs,
+                    known_enums,
+                    known_type_params,
+                    known_type_aliases,
+                    package_types,
+                    module_aliases,
+                );
+                return Type::Pointer(Box::new(inner));
+            }
             let base_name = if path.len() == 1 {
                 Some(path[0].as_str())
             } else if path.len() == 2 && is_package_type(&path[0], &path[1], package_types) {
@@ -149,11 +161,11 @@ pub fn resolve_type_expr_full(
                     "String" => Type::Primitive(Primitive::String),
                     "Bool" => Type::Primitive(Primitive::Bool),
                     "Float32" => Type::Primitive(Primitive::F32),
-                    "Float" => Type::Primitive(Primitive::F64),
+                    "Float" | "Float64" => Type::Primitive(Primitive::F64),
                     "Int8" => Type::Primitive(Primitive::I8),
                     "Int16" => Type::Primitive(Primitive::I16),
                     "Int32" => Type::Primitive(Primitive::I32),
-                    "Int" => Type::Primitive(Primitive::I64),
+                    "Int" | "Int64" => Type::Primitive(Primitive::I64),
                     "UInt8" => Type::Primitive(Primitive::U8),
                     "UInt16" => Type::Primitive(Primitive::U16),
                     "UInt32" => Type::Primitive(Primitive::U32),

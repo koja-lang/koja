@@ -36,13 +36,13 @@ struct is purely a namespace for C symbols.
 struct Argon2C
   fn argon2id_hash_encoded(
     t_cost: UInt32, m_cost: UInt32, parallelism: UInt32,
-    pwd: Ptr<UInt8>, pwdlen: UInt32,
-    salt: Ptr<UInt8>, saltlen: UInt32,
-    hashlen: UInt32, encoded: Ptr<UInt8>, encodedlen: UInt32
+    pwd: CPtr<UInt8>, pwdlen: UInt32,
+    salt: CPtr<UInt8>, saltlen: UInt32,
+    hashlen: UInt32, encoded: CPtr<UInt8>, encodedlen: UInt32
   ) -> Int32
 
   fn argon2id_verify(
-    encoded: Ptr<UInt8>, pwd: Ptr<UInt8>, pwdlen: UInt32
+    encoded: CPtr<UInt8>, pwd: CPtr<UInt8>, pwdlen: UInt32
   ) -> Int32
 end
 ```
@@ -60,24 +60,24 @@ struct Argon2
   @link "argon2" @extern "C"
   priv fn argon2id_hash_encoded(
     t_cost: UInt32, m_cost: UInt32, parallelism: UInt32,
-    pwd: Ptr<UInt8>, pwdlen: UInt32,
-    salt: Ptr<UInt8>, saltlen: UInt32,
-    hashlen: UInt32, encoded: Ptr<UInt8>, encodedlen: UInt32
+    pwd: CPtr<UInt8>, pwdlen: UInt32,
+    salt: CPtr<UInt8>, saltlen: UInt32,
+    hashlen: UInt32, encoded: CPtr<UInt8>, encodedlen: UInt32
   ) -> Int32
 
   @link "argon2" @extern "C"
   priv fn argon2id_verify(
-    encoded: Ptr<UInt8>, pwd: Ptr<UInt8>, pwdlen: UInt32
+    encoded: CPtr<UInt8>, pwd: CPtr<UInt8>, pwdlen: UInt32
   ) -> Int32
 
   fn hash(password: String) -> Result<String, String>
     salt = random.bytes(16)
-    buf = Ptr.alloc(128)
+    buf: CPtr<UInt8> = CPtr.alloc(128)
     pwd_c = password.to_cstring()
     result = argon2id_hash_encoded(
       3, 65536, 1,
-      pwd_c.ptr(), pwd_c.len(),
-      salt.ptr(), salt.len(),
+      pwd_c.ptr, pwd_c.len,
+      salt.ptr, salt.len,
       32, buf, 128
     )
     if result == 0
@@ -90,7 +90,7 @@ struct Argon2
   fn verify(password: String, hash: String) -> Bool
     pwd_c = password.to_cstring()
     hash_c = hash.to_cstring()
-    argon2id_verify(hash_c.ptr(), pwd_c.ptr(), pwd_c.len()) == 0
+    argon2id_verify(hash_c.ptr, pwd_c.ptr, pwd_c.len) == 0
   end
 end
 ```
@@ -155,32 +155,34 @@ c_result = some_c_function(pwd_c.ptr())
 expo_str = c_result.to_string() # CString -> Expo String
 ```
 
-### Open: `CString` ownership
+### `CString` ownership (decided)
 
-- `to_cstring()` allocates with what? `malloc` (C-compatible, caller
-  must free) or the runtime allocator?
-- C-returned strings: manual free via `Ptr.free()` required.
-- Should `CString` live in auto-imported stdlib or only be available
-  when using FFI? (Leaning: always available, since it's a type like
-  any other.)
+- `to_cstring()` allocates with `malloc` (C-compatible). The caller
+  is responsible for freeing via `CString.free()` (which calls
+  `CPtr.free()` on the underlying pointer).
+- C-returned pointers: wrap in a `CString` struct and call `.free()`
+  when done, or call `ptr.free()` directly on the `CPtr<UInt8>`.
+- `CString` lives in auto-imported stdlib (`std.cstring`). Always
+  available, since it's a type like any other.
 
 ---
 
 ## Implementation phasing (decided)
 
-### Phase 1: minimal FFI
+### Phase 1: minimal FFI -- **DONE**
 
-- `@extern "C"` annotation on structs and functions
-- `@link "libname"` annotation
-- Pass and return primitives only (`Int32`, `UInt32`, `Float`, `Bool`)
-- `-l` flag wired through to linker
+- ~~`@extern "C"` annotation on structs and functions~~ **Done**
+- ~~`@link "libname"` annotation~~ **Done**
+- ~~Pass and return primitives only (`Int32`, `UInt32`, `Float`, `Bool`)~~ **Done**
+- ~~`-l` flag wired through to linker~~ **Done**
 - ~~Multiple annotations per declaration (space-separated or stacked)~~ **Done**
 
-### Phase 2: pointers and strings
+### Phase 2: pointers and strings -- **DONE**
 
-- `Ptr<T>` type with core methods
-- `CString` type with `to_cstring()` / `to_string()`
-- `alloc` / `free`
+- ~~`CPtr<T>` type with core methods (`null`, `alloc`, `free`, `offset`, `read`, `write`, `is_null?`)~~ **Done**
+- ~~`CString` struct (`ptr: CPtr<UInt8>`, `len: Int`) with `to_cstring()` / `to_string()` / `free()`~~ **Done**
+- ~~`CPtr<T>` accepted in `@extern "C"` signatures~~ **Done**
+- ~~`alloc` / `free` backed by C `malloc` / `free`~~ **Done**
 
 ### Phase 3: struct interop
 
@@ -245,25 +247,26 @@ where these models collide.
 Primitives (`Int32`, `UInt32`, `Float`, `Bool`) are straightforward --
 they're passed by value, same as C. No ownership questions.
 
-For pointers (`Ptr<T>`): the pointer value is copied (it's `Copy`). The
+For pointers (`CPtr<T>`): the pointer value is copied (it's `Copy`). The
 Expo side retains no ownership of what's behind the pointer.
 
-For strings: `to_cstring()` creates a copy. The original Expo `String`
-is unaffected. The `CString` is a new allocation that must be freed.
+For strings: `to_cstring()` creates a copy via `malloc`. The original
+Expo `String` is unaffected. The `CString` is a new allocation that
+must be freed via `CString.free()` or `cs.ptr.free()`.
 
 ### Receiving values from C
 
 Primitives: returned by value, no ownership issues.
 
-Pointers: C returns a `Ptr<T>`. Who allocated the memory? The C library
-(via `malloc`). Who frees it? The Expo code must call `Ptr.free()` (which
+Pointers: C returns a `CPtr<T>`. Who allocated the memory? The C library
+(via `malloc`). Who frees it? The Expo code must call `ptr.free()` (which
 calls `free()`). The Expo runtime will not auto-free memory behind a
-`Ptr<T>`.
+`CPtr<T>`.
 
 ### Key principle
 
-`Ptr<T>` is an explicit opt-in to manual memory management. It's the
-escape hatch. Normal Expo code never touches `Ptr` -- only FFI wrapper
+`CPtr<T>` is an explicit opt-in to manual memory management. It's the
+escape hatch. Normal Expo code never touches `CPtr` -- only FFI wrapper
 authors do.
 
 ### Open questions
@@ -296,7 +299,7 @@ Expo already has fixed-width integer types that map directly to C:
 | `Float`   | `double`            | 8 bytes       |
 | `Bool`    | `_Bool` / `uint8_t` | 1 byte        |
 | `()`      | `void`              | 0 bytes       |
-| `Ptr<T>`  | `T*`                | pointer-sized |
+| `CPtr<T>` | `T*`                | pointer-sized |
 
 ### The `Int` footgun
 
@@ -344,34 +347,39 @@ Options:
 
 ---
 
-## Open: `Ptr<T>` design
+## `CPtr<T>` design (implemented)
 
 Raw pointer type. `Copy` (just a machine word). No ownership tracking.
-The Expo compiler will not auto-free memory behind a `Ptr<T>`.
+The Expo compiler will not auto-free memory behind a `CPtr<T>`.
 
-### Planned API
+Named `CPtr` (not `Ptr`) to signal that this is a C interop type --
+it uses `malloc`/`free`, not the Expo runtime allocator. Normal Expo
+code never touches `CPtr` -- only FFI wrapper authors do.
+
+### API
 
 ```expo
-Ptr.null()           # -> Ptr<T>     null pointer
-ptr.offset(n)        # -> Ptr<T>     pointer arithmetic
+CPtr.null()          # -> CPtr<T>    null pointer
+CPtr.alloc(count)    # -> CPtr<T>    malloc(count * sizeof(T))
+ptr.free()           # free(ptr)     move self, no return
+ptr.offset(n)        # -> CPtr<T>    pointer arithmetic
 ptr.read()           # -> T          read value at pointer
-ptr.write(value)     # write value at pointer
-Ptr.alloc(count)     # -> Ptr<T>     malloc(count * sizeof(T))
-ptr.free()           # free(ptr)
+ptr.write(value)     #               write value at pointer
 ptr.is_null?()       # -> Bool       null check
 ```
 
-### Open questions
+All methods are compiler intrinsics backed by LLVM IR generation.
+`CPtr<T>` is represented as `Type::Pointer(Box<Type>)` in the AST
+and maps to LLVM's opaque pointer type.
 
-- `alloc` / `free` use `malloc` / `free` (C allocator). Not the Expo
-  runtime allocator. This is deliberate -- C libraries expect C-allocated
-  memory.
-- Should `Ptr<T>` be generic over all types, or restricted to primitives
-  and `@compat "C"` structs?
+### Remaining questions
+
+- Should `CPtr<T>` be restricted to primitives and `@compat "C"`
+  structs, or remain generic over all types?
 - Should `read()` be restricted to `Copy` types? What about reading a
   struct that contains a `String` (heap-allocated)?
 - Null checking: `is_null?()` returns `Bool`. Should there also be a
-  `to_option()` -> `Option<Ptr<T>>` for idiomatic handling?
+  `to_option()` -> `Option<CPtr<T>>` for idiomatic handling?
 
 ---
 

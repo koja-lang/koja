@@ -115,7 +115,7 @@ pub fn synthesize_all_formats<'ctx>(c: &mut Compiler<'ctx>) -> Result<(), String
 
 fn is_complex_type(ty: &Type) -> bool {
     match ty {
-        Type::Indirect(_) | Type::Unknown => true,
+        Type::Indirect(_) | Type::Pointer(_) | Type::Unknown => true,
         Type::Named { type_args, .. } => !type_args.is_empty(),
         _ => false,
     }

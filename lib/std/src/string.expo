@@ -422,4 +422,12 @@ impl String
     end
     true
   end
+
+  @doc """
+  Allocates a null-terminated C string copy of this string using `malloc`.
+  The caller is responsible for calling `free()` on the returned `CString`.
+  """
+  fn to_cstring(self) -> CString
+    panic("intrinsic")
+  end
 end

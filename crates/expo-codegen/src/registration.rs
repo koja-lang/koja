@@ -280,7 +280,7 @@ fn collect_union_types(ty: &Type, out: &mut Vec<Type>) {
                 collect_union_types(ta, out);
             }
         }
-        Type::Indirect(inner) => collect_union_types(inner, out),
+        Type::Indirect(inner) | Type::Pointer(inner) => collect_union_types(inner, out),
         _ => {}
     }
 }

@@ -18,6 +18,7 @@ Expo is a statically typed, compiled language targeting native binaries via LLVM
 - [Modules](#modules) -- Transparent Files, Visibility, Aliases
 - [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
 - [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
+- [C FFI](#c-ffi) -- `@extern "C"`, `CPtr<T>`, `CString`
 - [Annotations](#annotations) -- `@doc`
 - [Planned Features](#planned-features) -- Arena Blocks, Display, Struct Destructuring, `command`
 - [Tooling](#tooling) -- CLI Commands, LSP, Formatter
@@ -1579,6 +1580,115 @@ end
 ```
 
 `Map<K, V>` implements `MapLiteral<K, V>`.
+
+---
+
+## C FFI
+
+Expo can call C functions via the `@extern "C"` annotation. FFI declarations live on structs (types are namespaces). No `unsafe` keyword -- safety is the wrapper author's responsibility.
+
+### Declaring Extern Functions
+
+`@extern "C"` on a function marks it as a C declaration. `@link "libname"` tells the linker which library provides the symbol (`-l libname`). Extern functions live inside structs, which serve as namespaces.
+
+```expo
+struct FFI
+  @extern "C" @link "mylib"
+  fn add_numbers(a: Int32, b: Int32) -> Int32
+
+  @extern "C" @link "mylib"
+  fn fill_buffer(buf: CPtr<Int32>, count: Int32, value: Int32)
+end
+
+result = FFI.add_numbers(3, 4)
+print(result)
+```
+
+Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Expo functions in the same struct -- use `priv fn` on the extern declarations and expose safe public wrappers.
+
+### `CPtr<T>`
+
+A raw C pointer type. `Copy` semantics (just a machine word). No ownership tracking -- the compiler will not auto-free memory behind a `CPtr<T>`.
+
+```expo
+struct CPtr<T>
+  fn null() -> CPtr<T>
+  fn alloc(count: Int) -> CPtr<T>
+  fn free(move self)
+  fn offset(self, n: Int) -> CPtr<T>
+  fn read(self) -> T
+  fn write(self, value: T)
+  fn is_null?(self) -> Bool
+end
+```
+
+`alloc` and `free` use C's `malloc` and `free`. All methods are compiler intrinsics.
+
+```expo
+buf: CPtr<Int32> = CPtr.alloc(4)
+buf.write(42)
+print(buf.read())
+buf.free()
+
+null_ptr: CPtr<Int32> = CPtr.null()
+print(null_ptr.is_null?())
+```
+
+Type annotations on the variable drive generic inference for static methods like `CPtr.alloc()` and `CPtr.null()`.
+
+### `CString`
+
+A null-terminated C string for FFI interop. Allocated with `malloc`, must be freed explicitly.
+
+```expo
+struct CString
+  ptr: CPtr<UInt8>
+  len: Int
+end
+```
+
+Convert between Expo strings and C strings:
+
+```expo
+name = "hello"
+cs = name.to_cstring()
+print(cs.len)
+
+back = cs.to_string()
+print(back == name)
+
+cs.free()
+```
+
+`String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies the bytes back into an Expo `String`. The original string is unaffected by either conversion.
+
+### Passing Pointers to C
+
+`CPtr<T>` is accepted in `@extern "C"` signatures, enabling pointer-passing FFI:
+
+```expo
+struct FFI
+  @extern "C" @link "mylib"
+  fn fill_array(buf: CPtr<Int32>, count: Int32, value: Int32)
+
+  @extern "C" @link "mylib"
+  fn sum_array(buf: CPtr<Int32>, count: Int32) -> Int32
+end
+
+buf: CPtr<Int32> = CPtr.alloc(4)
+FFI.fill_array(buf, 4, 10)
+total = FFI.sum_array(buf, 4)
+print(total)
+buf.free()
+```
+
+For string-accepting C functions, pass `cs.ptr` (the `CPtr<UInt8>`) and `cs.len`:
+
+```expo
+cs = "hello".to_cstring()
+FFI.some_c_function(cs.ptr, cs.len)
+cs.free()
+```
 
 ---
 

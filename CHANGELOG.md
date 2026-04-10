@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Ref.alive?()` -- returns `true` if the process is still running.
 - `json` promoted to qualified stdlib package. Ships with the compiler -- no `[dependencies]` entry needed. `json.Value` (renamed from `JSONValue`), `json.Encoder`, `json.Decoder`, `json.StringBuilder`. Use `alias json.Value` or `json.Value.object(...)` to access.
 - `expo-stdlib` build script auto-discovers `.expo` files under `expo/lib/`. Adding a new stdlib package is just creating a directory with an `expo.toml` and `src/` -- no Rust code changes needed.
+- `CPtr<T>` -- raw C pointer type for FFI interop. `Copy` semantics (just a machine word). Methods: `CPtr.null()`, `CPtr.alloc(count)`, `ptr.free()`, `ptr.offset(n)`, `ptr.read()`, `ptr.write(value)`, `ptr.is_null?()`. Backed by `malloc`/`free`. All methods are compiler intrinsics.
+- `CString` -- null-terminated C string type with `ptr: CPtr<UInt8>` and `len: Int` fields. `String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies bytes back into an Expo `String`. `CString.free()` releases the underlying memory.
+- `CPtr<T>` accepted in `@extern "C"` signatures, enabling pointer-passing FFI with C libraries. Expo-allocated buffers can be passed to C functions that read or write through pointers.
 
 ### Changed
 
@@ -41,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Multi-process setups no longer trigger LLVM union type mismatches when two process types coexist. `Step<T>` is a normal generic enum instantiation, avoiding the ad-hoc union codegen path.
 - Process initialization (socket binding, timer setup) now runs in the child process context, fixing `EINVAL` errors from resources created in the parent before spawn.
+- `move self` methods returning `()` on non-Copy structs no longer produce a false "use of moved value" error. The ownership checker's discarded-return-value warning logic was re-inferring the receiver after it had already been marked as moved, triggering a spurious error.
 
 ## [0.9.0] - 2026-04-06
 

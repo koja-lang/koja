@@ -367,7 +367,7 @@ fn check_ffi_type_expr(te: &TypeExpr, span: Span, ctx: &mut TypeContext) {
                     span,
                 ),
                 "String" => ctx.error(
-                    "type `String` is not FFI-compatible — use `Ptr<UInt8>` with `CString` (requires FFI Phase 2)".to_string(),
+                    "type `String` is not FFI-compatible — use `CPtr<UInt8>` with `CString`".to_string(),
                     span,
                 ),
                 other => ctx.error(
@@ -376,9 +376,11 @@ fn check_ffi_type_expr(te: &TypeExpr, span: Span, ctx: &mut TypeContext) {
                 ),
             }
         }
+        TypeExpr::Generic { path, args, .. }
+            if path.len() == 1 && path[0] == "CPtr" && args.len() == 1 => {}
         TypeExpr::Unit { .. } => {}
         _ => ctx.error(
-            "only explicit-width primitive types are allowed in `@extern \"C\"` functions"
+            "only explicit-width primitive types and `CPtr<T>` are allowed in `@extern \"C\"` functions"
                 .to_string(),
             span,
         ),
