@@ -54,9 +54,7 @@ impl<'a> Printer<'a> {
                 }
 
                 let anchor = mem::discriminant(&module.items[i]);
-                while i < module.items.len()
-                    && mem::discriminant(&module.items[i]) == anchor
-                {
+                while i < module.items.len() && mem::discriminant(&module.items[i]) == anchor {
                     let item = &module.items[i];
                     let span = item_span(item);
                     let (comment_docs, _) = self.comments.drain_before(span.start.line);

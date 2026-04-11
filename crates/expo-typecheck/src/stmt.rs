@@ -10,7 +10,7 @@ use crate::check::{record_coercion_if_needed, types_compatible};
 use crate::context::{FunctionKind, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarState};
 use crate::expr::{expr_span, infer_expr, resolve_receiver_base_name};
-use crate::types::{Type, resolve_type_expr};
+use crate::types::Type;
 
 /// Checks all statements in a body sequentially.
 pub(crate) fn check_body(stmts: &mut [Statement], ctx: &mut TypeContext, ce: &mut CheckEnv) {
@@ -29,8 +29,7 @@ pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &
             span,
         } => {
             if let Some(te) = type_annotation {
-                let mut hint = resolve_type_expr(te, ce.struct_names, ce.enum_names);
-                ctx.resolve_type(&mut hint);
+                let hint = ctx.resolve_type_annotation(te, ce.struct_names, ce.enum_names);
                 ce.type_hint = Some(hint);
             } else {
                 ce.type_hint = None;
@@ -40,8 +39,7 @@ pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &
             ce.type_hint = None;
 
             let effective_type = if let Some(te) = type_annotation {
-                let mut annotated = resolve_type_expr(te, ce.struct_names, ce.enum_names);
-                ctx.resolve_type(&mut annotated);
+                let annotated = ctx.resolve_type_annotation(te, ce.struct_names, ce.enum_names);
                 if value_type.is_known() && annotated.is_known() {
                     if !types_compatible(&value_type, &annotated) {
                         ctx.error_with_hint(

@@ -29,9 +29,31 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .build_extract_value(kind_enum, 0, "kind_tag")
                 .unwrap()
                 .into_int_value();
-            let kind = c
+
+            let stream_tag = c
+                .types
+                .get_variant_tag("SocketKind", "Stream")
+                .ok_or("SocketKind::Stream variant not found")?;
+            let i8_ty = c.context.i8_type();
+            let is_stream = c
                 .builder
-                .build_int_z_extend(kind_tag, i64_ty, "kind")
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    kind_tag,
+                    i8_ty.const_int(stream_tag as u64, false),
+                    "is_stream",
+                )
+                .unwrap();
+            const SOCK_STREAM: u64 = 1;
+            const SOCK_DGRAM: u64 = 2;
+            let sock_type = c
+                .builder
+                .build_select(
+                    is_stream,
+                    i64_ty.const_int(SOCK_STREAM, false),
+                    i64_ty.const_int(SOCK_DGRAM, false),
+                    "sock_type",
+                )
                 .unwrap();
 
             let rt_fn = *c
@@ -39,7 +61,7 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .get("expo_socket_create")
                 .ok_or("expo_socket_create not declared")?;
             let fd_val = c
-                .call(rt_fn, &[kind.into()], "fd_val")
+                .call(rt_fn, &[sock_type.into()], "fd_val")
                 .unwrap()
                 .into_int_value();
 

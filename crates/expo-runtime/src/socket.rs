@@ -9,10 +9,10 @@ use std::mem;
 use std::ptr;
 
 use crate::ffi::{
-    AF_INET, Addrinfo, EAGAIN, EINPROGRESS, SO_ERROR, SO_REUSEADDR, SOCK_DGRAM, SOCK_STREAM,
-    SOL_SOCKET, SockaddrIn, get_errno, libc_accept, libc_bind, libc_connect, libc_freeaddrinfo,
-    libc_getaddrinfo, libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt,
-    libc_socket, malloc, set_nonblocking,
+    AF_INET, Addrinfo, EAGAIN, EINPROGRESS, SO_ERROR, SO_REUSEADDR, SOL_SOCKET, SockaddrIn,
+    get_errno, libc_accept, libc_bind, libc_connect, libc_freeaddrinfo, libc_getaddrinfo,
+    libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket, malloc,
+    set_nonblocking,
 };
 use crate::reactor::{Interest, io_block};
 use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_binary, set_last_error};
@@ -101,19 +101,13 @@ pub extern "C" fn expo_socket_connect(fd: i64, ip_ptr: *const u8, port: i64) -> 
     -1
 }
 
-/// Creates a new socket in non-blocking mode. `kind`: 0 = stream (TCP),
-/// 1 = datagram (UDP). Returns the fd on success, -1 on error.
+/// Creates a new socket in non-blocking mode. `sock_type` is the POSIX
+/// socket type constant (e.g. `SOCK_STREAM`, `SOCK_DGRAM`), resolved by
+/// the codegen from the Expo `SocketKind` enum.
+/// Returns the fd on success, -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_socket_create(kind: i64) -> i64 {
-    let sock_type = match kind {
-        0 => SOCK_STREAM,
-        1 => SOCK_DGRAM,
-        _ => {
-            set_last_error(io::Error::other("invalid socket kind"));
-            return -1;
-        }
-    };
-    let fd = unsafe { libc_socket(AF_INET, sock_type, 0) };
+pub extern "C" fn expo_socket_create(sock_type: i64) -> i64 {
+    let fd = unsafe { libc_socket(AF_INET, sock_type as i32, 0) };
     if fd < 0 {
         set_last_error(io::Error::last_os_error());
         return -1;

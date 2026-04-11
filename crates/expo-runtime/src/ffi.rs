@@ -2,10 +2,6 @@
 
 /// IPv4 address family.
 pub const AF_INET: i32 = 2;
-/// Stream (TCP) socket type.
-pub const SOCK_STREAM: i32 = 1;
-/// Datagram (UDP) socket type.
-pub const SOCK_DGRAM: i32 = 2;
 
 #[cfg(target_os = "macos")]
 mod platform {

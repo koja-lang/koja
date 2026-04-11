@@ -350,9 +350,55 @@ pub fn emit_file_intrinsic<'ctx>(
                 .build_extract_value(mode_enum, 0, "mode_tag")
                 .unwrap()
                 .into_int_value();
+
+            let read_tag = c
+                .types
+                .get_variant_tag("FileMode", "Read")
+                .ok_or("FileMode::Read variant not found")?;
+            let write_tag = c
+                .types
+                .get_variant_tag("FileMode", "Write")
+                .ok_or("FileMode::Write variant not found")?;
+            let i8_ty = c.context.i8_type();
+            let is_read = c
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    mode_tag,
+                    i8_ty.const_int(read_tag as u64, false),
+                    "is_read",
+                )
+                .unwrap();
+            let is_write = c
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    mode_tag,
+                    i8_ty.const_int(write_tag as u64, false),
+                    "is_write",
+                )
+                .unwrap();
+            const MODE_READ: u64 = 0;
+            const MODE_WRITE: u64 = 1;
+            const MODE_APPEND: u64 = 2;
+            let write_or_append = c
+                .builder
+                .build_select(
+                    is_write,
+                    i64_ty.const_int(MODE_WRITE, false),
+                    i64_ty.const_int(MODE_APPEND, false),
+                    "write_or_append",
+                )
+                .unwrap()
+                .into_int_value();
             let mode = c
                 .builder
-                .build_int_z_extend(mode_tag, i64_ty, "mode")
+                .build_select(
+                    is_read,
+                    i64_ty.const_int(MODE_READ, false),
+                    write_or_append,
+                    "mode",
+                )
                 .unwrap();
             let rt_fn = *c
                 .functions

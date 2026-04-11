@@ -1,13 +1,14 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, ProtocolMethod, Severity, StructDecl,
-    TypeParam,
+    TypeExpr, TypeParam,
 };
 pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::span::Span;
 
-pub use crate::types::{FnParam, Type, TypeIdentifier};
+use crate::types::resolve_type_expr_full;
+pub use crate::types::{FnParam, Package, Type, TypeIdentifier};
 
 pub type SpecializedMethodMap =
     BTreeMap<TypeIdentifier, Vec<(Vec<Type>, BTreeMap<String, FunctionSig>)>>;
@@ -37,6 +38,9 @@ pub struct TypeContext {
     /// Reverse index from bare type name to its fully qualified
     /// [`TypeIdentifier`]. Populated by the resolution pass; empty before that.
     pub name_index: BTreeMap<String, TypeIdentifier>,
+    /// Package-to-type-names index for resolving qualified type paths like
+    /// `http.Request`. Populated by the resolution pass alongside `name_index`.
+    pub package_types: BTreeMap<Package, BTreeSet<String>>,
 }
 
 /// Whether a function in an impl block takes a `self` receiver or is static.
@@ -295,6 +299,28 @@ impl TypeContext {
         crate::resolve::resolve_type_inline(ty, &self.name_index);
     }
 
+    /// Resolves a [`TypeExpr`] annotation using the full cached context: type
+    /// aliases, module aliases, and package-qualified type lookups. Replaces the
+    /// `resolve_type_expr(...) + ctx.resolve_type(...)` pattern at call sites.
+    pub fn resolve_type_annotation(
+        &self,
+        te: &TypeExpr,
+        struct_names: &[&str],
+        enum_names: &[&str],
+    ) -> Type {
+        let mut ty = resolve_type_expr_full(
+            te,
+            struct_names,
+            enum_names,
+            &[],
+            &self.type_aliases,
+            &self.package_types,
+            &self.module_aliases,
+        );
+        self.resolve_type(&mut ty);
+        ty
+    }
+
     /// Returns `true` if the given package provides a type with the given name.
     pub fn is_package_type(&self, pkg: &str, type_name: &str) -> bool {
         let id = if pkg == "std" {
@@ -327,6 +353,7 @@ impl TypeContext {
             types: BTreeMap::new(),
             module_aliases: BTreeMap::new(),
             name_index: BTreeMap::new(),
+            package_types: BTreeMap::new(),
         }
     }
 

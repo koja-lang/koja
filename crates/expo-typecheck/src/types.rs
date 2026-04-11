@@ -60,9 +60,9 @@ pub fn resolve_type_alias_id(
 
 /// Checks if a two-segment qualified type path like `json.Decoder` is valid.
 fn is_package_type(
-    package: &str,
+    package: &Package,
     type_name: &str,
-    package_types: &BTreeMap<String, BTreeSet<String>>,
+    package_types: &BTreeMap<Package, BTreeSet<String>>,
 ) -> bool {
     package_types
         .get(package)
@@ -98,7 +98,7 @@ pub fn resolve_type_expr_full(
     known_enums: &[&str],
     known_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
-    package_types: &BTreeMap<String, BTreeSet<String>>,
+    package_types: &BTreeMap<Package, BTreeSet<String>>,
     module_aliases: &BTreeMap<String, Type>,
 ) -> Type {
     match type_expr {
@@ -117,7 +117,9 @@ pub fn resolve_type_expr_full(
             }
             let base_name = if path.len() == 1 {
                 Some(path[0].as_str())
-            } else if path.len() == 2 && is_package_type(&path[0], &path[1], package_types) {
+            } else if path.len() == 2
+                && is_package_type(&Package::Named(path[0].clone()), &path[1], package_types)
+            {
                 Some(path[1].as_str())
             } else {
                 None
@@ -181,7 +183,9 @@ pub fn resolve_type_expr_full(
                         }
                     }
                 }
-            } else if path.len() == 2 && is_package_type(&path[0], &path[1], package_types) {
+            } else if path.len() == 2
+                && is_package_type(&Package::Named(path[0].clone()), &path[1], package_types)
+            {
                 let name = path[1].as_str();
                 if known_structs.contains(&name) || known_enums.contains(&name) {
                     Type::Named {

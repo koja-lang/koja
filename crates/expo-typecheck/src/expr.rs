@@ -24,7 +24,7 @@ use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_
 use crate::stmt::{check_body, check_statement};
 use crate::types::{
     Primitive, Type, build_substitution, named, named_generic, resolve_type_alias_name,
-    resolve_type_expr, substitute_preserving, unify, unwrap_indirect,
+    substitute_preserving, unify, unwrap_indirect,
 };
 
 /// Infers the type of an expression, emitting diagnostics for any type errors
@@ -661,8 +661,7 @@ fn infer_binary_literal(
                 None
             }
         } else if let Some(type_ann) = &seg.type_ann {
-            let mut ann_ty = resolve_type_expr(type_ann, ce.struct_names, ce.enum_names);
-            ctx.resolve_type(&mut ann_ty);
+            let ann_ty = ctx.resolve_type_annotation(type_ann, ce.struct_names, ce.enum_names);
             match &ann_ty {
                 Type::Primitive(p) => {
                     if let Some(w) = p.bit_width() {
@@ -1755,9 +1754,7 @@ fn bind_closure_params(
                 ..
             } => {
                 let ty = if let Some(te) = type_expr {
-                    let mut ty = resolve_type_expr(te, ce.struct_names, ce.enum_names);
-                    ctx.resolve_type(&mut ty);
-                    ty
+                    ctx.resolve_type_annotation(te, ce.struct_names, ce.enum_names)
                 } else if let Some(exp) = expected {
                     exp.ty.clone()
                 } else {

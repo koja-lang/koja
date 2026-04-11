@@ -25,8 +25,8 @@ use expo_ast::ast::{
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::{TypeContext, VariantData};
 use expo_typecheck::types::{
-    Type, build_substitution, named, process_envelope_type, resolve_type_expr_with_params,
-    substitute, substitute_preserving,
+    Type, build_substitution, named, process_envelope_type, resolve_type_expr_full, substitute,
+    substitute_preserving,
 };
 use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -568,12 +568,14 @@ impl<'ctx> Compiler<'ctx> {
         if self.fn_state.self_type_name.is_some() && !type_params.contains(&"Self") {
             type_params.push("Self");
         }
-        let mut ty = resolve_type_expr_with_params(
+        let mut ty = resolve_type_expr_full(
             type_expr,
             &struct_names,
             &enum_names,
             &type_params,
             &self.type_ctx.type_aliases,
+            &self.type_ctx.package_types,
+            &self.type_ctx.module_aliases,
         );
         self.type_ctx.resolve_type(&mut ty);
         if let Some(ref name) = self.fn_state.self_type_name {

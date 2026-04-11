@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::context::{FunctionSig, TypeContext, TypeKind, VariantData};
 use crate::types::{Package, Type, TypeIdentifier};
@@ -83,6 +83,15 @@ pub fn resolve_packages(ctx: &mut TypeContext) {
     }
 
     ctx.name_index = index;
+
+    let mut pkg_types: BTreeMap<Package, BTreeSet<String>> = BTreeMap::new();
+    for id in ctx.types.keys() {
+        pkg_types
+            .entry(id.package.clone())
+            .or_default()
+            .insert(id.name.clone());
+    }
+    ctx.package_types = pkg_types;
 }
 
 /// Resolves `Package::Unresolved` identifiers in a single [`Type`] using a
