@@ -10,6 +10,7 @@ use std::{env, fs, process};
 use crate::diagnostics::render_diagnostics;
 use crate::pipeline;
 use crate::project;
+use crate::resolve;
 
 /// Replaces the current process with the given binary via `exec`. Never returns on success.
 fn exec_binary(binary: &Path, args: &[String]) -> ! {
@@ -450,15 +451,71 @@ pub fn cmd_test(color: bool) {
     pipeline::test_project(&config, &cwd, color);
 }
 
-/// `expo format <file.expo> [--check] [--write]` -- formats Expo source files.
+/// `expo format [files...] [--check] [--write]` -- formats Expo source files.
+///
+/// With no arguments, looks for `expo.toml` and formats all `.expo` files in
+/// the project's `src` and `test` directories. Directory arguments are walked
+/// recursively for `.expo` files.
 pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
-    if files.is_empty() {
-        eprintln!("Usage: expo format <file.expo> [--check] [--write]");
-        process::exit(1);
-    }
+    let resolved = if files.is_empty() {
+        let cwd = env::current_dir().unwrap_or_else(|e| {
+            eprintln!("error: cannot determine current directory: {e}");
+            process::exit(1);
+        });
+
+        let config = match project::load_project(&cwd) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                eprintln!("error: no files specified and no expo.toml found");
+                eprintln!("Usage: expo format [files...] [--check] [--write]");
+                eprintln!("  or:  create an expo.toml in the current directory");
+                process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+        };
+
+        let roots: Vec<PathBuf> = config
+            .src
+            .iter()
+            .chain(config.test.iter())
+            .map(|s| cwd.join(s))
+            .collect();
+
+        let mut paths = Vec::new();
+        for root in &roots {
+            if root.is_dir() {
+                paths.extend(resolve::collect_expo_files_recursive(root));
+            }
+        }
+        paths.sort();
+        paths
+            .into_iter()
+            .filter_map(|p| p.to_str().map(String::from))
+            .collect::<Vec<_>>()
+    } else {
+        let mut paths = Vec::new();
+        for input in &files {
+            let p = Path::new(input);
+            if p.is_dir() {
+                let found = resolve::collect_expo_files_recursive(p);
+                for f in found {
+                    if let Some(s) = f.to_str() {
+                        paths.push(s.to_string());
+                    }
+                }
+            } else {
+                paths.push(input.clone());
+            }
+        }
+        paths.sort();
+        paths
+    };
 
     let mut has_diff = false;
-    for path in &files {
+    for path in &resolved {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {

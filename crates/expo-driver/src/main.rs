@@ -58,7 +58,7 @@ enum Command {
     },
     /// Format source files
     Format {
-        /// Source files to format
+        /// Files or directories to format (formats project if omitted)
         files: Vec<String>,
 
         /// Check if files need formatting (exit 1 if so)

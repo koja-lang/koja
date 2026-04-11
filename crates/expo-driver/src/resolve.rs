@@ -283,7 +283,7 @@ fn resolve_dependencies(
     Ok(())
 }
 
-fn collect_expo_files_recursive(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn collect_expo_files_recursive(dir: &Path) -> Vec<PathBuf> {
     let mut result = Vec::new();
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
