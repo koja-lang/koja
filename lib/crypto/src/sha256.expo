@@ -1,0 +1,59 @@
+@doc "SHA-256 cryptographic hash (32-byte / 256-bit digest)."
+struct SHA256
+  ctx: CPtr<UInt8>
+
+  @doc "Computes the SHA-256 digest of `data` in a single call."
+  fn digest(data: Binary) -> Binary
+    out: CPtr<UInt8> = CPtr.alloc(32)
+    sha256_raw(data.ptr(), data.byte_size(), out)
+    result = out.to_binary(32)
+    out.free()
+    result
+  end
+
+  @doc "Finalizes the hash and returns the 32-byte digest. Consumes the context."
+  fn finalize(move self) -> Binary
+    out: CPtr<UInt8> = CPtr.alloc(32)
+    null: CPtr<UInt8> = CPtr.null()
+    evp_digest_final_ex(self.ctx, out, null)
+    evp_md_ctx_free(self.ctx)
+    result = out.to_binary(32)
+    out.free()
+    result
+  end
+
+  @doc "Creates a new streaming SHA-256 context."
+  fn new() -> Self
+    ctx = evp_md_ctx_new()
+    null: CPtr<UInt8> = CPtr.null()
+    evp_digest_init_ex(ctx, evp_sha256(), null)
+    SHA256{ctx: ctx}
+  end
+
+  @doc "Feeds data into the hash context."
+  fn update(move self, data: Binary) -> Self
+    evp_digest_update(self.ctx, data.ptr(), data.byte_size())
+    self
+  end
+
+  @extern "C" @link "crypto:EVP_DigestFinal_ex"
+  priv fn evp_digest_final_ex(ctx: CPtr<UInt8>, out: CPtr<UInt8>, out_len: CPtr<UInt8>) -> Int64
+
+  @extern "C" @link "crypto:EVP_DigestInit_ex"
+  priv fn evp_digest_init_ex(ctx: CPtr<UInt8>, md: CPtr<UInt8>, engine: CPtr<UInt8>) -> Int64
+
+  @extern "C" @link "crypto:EVP_DigestUpdate"
+  priv fn evp_digest_update(ctx: CPtr<UInt8>, data: CPtr<UInt8>, len: Int64) -> Int64
+
+  @extern "C" @link "crypto:EVP_MD_CTX_free"
+  priv fn evp_md_ctx_free(ctx: CPtr<UInt8>)
+
+  @extern "C" @link "crypto:EVP_MD_CTX_new"
+  priv fn evp_md_ctx_new() -> CPtr<UInt8>
+
+  @extern "C" @link "crypto:EVP_sha256"
+  priv fn evp_sha256() -> CPtr<UInt8>
+
+  @extern "C" @link "crypto:SHA256"
+  priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>) -> CPtr<UInt8>
+end

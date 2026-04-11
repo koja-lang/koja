@@ -19,7 +19,7 @@ An 11-crate Rust workspace that compiles Expo source to native binaries via LLVM
 - `expo-fmt` -- opinionated code formatter
 - `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
 - `expo-runtime` -- multi-threaded process scheduler (C ABI static library linked into compiled binaries)
-- `expo-driver` -- CLI binary (`expo`)
+- `expo-driver` -- CLI binary (`expo`); builds BoringSSL via `boring-sys` and embeds `libcrypto.a` for `@link "crypto"` resolution
 - `expo-lsp` -- language server (diagnostics, formatting, hover with inferred types, go-to-definition, AST-based dot completion and signature help)
 
 ### CLI
@@ -190,7 +190,7 @@ User-facing foreign function interface for calling C libraries. Expo already cal
 
 - ~~`@extern "C"` annotation on structs (pure binding namespace) or individual functions (mixed with Expo code). No new keywords -- uses existing annotation system. Multiple annotations per declaration supported (`@link "argon2" @extern "C"`).~~ **Done** (Phase 1)
 - ~~`@link "libname"` annotation on structs or functions; `[link]` table in `expo.toml` for search paths~~ **Done** (Phase 1)
-- ~~`CPtr<T>` type for raw pointers (`CPtr.null()`, `CPtr.alloc()`, `ptr.free()`, `ptr.offset()`, `ptr.read()`, `ptr.write()`, `ptr.is_null?()`). `CPtr<T>` is `Copy` (just a machine word).~~ **Done** (Phase 2)
+- ~~`CPtr<T>` type for raw pointers (`CPtr.null()`, `CPtr.alloc()`, `ptr.free()`, `ptr.offset()`, `ptr.read()`, `ptr.write()`, `ptr.null?()`). `CPtr<T>` is `Copy` (just a machine word).~~ **Done** (Phase 2)
 - ~~`CString` for null-terminated C string interop (`string.to_cstring()`, `cstring.to_string()`)~~ **Done** (Phase 2)
 - ~~Codegen: extern functions emit LLVM `declare` with C calling convention. Same pattern the compiler already uses for runtime intrinsics. Extern function names are unmangled.~~ **Done** (Phase 1)
 - ~~Linker: `-l` flags for system libraries, static archive paths for vendored libraries. Already works for `libc` and `expo-runtime`.~~ **Done** (Phase 1)
@@ -206,7 +206,7 @@ User-facing foreign function interface for calling C libraries. Expo already cal
 - `http` -- shared vocabulary types (`Request`, `Response`, `Method`, `Status`, `Headers`), HTTP/1.1 parser, one-shot client, spawn-per-connection server.
 - `json` -- **DONE** (qualified stdlib package). `json.Value` (renamed from `JSONValue`), `json.Encoder`, `json.Decoder`, `json.StringBuilder`. Pure Expo, 17 tests. Accessed via `alias json.Value` or `json.Value.object(...)`.
 - ~~`random`~~ -- **Done.** `Random.bytes(n)` and `Random.int(min, max)` landed in `std.kernel` (auto-imported, no package qualifier needed). OS entropy via `getrandom(2)` / `getentropy(2)`, no OpenSSL dependency. Decided against a separate package -- too small, too fundamental.
-- `crypto` -- `Hash.sha256(data)`, `HMAC.sign(key, data)`. Stable cryptographic primitives (SHA-2, HMAC). Building blocks for TLS and application-level auth.
+- `crypto` -- **DONE** (qualified stdlib package). Direct BoringSSL C FFI via `@extern "C"` + `@link "crypto:symbol"`. Full SHA family: `crypto.SHA1`, `crypto.SHA256`, `crypto.SHA384`, `crypto.SHA512` -- each with one-shot `digest(data)` and streaming (`new`, `update`, `finalize`) APIs. `crypto.HMAC` with `sha1`, `sha256`, `sha384`, `sha512` methods. All functions accept and return `Binary`. Expo function names follow `snake_case`; C symbols specified via `@link "crypto:EVP_sha256"` convention. `libcrypto.a` is embedded in the compiler and written to a temp dir at link time -- zero user setup. Accessed via `alias crypto.SHA256` or `crypto.SHA256.digest(...)`.
 
 #### First-party packages
 
@@ -579,7 +579,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase | Milestone                                                                                                                                                                                                       |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, ~~`random`~~, package manager, ~~C FFI Phase 1-2~~, C FFI Phase 3, stdlib packages (`net`, `http`, `json`, `crypto`), first-party packages |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, ~~`random`~~, package manager, ~~C FFI Phase 1-2~~, C FFI Phase 3, stdlib packages (`net`, `http`, ~~`json`~~, ~~`crypto`~~), first-party packages |
 | 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                                          |
 | 5     | Documentation (doctests, search), LSP (~~autocomplete~~, ~~signature help~~, inlay hints), REPL                                                                                                                  |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                                                      |

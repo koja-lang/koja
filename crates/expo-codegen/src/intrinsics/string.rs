@@ -152,6 +152,10 @@ pub fn emit_conversion_intrinsic<'ctx>(
                 .unwrap();
             c.builder.build_return(Some(&byte_count)).unwrap();
         }
+        "Binary_ptr" => {
+            let self_ptr = fn_val.get_nth_param(0).unwrap();
+            c.builder.build_return(Some(&self_ptr)).unwrap();
+        }
         "Bits_to_binary" => {
             let self_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
             let i8_ty = c.context.i8_type();

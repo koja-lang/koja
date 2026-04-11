@@ -251,9 +251,10 @@ fn collect_link_libraries(modules: &[&Module]) -> Vec<String> {
     fn collect_from(annotations: &[Annotation], libs: &mut BTreeSet<String>) {
         for ann in annotations {
             if ann.name == "link"
-                && let Some(AnnotationValue::String(lib)) = &ann.value
+                && let Some(AnnotationValue::String(s)) = &ann.value
             {
-                libs.insert(lib.clone());
+                let lib = s.split_once(':').map_or(s.as_str(), |(l, _)| l);
+                libs.insert(lib.to_string());
             }
         }
     }
@@ -544,14 +545,22 @@ pub struct BuildArgs {
     pub release: bool,
 }
 
+/// Embedded static libraries written to the temp link directory.
+/// The runtime is always linked; others are available for `@link` resolution.
+const EMBEDDED_RUNTIME: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
+const EMBEDDED_CRYPTO: &[u8] = include_bytes!(env!("EXPO_CRYPTO_LIB_PATH"));
+
 /// Links an object file with the embedded runtime library to produce an executable.
 /// `link_libraries` contains library names from `@link` annotations (passed as `-l` flags).
 fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries: &[String]) {
-    let runtime_lib_bytes: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
     let tmp_dir = env::temp_dir().join(format!("expo-link-{}", process::id()));
     fs::create_dir_all(&tmp_dir).expect("failed to create temp dir for linking");
-    let tmp_lib = tmp_dir.join("libexpo_runtime.a");
-    fs::write(&tmp_lib, runtime_lib_bytes).expect("failed to write embedded runtime library");
+
+    fs::write(tmp_dir.join("libexpo_runtime.a"), EMBEDDED_RUNTIME)
+        .expect("failed to write embedded runtime library");
+    fs::write(tmp_dir.join("libcrypto.a"), EMBEDDED_CRYPTO)
+        .expect("failed to write embedded crypto library");
+
     let tmp_dir_str = tmp_dir.to_string_lossy();
 
     let mut args = vec![

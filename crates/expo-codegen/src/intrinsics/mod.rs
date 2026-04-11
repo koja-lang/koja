@@ -42,6 +42,7 @@ const CONVERSION_INTRINSICS: &[&str] = &[
     "Binary_to_bits",
     "Binary_to_string",
     "Binary_byte_size",
+    "Binary_ptr",
     "Bits_to_binary",
 ];
 

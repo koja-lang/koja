@@ -625,7 +625,7 @@ impl<'ctx> Compiler<'ctx> {
         });
 
         let mangled = if is_extern_c {
-            func.name.clone()
+            extract_link_symbol(&func.annotations).unwrap_or_else(|| func.name.clone())
         } else {
             match self_type_name {
                 Some(tn) => format!("{}_{}", tn, func.name),
@@ -641,6 +641,10 @@ impl<'ctx> Compiler<'ctx> {
                 None => self.context.void_type().fn_type(&param_types, false),
             }
         };
+
+        if is_extern_c && let Some(existing) = self.module.get_function(&mangled) {
+            return Ok(existing);
+        }
 
         Ok(self.module.add_function(&mangled, fn_type, None))
     }
@@ -1561,6 +1565,19 @@ pub(crate) fn llvm_field_byte_size(ty: inkwell::types::BasicTypeEnum) -> u32 {
         }
         _ => 8,
     }
+}
+
+/// Extracts the C symbol name from a `@link "lib:symbol"` annotation.
+/// Returns `Some("symbol")` if the colon convention is used, `None` otherwise.
+fn extract_link_symbol(annotations: &[expo_ast::ast::Annotation]) -> Option<String> {
+    annotations.iter().find_map(|a| {
+        if a.name == "link"
+            && let Some(AnnotationValue::String(s)) = &a.value
+        {
+            return s.split_once(':').map(|(_, sym)| sym.to_string());
+        }
+        None
+    })
 }
 
 /// Resolves the mailbox message type `Pair<M, Option<ReplyTo<R>>>` for `receive`

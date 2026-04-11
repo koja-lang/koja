@@ -1,11 +1,11 @@
 fn main
   # null pointer
   null_ptr: CPtr<Int32> = CPtr.null()
-  print(null_ptr.is_null?())
+  print(null_ptr.null?())
 
   # alloc, write, read
   ptr: CPtr<Int32> = CPtr.alloc(3)
-  print(ptr.is_null?())
+  print(ptr.null?())
   ptr.write(42)
   print(ptr.read())
 

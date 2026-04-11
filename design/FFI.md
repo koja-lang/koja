@@ -179,7 +179,7 @@ expo_str = c_result.to_string() # CString -> Expo String
 
 ### Phase 2: pointers and strings -- **DONE**
 
-- ~~`CPtr<T>` type with core methods (`null`, `alloc`, `free`, `offset`, `read`, `write`, `is_null?`)~~ **Done**
+- ~~`CPtr<T>` type with core methods (`null`, `alloc`, `free`, `offset`, `read`, `write`, `null?`)~~ **Done**
 - ~~`CString` struct (`ptr: CPtr<UInt8>`, `len: Int`) with `to_cstring()` / `to_string()` / `free()`~~ **Done**
 - ~~`CPtr<T>` accepted in `@extern "C"` signatures~~ **Done**
 - ~~`alloc` / `free` backed by C `malloc` / `free`~~ **Done**
@@ -365,7 +365,7 @@ ptr.free()           # free(ptr)     move self, no return
 ptr.offset(n)        # -> CPtr<T>    pointer arithmetic
 ptr.read()           # -> T          read value at pointer
 ptr.write(value)     #               write value at pointer
-ptr.is_null?()       # -> Bool       null check
+ptr.null?()          # -> Bool       null check
 ```
 
 All methods are compiler intrinsics backed by LLVM IR generation.
@@ -378,7 +378,7 @@ and maps to LLVM's opaque pointer type.
   structs, or remain generic over all types?
 - Should `read()` be restricted to `Copy` types? What about reading a
   struct that contains a `String` (heap-allocated)?
-- Null checking: `is_null?()` returns `Bool`. Should there also be a
+- Null checking: `null?()` returns `Bool`. Should there also be a
   `to_option()` -> `Option<CPtr<T>>` for idiomatic handling?
 
 ---
@@ -429,6 +429,22 @@ end
 
 `@link "libname"` on a struct or function produces `-l libname` at link
 time. Multiple `@link` annotations link multiple libraries.
+
+#### Symbol naming: `@link "lib:symbol"`
+
+When the C symbol name differs from the Expo function name, append
+`:symbol` to the link string. The part before the colon is the library
+name; the part after is the C symbol used in the LLVM `declare`:
+
+```expo
+@extern "C" @link "crypto:SHA256"
+priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>) -> CPtr<UInt8>
+```
+
+This produces `-l crypto` at link time and emits `declare ... @SHA256(...)`
+in the LLVM IR, while the Expo function name `sha256_raw` follows
+`snake_case` conventions. When the colon is absent (`@link "crypto"`),
+the Expo function name is used as the C symbol.
 
 ### `expo.toml` `[link]` table
 

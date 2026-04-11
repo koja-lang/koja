@@ -9,6 +9,9 @@ use expo_ast::span::Span;
 
 pub use crate::types::{FnParam, Type, TypeIdentifier};
 
+pub type SpecializedMethodMap =
+    BTreeMap<TypeIdentifier, Vec<(Vec<Type>, BTreeMap<String, FunctionSig>)>>;
+
 /// Holds all type information gathered during collection and checking for a single module.
 #[derive(Clone)]
 pub struct TypeContext {
@@ -25,8 +28,7 @@ pub struct TypeContext {
     pub protocol_impls: BTreeMap<String, Vec<(String, Vec<Type>)>>,
     pub protocols: BTreeMap<String, ProtocolInfo>,
     pub specialized_impl_asts: BTreeMap<TypeIdentifier, Vec<(Vec<Type>, ImplBlock)>>,
-    pub specialized_methods:
-        BTreeMap<TypeIdentifier, Vec<(Vec<Type>, BTreeMap<String, FunctionSig>)>>,
+    pub specialized_methods: SpecializedMethodMap,
     pub synthesized_default_fns: BTreeMap<String, Vec<Function>>,
     pub type_aliases: BTreeMap<String, Type>,
     pub types: BTreeMap<TypeIdentifier, TypeInfo>,

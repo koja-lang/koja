@@ -20,11 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Ref.alive?()` -- returns `true` if the process is still running.
 - `json` promoted to qualified stdlib package. Ships with the compiler -- no `[dependencies]` entry needed. `json.Value` (renamed from `JSONValue`), `json.Encoder`, `json.Decoder`, `json.StringBuilder`. Use `alias json.Value` or `json.Value.object(...)` to access.
 - `expo-stdlib` build script auto-discovers `.expo` files under `expo/lib/`. Adding a new stdlib package is just creating a directory with an `expo.toml` and `src/` -- no Rust code changes needed.
-- `CPtr<T>` -- raw C pointer type for FFI interop. `Copy` semantics (just a machine word). Methods: `CPtr.null()`, `CPtr.alloc(count)`, `ptr.free()`, `ptr.offset(n)`, `ptr.read()`, `ptr.write(value)`, `ptr.is_null?()`. Backed by `malloc`/`free`. All methods are compiler intrinsics.
+- `CPtr<T>` -- raw C pointer type for FFI interop. `Copy` semantics (just a machine word). Methods: `CPtr.null()`, `CPtr.alloc(count)`, `ptr.free()`, `ptr.offset(n)`, `ptr.read()`, `ptr.write(value)`, `ptr.null?()`. Backed by `malloc`/`free`. All methods are compiler intrinsics.
 - `CString` -- null-terminated C string type with `ptr: CPtr<UInt8>` and `len: Int` fields. `String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies bytes back into an Expo `String`. `CString.free()` releases the underlying memory.
 - `CPtr<T>` accepted in `@extern "C"` signatures, enabling pointer-passing FFI with C libraries. Expo-allocated buffers can be passed to C functions that read or write through pointers.
 - Concrete impl specialization -- `impl Type<ConcreteArg>` blocks define methods only available for a specific type argument. `impl CPtr<UInt8>` adds `to_cstring()` without affecting other `CPtr<T>` instantiations. Targeted error messages when specialized methods are called on the wrong type argument.
 - Bare function calls within a type now resolve same-type methods. `@extern "C"` private functions declared inline in a struct can be called by name from sibling methods in the same type.
+- `crypto` qualified stdlib package. Full SHA family via direct BoringSSL C FFI (`@extern "C"` + `@link "crypto"`). `SHA1`, `SHA256`, `SHA384`, `SHA512` -- each with one-shot `digest(data)` and streaming (`new`, `update`, `finalize`) APIs. `HMAC` with `sha1`, `sha256`, `sha384`, `sha512` methods. All functions accept and return `Binary`. No Rust shims -- Expo calls BoringSSL's C API directly. `libcrypto.a` is embedded in the compiler binary and written to the link temp dir alongside `libexpo_runtime.a`.
+- BoringSSL integration in `expo-driver`. Builds BoringSSL via `boring-sys` directly in the driver's build script. `libcrypto.a` is located, embedded via `include_bytes!`, and written to the link temp dir at compile time.
+- `Binary.ptr()` intrinsic. Returns a `CPtr<UInt8>` to the underlying byte data, enabling zero-copy pointer passing to C FFI functions.
+- `CPtr<UInt8>.to_binary(len)` intrinsic. Creates a `Binary` by copying `len` bytes from a raw pointer. Allocates the 8-byte bit-length header and payload, matching the internal Binary/String layout.
+
+- `@link "lib:symbol"` convention for C symbol naming. When the C symbol differs from the Expo function name, append `:symbol` to the `@link` string (e.g. `@link "crypto:SHA256"` for an Expo function named `sha256_raw`). Keeps all Expo function names in `snake_case` regardless of the C library's conventions. The part before the colon is the library name for `-l` flags; the part after is the LLVM function declaration name.
 
 ### Changed
 

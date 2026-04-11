@@ -8,7 +8,14 @@ use crate::compiler::{Compiler, EmitResult};
 use crate::types::to_llvm_type;
 
 const CPTR_METHODS: &[&str] = &[
-    "null", "alloc", "free", "offset", "read", "write", "is_null?",
+    "null",
+    "alloc",
+    "free",
+    "offset",
+    "read",
+    "write",
+    "null?",
+    "to_binary",
 ];
 
 pub fn is_cptr_intrinsic(mangled: &str) -> bool {
@@ -117,13 +124,49 @@ pub fn emit_cptr_intrinsic<'ctx>(
             c.builder.build_return(None).unwrap();
         }
 
-        "is_null?" => {
+        "null?" => {
             let self_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
             let is_null = c
                 .builder
                 .build_int_compare(IntPredicate::EQ, self_ptr, ptr_ty.const_null(), "is_null")
                 .unwrap();
             c.builder.build_return(Some(&is_null)).unwrap();
+        }
+
+        "to_binary" => {
+            let src_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
+            let byte_len = fn_val.get_nth_param(1).unwrap().into_int_value();
+            let i8_ty = c.context.i8_type();
+            let header_size = i64_ty.const_int(STRING_HEADER_BYTES, false);
+            let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
+            let memcpy = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+
+            let total = c
+                .builder
+                .build_int_add(header_size, byte_len, "total")
+                .unwrap();
+            let base_ptr = c
+                .call(malloc, &[total.into()], "base_ptr")
+                .unwrap()
+                .into_pointer_value();
+
+            let bit_len = c
+                .builder
+                .build_int_mul(byte_len, i64_ty.const_int(8, false), "bit_len")
+                .unwrap();
+            c.builder.build_store(base_ptr, bit_len).unwrap();
+
+            let payload_ptr = unsafe {
+                c.builder
+                    .build_gep(i8_ty, base_ptr, &[header_size], "payload_ptr")
+                    .unwrap()
+            };
+            c.call(
+                memcpy,
+                &[payload_ptr.into(), src_ptr.into(), byte_len.into()],
+                "",
+            );
+            c.builder.build_return(Some(&payload_ptr)).unwrap();
         }
 
         _ => return Err(format!("unknown CPtr intrinsic method: {method}")),
@@ -322,7 +365,8 @@ pub fn emit_cptr_method<'ctx>(
             let val = inner_llvm.ok_or("CPtr.write: cannot resolve pointee LLVM type")?;
             void_ty.fn_type(&[ptr_ty.into(), val.into()], false)
         }
-        "is_null?" => bool_ty.fn_type(&[ptr_ty.into()], false),
+        "null?" => bool_ty.fn_type(&[ptr_ty.into()], false),
+        "to_binary" => ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false),
         _ => return Ok(EmitResult::NotIntrinsic),
     };
 

@@ -90,7 +90,21 @@ pub fn compile_call<'ctx>(
         }
         "panic" => compile_panic(c, args, function),
         _ => {
-            if let Some(callee) = c.functions.get(name).copied() {
+            let mangled_name = c
+                .fn_state
+                .self_type_name
+                .as_ref()
+                .map(|tn| format!("{tn}_{name}"));
+            let callee_opt = c
+                .functions
+                .get(name)
+                .or_else(|| {
+                    mangled_name
+                        .as_ref()
+                        .and_then(|mn| c.functions.get(mn.as_str()))
+                })
+                .copied();
+            if let Some(callee) = callee_opt {
                 let sig = c.type_ctx.functions.get(name).or_else(|| {
                     c.fn_state
                         .self_type_name

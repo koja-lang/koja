@@ -22,10 +22,14 @@ pub fn emit_debug_format_intrinsic<'ctx>(
         }
         "Int" | "Int8" | "Int16" | "Int32" | "UInt8" | "UInt16" | "UInt32" | "UInt64" => {
             let fmt_spec = match type_name {
-                "Int" | "UInt64" => "%lld",
-                "Int32" | "UInt32" => "%d",
-                "Int16" | "UInt16" => "%hd",
-                "Int8" | "UInt8" => "%hhd",
+                "Int" => "%lld",
+                "UInt64" => "%llu",
+                "Int32" => "%d",
+                "UInt32" => "%u",
+                "Int16" => "%hd",
+                "UInt16" => "%hu",
+                "Int8" => "%hhd",
+                "UInt8" => "%hhu",
                 _ => "%lld",
             };
             let result = snprintf_to_expo_string(c, fmt_spec, &[self_val.into()], "dbg");

@@ -1,0 +1,103 @@
+alias crypto.SHA1
+alias crypto.SHA256
+alias crypto.SHA384
+alias crypto.SHA512
+alias crypto.HMAC
+
+fn main
+  data = "hello".to_binary()
+  key = "secret".to_binary()
+
+  # SHA-1 one-shot
+  d1 = SHA1.digest(data)
+  print(d1.byte_size())
+  print(d1.ptr().read())
+
+  # SHA-1 streaming
+  ctx1 = SHA1.new()
+  ctx1 = ctx1.update("hel".to_binary())
+  ctx1 = ctx1.update("lo".to_binary())
+  d1s = ctx1.finalize()
+  print(d1s.byte_size())
+  print(d1s.ptr().read())
+
+  # SHA-256 one-shot
+  d256 = SHA256.digest(data)
+  print(d256.byte_size())
+  print(d256.ptr().read())
+
+  # SHA-256 streaming
+  ctx256 = SHA256.new()
+  ctx256 = ctx256.update("hel".to_binary())
+  ctx256 = ctx256.update("lo".to_binary())
+  d256s = ctx256.finalize()
+  print(d256s.byte_size())
+  print(d256s.ptr().read())
+
+  # SHA-384 one-shot
+  d384 = SHA384.digest(data)
+  print(d384.byte_size())
+  print(d384.ptr().read())
+
+  # SHA-384 streaming
+  ctx384 = SHA384.new()
+  ctx384 = ctx384.update("hel".to_binary())
+  ctx384 = ctx384.update("lo".to_binary())
+  d384s = ctx384.finalize()
+  print(d384s.byte_size())
+  print(d384s.ptr().read())
+
+  # SHA-512 one-shot
+  d512 = SHA512.digest(data)
+  print(d512.byte_size())
+  print(d512.ptr().read())
+
+  # SHA-512 streaming
+  ctx512 = SHA512.new()
+  ctx512 = ctx512.update("hel".to_binary())
+  ctx512 = ctx512.update("lo".to_binary())
+  d512s = ctx512.finalize()
+  print(d512s.byte_size())
+  print(d512s.ptr().read())
+
+  # HMAC-SHA-1
+  mac1 = HMAC.sha1(key, data)
+  print(mac1.byte_size())
+  print(mac1.ptr().read())
+
+  # HMAC-SHA-256
+  mac256 = HMAC.sha256(key, data)
+  print(mac256.byte_size())
+  print(mac256.ptr().read())
+
+  # HMAC-SHA-384
+  mac384 = HMAC.sha384(key, data)
+  print(mac384.byte_size())
+  print(mac384.ptr().read())
+
+  # HMAC-SHA-512
+  mac512 = HMAC.sha512(key, data)
+  print(mac512.byte_size())
+  print(mac512.ptr().read())
+
+  # Empty inputs
+  empty = "".to_binary()
+
+  e1 = SHA1.digest(empty)
+  print(e1.byte_size())
+  print(e1.ptr().read())
+
+  e256 = SHA256.digest(empty)
+  print(e256.byte_size())
+  print(e256.ptr().read())
+
+  e384 = SHA384.digest(empty)
+  print(e384.byte_size())
+  print(e384.ptr().read())
+
+  e512 = SHA512.digest(empty)
+  print(e512.byte_size())
+  print(e512.ptr().read())
+
+  print("done")
+end

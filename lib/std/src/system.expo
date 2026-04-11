@@ -25,7 +25,7 @@ struct System
     key_cs = key.to_cstring()
     ptr = expo_get_env(key_cs.ptr)
     key_cs.free()
-    if ptr.is_null?()
+    if ptr.null?()
       Option.None
     else
       cs = ptr.to_cstring()
@@ -51,7 +51,7 @@ struct System
   """
   fn cwd() -> Result<String, String>
     ptr = expo_cwd()
-    if ptr.is_null?()
+    if ptr.null?()
       Result.Err("failed to get current directory")
     else
       cs = ptr.to_cstring()

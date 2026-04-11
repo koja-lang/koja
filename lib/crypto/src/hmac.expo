@@ -1,0 +1,63 @@
+@doc "HMAC message authentication codes."
+struct HMAC
+  @doc "Computes HMAC-SHA-1."
+  fn sha1(key: Binary, data: Binary) -> Binary
+    out: CPtr<UInt8> = CPtr.alloc(20)
+    null: CPtr<UInt8> = CPtr.null()
+    hmac_raw(evp_sha1(), key.ptr(), key.byte_size(),
+         data.ptr(), data.byte_size(), out, null)
+    result = out.to_binary(20)
+    out.free()
+    result
+  end
+
+  @doc "Computes HMAC-SHA-256."
+  fn sha256(key: Binary, data: Binary) -> Binary
+    out: CPtr<UInt8> = CPtr.alloc(32)
+    null: CPtr<UInt8> = CPtr.null()
+    hmac_raw(evp_sha256(), key.ptr(), key.byte_size(),
+         data.ptr(), data.byte_size(), out, null)
+    result = out.to_binary(32)
+    out.free()
+    result
+  end
+
+  @doc "Computes HMAC-SHA-384."
+  fn sha384(key: Binary, data: Binary) -> Binary
+    out: CPtr<UInt8> = CPtr.alloc(48)
+    null: CPtr<UInt8> = CPtr.null()
+    hmac_raw(evp_sha384(), key.ptr(), key.byte_size(),
+         data.ptr(), data.byte_size(), out, null)
+    result = out.to_binary(48)
+    out.free()
+    result
+  end
+
+  @doc "Computes HMAC-SHA-512."
+  fn sha512(key: Binary, data: Binary) -> Binary
+    out: CPtr<UInt8> = CPtr.alloc(64)
+    null: CPtr<UInt8> = CPtr.null()
+    hmac_raw(evp_sha512(), key.ptr(), key.byte_size(),
+         data.ptr(), data.byte_size(), out, null)
+    result = out.to_binary(64)
+    out.free()
+    result
+  end
+
+  @extern "C" @link "crypto:EVP_sha1"
+  priv fn evp_sha1() -> CPtr<UInt8>
+
+  @extern "C" @link "crypto:EVP_sha256"
+  priv fn evp_sha256() -> CPtr<UInt8>
+
+  @extern "C" @link "crypto:EVP_sha384"
+  priv fn evp_sha384() -> CPtr<UInt8>
+
+  @extern "C" @link "crypto:EVP_sha512"
+  priv fn evp_sha512() -> CPtr<UInt8>
+
+  @extern "C" @link "crypto:HMAC"
+  priv fn hmac_raw(evp_md: CPtr<UInt8>, key: CPtr<UInt8>, key_len: Int64,
+               data: CPtr<UInt8>, data_len: Int64,
+               out: CPtr<UInt8>, out_len: CPtr<UInt8>) -> CPtr<UInt8>
+end

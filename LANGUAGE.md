@@ -941,9 +941,10 @@ conn = TCPSocket.connect("example.com", 80)
 
 Core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, etc.) are auto-imported into every module -- no alias needed. Domain-specific packages require qualified access:
 
+- **`crypto`** -- `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`
 - **`net`** -- `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`
 
-Use `alias net.TCPSocket` or `net.TCPSocket.connect(...)` to access them.
+Use `alias crypto.SHA256` or `alias net.TCPSocket` to access them.
 
 ---
 
@@ -1416,11 +1417,17 @@ end
 
 Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns that don't match the data length fall through to the next arm.
 
+#### Functions
+
+- `byte_size(self) -> Int` -- returns the number of bytes.
+- `ptr(self) -> CPtr<UInt8>` -- returns a raw pointer to the underlying byte data. Useful for passing binary data to C FFI functions.
+- `to_bits(self) -> Bits` -- zero-cost widening from bytes to bits.
+- `to_string(self) -> Result<String, String>` -- attempts to interpret bytes as UTF-8. Returns `Result.Err` with a diagnostic if invalid.
+
 #### Conversion Functions
 
 - `String.to_binary(self) -> Binary` -- zero-cost widening from UTF-8 string to bytes.
-- `Binary.to_string(self) -> Result<String, String>` -- attempts to interpret bytes as UTF-8. Returns `Result.Err` with a diagnostic if invalid.
-- `Binary.to_bits(self) -> Bits` -- zero-cost widening from bytes to bits.
+- `CPtr<UInt8>.to_binary(self, len: Int) -> Binary` -- creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed.
 - `Bits.to_binary(self) -> Result<Binary, String>` -- narrows bits to bytes. Returns `Result.Err` if the bit length is not divisible by 8.
 
 ```expo
@@ -1631,6 +1638,22 @@ print(result)
 
 Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Expo functions in the same struct -- use `priv fn` on the extern declarations and expose safe public wrappers.
 
+### Symbol Naming
+
+When the C symbol name differs from the Expo function name, use `@link "lib:symbol"` to specify the C symbol after a colon:
+
+```expo
+struct Crypto
+  @extern "C" @link "crypto:EVP_sha256"
+  priv fn evp_sha256() -> CPtr<UInt8>
+
+  @extern "C" @link "crypto:SHA256"
+  priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>) -> CPtr<UInt8>
+end
+```
+
+`@link "crypto"` (without a colon) uses the Expo function name as the C symbol. `@link "crypto:SHA256"` links to the C symbol `SHA256` while the Expo function name is `sha256_raw`. This keeps all Expo function names in proper `snake_case` regardless of the C library's naming conventions.
+
 ### `CPtr<T>`
 
 A raw C pointer type. `Copy` semantics (just a machine word). No ownership tracking -- the compiler will not auto-free memory behind a `CPtr<T>`.
@@ -1643,7 +1666,7 @@ struct CPtr<T>
   fn offset(self, n: Int) -> CPtr<T>
   fn read(self) -> T
   fn write(self, value: T)
-  fn is_null?(self) -> Bool
+  fn null?(self) -> Bool
 end
 ```
 
@@ -1656,7 +1679,7 @@ print(buf.read())
 buf.free()
 
 null_ptr: CPtr<Int32> = CPtr.null()
-print(null_ptr.is_null?())
+print(null_ptr.null?())
 ```
 
 Type annotations on the variable drive generic inference for static methods like `CPtr.alloc()` and `CPtr.null()`.
