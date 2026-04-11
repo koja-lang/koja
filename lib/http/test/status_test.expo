@@ -1,0 +1,83 @@
+@test "Status.ok returns 200"
+fn test_status_ok
+  s = Status.ok()
+  if s.code != 200
+    panic("expected code 200")
+  end
+  if s.reason != "OK"
+    panic("expected reason OK")
+  end
+end
+
+@test "Status.not_found returns 404"
+fn test_status_not_found
+  s = Status.not_found()
+  if s.code != 404
+    panic("expected code 404")
+  end
+end
+
+@test "Status.internal_server_error returns 500"
+fn test_status_internal_server_error
+  s = Status.internal_server_error()
+  if s.code != 500
+    panic("expected code 500")
+  end
+end
+
+@test "Status.new creates custom status"
+fn test_status_new
+  s = Status.new(418, "I'm a Teapot")
+  if s.code != 418
+    panic("expected code 418")
+  end
+  if s.reason != "I'm a Teapot"
+    panic("expected custom reason")
+  end
+end
+
+@test "Status.ok? checks 2xx range"
+fn test_status_ok_predicate
+  if not Status.ok().ok?()
+    panic("200 should be ok")
+  end
+  if not Status.created().ok?()
+    panic("201 should be ok")
+  end
+  if Status.not_found().ok?()
+    panic("404 should not be ok")
+  end
+end
+
+@test "Status.redirect? checks 3xx range"
+fn test_status_redirect_predicate
+  if not Status.new(301, "Moved").redirect?()
+    panic("301 should be redirect")
+  end
+  if Status.ok().redirect?()
+    panic("200 should not be redirect")
+  end
+end
+
+@test "Status.client_error? checks 4xx range"
+fn test_status_client_error_predicate
+  if not Status.bad_request().client_error?()
+    panic("400 should be client error")
+  end
+  if not Status.not_found().client_error?()
+    panic("404 should be client error")
+  end
+  if Status.ok().client_error?()
+    panic("200 should not be client error")
+  end
+end
+
+@test "Status.server_error? checks 5xx range"
+fn test_status_server_error_predicate
+  if not Status.internal_server_error().server_error?()
+    panic("500 should be server error")
+  end
+  if Status.ok().server_error?()
+    panic("200 should not be server error")
+  end
+end

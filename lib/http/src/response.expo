@@ -1,0 +1,29 @@
+@doc """
+An HTTP response with status, headers, body, and protocol
+version. Returned by the parser when reading server responses,
+or constructed by handler functions for the server.
+"""
+struct Response
+  body: String
+  headers: Headers
+  status: Status
+  version: String
+end
+
+impl Response
+  @doc """
+  Converts the body to a Binary value.
+  """
+  fn body_as_binary(self) -> Binary
+    self.body.to_binary()
+  end
+
+  @doc """
+  Creates a response with the given status and body.
+  Automatically sets Content-Length and version HTTP/1.1.
+  """
+  fn new(status: Status, body: String) -> Response
+    headers = Headers.new().set("Content-Length", "#{body.length()}")
+    Response{body: body, headers: headers, status: status, version: "HTTP/1.1"}
+  end
+end

@@ -1,0 +1,135 @@
+@doc """
+An ordered collection of HTTP headers with case-insensitive
+key lookup. Preserves insertion order and supports duplicate
+header names (common for Set-Cookie, etc.).
+"""
+struct Headers
+  entries: List<Header>
+end
+
+impl Headers
+  @doc """
+  Adds a header without removing existing headers with the
+  same name. Use this for headers that allow multiple values
+  like Set-Cookie.
+  """
+  fn append(move self, name: String, value: String) -> Headers
+    self.entries = self.entries.append(Header{name: name, value: value})
+    self
+  end
+
+  @doc """
+  Returns the Content-Length header value parsed as an integer,
+  or None if the header is absent or not a valid integer.
+  """
+  fn content_length(self) -> Option<Int>
+    match self.get("Content-Length")
+      Option.Some(val) ->
+        match val.to_int()
+          Result.Ok(n) -> Option.Some(n)
+          Result.Err(_) -> Option.None
+        end
+
+      Option.None ->
+        Option.None
+    end
+  end
+
+  @doc """
+  Returns the first value for the given header name using
+  case-insensitive comparison, or None if not present.
+  """
+  fn get(self, name: String) -> Option<String>
+    lower = name.downcase()
+    Headers.find_first(self.entries, lower, 0)
+  end
+
+  @doc """
+  Returns all values for the given header name using
+  case-insensitive comparison.
+  """
+  fn get_all(self, name: String) -> List<String>
+    lower = name.downcase()
+    results: List<String> = List.new()
+    Headers.collect_all(self.entries, lower, 0, results)
+  end
+
+  @doc """
+  Returns true if a header with the given name exists,
+  using case-insensitive comparison.
+  """
+  fn has?(self, name: String) -> Bool
+    self.get(name).some?()
+  end
+
+  @doc """
+  Creates an empty header collection.
+  """
+  fn new -> Headers
+    entries: List<Header> = List.new()
+    Headers{entries: entries}
+  end
+
+  @doc """
+  Sets a header value, replacing any existing headers with
+  the same name. If the header does not exist, it is appended.
+  """
+  fn set(move self, name: String, value: String) -> Headers
+    lower = name.downcase()
+    new_entries: List<Header> = List.new()
+    found = false
+    i = 0
+    while i < self.entries.length()
+      entry = self.entries.get(i).unwrap()
+      if entry.name.downcase() == lower
+        if not found
+          new_entries = new_entries.append(Header{name: name, value: value})
+          found = true
+        end
+      else
+        new_entries = new_entries.append(entry)
+      end
+
+      i += 1
+    end
+
+    if not found
+      new_entries = new_entries.append(Header{name: name, value: value})
+    end
+
+    Headers{entries: new_entries}
+  end
+
+  priv fn find_first(entries: List<Header>, lower: String, i: Int)
+    -> Option<String>
+
+    if i >= entries.length()
+      return Option.None
+    end
+
+    entry = entries.get(i).unwrap()
+    entry.name.downcase() == lower
+      ? Option.Some(entry.value)
+      : Headers.find_first(entries, lower, i + 1)
+  end
+
+  priv fn collect_all(
+    entries: List<Header>,
+    lower: String,
+    i: Int,
+    move results: List<String>,
+  ) -> List<String>
+
+    if i >= entries.length()
+      return results
+    end
+
+    entry = entries.get(i).unwrap()
+
+    if entry.name.downcase() == lower
+      results = results.append(entry.value)
+    end
+
+    Headers.collect_all(entries, lower, i + 1, results)
+  end
+end

@@ -63,16 +63,27 @@ impl<'a> Printer<'a> {
                 concat(vec![self.expr_to_doc(callee), self.call_args_to_doc(args)])
             }
 
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-            } => concat(vec![
-                self.expr_to_doc(receiver),
-                text("."),
-                text(method.clone()),
-                self.call_args_to_doc(args),
-            ]),
+            ExprKind::MethodCall { .. } => {
+                let depth = method_chain_depth(expr);
+                if depth >= 3 {
+                    self.method_chain_to_doc(expr)
+                } else {
+                    let ExprKind::MethodCall {
+                        receiver,
+                        method,
+                        args,
+                    } = &expr.kind
+                    else {
+                        unreachable!()
+                    };
+                    concat(vec![
+                        self.expr_to_doc(receiver),
+                        text("."),
+                        text(method.clone()),
+                        self.call_args_to_doc(args),
+                    ])
+                }
+            }
 
             ExprKind::FieldAccess { receiver, field } => concat(vec![
                 self.expr_to_doc(receiver),
@@ -561,4 +572,54 @@ impl<'a> Printer<'a> {
             ])
         }
     }
+
+    /// Formats a method chain of 3+ calls with one-per-line breaking.
+    ///
+    /// Flattens the left-recursive MethodCall tree into a root expression
+    /// and a list of `.method(args)` segments. When the chain fits on one
+    /// line it stays inline; otherwise each call breaks onto its own line
+    /// indented 2 from the root.
+    fn method_chain_to_doc(&mut self, expr: &Expr) -> Doc {
+        let mut calls: Vec<(&str, &[Arg])> = Vec::new();
+        let mut current = expr;
+        while let ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } = &current.kind
+        {
+            calls.push((method.as_str(), args.as_slice()));
+            current = receiver;
+        }
+        calls.reverse();
+
+        let root_doc = self.expr_to_doc(current);
+
+        let (first_method, first_args) = calls.remove(0);
+        let anchor = concat(vec![
+            root_doc,
+            text(format!(".{}", first_method)),
+            self.call_args_to_doc(first_args),
+        ]);
+
+        let mut chain_parts = Vec::with_capacity(calls.len());
+        for (method, args) in calls {
+            chain_parts.push(softline());
+            chain_parts.push(text(format!(".{}", method)));
+            chain_parts.push(self.call_args_to_doc(args));
+        }
+
+        group(concat(vec![anchor, indent(2, concat(chain_parts))]))
+    }
+}
+
+/// Counts the depth of nested MethodCall nodes on the left spine.
+fn method_chain_depth(expr: &Expr) -> usize {
+    let mut depth = 0;
+    let mut current = expr;
+    while let ExprKind::MethodCall { receiver, .. } = &current.kind {
+        depth += 1;
+        current = receiver;
+    }
+    depth
 }

@@ -1,0 +1,24 @@
+@doc """
+Error type for HTTP operations. Covers connection failures,
+URL parsing errors, response/request parse errors, and timeouts.
+"""
+enum Error
+  ConnectionFailed(String)
+  InvalidUrl(String)
+  ParseError(String)
+  Timeout
+end
+
+impl Error
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      Error.ConnectionFailed(msg) -> "connection failed: " <> msg
+      Error.InvalidUrl(msg) -> "invalid URL: " <> msg
+      Error.ParseError(msg) -> "parse error: " <> msg
+      Error.Timeout -> "request timed out"
+    end
+  end
+end

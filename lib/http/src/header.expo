@@ -1,0 +1,9 @@
+@doc """
+A single HTTP header as a name-value pair. Header names are
+stored as-is; case-insensitive comparison is handled by
+the Headers collection.
+"""
+struct Header
+  name: String
+  value: String
+end

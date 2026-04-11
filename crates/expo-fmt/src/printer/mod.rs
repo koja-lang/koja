@@ -252,7 +252,7 @@ impl<'a> Printer<'a> {
         let sig_multiline = sig_will_break(f);
         parts.push(self.function_sig_to_doc(f));
 
-        if sig_multiline {
+        if sig_multiline && f.body.is_some() {
             parts.push(hardline());
         }
 
@@ -566,9 +566,9 @@ impl<'a> Printer<'a> {
                 if source_has_blank {
                     parts.push(hardline());
                 } else {
-                    let prev_is_block = is_block_assignment(&stmts[i - 1]);
-                    let curr_is_block = is_block_assignment(stmt);
-                    if prev_is_block != curr_is_block {
+                    let prev_is_block = stmt_is_block(&stmts[i - 1]);
+                    let curr_is_block = stmt_is_block(stmt);
+                    if prev_is_block || curr_is_block {
                         parts.push(hardline());
                     }
                 }

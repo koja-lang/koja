@@ -1,0 +1,31 @@
+@test "Response.new sets Content-Length and version"
+fn test_response_new
+  resp = Response.new(Status.ok(), "hello")
+  if resp.status.code != 200
+    panic("expected 200")
+  end
+  if resp.version != "HTTP/1.1"
+    panic("expected HTTP/1.1")
+  end
+  if resp.headers.get("Content-Length").unwrap() != "5"
+    panic("expected Content-Length 5")
+  end
+  if resp.body != "hello"
+    panic("expected body hello")
+  end
+end
+
+@test "Request.body_as_binary converts body"
+fn test_request_body_as_binary
+  req = Request{
+    body: "test",
+    headers: Headers.new(),
+    method: Method.Get,
+    path: "/",
+    version: "HTTP/1.1",
+  }
+  bin = req.body_as_binary()
+  if bin.byte_size() != 4
+    panic("expected 4 bytes, got #{bin.byte_size()}")
+  end
+end

@@ -470,6 +470,187 @@ mod tests {
     }
 
     #[test]
+    fn extern_c_multiline_sig_no_double_blank() {
+        assert_fmt(
+            "
+            struct Crypto
+              @extern \"C\" @link \"crypto:EVP_DigestInit_ex\"
+              priv fn evp_digest_init_ex(ctx: CPtr<UInt8>, md: CPtr<UInt8>, engine: CPtr<UInt8>) -> Int64
+              @extern \"C\" @link \"crypto:EVP_DigestUpdate\"
+              priv fn evp_digest_update(ctx: CPtr<UInt8>, data: CPtr<UInt8>, len: Int64) -> Int64
+              @extern \"C\" @link \"crypto:EVP_MD_CTX_free\"
+              priv fn evp_md_ctx_free(ctx: CPtr<UInt8>)
+            end
+        ",
+            "
+            struct Crypto
+
+              @extern \"C\" @link \"crypto:EVP_DigestInit_ex\"
+              priv fn evp_digest_init_ex(
+                ctx: CPtr<UInt8>,
+                md: CPtr<UInt8>,
+                engine: CPtr<UInt8>,
+              ) -> Int64
+
+              @extern \"C\" @link \"crypto:EVP_DigestUpdate\"
+              priv fn evp_digest_update(ctx: CPtr<UInt8>, data: CPtr<UInt8>, len: Int64)
+                -> Int64
+
+              @extern \"C\" @link \"crypto:EVP_MD_CTX_free\"
+              priv fn evp_md_ctx_free(ctx: CPtr<UInt8>)
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn blank_line_before_block_statement() {
+        assert_fmt(
+            "
+            fn f(x: Int) -> Int
+              y = x + 1
+              if y > 10
+                y = y - 10
+              end
+              y
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              y = x + 1
+
+              if y > 10
+                y = y - 10
+              end
+
+              y
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn no_blank_line_when_block_is_first_or_last() {
+        assert_fmt(
+            "
+            fn f(x: Int) -> Int
+              if x > 0
+                x
+              else
+                -x
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              if x > 0
+                x
+              else
+                -x
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn blank_line_between_adjacent_blocks() {
+        assert_fmt(
+            "
+            fn f(x: Int)
+              if x > 0
+                print(x)
+              end
+              while x > 0
+                x -= 1
+              end
+            end
+        ",
+            "
+            fn f(x: Int)
+              if x > 0
+                print(x)
+              end
+
+              while x > 0
+                x -= 1
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn method_chain_short_stays_inline() {
+        assert_fmt(
+            r#"
+            fn f -> String
+              "hello".upcase().trim()
+            end
+        "#,
+            r#"
+            fn f -> String
+              "hello".upcase().trim()
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn method_chain_long_breaks_per_call() {
+        assert_fmt(
+            r#"
+            fn build -> String
+              sb = StringBuilder.new().add("GET").add(" ").add("/index.html").add(" HTTP/1.1\r\n").add("Host: ").add("example.com").add("\r\n")
+              sb.build()
+            end
+        "#,
+            r#"
+            fn build -> String
+              sb = StringBuilder.new()
+                .add("GET")
+                .add(" ")
+                .add("/index.html")
+                .add(" HTTP/1.1\r\n")
+                .add("Host: ")
+                .add("example.com")
+                .add("\r\n")
+              sb.build()
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn method_chain_block_gets_spacing() {
+        assert_fmt(
+            r#"
+            fn build(body: String) -> String
+              sb = StringBuilder.new().add("GET / HTTP/1.1\r\n").add("Host: example.com\r\n").add("\r\n")
+              if not body.empty?()
+                sb = sb.add(body)
+              end
+              sb.build()
+            end
+        "#,
+            r#"
+            fn build(body: String) -> String
+              sb = StringBuilder.new()
+                .add("GET / HTTP/1.1\r\n")
+                .add("Host: example.com\r\n")
+                .add("\r\n")
+
+              if not body.empty?()
+                sb = sb.add(body)
+              end
+
+              sb.build()
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn cond_or_chain_packs_like_fill() {
         assert_fmt(
             r#"

@@ -1,0 +1,73 @@
+@test "parse_url extracts host, port, and path"
+fn test_parse_url_basic
+  match Http.parse_url("http://example.com/path")
+    Result.Ok(parts) ->
+      if parts.first != "example.com"
+        panic("expected host example.com, got #{parts.first}")
+      end
+      if parts.second.first != 80
+        panic("expected port 80, got #{parts.second.first}")
+      end
+      if parts.second.second != "/path"
+        panic("expected path /path, got #{parts.second.second}")
+      end
+
+    Result.Err(msg) ->
+      panic("parse_url failed: #{msg}")
+  end
+end
+
+@test "parse_url handles custom port"
+fn test_parse_url_custom_port
+  match Http.parse_url("http://localhost:3000/api")
+    Result.Ok(parts) ->
+      if parts.first != "localhost"
+        panic("expected localhost")
+      end
+      if parts.second.first != 3000
+        panic("expected port 3000")
+      end
+      if parts.second.second != "/api"
+        panic("expected /api")
+      end
+
+    Result.Err(msg) ->
+      panic("parse_url failed: #{msg}")
+  end
+end
+
+@test "parse_url defaults to root path"
+fn test_parse_url_no_path
+  match Http.parse_url("http://example.com")
+    Result.Ok(parts) ->
+      if parts.first != "example.com"
+        panic("expected host example.com")
+      end
+      if parts.second.second != "/"
+        panic("expected root path, got #{parts.second.second}")
+      end
+
+    Result.Err(msg) ->
+      panic("parse_url failed: #{msg}")
+  end
+end
+
+@test "parse_url handles https default port"
+fn test_parse_url_https
+  match Http.parse_url("https://example.com/secure")
+    Result.Ok(parts) ->
+      if parts.second.first != 443
+        panic("expected port 443, got #{parts.second.first}")
+      end
+
+    Result.Err(msg) ->
+      panic("parse_url failed: #{msg}")
+  end
+end
+
+@test "parse_url rejects empty host"
+fn test_parse_url_empty_host
+  if not Http.parse_url("http:///path").err?()
+    panic("expected error for empty host")
+  end
+end

@@ -444,10 +444,16 @@ pub(super) fn is_block_expr(expr: &Expr) -> bool {
     )
 }
 
-/// Returns `true` if the statement is an assignment whose value is a
-/// block expression (match, cond, if, receive, for, loop, while, etc.).
-pub(super) fn is_block_assignment(stmt: &Statement) -> bool {
-    matches!(stmt, Statement::Assignment { value, .. } if is_block_expr(value))
+/// Returns `true` if the statement is or contains a block expression
+/// at its top level (if, match, cond, while, for, loop, etc.).
+pub(super) fn stmt_is_block(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Expr(expr) => is_block_expr(expr),
+        Statement::Assignment { value, .. } => is_block_expr(value),
+        Statement::CompoundAssign { value, .. } => is_block_expr(value),
+        Statement::Return { value: Some(v), .. } => is_block_expr(v),
+        _ => false,
+    }
 }
 
 /// Returns `true` if the expression contains multi-line block constructs

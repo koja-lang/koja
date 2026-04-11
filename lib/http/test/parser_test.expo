@@ -1,0 +1,158 @@
+@test "parse simple GET request"
+fn test_parse_get_request
+  raw = "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n"
+  match Parser.parse_request(raw)
+    Result.Ok(req) ->
+      if req.method.to_string() != "GET"
+        panic("expected GET")
+      end
+      if req.path != "/index.html"
+        panic("expected /index.html")
+      end
+      if req.version != "HTTP/1.1"
+        panic("expected HTTP/1.1")
+      end
+      if req.headers.get("Host").unwrap() != "example.com"
+        panic("expected host example.com")
+      end
+      if req.body != ""
+        panic("expected empty body")
+      end
+
+    Result.Err(e) ->
+      panic("parse failed: #{e.message()}")
+  end
+end
+
+@test "parse POST request with body"
+fn test_parse_post_request
+  raw = "POST /api/data HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!"
+  match Parser.parse_request(raw)
+    Result.Ok(req) ->
+      if req.method.to_string() != "POST"
+        panic("expected POST")
+      end
+      if req.path != "/api/data"
+        panic("expected /api/data")
+      end
+      if req.body != "Hello, World!"
+        panic("expected body 'Hello, World!', got '#{req.body}'")
+      end
+
+    Result.Err(e) ->
+      panic("parse failed: #{e.message()}")
+  end
+end
+
+@test "parse request with multiple headers"
+fn test_parse_multiple_headers
+  raw = "GET / HTTP/1.1\r\nHost: example.com\r\nAccept: text/html\r\nX-Custom: value\r\n\r\n"
+  match Parser.parse_request(raw)
+    Result.Ok(req) ->
+      if req.headers.get("Host").unwrap() != "example.com"
+        panic("expected host")
+      end
+      if req.headers.get("Accept").unwrap() != "text/html"
+        panic("expected accept")
+      end
+      if req.headers.get("X-Custom").unwrap() != "value"
+        panic("expected custom header")
+      end
+
+    Result.Err(e) ->
+      panic("parse failed: #{e.message()}")
+  end
+end
+
+@test "parse simple response"
+fn test_parse_response
+  raw = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
+  match Parser.parse_response(raw)
+    Result.Ok(resp) ->
+      if resp.status.code != 200
+        panic("expected status 200")
+      end
+      if resp.status.reason != "OK"
+        panic("expected reason OK")
+      end
+      if resp.version != "HTTP/1.1"
+        panic("expected HTTP/1.1")
+      end
+      if resp.body != "hello"
+        panic("expected body hello")
+      end
+
+    Result.Err(e) ->
+      panic("parse failed: #{e.message()}")
+  end
+end
+
+@test "parse response with multi-word reason"
+fn test_parse_response_multi_word_reason
+  raw = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found"
+  match Parser.parse_response(raw)
+    Result.Ok(resp) ->
+      if resp.status.code != 404
+        panic("expected status 404")
+      end
+      if resp.status.reason != "Not Found"
+        panic("expected reason 'Not Found', got '#{resp.status.reason}'")
+      end
+
+    Result.Err(e) ->
+      panic("parse failed: #{e.message()}")
+  end
+end
+
+@test "parse response with no body"
+fn test_parse_response_no_body
+  raw = "HTTP/1.1 204 No Content\r\n\r\n"
+  match Parser.parse_response(raw)
+    Result.Ok(resp) ->
+      if resp.status.code != 204
+        panic("expected status 204")
+      end
+      if resp.body != ""
+        panic("expected empty body, got '#{resp.body}'")
+      end
+
+    Result.Err(e) ->
+      panic("parse failed: #{e.message()}")
+  end
+end
+
+@test "parse chunked response"
+fn test_parse_chunked_response
+  raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+  match Parser.parse_response(raw)
+    Result.Ok(resp) ->
+      if resp.body != "hello world"
+        panic("expected 'hello world', got '#{resp.body}'")
+      end
+
+    Result.Err(e) ->
+      panic("parse failed: #{e.message()}")
+  end
+end
+
+@test "parse empty request returns error"
+fn test_parse_empty_request
+  if not Parser.parse_request("").err?()
+    panic("expected error for empty request")
+  end
+end
+
+@test "parse malformed request line returns error"
+fn test_parse_malformed_request_line
+  if not Parser.parse_request("BADREQUEST\r\n\r\n").err?()
+    panic("expected error for malformed request line")
+  end
+end
+
+@test "Error.message returns readable description"
+fn test_error_message
+  e = Error.ParseError("bad header")
+  if e.message() != "parse error: bad header"
+    panic("expected formatted message, got '#{e.message()}'")
+  end
+end

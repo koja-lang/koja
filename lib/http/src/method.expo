@@ -1,0 +1,47 @@
+@doc """
+HTTP request method. Represents the action to be performed
+on the identified resource.
+"""
+enum Method
+  Delete
+  Get
+  Head
+  Options
+  Patch
+  Post
+  Put
+end
+
+impl Method
+  @doc """
+  Parses an uppercase HTTP method string into a Method value.
+  Returns an error for unrecognized methods.
+  """
+  fn from_string(s: String) -> Result<Method, String>
+    match s
+      "DELETE" -> Result.Ok(Method.Delete)
+      "GET" -> Result.Ok(Method.Get)
+      "HEAD" -> Result.Ok(Method.Head)
+      "OPTIONS" -> Result.Ok(Method.Options)
+      "PATCH" -> Result.Ok(Method.Patch)
+      "POST" -> Result.Ok(Method.Post)
+      "PUT" -> Result.Ok(Method.Put)
+      _ -> Result.Err("unknown HTTP method: " <> s)
+    end
+  end
+
+  @doc """
+  Returns the uppercase string representation of this method.
+  """
+  fn to_string(self) -> String
+    match self
+      Method.Delete -> "DELETE"
+      Method.Get -> "GET"
+      Method.Head -> "HEAD"
+      Method.Options -> "OPTIONS"
+      Method.Patch -> "PATCH"
+      Method.Post -> "POST"
+      Method.Put -> "PUT"
+    end
+  end
+end

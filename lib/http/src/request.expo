@@ -1,0 +1,21 @@
+@doc """
+An HTTP request with method, path, headers, body, and
+protocol version. Created by the parser when handling
+incoming requests, or constructed directly for client use.
+"""
+struct Request
+  body: String
+  headers: Headers
+  method: Method
+  path: String
+  version: String
+end
+
+impl Request
+  @doc """
+  Converts the body to a Binary value.
+  """
+  fn body_as_binary(self) -> Binary
+    self.body.to_binary()
+  end
+end

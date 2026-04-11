@@ -1,0 +1,109 @@
+@doc """
+HTTP response status code and reason phrase. Wraps an integer
+code with a human-readable reason string. Named constructors
+are provided for common status codes.
+"""
+struct Status
+  code: Int
+  reason: String
+end
+
+impl Status
+  @doc """
+  Returns a 400 Bad Request status.
+  """
+  fn bad_request -> Status
+    Status{code: 400, reason: "Bad Request"}
+  end
+
+  @doc """
+  Returns true if the status code is in the 4xx range.
+  """
+  fn client_error?(self) -> Bool
+    self.code >= 400 and self.code < 500
+  end
+
+  @doc """
+  Returns a 201 Created status.
+  """
+  fn created -> Status
+    Status{code: 201, reason: "Created"}
+  end
+
+  @doc """
+  Returns a 403 Forbidden status.
+  """
+  fn forbidden -> Status
+    Status{code: 403, reason: "Forbidden"}
+  end
+
+  @doc """
+  Returns a 500 Internal Server Error status.
+  """
+  fn internal_server_error -> Status
+    Status{code: 500, reason: "Internal Server Error"}
+  end
+
+  @doc """
+  Returns a 405 Method Not Allowed status.
+  """
+  fn method_not_allowed -> Status
+    Status{code: 405, reason: "Method Not Allowed"}
+  end
+
+  @doc """
+  Creates a status with a custom code and reason phrase.
+  """
+  fn new(code: Int, reason: String) -> Status
+    Status{code: code, reason: reason}
+  end
+
+  @doc """
+  Returns a 204 No Content status.
+  """
+  fn no_content -> Status
+    Status{code: 204, reason: "No Content"}
+  end
+
+  @doc """
+  Returns a 404 Not Found status.
+  """
+  fn not_found -> Status
+    Status{code: 404, reason: "Not Found"}
+  end
+
+  @doc """
+  Returns a 200 OK status.
+  """
+  fn ok -> Status
+    Status{code: 200, reason: "OK"}
+  end
+
+  @doc """
+  Returns true if the status code is in the 2xx range.
+  """
+  fn ok?(self) -> Bool
+    self.code >= 200 and self.code < 300
+  end
+
+  @doc """
+  Returns true if the status code is in the 3xx range.
+  """
+  fn redirect?(self) -> Bool
+    self.code >= 300 and self.code < 400
+  end
+
+  @doc """
+  Returns true if the status code is in the 5xx range.
+  """
+  fn server_error?(self) -> Bool
+    self.code >= 500 and self.code < 600
+  end
+
+  @doc """
+  Returns a 401 Unauthorized status.
+  """
+  fn unauthorized -> Status
+    Status{code: 401, reason: "Unauthorized"}
+  end
+end

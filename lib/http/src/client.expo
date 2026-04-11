@@ -1,0 +1,232 @@
+alias net.TCPSocket
+
+@doc """
+One-shot HTTP/1.1 client. Each request opens a new TCP
+connection, sends the request, reads the response, and
+closes the connection.
+"""
+struct Http
+end
+
+impl Http
+  @doc """
+  Sends a DELETE request to the given URL.
+  """
+  fn delete(url: String, headers: Headers) -> Result<Response, Error>
+    Http.request(Method.Delete, url, headers, "")
+  end
+
+  @doc """
+  Sends a GET request to the given URL.
+  """
+  fn get(url: String) -> Result<Response, Error>
+    Http.request(Method.Get, url, Headers.new(), "")
+  end
+
+  @doc """
+  Sends a HEAD request to the given URL.
+  """
+  fn head(url: String) -> Result<Response, Error>
+    Http.request(Method.Head, url, Headers.new(), "")
+  end
+
+  @doc """
+  Sends an OPTIONS request to the given URL.
+  """
+  fn options(url: String) -> Result<Response, Error>
+    Http.request(Method.Options, url, Headers.new(), "")
+  end
+
+  @doc """
+  Sends a PATCH request to the given URL with a body.
+  """
+  fn patch(url: String, body: String, headers: Headers)
+    -> Result<Response, Error>
+    Http.request(Method.Patch, url, headers, body)
+  end
+
+  @doc """
+  Sends a POST request to the given URL with a body.
+  """
+  fn post(url: String, body: String, headers: Headers)
+    -> Result<Response, Error>
+    Http.request(Method.Post, url, headers, body)
+  end
+
+  @doc """
+  Sends a PUT request to the given URL with a body.
+  """
+  fn put(url: String, body: String, headers: Headers) -> Result<Response, Error>
+    Http.request(Method.Put, url, headers, body)
+  end
+
+  @doc """
+  Sends an HTTP request with the given method, URL, headers,
+  and body. Opens a TCP connection, writes the request, reads
+  the full response, and closes the connection.
+  """
+  fn request(method: Method, url: String, headers: Headers, body: String)
+    -> Result<Response, Error>
+
+    match Http.parse_url(url)
+      Result.Err(msg) ->
+        Result.Err(Error.InvalidUrl(msg))
+
+      Result.Ok(url_parts) ->
+        host = url_parts.first
+        port = url_parts.second.first
+        path = url_parts.second.second
+
+        socket =
+          match TCPSocket.connect(host.clone(), port)
+            Result.Ok(s) -> s
+            Result.Err(e) -> return Result.Err(Error.ConnectionFailed(e))
+          end
+
+        raw = Http.build_request(method, host, path, headers, body)
+
+        match socket.write(raw)
+          Result.Err(e) ->
+            return Result.Err(Error.ConnectionFailed("write failed: " <> e))
+          Result.Ok(_) -> ()
+        end
+
+        Http.read_response(socket)
+    end
+  end
+
+  @doc """
+  Extracts host, port, and path from an HTTP URL string.
+  Returns a nested Pair of (host, (port, path)). Handles
+  http:// and https:// schemes with default ports 80 and 443.
+  """
+  fn parse_url(url: String) -> Result<Pair<String, Pair<Int, String>>, String>
+    default_port = 80
+    remaining = ""
+
+    cond
+      url.starts_with?("https://") ->
+        remaining = url.slice(Range{start: 8, stop: url.length() - 1})
+        default_port = 443
+
+      url.starts_with?("http://") ->
+        remaining = url.slice(Range{start: 7, stop: url.length() - 1})
+
+      else ->
+        remaining = url.clone()
+    end
+
+    path = "/"
+    host_port = remaining.clone()
+
+    slash_parts = remaining.split("/")
+
+    if slash_parts.length() > 1
+      host_port = slash_parts.get(0).unwrap()
+      path_parts: List<String> = List.new()
+      i = 1
+
+      while i < slash_parts.length()
+        path_parts = path_parts.append(slash_parts.get(i).unwrap())
+        i += 1
+      end
+
+      path = "/" <> String.join(path_parts, "/")
+    end
+
+    host = host_port.clone()
+    port = default_port
+
+    colon_parts = host_port.split(":")
+
+    if colon_parts.length() == 2
+      host = colon_parts.get(0).unwrap()
+
+      match colon_parts.get(1).unwrap().to_int()
+        Result.Ok(p) -> port = p
+        Result.Err(_) -> return Result.Err("invalid port in URL: " <> url)
+      end
+    end
+
+    if host.empty?()
+      return Result.Err("missing host in URL: " <> url)
+    end
+
+    port_path: Pair<Int, String> = Pair{first: port, second: path}
+    result: Pair<String, Pair<Int, String>> = Pair{
+      first: host,
+      second: port_path,
+    }
+    Result.Ok(result)
+  end
+
+  priv fn build_request(
+    method: Method,
+    host: String,
+    path: String,
+    headers: Headers,
+    body: String,
+  ) -> String
+
+    sb = StringBuilder.new()
+      .add(method.to_string())
+      .add(" ")
+      .add(path)
+      .add(" HTTP/1.1\r\n")
+      .add("Host: ")
+      .add(host)
+      .add("\r\n")
+
+    if not body.empty?() and not headers.has?("Content-Length")
+      sb = sb.add("Content-Length: ").add("#{body.byte_length()}").add("\r\n")
+    end
+
+    sb = Http.write_headers(sb, headers, 0).add("Connection: close\r\n\r\n")
+
+    if not body.empty?()
+      sb = sb.add(body)
+    end
+
+    sb.build()
+  end
+
+  priv fn write_headers(move sb: StringBuilder, headers: Headers, i: Int)
+    -> StringBuilder
+
+    if i >= headers.entries.length()
+      return sb
+    end
+
+    entry = headers.entries.get(i).unwrap()
+    sb = sb.add(entry.name).add(": ").add(entry.value).add("\r\n")
+    Http.write_headers(sb, headers, i + 1)
+  end
+
+  priv fn read_response(move socket: TCPSocket) -> Result<Response, Error>
+    match Http.read_all(socket, StringBuilder.new())
+      Result.Err(e) -> Result.Err(e)
+      Result.Ok(data) -> Parser.parse_response(data)
+    end
+  end
+
+  priv fn read_all(move socket: TCPSocket, move sb: StringBuilder)
+    -> Result<String, Error>
+
+    match socket.read(8192)
+      Result.Err(e) ->
+        Result.Err(Error.ConnectionFailed("read failed: " <> e))
+
+      Result.Ok(chunk) ->
+        if chunk.empty?()
+          match socket.close()
+            _ -> ()
+          end
+
+          Result.Ok(sb.build())
+        else
+          sb = sb.add(chunk)
+          Http.read_all(socket, sb)
+        end
+    end
+  end
+end
