@@ -5,12 +5,12 @@ struct DateTime
   millis: Int
 
   @extern "C"
-  priv fn expo_time_now_millis() -> Int64
+  priv fn expo_time_now_millis -> Int64
 
   @doc """
   Returns the current wall-clock time as a `DateTime`.
   """
-  fn now() -> DateTime
+  fn now -> DateTime
     DateTime{millis: expo_time_now_millis()}
   end
 
@@ -27,9 +27,7 @@ A span of time measured in milliseconds.
 """
 struct Duration
   millis: Int
-end
 
-impl Duration
   @doc """
   Creates a `Duration` from a number of seconds.
   """

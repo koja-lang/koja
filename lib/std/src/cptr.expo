@@ -1,6 +1,6 @@
 struct CPtr<T>
   @doc "Returns a null pointer."
-  fn null() -> CPtr<T>
+  fn null -> CPtr<T>
     panic("intrinsic")
   end
 

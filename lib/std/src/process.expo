@@ -221,12 +221,14 @@ impl Process<Task<R>, (), R> for Task<R>
 
   fn run(move self) -> StopReason
     result = self.work()
+
     receive
       pair: Pair<(), Option<ReplyTo<R>>> ->
         match pair.second
           Option.Some(reply_to) -> reply_to.send(result)
           Option.None -> ()
         end
+
         StopReason.Normal
 
       event: Lifecycle ->

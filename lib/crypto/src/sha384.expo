@@ -23,7 +23,7 @@ struct SHA384
   end
 
   @doc "Creates a new streaming SHA-384 context."
-  fn new() -> Self
+  fn new -> Self
     ctx = evp_md_ctx_new()
     null: CPtr<UInt8> = CPtr.null()
     evp_digest_init_ex(ctx, evp_sha384(), null)
@@ -37,23 +37,33 @@ struct SHA384
   end
 
   @extern "C" @link "crypto:EVP_DigestFinal_ex"
-  priv fn evp_digest_final_ex(ctx: CPtr<UInt8>, out: CPtr<UInt8>, out_len: CPtr<UInt8>) -> Int64
+  priv fn evp_digest_final_ex(
+    ctx: CPtr<UInt8>,
+    out: CPtr<UInt8>,
+    out_len: CPtr<UInt8>,
+  ) -> Int64
 
   @extern "C" @link "crypto:EVP_DigestInit_ex"
-  priv fn evp_digest_init_ex(ctx: CPtr<UInt8>, md: CPtr<UInt8>, engine: CPtr<UInt8>) -> Int64
+  priv fn evp_digest_init_ex(
+    ctx: CPtr<UInt8>,
+    md: CPtr<UInt8>,
+    engine: CPtr<UInt8>,
+  ) -> Int64
 
   @extern "C" @link "crypto:EVP_DigestUpdate"
-  priv fn evp_digest_update(ctx: CPtr<UInt8>, data: CPtr<UInt8>, len: Int64) -> Int64
+  priv fn evp_digest_update(ctx: CPtr<UInt8>, data: CPtr<UInt8>, len: Int64)
+    -> Int64
 
   @extern "C" @link "crypto:EVP_MD_CTX_free"
   priv fn evp_md_ctx_free(ctx: CPtr<UInt8>)
 
   @extern "C" @link "crypto:EVP_MD_CTX_new"
-  priv fn evp_md_ctx_new() -> CPtr<UInt8>
+  priv fn evp_md_ctx_new -> CPtr<UInt8>
 
   @extern "C" @link "crypto:EVP_sha384"
-  priv fn evp_sha384() -> CPtr<UInt8>
+  priv fn evp_sha384 -> CPtr<UInt8>
 
   @extern "C" @link "crypto:SHA384"
-  priv fn sha384_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>) -> CPtr<UInt8>
+  priv fn sha384_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>)
+    -> CPtr<UInt8>
 end

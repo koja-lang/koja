@@ -42,7 +42,7 @@ impl Option<T>
   @doc """
   Applies `f` to the contained value if `Some`, returns `None` otherwise.
   """
-  fn map<U>(self, f: fn(T) -> U) -> Option<U>
+  fn map<U>(self, f: fn (T) -> U) -> Option<U>
     match self
       Option.Some(val) -> Option.Some(f(val))
       Option.None -> Option.None
@@ -83,7 +83,7 @@ impl Option<T>
   Applies `f` to the contained value if `Some` (where `f` returns an
   `Option`), returns `None` otherwise. Also known as flat_map.
   """
-  fn then<U>(self, f: fn(T) -> Option<U>) -> Option<U>
+  fn then<U>(self, f: fn (T) -> Option<U>) -> Option<U>
     match self
       Option.Some(val) -> f(val)
       Option.None -> Option.None
@@ -115,7 +115,7 @@ impl Result<T, E>
   @doc """
   Applies `f` to the `Ok` value if present, returns `Err` unchanged.
   """
-  fn map<U>(self, f: fn(T) -> U) -> Result<U, E>
+  fn map<U>(self, f: fn (T) -> U) -> Result<U, E>
     match self
       Result.Ok(val) -> Result.Ok(f(val))
       Result.Err(e) -> Result.Err(e)
@@ -146,7 +146,7 @@ impl Result<T, E>
   Applies `f` to the `Ok` value (where `f` returns a `Result`), returns
   `Err` unchanged. Also known as flat_map.
   """
-  fn then<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E>
+  fn then<U>(self, f: fn (T) -> Result<U, E>) -> Result<U, E>
     match self
       Result.Ok(val) -> f(val)
       Result.Err(e) -> Result.Err(e)

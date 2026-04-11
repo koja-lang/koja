@@ -12,6 +12,8 @@ mod comments;
 mod expr;
 mod util;
 
+use std::mem;
+
 use crate::doc::*;
 use expo_ast::ast::*;
 
@@ -46,12 +48,15 @@ impl<'a> Printer<'a> {
         let mut i = 0;
 
         while i < module.items.len() {
-            if matches!(&module.items[i], Item::Constant(_)) {
+            if matches!(&module.items[i], Item::Constant(_) | Item::Alias(_)) {
                 if emitted {
                     parts.push(hardline());
                 }
 
-                while i < module.items.len() && matches!(&module.items[i], Item::Constant(_)) {
+                let anchor = mem::discriminant(&module.items[i]);
+                while i < module.items.len()
+                    && mem::discriminant(&module.items[i]) == anchor
+                {
                     let item = &module.items[i];
                     let span = item_span(item);
                     let (comment_docs, _) = self.comments.drain_before(span.start.line);
@@ -128,8 +133,10 @@ impl<'a> Printer<'a> {
             }
             body.push(self.struct_field_to_doc(field));
         }
-        for func in &s.functions {
-            body.push(hardline());
+        for (i, func) in s.functions.iter().enumerate() {
+            if i > 0 || !s.fields.is_empty() {
+                body.push(hardline());
+            }
             body.push(hardline());
             body.push(self.function_to_doc(func));
         }
@@ -187,8 +194,10 @@ impl<'a> Printer<'a> {
             }
             body.push(self.enum_variant_to_doc(variant));
         }
-        for func in &e.functions {
-            body.push(hardline());
+        for (i, func) in e.functions.iter().enumerate() {
+            if i > 0 || !e.variants.is_empty() {
+                body.push(hardline());
+            }
             body.push(hardline());
             body.push(self.function_to_doc(func));
         }

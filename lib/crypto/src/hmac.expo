@@ -2,7 +2,6 @@
 HMAC message authentication codes.
 """
 struct HMAC
-
   @doc "Computes HMAC-SHA-1."
   fn sha1(key: Binary, data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(20)

@@ -4,9 +4,6 @@ Elements must implement `Hash` and `Equality`. Uses open addressing
 with linear probing.
 """
 struct Set<T>
-end
-
-impl Set<T>
   @doc """
   Returns `true` if the set contains no elements.
   """

@@ -26,26 +26,30 @@ impl List<T>
   Returns `true` if `f` returns `true` for every element.
   Returns `true` for an empty list.
   """
-  fn all?(self, f: fn(T) -> Bool) -> Bool
+  fn all?(self, f: fn (T) -> Bool) -> Bool
     result = true
+
     for item in self
       unless f(item)
         result = false
       end
     end
+
     result
   end
 
   @doc """
   Returns `true` if `f` returns `true` for at least one element.
   """
-  fn any?(self, f: fn(T) -> Bool) -> Bool
+  fn any?(self, f: fn (T) -> Bool) -> Bool
     result = false
+
     for item in self
       if f(item)
         result = true
       end
     end
+
     result
   end
 
@@ -74,25 +78,28 @@ impl List<T>
   @doc """
   Returns a new list containing only the elements for which `f` returns `true`.
   """
-  fn filter(self, f: fn(T) -> Bool) -> List<T>
+  fn filter(self, f: fn (T) -> Bool) -> List<T>
     result: List<T> = List.new()
+
     for item in self
       if f(item)
         result = result.append(item)
       end
     end
+
     result
   end
 
   @doc """
   Returns the first element for which `f` returns `true`, or `None`.
   """
-  fn find(self, f: fn(T) -> Bool) -> Option<T>
+  fn find(self, f: fn (T) -> Bool) -> Option<T>
     for item in self
       if f(item)
         return Option.Some(item)
       end
     end
+
     Option.None
   end
 
@@ -114,11 +121,13 @@ impl List<T>
   Returns a new list with `f` applied to each element. The closure may
   return a different type, producing a `List<U>` from a `List<T>`.
   """
-  fn map<U>(self, f: fn(T) -> U) -> List<U>
+  fn map<U>(self, f: fn (T) -> U) -> List<U>
     result: List<U> = List.new()
+
     for item in self
       result = result.append(f(item))
     end
+
     result
   end
 
@@ -141,11 +150,13 @@ impl List<T>
   Reduces the list to a single value by applying `f` to the accumulator
   and each element. `initial` is the starting accumulator value.
   """
-  fn reduce<U>(self, initial: U, f: fn(U, T) -> U) -> U
+  fn reduce<U>(self, initial: U, f: fn (U, T) -> U) -> U
     acc = initial
+
     for item in self
       acc = f(acc, item)
     end
+
     acc
   end
 
@@ -163,13 +174,16 @@ impl List<T>
   fn reverse(self) -> List<T>
     result: List<T> = List.new()
     i = self.length() - 1
+
     while i >= 0
       match self.get(i)
         Option.Some(item) -> result = result.append(item)
         Option.None -> ()
       end
+
       i = i - 1
     end
+
     result
   end
 

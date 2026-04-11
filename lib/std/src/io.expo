@@ -12,12 +12,10 @@ end
 The standard input file descriptor.
 """
 const STDIN: Fd = Fd{descriptor: 0}
-
 @doc """
 The standard output file descriptor.
 """
 const STDOUT: Fd = Fd{descriptor: 1}
-
 @doc """
 The standard error file descriptor.
 """
@@ -64,7 +62,9 @@ impl IO
         else
           IO.gets_loop(acc <> char)
         end
-      Result.Err(_) -> acc
+
+      Result.Err(_) ->
+        acc
     end
   end
 end

@@ -47,6 +47,7 @@ impl String
       else ->
         "yeah"
     end
+
     for c in self
       match c
         "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" |
@@ -63,6 +64,7 @@ impl String
           return false
       end
     end
+
     true
   end
 
@@ -86,9 +88,11 @@ impl String
   """
   fn codepoints(self) -> List<String>
     result: List<String> = List.new()
+
     for c in self
       result = result.append(c)
     end
+
     result
   end
 
@@ -106,12 +110,15 @@ impl String
     end
 
     i = 0
+
     while i <= len - other_len
       if self.slice(Range{start: i, stop: i + other_len - 1}) == other
         return true
       end
+
       i += 1
     end
+
     false
   end
 
@@ -125,6 +132,7 @@ impl String
         _ -> return false
       end
     end
+
     true
   end
 
@@ -133,6 +141,7 @@ impl String
   """
   fn downcase(self) -> String
     result = ""
+
     for c in self
       match c
         "A" -> result = result <> "a"
@@ -164,6 +173,7 @@ impl String
         _ -> result = result <> c
       end
     end
+
     result
   end
 
@@ -206,13 +216,16 @@ impl String
     result = ""
     i = 0
     len = parts.length()
+
     while i < len
       if i > 0
         result = result <> separator
       end
+
       result = result <> parts.get(i).unwrap()
       i += 1
     end
+
     result
   end
 
@@ -224,10 +237,12 @@ impl String
     if old.empty?()
       return self
     end
+
     result = ""
     i = 0
     old_len = old.length()
     len = self.length()
+
     while i < len
       if i + old_len <= len and
       self.slice(Range{start: i, stop: i + old_len - 1}) == old
@@ -238,6 +253,7 @@ impl String
         i += 1
       end
     end
+
     result
   end
 
@@ -247,10 +263,12 @@ impl String
   fn reverse(self) -> String
     result = ""
     i = self.length() - 1
+
     while i >= 0
       result = result <> self.get(i).unwrap()
       i -= 1
     end
+
     result
   end
 
@@ -269,10 +287,12 @@ impl String
   """
   fn split(self, separator: String) -> List<String>
     result: List<String> = List.new()
+
     if separator.empty?()
       for c in self
         result = result.append(c)
       end
+
       return result
     end
 
@@ -280,6 +300,7 @@ impl String
     i = 0
     sep_len = separator.length()
     len = self.length()
+
     while i < len
       if i + sep_len <= len and
       self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
@@ -291,6 +312,7 @@ impl String
         i += 1
       end
     end
+
     result = result.append(current)
     result
   end
@@ -345,13 +367,16 @@ impl String
   fn trim_end(self) -> String
     len = self.length()
     i = len - 1
+
     while i >= 0
       match self.get(i).unwrap()
         " " | "\n" | "\r" | "\t" -> ()
         _ -> return self.slice(Range{start: 0, stop: i})
       end
+
       i -= 1
     end
+
     ""
   end
 
@@ -361,13 +386,16 @@ impl String
   fn trim_start(self) -> String
     i = 0
     len = self.length()
+
     while i < len
       match self.get(i).unwrap()
         " " | "\n" | "\r" | "\t" -> ()
         _ -> return self.slice(Range{start: i, stop: len - 1})
       end
+
       i += 1
     end
+
     ""
   end
 
@@ -376,6 +404,7 @@ impl String
   """
   fn upcase(self) -> String
     result = ""
+
     for c in self
       match c
         "a" -> result = result <> "A"
@@ -407,6 +436,7 @@ impl String
         _ -> result = result <> c
       end
     end
+
     result
   end
 
@@ -420,6 +450,7 @@ impl String
         _ -> return false
       end
     end
+
     true
   end
 

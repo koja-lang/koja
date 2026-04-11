@@ -10,7 +10,7 @@ enum Value
 end
 
 impl Value
-  fn null() -> Value
+  fn null -> Value
     Value.Null
   end
 

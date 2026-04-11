@@ -458,7 +458,6 @@ mod tests {
         ",
             "
             struct Argon2C
-
               @extern \"C\" @link \"argon2\"
               fn hash_encoded(t_cost: UInt32) -> Int32
 
@@ -484,7 +483,6 @@ mod tests {
         ",
             "
             struct Crypto
-
               @extern \"C\" @link \"crypto:EVP_DigestInit_ex\"
               priv fn evp_digest_init_ex(
                 ctx: CPtr<UInt8>,

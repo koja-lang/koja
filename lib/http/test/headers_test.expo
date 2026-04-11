@@ -1,6 +1,7 @@
 @test "Headers.new creates empty collection"
 fn test_headers_new
   h = Headers.new()
+
   if h.has?("Content-Type")
     panic("new headers should be empty")
   end
@@ -10,6 +11,7 @@ end
 fn test_headers_append
   h = Headers.new()
   h = h.append("Content-Type", "text/html")
+
   if h.get("Content-Type").unwrap() != "text/html"
     panic("expected text/html")
   end
@@ -19,9 +21,11 @@ end
 fn test_headers_case_insensitive
   h = Headers.new()
   h = h.append("Content-Type", "text/html")
+
   if h.get("content-type").unwrap() != "text/html"
     panic("lowercase lookup failed")
   end
+
   if h.get("CONTENT-TYPE").unwrap() != "text/html"
     panic("uppercase lookup failed")
   end
@@ -30,6 +34,7 @@ end
 @test "Headers.get returns None for missing header"
 fn test_headers_get_missing
   h = Headers.new()
+
   if h.get("X-Missing").some?()
     panic("expected None for missing header")
   end
@@ -41,12 +46,15 @@ fn test_headers_get_all
   h = h.append("Set-Cookie", "a=1")
   h = h.append("Set-Cookie", "b=2")
   all = h.get_all("Set-Cookie")
+
   if all.length() != 2
     panic("expected 2 values, got #{all.length()}")
   end
+
   if all.get(0).unwrap() != "a=1"
     panic("expected first cookie a=1")
   end
+
   if all.get(1).unwrap() != "b=2"
     panic("expected second cookie b=2")
   end
@@ -57,10 +65,13 @@ fn test_headers_set
   h = Headers.new()
   h = h.append("Content-Type", "text/plain")
   h = h.set("Content-Type", "text/html")
+
   if h.get("Content-Type").unwrap() != "text/html"
     panic("expected replaced value")
   end
+
   all = h.get_all("Content-Type")
+
   if all.length() != 1
     panic("expected single value after set")
   end
@@ -69,12 +80,15 @@ end
 @test "Headers.has? checks for header presence"
 fn test_headers_has
   h = Headers.new().append("Host", "example.com")
+
   if not h.has?("Host")
     panic("expected Host to exist")
   end
+
   if not h.has?("host")
     panic("case insensitive has failed")
   end
+
   if h.has?("X-Missing")
     panic("expected missing to not exist")
   end
@@ -83,6 +97,7 @@ end
 @test "Headers.content_length parses integer value"
 fn test_headers_content_length
   h = Headers.new().append("Content-Length", "42")
+
   if h.content_length().unwrap() != 42
     panic("expected 42")
   end
@@ -91,6 +106,7 @@ end
 @test "Headers.content_length returns None when missing"
 fn test_headers_content_length_missing
   h = Headers.new()
+
   if h.content_length().some?()
     panic("expected None")
   end

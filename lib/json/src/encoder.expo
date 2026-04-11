@@ -28,6 +28,7 @@ impl Encoder
 
   priv fn encode_string(s: String) -> String
     sb = StringBuilder.new().add("\"")
+
     for c in s
       match c
         "\"" -> sb = sb.add("\\\"")
@@ -38,6 +39,7 @@ impl Encoder
         _ -> sb = sb.add(c)
       end
     end
+
     sb.add("\"").build()
   end
 
@@ -45,15 +47,19 @@ impl Encoder
     if items.empty?()
       return "[]"
     end
+
     sb = StringBuilder.new().add("[")
     i = 0
+
     while i < items.length()
       if i > 0
         sb = sb.add(",")
       end
+
       sb = sb.add(Encoder.encode_value(items.get(i).unwrap()))
       i += 1
     end
+
     sb.add("]").build()
   end
 
@@ -61,44 +67,62 @@ impl Encoder
     if entries.empty?()
       return "{}"
     end
+
     sb = StringBuilder.new().add("{")
     i = 0
+
     while i < entries.length()
       if i > 0
         sb = sb.add(",")
       end
+
       pair = entries.get(i).unwrap()
       sb = sb.add(Encoder.encode_string(pair.first))
       sb = sb.add(":").add(Encoder.encode_value(pair.second))
       i += 1
     end
+
     sb.add("}").build()
   end
 
   priv fn encode_value_pretty(value: Value, indent: Int) -> String
     match value
-      Value.Null -> "null"
+      Value.Null ->
+        "null"
+
       Value.Bool(b) ->
         if b
           "true"
         else
           "false"
         end
-      Value.Int(n) -> "#{n}"
-      Value.Float(f) -> "#{f}"
-      Value.String(s) -> Encoder.encode_string(s)
-      Value.Array(items) -> Encoder.encode_array_pretty(items, indent)
-      Value.Object(entries) -> Encoder.encode_object_pretty(entries, indent)
+
+      Value.Int(n) ->
+        "#{n}"
+
+      Value.Float(f) ->
+        "#{f}"
+
+      Value.String(s) ->
+        Encoder.encode_string(s)
+
+      Value.Array(items) ->
+        Encoder.encode_array_pretty(items, indent)
+
+      Value.Object(entries) ->
+        Encoder.encode_object_pretty(entries, indent)
     end
   end
 
   priv fn make_indent(level: Int) -> String
     result = ""
     i = 0
+
     while i < level
       result = result <> "  "
       i += 1
     end
+
     result
   end
 
@@ -106,37 +130,47 @@ impl Encoder
     if items.empty?()
       return "[]"
     end
+
     inner = indent + 1
     sb = StringBuilder.new().add("[\n")
     i = 0
+
     while i < items.length()
       if i > 0
         sb = sb.add(",\n")
       end
+
       sb = sb.add(Encoder.make_indent(inner))
       sb = sb.add(Encoder.encode_value_pretty(items.get(i).unwrap(), inner))
       i += 1
     end
+
     sb.add("\n").add(Encoder.make_indent(indent)).add("]").build()
   end
 
-  priv fn encode_object_pretty(entries: List<Pair<String, Value>>, indent: Int) -> String
+  priv fn encode_object_pretty(entries: List<Pair<String, Value>>, indent: Int)
+    -> String
+
     if entries.empty?()
       return "{}"
     end
+
     inner = indent + 1
     sb = StringBuilder.new().add("{\n")
     i = 0
+
     while i < entries.length()
       if i > 0
         sb = sb.add(",\n")
       end
+
       pair = entries.get(i).unwrap()
       sb = sb.add(Encoder.make_indent(inner))
       sb = sb.add(Encoder.encode_string(pair.first))
       sb = sb.add(": ").add(Encoder.encode_value_pretty(pair.second, inner))
       i += 1
     end
+
     sb.add("\n").add(Encoder.make_indent(indent)).add("}").build()
   end
 end

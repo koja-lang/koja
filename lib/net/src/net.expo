@@ -2,8 +2,8 @@
 The kind of socket: `Stream` (TCP) or `Datagram` (UDP).
 """
 enum SocketKind
-  Stream
   Datagram
+  Stream
 end
 
 @doc """
@@ -12,9 +12,7 @@ IPv6 addresses use 16 bytes.
 """
 struct IPAddress
   bytes: Binary
-end
 
-impl IPAddress
   @doc """
   Constructs an IPv4 address from four octets.
   """
@@ -165,6 +163,7 @@ struct TCPSocket
     if addrs.empty?()
       return Result.Err("no addresses found for " <> host)
     end
+
     addr = addrs.get(0).unwrap()
 
     sock =
@@ -249,11 +248,13 @@ struct TCPListener
         Result.Ok(s) -> s
         Result.Err(e) -> return Result.Err(e)
       end
+
     sock =
       match sock.set_reuse_addr()
         Result.Ok(s) -> s
         Result.Err(e) -> return Result.Err(e)
       end
+
     sock =
       match sock.bind(addr)
         Result.Ok(s) -> s

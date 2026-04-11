@@ -79,8 +79,10 @@ impl Headers
     new_entries: List<Header> = List.new()
     found = false
     i = 0
+
     while i < self.entries.length()
       entry = self.entries.get(i).unwrap()
+
       if entry.name.downcase() == lower
         if not found
           new_entries = new_entries.append(Header{name: name, value: value})

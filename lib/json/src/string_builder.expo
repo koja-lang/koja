@@ -8,7 +8,7 @@ struct StringBuilder
 end
 
 impl StringBuilder
-  fn new() -> StringBuilder
+  fn new -> StringBuilder
     parts: List<String> = List.new()
     StringBuilder{parts: parts}
   end
@@ -23,13 +23,17 @@ impl StringBuilder
 
   priv fn merge_join(parts: List<String>, start: Int, end_idx: Int) -> String
     count = end_idx - start
+
     if count == 0
       return ""
     end
+
     if count == 1
       return parts.get(start).unwrap()
     end
+
     mid = start + count / 2
-    StringBuilder.merge_join(parts, start, mid) <> StringBuilder.merge_join(parts, mid, end_idx)
+    StringBuilder.merge_join(parts, start, mid) <>
+    StringBuilder.merge_join(parts, mid, end_idx)
   end
 end

@@ -12,13 +12,16 @@ impl Decoder
   fn decode(input: String) -> Result<Value, String>
     d = Decoder{input: input, pos: 0}
     d = d.skip_ws()
+
     match d.parse_value_at(d.pos)
       Result.Ok(pair) ->
         d2 = Decoder{input: input, pos: pair.second}
         d2 = d2.skip_ws()
+
         if d2.pos < d2.input.length()
           return Result.Err("unexpected trailing content at position #{d2.pos}")
         end
+
         Result.Ok(pair.first)
 
       Result.Err(msg) ->
@@ -30,11 +33,14 @@ impl Decoder
     if self.pos >= self.input.length()
       return self
     end
+
     ch = self.input.get(self.pos).unwrap()
+
     if ch == " " or ch == "\n" or ch == "\r" or ch == "\t"
       d = Decoder{input: self.input, pos: self.pos + 1}
       return d.skip_ws()
     end
+
     self
   end
 
@@ -42,38 +48,44 @@ impl Decoder
     if pos >= self.input.length()
       return Result.Err("unexpected end of input at position #{pos}")
     end
+
     ch = self.input.get(pos).unwrap()
+
     if ch == "n"
       return self.parse_null(pos)
     end
+
     if ch == "t" or ch == "f"
       return self.parse_bool(pos)
     end
+
     if ch == "\""
       return self.parse_string(pos)
     end
+
     if ch == "["
       return self.parse_array(pos)
     end
+
     if ch == "{"
       return self.parse_object(pos)
     end
+
     if ch == "-" or ch.digit?()
       return self.parse_number(pos)
     end
+
     Result.Err("unexpected character '#{ch}' at position #{pos}")
   end
 
   fn parse_null(self, pos: Int) -> Result<Pair<Value, Int>, String>
     if pos + 4 <= self.input.length()
       if self.input.slice(Range{start: pos, stop: pos + 3}) == "null"
-        ok_pair: Pair<Value, Int> = Pair{
-          first: Value.Null,
-          second: pos + 4,
-        }
+        ok_pair: Pair<Value, Int> = Pair{first: Value.Null, second: pos + 4}
         return Result.Ok(ok_pair)
       end
     end
+
     Result.Err("expected 'null' at position #{pos}")
   end
 
@@ -87,6 +99,7 @@ impl Decoder
         return Result.Ok(ok_pair)
       end
     end
+
     if pos + 5 <= self.input.length()
       if self.input.slice(Range{start: pos, stop: pos + 4}) == "false"
         ok_pair: Pair<Value, Int> = Pair{
@@ -96,71 +109,87 @@ impl Decoder
         return Result.Ok(ok_pair)
       end
     end
+
     Result.Err("expected 'true' or 'false' at position #{pos}")
   end
 
   fn parse_number(self, pos: Int) -> Result<Pair<Value, Int>, String>
     i = pos
+
     if i < self.input.length()
       if self.input.get(i).unwrap() == "-"
         i += 1
       end
     end
+
     if i >= self.input.length()
       return Result.Err("expected digit at position #{i}")
     end
+
     if not self.input.get(i).unwrap().digit?()
       return Result.Err("expected digit at position #{i}")
     end
+
     i = self.consume_digits(i)
     is_float = false
+
     if i < self.input.length()
       if self.input.get(i).unwrap() == "."
         is_float = true
         i += 1
+
         if i >= self.input.length()
           return Result.Err("expected digit after decimal point at position #{i}")
         end
+
         if not self.input.get(i).unwrap().digit?()
           return Result.Err("expected digit after decimal point at position #{i}")
         end
+
         i = self.consume_digits(i)
       end
     end
+
     if i < self.input.length()
       e_ch = self.input.get(i).unwrap()
+
       if e_ch == "e" or e_ch == "E"
         is_float = true
         i += 1
+
         if i < self.input.length()
           sign_ch = self.input.get(i).unwrap()
+
           if sign_ch == "+" or sign_ch == "-"
             i += 1
           end
         end
+
         if i >= self.input.length()
           return Result.Err("expected digit in exponent at position #{i}")
         end
+
         if not self.input.get(i).unwrap().digit?()
           return Result.Err("expected digit in exponent at position #{i}")
         end
+
         i = self.consume_digits(i)
       end
     end
+
     num_str = self.input.slice(Range{start: pos, stop: i - 1})
+
     if is_float
       match num_str.to_float()
         Result.Ok(f) ->
-          ok_pair: Pair<Value, Int> = Pair{
-            first: Value.Float(f),
-            second: i,
-          }
+          ok_pair: Pair<Value, Int> = Pair{first: Value.Float(f), second: i}
           return Result.Ok(ok_pair)
 
         Result.Err(msg) ->
           return Result.Err("invalid float '#{num_str}' at position #{pos}: #{msg}")
       end
     end
+
     match num_str.to_int()
       Result.Ok(n) ->
         ok_pair: Pair<Value, Int> = Pair{first: Value.Int(n), second: i}
@@ -175,6 +204,7 @@ impl Decoder
     if start >= self.input.length()
       return start
     end
+
     match self.input.get(start)
       Option.Some(ch) when ch.digit?() -> self.consume_digits(start + 1)
       _ -> start
@@ -199,9 +229,11 @@ impl Decoder
     if pos >= self.input.length()
       return Result.Err("expected '\"' at position #{pos}")
     end
+
     if self.input.get(pos).unwrap() != "\""
       return Result.Err("expected '\"' at position #{pos}")
     end
+
     self.scan_string(pos + 1, pos, StringBuilder.new())
   end
 
@@ -211,15 +243,19 @@ impl Decoder
     if i >= self.input.length()
       return Result.Err("unterminated string starting at position #{start}")
     end
+
     ch = self.input.get(i).unwrap()
+
     if ch == "\""
       ok_pair: Pair<String, Int> = Pair{first: sb.build(), second: i + 1}
       return Result.Ok(ok_pair)
     end
+
     if ch == "\\"
       if i + 1 >= self.input.length()
         return Result.Err("unexpected end of string escape at position #{i}")
       end
+
       esc = self.input.get(i + 1).unwrap()
       self.scan_string(i + 2, start, sb.add(Decoder.unescape(esc)))
     else
@@ -229,6 +265,7 @@ impl Decoder
 
   fn parse_array(self, pos: Int) -> Result<Pair<Value, Int>, String>
     i = Decoder.skip_ws_at(self.input, pos + 1)
+
     if i < self.input.length()
       if self.input.get(i).unwrap() == "]"
         items: List<Value> = List.new()
@@ -239,6 +276,7 @@ impl Decoder
         return Result.Ok(ok_pair)
       end
     end
+
     items: List<Value> = List.new()
     self.parse_array_elements(items, i, pos)
   end
@@ -251,6 +289,7 @@ impl Decoder
   ) -> Result<Pair<Value, Int>, String>
 
     i = Decoder.skip_ws_at(self.input, pos)
+
     match self.parse_value_at(i)
       Result.Err(msg) ->
         Result.Err(msg)
@@ -258,10 +297,13 @@ impl Decoder
       Result.Ok(pair) ->
         items = items.append(pair.first)
         i = Decoder.skip_ws_at(self.input, pair.second)
+
         if i >= self.input.length()
           return Result.Err("unterminated array starting at position #{arr_start}")
         end
+
         ch = self.input.get(i).unwrap()
+
         if ch == "]"
           ok_pair: Pair<Value, Int> = Pair{
             first: Value.Array(items),
@@ -269,15 +311,18 @@ impl Decoder
           }
           return Result.Ok(ok_pair)
         end
+
         if ch != ","
           return Result.Err("expected ',' or ']' in array at position #{i}")
         end
+
         self.parse_array_elements(items, i + 1, arr_start)
     end
   end
 
   fn parse_object(self, pos: Int) -> Result<Pair<Value, Int>, String>
     i = Decoder.skip_ws_at(self.input, pos + 1)
+
     if i < self.input.length()
       if self.input.get(i).unwrap() == "}"
         entries: List<Pair<String, Value>> = List.new()
@@ -288,6 +333,7 @@ impl Decoder
         return Result.Ok(ok_pair)
       end
     end
+
     entries: List<Pair<String, Value>> = List.new()
     self.parse_object_entries(entries, i, pos)
   end
@@ -300,19 +346,24 @@ impl Decoder
   ) -> Result<Pair<Value, Int>, String>
 
     i = Decoder.skip_ws_at(self.input, pos)
+
     match self.parse_raw_string(i)
       Result.Err(msg) ->
         Result.Err("expected string key in object: " <> msg)
 
       Result.Ok(key_pair) ->
         i = Decoder.skip_ws_at(self.input, key_pair.second)
+
         if i >= self.input.length()
           return Result.Err("expected ':' after object key at position #{i}")
         end
+
         if self.input.get(i).unwrap() != ":"
           return Result.Err("expected ':' after object key at position #{i}")
         end
+
         i = Decoder.skip_ws_at(self.input, i + 1)
+
         match self.parse_value_at(i)
           Result.Err(msg) ->
             Result.Err(msg)
@@ -324,10 +375,13 @@ impl Decoder
             }
             entries = entries.append(e)
             i = Decoder.skip_ws_at(self.input, val_pair.second)
+
             if i >= self.input.length()
               return Result.Err("unterminated object starting at position #{obj_start}")
             end
+
             ch = self.input.get(i).unwrap()
+
             if ch == "}"
               ok_pair: Pair<Value, Int> = Pair{
                 first: Value.Object(entries),
@@ -335,9 +389,11 @@ impl Decoder
               }
               return Result.Ok(ok_pair)
             end
+
             if ch != ","
               return Result.Err("expected ',' or '}' in object at position #{i}")
             end
+
             self.parse_object_entries(entries, i + 1, obj_start)
         end
     end
@@ -359,10 +415,13 @@ impl Decoder
     if pos >= input.length()
       return pos
     end
+
     ch = input.get(pos).unwrap()
+
     if ch == " " or ch == "\n" or ch == "\r" or ch == "\t"
       return Decoder.skip_ws_at(input, pos + 1)
     end
+
     pos
   end
 end

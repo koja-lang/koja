@@ -542,7 +542,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
             } else {
                 println!("{path}: ok");
             }
-        } else if write {
+        } else if write || resolved.len() > 1 {
             if source != formatted {
                 if let Err(e) = fs::write(path, &formatted) {
                     eprintln!("error writing {path}: {e}");

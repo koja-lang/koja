@@ -3,21 +3,27 @@ fn test_method_to_string
   if Method.Get.to_string() != "GET"
     panic("expected GET")
   end
+
   if Method.Post.to_string() != "POST"
     panic("expected POST")
   end
+
   if Method.Put.to_string() != "PUT"
     panic("expected PUT")
   end
+
   if Method.Delete.to_string() != "DELETE"
     panic("expected DELETE")
   end
+
   if Method.Patch.to_string() != "PATCH"
     panic("expected PATCH")
   end
+
   if Method.Head.to_string() != "HEAD"
     panic("expected HEAD")
   end
+
   if Method.Options.to_string() != "OPTIONS"
     panic("expected OPTIONS")
   end
@@ -28,9 +34,11 @@ fn test_method_from_string_valid
   if Method.from_string("GET").unwrap().to_string() != "GET"
     panic("GET roundtrip failed")
   end
+
   if Method.from_string("POST").unwrap().to_string() != "POST"
     panic("POST roundtrip failed")
   end
+
   if Method.from_string("DELETE").unwrap().to_string() != "DELETE"
     panic("DELETE roundtrip failed")
   end
