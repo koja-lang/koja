@@ -1,0 +1,124 @@
+struct OptionTest
+  @test "unwrap returns value from Some"
+  fn test_unwrap -> Result<Bool, String>
+    x = Option.Some(42)
+
+    unless x.unwrap() == 42
+      return Result.Err("expected 42")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "or returns value from Some"
+  fn test_or_some -> Result<Bool, String>
+    x = Option.Some(42)
+
+    unless x.or(0) == 42
+      return Result.Err("expected 42")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "or returns default from None"
+  fn test_or_none -> Result<Bool, String>
+    y: Option<Int> = Option.None
+
+    unless y.or(99) == 99
+      return Result.Err("expected 99")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "some? and none? predicates"
+  fn test_predicates -> Result<Bool, String>
+    x = Option.Some(42)
+    y: Option<Int> = Option.None
+
+    unless x.some?()
+      return Result.Err("Some should be some?")
+    end
+
+    if x.none?()
+      return Result.Err("Some should not be none?")
+    end
+
+    if y.some?()
+      return Result.Err("None should not be some?")
+    end
+
+    unless y.none?()
+      return Result.Err("None should be none?")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "unwrap on string Some"
+  fn test_unwrap_string -> Result<Bool, String>
+    s = Option.Some("hello")
+
+    unless s.unwrap() == "hello"
+      return Result.Err("expected hello")
+    end
+
+    unless s.or("default") == "hello"
+      return Result.Err("expected hello from or")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "map transforms Some value"
+  fn test_map_some -> Result<Bool, String>
+    x = Option.Some(42)
+    mapped =
+      x.map(fn (v: Int) -> Int v * 10 end)
+
+    unless mapped.unwrap() == 420
+      return Result.Err("expected 420")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "map returns None for None"
+  fn test_map_none -> Result<Bool, String>
+    y: Option<Int> = Option.None
+    none_mapped =
+      y.map(fn (v: Int) -> Int v * 10 end)
+
+    unless none_mapped.or(-1) == -1
+      return Result.Err("expected -1")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "then chains Some values"
+  fn test_then_some -> Result<Bool, String>
+    chained =
+      Option.Some(10).then(fn (v: Int) -> Option<Int> Option.Some(v + 5) end)
+
+    unless chained.unwrap() == 15
+      return Result.Err("expected 15")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "then returns None for None"
+  fn test_then_none -> Result<Bool, String>
+    y: Option<Int> = Option.None
+    none_chained =
+      y.then(fn (v: Int) -> Option<Int> Option.Some(v + 5) end)
+
+    unless none_chained.or(-1) == -1
+      return Result.Err("expected -1")
+    end
+
+    Result.Ok(true)
+  end
+end

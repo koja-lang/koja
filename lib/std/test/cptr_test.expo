@@ -1,0 +1,85 @@
+struct CPtrTest
+  @test "null pointer is null"
+  fn test_null -> Result<Bool, String>
+    null_ptr: CPtr<Int32> = CPtr.null()
+
+    unless null_ptr.null?()
+      return Result.Err("expected null")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "alloc, write, read"
+  fn test_alloc_write_read -> Result<Bool, String>
+    ptr: CPtr<Int32> = CPtr.alloc(3)
+
+    if ptr.null?()
+      return Result.Err("alloc returned null")
+    end
+
+    ptr.write(42)
+
+    unless ptr.read() == 42
+      return Result.Err("expected 42")
+    end
+
+    ptr.free()
+    Result.Ok(true)
+  end
+
+  @test "offset write and read"
+  fn test_offset -> Result<Bool, String>
+    ptr: CPtr<Int32> = CPtr.alloc(3)
+    ptr.write(42)
+    ptr.offset(1).write(100)
+    ptr.offset(2).write(200)
+
+    unless ptr.offset(1).read() == 100
+      return Result.Err("expected 100 at offset 1")
+    end
+
+    unless ptr.offset(2).read() == 200
+      return Result.Err("expected 200 at offset 2")
+    end
+
+    unless ptr.read() == 42
+      return Result.Err("first element should be unchanged")
+    end
+
+    ptr.free()
+    Result.Ok(true)
+  end
+
+  @test "overwrite and verify"
+  fn test_overwrite -> Result<Bool, String>
+    ptr: CPtr<Int32> = CPtr.alloc(1)
+    ptr.write(42)
+    ptr.write(99)
+
+    unless ptr.read() == 99
+      return Result.Err("expected 99 after overwrite")
+    end
+
+    ptr.free()
+    Result.Ok(true)
+  end
+
+  @test "UInt8 pointer"
+  fn test_uint8 -> Result<Bool, String>
+    byte_ptr: CPtr<UInt8> = CPtr.alloc(2)
+    byte_ptr.write(65)
+    byte_ptr.offset(1).write(0)
+
+    unless byte_ptr.read() == 65
+      return Result.Err("expected 65")
+    end
+
+    unless byte_ptr.offset(1).read() == 0
+      return Result.Err("expected 0")
+    end
+
+    byte_ptr.free()
+    Result.Ok(true)
+  end
+end

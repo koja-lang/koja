@@ -1,0 +1,72 @@
+struct SetTest
+  @test "new, insert, has?, length"
+  fn test_new_insert_has -> Result<Bool, String>
+    s: Set<Int> = Set.new()
+    s = s.insert(10)
+    s = s.insert(20)
+    s = s.insert(10)
+
+    unless s.length() == 2
+      return Result.Err("expected length 2, got #{s.length()}")
+    end
+
+    unless s.has?(10)
+      return Result.Err("expected has 10")
+    end
+
+    if s.has?(30)
+      return Result.Err("should not have 30")
+    end
+
+    if s.empty?()
+      return Result.Err("should not be empty")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "remove deletes element"
+  fn test_remove -> Result<Bool, String>
+    s: Set<Int> = Set.new()
+    s = s.insert(10)
+    s = s.insert(20)
+    s = s.remove(10)
+
+    unless s.length() == 1
+      return Result.Err("expected length 1 after remove")
+    end
+
+    if s.has?(10)
+      return Result.Err("10 should be removed")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "from list deduplicates"
+  fn test_from_list -> Result<Bool, String>
+    s: Set<Int> = [1, 2, 3, 2, 1]
+
+    unless s.length() == 3
+      return Result.Err("expected length 3, got #{s.length()}")
+    end
+
+    unless s.has?(1)
+      return Result.Err("expected has 1")
+    end
+
+    unless s.has?(2)
+      return Result.Err("expected has 2")
+    end
+
+    unless s.has?(3)
+      return Result.Err("expected has 3")
+    end
+
+    if s.has?(4)
+      return Result.Err("should not have 4")
+    end
+
+    Result.Ok(true)
+  end
+end

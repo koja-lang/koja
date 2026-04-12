@@ -4,8 +4,9 @@
 //! and `check`. No CLI command functions live here -- those are in [`crate::commands`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-use std::{env, fs, process};
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::{env, fs, mem, process};
 
 use expo_ast::ast::{Annotation, AnnotationValue, ImplMember, Item, Module, Severity};
 
@@ -401,14 +402,14 @@ pub fn check_project(config: &ProjectConfig, project_root: &Path, color: bool) -
 /// Inserts stdlib modules at the front of an existing graph's order.
 /// Used for single-file mode where the graph is built without stdlib.
 fn prepend_stdlib(graph: &mut ModuleGraph) {
-    let user_order = std::mem::take(&mut graph.order);
+    let user_order = mem::take(&mut graph.order);
     resolve::insert_stdlib(graph);
     graph.order.extend(user_order);
 }
 
-/// A discovered `@test` function: its fully qualified module name, function name,
-/// and human-readable description (from `@test "..."` or the function name itself).
+/// A discovered `@test` function inside a struct, called as `StructName.fn_name()`.
 struct TestCase {
+    struct_name: String,
     fn_name: String,
     description: String,
 }
@@ -447,7 +448,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
         harness_name.clone(),
         resolve::ResolvedModule {
             name: harness_name.clone(),
-            path: std::path::PathBuf::from("<test_harness>"),
+            path: PathBuf::from("<test_harness>"),
             source: harness_source,
             module: parse_result.module,
             errors: parse_result.errors,
@@ -477,28 +478,33 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     }
 }
 
-/// Walks the module graph and collects all functions annotated with `@test`.
-fn discover_tests(graph: &ModuleGraph, _project_name: &str) -> Vec<TestCase> {
+/// Walks the module graph and collects `@test`-annotated functions inside structs.
+/// Only scans modules belonging to the current project (by name prefix).
+fn discover_tests(graph: &ModuleGraph, project_name: &str) -> Vec<TestCase> {
     let mut tests = Vec::new();
+    let prefix = format!("{project_name}.");
 
     for name in &graph.order {
-        if name.starts_with("std.") {
+        if name != project_name && !name.starts_with(&prefix) {
             continue;
         }
 
         let rm = &graph.modules[name];
         for item in &rm.module.items {
-            if let Item::Function(func) = item
-                && let Some(ann) = func.annotations.iter().find(|a| a.name == "test")
-            {
-                let description = match &ann.value {
-                    Some(AnnotationValue::String(s)) => s.clone(),
-                    _ => func.name.clone(),
-                };
-                tests.push(TestCase {
-                    fn_name: func.name.clone(),
-                    description,
-                });
+            if let Item::Struct(s) = item {
+                for func in &s.functions {
+                    if let Some(ann) = func.annotations.iter().find(|a| a.name == "test") {
+                        let description = match &ann.value {
+                            Some(AnnotationValue::String(s)) => s.clone(),
+                            _ => func.name.clone(),
+                        };
+                        tests.push(TestCase {
+                            struct_name: s.name.clone(),
+                            fn_name: func.name.clone(),
+                            description,
+                        });
+                    }
+                }
             }
         }
     }
@@ -508,26 +514,41 @@ fn discover_tests(graph: &ModuleGraph, _project_name: &str) -> Vec<TestCase> {
 
 /// Generates the Expo source for a test harness module.
 ///
-/// Calls each `@test` function sequentially. Prints the test description
-/// before calling, and "ok" after it returns. If a test panics, the process
-/// aborts and the last printed description identifies the failing test.
+/// Each `@test` function must return `Result<Bool, String>`. The harness
+/// calls each test as `StructName.fn_name()`, matches on the result to
+/// track pass/fail counts, and continues running all tests even when some
+/// fail. A final non-zero exit (via panic) is triggered when any test failed.
 ///
 /// No imports are needed -- the gather-then-check pipeline makes all project
 /// types visible to every module automatically.
 fn generate_harness(tests: &[TestCase], _graph: &ModuleGraph) -> String {
     let total = tests.len();
     let mut body = String::new();
+    body.push_str("  passed = 0\n");
+    body.push_str("  failed = 0\n");
     body.push_str(&format!("  print(\"running {} tests\")\n", total));
 
     for test in tests {
         let escaped_desc = test.description.replace('\\', "\\\\").replace('"', "\\\"");
         body.push_str(&format!("  print(\"test {} ...\")\n", escaped_desc));
-        body.push_str(&format!("  {}()\n", test.fn_name));
-        body.push_str("  print(\"  ok\")\n");
+        body.push_str(&format!(
+            "  match {}.{}()\n",
+            test.struct_name, test.fn_name
+        ));
+        body.push_str("    Result.Ok(_) ->\n");
+        body.push_str("      passed = passed + 1\n");
+        body.push_str("      print(\"  ok\")\n");
+        body.push_str("    Result.Err(msg) ->\n");
+        body.push_str("      failed = failed + 1\n");
+        body.push_str("      print(\"  FAILED: \" <> msg)\n");
+        body.push_str("  end\n");
     }
 
     body.push_str("  print(\"\")\n");
-    body.push_str(&format!("  print(\"{} passed, 0 failed\")\n", total));
+    body.push_str("  print(\"#{passed} passed, #{failed} failed\")\n");
+    body.push_str("  if failed > 0\n");
+    body.push_str("    panic(\"#{failed} test(s) failed\")\n");
+    body.push_str("  end\n");
 
     let mut source = String::new();
     source.push_str("fn main\n");
@@ -549,6 +570,30 @@ pub struct BuildArgs {
 /// The runtime is always linked; others are available for `@link` resolution.
 const EMBEDDED_RUNTIME: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
 const EMBEDDED_CRYPTO: &[u8] = include_bytes!(env!("EXPO_CRYPTO_LIB_PATH"));
+
+/// Returns the macOS product version (e.g. "26.4") for use as MACOSX_DEPLOYMENT_TARGET.
+/// Cached so `sw_vers` is invoked at most once per process.
+#[cfg(target_os = "macos")]
+fn macos_version() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION.get_or_init(|| {
+        process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| {
+                let s = s.trim();
+                let parts: Vec<&str> = s.splitn(3, '.').collect();
+                if parts.len() >= 2 {
+                    format!("{}.{}", parts[0], parts[1])
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_else(|| "11.0".to_string())
+    })
+}
 
 /// Links an object file with the embedded runtime library to produce an executable.
 /// `link_libraries` contains library names from `@link` annotations (passed as `-l` flags).
@@ -575,32 +620,51 @@ fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries
         args.push(format!("-l{lib}"));
     }
 
-    let status = process::Command::new("cc").args(&args).status();
+    let mut cmd = process::Command::new("cc");
+    cmd.args(&args);
+    cmd.stderr(process::Stdio::piped());
+    if cfg!(target_os = "macos") {
+        cmd.env("MACOSX_DEPLOYMENT_TARGET", macos_version());
+    }
+    let result = cmd.output();
 
-    match status {
-        Ok(s) if s.success() => {
-            if cfg!(target_os = "macos") && !release {
-                let _ = process::Command::new("dsymutil")
-                    .arg(output)
-                    .stderr(process::Stdio::null())
-                    .status();
+    let cleanup = |tmp: &Path, obj: &str| {
+        let _ = fs::remove_dir_all(tmp);
+        let _ = fs::remove_file(obj);
+    };
+
+    match result {
+        Ok(output_result) => {
+            let stderr = String::from_utf8_lossy(&output_result.stderr);
+            for line in stderr.lines() {
+                if !line.contains("reexported library") {
+                    eprintln!("{line}");
+                }
             }
-            let _ = fs::remove_dir_all(&tmp_dir);
-            let _ = fs::remove_file(obj_path);
-            if !quiet {
-                println!("compiled: {output}");
+
+            if output_result.status.success() {
+                if cfg!(target_os = "macos") && !release {
+                    let _ = process::Command::new("dsymutil")
+                        .arg(output)
+                        .stderr(process::Stdio::null())
+                        .status();
+                }
+                cleanup(&tmp_dir, obj_path);
+                if !quiet {
+                    println!("compiled: {output}");
+                }
+            } else {
+                eprintln!(
+                    "linker failed with exit code: {}",
+                    output_result.status.code().unwrap_or(-1)
+                );
+                cleanup(&tmp_dir, obj_path);
+                process::exit(1);
             }
-        }
-        Ok(s) => {
-            eprintln!("linker failed with exit code: {}", s.code().unwrap_or(-1));
-            let _ = fs::remove_dir_all(&tmp_dir);
-            let _ = fs::remove_file(obj_path);
-            process::exit(1);
         }
         Err(e) => {
             eprintln!("failed to run linker: {e}");
-            let _ = fs::remove_dir_all(&tmp_dir);
-            let _ = fs::remove_file(obj_path);
+            cleanup(&tmp_dir, obj_path);
             process::exit(1);
         }
     }

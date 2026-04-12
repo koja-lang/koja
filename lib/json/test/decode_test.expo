@@ -1,121 +1,139 @@
-@test "decode null"
-fn test_decode_null
-  match Decoder.decode("null")
-    Result.Ok(val) ->
-      result = Encoder.encode(val)
+struct DecodeTest
+  @test "decode null"
+  fn test_decode_null -> Result<Bool, String>
+    match Decoder.decode("null")
+      Result.Ok(val) ->
+        result = Encoder.encode(val)
 
-      if result != "null"
-        panic("expected \"null\", got #{result}")
-      end
+        unless result == "null"
+          return Result.Err("expected \"null\", got #{result}")
+        end
 
-    Result.Err(msg) ->
-      panic("decode failed: #{msg}")
+      Result.Err(msg) ->
+        return Result.Err("decode failed: #{msg}")
+    end
+
+    Result.Ok(true)
   end
-end
 
-@test "decode true"
-fn test_decode_true
-  match Decoder.decode("true")
-    Result.Ok(val) ->
-      result = Encoder.encode(val)
+  @test "decode true"
+  fn test_decode_true -> Result<Bool, String>
+    match Decoder.decode("true")
+      Result.Ok(val) ->
+        result = Encoder.encode(val)
 
-      if result != "true"
-        panic("expected \"true\", got #{result}")
-      end
+        unless result == "true"
+          return Result.Err("expected \"true\", got #{result}")
+        end
 
-    Result.Err(msg) ->
-      panic("decode failed: #{msg}")
+      Result.Err(msg) ->
+        return Result.Err("decode failed: #{msg}")
+    end
+
+    Result.Ok(true)
   end
-end
 
-@test "decode integer"
-fn test_decode_integer
-  match Decoder.decode("42")
-    Result.Ok(val) ->
-      result = Encoder.encode(val)
+  @test "decode integer"
+  fn test_decode_integer -> Result<Bool, String>
+    match Decoder.decode("42")
+      Result.Ok(val) ->
+        result = Encoder.encode(val)
 
-      if result != "42"
-        panic("expected \"42\", got #{result}")
-      end
+        unless result == "42"
+          return Result.Err("expected \"42\", got #{result}")
+        end
 
-    Result.Err(msg) ->
-      panic("decode failed: #{msg}")
+      Result.Err(msg) ->
+        return Result.Err("decode failed: #{msg}")
+    end
+
+    Result.Ok(true)
   end
-end
 
-@test "decode string"
-fn test_decode_string
-  match Decoder.decode("\"hello\"")
-    Result.Ok(val) ->
-      result = Encoder.encode(val)
+  @test "decode string"
+  fn test_decode_string -> Result<Bool, String>
+    match Decoder.decode("\"hello\"")
+      Result.Ok(val) ->
+        result = Encoder.encode(val)
 
-      if result != "\"hello\""
-        panic("expected '\"hello\"', got #{result}")
-      end
+        unless result == "\"hello\""
+          return Result.Err("expected '\"hello\"', got #{result}")
+        end
 
-    Result.Err(msg) ->
-      panic("decode failed: #{msg}")
+      Result.Err(msg) ->
+        return Result.Err("decode failed: #{msg}")
+    end
+
+    Result.Ok(true)
   end
-end
 
-@test "decode empty array"
-fn test_decode_empty_array
-  match Decoder.decode("[]")
-    Result.Ok(val) ->
-      result = Encoder.encode(val)
+  @test "decode empty array"
+  fn test_decode_empty_array -> Result<Bool, String>
+    match Decoder.decode("[]")
+      Result.Ok(val) ->
+        result = Encoder.encode(val)
 
-      if result != "[]"
-        panic("expected \"[]\", got #{result}")
-      end
+        unless result == "[]"
+          return Result.Err("expected \"[]\", got #{result}")
+        end
 
-    Result.Err(msg) ->
-      panic("decode failed: #{msg}")
+      Result.Err(msg) ->
+        return Result.Err("decode failed: #{msg}")
+    end
+
+    Result.Ok(true)
   end
-end
 
-@test "decode array"
-fn test_decode_array
-  match Decoder.decode("[1, 2, 3]")
-    Result.Ok(val) ->
-      result = Encoder.encode(val)
+  @test "decode array"
+  fn test_decode_array -> Result<Bool, String>
+    match Decoder.decode("[1, 2, 3]")
+      Result.Ok(val) ->
+        result = Encoder.encode(val)
 
-      if result != "[1,2,3]"
-        panic("expected \"[1,2,3]\", got #{result}")
-      end
+        unless result == "[1,2,3]"
+          return Result.Err("expected \"[1,2,3]\", got #{result}")
+        end
 
-    Result.Err(msg) ->
-      panic("decode failed: #{msg}")
+      Result.Err(msg) ->
+        return Result.Err("decode failed: #{msg}")
+    end
+
+    Result.Ok(true)
   end
-end
 
-@test "decode object"
-fn test_decode_object
-  match Decoder.decode("{\"key\": \"value\"}")
-    Result.Ok(val) ->
-      result = Encoder.encode(val)
+  @test "decode object"
+  fn test_decode_object -> Result<Bool, String>
+    match Decoder.decode("{\"key\": \"value\"}")
+      Result.Ok(val) ->
+        result = Encoder.encode(val)
 
-      if result != "{\"key\":\"value\"}"
-        panic("expected '{\"key\":\"value\"}', got #{result}")
-      end
+        unless result == "{\"key\":\"value\"}"
+          return Result.Err("expected '{\"key\":\"value\"}', got #{result}")
+        end
 
-    Result.Err(msg) ->
-      panic("decode failed: #{msg}")
+      Result.Err(msg) ->
+        return Result.Err("decode failed: #{msg}")
+    end
+
+    Result.Ok(true)
   end
-end
 
-@test "round trip object"
-fn test_round_trip
-  input = "{\"name\":\"expo\",\"version\":\"0.1.0\",\"tags\":[1,2,3]}"
+  @test "round trip object"
+  fn test_round_trip -> Result<Bool, String>
+    input = "{\"name\":\"expo\",\"version\":\"0.1.0\",\"tags\":[1,2,3]}"
 
-  match Decoder.decode(input)
-    Result.Ok(val) ->
-      output = Encoder.encode(val)
+    match Decoder.decode(input)
+      Result.Ok(val) ->
+        output = Encoder.encode(val)
 
-      if output != input
-        panic("round trip failed: #{output}")
-      end
+        unless output == input
+          return Result.Err("round trip failed: #{output}")
+        end
 
-    Result.Err(msg) ->
-      panic("decode failed: #{msg}")
+      Result.Err(msg) ->
+        return Result.Err("decode failed: #{msg}")
+    end
+
+    Result.Ok(true)
   end
 end

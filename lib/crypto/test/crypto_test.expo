@@ -1,0 +1,183 @@
+struct SHA1Test
+  @test "SHA1 one-shot digest"
+  fn test_digest -> Result<Bool, String>
+    d = SHA1.digest("hello".to_binary())
+
+    unless d.byte_size() == 20
+      return Result.Err("expected 20 bytes, got #{d.byte_size()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "SHA1 streaming matches one-shot"
+  fn test_streaming -> Result<Bool, String>
+    d1 = SHA1.digest("hello".to_binary())
+    ctx = SHA1.new()
+    ctx = ctx.update("hel".to_binary())
+    ctx = ctx.update("lo".to_binary())
+    d2 = ctx.finalize()
+
+    unless d1.byte_size() == d2.byte_size()
+      return Result.Err("size mismatch")
+    end
+
+    unless d1.ptr().read() == d2.ptr().read()
+      return Result.Err("first byte mismatch")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "SHA1 empty input"
+  fn test_empty -> Result<Bool, String>
+    d = SHA1.digest("".to_binary())
+
+    unless d.byte_size() == 20
+      return Result.Err("expected 20 bytes for empty input")
+    end
+
+    Result.Ok(true)
+  end
+end
+
+struct SHA256Test
+  @test "SHA256 one-shot digest"
+  fn test_digest -> Result<Bool, String>
+    d = SHA256.digest("hello".to_binary())
+
+    unless d.byte_size() == 32
+      return Result.Err("expected 32 bytes, got #{d.byte_size()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "SHA256 streaming matches one-shot"
+  fn test_streaming -> Result<Bool, String>
+    d1 = SHA256.digest("hello".to_binary())
+    ctx = SHA256.new()
+    ctx = ctx.update("hel".to_binary())
+    ctx = ctx.update("lo".to_binary())
+    d2 = ctx.finalize()
+
+    unless d1.ptr().read() == d2.ptr().read()
+      return Result.Err("first byte mismatch")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "SHA256 empty input"
+  fn test_empty -> Result<Bool, String>
+    d = SHA256.digest("".to_binary())
+
+    unless d.byte_size() == 32
+      return Result.Err("expected 32 bytes for empty input")
+    end
+
+    Result.Ok(true)
+  end
+end
+
+struct SHA384Test
+  @test "SHA384 one-shot digest"
+  fn test_digest -> Result<Bool, String>
+    d = SHA384.digest("hello".to_binary())
+
+    unless d.byte_size() == 48
+      return Result.Err("expected 48 bytes, got #{d.byte_size()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "SHA384 streaming matches one-shot"
+  fn test_streaming -> Result<Bool, String>
+    d1 = SHA384.digest("hello".to_binary())
+    ctx = SHA384.new()
+    ctx = ctx.update("hel".to_binary())
+    ctx = ctx.update("lo".to_binary())
+    d2 = ctx.finalize()
+
+    unless d1.ptr().read() == d2.ptr().read()
+      return Result.Err("first byte mismatch")
+    end
+
+    Result.Ok(true)
+  end
+end
+
+struct SHA512Test
+  @test "SHA512 one-shot digest"
+  fn test_digest -> Result<Bool, String>
+    d = SHA512.digest("hello".to_binary())
+
+    unless d.byte_size() == 64
+      return Result.Err("expected 64 bytes, got #{d.byte_size()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "SHA512 streaming matches one-shot"
+  fn test_streaming -> Result<Bool, String>
+    d1 = SHA512.digest("hello".to_binary())
+    ctx = SHA512.new()
+    ctx = ctx.update("hel".to_binary())
+    ctx = ctx.update("lo".to_binary())
+    d2 = ctx.finalize()
+
+    unless d1.ptr().read() == d2.ptr().read()
+      return Result.Err("first byte mismatch")
+    end
+
+    Result.Ok(true)
+  end
+end
+
+struct HMACTest
+  @test "HMAC-SHA1 produces 20 bytes"
+  fn test_hmac_sha1 -> Result<Bool, String>
+    mac = HMAC.sha1("secret".to_binary(), "hello".to_binary())
+
+    unless mac.byte_size() == 20
+      return Result.Err("expected 20 bytes, got #{mac.byte_size()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "HMAC-SHA256 produces 32 bytes"
+  fn test_hmac_sha256 -> Result<Bool, String>
+    mac = HMAC.sha256("secret".to_binary(), "hello".to_binary())
+
+    unless mac.byte_size() == 32
+      return Result.Err("expected 32 bytes, got #{mac.byte_size()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "HMAC-SHA384 produces 48 bytes"
+  fn test_hmac_sha384 -> Result<Bool, String>
+    mac = HMAC.sha384("secret".to_binary(), "hello".to_binary())
+
+    unless mac.byte_size() == 48
+      return Result.Err("expected 48 bytes, got #{mac.byte_size()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "HMAC-SHA512 produces 64 bytes"
+  fn test_hmac_sha512 -> Result<Bool, String>
+    mac = HMAC.sha512("secret".to_binary(), "hello".to_binary())
+
+    unless mac.byte_size() == 64
+      return Result.Err("expected 64 bytes, got #{mac.byte_size()}")
+    end
+
+    Result.Ok(true)
+  end
+end

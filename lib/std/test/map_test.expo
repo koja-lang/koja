@@ -1,0 +1,128 @@
+struct MapTest
+  @test "new, put, has?, length"
+  fn test_new_put_has -> Result<Bool, String>
+    m: Map<String, Int> = Map.new()
+    m = m.put("hello", 10)
+    m = m.put("world", 20)
+    m = m.put("hello", 30)
+
+    unless m.length() == 2
+      return Result.Err("expected length 2, got #{m.length()}")
+    end
+
+    unless m.has?("hello")
+      return Result.Err("expected has hello")
+    end
+
+    if m.has?("missing")
+      return Result.Err("should not have missing")
+    end
+
+    if m.empty?()
+      return Result.Err("should not be empty")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "remove deletes key"
+  fn test_remove -> Result<Bool, String>
+    m: Map<String, Int> = Map.new()
+    m = m.put("hello", 10)
+    m = m.put("world", 20)
+    m = m.remove("hello")
+
+    unless m.length() == 1
+      return Result.Err("expected length 1 after remove")
+    end
+
+    if m.has?("hello")
+      return Result.Err("hello should be removed")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "literal syntax"
+  fn test_literal -> Result<Bool, String>
+    m: Map<String, Int> = ["hello": 10, "world": 20]
+
+    unless m.length() == 2
+      return Result.Err("expected length 2")
+    end
+
+    unless m.has?("hello")
+      return Result.Err("expected has hello")
+    end
+
+    unless m.has?("world")
+      return Result.Err("expected has world")
+    end
+
+    if m.has?("missing")
+      return Result.Err("should not have missing")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "empty literal"
+  fn test_empty_literal -> Result<Bool, String>
+    empty: Map<String, Int> = [:]
+
+    unless empty.length() == 0
+      return Result.Err("expected length 0")
+    end
+
+    unless empty.empty?()
+      return Result.Err("should be empty")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "int keys"
+  fn test_int_keys -> Result<Bool, String>
+    m: Map<Int, String> = [1: "one", 2: "two", 3: "three"]
+
+    unless m.length() == 3
+      return Result.Err("expected length 3")
+    end
+
+    unless m.has?(1)
+      return Result.Err("expected has 1")
+    end
+
+    if m.has?(4)
+      return Result.Err("should not have 4")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "resize preserves entries"
+  fn test_resize -> Result<Bool, String>
+    m: Map<Int, String> = [1: "one", 2: "two", 3: "three"]
+    m = m.put(4, "four")
+    m = m.put(5, "five")
+    m = m.put(6, "six")
+    m = m.put(7, "seven")
+    m = m.put(8, "eight")
+    m = m.put(9, "nine")
+    m = m.put(10, "ten")
+
+    unless m.length() == 10
+      return Result.Err("expected length 10 after resize, got #{m.length()}")
+    end
+
+    unless m.has?(1)
+      return Result.Err("lost key 1 after resize")
+    end
+
+    unless m.has?(10)
+      return Result.Err("missing key 10 after resize")
+    end
+
+    Result.Ok(true)
+  end
+end

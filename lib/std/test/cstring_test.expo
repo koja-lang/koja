@@ -1,0 +1,83 @@
+struct CStringTest
+  @test "basic round-trip"
+  fn test_round_trip -> Result<Bool, String>
+    s = "hello world"
+    cs = s.to_cstring()
+
+    unless cs.len == 11
+      return Result.Err("expected len 11, got #{cs.len}")
+    end
+
+    back = cs.to_string()
+
+    unless back == s
+      return Result.Err("round-trip failed: #{back}")
+    end
+
+    cs.free()
+    Result.Ok(true)
+  end
+
+  @test "empty string"
+  fn test_empty -> Result<Bool, String>
+    cs = "".to_cstring()
+
+    unless cs.len == 0
+      return Result.Err("expected len 0")
+    end
+
+    unless cs.to_string() == ""
+      return Result.Err("expected empty string")
+    end
+
+    cs.free()
+    Result.Ok(true)
+  end
+
+  @test "string with special characters"
+  fn test_special_chars -> Result<Bool, String>
+    special = "hello\tworld\n"
+    cs = special.to_cstring()
+
+    unless cs.len == 12
+      return Result.Err("expected len 12, got #{cs.len}")
+    end
+
+    unless cs.to_string() == special
+      return Result.Err("round-trip failed")
+    end
+
+    cs.free()
+    Result.Ok(true)
+  end
+
+  @test "longer string"
+  fn test_long_string -> Result<Bool, String>
+    long = "the quick brown fox jumps over the lazy dog"
+    cs = long.to_cstring()
+
+    unless cs.len == 43
+      return Result.Err("expected len 43, got #{cs.len}")
+    end
+
+    unless cs.to_string() == long
+      return Result.Err("round-trip failed")
+    end
+
+    cs.free()
+    Result.Ok(true)
+  end
+
+  @test "original string unaffected after conversion"
+  fn test_original_unaffected -> Result<Bool, String>
+    original = "unchanged"
+    cs = original.to_cstring()
+
+    unless original == "unchanged"
+      return Result.Err("original was modified")
+    end
+
+    cs.free()
+    Result.Ok(true)
+  end
+end

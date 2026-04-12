@@ -1,0 +1,348 @@
+struct ListTest
+  @test "new, append, get, length"
+  fn test_new_append_get -> Result<Bool, String>
+    list: List<Int> = List.new()
+    list = list.append(10)
+    list = list.append(20)
+    list = list.append(30)
+
+    unless list.length() == 3
+      return Result.Err("expected length 3, got #{list.length()}")
+    end
+
+    unless list.get(0).unwrap() == 10
+      return Result.Err("expected 10 at index 0")
+    end
+
+    unless list.get(1).unwrap() == 20
+      return Result.Err("expected 20 at index 1")
+    end
+
+    unless list.get(2).unwrap() == 30
+      return Result.Err("expected 30 at index 2")
+    end
+
+    if list.empty?()
+      return Result.Err("should not be empty")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "literal syntax"
+  fn test_literal -> Result<Bool, String>
+    nums = [10, 20, 30]
+
+    unless nums.length() == 3
+      return Result.Err("expected length 3")
+    end
+
+    unless nums.get(0).unwrap() == 10
+      return Result.Err("expected 10 at 0")
+    end
+
+    unless nums.get(2).unwrap() == 30
+      return Result.Err("expected 30 at 2")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "empty literal"
+  fn test_empty_literal -> Result<Bool, String>
+    empty: List<Int> = []
+
+    unless empty.length() == 0
+      return Result.Err("expected length 0")
+    end
+
+    unless empty.empty?()
+      return Result.Err("should be empty")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "string list"
+  fn test_string_list -> Result<Bool, String>
+    words = ["hello", "world"]
+
+    unless words.get(0).unwrap() == "hello"
+      return Result.Err("expected hello")
+    end
+
+    unless words.get(1).unwrap() == "world"
+      return Result.Err("expected world")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "single element literal"
+  fn test_single_element -> Result<Bool, String>
+    single = [42]
+
+    unless single.length() == 1
+      return Result.Err("expected length 1")
+    end
+
+    unless single.get(0).unwrap() == 42
+      return Result.Err("expected 42")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "first returns first element"
+  fn test_first -> Result<Bool, String>
+    list = [10, 20, 30, 40, 50]
+
+    unless list.first().unwrap() == 10
+      return Result.Err("expected first 10")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "pop removes last element"
+  fn test_pop -> Result<Bool, String>
+    list = [10, 20, 30, 40, 50]
+    pair = list.pop()
+
+    unless pair.first.unwrap() == 50
+      return Result.Err("expected popped value 50")
+    end
+
+    unless pair.second.length() == 4
+      return Result.Err("expected remaining length 4")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "pop until empty"
+  fn test_pop_empty -> Result<Bool, String>
+    rest = [1, 2, 3]
+    rest = rest.pop().second
+    rest = rest.pop().second
+    rest = rest.pop().second
+    empty_pair = rest.pop()
+
+    if empty_pair.first.some?()
+      return Result.Err("expected None from empty pop")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "replace_at in bounds"
+  fn test_replace_at -> Result<Bool, String>
+    updated = [1, 2, 3].replace_at(1, 99)
+
+    unless updated.get(1).unwrap() == 99
+      return Result.Err("expected 99 at index 1")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "replace_at out of bounds is no-op"
+  fn test_replace_at_oob -> Result<Bool, String>
+    same = [1, 2, 3].replace_at(10, 99)
+
+    unless same.length() == 3
+      return Result.Err("expected length 3")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "slice extracts sublist"
+  fn test_slice -> Result<Bool, String>
+    sliced = [10, 20, 30, 40, 50].slice(1, 3)
+
+    unless sliced.length() == 3
+      return Result.Err("expected length 3, got #{sliced.length()}")
+    end
+
+    unless sliced.first().unwrap() == 20
+      return Result.Err("expected first 20")
+    end
+
+    unless sliced.last().unwrap() == 40
+      return Result.Err("expected last 40")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "slice clamps to bounds"
+  fn test_slice_clamped -> Result<Bool, String>
+    clamped = [1, 2, 3].slice(1, 100)
+
+    unless clamped.length() == 2
+      return Result.Err("expected length 2, got #{clamped.length()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "concat joins two lists"
+  fn test_concat -> Result<Bool, String>
+    combined = [1, 2].concat([3, 4, 5])
+
+    unless combined.length() == 5
+      return Result.Err("expected length 5")
+    end
+
+    unless combined.last().unwrap() == 5
+      return Result.Err("expected last 5")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "reverse reverses order"
+  fn test_reverse -> Result<Bool, String>
+    rev = [1, 2, 3].reverse()
+
+    unless rev.first().unwrap() == 3
+      return Result.Err("expected first 3")
+    end
+
+    unless rev.last().unwrap() == 1
+      return Result.Err("expected last 1")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "find returns matching element"
+  fn test_find -> Result<Bool, String>
+    found =
+      [10, 20, 30].find(fn (x: Int) -> Bool x > 15 end)
+
+    unless found.unwrap() == 20
+      return Result.Err("expected 20")
+    end
+
+    not_found =
+      [10, 20, 30].find(fn (x: Int) -> Bool x > 100 end)
+
+    if not_found.some?()
+      return Result.Err("expected None")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "reduce accumulates value"
+  fn test_reduce -> Result<Bool, String>
+    sum =
+      [1, 2, 3, 4].reduce(0, fn (acc: Int, x: Int) -> Int acc + x end)
+
+    unless sum == 10
+      return Result.Err("expected sum 10, got #{sum}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "map transforms elements"
+  fn test_map -> Result<Bool, String>
+    nums = [1, 2, 3, 4, 5]
+    doubled =
+      nums.map(fn (n: Int) -> Int n * 2 end)
+
+    unless doubled.length() == 5
+      return Result.Err("expected length 5")
+    end
+
+    unless doubled.get(0).unwrap() == 2
+      return Result.Err("expected 2 at 0")
+    end
+
+    unless doubled.get(4).unwrap() == 10
+      return Result.Err("expected 10 at 4")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "map changes element type"
+  fn test_map_type_change -> Result<Bool, String>
+    strings =
+      [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
+
+    unless strings.get(0).unwrap() == "item_1"
+      return Result.Err("expected item_1")
+    end
+
+    unless strings.get(2).unwrap() == "item_3"
+      return Result.Err("expected item_3")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "filter selects matching elements"
+  fn test_filter -> Result<Bool, String>
+    big =
+      [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n > 2 end)
+
+    unless big.length() == 3
+      return Result.Err("expected length 3, got #{big.length()}")
+    end
+
+    unless big.first().unwrap() == 3
+      return Result.Err("expected first 3")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "any? and all? predicates"
+  fn test_any_all -> Result<Bool, String>
+    nums = [1, 2, 3, 4, 5]
+
+    unless nums.any?(fn (n: Int) -> Bool n > 4 end)
+      return Result.Err("any? should find 5")
+    end
+
+    unless nums.all?(fn (n: Int) -> Bool n > 0 end)
+      return Result.Err("all? should pass for positive")
+    end
+
+    if nums.all?(fn (n: Int) -> Bool n > 3 end)
+      return Result.Err("all? should fail for > 3")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "filter then map chaining"
+  fn test_chaining -> Result<Bool, String>
+    chained =
+      [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n > 2 end).map(
+        fn (n: Int) -> Int n * 10 end,
+      )
+
+    unless chained.length() == 3
+      return Result.Err("expected length 3")
+    end
+
+    unless chained.get(0).unwrap() == 30
+      return Result.Err("expected 30 at 0")
+    end
+
+    unless chained.get(1).unwrap() == 40
+      return Result.Err("expected 40 at 1")
+    end
+
+    unless chained.get(2).unwrap() == 50
+      return Result.Err("expected 50 at 2")
+    end
+
+    Result.Ok(true)
+  end
+end

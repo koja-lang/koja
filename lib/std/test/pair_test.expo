@@ -1,0 +1,31 @@
+struct PairTest
+  @test "Pair stores and retrieves int fields"
+  fn test_pair_int -> Result<Bool, String>
+    p = Pair{first: 10, second: 20}
+
+    unless p.first == 10
+      return Result.Err("expected first 10")
+    end
+
+    unless p.second == 20
+      return Result.Err("expected second 20")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Pair stores mixed types"
+  fn test_pair_mixed -> Result<Bool, String>
+    p = Pair{first: "hello", second: true}
+
+    unless p.first == "hello"
+      return Result.Err("expected first hello")
+    end
+
+    unless p.second == true
+      return Result.Err("expected second true")
+    end
+
+    Result.Ok(true)
+  end
+end

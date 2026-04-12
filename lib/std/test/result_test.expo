@@ -1,0 +1,110 @@
+struct ResultTest
+  @test "unwrap returns Ok value"
+  fn test_unwrap -> Result<Bool, String>
+    ok: Result<Int, Int> = Result.Ok(42)
+
+    unless ok.unwrap() == 42
+      return Result.Err("expected 42")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "or returns Ok value"
+  fn test_or_ok -> Result<Bool, String>
+    ok: Result<Int, Int> = Result.Ok(42)
+
+    unless ok.or(0) == 42
+      return Result.Err("expected 42")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "or returns default for Err"
+  fn test_or_err -> Result<Bool, String>
+    err: Result<Int, Int> = Result.Err(1)
+
+    unless err.or(99) == 99
+      return Result.Err("expected 99")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "ok? and err? predicates"
+  fn test_predicates -> Result<Bool, String>
+    ok: Result<Int, Int> = Result.Ok(42)
+    err: Result<Int, Int> = Result.Err(1)
+
+    unless ok.ok?()
+      return Result.Err("Ok should be ok?")
+    end
+
+    if ok.err?()
+      return Result.Err("Ok should not be err?")
+    end
+
+    if err.ok?()
+      return Result.Err("Err should not be ok?")
+    end
+
+    unless err.err?()
+      return Result.Err("Err should be err?")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "map transforms Ok value"
+  fn test_map_ok -> Result<Bool, String>
+    ok: Result<Int, Int> = Result.Ok(42)
+    mapped =
+      ok.map(fn (v: Int) -> Int v + 8 end)
+
+    unless mapped.unwrap() == 50
+      return Result.Err("expected 50")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "map returns Err unchanged"
+  fn test_map_err -> Result<Bool, String>
+    err: Result<Int, Int> = Result.Err(1)
+    err_mapped =
+      err.map(fn (v: Int) -> Int v + 8 end)
+
+    unless err_mapped.or(-1) == -1
+      return Result.Err("expected -1")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "then chains Ok values"
+  fn test_then_ok -> Result<Bool, String>
+    ok: Result<Int, Int> = Result.Ok(42)
+    chained =
+      ok.then(fn (v: Int) -> Result<Int, Int> Result.Ok(v * 3) end)
+
+    unless chained.unwrap() == 126
+      return Result.Err("expected 126")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "then returns Err unchanged"
+  fn test_then_err -> Result<Bool, String>
+    err: Result<Int, Int> = Result.Err(1)
+    err_chained =
+      err.then(fn (v: Int) -> Result<Int, Int> Result.Ok(v * 3) end)
+
+    unless err_chained.or(-1) == -1
+      return Result.Err("expected -1")
+    end
+
+    Result.Ok(true)
+  end
+end
