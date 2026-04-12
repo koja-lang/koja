@@ -11,7 +11,7 @@
 //! scheduler. When the reactor detects readiness, the process resumes
 //! and retries the syscall.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::fd::BorrowedFd;
 use std::sync::atomic::Ordering;
@@ -22,7 +22,8 @@ use polling::{Event, Events, PollMode, Poller};
 
 use crate::ffi::expo_context_switch;
 use crate::scheduler::{
-    CURRENT_PID, ProcessState, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP,
+    CURRENT_PID, IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE, ProcessState, SCHED, SCHED_SP,
+    SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
 };
 
 /// Whether the reactor should wake for readable or writable readiness.
@@ -32,14 +33,24 @@ pub enum Interest {
     Writable,
 }
 
+/// Key offset for watched fds so they don't collide with io_block keys
+/// (which use the PID, starting at 1).
+const WATCH_KEY_OFFSET: usize = 1_000_000;
+
 /// Global I/O reactor. Initialized once at startup.
 ///
 /// The `Poller` is thread-safe internally. The `registered` set tracks
 /// which fds are currently in the poller so we know whether to `add` or
 /// `modify` on re-registration.
+///
+/// `watched` maps event keys (fd + WATCH_KEY_OFFSET) to (owner_pid, fd)
+/// for fds registered via `Fd.watch`. When the reactor fires an event
+/// for a watched key, it sends an `IOReady` message instead of marking
+/// the process Runnable.
 struct Reactor {
     poller: Poller,
     registered: Mutex<HashSet<i32>>,
+    watched: Mutex<HashMap<usize, (i64, i32)>>,
 }
 
 /// Singleton reactor instance, created in [`init`].
@@ -51,20 +62,14 @@ pub fn init() {
     REACTOR.get_or_init(|| Reactor {
         poller: Poller::new().expect("failed to create I/O poller"),
         registered: Mutex::new(HashSet::new()),
+        watched: Mutex::new(HashMap::new()),
     });
 }
 
-/// Registers a file descriptor for readiness notification.
-///
-/// Uses oneshot mode: after one event fires the fd stops generating
-/// events until re-registered. The `key` is the process PID so the
-/// reactor thread knows which process to wake.
-fn register(fd: i32, interest: Interest, pid: i64) {
+/// Adds or modifies a file descriptor in the poller with oneshot mode.
+/// Handles the add-vs-modify distinction using the `registered` set.
+fn poller_add_or_modify(fd: i32, event: Event) {
     let reactor = REACTOR.get().expect("reactor not initialized");
-    let event = match interest {
-        Interest::Readable => Event::readable(pid as usize),
-        Interest::Writable => Event::writable(pid as usize),
-    };
     let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
     let mut set = reactor.registered.lock().unwrap();
 
@@ -80,6 +85,19 @@ fn register(fd: i32, interest: Interest, pid: i64) {
         }
         set.insert(fd);
     }
+}
+
+/// Registers a file descriptor for readiness notification.
+///
+/// Uses oneshot mode: after one event fires the fd stops generating
+/// events until re-registered. The `key` is the process PID so the
+/// reactor thread knows which process to wake.
+fn register(fd: i32, interest: Interest, pid: i64) {
+    let event = match interest {
+        Interest::Readable => Event::readable(pid as usize),
+        Interest::Writable => Event::writable(pid as usize),
+    };
+    poller_add_or_modify(fd, event);
 }
 
 /// Removes a file descriptor from the reactor.
@@ -125,17 +143,75 @@ pub fn reactor_loop() {
             continue;
         }
 
-        let mut guard = SCHED.lock().unwrap();
-        for ev in events.iter() {
-            let pid = ev.key as i64;
-            let idx = (pid - 1) as usize;
-            if idx < guard.processes.len() && guard.processes[idx].state == ProcessState::WaitingIo
-            {
-                guard.processes[idx].state = ProcessState::Runnable;
+        let mut io_events: Vec<(i64, u8, i64)> = Vec::new();
+
+        {
+            let watched_guard = reactor.watched.lock().unwrap();
+            let mut sched_guard = SCHED.lock().unwrap();
+
+            for ev in events.iter() {
+                if let Some(&(owner_pid, fd)) = watched_guard.get(&ev.key) {
+                    let variant: u8 = if ev.readable {
+                        IO_READY_READ
+                    } else if ev.writable {
+                        IO_READY_WRITE
+                    } else {
+                        IO_READY_ERROR
+                    };
+                    io_events.push((owner_pid, variant, fd as i64));
+                } else {
+                    let pid = ev.key as i64;
+                    let idx = (pid - 1) as usize;
+                    if idx < sched_guard.processes.len()
+                        && sched_guard.processes[idx].state == ProcessState::WaitingIo
+                    {
+                        sched_guard.processes[idx].state = ProcessState::Runnable;
+                    }
+                }
             }
         }
-        drop(guard);
+
+        for (pid, variant, fd) in io_events {
+            send_io_event(pid, variant, fd);
+        }
+
         WORK_AVAILABLE.notify_all();
+    }
+}
+
+/// Registers a file descriptor for readiness monitoring. Instead of
+/// blocking the process, readiness events are delivered as `IOReady`
+/// messages to the process's mailbox (tag=2).
+///
+/// `interest`: 0 = Read, 1 = Write.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_rt_watch_fd(fd: i32, interest: i64) {
+    let reactor = REACTOR.get().expect("reactor not initialized");
+    let pid = CURRENT_PID.with(|c| c.get());
+    let key = WATCH_KEY_OFFSET + fd as usize;
+
+    let event = if interest == 1 {
+        Event::writable(key)
+    } else {
+        Event::readable(key)
+    };
+
+    poller_add_or_modify(fd, event);
+    reactor.watched.lock().unwrap().insert(key, (pid, fd));
+}
+
+/// Removes a file descriptor from I/O readiness monitoring.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_rt_unwatch_fd(fd: i32) {
+    let reactor = REACTOR.get().expect("reactor not initialized");
+    let key = WATCH_KEY_OFFSET + fd as usize;
+
+    reactor.watched.lock().unwrap().remove(&key);
+
+    let mut reg = reactor.registered.lock().unwrap();
+    if reg.remove(&fd) {
+        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+        let _ = reactor.poller.delete(borrowed);
     }
 }
 

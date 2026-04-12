@@ -361,6 +361,18 @@ Dual entry mode is implemented. `expo.toml` `entry` field determines behavior by
 - Backend: LLVM JIT (via inkwell `ExecutionEngine`) initially; Cranelift JIT long-term for faster response
 - **Done when**: `expo shell -S .` loads a multi-module project and you can call functions, inspect results, and read docs interactively
 
+### CLI query and guide system
+
+Machine-readable access to language knowledge, serving humans, AI agents, and tooling with one investment.
+
+- `expo query type <Type>` -- print a type's signature, fields/variants, functions, and `@doc` strings. Data comes from the type checker (always correct). Output is plain text, structured for both human reading and AI consumption.
+- `expo query module <package>` -- list all types and public functions in a package.
+- `expo query protocol <Protocol>` -- print protocol methods and known implementors.
+- `expo guide <topic>` -- print a prose guide on a language concept. Guides are markdown files shipped with the compiler (embedded like stdlib sources), versioned with the language. Topics: `ownership`, `concurrency`, `ffi`, `protocols`, `testing`, etc.
+- Each `expo doc` HTML page corresponds to one type (already the plan). `expo query` is the CLI equivalent -- same data, text output instead of HTML.
+- Long-term, AI tooling rules reduce to "use `expo query` and `expo guide` to look up types, APIs, and language concepts." The CLI is the single source of truth.
+- **Done when**: `expo query type TCPSocket` prints the full public API with doc strings, and `expo guide ownership` prints a readable explanation of the ownership model
+
 ---
 
 ## Phase 6: Self-hosting + Validation
@@ -581,7 +593,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, ~~`random`~~, package manager, ~~C FFI Phase 1-2~~, C FFI Phase 3, stdlib packages (`net`, `http`, ~~`json`~~, ~~`crypto`~~), first-party packages |
 | 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                                          |
-| 5     | Documentation (doctests, search), LSP (~~autocomplete~~, ~~signature help~~, inlay hints), REPL                                                                                                                  |
+| 5     | Documentation (doctests, search), LSP (~~autocomplete~~, ~~signature help~~, inlay hints), REPL, CLI query/guide system                                                                                           |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                                                      |
 | 6B    | auth-manager-expo runs for real, second project                                                                                                                                                                 |
 

@@ -102,6 +102,15 @@ end
 
 impl Ref<M, R>
   @doc """
+  Returns a typed handle to the current process. Must be called from within
+  a running process (inside `start`, `handle`, or `handle_signal`).
+  The type parameters are inferred from the annotation on the binding.
+  """
+  fn self_ref -> Ref<M, R>
+    panic("intrinsic")
+  end
+
+  @doc """
   Sends a message to the process without waiting for a reply (fire and forget).
   The handler receives `from = Option.None`.
   """
@@ -139,6 +148,16 @@ impl Ref<M, R>
   Returns `true` if the process is still running.
   """
   fn alive?(self) -> Bool
+    panic("intrinsic")
+  end
+
+  @doc """
+  Schedules a message to be delivered to the process after `delay_ms`
+  milliseconds. The message is copied immediately; delivery happens
+  asynchronously when the timer fires. Useful for periodic tasks
+  and timeouts within a process loop.
+  """
+  fn send_after(self, msg: M, delay_ms: Int)
     panic("intrinsic")
   end
 end

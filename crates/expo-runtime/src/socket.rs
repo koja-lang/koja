@@ -37,6 +37,22 @@ pub extern "C" fn expo_socket_accept(fd: i64) -> i64 {
     }
 }
 
+/// Non-blocking accept: returns the new client fd if a connection is
+/// immediately available, -2 if none is pending (EAGAIN), or -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_socket_try_accept(fd: i64) -> i64 {
+    let client = unsafe { libc_accept(fd as i32, ptr::null_mut(), ptr::null_mut()) };
+    if client >= 0 {
+        set_nonblocking(client);
+        return client as i64;
+    }
+    if get_errno() == EAGAIN {
+        return -2; // nothing pending
+    }
+    set_last_error(io::Error::last_os_error());
+    -1
+}
+
 /// Binds a socket to a local IP address and port. Returns 0 on success,
 /// -1 on error.
 #[unsafe(no_mangle)]

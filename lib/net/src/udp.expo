@@ -1,0 +1,57 @@
+@doc """
+A UDP socket for sending and receiving datagrams. UDP is connectionless --
+the same socket can send to and receive from any address. Use `bind` to
+listen on a port, or bind to port 0 for an ephemeral port.
+"""
+struct UDPSocket
+  socket: Socket
+
+  @doc """
+  Binds to the given port on all interfaces (0.0.0.0). Use port 0
+  to let the OS assign an ephemeral port. Returns the bound socket
+  or an error if the bind fails.
+  """
+  fn bind(port: Int) -> Result<UDPSocket, String>
+    UDPSocket.bind_addr(SocketAddress{ip: IPAddress.any(), port: port})
+  end
+
+  @doc """
+  Binds to a specific `SocketAddress`. Returns the bound socket or
+  an error if the bind fails.
+  """
+  fn bind_addr(addr: SocketAddress) -> Result<UDPSocket, String>
+    sock =
+      match Socket.create(SocketKind.Datagram)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match sock.bind(addr)
+      Result.Ok(bound) -> Result.Ok(UDPSocket{socket: bound})
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  @doc """
+  Sends data to the given address. Returns the number of bytes
+  sent or an error if the send fails.
+  """
+  fn send_to(self, data: String, addr: SocketAddress) -> Result<Int, String>
+    self.socket.send_to(data, addr)
+  end
+
+  @doc """
+  Receives up to `count` bytes. Returns a pair of the received data
+  and the sender's address, or an error if the receive fails.
+  """
+  fn recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>
+    self.socket.recv_from(count)
+  end
+
+  @doc """
+  Closes the UDP socket.
+  """
+  fn close(move self) -> Result<String, String>
+    self.socket.close()
+  end
+end

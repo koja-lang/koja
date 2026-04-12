@@ -1,4 +1,16 @@
 @doc """
+Generic I/O readiness notification delivered to a process's mailbox
+when a watched file descriptor becomes ready. Used by infrastructure
+processes like `TCPListener`; most user code handles higher-level
+events like `TCPEvent` instead.
+"""
+enum IOReady
+  Read(Fd)
+  Write(Fd)
+  Error(Fd)
+end
+
+@doc """
 Standard I/O operations.
 
 Provides `IO.puts`, `IO.warn`, `IO.write`, and `IO.gets` for common

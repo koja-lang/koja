@@ -372,6 +372,195 @@ These three compose into the supervisor shutdown loop. `signal` is the polite re
 
 ---
 
+## Child-to-parent messaging and `Ref.self()`
+
+### The gap
+
+`Ref<M, R>` gives the parent a typed channel to the child. The parent can
+`cast`, `call`, and `signal` the child. But the child has no way to push
+unsolicited messages back to the parent. The only child-to-parent path is
+the synchronous `call` reply via `ReplyTo<R>`, which requires the parent to
+ask first.
+
+This is a problem for I/O-driven processes. A TCP listener that accepts
+connections and receives data needs to push events to its owner without
+being asked. In Erlang, any process can send to any other process it knows
+the pid of -- the mailbox is untyped, so `Pid ! {tcp, Socket, Data}` just
+works. In Expo, mailboxes are typed: the runtime can't inject a message
+unless it matches the process's declared message type `M`.
+
+### `Ref.self()` -- the missing primitive
+
+A static function on `Ref` that returns a typed handle to the current
+process:
+
+```expo
+impl Ref<M, R>
+  fn self() -> Ref<M, R>
+    panic("intrinsic")
+  end
+end
+```
+
+The caller provides the type via annotation, same as `CPtr.alloc()` or
+`List.new()`:
+
+```expo
+me: Ref<AppMsg | TcpEvent, String> = Ref.self()
+```
+
+The intrinsic reads the current process's pid from thread-local state
+(`CURRENT_PID`) and wraps it in a `Ref`. The type parameters are purely
+compile-time -- the runtime representation is just the integer pid.
+
+### Union message types for multi-source mailboxes
+
+A process that handles both business messages and I/O events declares `M`
+as a union:
+
+```expo
+enum AppMsg
+  DoWork(String)
+end
+
+enum TcpEvent
+  Connection(TCPSocket)
+  Data(TCPSocket, Binary)
+  Closed(TCPSocket)
+end
+
+impl Process<App, AppMsg | TcpEvent, String> for App
+  fn start(move config: App) -> Result<Self, StopReason>
+    me: Ref<AppMsg | TcpEvent, String> = Ref.self()
+    listener = spawn TCPListener.start(ListenerConfig{owner: me, port: 4000})
+    Result.Ok(App{listener: listener})
+  end
+
+  fn handle(move self, msg: AppMsg | TcpEvent, from: Option<ReplyTo<String>>)
+    -> Step<Self>
+    match msg
+      AppMsg.DoWork(task) ->
+        # handle business logic
+        Step.Continue(self)
+
+      TcpEvent.Connection(socket) ->
+        # new client connected
+        Step.Continue(self)
+
+      TcpEvent.Data(socket, bytes) ->
+        # data arrived on socket
+        Step.Continue(self)
+
+      TcpEvent.Closed(socket) ->
+        # client disconnected
+        Step.Continue(self)
+    end
+  end
+end
+```
+
+The child (`TCPListener`) holds `owner: Ref<AppMsg | TcpEvent, String>`.
+When it accepts a connection, it calls `self.owner.cast(TcpEvent.Connection(socket))`.
+`TcpEvent` is a member of the union `AppMsg | TcpEvent`, so it widens
+automatically -- no wrapping, no adapter.
+
+This is the typed equivalent of Erlang's `Pid ! {tcp, Socket, Data}`. The
+difference is that the type system enforces the contract: the child can
+only send `TcpEvent` values (its `R` type contributes to the parent's `M`
+union), and the parent's `handle` must match on them.
+
+### How it composes with `Process<C, M, R>`
+
+The parent spawns a child and gets `Ref<ChildM, ChildR>`. The child's `R`
+is the type it can push back. The parent's `M` is a union that includes
+`ChildR`:
+
+```
+Parent: Process<..., AppMsg | TcpEvent, ...>
+  spawns child → gets Ref<ListenerMsg, TcpEvent>
+  passes Ref.self() to child config
+
+Child: Process<ListenerConfig, ListenerMsg, TcpEvent>
+  holds owner: Ref<AppMsg | TcpEvent, String>
+  calls owner.cast(TcpEvent.Data(...))
+```
+
+The type alignment:
+- Child's `R = TcpEvent`
+- Parent's `M = AppMsg | TcpEvent`
+- Child calls `owner.cast(TcpEvent.Data(...))` -- `TcpEvent` widens to
+  `AppMsg | TcpEvent` automatically
+
+No new runtime machinery is needed. `cast` already pushes a value into a
+process's mailbox by serializing it. Union widening is a compile-time
+concept -- the runtime just sees bytes in the mailbox. The `receive` loop
+pattern-matches on the tag to determine which variant arrived.
+
+### Why not a third receive clause
+
+`Lifecycle` events have a dedicated receive clause because they are
+universal -- every process needs signal handling for supervision to work.
+The runtime itself generates lifecycle events (from OS signals).
+
+I/O events are not universal. Most processes don't care about sockets. And
+unlike lifecycle events (which are a fixed, known set of three variants),
+I/O event types are user-defined -- `TcpEvent`, `HttpEvent`,
+`WebSocketFrame`, etc. Adding a dedicated receive clause for each would not
+scale.
+
+Union types are the right tool: the process declares exactly which event
+types it handles, and the type system ensures completeness. No special
+runtime support, no magic mailbox categories.
+
+### Implementation notes
+
+`Ref.self()` requires:
+- A new intrinsic in codegen that reads `CURRENT_PID` and constructs a
+  `Ref` struct (just the integer pid)
+- No runtime changes -- the pid is already available in thread-local
+  storage
+- Type inference from the annotation, same as existing generic static
+  functions
+
+The key invariant: `Ref.self()` must only be called from within a running
+process (inside `start`, `handle`, `handle_signal`, or `run`). Calling it
+from `fn main` or a script is undefined. The compiler could enforce this
+by restricting it to `Process` impl bodies, or it could be left as a
+convention (like Erlang's `self()` being meaningless outside a process).
+
+### Relationship to TCP and HTTP
+
+This primitive enables actor-native networking. Instead of the current
+blocking `Server.start` accept loop (which takes over the calling process
+and prevents signal handling), the architecture becomes:
+
+```
+App (entry process)
+  - spawns TCPListener, passes Ref.self()
+  - stays in default receive loop
+  - handles Lifecycle signals (SIGINT → graceful shutdown)
+  - handles TcpEvent messages from listener
+
+TCPListener (child process)
+  - owns the listen socket
+  - accept loop runs in its own process
+  - on accept: casts TcpEvent.Connection(socket) to owner
+  - on data: casts TcpEvent.Data(socket, bytes) to owner
+  - on close: casts TcpEvent.Closed(socket) to owner
+
+http.Server (stdlib, built on top of TCP)
+  - a Process that wraps TCPListener
+  - accumulates TcpEvent.Data until headers complete
+  - parses HTTP request, calls user handler
+  - writes response, closes connection
+  - user never touches TcpEvent directly
+```
+
+Every process stays in its receive loop. Every process can handle signals.
+No blocking calls steal control from the actor model.
+
+---
+
 ## Error handling philosophy
 
 Expo's error model has three layers, each progressively less precise:

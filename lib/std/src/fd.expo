@@ -28,6 +28,26 @@ impl Fd
   fn close(move self) -> Result<String, String>
     panic("intrinsic")
   end
+
+  @doc """
+  Registers this file descriptor for I/O readiness notifications.
+  When the fd becomes ready, an `IOReady` message is delivered to
+  the current process's mailbox. Uses oneshot mode: after one event
+  fires, `watch` must be called again to re-register.
+
+  Interest: 0 = readable, 1 = writable.
+  """
+  fn watch(self, interest: Int)
+    panic("intrinsic")
+  end
+
+  @doc """
+  Removes this file descriptor from I/O readiness monitoring.
+  No further `IOReady` messages will be delivered for this fd.
+  """
+  fn unwatch(self)
+    panic("intrinsic")
+  end
 end
 
 @doc """

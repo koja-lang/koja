@@ -15,14 +15,14 @@ pub fn emit_fd_intrinsic<'ctx>(
     c.builder.position_at_end(entry);
 
     let i64_ty = c.context.i64_type();
-    let result_type = fn_val
-        .get_type()
-        .get_return_type()
-        .unwrap()
-        .into_struct_type();
 
     match mangled {
         "Fd_read" => {
+            let result_type = fn_val
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_struct_type();
             let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
             let fd = c.builder.build_extract_value(self_val, 0, "fd").unwrap();
             let count = fn_val.get_nth_param(1).unwrap();
@@ -66,6 +66,11 @@ pub fn emit_fd_intrinsic<'ctx>(
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
         }
         "Fd_write" => {
+            let result_type = fn_val
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_struct_type();
             let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
             let fd = c.builder.build_extract_value(self_val, 0, "fd").unwrap();
             let data = fn_val.get_nth_param(1).unwrap();
@@ -113,6 +118,11 @@ pub fn emit_fd_intrinsic<'ctx>(
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
         }
         "Fd_close" => {
+            let result_type = fn_val
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_struct_type();
             let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
             let fd = c.builder.build_extract_value(self_val, 0, "fd").unwrap();
             let rt_fn = *c
@@ -158,6 +168,46 @@ pub fn emit_fd_intrinsic<'ctx>(
             let phi = c.builder.build_phi(result_type, "result").unwrap();
             phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
             c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
+        }
+        "Fd_watch" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd_i64 = c
+                .builder
+                .build_extract_value(self_val, 0, "fd")
+                .unwrap()
+                .into_int_value();
+            let fd_i32 = c
+                .builder
+                .build_int_truncate(fd_i64, c.context.i32_type(), "fd_i32")
+                .unwrap();
+
+            let interest_i64 = fn_val.get_nth_param(1).unwrap().into_int_value();
+
+            let rt_fn = *c
+                .functions
+                .get("expo_rt_watch_fd")
+                .ok_or("expo_rt_watch_fd not declared")?;
+            c.call(rt_fn, &[fd_i32.into(), interest_i64.into()], "");
+            c.builder.build_return(None).unwrap();
+        }
+        "Fd_unwatch" => {
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let fd_i64 = c
+                .builder
+                .build_extract_value(self_val, 0, "fd")
+                .unwrap()
+                .into_int_value();
+            let fd_i32 = c
+                .builder
+                .build_int_truncate(fd_i64, c.context.i32_type(), "fd_i32")
+                .unwrap();
+
+            let rt_fn = *c
+                .functions
+                .get("expo_rt_unwatch_fd")
+                .ok_or("expo_rt_unwatch_fd not declared")?;
+            c.call(rt_fn, &[fd_i32.into()], "");
+            c.builder.build_return(None).unwrap();
         }
         _ => return Err(format!("unknown fd intrinsic: {mangled}")),
     }

@@ -1,0 +1,47 @@
+enum MsgA
+  Ping(String)
+end
+
+enum MsgB
+  Pong(Int)
+end
+
+struct ParentConfig
+end
+
+struct Parent
+  count: Int
+end
+
+impl Process<ParentConfig, MsgA | MsgB, String> for Parent
+  fn start(move config: ParentConfig) -> Result<Self, StopReason>
+    Result.Ok(Parent{count: 0})
+  end
+
+  fn handle(move self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>)
+    -> Step<Self>
+    match msg
+      a: MsgA ->
+        match a
+          MsgA.Ping(s) ->
+            print("ping: #{s}")
+            ReplyTo.reply(from, "ok")
+            Step.Continue(Parent{count: self.count + 1})
+        end
+      b: MsgB ->
+        match b
+          MsgB.Pong(n) ->
+            print("pong: #{n}")
+            ReplyTo.reply(from, "ok")
+            Step.Continue(Parent{count: self.count + 1})
+        end
+    end
+  end
+end
+
+fn main
+  p = spawn Parent.start(ParentConfig{})
+  p.call(MsgA.Ping("hello"), 5000)
+  p.call(MsgB.Pong(42), 5000)
+  p.call(MsgA.Ping("done"), 5000)
+end

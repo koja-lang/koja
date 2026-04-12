@@ -60,7 +60,7 @@ const DEBUG_TYPES: &[&str] = &[
 
 const PARSE_INTRINSICS: &[&str] = &["Int_parse", "Float_parse"];
 
-const FD_INTRINSICS: &[&str] = &["Fd_read", "Fd_write", "Fd_close"];
+const FD_INTRINSICS: &[&str] = &["Fd_read", "Fd_write", "Fd_close", "Fd_watch", "Fd_unwatch"];
 
 const FILE_INTRINSICS: &[&str] = &[
     "File_open",
@@ -77,6 +77,7 @@ const SOCKET_INTRINSICS: &[&str] = &[
     "Socket_connect",
     "Socket_listen",
     "Socket_accept",
+    "Socket_try_accept_raw",
     "Socket_set_reuse_addr",
     "Socket_resolve",
     "Socket_send_to",

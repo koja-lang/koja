@@ -76,6 +76,15 @@ pub(crate) fn declare_builtins<'ctx>(
         i64.fn_type(&[i64.into()], false),
     );
     decl("expo_rt_kill", void.fn_type(&[i64.into()], false));
+    decl(
+        "expo_rt_send_after",
+        void.fn_type(&[i64.into(), ptr.into(), i64.into(), i64.into()], false),
+    );
+    decl(
+        "expo_rt_watch_fd",
+        void.fn_type(&[i32.into(), i64.into()], false),
+    );
+    decl("expo_rt_unwatch_fd", void.fn_type(&[i32.into()], false));
 
     // String intrinsics
     decl(
@@ -176,6 +185,7 @@ pub(crate) fn declare_builtins<'ctx>(
         i64.fn_type(&[i64.into(), i64.into()], false),
     );
     decl("expo_socket_accept", i64.fn_type(&[i64.into()], false));
+    decl("expo_socket_try_accept", i64.fn_type(&[i64.into()], false));
     decl(
         "expo_socket_setsockopt_reuse",
         i64.fn_type(&[i64.into()], false),

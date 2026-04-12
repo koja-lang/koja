@@ -1,0 +1,286 @@
+@doc """
+A TCP connection for reading and writing byte streams. Use `connect` to
+establish a client connection by hostname, or `connect_addr` to connect
+to a specific `SocketAddress`. Server-side `TCPSocket` values are returned
+by `TCPListener.accept`.
+"""
+struct TCPSocket
+  socket: Socket
+
+  @doc """
+  Connects to a remote host by resolving the hostname via DNS and
+  establishing a TCP connection to the first resolved address.
+  Returns the connected socket or an error if resolution or
+  connection fails.
+  """
+  fn connect(host: String, port: Int) -> Result<TCPSocket, String>
+    addrs =
+      match Socket.resolve(host)
+        Result.Ok(a) -> a
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    if addrs.empty?()
+      return Result.Err("no addresses found for " <> host)
+    end
+
+    addr = addrs.get(0).unwrap()
+
+    sock =
+      match Socket.create(SocketKind.Stream)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match sock.connect(SocketAddress{ip: addr, port: port})
+      Result.Ok(connected) -> Result.Ok(TCPSocket{socket: connected})
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  @doc """
+  Connects to a specific `SocketAddress` without DNS resolution.
+  Returns the connected socket or an error if the connection fails.
+  """
+  fn connect_addr(addr: SocketAddress) -> Result<TCPSocket, String>
+    sock =
+      match Socket.create(SocketKind.Stream)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match sock.connect(addr)
+      Result.Ok(connected) -> Result.Ok(TCPSocket{socket: connected})
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  @doc """
+  Reads up to `count` bytes from the connection. Returns the data
+  as a string or an error if the read fails.
+  """
+  fn read(self, count: Int) -> Result<String, String>
+    self.socket.fd.read(count)
+  end
+
+  @doc """
+  Writes data to the connection. Returns the number of bytes
+  written or an error if the write fails.
+  """
+  fn write(self, data: String) -> Result<Int, String>
+    self.socket.fd.write(data)
+  end
+
+  @doc """
+  Closes the TCP connection.
+  """
+  fn close(move self) -> Result<String, String>
+    self.socket.close()
+  end
+end
+
+@doc """
+A TCP listener that accepts incoming connections on a bound port.
+Use `bind` to listen on all interfaces at a given port, or `bind_addr`
+to listen on a specific address. Each call to `accept` returns a
+`TCPSocket` for the new client connection.
+"""
+struct TCPListener
+  socket: Socket
+
+  @doc """
+  Binds to the given port on all interfaces (0.0.0.0), sets
+  `SO_REUSEADDR`, and starts listening with a backlog of 128.
+  Returns the listener or an error if any step fails.
+  """
+  fn bind(port: Int) -> Result<TCPListener, String>
+    TCPListener.bind_addr(SocketAddress{ip: IPAddress.any(), port: port})
+  end
+
+  @doc """
+  Binds to a specific `SocketAddress`, sets `SO_REUSEADDR`, and
+  starts listening with a backlog of 128. Returns the listener or
+  an error if any step fails.
+  """
+  fn bind_addr(addr: SocketAddress) -> Result<TCPListener, String>
+    sock =
+      match Socket.create(SocketKind.Stream)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    sock =
+      match sock.set_reuse_addr()
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    sock =
+      match sock.bind(addr)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match sock.listen(128)
+      Result.Ok(sock) -> Result.Ok(TCPListener{socket: sock})
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  @doc """
+  Accepts an incoming TCP connection. Blocks until a client connects.
+  Returns a `TCPSocket` for the new connection or an error if the
+  accept fails.
+  """
+  fn accept(self) -> Result<TCPSocket, String>
+    match self.socket.accept()
+      Result.Ok(fd) -> Result.Ok(TCPSocket{socket: Socket{fd: fd}})
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  @doc """
+  Non-blocking accept: returns `Option.Some(socket)` if a connection is
+  immediately available, or `Option.None` if no connection is pending.
+  """
+  fn try_accept(self) -> Option<TCPSocket>
+    raw = self.socket.try_accept_raw()
+
+    if raw >= 0
+      Option.Some(TCPSocket{socket: Socket{fd: Fd{descriptor: raw}}})
+    else
+      Option.None
+    end
+  end
+
+  @doc """
+  Returns the underlying file descriptor for use with `Fd.watch`.
+  """
+  fn fd(self) -> Fd
+    self.socket.fd
+  end
+
+  @doc """
+  Closes the listener and stops accepting new connections.
+  """
+  fn close(move self) -> Result<String, String>
+    self.socket.close()
+  end
+end
+
+@doc """
+Events delivered to a process that spawns a `TCPServer`.
+"""
+enum TCPEvent
+  Connected(TCPSocket)
+  Closed(Fd)
+  Error(String)
+end
+
+@doc """
+Configuration for spawning a `TCPServer`.
+`owner` is the process that receives `TCPEvent` messages.
+"""
+struct TCPServerConfig
+  port: Int
+  owner: Ref<TCPEvent, String>
+end
+
+@doc """
+An actor that listens for TCP connections and delivers `TCPEvent`
+messages to its owner process. Uses `IOReady` internally to avoid
+blocking on accept.
+
+Spawn with:
+```
+me: Ref<TCPEvent, String> = Ref.self_ref()
+server = spawn TCPServer.start(TCPServerConfig{port: 4000, owner: me})
+```
+"""
+struct TCPServer
+  listener: TCPListener
+  owner: Ref<TCPEvent, String>
+end
+
+enum TCPServerMsg
+  AcceptReady
+end
+
+impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
+  fn start(move config: TCPServerConfig) -> Result<Self, StopReason>
+    match TCPListener.bind(config.port)
+      Result.Ok(listener) ->
+        listener.fd().watch(0)
+        Result.Ok(TCPServer{listener: listener, owner: config.owner})
+
+      Result.Err(e) ->
+        config.owner.cast(TCPEvent.Error("bind failed: " <> e))
+        Result.Err(StopReason.Shutdown)
+    end
+  end
+
+  fn handle(
+    move self,
+    msg: TCPServerMsg | IOReady,
+    from: Option<ReplyTo<String>>,
+  ) -> Step<Self>
+
+    match msg
+      io: IOReady ->
+        self.on_io_ready(io)
+
+      cmd: TCPServerMsg ->
+        match cmd
+          TCPServerMsg.AcceptReady -> self.drain_accepts()
+        end
+    end
+  end
+
+  fn handle_signal(move self, signal: Lifecycle) -> Step<Self>
+    match signal
+      Lifecycle.Shutdown ->
+        match self.listener.close()
+          _ -> ()
+        end
+
+        Step.Done(StopReason.Shutdown)
+
+      Lifecycle.Interrupt ->
+        match self.listener.close()
+          _ -> ()
+        end
+
+        Step.Done(StopReason.Shutdown)
+
+      _ ->
+        Step.Continue(self)
+    end
+  end
+
+  priv fn on_io_ready(move self, io: IOReady) -> Step<Self>
+    match io
+      IOReady.Read(_) ->
+        self.drain_accepts()
+
+      IOReady.Error(_) ->
+        self.owner.cast(TCPEvent.Error("listener error"))
+        Step.Done(StopReason.Shutdown)
+
+      _ ->
+        self.listener.fd().watch(0)
+        Step.Continue(self)
+    end
+  end
+
+  priv fn drain_accepts(move self) -> Step<Self>
+    match self.listener.try_accept()
+      Option.Some(client) ->
+        self.owner.cast(TCPEvent.Connected(client))
+        self.drain_accepts()
+
+      Option.None ->
+        self.listener.fd().watch(0)
+        Step.Continue(self)
+    end
+  end
+end

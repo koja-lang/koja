@@ -28,7 +28,7 @@ use crate::enums::compile_enum_construction;
 use crate::generics::{monomorphize_impl_method, monomorphize_struct, try_parse_mangled_name};
 use crate::ops::{compile_binary, compile_unary};
 use crate::spawn;
-use crate::stmt::{apply_coercion, coerce_numeric, compile_statement};
+use crate::stmt::{apply_coercion, coerce_numeric, compile_statement, compile_union_wrap};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
 use crate::util::{parse_int_literal, printf_format_spec};
@@ -1230,13 +1230,34 @@ fn build_receive_phi<'ctx>(
     Ok(None)
 }
 
+/// Loads an IOReady value from the mailbox payload pointer.
+fn load_io_ready_from_payload<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    payload_ptr: PointerValue<'ctx>,
+    label: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let io_ready_type = named("IOReady");
+    let io_ready_llvm = to_llvm_type(&io_ready_type, compiler.context, &compiler.types)
+        .ok_or("no LLVM type for IOReady enum")?;
+    Ok(compiler
+        .builder
+        .build_load(io_ready_llvm, payload_ptr, label)
+        .unwrap())
+}
+
 /// Compiles a `receive` expression in a Process context where the mailbox
 /// uses tagged messages. The raw buffer layout is [tag: 8 bytes, payload].
-/// Tag 0 = business message (Pair<M, Option<ReplyTo<R>>>), tag 1 = Lifecycle.
+/// Tag 0 = business message (Pair<M, Option<ReplyTo<R>>>), tag 1 = Lifecycle,
+/// tag 2 = IOReady.
 ///
 /// Arms are partitioned by their TypedBinding type annotation: arms whose
-/// resolved type matches `Lifecycle` go to the lifecycle branch, all others
-/// go to the business branch.
+/// resolved type matches `Lifecycle` go to the lifecycle branch, `IOReady`
+/// arms go to the io_ready branch, all others go to the business branch.
+///
+/// When M contains IOReady as a union member but no explicit IOReady arms
+/// exist, a synthetic tag 2 handler wraps IOReady into the business envelope
+/// and dispatches through the shared business dispatch block. When explicit
+/// IOReady arms exist, they are compiled directly against the IOReady type.
 fn compile_receive_tagged<'ctx>(
     compiler: &mut Compiler<'ctx>,
     arms: &[MatchArm],
@@ -1247,6 +1268,22 @@ fn compile_receive_tagged<'ctx>(
     let i8_type = compiler.context.i8_type();
     let i64_type = compiler.context.i64_type();
     let envelope_type = compiler.fn_state.process_msg_type.clone().unwrap();
+
+    let m_type = if let Type::Named { type_args, .. } = &envelope_type {
+        type_args.first().cloned()
+    } else {
+        None
+    };
+
+    let m_has_io_ready = m_type.as_ref().is_some_and(|m| {
+        if let Type::Union(members) = m {
+            members.iter().any(|member| {
+                matches!(member, Type::Named { identifier, .. } if identifier.name == "IOReady")
+            })
+        } else {
+            false
+        }
+    });
 
     let tag_val = compiler
         .builder
@@ -1268,6 +1305,7 @@ fn compile_receive_tagged<'ctx>(
 
     let mut business_arms: Vec<&MatchArm> = Vec::new();
     let mut lifecycle_arms: Vec<&MatchArm> = Vec::new();
+    let mut io_ready_arms: Vec<&MatchArm> = Vec::new();
 
     for arm in arms {
         if let Pattern::TypedBinding { type_expr, .. } = &arm.pattern {
@@ -1277,15 +1315,35 @@ fn compile_receive_tagged<'ctx>(
                 lifecycle_arms.push(arm);
                 continue;
             }
+            if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "IOReady" && type_args.is_empty())
+            {
+                io_ready_arms.push(arm);
+                continue;
+            }
         }
         business_arms.push(arm);
     }
 
     let has_lifecycle = !lifecycle_arms.is_empty();
+    let has_io_ready = !io_ready_arms.is_empty();
+    let needs_synth_io = m_has_io_ready && !has_io_ready;
+
+    let env_llvm = to_llvm_type(&envelope_type, compiler.context, &compiler.types)
+        .ok_or_else(|| format!("no LLVM type for envelope `{}`", envelope_type.display()))?;
+    let env_struct = env_llvm.into_struct_type();
+
+    // Alloca for the business envelope, shared by tag 0 and synthetic tag 2.
+    let business_alloca = compiler
+        .builder
+        .build_alloca(env_struct, "biz_subject")
+        .unwrap();
 
     let business_block = compiler
         .context
         .append_basic_block(function, "recv_tag_business");
+    let business_dispatch = compiler
+        .context
+        .append_basic_block(function, "recv_biz_dispatch");
     let lifecycle_block = if has_lifecycle {
         compiler
             .context
@@ -1293,20 +1351,41 @@ fn compile_receive_tagged<'ctx>(
     } else {
         merge_block
     };
+    let io_ready_block = if has_io_ready {
+        Some(
+            compiler
+                .context
+                .append_basic_block(function, "recv_tag_io_ready"),
+        )
+    } else {
+        None
+    };
+    let synth_io_block = if needs_synth_io {
+        Some(
+            compiler
+                .context
+                .append_basic_block(function, "recv_tag_io_synth"),
+        )
+    } else {
+        None
+    };
     let default_block = compiler
         .context
         .append_basic_block(function, "recv_tag_default");
 
+    let mut switch_cases = vec![
+        (i8_type.const_int(0, false), business_block),
+        (i8_type.const_int(1, false), lifecycle_block),
+    ];
+    if let Some(io_block) = io_ready_block {
+        switch_cases.push((i8_type.const_int(2, false), io_block));
+    } else if let Some(synth_block) = synth_io_block {
+        switch_cases.push((i8_type.const_int(2, false), synth_block));
+    }
+
     compiler
         .builder
-        .build_switch(
-            tag_val,
-            default_block,
-            &[
-                (i8_type.const_int(0, false), business_block),
-                (i8_type.const_int(1, false), lifecycle_block),
-            ],
-        )
+        .build_switch(tag_val, default_block, &switch_cases)
         .unwrap();
 
     compiler.builder.position_at_end(default_block);
@@ -1316,22 +1395,70 @@ fn compile_receive_tagged<'ctx>(
     let mut reachable_arm_count = 0usize;
     let mut fallthrough_blocks: Vec<BasicBlock<'ctx>> = Vec::new();
 
+    // --- Synthetic IOReady → business envelope (tag 2) ---
+    if let Some(synth_block) = synth_io_block {
+        compiler.builder.position_at_end(synth_block);
+
+        let io_ready_val = load_io_ready_from_payload(compiler, payload_ptr, "synth_io")?;
+
+        let io_ready_type = named("IOReady");
+        let m_ref = m_type.as_ref().unwrap();
+        let wrapped_m = compile_union_wrap(compiler, io_ready_val, &io_ready_type, m_ref)?;
+
+        let option_reply_type = if let Type::Named { type_args, .. } = &envelope_type {
+            type_args.get(1).cloned().unwrap_or(Type::Unknown)
+        } else {
+            Type::Unknown
+        };
+        let option_reply_llvm = to_llvm_type(&option_reply_type, compiler.context, &compiler.types)
+            .ok_or("no LLVM type for Option<ReplyTo<R>>")?
+            .into_struct_type();
+        let mut option_none = option_reply_llvm.get_undef();
+        option_none = compiler
+            .builder
+            .build_insert_value(option_none, i8_type.const_int(1, false), 0, "synth_none")
+            .unwrap()
+            .into_struct_value();
+
+        let mut pair_val = env_struct.get_undef();
+        pair_val = compiler
+            .builder
+            .build_insert_value(pair_val, wrapped_m, 0, "synth_first")
+            .unwrap()
+            .into_struct_value();
+        pair_val = compiler
+            .builder
+            .build_insert_value(pair_val, option_none, 1, "synth_second")
+            .unwrap()
+            .into_struct_value();
+
+        compiler
+            .builder
+            .build_store(business_alloca, pair_val)
+            .unwrap();
+        compiler
+            .builder
+            .build_unconditional_branch(business_dispatch)
+            .unwrap();
+    }
+
     // --- Business arms (tag 0) ---
     compiler.builder.position_at_end(business_block);
-    let env_llvm = to_llvm_type(&envelope_type, compiler.context, &compiler.types)
-        .ok_or_else(|| format!("no LLVM type for envelope `{}`", envelope_type.display()))?;
     let business_value = compiler
         .builder
-        .build_load(env_llvm, payload_ptr, "biz_msg")
-        .unwrap();
-    let business_alloca = compiler
-        .builder
-        .build_alloca(business_value.get_type(), "biz_subject")
+        .build_load(env_struct, payload_ptr, "biz_msg")
         .unwrap();
     compiler
         .builder
         .build_store(business_alloca, business_value)
         .unwrap();
+    compiler
+        .builder
+        .build_unconditional_branch(business_dispatch)
+        .unwrap();
+
+    // --- Business dispatch (shared by tag 0 and synthetic tag 2) ---
+    compiler.builder.position_at_end(business_dispatch);
 
     let business_fallthrough = compiler
         .context
@@ -1392,6 +1519,42 @@ fn compile_receive_tagged<'ctx>(
             &mut reachable_arm_count,
         )?;
         fallthrough_blocks.push(lifecycle_fallthrough);
+    }
+
+    // --- IOReady arms (tag 2, explicit) ---
+    if let Some(io_ready_block) = io_ready_block {
+        compiler.builder.position_at_end(io_ready_block);
+
+        let io_ready_type = named("IOReady");
+        let io_ready_value = load_io_ready_from_payload(compiler, payload_ptr, "io_msg")?;
+        let io_ready_alloca = compiler
+            .builder
+            .build_alloca(io_ready_value.get_type(), "io_subject")
+            .unwrap();
+        compiler
+            .builder
+            .build_store(io_ready_alloca, io_ready_value)
+            .unwrap();
+
+        let io_ready_fallthrough = compiler
+            .context
+            .append_basic_block(function, "recv_io_none");
+        let io_ready_context = ReceiveArmCtx {
+            subject_alloca: io_ready_alloca,
+            subject_type: &io_ready_type,
+            merge_block,
+            fallthrough_block: io_ready_fallthrough,
+            prefix: "recv_io",
+            function,
+        };
+        compile_receive_arms(
+            compiler,
+            &io_ready_arms,
+            &io_ready_context,
+            &mut incoming,
+            &mut reachable_arm_count,
+        )?;
+        fallthrough_blocks.push(io_ready_fallthrough);
     }
 
     compiler.builder.position_at_end(merge_block);

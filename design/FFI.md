@@ -531,30 +531,117 @@ extern declarations.
 
 ---
 
-## Open: conditional `@extern` (`@when`)
+## Conditional compilation: `@when`
 
 `@extern "C"` on its own cannot express different C symbols or signatures
-per target OS or per compiler version. The same problem exists for any
-library that wants to ship one package that works on multiple platforms
-or across a range of Expo releases.
+per target OS. The same problem exists for any declaration that needs
+platform-specific variants -- struct layouts, constants, or function
+implementations. `@when` is the conditional compilation mechanism.
 
-**Planned direction:** a single conditional mechanism, working name `@when`,
-attachable to declarations (functions, structs, `impl` items, etc.) with
-predicate expressions evaluated at **compile time**:
+### Syntax
 
-- **Target:** `target_os`, `target_arch`, and related triple fields, so
-  Linux can declare `getrandom` and macOS can declare `getentropy` (or
-  each links a thin shim) without runtime probing.
-- **Toolchain:** `expo_version` / compiler version with semver ranges, so
-  package maintainers can ship alternate implementations or shims for
-  breaking API changes (same idea as `rust-version` in Cargo, but at the
-  declaration level).
+`@when` is an annotation that takes a condition expression. The condition
+is a simple comparison: a build variable, an operator, and a string literal.
 
-**Alternatives** (see also [STDLIB.md](STDLIB.md) for the “system data”
-story): file-level or module-level inclusion by target; a tiny C/Rust shim
-with one stable symbol so Expo only ever sees one `extern`; both can
-coexist with `@when`.
+```expo
+@when os == "macos"
+@extern "C" @link "system"
+fn getentropy(buf: CPtr<UInt8>, len: Int64) -> Int32
 
-Exact grammar, predicate set, and error messages when no arm matches are
-TBD. This section is a placeholder so the FFI doc does not pretend that
-one undecorated `extern` block solves platform-specific C APIs.
+@when os == "linux"
+@extern "C" @link "c:getrandom"
+fn getrandom(buf: CPtr<UInt8>, len: Int64, flags: UInt32) -> Int64
+```
+
+Supported build variables:
+
+- `os` -- the target operating system: `"macos"`, `"linux"`, `"windows"`,
+  `"freebsd"`, etc. Derived from the LLVM target triple.
+- `arch` -- the target architecture: `"aarch64"`, `"x86_64"`, `"arm"`,
+  etc. Derived from the LLVM target triple.
+
+Supported operators: `==`, `!=`.
+
+`@when` composes with other annotations (stacked or inline):
+
+```expo
+@when os == "macos"
+@extern "C" @link "system"
+fn getentropy(buf: CPtr<UInt8>, len: Int64) -> Int32
+
+@when arch == "aarch64"
+const CACHE_LINE_SIZE = 128
+
+@when arch != "aarch64"
+const CACHE_LINE_SIZE = 64
+```
+
+### Scope
+
+`@when` applies to any top-level item: functions, structs, enums,
+constants, type aliases, protocols, impl blocks. It does not apply to
+individual struct fields or enum variants -- that is a future extension
+if needed.
+
+### Evaluation: early filtering
+
+`@when` is evaluated **early** -- after parsing but before type checking.
+Items whose `@when` condition does not match the current build target are
+stripped from the AST. By the time the type checker and codegen run, they
+don't exist.
+
+This is the same conceptual phase as `@doc` -- metadata consumed before
+compilation to shape what enters the type system. The type checker never
+sees wrong-platform code, so there are no spurious type errors from
+platform-specific struct layouts or missing platform-specific functions.
+
+This matches Rust's `#[cfg]` model, which is battle-tested. The
+alternative (late filtering at codegen time) would require the type checker
+to reason about conditional types, which adds complexity for no benefit.
+
+### Implementation sketch
+
+**AST**: Add `AnnotationValue::Condition { lhs: String, op: CondOp, rhs: String }`
+to the existing `AnnotationValue` enum. `CondOp` is `Eq | NotEq`.
+
+**Parser**: When `parse_annotation` sees `name == "when"`, call a dedicated
+parser that reads `ident operator string_lit` instead of the normal
+annotation value.
+
+**Build target**: A `BuildTarget` struct holding `os: String` and
+`arch: String`, derived from the LLVM target triple at compiler startup.
+The triple is already obtained in codegen via `TargetMachine::get_default_triple()`;
+extract it earlier in the driver.
+
+**Filtering**: A post-parse pass (`filter_items_for_target`) calls
+`Module.items.retain(...)`, keeping items whose `@when` conditions all
+match the build target. Called in `resolve.rs` immediately after parsing
+each module, before it enters the module graph.
+
+**Grammar**:
+
+```ebnf
+annotation_value = string_lit
+                 | multiline_string_lit
+                 | "false"
+                 | condition ;
+
+condition = IDENT , ( "==" | "!=" ) , string_lit ;
+```
+
+The `condition` form is only valid for `@when`. Other annotations continue
+to accept strings and `false`.
+
+### Future extensions
+
+- **`expo_version`**: `@when expo_version >= "0.9"` for API migration
+  across compiler versions. Requires compiler-internal semver comparison
+  logic (not the stdlib `Version` type, since annotations are evaluated
+  before the type system exists). Additional operators `>=`, `<=`, `>`, `<`
+  would be added for version comparisons.
+- **Boolean combinators**: `@when os == "macos" and arch == "aarch64"` --
+  `and`, `or`, `not` in condition expressions. Not needed for Phase 1.
+- **Per-member conditions**: `@when` on individual struct fields or enum
+  variants, enabling platform-specific struct layouts without duplicating
+  the entire struct. Complex to implement (affects struct layout
+  computation) and deferred until a concrete use case demands it.

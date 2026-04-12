@@ -156,6 +156,44 @@ pub fn emit_ref_method<'ctx>(
     type_args: &[Type],
 ) -> Result<EmitResult, String> {
     match method_name {
+        "self_ref" => {
+            let ref_struct = c
+                .types
+                .get_monomorphized(mangled_type)
+                .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
+
+            let fn_type = ref_struct.fn_type(&[], false);
+            let fn_val = c.module.add_function(mangled_fn, fn_type, None);
+            c.functions.insert(mangled_fn.to_string(), fn_val);
+
+            let entry = c.context.append_basic_block(fn_val, "entry");
+            let saved_block = c.builder.get_insert_block();
+            c.builder.position_at_end(entry);
+
+            let self_fn = *c
+                .functions
+                .get("expo_rt_self")
+                .ok_or("expo_rt_self not declared")?;
+            let pid = c
+                .call(self_fn, &[], "current_pid")
+                .ok_or("expo_rt_self did not return a value")?
+                .into_int_value();
+
+            let mut ref_val = ref_struct.get_undef();
+            ref_val = c
+                .builder
+                .build_insert_value(ref_val, pid, 0, "ref_id")
+                .unwrap()
+                .into_struct_value();
+
+            c.builder.build_return(Some(&ref_val)).unwrap();
+
+            if let Some(bb) = saved_block {
+                c.builder.position_at_end(bb);
+            }
+
+            Ok(EmitResult::Emitted)
+        }
         "cast" => {
             let ref_struct = c
                 .types
@@ -713,6 +751,121 @@ pub fn emit_ref_method<'ctx>(
                 .unwrap();
 
             c.builder.build_return(Some(&bool_val)).unwrap();
+
+            if let Some(bb) = saved_block {
+                c.builder.position_at_end(bb);
+            }
+
+            Ok(EmitResult::Emitted)
+        }
+        "send_after" => {
+            let ref_struct = c
+                .types
+                .get_monomorphized(mangled_type)
+                .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
+
+            let msg_type = type_args
+                .first()
+                .ok_or("Ref.send_after requires a type argument")?;
+            let reply_type = type_args
+                .get(1)
+                .ok_or("Ref.send_after requires R type argument")?;
+            let is_string = matches!(msg_type, Type::Primitive(Primitive::String));
+
+            let msg_llvm = if is_string {
+                c.context.ptr_type(AddressSpace::default()).into()
+            } else {
+                to_llvm_type(msg_type, c.context, &c.types)
+                    .ok_or_else(|| format!("no LLVM type for message `{msg_type:?}`"))?
+            };
+
+            let envelope_type = process_envelope_type(msg_type, reply_type);
+            ensure_types_exist(c, &envelope_type)?;
+            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.types)
+                .ok_or("no LLVM type for Pair envelope")?
+                .into_struct_type();
+
+            let i64_ty = c.context.i64_type();
+            let fn_type = c
+                .context
+                .void_type()
+                .fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
+            let fn_val = c.module.add_function(mangled_fn, fn_type, None);
+            c.functions.insert(mangled_fn.to_string(), fn_val);
+
+            let entry = c.context.append_basic_block(fn_val, "entry");
+            let saved_block = c.builder.get_insert_block();
+            c.builder.position_at_end(entry);
+
+            let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+            let pid = c
+                .builder
+                .build_extract_value(self_val, 0, "pid")
+                .unwrap()
+                .into_int_value();
+
+            let msg_val = fn_val.get_nth_param(1).unwrap();
+            let delay_ms = fn_val.get_nth_param(2).unwrap();
+
+            let option_reply_type = named_generic(
+                "Option",
+                vec![named_generic(
+                    "ReplyTo",
+                    vec![reply_type.clone()],
+                    c.type_ctx,
+                )],
+                c.type_ctx,
+            );
+            ensure_types_exist(c, &option_reply_type)?;
+            let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.types)
+                .ok_or("no LLVM type for Option<ReplyTo<R>>")?
+                .into_struct_type();
+
+            let mut option_none = option_llvm.get_undef();
+            let tag_none = c.context.i8_type().const_int(1, false);
+            option_none = c
+                .builder
+                .build_insert_value(option_none, tag_none, 0, "none_tag")
+                .unwrap()
+                .into_struct_value();
+
+            let mut pair_val = envelope_llvm.get_undef();
+            pair_val = c
+                .builder
+                .build_insert_value(pair_val, msg_val, 0, "pair_first")
+                .unwrap()
+                .into_struct_value();
+            pair_val = c
+                .builder
+                .build_insert_value(pair_val, option_none, 1, "pair_second")
+                .unwrap()
+                .into_struct_value();
+
+            let send_after_fn = *c
+                .functions
+                .get("expo_rt_send_after")
+                .ok_or("expo_rt_send_after not declared")?;
+
+            let ptr_ty = c.context.ptr_type(AddressSpace::default());
+            let alloca = c
+                .builder
+                .build_alloca(envelope_llvm, "envelope_buf")
+                .unwrap();
+            c.builder.build_store(alloca, pair_val).unwrap();
+            let msg_ptr = c
+                .builder
+                .build_pointer_cast(alloca, ptr_ty, "envelope_ptr")
+                .unwrap();
+            let msg_len = envelope_llvm
+                .size_of()
+                .ok_or("cannot compute envelope byte size")?;
+            c.call_void(
+                send_after_fn,
+                &[pid.into(), msg_ptr.into(), msg_len.into(), delay_ms.into()],
+                "",
+            );
+
+            c.builder.build_return(None).unwrap();
 
             if let Some(bb) = saved_block {
                 c.builder.position_at_end(bb);

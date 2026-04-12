@@ -15,6 +15,32 @@ pub fn emit_socket_intrinsic<'ctx>(
     c.builder.position_at_end(entry);
 
     let i64_ty = c.context.i64_type();
+
+    if mangled == "Socket_try_accept_raw" {
+        let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
+        let fd_inner = c
+            .builder
+            .build_extract_value(self_val, 0, "fd_struct")
+            .unwrap();
+        let fd = c
+            .builder
+            .build_extract_value(fd_inner.into_struct_value(), 0, "fd")
+            .unwrap();
+
+        let rt_fn = *c
+            .functions
+            .get("expo_socket_try_accept")
+            .ok_or("expo_socket_try_accept not declared")?;
+        let client_fd = c.call(rt_fn, &[fd.into()], "client_fd").unwrap();
+
+        c.builder.build_return(Some(&client_fd)).unwrap();
+
+        if let Some(bb) = saved_block {
+            c.builder.position_at_end(bb);
+        }
+        return Ok(());
+    }
+
     let result_type = fn_val
         .get_type()
         .get_return_type()

@@ -26,4 +26,44 @@ impl Response
     headers = Headers.new().set("Content-Length", "#{body.length()}")
     Response{body: body, headers: headers, status: status, version: "HTTP/1.1"}
   end
+
+  @doc """
+  Serializes the response into a raw HTTP/1.1 message string
+  suitable for writing to a TCP socket.
+  """
+  fn serialize(self) -> String
+    sb = StringBuilder.new()
+      .add(self.version)
+      .add(" ")
+      .add("#{self.status.code}")
+      .add(" ")
+      .add(self.status.reason)
+      .add("\r\n")
+
+    headers = self.headers
+
+    if not headers.has?("Content-Length")
+      headers = headers.set("Content-Length", "#{self.body.byte_length()}")
+    end
+
+    sb = Response.write_headers(sb, headers, 0).add("\r\n")
+
+    if not self.body.empty?()
+      sb = sb.add(self.body)
+    end
+
+    sb.build()
+  end
+
+  priv fn write_headers(move sb: StringBuilder, headers: Headers, i: Int)
+    -> StringBuilder
+
+    if i >= headers.entries.length()
+      return sb
+    end
+
+    entry = headers.entries.get(i).unwrap()
+    sb = sb.add(entry.name).add(": ").add(entry.value).add("\r\n")
+    Response.write_headers(sb, headers, i + 1)
+  end
 end

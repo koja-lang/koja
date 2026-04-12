@@ -17,6 +17,27 @@ use std::time::{Duration, Instant};
 use crate::ffi::{expo_context_switch, fflush, setvbuf};
 
 // ---------------------------------------------------------------------------
+// Mailbox tag and IOReady layout constants
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)]
+pub(crate) const TAG_BUSINESS: u8 = 0;
+pub(crate) const TAG_LIFECYCLE: u8 = 1;
+pub(crate) const TAG_IO_READY: u8 = 2;
+
+pub(crate) const TAG_HEADER_SIZE: usize = 8;
+
+pub(crate) const LIFECYCLE_BUF_SIZE: usize = 16;
+
+pub(crate) const IO_READY_BUF_SIZE: usize = 24;
+pub(crate) const IO_READY_VARIANT_OFFSET: usize = 8;
+pub(crate) const IO_READY_FD_OFFSET: usize = 16;
+
+pub(crate) const IO_READY_READ: u8 = 0;
+pub(crate) const IO_READY_WRITE: u8 = 1;
+pub(crate) const IO_READY_ERROR: u8 = 2;
+
+// ---------------------------------------------------------------------------
 // Signal handling state
 // ---------------------------------------------------------------------------
 
@@ -80,13 +101,12 @@ fn poll_signals() {
 /// Internal helper: allocates a tagged lifecycle message buffer and
 /// pushes it to the front of the target process's mailbox.
 fn send_lifecycle_to(pid: i64, variant: i64) {
-    let total = 16usize;
     let buf = unsafe {
-        let layout = alloc::Layout::from_size_align(total, 8).unwrap();
+        let layout = alloc::Layout::from_size_align(LIFECYCLE_BUF_SIZE, 8).unwrap();
         let buf = alloc::alloc(layout);
-        ptr::write_bytes(buf, 0, total);
-        *buf = 1u8; // tag = 1 (lifecycle)
-        *buf.add(8) = variant as u8;
+        ptr::write_bytes(buf, 0, LIFECYCLE_BUF_SIZE);
+        *buf = TAG_LIFECYCLE;
+        *buf.add(TAG_HEADER_SIZE) = variant as u8;
         buf
     };
 
@@ -176,6 +196,16 @@ pub(crate) struct Process {
 /// thread-affine, so cross-thread transfer is safe.
 unsafe impl Send for Process {}
 
+/// A pending delayed message, delivered when `fire_at` has elapsed.
+struct Timer {
+    fire_at: Instant,
+    target_pid: i64,
+    msg_buf: *mut u8,
+    msg_len: usize,
+}
+
+unsafe impl Send for Timer {}
+
 /// Shared scheduler state protected by [`SCHED`].
 ///
 /// All process metadata lives here. Workers lock the Mutex briefly to
@@ -186,6 +216,8 @@ pub(crate) struct Scheduler {
     next_id: i64,
     /// All known processes, indexed by `pid - 1`.
     pub(crate) processes: Vec<Process>,
+    /// Pending timers created by `send_after`. Drained by the worker loop.
+    timers: Vec<Timer>,
 }
 
 impl Scheduler {
@@ -193,6 +225,7 @@ impl Scheduler {
         Scheduler {
             next_id: 1,
             processes: Vec::new(),
+            timers: Vec::new(),
         }
     }
 }
@@ -349,6 +382,38 @@ fn worker_loop() {
             }
         }
 
+        let mut i = 0;
+        while i < guard.timers.len() {
+            if now >= guard.timers[i].fire_at {
+                let timer = guard.timers.swap_remove(i);
+                let total = TAG_HEADER_SIZE + timer.msg_len;
+                let buf = unsafe {
+                    let layout = alloc::Layout::from_size_align(total, 8).unwrap();
+                    let buf = alloc::alloc(layout);
+                    ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
+                    ptr::copy_nonoverlapping(
+                        timer.msg_buf,
+                        buf.add(TAG_HEADER_SIZE),
+                        timer.msg_len,
+                    );
+                    alloc::dealloc(
+                        timer.msg_buf,
+                        alloc::Layout::from_size_align(timer.msg_len, 8).unwrap(),
+                    );
+                    buf
+                };
+                let idx = (timer.target_pid - 1) as usize;
+                if idx < guard.processes.len() {
+                    guard.processes[idx].mailbox.push_back(buf);
+                    if guard.processes[idx].state == ProcessState::Blocked {
+                        guard.processes[idx].state = ProcessState::Runnable;
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+
         let found = guard
             .processes
             .iter()
@@ -405,12 +470,17 @@ fn worker_loop() {
             .iter()
             .any(|p| p.state == ProcessState::Running || p.state == ProcessState::WaitingIo);
 
-        let nearest = guard
+        let nearest_deadline = guard
             .processes
             .iter()
             .filter(|p| p.state == ProcessState::Blocked)
             .filter_map(|p| p.deadline)
             .min();
+        let nearest_timer = guard.timers.iter().map(|t| t.fire_at).min();
+        let nearest = match (nearest_deadline, nearest_timer) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
 
         let timeout = if any_active {
             nearest
@@ -559,12 +629,12 @@ pub extern "C" fn expo_rt_self() -> i64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64) {
     let len = msg_len as usize;
-    let total = 8 + len;
+    let total = TAG_HEADER_SIZE + len;
     let buf = unsafe {
         let layout = alloc::Layout::from_size_align(total, 8).unwrap();
         let buf = alloc::alloc(layout);
-        ptr::write_bytes(buf, 0, 8);
-        ptr::copy_nonoverlapping(msg_ptr, buf.add(8), len);
+        ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
+        ptr::copy_nonoverlapping(msg_ptr, buf.add(TAG_HEADER_SIZE), len);
         buf
     };
 
@@ -591,6 +661,74 @@ pub unsafe extern "C" fn expo_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
 #[unsafe(no_mangle)]
 pub extern "C" fn expo_rt_send_lifecycle(pid: i64, variant: i64) {
     send_lifecycle_to(pid, variant);
+}
+
+/// Sends an IOReady event to the process identified by `pid`.
+///
+/// Constructs a tagged buffer: tag=2 (IO event), then the IOReady enum
+/// layout: variant byte (0=Read, 1=Write, 2=Error) at offset 8, followed
+/// by the Fd struct (i64 descriptor) at offset 16. Appends to the target's
+/// mailbox via `push_back`.
+pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
+    let buf = unsafe {
+        let layout = alloc::Layout::from_size_align(IO_READY_BUF_SIZE, 8).unwrap();
+        let buf = alloc::alloc(layout);
+        ptr::write_bytes(buf, 0, IO_READY_BUF_SIZE);
+        *buf = TAG_IO_READY;
+        *buf.add(IO_READY_VARIANT_OFFSET) = variant;
+        *(buf.add(IO_READY_FD_OFFSET) as *mut i64) = fd;
+        buf
+    };
+
+    {
+        let mut guard = SCHED.lock().unwrap();
+        let idx = (pid - 1) as usize;
+        if idx >= guard.processes.len() {
+            return;
+        }
+        guard.processes[idx].mailbox.push_back(buf);
+        if guard.processes[idx].state == ProcessState::Blocked {
+            guard.processes[idx].state = ProcessState::Runnable;
+        }
+    }
+
+    WORK_AVAILABLE.notify_one();
+}
+
+/// Schedules a message to be delivered to `pid` after `delay_ms`
+/// milliseconds. The message bytes are copied immediately; the
+/// delivery happens in the worker loop when the timer fires.
+///
+/// # Safety
+/// `msg_ptr` must point to `msg_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn expo_rt_send_after(
+    pid: i64,
+    msg_ptr: *const u8,
+    msg_len: i64,
+    delay_ms: i64,
+) {
+    let len = msg_len as usize;
+    let msg_copy = unsafe {
+        let layout = alloc::Layout::from_size_align(len, 8).unwrap();
+        let buf = alloc::alloc(layout);
+        ptr::copy_nonoverlapping(msg_ptr, buf, len);
+        buf
+    };
+
+    let fire_at = Instant::now() + Duration::from_millis(delay_ms as u64);
+
+    {
+        let mut guard = SCHED.lock().unwrap();
+        guard.timers.push(Timer {
+            fire_at,
+            target_pid: pid,
+            msg_buf: msg_copy,
+            msg_len: len,
+        });
+    }
+
+    WORK_AVAILABLE.notify_one();
 }
 
 /// Returns 1 if the process with the given PID is still alive (not `Dead`),
