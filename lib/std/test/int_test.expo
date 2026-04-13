@@ -1,0 +1,176 @@
+struct IntTest
+  @test "integer arithmetic"
+  fn test_arithmetic_int -> Result<Bool, String>
+    unless 2 + 3 == 5
+      return Result.Err("add")
+    end
+
+    unless 10 - 4 == 6
+      return Result.Err("sub")
+    end
+
+    unless 6 * 7 == 42
+      return Result.Err("mul")
+    end
+
+    unless 20 / 4 == 5
+      return Result.Err("div")
+    end
+
+    unless 17 % 5 == 2
+      return Result.Err("mod")
+    end
+
+    unless -3 + 10 == 7
+      return Result.Err("negative add")
+    end
+
+    unless 0 * 100 == 0
+      return Result.Err("zero mul")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "float arithmetic"
+  fn test_arithmetic_float -> Result<Bool, String>
+    unless 1.5 + 2.5 == 4.0
+      return Result.Err("float add")
+    end
+
+    unless 10.0 - 3.5 == 6.5
+      return Result.Err("float sub")
+    end
+
+    unless 2.0 * 3.0 == 6.0
+      return Result.Err("float mul")
+    end
+
+    unless 7.0 / 2.0 == 3.5
+      return Result.Err("float div")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "comparison operators"
+  fn test_comparison -> Result<Bool, String>
+    unless 1 == 1
+      return Result.Err("eq reflexive")
+    end
+
+    if 1 == 2
+      return Result.Err("eq distinct")
+    end
+
+    unless 1 != 2
+      return Result.Err("neq distinct")
+    end
+
+    if 1 != 1
+      return Result.Err("neq reflexive")
+    end
+
+    unless 3 < 5
+      return Result.Err("lt")
+    end
+
+    if 5 < 3
+      return Result.Err("lt false")
+    end
+
+    unless 5 > 3
+      return Result.Err("gt")
+    end
+
+    if 3 > 5
+      return Result.Err("gt false")
+    end
+
+    unless 3 <= 3
+      return Result.Err("lte eq")
+    end
+
+    unless 3 <= 4
+      return Result.Err("lte strict")
+    end
+
+    if 4 <= 3
+      return Result.Err("lte false")
+    end
+
+    unless 5 >= 5
+      return Result.Err("gte eq")
+    end
+
+    unless 5 >= 4
+      return Result.Err("gte strict")
+    end
+
+    if 4 >= 5
+      return Result.Err("gte false")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "compound assignment"
+  fn test_compound_assignment -> Result<Bool, String>
+    x = 10
+    x += 5
+
+    unless x == 15
+      return Result.Err("+=")
+    end
+
+    x -= 3
+
+    unless x == 12
+      return Result.Err("-=")
+    end
+
+    x *= 4
+
+    unless x == 48
+      return Result.Err("*=")
+    end
+
+    x /= 6
+
+    unless x == 8
+      return Result.Err("/=")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "primitive integer widths and underscore literal"
+  fn test_primitives -> Result<Bool, String>
+    i8: Int8 = 127
+    i16: Int16 = 32000
+    i32: Int32 = 42
+    i: Int = 100
+
+    unless i8 == 127
+      return Result.Err("Int8")
+    end
+
+    unless i16 == 32000
+      return Result.Err("Int16")
+    end
+
+    unless i32 == 42
+      return Result.Err("Int32")
+    end
+
+    unless i == 100
+      return Result.Err("Int")
+    end
+
+    unless 1_000 == 1000
+      return Result.Err("underscore int literal")
+    end
+
+    Result.Ok(true)
+  end
+end

@@ -1,4 +1,17 @@
 @doc """
+Core runtime operations.
+"""
+struct Kernel
+  @doc """
+  Terminates the process immediately with the given exit code.
+  Code 0 indicates success; any non-zero value indicates failure.
+  """
+  fn exit(code: Int)
+    panic("intrinsic")
+  end
+end
+
+@doc """
 Represents a value that may or may not exist. Use `Some(value)` when a
 value is present, or `None` when it is absent.
 """

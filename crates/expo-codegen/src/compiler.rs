@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::mem;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
@@ -23,7 +23,8 @@ use expo_ast::ast::{
     Item, Literal, Module, Param, Severity, StringPart, TypeExpr,
 };
 use expo_ast::identifier::TypeIdentifier;
-use expo_typecheck::context::{TypeContext, VariantData};
+use expo_ast::span::Span;
+use expo_typecheck::context::{ClosureInfo, TypeContext, VariantData};
 use expo_typecheck::types::{
     Type, build_substitution, named, process_envelope_type, resolve_type_expr_full, substitute,
     substitute_preserving,
@@ -285,6 +286,9 @@ pub struct Compiler<'ctx> {
     pub types: TypeRegistry<'ctx>,
     /// Per-function ephemeral state (variables, loops, TCO, etc.).
     pub fn_state: FnState<'ctx>,
+    /// Source path of the Expo module currently being defined; matches
+    /// [`TypeContext::closure_info`] keys during lookup.
+    pub closure_site_path: Option<PathBuf>,
     /// DWARF debug info state (always present; emitted in all builds).
     pub debug: DebugContext<'ctx>,
 }
@@ -312,8 +316,15 @@ impl<'ctx> Compiler<'ctx> {
             fn_ref_thunks: HashMap::new(),
             types: TypeRegistry::new(),
             fn_state: FnState::new(),
+            closure_site_path: None,
             debug,
         }
+    }
+
+    pub fn closure_info_at(&self, span: Span) -> Option<&ClosureInfo> {
+        self.type_ctx
+            .closure_info
+            .get(&(self.closure_site_path.clone(), span))
     }
 
     /// Applies `uwtable` and `frame-pointer=all` to every defined function
@@ -1076,6 +1087,14 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn define_functions(&mut self, module: &Module) -> Result<(), String> {
+        let prev_site = self.closure_site_path.clone();
+        self.closure_site_path = module.path.clone();
+        let result = self.define_functions_inner(module);
+        self.closure_site_path = prev_site;
+        result
+    }
+
+    fn define_functions_inner(&mut self, module: &Module) -> Result<(), String> {
         if let Some(path) = &module.path {
             self.debug.set_current_file(path);
         }

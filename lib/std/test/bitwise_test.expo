@@ -1,0 +1,45 @@
+struct BitwiseTest
+  @test "band bor bxor bnot bsl bsr"
+  fn test_bitwise_ops -> Result<Bool, String>
+    unless 5.band(3) == 1
+      return Result.Err("band")
+    end
+
+    unless 5.bor(3) == 7
+      return Result.Err("bor")
+    end
+
+    unless 5.bxor(3) == 6
+      return Result.Err("bxor")
+    end
+
+    unless 0.bnot() == -1
+      return Result.Err("bnot")
+    end
+
+    unless 1.bsl(4) == 16
+      return Result.Err("bsl")
+    end
+
+    unless 16.bsr(4) == 1
+      return Result.Err("bsr")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "chained bitwise on flags"
+  fn test_flags_chain -> Result<Bool, String>
+    flags = 0xFF
+
+    unless flags.band(0x0F) == 15
+      return Result.Err("flags band 0x0F")
+    end
+
+    unless flags.band(0x0F).bor(0x30) == 63
+      return Result.Err("band then bor")
+    end
+
+    Result.Ok(true)
+  end
+end

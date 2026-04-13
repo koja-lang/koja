@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
 
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, ImplBlock, ProtocolDecl, ProtocolMethod, Severity, StructDecl,
@@ -16,7 +17,12 @@ pub type SpecializedMethodMap =
 /// Holds all type information gathered during collection and checking for a single module.
 #[derive(Clone)]
 pub struct TypeContext {
-    pub closure_info: HashMap<Span, ClosureInfo>,
+    /// Keyed by `(source file path, closure span)` so merged graphs from many
+    /// modules do not collide on identical line/column positions.
+    pub closure_info: HashMap<(Option<PathBuf>, Span), ClosureInfo>,
+    /// Set while [`crate::check_module`] walks a module; used when recording
+    /// [`ClosureInfo`] keys. Not meaningful in merged contexts.
+    pub current_module_path: Option<PathBuf>,
     pub coercions: HashMap<Span, Coercion>,
     pub constants: BTreeMap<String, Type>,
     pub diagnostics: Vec<Diagnostic>,
@@ -335,6 +341,7 @@ impl TypeContext {
     pub fn new() -> Self {
         Self {
             closure_info: HashMap::new(),
+            current_module_path: None,
             coercions: HashMap::new(),
             constants: BTreeMap::new(),
             diagnostics: Vec::new(),
@@ -465,8 +472,9 @@ impl TypeContext {
                 self.constants.insert(name.clone(), ty.clone());
             }
         }
-        for (span, info) in &other.closure_info {
-            self.closure_info.insert(*span, info.clone());
+        for ((path, span), info) in &other.closure_info {
+            self.closure_info
+                .insert((path.clone(), *span), info.clone());
         }
         for (span, coercion) in &other.coercions {
             self.coercions

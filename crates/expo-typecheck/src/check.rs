@@ -22,6 +22,9 @@ use crate::types::{
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
 pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
+    let prev_path = ctx.current_module_path.clone();
+    ctx.current_module_path = module.path.clone();
+
     let struct_names = ctx.struct_names();
     let struct_name_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
     let enum_names = ctx.enum_names();
@@ -134,6 +137,8 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
             _ => {}
         }
     }
+
+    ctx.current_module_path = prev_path;
 }
 
 /// Type-checks inline functions defined inside a struct or enum body.

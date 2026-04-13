@@ -1,0 +1,588 @@
+struct StringTest
+  @test "escape sequences: tab, quote, backslash"
+  fn test_escape_sequences -> Result<Bool, String>
+    # --- strings.expo: escapes, interpolation, heredoc ---
+
+    unless "tab:\there" == "tab:\t" <> "here"
+      return Result.Err("tab escape")
+    end
+
+    unless "quote: \"yes\"" == "quote: " <> "\"" <> "yes" <> "\""
+      return Result.Err("quote escape")
+    end
+
+    unless "backslash: \\" == "backslash: " <> "\\"
+      return Result.Err("backslash escape")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "string interpolation: variable and expression"
+  fn test_interpolation -> Result<Bool, String>
+    name = "expo"
+
+    unless "hello #{name}" == "hello expo"
+      return Result.Err("variable interpolation")
+    end
+
+    unless "1 + 2 = #{1 + 2}" == "1 + 2 = 3"
+      return Result.Err("expression interpolation")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "heredoc dedents trailing lines"
+  fn test_heredoc -> Result<Bool, String>
+    msg = """first line
+    second line"""
+
+    unless msg == "first line\nsecond line"
+      return Result.Err("heredoc content")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "digit? and whitespace? on literals"
+  fn test_literal_digit_whitespace -> Result<Bool, String>
+    unless "123456790".digit?()
+      return Result.Err("expected digit? true for all digits")
+    end
+
+    if "notdigit".digit?()
+      return Result.Err("expected digit? false for letters")
+    end
+
+    unless " \n\r\t".whitespace?()
+      return Result.Err("expected whitespace? true")
+    end
+
+    if "notwhitespace ".whitespace?()
+      return Result.Err("expected whitespace? false when text present")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "byte_length and length for ASCII"
+  fn test_byte_length_and_length_ascii -> Result<Bool, String>
+    # --- string_intrinsics.expo ---
+
+    s = "hello"
+
+    unless s.byte_length() == 5
+      return Result.Err("byte_length ascii")
+    end
+
+    unless s.length() == 5
+      return Result.Err("length ascii")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "get returns Option of single-codepoint strings"
+  fn test_get_indices -> Result<Bool, String>
+    s = "hello"
+
+    match s.get(0)
+      Option.Some(ch) ->
+        unless ch == "h"
+          return Result.Err("get(0)")
+        end
+
+      Option.None ->
+        return Result.Err("get(0) expected Some")
+    end
+
+    match s.get(4)
+      Option.Some(ch) ->
+        unless ch == "o"
+          return Result.Err("get(4)")
+        end
+
+      Option.None ->
+        return Result.Err("get(4) expected Some")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "for loop iterates codepoints in order"
+  fn test_for_iteration -> Result<Bool, String>
+    acc = ""
+
+    for c in "abc"
+      acc = acc <> c
+    end
+
+    unless acc == "abc"
+      return Result.Err("for iteration concatenation")
+    end
+
+    unless "abc".length() == 3
+      return Result.Err("iterated string length")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "slice with inclusive Range"
+  fn test_slice_range -> Result<Bool, String>
+    s = "hello"
+    sub = s.slice(Range{start: 1, stop: 3})
+
+    unless sub == "ell"
+      return Result.Err("slice(1..3)")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "to_binary and to_string round trip"
+  fn test_binary_string_round_trip -> Result<Bool, String>
+    bin = "test".to_binary()
+
+    match bin.to_string()
+      Result.Ok(val) ->
+        unless val == "test"
+          return Result.Err("binary round trip")
+        end
+
+      Result.Err(msg) ->
+        return Result.Err("to_string failed: #{msg}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Int.parse success and failure"
+  fn test_int_parse -> Result<Bool, String>
+    match Int.parse("42")
+      Result.Ok(val) ->
+        unless val == 42
+          return Result.Err("Int.parse 42")
+        end
+
+      Result.Err(msg) ->
+        return Result.Err("unexpected err: #{msg}")
+    end
+
+    match Int.parse("not_a_number")
+      Result.Ok(_) ->
+        return Result.Err("expected parse failure")
+
+      Result.Err(msg) ->
+        unless msg == "invalid integer"
+          return Result.Err("wrong error message")
+        end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Float.parse success and failure"
+  fn test_float_parse -> Result<Bool, String>
+    match Float.parse("3.14")
+      Result.Ok(val) ->
+        unless val == 3.14
+          return Result.Err("Float.parse 3.14")
+        end
+
+      Result.Err(msg) ->
+        return Result.Err("unexpected err: #{msg}")
+    end
+
+    match Float.parse("bad")
+      Result.Ok(_) ->
+        return Result.Err("expected parse failure")
+
+      Result.Err(msg) ->
+        unless msg == "invalid float"
+          return Result.Err("wrong error message")
+        end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Unicode length vs byte_length and get"
+  fn test_unicode_metrics -> Result<Bool, String>
+    emoji = "héllo"
+
+    unless emoji.length() == 5
+      return Result.Err("unicode length")
+    end
+
+    unless emoji.byte_length() == 6
+      return Result.Err("unicode byte_length")
+    end
+
+    match emoji.get(1)
+      Option.Some(ch) ->
+        unless ch == "é"
+          return Result.Err("get(1) should be é")
+        end
+
+      Option.None ->
+        return Result.Err("get(1) expected Some")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "empty?"
+  fn test_empty_q -> Result<Bool, String>
+    # --- string_stdlib.expo ---
+
+    unless "".empty?()
+      return Result.Err("empty string should be empty?")
+    end
+
+    if "hello".empty?()
+      return Result.Err("non-empty should not be empty?")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "at: valid index, out of bounds, negative"
+  fn test_at -> Result<Bool, String>
+    match "hello".at(1)
+      Option.Some(c) ->
+        unless c == "e"
+          return Result.Err("at(1)")
+        end
+
+      Option.None ->
+        return Result.Err("at(1) expected Some")
+    end
+
+    match "hello".at(10)
+      Option.Some(_) -> return Result.Err("at(10) expected None")
+      Option.None -> ()
+    end
+
+    match "hello".at(-1)
+      Option.Some(_) -> return Result.Err("at(-1) expected None")
+      Option.None -> ()
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "contains?"
+  fn test_contains_q -> Result<Bool, String>
+    unless "hello world".contains?("world")
+      return Result.Err("contains substring")
+    end
+
+    if "hello world".contains?("xyz")
+      return Result.Err("should not contain xyz")
+    end
+
+    unless "hello".contains?("")
+      return Result.Err("empty needle should match")
+    end
+
+    if "".contains?("a")
+      return Result.Err("empty haystack should not contain a")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "starts_with? and ends_with?"
+  fn test_starts_ends_with -> Result<Bool, String>
+    unless "hello world".starts_with?("hello")
+      return Result.Err("starts_with hello")
+    end
+
+    if "hello world".starts_with?("world")
+      return Result.Err("starts_with world")
+    end
+
+    unless "hello".starts_with?("")
+      return Result.Err("starts_with empty prefix")
+    end
+
+    if "hi".starts_with?("hello")
+      return Result.Err("hi should not start with hello")
+    end
+
+    unless "hello world".ends_with?("world")
+      return Result.Err("ends_with world")
+    end
+
+    if "hello world".ends_with?("hello")
+      return Result.Err("ends_with hello")
+    end
+
+    unless "hello".ends_with?("")
+      return Result.Err("ends_with empty suffix")
+    end
+
+    if "hi".ends_with?("hello")
+      return Result.Err("hi should not end with hello")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "trim_start, trim_end, trim"
+  fn test_trim_variants -> Result<Bool, String>
+    unless "  hello  ".trim_start() == "hello  "
+      return Result.Err("trim_start with spaces")
+    end
+
+    unless "hello".trim_start() == "hello"
+      return Result.Err("trim_start noop")
+    end
+
+    unless "  hello  ".trim_end() == "  hello"
+      return Result.Err("trim_end with spaces")
+    end
+
+    unless "hello".trim_end() == "hello"
+      return Result.Err("trim_end noop")
+    end
+
+    unless "  hello  ".trim() == "hello"
+      return Result.Err("trim both sides")
+    end
+
+    unless "hello".trim() == "hello"
+      return Result.Err("trim noop")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "upcase and downcase"
+  fn test_case_conversion -> Result<Bool, String>
+    unless "hello".upcase() == "HELLO"
+      return Result.Err("upcase hello")
+    end
+
+    unless "Hello World 123".upcase() == "HELLO WORLD 123"
+      return Result.Err("upcase mixed")
+    end
+
+    unless "HELLO".downcase() == "hello"
+      return Result.Err("downcase HELLO")
+    end
+
+    unless "Hello World 123".downcase() == "hello world 123"
+      return Result.Err("downcase mixed")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "replace"
+  fn test_replace -> Result<Bool, String>
+    unless "hello world".replace("world", "expo") == "hello expo"
+      return Result.Err("replace world")
+    end
+
+    unless "aaa".replace("a", "bb") == "bbbbbb"
+      return Result.Err("replace overlapping expansion")
+    end
+
+    unless "hello".replace("xyz", "!") == "hello"
+      return Result.Err("replace missing needle")
+    end
+
+    unless "hello".replace("", "!") == "hello"
+      return Result.Err("replace empty old is no-op")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "reverse"
+  fn test_reverse -> Result<Bool, String>
+    unless "hello".reverse() == "olleh"
+      return Result.Err("reverse hello")
+    end
+
+    unless "".reverse() == ""
+      return Result.Err("reverse empty")
+    end
+
+    unless "a".reverse() == "a"
+      return Result.Err("reverse single")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "split"
+  fn test_split -> Result<Bool, String>
+    parts: List<String> = "a,b,c".split(",")
+
+    unless parts.length() == 3
+      return Result.Err("split comma length")
+    end
+
+    unless parts.get(0).unwrap() == "a"
+      return Result.Err("split part 0")
+    end
+
+    unless parts.get(1).unwrap() == "b"
+      return Result.Err("split part 1")
+    end
+
+    unless parts.get(2).unwrap() == "c"
+      return Result.Err("split part 2")
+    end
+
+    parts = "hi".split("")
+
+    unless parts.length() == 2
+      return Result.Err("split empty sep length")
+    end
+
+    unless parts.get(0).unwrap() == "h"
+      return Result.Err("split empty sep 0")
+    end
+
+    unless parts.get(1).unwrap() == "i"
+      return Result.Err("split empty sep 1")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "String.join"
+  fn test_join -> Result<Bool, String>
+    join_parts: List<String> = ["a", "b", "c"]
+
+    unless String.join(join_parts, ", ") == "a, b, c"
+      return Result.Err("join three")
+    end
+
+    join_one: List<String> = ["one"]
+
+    unless String.join(join_one, "-") == "one"
+      return Result.Err("join one")
+    end
+
+    join_empty: List<String> = List.new()
+
+    unless String.join(join_empty, ",") == ""
+      return Result.Err("join empty list")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "alpha?, digit?, whitespace? (stdlib)"
+  fn test_stdlib_character_predicates -> Result<Bool, String>
+    unless "hello".alpha?()
+      return Result.Err("hello alpha?")
+    end
+
+    if "hello123".alpha?()
+      return Result.Err("hello123 not alpha")
+    end
+
+    unless "".alpha?()
+      return Result.Err("empty alpha? vacuous")
+    end
+
+    unless "123".digit?()
+      return Result.Err("123 digit?")
+    end
+
+    if "12a".digit?()
+      return Result.Err("12a not digit")
+    end
+
+    unless " \t\n".whitespace?()
+      return Result.Err("whitespace only")
+    end
+
+    if " x ".whitespace?()
+      return Result.Err(" x  not all whitespace")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "codepoints and graphemes"
+  fn test_codepoints_graphemes -> Result<Bool, String>
+    cp: List<String> = "abc".codepoints()
+
+    unless cp.length() == 3
+      return Result.Err("codepoints length")
+    end
+
+    unless cp.get(0).unwrap() == "a"
+      return Result.Err("codepoints first")
+    end
+
+    unless cp.get(2).unwrap() == "c"
+      return Result.Err("codepoints last")
+    end
+
+    cp = "hi".graphemes()
+
+    unless cp.length() == 2
+      return Result.Err("graphemes length")
+    end
+
+    unless cp.get(0).unwrap() == "h"
+      return Result.Err("graphemes first")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "to_int and to_float"
+  fn test_to_int_to_float -> Result<Bool, String>
+    match "42".to_int()
+      Result.Ok(val) ->
+        unless val == 42
+          return Result.Err("to_int 42")
+        end
+
+      Result.Err(msg) ->
+        return Result.Err("to_int err: #{msg}")
+    end
+
+    match "bad".to_int()
+      Result.Ok(_) ->
+        return Result.Err("to_int bad expected err")
+
+      Result.Err(msg) ->
+        unless msg == "invalid integer"
+          return Result.Err("to_int bad message")
+        end
+    end
+
+    match "3.14".to_float()
+      Result.Ok(val) ->
+        unless val == 3.14
+          return Result.Err("to_float 3.14")
+        end
+
+      Result.Err(msg) ->
+        return Result.Err("to_float err: #{msg}")
+    end
+
+    match "bad".to_float()
+      Result.Ok(_) ->
+        return Result.Err("to_float bad expected err")
+
+      Result.Err(msg) ->
+        unless msg == "invalid float"
+          return Result.Err("to_float bad message")
+        end
+    end
+
+    Result.Ok(true)
+  end
+end

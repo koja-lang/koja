@@ -145,6 +145,9 @@ pub(crate) fn declare_builtins<'ctx>(
     decl("expo_cwd", ptr.fn_type(&[], false));
     decl("expo_hostname", ptr.fn_type(&[], false));
 
+    // Kernel
+    decl("expo_kernel_exit", void.fn_type(&[i64.into()], false));
+
     // Debug formatting
     decl(
         "expo_format_binary",

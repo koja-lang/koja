@@ -205,9 +205,7 @@ pub fn compile_expr<'ctx>(
         ExprKind::ShortClosure { params, body } => {
             let body_stmts = vec![Statement::Expr((**body).clone())];
             let ret_type = compiler
-                .type_ctx
-                .closure_info
-                .get(&expr.span)
+                .closure_info_at(expr.span)
                 .and_then(|ci| ci.return_type.clone())
                 .unwrap_or(Type::Unit);
             compile_closure_core(compiler, params, ret_type, &body_stmts, function, expr.span)
@@ -458,7 +456,7 @@ fn resolve_closure_params<'ctx>(
             .collect();
     }
 
-    if let Some(closure_info) = compiler.type_ctx.closure_info.get(&span) {
+    if let Some(closure_info) = compiler.closure_info_at(span) {
         return closure_info.param_types.clone();
     }
 
@@ -523,11 +521,7 @@ fn compile_closure_core<'ctx>(
     let closure_name = format!("__closure_{}", compiler.fn_state.closure_counter);
     compiler.fn_state.closure_counter += 1;
 
-    let captures = compiler
-        .type_ctx
-        .closure_info
-        .get(&span)
-        .map(|ci| ci.captures.clone());
+    let captures = compiler.closure_info_at(span).map(|ci| ci.captures.clone());
 
     let captured_values: Vec<(String, BasicValueEnum<'ctx>, Type)> =
         if let Some(ref captures) = captures {

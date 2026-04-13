@@ -598,9 +598,7 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
             }
         }
         ExprKind::ShortClosure { .. } => c
-            .type_ctx
-            .closure_info
-            .get(&expr.span)
+            .closure_info_at(expr.span)
             .map(|ci| Type::Function {
                 params: ci
                     .param_types

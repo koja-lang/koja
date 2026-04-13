@@ -1,0 +1,415 @@
+enum Color
+  Red
+  Green
+  Blue
+end
+
+enum Shape
+  Circle(Int)
+  Rect(Int, Int)
+end
+
+struct CondStmtCounter
+  value: Int
+
+  fn new -> Self
+    CondStmtCounter{value: 0}
+  end
+
+  fn apply(move self, n: Int) -> Self
+    cond
+      n > 0 -> self.value = self.value + n
+      n < 0 -> self.value = self.value + n
+      else -> ()
+    end
+
+    self
+  end
+end
+
+struct ControlFlowTest
+  fn classify_size(n: Int) -> String
+    cond
+      n > 100 -> "big"
+      n > 10 -> "medium"
+      else -> "small"
+    end
+  end
+
+  fn color_name(c: Color) -> String
+    match c
+      Red -> "red"
+      Green -> "green"
+      Blue -> "blue"
+    end
+  end
+
+  fn shape_area(s: Shape) -> Int
+    match s
+      Shape.Circle(r) -> r * r * 3
+      Shape.Rect(w, h) -> w * h
+    end
+  end
+
+  fn classify_or(n: Int) -> String
+    match n
+      1 | 2 | 3 -> "small"
+      4 | 5 | 6 -> "medium"
+      _ -> "large"
+    end
+  end
+
+  fn bracket_kind(ch: String) -> String
+    match ch
+      "(" | ")" | "[" | "]" -> "bracket"
+      _ -> "other"
+    end
+  end
+
+  fn color_warmth(c: Color) -> String
+    match c
+      Color.Red -> "warm"
+      Color.Green | Color.Blue -> "cool"
+    end
+  end
+
+  fn or_with_guard(n: Int) -> String
+    match n
+      1 | 2 | 3 when n > 2 -> "three"
+      1 | 2 | 3 -> "small"
+      _ -> "other"
+    end
+  end
+
+  @test "for loops accumulate and iterate strings"
+  fn test_for_loops -> Result<Bool, String>
+    list: List<Int> = List.new()
+    list = list.append(1)
+    list = list.append(2)
+    list = list.append(3)
+
+    sum = 0
+
+    for item in list
+      sum += item
+    end
+
+    unless sum == 6
+      return Result.Err("for sum over list")
+    end
+
+    acc = ""
+
+    for c in "abc"
+      acc = acc <> c
+    end
+
+    unless acc == "abc"
+      return Result.Err("for over string codepoints")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "if else nested and classify"
+  fn test_if_else -> Result<Bool, String>
+    branch = ""
+
+    if true
+      branch = "yes"
+    end
+
+    unless branch == "yes"
+      return Result.Err("if true branch")
+    end
+
+    branch2 = ""
+
+    if false
+      branch2 = "nope"
+    else
+      branch2 = "else branch"
+    end
+
+    unless branch2 == "else branch"
+      return Result.Err("if false else branch")
+    end
+
+    x = 5
+    cmp = ""
+
+    if x > 3
+      cmp = "greater"
+    else
+      cmp = "not greater"
+    end
+
+    unless cmp == "greater"
+      return Result.Err("if comparison")
+    end
+
+    y = x > 2 ? "big" : "small"
+
+    unless y == "big"
+      return Result.Err("ternary")
+    end
+
+    unless ControlFlowTest.classify_size(200) == "big"
+      return Result.Err("classify big")
+    end
+
+    unless ControlFlowTest.classify_size(50) == "medium"
+      return Result.Err("classify medium")
+    end
+
+    unless ControlFlowTest.classify_size(3) == "small"
+      return Result.Err("classify small")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "loop and break"
+  fn test_loop_break -> Result<Bool, String>
+    i = 0
+    count = 0
+
+    loop
+      if i >= 3
+        break
+      end
+
+      count += 1
+      i += 1
+    end
+
+    unless count == 3
+      return Result.Err("loop iterations before break")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "match integers and wildcards"
+  fn test_match_integers -> Result<Bool, String>
+    x = 3
+
+    label =
+      match x
+        1 -> "one"
+        2 -> "two"
+        3 -> "three"
+        _ -> "other"
+      end
+
+    unless label == "three"
+      return Result.Err("match literal 3")
+    end
+
+    y = 99
+    kind = ""
+
+    match y
+      1 -> kind = "one"
+      _ -> kind = "wildcard"
+    end
+
+    unless kind == "wildcard"
+      return Result.Err("match wildcard")
+    end
+
+    z = 42
+
+    msg =
+      match z
+        0 -> "zero"
+        val -> "got #{val}"
+      end
+
+    unless msg == "got 42"
+      return Result.Err("match bind pattern")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "match plain and tagged enums"
+  fn test_match_enums -> Result<Bool, String>
+    unless ControlFlowTest.color_name(Color.Red) == "red"
+      return Result.Err("color Red")
+    end
+
+    unless ControlFlowTest.color_name(Color.Blue) == "blue"
+      return Result.Err("color Blue")
+    end
+
+    unless ControlFlowTest.shape_area(Shape.Circle(5)) == 75
+      return Result.Err("circle area")
+    end
+
+    unless ControlFlowTest.shape_area(Shape.Rect(4, 6)) == 24
+      return Result.Err("rect area")
+    end
+
+    opt: Option<Int> = Option.Some(10)
+
+    bucket =
+      match opt
+        Option.Some(v) when v > 5 -> "big some"
+        Option.Some(_) -> "small some"
+        Option.None -> "none"
+      end
+
+    unless bucket == "big some"
+      return Result.Err("Option match with guard")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "match OR patterns"
+  fn test_match_or -> Result<Bool, String>
+    unless ControlFlowTest.classify_or(1) == "small"
+      return Result.Err("or classify 1")
+    end
+
+    unless ControlFlowTest.classify_or(2) == "small"
+      return Result.Err("or classify 2")
+    end
+
+    unless ControlFlowTest.classify_or(5) == "medium"
+      return Result.Err("or classify 5")
+    end
+
+    unless ControlFlowTest.classify_or(99) == "large"
+      return Result.Err("or classify 99")
+    end
+
+    unless ControlFlowTest.bracket_kind("(") == "bracket"
+      return Result.Err("bracket paren")
+    end
+
+    unless ControlFlowTest.bracket_kind("]") == "bracket"
+      return Result.Err("bracket square close")
+    end
+
+    unless ControlFlowTest.bracket_kind("x") == "other"
+      return Result.Err("bracket other")
+    end
+
+    unless ControlFlowTest.color_warmth(Color.Red) == "warm"
+      return Result.Err("warmth red")
+    end
+
+    unless ControlFlowTest.color_warmth(Color.Green) == "cool"
+      return Result.Err("warmth green")
+    end
+
+    unless ControlFlowTest.color_warmth(Color.Blue) == "cool"
+      return Result.Err("warmth blue")
+    end
+
+    unless ControlFlowTest.or_with_guard(3) == "three"
+      return Result.Err("or guard three")
+    end
+
+    unless ControlFlowTest.or_with_guard(1) == "small"
+      return Result.Err("or guard one")
+    end
+
+    unless ControlFlowTest.or_with_guard(7) == "other"
+      return Result.Err("or guard other")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "unless"
+  fn test_unless -> Result<Bool, String>
+    ran_false = false
+
+    unless false
+      ran_false = true
+    end
+
+    unless ran_false
+      return Result.Err("unless false should run body")
+    end
+
+    ran_true = false
+
+    unless true
+      ran_true = true
+    end
+
+    if ran_true
+      return Result.Err("unless true should not run body")
+    end
+
+    x = 10
+    ok_high = false
+
+    unless x > 20
+      ok_high = true
+    end
+
+    unless ok_high
+      return Result.Err("unless x > 20 should run when condition is false")
+    end
+
+    ok_low = false
+
+    unless x < 5
+      ok_low = true
+    end
+
+    unless ok_low
+      return Result.Err("unless x < 5 should run when condition is false")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "while accumulation"
+  fn test_while -> Result<Bool, String>
+    i = 0
+    seen = 0
+
+    while i < 5
+      seen += 1
+      i += 1
+    end
+
+    unless seen == 5
+      return Result.Err("while iteration count")
+    end
+
+    sum = 0
+    n = 1
+
+    while n <= 10
+      sum += n
+      n += 1
+    end
+
+    unless sum == 55
+      return Result.Err("while sum 1..10")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "cond with multiple statements per branch"
+  fn test_cond_multistatement -> Result<Bool, String>
+    c = CondStmtCounter.new()
+    c = c.apply(5)
+    c = c.apply(-2)
+    c = c.apply(0)
+
+    unless c.value == 3
+      return Result.Err("cond counter value")
+    end
+
+    Result.Ok(true)
+  end
+end

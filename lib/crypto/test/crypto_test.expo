@@ -81,6 +81,17 @@ struct SHA256Test
 end
 
 struct SHA384Test
+  @test "SHA384 empty input"
+  fn test_empty -> Result<Bool, String>
+    d = SHA384.digest("".to_binary())
+
+    unless d.byte_size() == 48
+      return Result.Err("expected 48 bytes for empty input")
+    end
+
+    Result.Ok(true)
+  end
+
   @test "SHA384 one-shot digest"
   fn test_digest -> Result<Bool, String>
     d = SHA384.digest("hello".to_binary())
@@ -109,6 +120,17 @@ struct SHA384Test
 end
 
 struct SHA512Test
+  @test "SHA512 empty input"
+  fn test_empty -> Result<Bool, String>
+    d = SHA512.digest("".to_binary())
+
+    unless d.byte_size() == 64
+      return Result.Err("expected 64 bytes for empty input")
+    end
+
+    Result.Ok(true)
+  end
+
   @test "SHA512 one-shot digest"
   fn test_digest -> Result<Bool, String>
     d = SHA512.digest("hello".to_binary())

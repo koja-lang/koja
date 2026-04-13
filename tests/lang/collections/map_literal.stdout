@@ -1,6 +1,0 @@
-length: 2
-has hello: true
-has world: true
-has missing: false
-empty length: 0
-empty empty?: true

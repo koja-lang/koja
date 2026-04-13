@@ -81,6 +81,12 @@ pub extern "C" fn expo_time_now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+/// Terminates the process immediately with the given exit code.
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_kernel_exit(code: i64) {
+    std::process::exit(code as i32);
+}
+
 /// Fills `buf` with `len` bytes of OS entropy.
 fn fill_random(buf: *mut u8, len: usize) {
     let mut offset = 0;

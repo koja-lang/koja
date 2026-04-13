@@ -1,6 +1,0 @@
-str to_binary ok
-to_bits ok
-hi
-invalid utf8 caught
-bits to_binary ok
-all conversion tests passed

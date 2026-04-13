@@ -1,0 +1,47 @@
+struct RandomTest
+  @test "Random.bytes sizes"
+  fn test_bytes_sizes -> Result<Bool, String>
+    unless Random.bytes(0).byte_size() == 0
+      return Result.Err("bytes(0) size")
+    end
+
+    unless Random.bytes(1).byte_size() == 1
+      return Result.Err("bytes(1) size")
+    end
+
+    unless Random.bytes(16).byte_size() == 16
+      return Result.Err("bytes(16) size")
+    end
+
+    unless Random.bytes(100).byte_size() == 100
+      return Result.Err("bytes(100) size")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Random.int range"
+  fn test_int_inclusive_range -> Result<Bool, String>
+    trials = 0
+
+    while trials < 32
+      n = Random.int(1, 10)
+
+      if n < 1
+        return Result.Err("Random.int below min")
+      end
+
+      if n > 10
+        return Result.Err("Random.int above max")
+      end
+
+      trials += 1
+    end
+
+    unless Random.int(42, 42) == 42
+      return Result.Err("singleton range should return that value")
+    end
+
+    Result.Ok(true)
+  end
+end

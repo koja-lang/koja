@@ -25,7 +25,7 @@ use self::hash::{emit_bitwise_intrinsic, emit_eq_intrinsic, emit_hash_intrinsic}
 use self::io::{emit_fd_intrinsic, emit_file_intrinsic};
 use self::socket::emit_socket_intrinsic;
 use self::string::{emit_conversion_intrinsic, emit_parse_intrinsic, emit_string_intrinsic};
-use self::system::emit_random_intrinsic;
+use self::system::{emit_kernel_intrinsic, emit_random_intrinsic};
 
 const PRIMITIVE_TYPES: &[&str] = &[
     "Bool", "Int", "Int8", "Int16", "Int32", "String", "UInt8", "UInt16", "UInt32", "UInt64",
@@ -86,6 +86,8 @@ const SOCKET_INTRINSICS: &[&str] = &[
 
 const RANDOM_INTRINSICS: &[&str] = &["Random_bytes"];
 
+const KERNEL_INTRINSICS: &[&str] = &["Kernel_exit"];
+
 const CSTRING_INTRINSICS: &[&str] = &["String_to_cstring", "CString_to_string"];
 
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
@@ -113,6 +115,7 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
         || FILE_INTRINSICS.contains(&mangled)
         || SOCKET_INTRINSICS.contains(&mangled)
         || RANDOM_INTRINSICS.contains(&mangled)
+        || KERNEL_INTRINSICS.contains(&mangled)
         || is_cptr_intrinsic(mangled)
         || CSTRING_INTRINSICS.contains(&mangled)
     {
@@ -153,6 +156,10 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
 
     if RANDOM_INTRINSICS.contains(&mangled) {
         return emit_random_intrinsic(c, fn_val, mangled);
+    }
+
+    if KERNEL_INTRINSICS.contains(&mangled) {
+        return emit_kernel_intrinsic(c, fn_val, mangled);
     }
 
     if is_cptr_intrinsic(mangled) {

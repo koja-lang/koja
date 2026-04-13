@@ -345,4 +345,49 @@ struct ListTest
 
     Result.Ok(true)
   end
+
+  @test "for-in iterates map, filter, and chained lists"
+  fn test_for_in_iterators -> Result<Bool, String>
+    nums: List<Int> = [1, 2, 3, 4, 5]
+
+    doubled =
+      nums.map(fn (n: Int) -> Int n * 2 end)
+    sum_d = 0
+
+    for d in doubled
+      sum_d += d
+    end
+
+    unless sum_d == 30
+      return Result.Err("expected sum 30 from doubled, got #{sum_d}")
+    end
+
+    big =
+      nums.filter(fn (n: Int) -> Bool n > 2 end)
+    sum_b = 0
+
+    for b in big
+      sum_b += b
+    end
+
+    unless sum_b == 12
+      return Result.Err("expected sum 12 from filter, got #{sum_b}")
+    end
+
+    chained =
+      nums.filter(fn (n: Int) -> Bool n > 2 end).map(
+        fn (n: Int) -> Int n * 10 end,
+      )
+    sum_c = 0
+
+    for c in chained
+      sum_c += c
+    end
+
+    unless sum_c == 120
+      return Result.Err("expected sum 120 from chained, got #{sum_c}")
+    end
+
+    Result.Ok(true)
+  end
 end

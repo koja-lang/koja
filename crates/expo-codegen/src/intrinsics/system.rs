@@ -2,6 +2,34 @@ use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
 
+pub fn emit_kernel_intrinsic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: FunctionValue<'ctx>,
+    mangled: &str,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    match mangled {
+        "Kernel_exit" => {
+            let code = fn_val.get_nth_param(0).unwrap();
+            let rt_fn = *c
+                .functions
+                .get("expo_kernel_exit")
+                .ok_or("expo_kernel_exit not declared")?;
+            c.call_void(rt_fn, &[code.into()], "");
+            c.builder.build_unreachable().unwrap();
+        }
+        _ => return Err(format!("unknown kernel intrinsic: {mangled}")),
+    }
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
+}
+
 pub fn emit_random_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
     fn_val: FunctionValue<'ctx>,

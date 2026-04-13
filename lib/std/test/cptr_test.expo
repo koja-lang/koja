@@ -65,6 +65,19 @@ struct CPtrTest
     Result.Ok(true)
   end
 
+  @test "Float pointer"
+  fn test_float -> Result<Bool, String>
+    ptr: CPtr<Float> = CPtr.alloc(1)
+    ptr.write(3.14)
+
+    unless ptr.read() == 3.14
+      return Result.Err("expected 3.14")
+    end
+
+    ptr.free()
+    Result.Ok(true)
+  end
+
   @test "UInt8 pointer"
   fn test_uint8 -> Result<Bool, String>
     byte_ptr: CPtr<UInt8> = CPtr.alloc(2)

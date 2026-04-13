@@ -1,0 +1,69 @@
+struct BoolTest
+  @test "and"
+  fn test_and -> Result<Bool, String>
+    unless true and true
+      return Result.Err("true and true")
+    end
+
+    if true and false
+      return Result.Err("true and false")
+    end
+
+    if false and true
+      return Result.Err("false and true")
+    end
+
+    if false and false
+      return Result.Err("false and false")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "or"
+  fn test_or -> Result<Bool, String>
+    unless true or true
+      return Result.Err("true or true")
+    end
+
+    unless true or false
+      return Result.Err("true or false")
+    end
+
+    unless false or true
+      return Result.Err("false or true")
+    end
+
+    if false or false
+      return Result.Err("false or false")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "not"
+  fn test_not -> Result<Bool, String>
+    unless not true == false
+      return Result.Err("not true")
+    end
+
+    unless not false == true
+      return Result.Err("not false")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "combined logical expressions"
+  fn test_combined -> Result<Bool, String>
+    unless true and not false == true
+      return Result.Err("and with not and ==")
+    end
+
+    if not true or false
+      return Result.Err("not true or false should be false")
+    end
+
+    Result.Ok(true)
+  end
+end

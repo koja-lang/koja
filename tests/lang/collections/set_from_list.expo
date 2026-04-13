@@ -1,9 +1,0 @@
-fn main
-  s: Set<Int> = [1, 2, 3, 2, 1]
-
-  print("length: #{s.length()}")
-  print("has 1: #{s.has?(1)}")
-  print("has 2: #{s.has?(2)}")
-  print("has 3: #{s.has?(3)}")
-  print("has 4: #{s.has?(4)}")
-end

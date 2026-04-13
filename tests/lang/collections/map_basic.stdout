@@ -1,6 +1,0 @@
-length: 2
-has hello: true
-has missing: false
-empty: false
-after remove length: 1
-has hello after remove: false

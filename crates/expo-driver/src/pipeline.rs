@@ -100,15 +100,36 @@ pub fn typecheck_graph(
         unified_project_ctx.merge(&module_contexts[*name]);
     }
 
-    // Check: type-check each project module against the unified context.
-    for name in &project_names {
-        let rm = graph.modules.get_mut(*name).unwrap();
-        let mut ctx = module_contexts.remove(*name).unwrap();
+    /// Embedded stdlib modules use synthetic paths like `<std.list>`; only
+    /// workspace sources and the generated test harness need body checking.
+    fn module_needs_body_typecheck(path: &Path) -> bool {
+        let s = path.to_string_lossy();
+        if s.as_ref() == "<test_harness>" {
+            return true;
+        }
+        if s.starts_with('<') && s.ends_with('>') {
+            return false;
+        }
+        true
+    }
+
+    // Check: type-check each module backed by real (non-embedded) source.
+    // Packages named `std` still place tests under `std.test.*`; those must
+    // be checked like any other project code.
+    for name in graph.order.clone() {
+        let path = &graph.modules[&name].path;
+        if !module_needs_body_typecheck(path) {
+            continue;
+        }
+        let Some(mut ctx) = module_contexts.remove(&name) else {
+            continue;
+        };
         ctx.merge(&unified_project_ctx);
+        let rm = graph.modules.get_mut(&name).unwrap();
         resolve_module_aliases(&rm.module, &mut ctx);
         expo_typecheck::resolve_packages(&mut ctx);
         expo_typecheck::check_module(&mut rm.module, &mut ctx);
-        module_contexts.insert((*name).clone(), ctx);
+        module_contexts.insert(name, ctx);
     }
 
     for name in &graph.order {
@@ -522,32 +543,51 @@ fn discover_tests(graph: &ModuleGraph, project_name: &str) -> Vec<TestCase> {
 /// No imports are needed -- the gather-then-check pipeline makes all project
 /// types visible to every module automatically.
 fn generate_harness(tests: &[TestCase], _graph: &ModuleGraph) -> String {
-    let total = tests.len();
+    let green = "\x1b[32m";
+    let red = "\x1b[31m";
+    let reset = "\x1b[0m";
+
     let mut body = String::new();
+    body.push_str("  failures: List<String> = []\n");
     body.push_str("  passed = 0\n");
     body.push_str("  failed = 0\n");
-    body.push_str(&format!("  print(\"running {} tests\")\n", total));
 
     for test in tests {
         let escaped_desc = test.description.replace('\\', "\\\\").replace('"', "\\\"");
-        body.push_str(&format!("  print(\"test {} ...\")\n", escaped_desc));
         body.push_str(&format!(
             "  match {}.{}()\n",
             test.struct_name, test.fn_name
         ));
         body.push_str("    Result.Ok(_) ->\n");
         body.push_str("      passed = passed + 1\n");
-        body.push_str("      print(\"  ok\")\n");
+        body.push_str(&format!("      IO.write(\"{green}.{reset}\")\n"));
         body.push_str("    Result.Err(msg) ->\n");
         body.push_str("      failed = failed + 1\n");
-        body.push_str("      print(\"  FAILED: \" <> msg)\n");
+        body.push_str(&format!("      IO.write(\"{red}X{reset}\")\n"));
+        body.push_str(&format!(
+            "      failures = failures.append(\"  #{{failed}}) {} ({})\\n     \" <> msg)\n",
+            escaped_desc, test.struct_name
+        ));
         body.push_str("  end\n");
     }
 
     body.push_str("  print(\"\")\n");
-    body.push_str("  print(\"#{passed} passed, #{failed} failed\")\n");
     body.push_str("  if failed > 0\n");
-    body.push_str("    panic(\"#{failed} test(s) failed\")\n");
+    body.push_str("    print(\"\")\n");
+    body.push_str("    print(\"Failures:\")\n");
+    body.push_str("    print(\"\")\n");
+    body.push_str("    for f in failures\n");
+    body.push_str("      print(f)\n");
+    body.push_str("      print(\"\")\n");
+    body.push_str("    end\n");
+    body.push_str(&format!(
+        "    print(\"{red}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
+    ));
+    body.push_str("    Kernel.exit(1)\n");
+    body.push_str("  else\n");
+    body.push_str(&format!(
+        "    print(\"{green}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
+    ));
     body.push_str("  end\n");
 
     let mut source = String::new();
