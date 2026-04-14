@@ -6,8 +6,9 @@ use expo_ast::ast::{
 };
 use expo_ast::span::Span;
 
+use expo_ast::types::{named_generic_std, named_std};
 use expo_typecheck::context::FnParam;
-use expo_typecheck::types::{Primitive, Type, mangle_name, named, named_generic};
+use expo_typecheck::types::{Primitive, Type, mangle_name};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -765,7 +766,7 @@ fn resolve_list_literal(
         monomorphize_impl_method(compiler, "List", "append", &type_args, &[])?;
     }
 
-    let result_type = named_generic("List", vec![element_type.clone()], compiler.type_ctx);
+    let result_type = named_generic_std("List", vec![element_type.clone()]);
 
     Ok(ResolvedListLiteral {
         element_type,
@@ -842,11 +843,7 @@ fn resolve_map_literal(
         monomorphize_impl_method(compiler, "Map", "put", &type_args, &[])?;
     }
 
-    let result_type = named_generic(
-        "Map",
-        vec![key_type.clone(), value_type.clone()],
-        compiler.type_ctx,
-    );
+    let result_type = named_generic_std("Map", vec![key_type.clone(), value_type.clone()]);
 
     Ok(ResolvedMapLiteral {
         key_type: key_type.clone(),
@@ -1265,7 +1262,7 @@ fn load_io_ready_from_payload<'ctx>(
     payload_ptr: PointerValue<'ctx>,
     label: &str,
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    let io_ready_type = named("IOReady");
+    let io_ready_type = named_std("IOReady");
     let io_ready_llvm = to_llvm_type(&io_ready_type, compiler.context, &compiler.types)
         .ok_or("no LLVM type for IOReady enum")?;
     Ok(compiler
@@ -1451,7 +1448,7 @@ fn compile_receive_tagged<'ctx>(
 
         let io_ready_val = load_io_ready_from_payload(compiler, payload_ptr, "synth_io")?;
 
-        let io_ready_type = named("IOReady");
+        let io_ready_type = named_std("IOReady");
         let m_type = if let Type::Named { type_args, .. } = &resolved.envelope_type {
             type_args.first().cloned()
         } else {
@@ -1539,7 +1536,7 @@ fn compile_receive_tagged<'ctx>(
     if has_lifecycle {
         compiler.builder.position_at_end(lifecycle_block);
 
-        let lifecycle_type = named("Lifecycle");
+        let lifecycle_type = named_std("Lifecycle");
         let lifecycle_llvm = to_llvm_type(&lifecycle_type, compiler.context, &compiler.types)
             .ok_or("no LLVM type for Lifecycle enum")?;
         let lifecycle_value = compiler
@@ -1580,7 +1577,7 @@ fn compile_receive_tagged<'ctx>(
     if let Some(io_ready_block) = io_ready_block {
         compiler.builder.position_at_end(io_ready_block);
 
-        let io_ready_type = named("IOReady");
+        let io_ready_type = named_std("IOReady");
         let io_ready_value = load_io_ready_from_payload(compiler, payload_ptr, "io_msg")?;
         let io_ready_alloca = compiler
             .builder

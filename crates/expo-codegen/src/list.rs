@@ -3,7 +3,8 @@
 //! List is a heap-backed growable array using `malloc`/`realloc`/`free`.
 //! Layout: `{ ptr: i8*, length: i64, capacity: i64 }`
 
-use expo_typecheck::types::{Primitive, Type, mangle_name, named_generic};
+use expo_ast::types::named_generic_std;
+use expo_typecheck::types::{Primitive, Type, mangle_name};
 
 use crate::compiler::{Compiler, EmitResult};
 use crate::generics::ensure_types_exist;
@@ -192,7 +193,7 @@ pub fn emit_list_method<'ctx>(
         "get" => {
             let option_type_args = vec![elem_ty.clone()];
             let option_mangled = mangle_name("Option", &option_type_args);
-            ensure_types_exist(c, &named_generic("Option", option_type_args, c.type_ctx))?;
+            ensure_types_exist(c, &named_generic_std("Option", option_type_args))?;
             let option_struct = c
                 .types
                 .get_monomorphized(&option_mangled)
@@ -361,23 +362,17 @@ pub fn emit_list_method<'ctx>(
 
         "pop" => {
             let option_type_args = vec![elem_ty.clone()];
-            ensure_types_exist(
-                c,
-                &named_generic("Option", option_type_args.clone(), c.type_ctx),
-            )?;
+            ensure_types_exist(c, &named_generic_std("Option", option_type_args.clone()))?;
             let option_mangled = mangle_name("Option", &option_type_args);
             let option_struct = c
                 .types
                 .get_monomorphized(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
-            let list_type = named_generic("List", vec![elem_ty.clone()], c.type_ctx);
-            let option_type = named_generic("Option", option_type_args, c.type_ctx);
+            let list_type = named_generic_std("List", vec![elem_ty.clone()]);
+            let option_type = named_generic_std("Option", option_type_args);
             let pair_type_args = vec![option_type, list_type];
-            ensure_types_exist(
-                c,
-                &named_generic("Pair", pair_type_args.clone(), c.type_ctx),
-            )?;
+            ensure_types_exist(c, &named_generic_std("Pair", pair_type_args.clone()))?;
             let pair_mangled = mangle_name("Pair", &pair_type_args);
             let pair_struct = c
                 .types

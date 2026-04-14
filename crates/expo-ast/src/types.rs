@@ -547,3 +547,22 @@ pub fn named(name: &str) -> Type {
         type_args: vec![],
     }
 }
+
+/// Constructs a non-generic Named type with `Package::Std`. Use for known
+/// stdlib types (e.g. `IOReady`, `Lifecycle`) where the package is certain.
+pub fn named_std(name: &str) -> Type {
+    Type::Named {
+        identifier: TypeIdentifier::std(name),
+        type_args: vec![],
+    }
+}
+
+/// Constructs a generic Named type with `Package::Std`. Use for known
+/// stdlib generic types (e.g. `Option<T>`, `List<T>`) where the package is
+/// certain and no `TypeContext` resolution is needed.
+pub fn named_generic_std(name: &str, type_args: Vec<Type>) -> Type {
+    Type::Named {
+        identifier: TypeIdentifier::std(name),
+        type_args,
+    }
+}

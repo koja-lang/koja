@@ -11,9 +11,8 @@
 //! return an OS-level exit code derived from `StopReason`.
 
 use expo_ast::ast::{Arg, Expr, ExprKind};
-use expo_typecheck::types::{
-    Primitive, Type, build_substitution, mangle_name, named_generic, substitute,
-};
+use expo_ast::types::named_generic_std;
+use expo_typecheck::types::{Primitive, Type, build_substitution, mangle_name, substitute};
 use inkwell::IntPredicate;
 use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue};
@@ -358,10 +357,10 @@ struct ResolvedRefType {
 }
 
 /// Computes the mangled name and Expo type for a `Ref<M, R>` struct.
-fn resolve_ref_type(compiler: &Compiler, msg_type: Type, reply_type: Type) -> ResolvedRefType {
+fn resolve_ref_type(msg_type: Type, reply_type: Type) -> ResolvedRefType {
     let type_args = vec![msg_type.clone(), reply_type.clone()];
     let mangled_name = mangle_name("Ref", &type_args);
-    let expo_type = named_generic("Ref", type_args, compiler.type_ctx);
+    let expo_type = named_generic_std("Ref", type_args);
     ResolvedRefType {
         expo_type,
         mangled_name,
@@ -380,7 +379,7 @@ pub(crate) fn build_ref_value<'ctx>(
     msg_type: Type,
     reply_type: Type,
 ) -> Result<TypedValue<'ctx>, String> {
-    let resolved = resolve_ref_type(compiler, msg_type, reply_type);
+    let resolved = resolve_ref_type(msg_type, reply_type);
 
     if !compiler
         .types
