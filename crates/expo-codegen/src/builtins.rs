@@ -116,7 +116,7 @@ pub(crate) fn declare_builtins<'ctx>(
     );
     decl(
         "expo_fd_write",
-        i64.fn_type(&[i64.into(), ptr.into()], false),
+        i64.fn_type(&[i64.into(), ptr.into(), i64.into()], false),
     );
     decl("expo_fd_close", i64.fn_type(&[i64.into()], false));
     decl("expo_last_error", ptr.fn_type(&[], false));

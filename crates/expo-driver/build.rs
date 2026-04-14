@@ -38,6 +38,18 @@ fn main() {
     );
     println!("cargo:rerun-if-changed={}", crypto_lib_path.display());
 
+    let ssl_lib_path = find_file(&build_dir, "libssl.a").unwrap_or_else(|| {
+        panic!(
+            "libssl.a not found under {}. boring-sys should have built it.",
+            build_dir.display()
+        )
+    });
+    println!(
+        "cargo:rustc-env=EXPO_SSL_LIB_PATH={}",
+        ssl_lib_path.display()
+    );
+    println!("cargo:rerun-if-changed={}", ssl_lib_path.display());
+
     println!("cargo:rerun-if-changed=build.rs");
 }
 

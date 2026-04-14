@@ -43,15 +43,15 @@ pub extern "C" fn expo_fd_read(fd: i64, count: i64) -> *const u8 {
     }
 }
 
-/// Writes a length-prefixed string's contents to a raw file descriptor.
+/// Writes `data_len` bytes from `data_ptr` to a raw file descriptor.
 /// If the fd is non-blocking (sockets), suspends the process until the
 /// write buffer has space. Returns bytes written, or -1 on error.
 ///
 /// # Safety
-/// `data_ptr` must point to a valid length-prefixed Expo string.
+/// `data_ptr` must point to at least `data_len` readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn expo_fd_write(fd: i64, data_ptr: *const u8) -> i64 {
-    let slice = unsafe { expo_string_to_slice(data_ptr) };
+pub unsafe extern "C" fn expo_fd_write(fd: i64, data_ptr: *const u8, data_len: i64) -> i64 {
+    let slice = unsafe { std::slice::from_raw_parts(data_ptr, data_len as usize) };
     loop {
         let n = unsafe { libc_write(fd as i32, slice.as_ptr(), slice.len()) };
         if n >= 0 {
@@ -223,4 +223,14 @@ pub unsafe extern "C" fn expo_file_write_all(path_ptr: *const u8, content_ptr: *
             -1
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expo_io_block(fd: i64, readable: i64) {
+    let interest = if readable != 0 {
+        Interest::Readable
+    } else {
+        Interest::Writable
+    };
+    io_block(fd as i32, interest);
 }

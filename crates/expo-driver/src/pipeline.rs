@@ -610,6 +610,7 @@ pub struct BuildArgs {
 /// The runtime is always linked; others are available for `@link` resolution.
 const EMBEDDED_RUNTIME: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
 const EMBEDDED_CRYPTO: &[u8] = include_bytes!(env!("EXPO_CRYPTO_LIB_PATH"));
+const EMBEDDED_SSL: &[u8] = include_bytes!(env!("EXPO_SSL_LIB_PATH"));
 
 /// Returns the macOS product version (e.g. "26.4") for use as MACOSX_DEPLOYMENT_TARGET.
 /// Cached so `sw_vers` is invoked at most once per process.
@@ -645,6 +646,8 @@ fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries
         .expect("failed to write embedded runtime library");
     fs::write(tmp_dir.join("libcrypto.a"), EMBEDDED_CRYPTO)
         .expect("failed to write embedded crypto library");
+    fs::write(tmp_dir.join("libssl.a"), EMBEDDED_SSL)
+        .expect("failed to write embedded ssl library");
 
     let tmp_dir_str = tmp_dir.to_string_lossy();
 
