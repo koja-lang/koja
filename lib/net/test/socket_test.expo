@@ -14,7 +14,7 @@ struct SocketTest
         Result.Err("stream create failed: #{msg}")
 
       Result.Ok(s) ->
-        s.close()
+        _ = s.close()
         Result.Ok(true)
     end
   end
@@ -26,7 +26,7 @@ struct SocketTest
         Result.Err("datagram create failed: #{msg}")
 
       Result.Ok(s) ->
-        s.close()
+        _ = s.close()
         Result.Ok(true)
     end
   end
@@ -68,7 +68,7 @@ struct SocketTest
             Result.Err("bind failed: #{msg}")
 
           Result.Ok(bound) ->
-            bound.close()
+            _ = bound.close()
             Result.Ok(true)
         end
     end
@@ -83,7 +83,7 @@ struct SocketTest
       Result.Ok(s) ->
         match s.connect(SocketAddress{ip: IPAddress.loopback(), port: 1})
           Result.Ok(conn) ->
-            conn.close()
+            _ = conn.close()
             Result.Err("expected connection refused")
 
           Result.Err(_) ->
@@ -110,7 +110,7 @@ struct SocketTest
         Result.Err("tcp listener bind failed: #{msg}")
 
       Result.Ok(listener) ->
-        listener.close()
+        _ = listener.close()
         Result.Ok(true)
     end
   end
@@ -121,7 +121,7 @@ struct SocketTest
       SocketAddress{ip: IPAddress.loopback(), port: 1},
     )
       Result.Ok(conn) ->
-        conn.close()
+        _ = conn.close()
         Result.Err("expected tcp connection refused")
 
       Result.Err(_) ->
@@ -136,7 +136,7 @@ struct SocketTest
         Result.Err("udp bind failed: #{msg}")
 
       Result.Ok(sock) ->
-        sock.close()
+        _ = sock.close()
         Result.Ok(true)
     end
   end
@@ -148,7 +148,7 @@ struct SocketTest
         Result.Err("udp bind_addr failed: #{msg}")
 
       Result.Ok(sock) ->
-        sock.close()
+        _ = sock.close()
         Result.Ok(true)
     end
   end
@@ -162,7 +162,7 @@ struct SocketTest
         Result.Err("tcp listener bind_addr failed: #{msg}")
 
       Result.Ok(listener) ->
-        listener.close()
+        _ = listener.close()
         Result.Ok(true)
     end
   end

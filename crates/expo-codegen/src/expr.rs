@@ -289,23 +289,38 @@ fn compile_literal<'ctx>(compiler: &Compiler<'ctx>, literal: &Literal) -> ExprRe
     }
 }
 
+enum ResolvedString {
+    Interpolated,
+    Literal { value: String },
+}
+
+fn resolve_string(parts: &[StringPart]) -> ResolvedString {
+    let has_interpolation = parts
+        .iter()
+        .any(|p| matches!(p, StringPart::Interpolation { .. }));
+
+    if has_interpolation {
+        return ResolvedString::Interpolated;
+    }
+
+    let mut combined = String::new();
+    for part in parts {
+        if let StringPart::Literal { value, .. } = part {
+            combined.push_str(value);
+        }
+    }
+    ResolvedString::Literal { value: combined }
+}
+
 fn compile_string<'ctx>(
     compiler: &mut Compiler<'ctx>,
     parts: &[StringPart],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let has_interpolation = parts
-        .iter()
-        .any(|p| matches!(p, StringPart::Interpolation { .. }));
+    let resolved = resolve_string(parts);
 
-    if !has_interpolation {
-        let mut combined = String::new();
-        for part in parts {
-            if let StringPart::Literal { value, .. } = part {
-                combined.push_str(value);
-            }
-        }
-        let payload_ptr = compiler.create_string_global(combined.as_bytes(), "str");
+    if let ResolvedString::Literal { value } = resolved {
+        let payload_ptr = compiler.create_string_global(value.as_bytes(), "str");
         return Ok(Some(TypedValue::new(
             payload_ptr.into(),
             Type::Primitive(Primitive::String),
@@ -472,6 +487,37 @@ fn resolve_closure_params<'ctx>(
         .collect()
 }
 
+struct ResolvedClosure {
+    capture_names: Vec<String>,
+    closure_name: String,
+    parameter_types: Vec<Type>,
+    return_type: Type,
+}
+
+fn resolve_closure(
+    compiler: &mut Compiler,
+    params: &[ClosureParam],
+    return_type: Type,
+    span: Span,
+) -> ResolvedClosure {
+    let parameter_types = resolve_closure_params(compiler, params, span);
+
+    let closure_name = format!("__closure_{}", compiler.fn_state.closure_counter);
+    compiler.fn_state.closure_counter += 1;
+
+    let capture_names = compiler
+        .closure_info_at(span)
+        .map(|ci| ci.captures.iter().map(|cap| cap.name.clone()).collect())
+        .unwrap_or_default();
+
+    ResolvedClosure {
+        capture_names,
+        closure_name,
+        parameter_types,
+        return_type,
+    }
+}
+
 /// Compiles a block closure (`fn (params) -> type ... end`) into an anonymous
 /// LLVM function and returns a fat pointer `{ fn_ptr, env_ptr }`. Every closure
 /// function receives an implicit `env_ptr: ptr` as its first parameter.
@@ -499,18 +545,18 @@ fn compile_closure_core<'ctx>(
     _parent_function: FunctionValue<'ctx>,
     span: Span,
 ) -> ExprResult<'ctx> {
-    let param_types = resolve_closure_params(compiler, params, span);
+    let resolved = resolve_closure(compiler, params, ret_type, span);
 
     let ptr_ty = compiler.context.ptr_type(AddressSpace::default());
 
     let mut llvm_meta_params: Vec<BasicMetadataTypeEnum> = vec![ptr_ty.into()];
-    for ty in &param_types {
+    for ty in &resolved.parameter_types {
         if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types) {
             llvm_meta_params.push(llvm_ty.into());
         }
     }
 
-    let fn_type = match to_llvm_type(&ret_type, compiler.context, &compiler.types) {
+    let fn_type = match to_llvm_type(&resolved.return_type, compiler.context, &compiler.types) {
         Some(ret_llvm) => ret_llvm.fn_type(&llvm_meta_params, false),
         None => compiler
             .context
@@ -518,30 +564,20 @@ fn compile_closure_core<'ctx>(
             .fn_type(&llvm_meta_params, false),
     };
 
-    let closure_name = format!("__closure_{}", compiler.fn_state.closure_counter);
-    compiler.fn_state.closure_counter += 1;
+    let captured_values: Vec<(String, BasicValueEnum<'ctx>, Type)> = resolved
+        .capture_names
+        .iter()
+        .filter_map(|name| {
+            let (ptr, ty, _) = compiler.fn_state.variables.get(name)?;
+            let llvm_ty = to_llvm_type(ty, compiler.context, &compiler.types)?;
+            let value = compiler.builder.build_load(llvm_ty, *ptr, name).unwrap();
+            Some((name.clone(), value, ty.clone()))
+        })
+        .collect();
 
-    let captures = compiler.closure_info_at(span).map(|ci| ci.captures.clone());
-
-    let captured_values: Vec<(String, BasicValueEnum<'ctx>, Type)> =
-        if let Some(ref captures) = captures {
-            captures
-                .iter()
-                .filter_map(|cap| {
-                    let (ptr, ty, _) = compiler.fn_state.variables.get(&cap.name)?;
-                    let llvm_ty = to_llvm_type(ty, compiler.context, &compiler.types)?;
-                    let value = compiler
-                        .builder
-                        .build_load(llvm_ty, *ptr, &cap.name)
-                        .unwrap();
-                    Some((cap.name.clone(), value, ty.clone()))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-    let closure_fn = compiler.module.add_function(&closure_name, fn_type, None);
+    let closure_fn = compiler
+        .module
+        .add_function(&resolved.closure_name, fn_type, None);
     let entry = compiler.context.append_basic_block(closure_fn, "entry");
 
     let saved_vars = std::mem::take(&mut compiler.fn_state.variables);
@@ -551,7 +587,7 @@ fn compile_closure_core<'ctx>(
         if let Type::Named {
             identifier,
             type_args,
-        } = &ret_type
+        } = &resolved.return_type
             && !type_args.is_empty()
             && let Some(type_params) = compiler
                 .type_ctx
@@ -575,7 +611,7 @@ fn compile_closure_core<'ctx>(
 
     for (i, param) in params.iter().enumerate() {
         if let ClosureParam::Name { name, .. } = param {
-            let ty = &param_types[i];
+            let ty = &resolved.parameter_types[i];
             if let Some(llvm_ty) = to_llvm_type(ty, compiler.context, &compiler.types) {
                 let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
                 let param_val = closure_fn.get_nth_param((i + 1) as u32).unwrap();
@@ -682,10 +718,59 @@ fn compile_closure_core<'ctx>(
         .into_struct_value();
 
     let closure_type = Type::Function {
-        params: param_types.iter().cloned().map(FnParam::borrow).collect(),
-        return_type: Box::new(ret_type),
+        params: resolved
+            .parameter_types
+            .iter()
+            .cloned()
+            .map(FnParam::borrow)
+            .collect(),
+        return_type: Box::new(resolved.return_type),
     };
     Ok(Some(TypedValue::new(fat_ptr.into(), closure_type)))
+}
+
+struct ResolvedListLiteral {
+    element_type: Type,
+    result_type: Type,
+}
+
+fn resolve_list_literal(
+    compiler: &mut Compiler,
+    compiled_elements: &[TypedValue],
+) -> Result<ResolvedListLiteral, String> {
+    let element_type = if let Some(subst) = compiler.fn_state.type_subst.get("T") {
+        subst.clone()
+    } else if let Some(first) = compiled_elements.first() {
+        first.expo_type.clone()
+    } else {
+        Type::Primitive(Primitive::I32)
+    };
+
+    let type_args = vec![element_type.clone()];
+    let mangled_type = mangle_name("List", &type_args);
+
+    if !compiler.types.contains_monomorphized(&mangled_type) {
+        monomorphize_struct(compiler, "List", &type_args)?;
+    }
+    if !compiler
+        .functions
+        .contains_key(&format!("{mangled_type}_new"))
+    {
+        monomorphize_impl_method(compiler, "List", "new", &type_args, &[])?;
+    }
+    if !compiler
+        .functions
+        .contains_key(&format!("{mangled_type}_append"))
+    {
+        monomorphize_impl_method(compiler, "List", "append", &type_args, &[])?;
+    }
+
+    let result_type = named_generic("List", vec![element_type.clone()], compiler.type_ctx);
+
+    Ok(ResolvedListLiteral {
+        element_type,
+        result_type,
+    })
 }
 
 fn compile_list_literal<'ctx>(
@@ -701,36 +786,16 @@ fn compile_list_literal<'ctx>(
         })
         .collect::<Result<_, _>>()?;
 
-    let elem_type = if let Some(subst) = compiler.fn_state.type_subst.get("T") {
-        subst.clone()
-    } else if let Some(first) = compiled.first() {
-        first.expo_type.clone()
-    } else {
-        Type::Primitive(Primitive::I32)
-    };
-    let type_args = vec![elem_type.clone()];
-    let mangled_type = mangle_name("List", &type_args);
+    let resolved = resolve_list_literal(compiler, &compiled)?;
 
-    if !compiler.types.contains_monomorphized(&mangled_type) {
-        monomorphize_struct(compiler, "List", &type_args)?;
-    }
-
-    let new_fn_name = format!("{mangled_type}_new");
-    if !compiler.functions.contains_key(&new_fn_name) {
-        monomorphize_impl_method(compiler, "List", "new", &type_args, &[])?;
-    }
-    let append_fn_name = format!("{mangled_type}_append");
-    if !compiler.functions.contains_key(&append_fn_name) {
-        monomorphize_impl_method(compiler, "List", "append", &type_args, &[])?;
-    }
-
+    let mangled_type = mangle_name("List", std::slice::from_ref(&resolved.element_type));
     let new_fn = *compiler
         .functions
-        .get(&new_fn_name)
+        .get(&format!("{mangled_type}_new"))
         .ok_or("List.new not found")?;
     let append_fn = *compiler
         .functions
-        .get(&append_fn_name)
+        .get(&format!("{mangled_type}_append"))
         .ok_or("List.append not found")?;
 
     let mut list_val = compiler
@@ -738,14 +803,56 @@ fn compile_list_literal<'ctx>(
         .ok_or("List.new returned void")?;
 
     for element in &compiled {
-        let coerced = coerce_numeric(compiler, element.value, &elem_type);
+        let coerced = coerce_numeric(compiler, element.value, &resolved.element_type);
         list_val = compiler
             .call(append_fn, &[list_val.into(), coerced.into()], "list_append")
             .ok_or("List.append returned void")?;
     }
 
-    let list_type = named_generic("List", vec![elem_type], compiler.type_ctx);
-    Ok(Some(TypedValue::new(list_val, list_type)))
+    Ok(Some(TypedValue::new(list_val, resolved.result_type)))
+}
+
+struct ResolvedMapLiteral {
+    key_type: Type,
+    result_type: Type,
+    value_type: Type,
+}
+
+fn resolve_map_literal(
+    compiler: &mut Compiler,
+    key_type: &Type,
+    value_type: &Type,
+) -> Result<ResolvedMapLiteral, String> {
+    let type_args = vec![key_type.clone(), value_type.clone()];
+    let mangled_type = mangle_name("Map", &type_args);
+
+    if !compiler.types.contains_monomorphized(&mangled_type) {
+        monomorphize_struct(compiler, "Map", &type_args)?;
+    }
+    if !compiler
+        .functions
+        .contains_key(&format!("{mangled_type}_new"))
+    {
+        monomorphize_impl_method(compiler, "Map", "new", &type_args, &[])?;
+    }
+    if !compiler
+        .functions
+        .contains_key(&format!("{mangled_type}_put"))
+    {
+        monomorphize_impl_method(compiler, "Map", "put", &type_args, &[])?;
+    }
+
+    let result_type = named_generic(
+        "Map",
+        vec![key_type.clone(), value_type.clone()],
+        compiler.type_ctx,
+    );
+
+    Ok(ResolvedMapLiteral {
+        key_type: key_type.clone(),
+        result_type,
+        value_type: value_type.clone(),
+    })
 }
 
 fn compile_map_literal<'ctx>(
@@ -768,29 +875,19 @@ fn compile_map_literal<'ctx>(
         return Err("empty map literal requires a type annotation".to_string());
     };
 
-    let type_args = vec![key_type.clone(), val_type.clone()];
-    let mangled_type = mangle_name("Map", &type_args);
+    let resolved = resolve_map_literal(compiler, &key_type, &val_type)?;
 
-    if !compiler.types.contains_monomorphized(&mangled_type) {
-        monomorphize_struct(compiler, "Map", &type_args)?;
-    }
-
-    let new_fn_name = format!("{mangled_type}_new");
-    if !compiler.functions.contains_key(&new_fn_name) {
-        monomorphize_impl_method(compiler, "Map", "new", &type_args, &[])?;
-    }
-    let put_fn_name = format!("{mangled_type}_put");
-    if !compiler.functions.contains_key(&put_fn_name) {
-        monomorphize_impl_method(compiler, "Map", "put", &type_args, &[])?;
-    }
-
+    let mangled_type = mangle_name(
+        "Map",
+        &[resolved.key_type.clone(), resolved.value_type.clone()],
+    );
     let new_fn = *compiler
         .functions
-        .get(&new_fn_name)
+        .get(&format!("{mangled_type}_new"))
         .ok_or("Map.new not found")?;
     let put_fn = *compiler
         .functions
-        .get(&put_fn_name)
+        .get(&format!("{mangled_type}_put"))
         .ok_or("Map.put not found")?;
 
     let mut map_val = compiler
@@ -804,15 +901,14 @@ fn compile_map_literal<'ctx>(
         let val = compile_expr(compiler, val_expr, function)?
             .ok_or("map value produced no value")?
             .value;
-        let key = coerce_numeric(compiler, key, &key_type);
-        let val = coerce_numeric(compiler, val, &val_type);
+        let key = coerce_numeric(compiler, key, &resolved.key_type);
+        let val = coerce_numeric(compiler, val, &resolved.value_type);
         map_val = compiler
             .call(put_fn, &[map_val.into(), key.into(), val.into()], "map_put")
             .ok_or("Map.put returned void")?;
     }
 
-    let map_type = named_generic("Map", vec![key_type, val_type], compiler.type_ctx);
-    Ok(Some(TypedValue::new(map_val, map_type)))
+    Ok(Some(TypedValue::new(map_val, resolved.result_type)))
 }
 
 /// Compiles a `spawn T.start(config)` expression.
