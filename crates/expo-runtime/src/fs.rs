@@ -9,7 +9,7 @@ use std::ptr;
 
 use crate::ffi::{EAGAIN, get_errno, libc_close, libc_read, libc_write};
 use crate::reactor::{Interest, io_block};
-use crate::util::{alloc_expo_string, expo_string_to_slice, set_last_error};
+use crate::util::{alloc_expo_string, set_last_error};
 
 /// Closes a raw file descriptor. Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
@@ -204,7 +204,6 @@ pub unsafe extern "C" fn expo_file_rename(src_ptr: *const u8, dst_ptr: *const u8
 ///
 /// # Safety
 /// Both pointers must point to valid NUL-terminated UTF-8 strings.
-/// `content_ptr` must be a length-prefixed Expo string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_file_write_all(path_ptr: *const u8, content_ptr: *const u8) -> i64 {
     let path = unsafe { CStr::from_ptr(path_ptr as *const i8) };
@@ -215,7 +214,8 @@ pub unsafe extern "C" fn expo_file_write_all(path_ptr: *const u8, content_ptr: *
             return -1;
         }
     };
-    let data = unsafe { expo_string_to_slice(content_ptr) };
+    let content = unsafe { CStr::from_ptr(content_ptr as *const i8) };
+    let data = content.to_bytes();
     match fs::write(path, data) {
         Ok(()) => 0,
         Err(e) => {

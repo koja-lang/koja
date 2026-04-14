@@ -4,7 +4,6 @@ use std::alloc;
 use std::cell::RefCell;
 use std::fmt;
 use std::ptr;
-use std::slice;
 
 use crate::ffi::malloc;
 
@@ -64,20 +63,6 @@ pub extern "C" fn expo_last_error() -> *const u8 {
             None => unsafe { alloc_expo_string(b"unknown error") },
         }
     })
-}
-
-/// Extracts the byte slice from a length-prefixed Expo string pointer.
-///
-/// # Safety
-/// `ptr` must point to the payload of a valid length-prefixed Expo string
-/// with an 8-byte bit-length header at offset -8.
-pub unsafe fn expo_string_to_slice<'a>(ptr: *const u8) -> &'a [u8] {
-    unsafe {
-        let hdr = ptr.sub(STRING_HEADER_SIZE) as *const i64;
-        let bit_len = *hdr;
-        let byte_len = (bit_len / BITS_PER_BYTE as i64) as usize;
-        slice::from_raw_parts(ptr, byte_len)
-    }
 }
 
 /// Stores an error message in the thread-local `LAST_IO_ERROR` slot.
