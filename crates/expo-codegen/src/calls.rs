@@ -216,22 +216,19 @@ pub fn compile_call<'ctx>(
     }
 }
 
-fn compile_generic_call<'ctx>(
-    c: &mut Compiler<'ctx>,
-    name: &str,
-    args: &[Arg],
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    let mut compiled_args = Vec::new();
-    let mut arg_types = Vec::new();
-    for arg in args {
-        let tv = compile_expr(c, &arg.value, function)?
-            .ok_or_else(|| format!("argument to {name} produced no value"))?;
-        arg_types.push(tv.expo_type);
-        compiled_args.push(tv.value);
-    }
+struct ResolvedGenericCall<'ctx> {
+    callee: FunctionValue<'ctx>,
+    mangled_name: String,
+    parameter_types: Vec<Type>,
+    return_type: Type,
+}
 
-    let sig = c
+fn resolve_generic_call<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    name: &str,
+    arg_types: &[Type],
+) -> Result<ResolvedGenericCall<'ctx>, String> {
+    let sig = compiler
         .type_ctx
         .functions
         .get(name)
@@ -253,16 +250,16 @@ fn compile_generic_call<'ctx>(
         .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
         .collect();
 
-    let mangled = mangle_name(name, &type_args);
+    let mangled_name = mangle_name(name, &type_args);
 
-    if !c.functions.contains_key(&mangled) {
-        monomorphize_function(c, name, &type_args)?;
+    if !compiler.functions.contains_key(&mangled_name) {
+        monomorphize_function(compiler, name, &type_args)?;
     }
 
-    let callee = *c
+    let callee = *compiler
         .functions
-        .get(&mangled)
-        .ok_or_else(|| format!("monomorphized function `{mangled}` not found"))?;
+        .get(&mangled_name)
+        .ok_or_else(|| format!("monomorphized function `{mangled_name}` not found"))?;
 
     let subst_map: HashMap<String, Type> = sig
         .type_params
@@ -271,23 +268,58 @@ fn compile_generic_call<'ctx>(
         .map(|(p, a)| (p.name.clone(), a.clone()))
         .collect();
 
+    let parameter_types: Vec<Type> = sig
+        .params
+        .iter()
+        .map(|p| substitute(&p.ty, &subst_map))
+        .collect();
+
+    let return_type = substitute(&sig.return_type, &subst_map);
+
+    Ok(ResolvedGenericCall {
+        callee,
+        mangled_name,
+        parameter_types,
+        return_type,
+    })
+}
+
+fn compile_generic_call<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    name: &str,
+    args: &[Arg],
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let mut compiled_args = Vec::new();
+    let mut arg_types = Vec::new();
+    for arg in args {
+        let tv = compile_expr(compiler, &arg.value, function)?
+            .ok_or_else(|| format!("argument to {name} produced no value"))?;
+        arg_types.push(tv.expo_type);
+        compiled_args.push(tv.value);
+    }
+
+    let resolved = resolve_generic_call(compiler, name, &arg_types)?;
+
     let call_args: Vec<BasicMetadataValueEnum> = compiled_args
         .iter()
         .enumerate()
         .map(|(i, v)| {
-            if let Some(param) = sig.params.get(i) {
-                let concrete = substitute(&param.ty, &subst_map);
-                coerce_numeric(c, *v, &concrete).into()
+            if i < resolved.parameter_types.len() {
+                coerce_numeric(compiler, *v, &resolved.parameter_types[i]).into()
             } else {
                 (*v).into()
             }
         })
         .collect();
 
-    let ret_type = substitute(&sig.return_type, &subst_map);
-
-    Ok(c.call(callee, &call_args, &format!("call_{mangled}"))
-        .map(|v| TypedValue::new(v, ret_type)))
+    Ok(compiler
+        .call(
+            resolved.callee,
+            &call_args,
+            &format!("call_{}", resolved.mangled_name),
+        )
+        .map(|v| TypedValue::new(v, resolved.return_type)))
 }
 
 fn compile_call_as_struct<'ctx>(

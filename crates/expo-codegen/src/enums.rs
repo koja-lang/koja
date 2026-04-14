@@ -9,6 +9,7 @@ use expo_typecheck::types::{
 };
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
+use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
@@ -23,7 +24,7 @@ use crate::types::to_llvm_type;
 /// for tuple and struct variants. For generic enums, infers type arguments,
 /// triggers monomorphization, and uses the mangled name.
 pub fn compile_enum_construction<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     type_path: &[String],
     variant: &str,
     data: &EnumConstructionData,
@@ -35,61 +36,58 @@ pub fn compile_enum_construction<'ctx>(
         .ok_or("empty type path in enum construction")?;
 
     let type_info = resolved_type
-        .and_then(|id| c.type_ctx.get_type(id))
-        .or_else(|| c.type_ctx.find_type(base_name.as_str()));
+        .and_then(|id| compiler.type_ctx.get_type(id))
+        .or_else(|| compiler.type_ctx.find_type(base_name.as_str()));
 
     let is_generic = type_info.is_some_and(|ti| ti.is_enum() && !ti.type_params.is_empty());
 
     if is_generic {
-        return compile_generic_enum_construction(c, base_name, variant, data, function);
+        return compile_generic_enum_construction(compiler, base_name, variant, data, function);
     }
 
-    compile_concrete_enum(c, base_name, variant, data, function)
+    compile_concrete_enum(compiler, base_name, variant, data, function)
 }
 
-fn compile_concrete_enum<'ctx>(
-    c: &mut Compiler<'ctx>,
+enum ResolvedVariantFields {
+    Struct { fields: Vec<(String, u32, Type)> },
+    Tuple { element_types: Vec<Type> },
+    Unit,
+}
+
+struct ResolvedEnumVariant<'ctx> {
+    enum_type: StructType<'ctx>,
+    payload_type: Option<StructType<'ctx>>,
+    result_type: Type,
+    tag: u64,
+    variant_fields: ResolvedVariantFields,
+}
+
+fn resolve_concrete_enum_variant<'ctx>(
+    compiler: &Compiler<'ctx>,
     enum_name: &str,
     variant: &str,
     data: &EnumConstructionData,
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    let enum_type = c
+) -> Result<ResolvedEnumVariant<'ctx>, String> {
+    let enum_type = compiler
         .types
         .get_stdlib(enum_name)
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
-    let tag = c
+    let tag = compiler
         .types
         .get_variant_tag(enum_name, variant)
-        .ok_or_else(|| format!("unknown variant `{variant}` on enum `{enum_name}`"))?;
+        .ok_or_else(|| format!("unknown variant `{variant}` on enum `{enum_name}`"))?
+        as u64;
 
-    let alloca = c
-        .builder
-        .build_alloca(enum_type, &format!("{enum_name}_{variant}"))
-        .unwrap();
-
-    let tag_ptr = c
-        .builder
-        .build_struct_gep(enum_type, alloca, 0, "tag_ptr")
-        .unwrap();
-    let tag_val = c.context.i8_type().const_int(tag as u64, false);
-    c.builder.build_store(tag_ptr, tag_val).unwrap();
-
-    match data {
-        EnumConstructionData::Unit => {}
-        EnumConstructionData::Tuple(exprs) => {
-            let payload_type = c
+    let (payload_type, variant_fields) = match data {
+        EnumConstructionData::Unit => (None, ResolvedVariantFields::Unit),
+        EnumConstructionData::Tuple(_) => {
+            let payload = compiler
                 .types
                 .get_variant_payload_type(enum_name, variant)
                 .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
 
-            let payload_ptr = c
-                .builder
-                .build_struct_gep(enum_type, alloca, 1, "payload_ptr")
-                .unwrap();
-
-            let expected_types = c
+            let element_types = compiler
                 .type_ctx
                 .find_type(enum_name)
                 .and_then(|ti| ti.variants())
@@ -97,46 +95,21 @@ fn compile_concrete_enum<'ctx>(
                 .and_then(|vi| match &vi.data {
                     VariantData::Tuple(types) => Some(types.clone()),
                     _ => None,
-                });
+                })
+                .unwrap_or_default();
 
-            for (i, expr) in exprs.iter().enumerate() {
-                let elem_type = expected_types.as_ref().and_then(|t| t.get(i));
-                let coerce_ty = elem_type.map(unwrap_indirect);
-                let val = if let Some(ct) = coerce_ty {
-                    compile_expr_coerced(c, expr, ct, function)?
-                } else {
-                    compile_expr(c, expr, function)?.map(|tv| tv.value)
-                }
-                .ok_or_else(|| format!("enum field {i} produced no value"))?;
-                let field_ptr = c
-                    .builder
-                    .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("field_{i}"))
-                    .unwrap();
-                if let Some(et) = elem_type {
-                    store_maybe_indirect(
-                        c,
-                        field_ptr,
-                        val,
-                        et,
-                        &format!("{enum_name}_{variant}_{i}"),
-                    );
-                } else {
-                    c.builder.build_store(field_ptr, val).unwrap();
-                }
-            }
+            (
+                Some(payload),
+                ResolvedVariantFields::Tuple { element_types },
+            )
         }
-        EnumConstructionData::Struct(fields) => {
-            let payload_type = c
+        EnumConstructionData::Struct(field_inits) => {
+            let payload = compiler
                 .types
                 .get_variant_payload_type(enum_name, variant)
                 .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
 
-            let payload_ptr = c
-                .builder
-                .build_struct_gep(enum_type, alloca, 1, "payload_ptr")
-                .unwrap();
-
-            let variant_info = c
+            let variant_info = compiler
                 .type_ctx
                 .find_type(enum_name)
                 .and_then(|ti| ti.variants())
@@ -148,8 +121,9 @@ fn compile_concrete_enum<'ctx>(
                 _ => return Err(format!("{enum_name}.{variant} is not a struct variant")),
             };
 
-            for field_init in fields {
-                let (field_idx, field_type) = expected_fields
+            let mut fields = Vec::new();
+            for field_init in field_inits {
+                let (idx, field_type) = expected_fields
                     .iter()
                     .enumerate()
                     .find(|(_, (name, _))| *name == field_init.name)
@@ -160,37 +134,130 @@ fn compile_concrete_enum<'ctx>(
                             field_init.name
                         )
                     })?;
-
-                let coerce_ty = unwrap_indirect(&field_type);
-                let val = compile_expr_coerced(c, &field_init.value, coerce_ty, function)?
-                    .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
-                let field_ptr = c
-                    .builder
-                    .build_struct_gep(payload_type, payload_ptr, field_idx, &field_init.name)
-                    .unwrap();
-                store_maybe_indirect(c, field_ptr, val, &field_type, &field_init.name);
+                fields.push((field_init.name.clone(), idx, field_type));
             }
-        }
-    }
 
-    let enum_val = c.builder.build_load(enum_type, alloca, enum_name).unwrap();
-    Ok(Some(TypedValue::new(
-        enum_val,
-        Type::Named {
-            identifier: TypeIdentifier::unresolved(enum_name),
-            type_args: vec![],
-        },
-    )))
+            (Some(payload), ResolvedVariantFields::Struct { fields })
+        }
+    };
+
+    let result_type = Type::Named {
+        identifier: TypeIdentifier::unresolved(enum_name),
+        type_args: vec![],
+    };
+
+    Ok(ResolvedEnumVariant {
+        enum_type,
+        payload_type,
+        result_type,
+        tag,
+        variant_fields,
+    })
 }
 
-fn compile_generic_enum_construction<'ctx>(
-    c: &mut Compiler<'ctx>,
+fn compile_concrete_enum<'ctx>(
+    compiler: &mut Compiler<'ctx>,
     enum_name: &str,
     variant: &str,
     data: &EnumConstructionData,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let enum_info = c
+    let resolved = resolve_concrete_enum_variant(compiler, enum_name, variant, data)?;
+
+    let alloca = compiler
+        .builder
+        .build_alloca(resolved.enum_type, &format!("{enum_name}_{variant}"))
+        .unwrap();
+
+    let tag_ptr = compiler
+        .builder
+        .build_struct_gep(resolved.enum_type, alloca, 0, "tag_ptr")
+        .unwrap();
+    let tag_val = compiler.context.i8_type().const_int(resolved.tag, false);
+    compiler.builder.build_store(tag_ptr, tag_val).unwrap();
+
+    match (&resolved.variant_fields, data) {
+        (ResolvedVariantFields::Unit, _) => {}
+        (ResolvedVariantFields::Tuple { element_types }, EnumConstructionData::Tuple(exprs)) => {
+            let payload_type = resolved.payload_type.unwrap();
+            let payload_ptr = compiler
+                .builder
+                .build_struct_gep(resolved.enum_type, alloca, 1, "payload_ptr")
+                .unwrap();
+
+            for (i, expr) in exprs.iter().enumerate() {
+                let elem_type = element_types.get(i);
+                let coerce_ty = elem_type.map(unwrap_indirect);
+                let val = if let Some(ct) = coerce_ty {
+                    compile_expr_coerced(compiler, expr, ct, function)?
+                } else {
+                    compile_expr(compiler, expr, function)?.map(|tv| tv.value)
+                }
+                .ok_or_else(|| format!("enum field {i} produced no value"))?;
+                let field_ptr = compiler
+                    .builder
+                    .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("field_{i}"))
+                    .unwrap();
+                if let Some(et) = elem_type {
+                    store_maybe_indirect(
+                        compiler,
+                        field_ptr,
+                        val,
+                        et,
+                        &format!("{enum_name}_{variant}_{i}"),
+                    );
+                } else {
+                    compiler.builder.build_store(field_ptr, val).unwrap();
+                }
+            }
+        }
+        (ResolvedVariantFields::Struct { fields }, EnumConstructionData::Struct(field_inits)) => {
+            let payload_type = resolved.payload_type.unwrap();
+            let payload_ptr = compiler
+                .builder
+                .build_struct_gep(resolved.enum_type, alloca, 1, "payload_ptr")
+                .unwrap();
+
+            for (field_init, (_, field_idx, field_type)) in field_inits.iter().zip(fields.iter()) {
+                let coerce_ty = unwrap_indirect(field_type);
+                let val =
+                    compile_expr_coerced(compiler, &field_init.value, coerce_ty, function)?
+                        .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
+                let field_ptr = compiler
+                    .builder
+                    .build_struct_gep(payload_type, payload_ptr, *field_idx, &field_init.name)
+                    .unwrap();
+                store_maybe_indirect(compiler, field_ptr, val, field_type, &field_init.name);
+            }
+        }
+        _ => {}
+    }
+
+    let enum_val = compiler
+        .builder
+        .build_load(resolved.enum_type, alloca, enum_name)
+        .unwrap();
+    Ok(Some(TypedValue::new(enum_val, resolved.result_type)))
+}
+
+struct ResolvedGenericEnum<'ctx> {
+    enum_type: StructType<'ctx>,
+    mangled_name: String,
+    payload_type: Option<StructType<'ctx>>,
+    result_type: Type,
+    tag: u64,
+    variant_element_types: Option<Vec<Type>>,
+}
+
+fn resolve_generic_enum<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    enum_name: &str,
+    variant: &str,
+    data: &EnumConstructionData,
+    compiled_values: &[BasicValueEnum<'ctx>],
+    compiled_types: &[Type],
+) -> Result<ResolvedGenericEnum<'ctx>, String> {
+    let enum_info = compiler
         .type_ctx
         .find_type(enum_name)
         .filter(|ti| ti.is_enum())
@@ -203,18 +270,12 @@ fn compile_generic_enum_construction<'ctx>(
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{enum_name}`"))?;
 
     let mut subst: HashMap<String, Type> = HashMap::new();
-    let mut compiled_values: Vec<BasicValueEnum<'ctx>> = Vec::new();
-
     match (data, &vi.data) {
-        (EnumConstructionData::Tuple(exprs), VariantData::Tuple(expected)) => {
-            for (i, expr) in exprs.iter().enumerate() {
-                let tv = compile_expr(c, expr, function)?
-                    .ok_or_else(|| format!("enum field {i} produced no value"))?;
-                let concrete = tv.expo_type.clone();
+        (EnumConstructionData::Tuple(_), VariantData::Tuple(expected)) => {
+            for (i, compiled_type) in compiled_types.iter().enumerate() {
                 if i < expected.len() {
-                    unify(&expected[i], &concrete, &mut subst);
+                    unify(&expected[i], compiled_type, &mut subst);
                 }
-                compiled_values.push(tv.value);
             }
         }
         (EnumConstructionData::Unit, _) => {}
@@ -232,20 +293,20 @@ fn compile_generic_enum_construction<'ctx>(
             subst
                 .get(&tp.name)
                 .cloned()
-                .or_else(|| c.fn_state.type_subst.get(&tp.name).cloned())
+                .or_else(|| compiler.fn_state.type_subst.get(&tp.name).cloned())
                 .unwrap_or(Type::Unknown)
         })
         .collect();
 
     let has_unknown = type_args.contains(&Type::Unknown);
-    if has_unknown && let Some(ref hint) = c.fn_state.return_type_hint {
+    if has_unknown && let Some(ref hint) = compiler.fn_state.return_type_hint {
         let hint_args = match hint {
             Type::Named {
                 identifier,
                 type_args: ha,
             } if identifier.name == enum_name && !ha.is_empty() => Some(ha.clone()),
             Type::Named { identifier, .. } => {
-                crate::generics::try_parse_mangled_name(&identifier.name, c)
+                crate::generics::try_parse_mangled_name(&identifier.name, compiler)
                     .filter(|(base, _)| base == enum_name)
                     .map(|(_, ha)| ha)
             }
@@ -260,79 +321,132 @@ fn compile_generic_enum_construction<'ctx>(
         }
     }
 
-    let mangled = mangle_name(enum_name, &type_args);
+    let mangled_name = mangle_name(enum_name, &type_args);
 
-    if !c.types.contains_monomorphized(&mangled) {
-        monomorphize_enum(c, enum_name, &type_args)?;
+    if !compiler.types.contains_monomorphized(&mangled_name) {
+        monomorphize_enum(compiler, enum_name, &type_args)?;
     }
 
-    let enum_type = c
+    let enum_type = compiler
         .types
-        .get_monomorphized(&mangled)
-        .ok_or_else(|| format!("monomorphized enum `{mangled}` not found"))?;
+        .get_monomorphized(&mangled_name)
+        .ok_or_else(|| format!("monomorphized enum `{mangled_name}` not found"))?;
 
-    let tag = c
+    let tag = compiler
         .types
-        .get_variant_tag(&mangled, variant)
-        .ok_or_else(|| format!("unknown variant `{variant}` on enum `{mangled}`"))?;
+        .get_variant_tag(&mangled_name, variant)
+        .ok_or_else(|| format!("unknown variant `{variant}` on enum `{mangled_name}`"))?
+        as u64;
 
-    let alloca = c
+    let payload_type = if !compiled_values.is_empty() {
+        Some(
+            compiler
+                .types
+                .get_variant_payload_type(&mangled_name, variant)
+                .ok_or_else(|| format!("no payload type for {mangled_name}.{variant}"))?,
+        )
+    } else {
+        None
+    };
+
+    let variant_element_types: Option<Vec<Type>> = compiler
+        .types
+        .mono_enum_variants
+        .get(&mangled_name)
+        .and_then(|vs| vs.iter().find(|(n, _)| n == variant))
+        .and_then(|(_, vdata)| match vdata {
+            VariantData::Tuple(types) => Some(types.clone()),
+            _ => None,
+        });
+
+    let result_type = named_generic(enum_name, type_args, compiler.type_ctx);
+
+    Ok(ResolvedGenericEnum {
+        enum_type,
+        mangled_name,
+        payload_type,
+        result_type,
+        tag,
+        variant_element_types,
+    })
+}
+
+fn compile_generic_enum_construction<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    enum_name: &str,
+    variant: &str,
+    data: &EnumConstructionData,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let mut compiled_values: Vec<BasicValueEnum<'ctx>> = Vec::new();
+    let mut compiled_types: Vec<Type> = Vec::new();
+
+    if let EnumConstructionData::Tuple(exprs) = data {
+        for (i, expr) in exprs.iter().enumerate() {
+            let tv = compile_expr(compiler, expr, function)?
+                .ok_or_else(|| format!("enum field {i} produced no value"))?;
+            compiled_types.push(tv.expo_type);
+            compiled_values.push(tv.value);
+        }
+    }
+
+    let resolved = resolve_generic_enum(
+        compiler,
+        enum_name,
+        variant,
+        data,
+        &compiled_values,
+        &compiled_types,
+    )?;
+
+    let alloca = compiler
         .builder
-        .build_alloca(enum_type, &format!("{mangled}_{variant}"))
+        .build_alloca(
+            resolved.enum_type,
+            &format!("{}_{variant}", resolved.mangled_name),
+        )
         .unwrap();
 
-    let tag_ptr = c
+    let tag_ptr = compiler
         .builder
-        .build_struct_gep(enum_type, alloca, 0, "tag_ptr")
+        .build_struct_gep(resolved.enum_type, alloca, 0, "tag_ptr")
         .unwrap();
-    let tag_val = c.context.i8_type().const_int(tag as u64, false);
-    c.builder.build_store(tag_ptr, tag_val).unwrap();
+    let tag_val = compiler.context.i8_type().const_int(resolved.tag, false);
+    compiler.builder.build_store(tag_ptr, tag_val).unwrap();
 
     if !compiled_values.is_empty() {
-        let payload_type = c
-            .types
-            .get_variant_payload_type(&mangled, variant)
-            .ok_or_else(|| format!("no payload type for {mangled}.{variant}"))?;
-
-        let payload_ptr = c
+        let payload_type = resolved.payload_type.unwrap();
+        let payload_ptr = compiler
             .builder
-            .build_struct_gep(enum_type, alloca, 1, "payload_ptr")
+            .build_struct_gep(resolved.enum_type, alloca, 1, "payload_ptr")
             .unwrap();
 
-        let mono_elem_types: Option<Vec<Type>> = c
-            .types
-            .mono_enum_variants
-            .get(&mangled)
-            .and_then(|vs| vs.iter().find(|(n, _)| n == variant))
-            .and_then(|(_, vdata)| match vdata {
-                VariantData::Tuple(types) => Some(types.clone()),
-                _ => None,
-            });
-
         for (i, val) in compiled_values.iter().enumerate() {
-            let field_ptr = c
+            let field_ptr = compiler
                 .builder
                 .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("field_{i}"))
                 .unwrap();
-            if let Some(ref types) = mono_elem_types
+            if let Some(ref types) = resolved.variant_element_types
                 && i < types.len()
             {
                 store_maybe_indirect(
-                    c,
+                    compiler,
                     field_ptr,
                     *val,
                     &types[i],
-                    &format!("{mangled}_{variant}_{i}"),
+                    &format!("{}_{variant}_{i}", resolved.mangled_name),
                 );
             } else {
-                c.builder.build_store(field_ptr, *val).unwrap();
+                compiler.builder.build_store(field_ptr, *val).unwrap();
             }
         }
     }
 
-    let enum_val = c.builder.build_load(enum_type, alloca, &mangled).unwrap();
-    let result_type = named_generic(enum_name, type_args.clone(), c.type_ctx);
-    Ok(Some(TypedValue::new(enum_val, result_type)))
+    let enum_val = compiler
+        .builder
+        .build_load(resolved.enum_type, alloca, &resolved.mangled_name)
+        .unwrap();
+    Ok(Some(TypedValue::new(enum_val, resolved.result_type)))
 }
 
 // ---------------------------------------------------------------------------

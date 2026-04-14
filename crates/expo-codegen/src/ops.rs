@@ -330,34 +330,46 @@ fn truncate_to_common_width<'ctx>(
     (l, r)
 }
 
+enum ConcatKind {
+    Binary,
+    String,
+}
+
+fn resolve_concat_kind(compiler: &Compiler, left: &Expr) -> ConcatKind {
+    let operand_type = concat_operand_type(compiler, left);
+    match &operand_type {
+        Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits) => ConcatKind::Binary,
+        _ => ConcatKind::String,
+    }
+}
+
 /// Compiles the `<>` concatenation operator for String, Binary, and Bits.
 fn compile_concat<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     left: &Expr,
     right: &Expr,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let lhs_ty = concat_operand_type(c, left);
-    let lhs = compile_expr(c, left, function)?
+    let kind = resolve_concat_kind(compiler, left);
+    let result_type = concat_operand_type(compiler, left);
+
+    let lhs = compile_expr(compiler, left, function)?
         .ok_or("left side of <> produced no value")?
         .value;
-    let rhs = compile_expr(c, right, function)?
+    let rhs = compile_expr(compiler, right, function)?
         .ok_or("right side of <> produced no value")?
         .value;
 
-    let result_ty = lhs_ty.clone();
-    let inner = match &lhs_ty {
-        Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits) => {
-            compile_binary_concat(c, lhs, rhs)
-        }
-        _ => compile_string_concat(c, lhs, rhs),
+    let inner = match kind {
+        ConcatKind::Binary => compile_binary_concat(compiler, lhs, rhs),
+        ConcatKind::String => compile_string_concat(compiler, lhs, rhs),
     }?;
-    Ok(inner.map(|v| TypedValue::new(v, result_ty)))
+    Ok(inner.map(|v| TypedValue::new(v, result_type)))
 }
 
-fn concat_operand_type(c: &Compiler, expr: &Expr) -> Type {
+fn concat_operand_type(compiler: &Compiler, expr: &Expr) -> Type {
     if let ExprKind::Ident { name, .. } = &expr.kind
-        && let Some((_, ty, _)) = c.fn_state.variables.get(name)
+        && let Some((_, ty, _)) = compiler.fn_state.variables.get(name)
     {
         return ty.clone();
     }

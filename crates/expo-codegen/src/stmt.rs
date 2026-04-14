@@ -10,6 +10,7 @@ use expo_typecheck::context::{Coercion, FnParam};
 use expo_typecheck::types::{
     Primitive, Type, mangle_name, mangle_type, substitute, substitute_preserving,
 };
+use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
@@ -674,18 +675,18 @@ fn convert_list_literal_if_needed<'ctx>(
     Ok(result)
 }
 
-/// Wraps a concrete value into a tagged union representation.
-/// Allocates the union struct `{ i8 tag, [N x i8] payload }`, writes the tag
-/// (index of `source` in the union members), stores the value into the payload
-/// area, and loads the whole struct back as a value.
-pub(crate) fn compile_union_wrap<'ctx>(
-    c: &mut Compiler<'ctx>,
-    val: BasicValueEnum<'ctx>,
+struct ResolvedUnionMember<'ctx> {
+    tag: u64,
+    union_type: StructType<'ctx>,
+}
+
+fn resolve_union_member<'ctx>(
+    compiler: &Compiler<'ctx>,
     source: &Type,
     target_union: &Type,
-) -> Result<BasicValueEnum<'ctx>, String> {
+) -> Result<ResolvedUnionMember<'ctx>, String> {
     let Type::Union(members) = target_union else {
-        return Ok(val);
+        return Err("resolve_union_member called with non-union target".to_string());
     };
 
     let source_mangled = mangle_type(source);
@@ -702,31 +703,50 @@ pub(crate) fn compile_union_wrap<'ctx>(
             )
         })? as u64;
 
-    let union_llvm_ty = c
+    let union_type = compiler
         .types
         .get_monomorphized(&union_mangled)
         .ok_or_else(|| format!("union type {} not registered", union_mangled))?;
 
-    let alloca = c.builder.build_alloca(union_llvm_ty, "union_wrap").unwrap();
+    Ok(ResolvedUnionMember { tag, union_type })
+}
 
-    let tag_ptr = c
-        .builder
-        .build_struct_gep(union_llvm_ty, alloca, 0, "tag_ptr")
-        .unwrap();
-    let tag_val = c.context.i8_type().const_int(tag, false);
-    c.builder.build_store(tag_ptr, tag_val).unwrap();
-
-    if union_llvm_ty.count_fields() > 1 {
-        let payload_ptr = c
-            .builder
-            .build_struct_gep(union_llvm_ty, alloca, 1, "payload_ptr")
-            .unwrap();
-        c.builder.build_store(payload_ptr, val).unwrap();
+/// Wraps a concrete value into a tagged union representation.
+pub(crate) fn compile_union_wrap<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    source: &Type,
+    target_union: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    if !matches!(target_union, Type::Union(_)) {
+        return Ok(val);
     }
 
-    let result = c
+    let resolved = resolve_union_member(compiler, source, target_union)?;
+
+    let alloca = compiler
         .builder
-        .build_load(union_llvm_ty, alloca, "union_val")
+        .build_alloca(resolved.union_type, "union_wrap")
+        .unwrap();
+
+    let tag_ptr = compiler
+        .builder
+        .build_struct_gep(resolved.union_type, alloca, 0, "tag_ptr")
+        .unwrap();
+    let tag_val = compiler.context.i8_type().const_int(resolved.tag, false);
+    compiler.builder.build_store(tag_ptr, tag_val).unwrap();
+
+    if resolved.union_type.count_fields() > 1 {
+        let payload_ptr = compiler
+            .builder
+            .build_struct_gep(resolved.union_type, alloca, 1, "payload_ptr")
+            .unwrap();
+        compiler.builder.build_store(payload_ptr, val).unwrap();
+    }
+
+    let result = compiler
+        .builder
+        .build_load(resolved.union_type, alloca, "union_val")
         .unwrap();
     Ok(result)
 }
