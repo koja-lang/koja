@@ -365,6 +365,23 @@ fn expr_value_to_doc(expr: &Expr) -> Doc {
     match &expr.kind {
         ExprKind::Ident { name } => text(name.clone()),
         ExprKind::Literal { value } => literal_to_doc(value),
+        ExprKind::String { parts, .. } => {
+            let mut doc_parts = vec![text("\"")];
+            for part in parts {
+                match part {
+                    StringPart::Literal { value, .. } => {
+                        doc_parts.push(text(escape_string_literal(value)));
+                    }
+                    StringPart::Interpolation { expr, .. } => {
+                        doc_parts.push(text("#{"));
+                        doc_parts.push(expr_value_to_doc(expr));
+                        doc_parts.push(text("}"));
+                    }
+                }
+            }
+            doc_parts.push(text("\""));
+            concat(doc_parts)
+        }
         _ => text("<expr>"),
     }
 }
