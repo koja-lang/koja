@@ -54,18 +54,7 @@ const DEBUG_TYPES: &[&str] = &[
 
 const PARSE_INTRINSICS: &[&str] = &["Int_parse", "Float_parse"];
 
-const SOCKET_INTRINSICS: &[&str] = &[
-    "Socket_create",
-    "Socket_bind",
-    "Socket_connect",
-    "Socket_listen",
-    "Socket_accept",
-    "Socket_try_accept_raw",
-    "Socket_set_reuse_addr",
-    "Socket_resolve",
-    "Socket_send_to",
-    "Socket_recv_from",
-];
+const SOCKET_INTRINSICS: &[&str] = &["Socket_resolve", "Socket_recv_from"];
 
 const CSTRING_INTRINSICS: &[&str] = &["String_to_cstring", "CString_to_string"];
 

@@ -71,7 +71,7 @@ impl CPtr<UInt8>
   @doc """
   Wraps this pointer in a `CString` by computing the length with `strlen`.
 
-  The pointer must be a valid null-terminated C string. The caller is 
+  The pointer must be a valid null-terminated C string. The caller is
   responsible for freeing the result.
   """
   fn to_cstring(self) -> CString

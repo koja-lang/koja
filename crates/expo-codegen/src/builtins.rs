@@ -137,33 +137,10 @@ pub(crate) fn declare_builtins<'ctx>(
     );
 
     // Socket I/O
-    decl("expo_socket_create", i32.fn_type(&[i64.into()], false));
-    decl(
-        "expo_socket_bind",
-        i64.fn_type(&[i32.into(), ptr.into(), i64.into()], false),
-    );
-    decl(
-        "expo_socket_connect",
-        i64.fn_type(&[i32.into(), ptr.into(), i64.into()], false),
-    );
     decl("expo_socket_resolve", ptr.fn_type(&[ptr.into()], false));
-    decl(
-        "expo_socket_send_to",
-        i64.fn_type(&[i32.into(), ptr.into(), ptr.into(), i64.into()], false),
-    );
     decl(
         "expo_socket_recv_from",
         ptr.fn_type(&[i32.into(), i64.into()], false),
-    );
-    decl(
-        "expo_socket_listen",
-        i64.fn_type(&[i32.into(), i64.into()], false),
-    );
-    decl("expo_socket_accept", i32.fn_type(&[i32.into()], false));
-    decl("expo_socket_try_accept", i32.fn_type(&[i32.into()], false));
-    decl(
-        "expo_socket_setsockopt_reuse",
-        i64.fn_type(&[i32.into()], false),
     );
 
     // Panic runtime

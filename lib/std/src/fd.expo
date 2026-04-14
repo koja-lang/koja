@@ -28,9 +28,7 @@ struct Fd
   """
   fn read(self, count: Int) -> Result<String, String>
     ptr = expo_fd_read(self.descriptor, count)
-    ptr.null?()
-      ? Result.Err("read failed")
-      : Result.Ok(ptr.to_string())
+    ptr.null?() ? Result.Err("read failed") : Result.Ok(ptr.to_string())
   end
 
   @doc """
@@ -60,9 +58,7 @@ struct Fd
   fn write(self, data: String) -> Result<Int, String>
     bin = data.to_binary()
     result = expo_fd_write(self.descriptor, bin.ptr(), bin.byte_size())
-    result >= 0
-      ? Result.Ok(result)
-      : Result.Err("write failed")
+    result >= 0 ? Result.Ok(result) : Result.Err("write failed")
   end
 
   @extern "C"
@@ -114,9 +110,7 @@ struct File
     cs = path.to_cstring()
     result = expo_file_delete(cs.ptr)
     cs.free()
-    result >= 0
-      ? Result.Ok("ok")
-      : Result.Err("delete failed")
+    result >= 0 ? Result.Ok("ok") : Result.Err("delete failed")
   end
 
   @doc """
@@ -138,11 +132,13 @@ struct File
   - FileMode.Append  — open for appending (create if needed)
   """
   fn open(path: String, mode: FileMode) -> Result<File, String>
-    mode_int = match mode
-      FileMode.Read -> 0
-      FileMode.Write -> 1
-      FileMode.Append -> 2
-    end
+    mode_int =
+      match mode
+        FileMode.Read -> 0
+        FileMode.Write -> 1
+        FileMode.Append -> 2
+      end
+
     cs = path.to_cstring()
     fd = expo_file_open(cs.ptr, mode_int)
     cs.free()
@@ -160,9 +156,7 @@ struct File
     cs = path.to_cstring()
     ptr = expo_file_read_all(cs.ptr)
     cs.free()
-    ptr.null?()
-      ? Result.Err("read failed")
-      : Result.Ok(ptr.to_string())
+    ptr.null?() ? Result.Err("read failed") : Result.Ok(ptr.to_string())
   end
 
   @doc """
@@ -175,9 +169,7 @@ struct File
     result = expo_file_rename(src_cs.ptr, dst_cs.ptr)
     src_cs.free()
     dst_cs.free()
-    result >= 0
-      ? Result.Ok("ok")
-      : Result.Err("rename failed")
+    result >= 0 ? Result.Ok("ok") : Result.Err("rename failed")
   end
 
   @doc """
@@ -190,9 +182,7 @@ struct File
     result = expo_file_write_all(path_cs.ptr, content_cs.ptr)
     path_cs.free()
     content_cs.free()
-    result >= 0
-      ? Result.Ok("ok")
-      : Result.Err("write failed")
+    result >= 0 ? Result.Ok("ok") : Result.Err("write failed")
   end
 
   @extern "C"
