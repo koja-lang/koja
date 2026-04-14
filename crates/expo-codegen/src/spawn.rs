@@ -349,6 +349,27 @@ pub(crate) fn build_spawn_wrapper<'ctx>(
 // Ref<M, R> construction
 // ---------------------------------------------------------------------------
 
+/// Resolved `Ref<M, R>` type metadata.
+struct ResolvedRefType {
+    expo_type: Type,
+    mangled_name: String,
+    msg_type: Type,
+    reply_type: Type,
+}
+
+/// Computes the mangled name and Expo type for a `Ref<M, R>` struct.
+fn resolve_ref_type(compiler: &Compiler, msg_type: Type, reply_type: Type) -> ResolvedRefType {
+    let type_args = vec![msg_type.clone(), reply_type.clone()];
+    let mangled_name = mangle_name("Ref", &type_args);
+    let expo_type = named_generic("Ref", type_args, compiler.type_ctx);
+    ResolvedRefType {
+        expo_type,
+        mangled_name,
+        msg_type,
+        reply_type,
+    }
+}
+
 /// Wraps a runtime pid in a `Ref<M, R>` struct value.
 ///
 /// Monomorphizes the `Ref` struct type if it hasn't been instantiated for
@@ -359,14 +380,18 @@ pub(crate) fn build_ref_value<'ctx>(
     msg_type: Type,
     reply_type: Type,
 ) -> Result<TypedValue<'ctx>, String> {
-    let type_args = vec![msg_type, reply_type];
-    let mangled = mangle_name("Ref", &type_args);
-    if !compiler.types.contains_monomorphized(&mangled) {
+    let resolved = resolve_ref_type(compiler, msg_type, reply_type);
+
+    if !compiler
+        .types
+        .contains_monomorphized(&resolved.mangled_name)
+    {
+        let type_args = vec![resolved.msg_type, resolved.reply_type];
         monomorphize_struct(compiler, "Ref", &type_args)?;
     }
     let ref_struct = compiler
         .types
-        .get_monomorphized(&mangled)
+        .get_monomorphized(&resolved.mangled_name)
         .ok_or("Ref struct type not found")?;
 
     let mut struct_value = ref_struct.get_undef();
@@ -376,8 +401,7 @@ pub(crate) fn build_ref_value<'ctx>(
         .unwrap()
         .into_struct_value();
 
-    let ref_type = named_generic("Ref", type_args, compiler.type_ctx);
-    Ok(TypedValue::new(struct_value.into(), ref_type))
+    Ok(TypedValue::new(struct_value.into(), resolved.expo_type))
 }
 
 // ---------------------------------------------------------------------------

@@ -101,6 +101,63 @@ fn llvm_type_size<'ctx>(ty: BasicTypeEnum<'ctx>, c: &Compiler<'ctx>) -> IntValue
     }
 }
 
+use crate::stmt::ResolvedFieldStep;
+
+/// Resolved chain of field accesses from a base variable.
+struct ResolvedChain {
+    base_name: String,
+    base_type: Type,
+    steps: Vec<ResolvedFieldStep>,
+}
+
+/// Resolves a field access chain to a sequence of field indices and types
+/// by walking the AST recursively. No LLVM emission.
+fn resolve_chain_steps(compiler: &Compiler, receiver: &Expr, field: &str) -> Option<ResolvedChain> {
+    let (base_name, base_type, mut steps) = match &receiver.kind {
+        ExprKind::Ident { name, .. } => {
+            let (_, ty, _) = compiler.fn_state.variables.get(name.as_str()).cloned()?;
+            (name.clone(), ty, Vec::new())
+        }
+        ExprKind::Self_ => {
+            let (_, ty, _) = compiler.fn_state.variables.get("self").cloned()?;
+            ("self".to_string(), ty, Vec::new())
+        }
+        ExprKind::FieldAccess {
+            receiver: inner_recv,
+            field: inner_field,
+            ..
+        } => {
+            let inner = resolve_chain_steps(compiler, inner_recv, inner_field)?;
+            let last_type = inner
+                .steps
+                .last()
+                .map(|s| &s.field_type)
+                .unwrap_or(&inner.base_type);
+            if matches!(last_type, Type::Indirect(_)) {
+                return None;
+            }
+            (inner.base_name, inner.base_type, inner.steps)
+        }
+        _ => return None,
+    };
+
+    let current_type = steps.last().map(|s| &s.field_type).unwrap_or(&base_type);
+    let sn = struct_name_from_type(current_type)?;
+    let field_idx = compiler.get_field_index(&sn.mangled, field)?;
+    let field_ty = compiler.get_field_type(&sn.mangled, field)?;
+
+    steps.push(ResolvedFieldStep {
+        field_index: field_idx,
+        field_type: field_ty,
+    });
+
+    Some(ResolvedChain {
+        base_name,
+        base_type,
+        steps,
+    })
+}
+
 /// Tries to resolve a field access chain to a pointer via GEP without loading
 /// intermediate struct values. Returns `(pointer, field_type)` on success.
 /// Works for `ident.field`, `self.field`, and chains like `self.span.start`.
@@ -109,43 +166,26 @@ fn resolve_field_chain<'ctx>(
     receiver: &Expr,
     field: &str,
 ) -> Option<(PointerValue<'ctx>, Type)> {
-    let (base_ptr, base_struct_name, base_type) = match &receiver.kind {
-        ExprKind::Ident { name, .. } => {
-            let (ptr, ty, _) = compiler.fn_state.variables.get(name.as_str()).cloned()?;
-            let sn = struct_name_from_type(&ty)?;
-            (ptr, sn.mangled, ty)
-        }
-        ExprKind::Self_ => {
-            let (ptr, ty, _) = compiler.fn_state.variables.get("self").cloned()?;
-            let sn = struct_name_from_type(&ty)?;
-            (ptr, sn.mangled, ty)
-        }
-        ExprKind::FieldAccess {
-            receiver: inner_recv,
-            field: inner_field,
-            ..
-        } => {
-            let (inner_ptr, inner_ty) = resolve_field_chain(compiler, inner_recv, inner_field)?;
-            if let Type::Indirect(_) = &inner_ty {
-                return None;
-            }
-            let sn = struct_name_from_type(&inner_ty)?;
-            (inner_ptr, sn.mangled, inner_ty)
-        }
-        _ => return None,
-    };
+    let resolved = resolve_chain_steps(compiler, receiver, field)?;
 
-    let struct_type =
-        to_llvm_type(&base_type, compiler.context, &compiler.types)?.into_struct_type();
-    let field_idx = compiler.get_field_index(&base_struct_name, field)?;
-    let field_ty = compiler.get_field_type(&base_struct_name, field)?;
+    let (mut ptr, _, _) = compiler
+        .fn_state
+        .variables
+        .get(&resolved.base_name)
+        .cloned()?;
+    let mut current_type = resolved.base_type;
 
-    let field_ptr = compiler
-        .builder
-        .build_struct_gep(struct_type, base_ptr, field_idx, field)
-        .unwrap();
+    for step in &resolved.steps {
+        let struct_type =
+            to_llvm_type(&current_type, compiler.context, &compiler.types)?.into_struct_type();
+        ptr = compiler
+            .builder
+            .build_struct_gep(struct_type, ptr, step.field_index, field)
+            .unwrap();
+        current_type = step.field_type.clone();
+    }
 
-    Some((field_ptr, field_ty))
+    Some((ptr, current_type))
 }
 
 enum ResolvedFieldAccess<'ctx> {

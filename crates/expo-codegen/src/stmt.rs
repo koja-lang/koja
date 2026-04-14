@@ -67,6 +67,73 @@ fn statement_span(stmt: &Statement) -> Span {
     }
 }
 
+/// Resolves type annotation substitutions needed before compiling the RHS
+/// of an assignment. Returns `(param_name, type_arg)` pairs to insert into
+/// `type_subst` so generic type parameters are available during compilation.
+fn resolve_annotation_subst(
+    compiler: &Compiler,
+    type_annotation: &expo_ast::ast::TypeExpr,
+) -> Vec<(String, Type)> {
+    let annotated = compiler.resolve_type_expr(type_annotation);
+    match &annotated {
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => {
+            let Some(type_params) = compiler
+                .type_ctx
+                .get_type(identifier)
+                .map(|ti| ti.type_params.clone())
+            else {
+                return Vec::new();
+            };
+            type_params
+                .iter()
+                .zip(type_args.iter())
+                .map(|(param, arg)| {
+                    let concrete = substitute(arg, &compiler.fn_state.type_subst);
+                    (param.name.clone(), concrete)
+                })
+                .collect()
+        }
+        Type::Pointer(inner) => {
+            let Some(ti) = compiler.type_ctx.find_type("CPtr") else {
+                return Vec::new();
+            };
+            if ti.type_params.is_empty() {
+                return Vec::new();
+            }
+            vec![(ti.type_params[0].name.clone(), *inner.clone())]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Resolves the final annotated type after the RHS has been compiled,
+/// substituting generic type args with their concrete bindings.
+fn resolve_final_annotation_type(
+    compiler: &Compiler,
+    type_annotation: &expo_ast::ast::TypeExpr,
+) -> Type {
+    let annotated = compiler.resolve_type_expr(type_annotation);
+    match annotated {
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => {
+            let resolved_args: Vec<Type> = type_args
+                .iter()
+                .map(|t| substitute_preserving(t, &compiler.fn_state.type_subst))
+                .collect();
+            Type::Named {
+                identifier,
+                type_args: resolved_args,
+            }
+        }
+        other => other,
+    }
+}
+
 /// Compiles a single statement (assignment, return, break, or compound
 /// assignment). Expression statements are compiled for side effects only.
 pub fn compile_statement<'ctx>(
@@ -92,35 +159,12 @@ pub fn compile_statement<'ctx>(
         } => {
             let mut saved_subst = None;
             if let Some(te) = type_annotation {
-                let annotated = c.resolve_type_expr(te);
-                match &annotated {
-                    Type::Named {
-                        identifier,
-                        type_args,
-                    } if !type_args.is_empty() => {
-                        let type_params = c
-                            .type_ctx
-                            .get_type(identifier)
-                            .map(|ti| ti.type_params.clone());
-                        if let Some(tp) = type_params {
-                            saved_subst = Some(c.fn_state.type_subst.clone());
-                            for (param, arg) in tp.iter().zip(type_args.iter()) {
-                                let concrete = substitute(arg, &c.fn_state.type_subst);
-                                c.fn_state.type_subst.insert(param.name.clone(), concrete);
-                            }
-                        }
+                let entries = resolve_annotation_subst(c, te);
+                if !entries.is_empty() {
+                    saved_subst = Some(c.fn_state.type_subst.clone());
+                    for (name, ty) in entries {
+                        c.fn_state.type_subst.insert(name, ty);
                     }
-                    Type::Pointer(inner) => {
-                        if let Some(ti) = c.type_ctx.find_type("CPtr")
-                            && !ti.type_params.is_empty()
-                        {
-                            saved_subst = Some(c.fn_state.type_subst.clone());
-                            c.fn_state
-                                .type_subst
-                                .insert(ti.type_params[0].name.clone(), *inner.clone());
-                        }
-                    }
-                    _ => {}
                 }
             }
 
@@ -134,23 +178,7 @@ pub fn compile_statement<'ctx>(
             }
 
             let ty = if let Some(te) = type_annotation {
-                let annotated = c.resolve_type_expr(te);
-                let annotated = match annotated {
-                    Type::Named {
-                        identifier,
-                        type_args,
-                    } if !type_args.is_empty() => {
-                        let resolved_args: Vec<Type> = type_args
-                            .iter()
-                            .map(|t| substitute_preserving(t, &c.fn_state.type_subst))
-                            .collect();
-                        Type::Named {
-                            identifier,
-                            type_args: resolved_args,
-                        }
-                    }
-                    other => other,
-                };
+                let annotated = resolve_final_annotation_type(c, te);
                 let _ = ensure_types_exist(c, &annotated);
                 annotated
             } else if compiled_type != Type::Unknown {
@@ -329,21 +357,28 @@ pub fn compile_statement<'ctx>(
     }
 }
 
-/// Walks a dotted field path (`self.span.start.line`) and returns the LLVM
-/// pointer to the final field plus its Expo type.
-fn resolve_field_ptr<'ctx>(
-    c: &Compiler<'ctx>,
+/// One step in a resolved field path: the field index and its Expo type.
+pub(crate) struct ResolvedFieldStep {
+    pub field_index: u32,
+    pub field_type: Type,
+}
+
+/// Resolves a dotted field path to a sequence of field indices and types
+/// by walking the type context. No LLVM emission.
+pub(crate) fn resolve_field_path(
+    compiler: &Compiler,
     segments: &[String],
-) -> Result<(PointerValue<'ctx>, Type), String> {
+) -> Result<(Type, Vec<ResolvedFieldStep>), String> {
     let var_name = &segments[0];
-    let (mut ptr, ty, _) = c
+    let (_, ty, _) = compiler
         .fn_state
         .variables
         .get(var_name)
         .ok_or_else(|| format!("undefined variable: {var_name}"))?
         .clone();
 
-    let mut current_type = ty;
+    let mut current_type = ty.clone();
+    let mut steps = Vec::with_capacity(segments.len() - 1);
 
     for field_name in &segments[1..] {
         let struct_name = match &current_type {
@@ -359,29 +394,53 @@ fn resolve_field_ptr<'ctx>(
             }
         };
 
-        let struct_type = to_llvm_type(&current_type, c.context, &c.types)
-            .map(|t| t.into_struct_type())
-            .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
-
-        let field_idx = c
+        let field_idx = compiler
             .get_field_index(&struct_name, field_name)
             .ok_or_else(|| format!("unknown field `{field_name}` on struct `{struct_name}`"))?;
 
-        let field_ty = c
+        let field_ty = compiler
             .get_field_type(&struct_name, field_name)
             .ok_or_else(|| format!("unknown field `{field_name}` on struct `{struct_name}`"))?;
+
+        steps.push(ResolvedFieldStep {
+            field_index: field_idx,
+            field_type: field_ty.clone(),
+        });
+
+        current_type = field_ty;
+    }
+
+    Ok((ty, steps))
+}
+
+/// Walks a dotted field path (`self.span.start.line`) and returns the LLVM
+/// pointer to the final field plus its Expo type.
+fn resolve_field_ptr<'ctx>(
+    c: &Compiler<'ctx>,
+    segments: &[String],
+) -> Result<(PointerValue<'ctx>, Type), String> {
+    let (base_type, steps) = resolve_field_path(c, segments)?;
+
+    let var_name = &segments[0];
+    let (mut ptr, _, _) = c.fn_state.variables.get(var_name).unwrap().clone();
+
+    let mut current_type = base_type;
+    for (i, step) in steps.iter().enumerate() {
+        let struct_type = to_llvm_type(&current_type, c.context, &c.types)
+            .map(|t| t.into_struct_type())
+            .ok_or_else(|| format!("unknown struct type for field path segment {i}"))?;
 
         ptr = c
             .builder
             .build_struct_gep(
                 struct_type,
                 ptr,
-                field_idx,
-                &format!("{var_name}.{field_name}"),
+                step.field_index,
+                &format!("{var_name}.{}", segments[i + 1]),
             )
             .unwrap();
 
-        current_type = field_ty;
+        current_type = step.field_type.clone();
     }
 
     Ok((ptr, current_type))
@@ -751,6 +810,11 @@ pub(crate) fn compile_union_wrap<'ctx>(
     Ok(result)
 }
 
+/// Looks up a recorded coercion for the given span from the type context.
+fn resolve_coercion(compiler: &Compiler, span: Span) -> Option<Coercion> {
+    compiler.type_ctx.coercions.get(&span).cloned()
+}
+
 /// Applies a recorded coercion to a compiled value, if one exists for the
 /// given expression span. Currently handles union widening.
 pub(crate) fn apply_coercion<'ctx>(
@@ -759,20 +823,19 @@ pub(crate) fn apply_coercion<'ctx>(
     expr: &Expr,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let span = expr_span(expr);
-    if let Some(coercion) = c.type_ctx.coercions.get(&span).cloned() {
-        match coercion {
-            Coercion::UnionWiden { source, target } => {
-                let target_mangled = mangle_type(&target);
-                if let Some(target_llvm) = c.types.get_monomorphized(&target_mangled)
-                    && val.get_type() == target_llvm.into()
-                {
-                    return Ok(val);
-                }
-                compile_union_wrap(c, val, &source, &target)
+    let Some(coercion) = resolve_coercion(c, span) else {
+        return Ok(val);
+    };
+    match coercion {
+        Coercion::UnionWiden { source, target } => {
+            let target_mangled = mangle_type(&target);
+            if let Some(target_llvm) = c.types.get_monomorphized(&target_mangled)
+                && val.get_type() == target_llvm.into()
+            {
+                return Ok(val);
             }
+            compile_union_wrap(c, val, &source, &target)
         }
-    } else {
-        Ok(val)
     }
 }
 

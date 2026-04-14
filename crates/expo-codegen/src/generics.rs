@@ -463,20 +463,31 @@ pub(crate) fn monomorphize_enum<'ctx>(
     Ok(())
 }
 
-/// Generates a monomorphized version of a method from a generic impl block.
-/// Finds the method AST in `generic_impl_asts`, substitutes the type
-/// parameters with concrete type args, and compiles the body.
+/// Fully resolved method signature: AST, types, substitutions, and self-type.
+/// Produced by `resolve_method_signature` without any LLVM emission.
+struct ResolvedMethodSignature {
+    func_ast: Function,
+    is_static: bool,
+    mangled_fn: String,
+    mangled_type: String,
+    param_types: Vec<Type>,
+    return_type: Type,
+    self_type: Option<Type>,
+    subst: HashMap<String, Type>,
+}
+
+/// Resolves the method signature for a generic impl method by looking up
+/// the AST (specialized or generic path), building type substitutions,
+/// and computing parameter/return types. No LLVM emission.
 ///
-/// When `method_type_args` is non-empty, method-level type parameters
-/// (e.g. `U` in `map<U>`) are also substituted into the mangled name
-/// and type substitution map.
-pub(crate) fn monomorphize_impl_method<'ctx>(
-    c: &mut Compiler<'ctx>,
+/// Returns `None` if the method was already compiled (cached in `functions`).
+fn resolve_method_signature(
+    compiler: &Compiler,
     base_type: &str,
     method_name: &str,
     type_args: &[Type],
     method_type_args: &[Type],
-) -> Result<(), String> {
+) -> Result<Option<ResolvedMethodSignature>, String> {
     let mangled_type = mangle_name(base_type, type_args);
     let mangled_fn = if method_type_args.is_empty() {
         format!("{}_{}", mangled_type, method_name)
@@ -484,61 +495,14 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         let mangled_method = mangle_name(method_name, method_type_args);
         format!("{}_{}", mangled_type, mangled_method)
     };
-    if c.functions.contains_key(&mangled_fn) {
-        return Ok(());
+    if compiler.functions.contains_key(&mangled_fn) {
+        return Ok(None);
     }
 
-    if method_type_args.is_empty() {
-        match base_type {
-            "List" => {
-                if let EmitResult::Emitted =
-                    emit_list_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
-                {
-                    return Ok(());
-                }
-            }
-            "Map" => {
-                if let EmitResult::Emitted =
-                    emit_map_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
-                {
-                    return Ok(());
-                }
-            }
-            "Set" => {
-                if let EmitResult::Emitted =
-                    emit_set_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
-                {
-                    return Ok(());
-                }
-            }
-            "Ref" => {
-                if let EmitResult::Emitted =
-                    emit_ref_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
-                {
-                    return Ok(());
-                }
-            }
-            "ReplyTo" => {
-                if let EmitResult::Emitted =
-                    emit_reply_to_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
-                {
-                    return Ok(());
-                }
-            }
-            "CPtr" => {
-                if let EmitResult::Emitted =
-                    emit_cptr_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
-                {
-                    return Ok(());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let spec_id = c.type_ctx.resolve_name(base_type).cloned();
+    let spec_id = compiler.type_ctx.resolve_name(base_type).cloned();
     let specialized_match = spec_id.as_ref().and_then(|id| {
-        c.type_ctx
+        compiler
+            .type_ctx
             .specialized_impl_asts
             .get(id)
             .and_then(|entries| {
@@ -572,12 +536,16 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
             let spec_sig = spec_id
             .as_ref()
             .and_then(|id| {
-                c.type_ctx.specialized_methods.get(id).and_then(|entries| {
-                    entries
-                        .iter()
-                        .find(|(args, _)| *args == concrete_args)
-                        .and_then(|(_, sigs)| sigs.get(method_name))
-                })
+                compiler
+                    .type_ctx
+                    .specialized_methods
+                    .get(id)
+                    .and_then(|entries| {
+                        entries
+                            .iter()
+                            .find(|(args, _)| *args == concrete_args)
+                            .and_then(|(_, sigs)| sigs.get(method_name))
+                    })
             })
             .ok_or_else(|| {
                 format!(
@@ -594,7 +562,7 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
             let is_static = spec_sig.kind == FunctionKind::Static;
             (func_ast, subst, ret, pts, is_static)
         } else {
-            let impl_blocks = c
+            let impl_blocks = compiler
                 .type_ctx
                 .generic_impl_asts
                 .get(base_type)
@@ -644,7 +612,7 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
                 subst.insert(tp.name.clone(), ta.clone());
             }
 
-            let info = c
+            let info = compiler
                 .type_ctx
                 .find_type(base_type)
                 .map(|ti| (&ti.functions, &ti.type_params));
@@ -670,60 +638,159 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
             (func_ast, subst, return_type, param_types, is_static)
         };
 
-    ensure_types_exist(c, &return_type)?;
-    for pt in &param_types {
+    let self_type = if is_static {
+        None
+    } else if base_type == "CPtr" {
+        Some(Type::Pointer(Box::new(
+            type_args.first().cloned().unwrap_or(Type::Unknown),
+        )))
+    } else {
+        Some(named_generic(
+            base_type,
+            type_args.to_vec(),
+            compiler.type_ctx,
+        ))
+    };
+
+    Ok(Some(ResolvedMethodSignature {
+        func_ast,
+        is_static,
+        mangled_fn,
+        mangled_type,
+        param_types,
+        return_type,
+        self_type,
+        subst,
+    }))
+}
+
+/// Generates a monomorphized version of a method from a generic impl block.
+/// Finds the method AST via `resolve_method_signature`, then creates the LLVM
+/// function and compiles the body.
+///
+/// When `method_type_args` is non-empty, method-level type parameters
+/// (e.g. `U` in `map<U>`) are also substituted into the mangled name
+/// and type substitution map.
+pub(crate) fn monomorphize_impl_method<'ctx>(
+    c: &mut Compiler<'ctx>,
+    base_type: &str,
+    method_name: &str,
+    type_args: &[Type],
+    method_type_args: &[Type],
+) -> Result<(), String> {
+    let mangled_type = mangle_name(base_type, type_args);
+    let mangled_fn = if method_type_args.is_empty() {
+        format!("{}_{}", mangled_type, method_name)
+    } else {
+        let mangled_method = mangle_name(method_name, method_type_args);
+        format!("{}_{}", mangled_type, mangled_method)
+    };
+    if c.functions.contains_key(&mangled_fn) {
+        return Ok(());
+    }
+
+    if method_type_args.is_empty() {
+        match base_type {
+            "CPtr" => {
+                if let EmitResult::Emitted =
+                    emit_cptr_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
+                {
+                    return Ok(());
+                }
+            }
+            "List" => {
+                if let EmitResult::Emitted =
+                    emit_list_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
+                {
+                    return Ok(());
+                }
+            }
+            "Map" => {
+                if let EmitResult::Emitted =
+                    emit_map_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
+                {
+                    return Ok(());
+                }
+            }
+            "Ref" => {
+                if let EmitResult::Emitted =
+                    emit_ref_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
+                {
+                    return Ok(());
+                }
+            }
+            "ReplyTo" => {
+                if let EmitResult::Emitted =
+                    emit_reply_to_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
+                {
+                    return Ok(());
+                }
+            }
+            "Set" => {
+                if let EmitResult::Emitted =
+                    emit_set_method(c, &mangled_type, &mangled_fn, method_name, type_args)?
+                {
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(sig) =
+        resolve_method_signature(c, base_type, method_name, type_args, method_type_args)?
+    else {
+        return Ok(());
+    };
+
+    ensure_types_exist(c, &sig.return_type)?;
+    for pt in &sig.param_types {
         ensure_types_exist(c, pt)?;
     }
 
     let mut llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
 
-    if !is_static {
+    if let Some(self_expo_type) = &sig.self_type {
         let self_llvm_type = c
             .types
-            .get_monomorphized(&mangled_type)
+            .get_monomorphized(&sig.mangled_type)
             .map(|st| -> BasicTypeEnum { st.into() })
-            .or_else(|| {
-                let self_ty = if base_type == "CPtr" {
-                    Type::Pointer(Box::new(
-                        type_args.first().cloned().unwrap_or(Type::Unknown),
-                    ))
-                } else {
-                    named_generic(base_type, type_args.to_vec(), c.type_ctx)
-                };
-                to_llvm_type(&self_ty, c.context, &c.types)
-            })
-            .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
+            .or_else(|| to_llvm_type(self_expo_type, c.context, &c.types))
+            .ok_or_else(|| format!("no LLVM type for `{}`", sig.mangled_type))?;
         llvm_param_types.push(self_llvm_type.into());
     }
 
-    for ty in &param_types {
+    for ty in &sig.param_types {
         let lt = to_llvm_type(ty, c.context, &c.types).ok_or_else(|| {
-            format!("no LLVM type for method parameter type `{ty:?}` in `{mangled_fn}`")
+            format!(
+                "no LLVM type for method parameter type `{ty:?}` in `{}`",
+                sig.mangled_fn
+            )
         })?;
         llvm_param_types.push(lt.into());
     }
 
-    let fn_type = match to_llvm_type(&return_type, c.context, &c.types) {
+    let fn_type = match to_llvm_type(&sig.return_type, c.context, &c.types) {
         Some(ret) => ret.fn_type(&llvm_param_types, false),
         None => c.context.void_type().fn_type(&llvm_param_types, false),
     };
 
-    let fn_value = c.module.add_function(&mangled_fn, fn_type, None);
-    c.functions.insert(mangled_fn.clone(), fn_value);
+    let fn_value = c.module.add_function(&sig.mangled_fn, fn_type, None);
+    c.functions.insert(sig.mangled_fn.clone(), fn_value);
 
-    let self_type = if is_static {
+    let self_type = if sig.is_static {
         None
     } else {
-        Some((mangled_type.as_str(), base_type))
+        Some((sig.mangled_type.as_str(), base_type))
     };
     compile_method_body(
         c,
         fn_value,
-        &func_ast,
+        &sig.func_ast,
         self_type,
-        &param_types,
-        &return_type,
-        subst,
+        &sig.param_types,
+        &sig.return_type,
+        sig.subst,
     )
 }
 

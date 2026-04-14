@@ -524,21 +524,26 @@ fn compile_literal_for_pattern<'ctx>(
     }
 }
 
+/// Looks up the tag value for an enum variant from the type registry.
+fn resolve_variant_tag(compiler: &Compiler, enum_name: &str, variant: &str) -> Result<u8, String> {
+    compiler
+        .types
+        .get_variant_tag(enum_name, variant)
+        .ok_or_else(|| format!("unknown variant: {enum_name}.{variant}"))
+}
+
 fn compile_tag_check<'ctx>(
     compiler: &mut Compiler<'ctx>,
     subject_ptr: PointerValue<'ctx>,
     enum_name: &str,
     variant: &str,
 ) -> Result<IntValue<'ctx>, String> {
+    let tag = resolve_variant_tag(compiler, enum_name, variant)?;
     let enum_type = compiler
         .types
         .get_stdlib(enum_name)
         .or_else(|| compiler.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
-    let tag = compiler
-        .types
-        .get_variant_tag(enum_name, variant)
-        .ok_or_else(|| format!("unknown variant: {enum_name}.{variant}"))?;
     let tag_ptr = compiler
         .builder
         .build_struct_gep(enum_type, subject_ptr, 0, "tag_ptr")
@@ -692,12 +697,18 @@ fn find_constructor_enum<'ctx>(
     Err(format!("no enum found with variant `{variant_name}`"))
 }
 
-pub(crate) fn get_payload_ptr<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    subject_ptr: PointerValue<'ctx>,
+/// Resolved payload metadata for an enum variant.
+struct ResolvedPayloadInfo<'ctx> {
+    enum_type: StructType<'ctx>,
+    payload_type: StructType<'ctx>,
+}
+
+/// Looks up the payload and enum LLVM types for a variant from the type registry.
+fn resolve_payload_info<'ctx>(
+    compiler: &Compiler<'ctx>,
     enum_name: &str,
     variant: &str,
-) -> Result<(StructType<'ctx>, PointerValue<'ctx>), String> {
+) -> Result<ResolvedPayloadInfo<'ctx>, String> {
     let payload_type = compiler
         .types
         .get_variant_payload_type(enum_name, variant)
@@ -707,11 +718,24 @@ pub(crate) fn get_payload_ptr<'ctx>(
         .get_stdlib(enum_name)
         .or_else(|| compiler.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
+    Ok(ResolvedPayloadInfo {
+        enum_type,
+        payload_type,
+    })
+}
+
+pub(crate) fn get_payload_ptr<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    subject_ptr: PointerValue<'ctx>,
+    enum_name: &str,
+    variant: &str,
+) -> Result<(StructType<'ctx>, PointerValue<'ctx>), String> {
+    let resolved = resolve_payload_info(compiler, enum_name, variant)?;
     let payload_ptr = compiler
         .builder
-        .build_struct_gep(enum_type, subject_ptr, 1, "payload_ptr")
+        .build_struct_gep(resolved.enum_type, subject_ptr, 1, "payload_ptr")
         .unwrap();
-    Ok((payload_type, payload_ptr))
+    Ok((resolved.payload_type, payload_ptr))
 }
 
 fn get_struct_variant_fields(

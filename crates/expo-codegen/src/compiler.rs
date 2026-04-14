@@ -293,6 +293,100 @@ pub struct Compiler<'ctx> {
     pub debug: DebugContext<'ctx>,
 }
 
+/// Pure decision type: the semantic kind of a constant initializer,
+/// determined without touching LLVM.
+enum ResolvedConst {
+    Bool(bool),
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+    },
+    Float(f64),
+    Int(i64),
+    String(String),
+    Struct {
+        fields: Vec<FieldInit>,
+        struct_name: String,
+    },
+}
+
+/// Resolves a constant expression to its semantic kind by parsing literals
+/// and identifying enum/struct construction shapes.
+fn resolve_const(kind: &ExprKind) -> Option<ResolvedConst> {
+    match kind {
+        ExprKind::Literal {
+            value: Literal::Bool(b),
+            ..
+        } => Some(ResolvedConst::Bool(*b)),
+        ExprKind::Literal {
+            value: Literal::Float(s),
+            ..
+        } => {
+            let v: f64 = s.parse().ok()?;
+            Some(ResolvedConst::Float(v))
+        }
+        ExprKind::Literal {
+            value: Literal::Int(s),
+            ..
+        } => {
+            let v = parse_int_literal(s).ok()?;
+            Some(ResolvedConst::Int(v))
+        }
+        ExprKind::EnumConstruction {
+            type_path,
+            variant,
+            data: EnumConstructionData::Unit,
+            ..
+        } => Some(ResolvedConst::EnumVariant {
+            enum_name: type_path.join("."),
+            variant: variant.clone(),
+        }),
+        ExprKind::String { parts, .. } => {
+            let mut combined = String::new();
+            for part in parts {
+                if let StringPart::Literal { value, .. } = part {
+                    combined.push_str(value);
+                }
+            }
+            Some(ResolvedConst::String(combined))
+        }
+        ExprKind::StructConstruction {
+            type_path, fields, ..
+        } => Some(ResolvedConst::Struct {
+            fields: fields.clone(),
+            struct_name: type_path.join("."),
+        }),
+        _ => None,
+    }
+}
+
+/// Resolved metadata for a constant enum variant.
+struct ResolvedConstEnum {
+    tag: u8,
+}
+
+/// Looks up the tag for a unit enum variant used in a constant initializer.
+fn resolve_const_enum(
+    compiler: &Compiler,
+    enum_name: &str,
+    variant: &str,
+) -> Option<ResolvedConstEnum> {
+    let tag = compiler.types.get_variant_tag(enum_name, variant)?;
+    Some(ResolvedConstEnum { tag })
+}
+
+/// Resolved metadata for a constant struct initializer.
+struct ResolvedConstStruct {
+    field_types: Vec<(String, Type)>,
+}
+
+/// Looks up the field types for a struct used in a constant initializer.
+fn resolve_const_struct(compiler: &Compiler, struct_name: &str) -> Option<ResolvedConstStruct> {
+    let info = compiler.type_ctx.find_type(struct_name)?;
+    let field_types = info.fields()?.to_vec();
+    Some(ResolvedConstStruct { field_types })
+}
+
 impl<'ctx> Compiler<'ctx> {
     /// Creates a new compiler instance with an empty LLVM module.
     pub fn new(
@@ -665,55 +759,22 @@ impl<'ctx> Compiler<'ctx> {
     fn declare_constants(&mut self, module: &Module) -> Result<(), String> {
         for item in &module.items {
             if let Item::Constant(c) = item {
-                let val: BasicValueEnum = match &c.value.kind {
-                    ExprKind::Literal {
-                        value: Literal::Int(s),
-                        ..
-                    } => {
-                        let v = parse_int_literal(s)?;
-                        self.context.i64_type().const_int(v as u64, true).into()
-                    }
-                    ExprKind::Literal {
-                        value: Literal::Float(s),
-                        ..
-                    } => {
-                        let v: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
-                        self.context.f64_type().const_float(v).into()
-                    }
-                    ExprKind::Literal {
-                        value: Literal::Bool(b),
-                        ..
-                    } => self
+                let resolved = resolve_const(&c.value.kind);
+                let val: BasicValueEnum = match resolved {
+                    Some(ResolvedConst::Bool(b)) => self
                         .context
                         .bool_type()
-                        .const_int(if *b { 1 } else { 0 }, false)
+                        .const_int(if b { 1 } else { 0 }, false)
                         .into(),
-                    ExprKind::String { parts, .. } => {
-                        let mut combined = String::new();
-                        for part in parts {
-                            if let StringPart::Literal { value, .. } = part {
-                                combined.push_str(value);
-                            }
-                        }
-                        self.create_string_global(combined.as_bytes(), &c.name)
-                            .into()
-                    }
-                    ExprKind::EnumConstruction {
-                        type_path,
-                        variant,
-                        data: EnumConstructionData::Unit,
-                        ..
-                    } => {
-                        let enum_name = type_path.join(".");
+                    Some(ResolvedConst::EnumVariant { enum_name, variant }) => {
+                        let Some(info) = resolve_const_enum(self, &enum_name, &variant) else {
+                            continue;
+                        };
                         let Some(enum_type) = self.types.get_stdlib(&enum_name) else {
                             continue;
                         };
-                        let Some(tag) = self.types.get_variant_tag(&enum_name, variant) else {
-                            continue;
-                        };
-                        let tag_val = self.context.i8_type().const_int(tag as u64, false);
-                        let field_count = enum_type.count_fields();
-                        if field_count > 1 {
+                        let tag_val = self.context.i8_type().const_int(info.tag as u64, false);
+                        if enum_type.count_fields() > 1 {
                             let payload_ty = enum_type.get_field_type_at_index(1).unwrap();
                             let zero_payload = payload_ty.const_zero();
                             enum_type
@@ -723,25 +784,29 @@ impl<'ctx> Compiler<'ctx> {
                             enum_type.const_named_struct(&[tag_val.into()]).into()
                         }
                     }
-                    ExprKind::StructConstruction {
-                        type_path, fields, ..
-                    } => {
-                        let struct_name = type_path.join(".");
+                    Some(ResolvedConst::Float(v)) => self.context.f64_type().const_float(v).into(),
+                    Some(ResolvedConst::Int(v)) => {
+                        self.context.i64_type().const_int(v as u64, true).into()
+                    }
+                    Some(ResolvedConst::String(s)) => {
+                        self.create_string_global(s.as_bytes(), &c.name).into()
+                    }
+                    Some(ResolvedConst::Struct {
+                        fields,
+                        struct_name,
+                    }) => {
+                        let Some(info) = resolve_const_struct(self, &struct_name) else {
+                            continue;
+                        };
                         let Some(struct_type) = self.types.get_stdlib(&struct_name) else {
                             continue;
                         };
-                        let Some(info) = self.type_ctx.find_type(&struct_name) else {
-                            continue;
-                        };
-                        let Some(struct_fields) = info.fields() else {
-                            continue;
-                        };
-                        match self.build_const_struct(struct_type, struct_fields, fields) {
+                        match self.build_const_struct(struct_type, &info.field_types, &fields) {
                             Some(val) => val,
                             None => continue,
                         }
                     }
-                    _ => continue,
+                    None => continue,
                 };
                 self.constants.insert(c.name.clone(), val);
             }

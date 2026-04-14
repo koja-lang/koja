@@ -8,6 +8,27 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
 use crate::compiler::Compiler;
 use crate::intrinsics::{emit_primitive_intrinsic, is_primitive_intrinsic, type_display_name};
 
+/// Which formatting strategy to use for a given type.
+enum FormatKind {
+    Enum,
+    PrimitiveIntrinsic,
+    Struct,
+}
+
+/// Determines the formatting strategy for a type by checking the type
+/// context (enum vs struct) and the intrinsics table.
+fn resolve_format_kind(compiler: &Compiler, fn_name: &str, type_name: &str) -> Option<FormatKind> {
+    if compiler.type_ctx.is_enum(type_name) {
+        Some(FormatKind::Enum)
+    } else if compiler.type_ctx.is_struct(type_name) {
+        Some(FormatKind::Struct)
+    } else if is_primitive_intrinsic(fn_name) {
+        Some(FormatKind::PrimitiveIntrinsic)
+    } else {
+        None
+    }
+}
+
 /// Calls `{Type}_format(val)` and returns the resulting string pointer.
 /// Synthesizes the format function on demand for enums and structs if it
 /// doesn't already exist. Falls back to LLVM type inspection when the
@@ -27,19 +48,20 @@ pub fn call_format<'ctx>(
     let fn_name = format!("{type_name}_format");
 
     if !c.functions.contains_key(&fn_name) {
-        if c.type_ctx.is_enum(&type_name) {
-            synthesize_enum_format(c, &type_name)?;
-        } else if c.type_ctx.is_struct(&type_name) {
-            synthesize_struct_format(c, &type_name)?;
-        } else if is_primitive_intrinsic(&fn_name) {
-            let param_ty = val.get_type();
-            let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-            let ft = ptr_ty.fn_type(&[param_ty.into()], false);
-            let fv = c.module.add_function(&fn_name, ft, None);
-            c.functions.insert(fn_name.clone(), fv);
-            emit_primitive_intrinsic(c, &fn_name)?;
-        } else {
+        let Some(kind) = resolve_format_kind(c, &fn_name, &type_name) else {
             return Err(format!("no format function for type `{type_name}`"));
+        };
+        match kind {
+            FormatKind::Enum => synthesize_enum_format(c, &type_name)?,
+            FormatKind::PrimitiveIntrinsic => {
+                let param_ty = val.get_type();
+                let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+                let ft = ptr_ty.fn_type(&[param_ty.into()], false);
+                let fv = c.module.add_function(&fn_name, ft, None);
+                c.functions.insert(fn_name.clone(), fv);
+                emit_primitive_intrinsic(c, &fn_name)?;
+            }
+            FormatKind::Struct => synthesize_struct_format(c, &type_name)?,
         }
     }
 
@@ -234,6 +256,26 @@ pub fn snprintf_to_expo_string<'ctx>(
 // Enum format synthesis
 // ---------------------------------------------------------------------------
 
+/// Resolved metadata for synthesizing an enum format function.
+struct ResolvedEnumFormatInfo {
+    fn_name: String,
+    variants: Vec<expo_typecheck::context::VariantInfo>,
+}
+
+/// Looks up variant metadata from the type context for enum format synthesis.
+fn resolve_enum_format_info(compiler: &Compiler, enum_name: &str) -> ResolvedEnumFormatInfo {
+    let variants = compiler
+        .type_ctx
+        .find_type(enum_name)
+        .and_then(|ti| ti.variants())
+        .cloned()
+        .unwrap_or_default();
+    ResolvedEnumFormatInfo {
+        fn_name: format!("{enum_name}_format"),
+        variants,
+    }
+}
+
 fn synthesize_enum_format<'ctx>(c: &mut Compiler<'ctx>, enum_name: &str) -> Result<(), String> {
     let enum_type = c
         .types
@@ -241,11 +283,12 @@ fn synthesize_enum_format<'ctx>(c: &mut Compiler<'ctx>, enum_name: &str) -> Resu
         .or_else(|| c.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
+    let resolved = resolve_enum_format_info(c, enum_name);
+
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
     let fn_type = ptr_ty.fn_type(&[enum_type.into()], false);
-    let fn_name = format!("{enum_name}_format");
-    let fn_val = c.module.add_function(&fn_name, fn_type, None);
-    c.functions.insert(fn_name.clone(), fn_val);
+    let fn_val = c.module.add_function(&resolved.fn_name, fn_type, None);
+    c.functions.insert(resolved.fn_name.clone(), fn_val);
 
     let saved_block = c.builder.get_insert_block();
     let entry = c.context.append_basic_block(fn_val, "entry");
@@ -265,12 +308,7 @@ fn synthesize_enum_format<'ctx>(c: &mut Compiler<'ctx>, enum_name: &str) -> Resu
         .unwrap()
         .into_int_value();
 
-    let variants = c
-        .type_ctx
-        .find_type(enum_name)
-        .and_then(|ti| ti.variants())
-        .cloned()
-        .unwrap_or_default();
+    let variants = &resolved.variants;
 
     if variants.is_empty() {
         let fallback = c.create_string_global(enum_name.as_bytes(), "enum_fallback");
@@ -370,6 +408,26 @@ fn concat_variant_name<'ctx>(
 // Struct format synthesis
 // ---------------------------------------------------------------------------
 
+/// Resolved metadata for synthesizing a struct format function.
+struct ResolvedStructFormatInfo {
+    fields: Vec<(String, Type)>,
+    fn_name: String,
+}
+
+/// Looks up field metadata from the type context for struct format synthesis.
+fn resolve_struct_format_info(compiler: &Compiler, struct_name: &str) -> ResolvedStructFormatInfo {
+    let fields = compiler
+        .type_ctx
+        .find_type(struct_name)
+        .and_then(|ti| ti.fields())
+        .cloned()
+        .unwrap_or_default();
+    ResolvedStructFormatInfo {
+        fields,
+        fn_name: format!("{struct_name}_format"),
+    }
+}
+
 fn synthesize_struct_format<'ctx>(c: &mut Compiler<'ctx>, struct_name: &str) -> Result<(), String> {
     let struct_type = c
         .types
@@ -377,11 +435,12 @@ fn synthesize_struct_format<'ctx>(c: &mut Compiler<'ctx>, struct_name: &str) -> 
         .or_else(|| c.types.get_monomorphized(struct_name))
         .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
+    let resolved = resolve_struct_format_info(c, struct_name);
+
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
     let fn_type = ptr_ty.fn_type(&[struct_type.into()], false);
-    let fn_name = format!("{struct_name}_format");
-    let fn_val = c.module.add_function(&fn_name, fn_type, None);
-    c.functions.insert(fn_name.clone(), fn_val);
+    let fn_val = c.module.add_function(&resolved.fn_name, fn_type, None);
+    c.functions.insert(resolved.fn_name.clone(), fn_val);
 
     let saved_block = c.builder.get_insert_block();
     let entry = c.context.append_basic_block(fn_val, "entry");
@@ -389,12 +448,7 @@ fn synthesize_struct_format<'ctx>(c: &mut Compiler<'ctx>, struct_name: &str) -> 
 
     let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
 
-    let fields: Vec<(String, Type)> = c
-        .type_ctx
-        .find_type(struct_name)
-        .and_then(|ti| ti.fields())
-        .cloned()
-        .unwrap_or_default();
+    let fields = &resolved.fields;
 
     if fields.is_empty() {
         let s = c.create_string_global(struct_name.as_bytes(), "struct_fmt_empty");

@@ -911,6 +911,32 @@ fn compile_map_literal<'ctx>(
     Ok(Some(TypedValue::new(map_val, resolved.result_type)))
 }
 
+/// Resolved spawn metadata: mangled names and optional generic decomposition.
+struct ResolvedSpawn {
+    generic_args: Option<(String, Vec<Type>)>,
+    mangled_state: String,
+    run_fn_name: String,
+    start_fn_name: String,
+    wrapper_name: String,
+}
+
+/// Computes the mangled names and function identifiers for a spawn expression.
+fn resolve_spawn_info<'ctx>(
+    compiler: &Compiler<'ctx>,
+    type_name: &str,
+    config_value: BasicValueEnum<'ctx>,
+) -> ResolvedSpawn {
+    let mangled_state = spawn::resolve_mangled_state(type_name, config_value);
+    let generic_args = try_parse_mangled_name(&mangled_state, compiler);
+    ResolvedSpawn {
+        generic_args,
+        run_fn_name: format!("{mangled_state}_run"),
+        start_fn_name: format!("{mangled_state}_start"),
+        wrapper_name: format!("__spawn_{mangled_state}"),
+        mangled_state,
+    }
+}
+
 /// Compiles a `spawn T.start(config)` expression.
 ///
 /// Delegates to [`crate::spawn`] helpers for each phase: AST extraction,
@@ -937,38 +963,35 @@ fn compile_spawn<'ctx>(
         .value;
 
     let serialized = spawn::serialize_config(compiler, config_value)?;
-    let mangled_state = spawn::resolve_mangled_state(&target.type_name, config_value);
+    let resolved = resolve_spawn_info(compiler, &target.type_name, config_value);
 
-    if let Some((base, type_args)) = try_parse_mangled_name(&mangled_state, compiler) {
-        monomorphize_impl_method(compiler, &base, "start", &type_args, &[])?;
-        monomorphize_impl_method(compiler, &base, "run", &type_args, &[])?;
+    if let Some((base, type_args)) = &resolved.generic_args {
+        monomorphize_impl_method(compiler, base, "start", type_args, &[])?;
+        monomorphize_impl_method(compiler, base, "run", type_args, &[])?;
     }
 
-    let start_fn_name = format!("{mangled_state}_start");
     let start_fn = compiler
         .module
-        .get_function(&start_fn_name)
-        .ok_or_else(|| format!("undefined start function: {start_fn_name}"))?;
+        .get_function(&resolved.start_fn_name)
+        .ok_or_else(|| format!("undefined start function: {}", resolved.start_fn_name))?;
 
-    let run_fn_name = format!("{mangled_state}_run");
     let run_fn = compiler
         .module
-        .get_function(&run_fn_name)
-        .ok_or_else(|| format!("undefined run function: {run_fn_name}"))?;
+        .get_function(&resolved.run_fn_name)
+        .ok_or_else(|| format!("undefined run function: {}", resolved.run_fn_name))?;
 
     let state_struct_type = compiler
         .types
-        .get_stdlib(&mangled_state)
-        .or_else(|| compiler.types.get_monomorphized(&mangled_state))
-        .ok_or_else(|| format!("no LLVM struct for `{mangled_state}`"))?;
+        .get_stdlib(&resolved.mangled_state)
+        .or_else(|| compiler.types.get_monomorphized(&resolved.mangled_state))
+        .ok_or_else(|| format!("no LLVM struct for `{}`", resolved.mangled_state))?;
 
-    let wrapper_name = format!("__spawn_{mangled_state}");
-    let wrapper = if let Some(existing) = compiler.module.get_function(&wrapper_name) {
+    let wrapper = if let Some(existing) = compiler.module.get_function(&resolved.wrapper_name) {
         existing
     } else {
         spawn::build_spawn_wrapper(
             compiler,
-            &wrapper_name,
+            &resolved.wrapper_name,
             serialized.llvm_type,
             state_struct_type,
             start_fn,
@@ -997,7 +1020,7 @@ fn compile_spawn<'ctx>(
         .into_int_value();
 
     let (msg_type, reply_type) =
-        spawn::resolve_process_msg_reply(compiler, &target.type_name, &mangled_state)?;
+        spawn::resolve_process_msg_reply(compiler, &target.type_name, &resolved.mangled_state)?;
 
     spawn::build_ref_value(compiler, pid, msg_type, reply_type).map(Some)
 }

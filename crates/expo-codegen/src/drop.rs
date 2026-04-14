@@ -199,31 +199,20 @@ fn emit_drop<'ctx>(c: &mut Compiler<'ctx>, ptr: PointerValue<'ctx>, ty: &Type) {
     c.call_void(free, &[val.into()], "drop_free");
 }
 
-/// Frees heap pointers for each [`Type::Indirect`] field in a struct.
-/// Handles the first level of indirection; deeper recursive nodes are freed
-/// when they themselves go out of scope or are explicitly dropped.
-fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
-    let free_fn = *c
-        .functions
-        .get("free")
-        .expect("free not declared in builtins");
-    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-
+/// Identifies struct fields that use [`Type::Indirect`] and returns their
+/// indices and types. Checks monomorphized struct info first, then falls
+/// back to the type context.
+fn resolve_indirect_field_indices(compiler: &Compiler, ty: &Type) -> Vec<(usize, Type)> {
     let struct_name = match ty {
         Type::Named {
             identifier,
             type_args,
         } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
         Type::Named { identifier, .. } => identifier.name.clone(),
-        _ => return,
+        _ => return Vec::new(),
     };
 
-    let Some(struct_type) = to_llvm_type(ty, c.context, &c.types).map(|t| t.into_struct_type())
-    else {
-        return;
-    };
-
-    let fields: Option<Vec<(usize, Type)>> = c
+    compiler
         .types
         .mono_struct_info
         .get(&struct_name)
@@ -235,7 +224,7 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
                 .collect()
         })
         .or_else(|| {
-            c.type_ctx.find_type(&struct_name).and_then(|ti| {
+            compiler.type_ctx.find_type(&struct_name).and_then(|ti| {
                 ti.fields().map(|fields| {
                     fields
                         .iter()
@@ -245,25 +234,44 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
                         .collect()
                 })
             })
-        });
+        })
+        .unwrap_or_default()
+}
 
-    if let Some(indirect_fields) = fields {
-        for (idx, _field_ty) in &indirect_fields {
-            let field_ptr = c
-                .builder
-                .build_struct_gep(
-                    struct_type,
-                    alloca,
-                    *idx as u32,
-                    &format!("drop_field_{idx}"),
-                )
-                .unwrap();
-            let heap_ptr = c
-                .builder
-                .build_load(ptr_ty, field_ptr, &format!("drop_heap_{idx}"))
-                .unwrap();
-            c.call_void(free_fn, &[heap_ptr.into()], &format!("drop_free_{idx}"));
-        }
+/// Frees heap pointers for each [`Type::Indirect`] field in a struct.
+/// Handles the first level of indirection; deeper recursive nodes are freed
+/// when they themselves go out of scope or are explicitly dropped.
+fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
+    let indirect_fields = resolve_indirect_field_indices(c, ty);
+    if indirect_fields.is_empty() {
+        return;
+    }
+
+    let free_fn = *c
+        .functions
+        .get("free")
+        .expect("free not declared in builtins");
+    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
+    let Some(struct_type) = to_llvm_type(ty, c.context, &c.types).map(|t| t.into_struct_type())
+    else {
+        return;
+    };
+
+    for (idx, _field_ty) in &indirect_fields {
+        let field_ptr = c
+            .builder
+            .build_struct_gep(
+                struct_type,
+                alloca,
+                *idx as u32,
+                &format!("drop_field_{idx}"),
+            )
+            .unwrap();
+        let heap_ptr = c
+            .builder
+            .build_load(ptr_ty, field_ptr, &format!("drop_heap_{idx}"))
+            .unwrap();
+        c.call_void(free_fn, &[heap_ptr.into()], &format!("drop_free_{idx}"));
     }
 }
 
