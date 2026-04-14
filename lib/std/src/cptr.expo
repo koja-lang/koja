@@ -60,6 +60,15 @@ impl CPtr<UInt8>
   end
 
   @doc """
+  Reinterprets this pointer as an Expo `String`. The pointer must already
+  point to a valid length-prefixed Expo string payload (as allocated by
+  the runtime). This is a zero-cost operation.
+  """
+  fn to_string(move self) -> String
+    panic("intrinsic")
+  end
+
+  @doc """
   Wraps this pointer in a `CString` by computing the length with `strlen`.
 
   The pointer must be a valid null-terminated C string. The caller is 

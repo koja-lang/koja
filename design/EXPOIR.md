@@ -83,23 +83,23 @@ SIL-style is better for Expo because:
 The lowering pass reads the typed AST (where every `Expr` has `resolved_type`)
 and produces ExpoIR. The following transformations happen during lowering:
 
-| Source concept | Lowered to |
-| --- | --- |
-| Generics (`List<Int32>`) | Monomorphized concrete types |
-| Method calls (`p.distance()`) | Direct calls (`Point_distance(p)`) |
-| Closures (`fn (x) -> x + n end`) | Environment struct + free function |
-| `for` loops | `while` + `.get()` + `.length()` calls |
-| `match` on enums | `switch_enum` with payload extraction |
-| String interpolation (`"#{x}"`) | `.format()` + `.concat()` calls |
-| Field access (`p.x`) | `struct_extract` |
-| Struct construction | `struct` instruction |
-| Ownership drops | Explicit `drop_value` at scope exits |
-| Borrows | Explicit `borrow_value` / `end_borrow` |
-| Moves | `move_value` (source becomes dead) |
-| Clones | `clone_value` (deep copy, new owner) |
-| `self` | Desugared to explicit first parameter |
-| `Self` type alias | Resolved to concrete type |
-| `impl` blocks | Flattened to free functions with mangled names |
+| Source concept                   | Lowered to                                     |
+| -------------------------------- | ---------------------------------------------- |
+| Generics (`List<Int32>`)         | Monomorphized concrete types                   |
+| Method calls (`p.distance()`)    | Direct calls (`Point_distance(p)`)             |
+| Closures (`fn (x) -> x + n end`) | Environment struct + free function             |
+| `for` loops                      | `while` + `.get()` + `.length()` calls         |
+| `match` on enums                 | `switch_enum` with payload extraction          |
+| String interpolation (`"#{x}"`)  | `.format()` + `.concat()` calls                |
+| Field access (`p.x`)             | `struct_extract`                               |
+| Struct construction              | `struct` instruction                           |
+| Ownership drops                  | Explicit `drop_value` at scope exits           |
+| Borrows                          | Explicit `borrow_value` / `end_borrow`         |
+| Moves                            | `move_value` (source becomes dead)             |
+| Clones                           | `clone_value` (deep copy, new owner)           |
+| `self`                           | Desugared to explicit first parameter          |
+| `Self` type alias                | Resolved to concrete type                      |
+| `impl` blocks                    | Flattened to free functions with mangled names |
 
 What lowering does NOT do:
 
@@ -305,54 +305,54 @@ entry:
 
 ### Value operations
 
-| Instruction | Description |
-| --- | --- |
-| `struct $T (%fields...)` | Construct a struct value |
-| `struct_extract %val, #T.field` | Extract a field (typed, no offset math) |
-| `enum $T, #Variant [, %payload]` | Construct an enum value |
-| `switch_enum %val, case #V: bb...` | Branch on enum tag, deliver payloads |
-| `partial_apply @func, %env` | Create a closure from function + environment |
-| `apply @func(%args...)` | Call a function |
-| `builtin op(%args...)` | Primitive arithmetic/comparison |
-| `string_literal "..."` | Create a string constant |
+| Instruction                        | Description                                  |
+| ---------------------------------- | -------------------------------------------- |
+| `struct $T (%fields...)`           | Construct a struct value                     |
+| `struct_extract %val, #T.field`    | Extract a field (typed, no offset math)      |
+| `enum $T, #Variant [, %payload]`   | Construct an enum value                      |
+| `switch_enum %val, case #V: bb...` | Branch on enum tag, deliver payloads         |
+| `partial_apply @func, %env`        | Create a closure from function + environment |
+| `apply @func(%args...)`            | Call a function                              |
+| `builtin op(%args...)`             | Primitive arithmetic/comparison              |
+| `string_literal "..."`             | Create a string constant                     |
 
 ### Ownership operations
 
-| Instruction | Description |
-| --- | --- |
-| `move_value %val` | Transfer ownership (source becomes dead) |
-| `borrow_value %val` | Start a read-only borrow |
-| `end_borrow %val` | End a borrow scope |
-| `clone_value %val` | Deep copy, new independent owner |
-| `drop_value %val` | Free the value (deterministic destructor) |
+| Instruction         | Description                               |
+| ------------------- | ----------------------------------------- |
+| `move_value %val`   | Transfer ownership (source becomes dead)  |
+| `borrow_value %val` | Start a read-only borrow                  |
+| `end_borrow %val`   | End a borrow scope                        |
+| `clone_value %val`  | Deep copy, new independent owner          |
+| `drop_value %val`   | Free the value (deterministic destructor) |
 
 ### Memory operations
 
-| Instruction | Description |
-| --- | --- |
-| `alloca $T` | Stack allocation |
-| `heap_alloc $T` | Heap allocation |
-| `load %ptr` | Load from memory |
-| `store %ptr, %val` | Store to memory |
+| Instruction        | Description      |
+| ------------------ | ---------------- |
+| `alloca $T`        | Stack allocation |
+| `heap_alloc $T`    | Heap allocation  |
+| `load %ptr`        | Load from memory |
+| `store %ptr, %val` | Store to memory  |
 
 ### Control flow
 
-| Instruction | Description |
-| --- | --- |
-| `return %val` | Return from function |
-| `cond_br %cond, bb_then, bb_else` | Conditional branch |
-| `jump bb` | Unconditional branch |
-| `unreachable` | Marks dead code |
+| Instruction                       | Description          |
+| --------------------------------- | -------------------- |
+| `return %val`                     | Return from function |
+| `cond_br %cond, bb_then, bb_else` | Conditional branch   |
+| `jump bb`                         | Unconditional branch |
+| `unreachable`                     | Marks dead code      |
 
 ### Shared types (future)
 
-| Instruction | Description |
-| --- | --- |
-| `shared_alloc $T` | Allocate shared (ARC) object, ref count = 1 |
-| `shared_retain %val` | Increment reference count (atomic) |
-| `shared_release %val` | Decrement reference count, free if zero |
-| `shared_read %val` | Begin atomic read access |
-| `shared_write %val` | Begin atomic write access |
+| Instruction           | Description                                 |
+| --------------------- | ------------------------------------------- |
+| `shared_alloc $T`     | Allocate shared (ARC) object, ref count = 1 |
+| `shared_retain %val`  | Increment reference count (atomic)          |
+| `shared_release %val` | Decrement reference count, free if zero     |
+| `shared_read %val`    | Begin atomic read access                    |
+| `shared_write %val`   | Begin atomic write access                   |
 
 ---
 
@@ -572,23 +572,23 @@ pub enum IrType {
 
 ## Comparison with other compilers
 
-| Compiler | IR levels | Primary motivation |
-| --- | --- | --- |
-| Rust | AST → HIR → MIR → LLVM IR | Borrow checker operates on MIR |
-| Swift | AST → Raw SIL → Canonical SIL → LLVM IR | ARC optimization, generic specialization |
-| Go | AST → SSA → machine code | Optimization, no LLVM dependency |
-| Expo (current) | Typed AST → LLVM IR | (no IR, lowering and emission interleaved) |
+| Compiler        | IR levels                                           | Primary motivation                                       |
+| --------------- | --------------------------------------------------- | -------------------------------------------------------- |
+| Rust            | AST → HIR → MIR → LLVM IR                           | Borrow checker operates on MIR                           |
+| Swift           | AST → Raw SIL → Canonical SIL → LLVM IR             | ARC optimization, generic specialization                 |
+| Go              | AST → SSA → machine code                            | Optimization, no LLVM dependency                         |
+| Expo (current)  | Typed AST → LLVM IR                                 | (no IR, lowering and emission interleaved)               |
 | Expo (proposed) | Typed AST → Raw ExpoIR → Canonical ExpoIR → backend | Ownership optimization, multiple backends, clean codegen |
 
 Apple's primary motivations for SIL, mapped to Expo:
 
-| Apple's reason | Expo equivalent |
-| --- | --- |
-| ARC optimization (retain/release) | Clone/drop elimination, future shared type ARC |
-| Semantic diagnostics (definite init) | Ownership verification, unreachable code |
-| Generic specialization | Monomorphization (already needed) |
-| Protocol devirtualization | Not needed (Expo is already statically dispatched) |
-| Clean separation of concerns | Fixes `c.types.structs`, enables multiple backends |
+| Apple's reason                       | Expo equivalent                                    |
+| ------------------------------------ | -------------------------------------------------- |
+| ARC optimization (retain/release)    | Clone/drop elimination, future shared type ARC     |
+| Semantic diagnostics (definite init) | Ownership verification, unreachable code           |
+| Generic specialization               | Monomorphization (already needed)                  |
+| Protocol devirtualization            | Not needed (Expo is already statically dispatched) |
+| Clean separation of concerns         | Fixes `c.types.structs`, enables multiple backends |
 
 ---
 
@@ -610,7 +610,7 @@ Tests pass at every step.
 The original plan was a narrow TypeRegistry key migration, but implementation
 revealed three tightly coupled pieces that needed to move together.
 
-*TypeRegistry migration.* `TypeRegistry.concrete` is now
+_TypeRegistry migration._ `TypeRegistry.concrete` is now
 `HashMap<TypeIdentifier, StructType>` with `register_concrete()` /
 `get_concrete()` methods. Monomorphized generics and unions remain as
 mangled `String` keys in a separate `monomorphized` map -- these are
@@ -618,7 +618,7 @@ synthesized names like `"List_$Int32$"`, not package-qualified types.
 `get_stdlib()` provides bare-name lookup for intrinsic/stdlib types where
 the caller only knows `"Fd"` or `"Socket"`, not the full identifier.
 
-*Typed AST.* `Expr` was restructured from a flat enum to
+_Typed AST._ `Expr` was restructured from a flat enum to
 `struct Expr { kind: ExprKind, span, resolved_type: Option<Type> }` --
 every expression carries its resolved type after type checking.
 `Type`, `Primitive`, `FnParam`, and `TypeIdentifier` were moved from
@@ -626,12 +626,12 @@ every expression carries its resolved type after type checking.
 crates. Struct and enum construction AST nodes carry
 `resolved_type: Option<TypeIdentifier>`.
 
-*TypedValue threading.* `compile_expr` now returns `TypedValue`, which
+_TypedValue threading._ `compile_expr` now returns `TypedValue`, which
 pairs every LLVM value with its Expo `Type`. Downstream codegen reads
 `expo_type` instead of reverse-engineering types from LLVM bit widths or
 struct names. ~75 usages across all codegen files.
 
-*Remaining.* `TypeContext.find_type(&str)` still has ~35 call sites in
+_Remaining._ `TypeContext.find_type(&str)` still has ~35 call sites in
 codegen (heaviest in `structs.rs`, `enums.rs`, `compiler.rs`). These look
 up type metadata (fields, methods, type params) by bare string. Reducing
 them is ongoing -- `resolved_type` on AST nodes provides the

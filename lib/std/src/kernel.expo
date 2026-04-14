@@ -7,8 +7,11 @@ struct Kernel
   Code 0 indicates success; any non-zero value indicates failure.
   """
   fn exit(code: Int)
-    panic("intrinsic")
+    expo_kernel_exit(code)
   end
+
+  @extern "C"
+  priv fn expo_kernel_exit(code: Int64)
 end
 
 @doc """
@@ -368,14 +371,11 @@ end
 Cryptographically secure random data from the operating system.
 """
 struct Random
-  @extern "C"
-  priv fn expo_random_int(min: Int64, max: Int64) -> Int64
-
   @doc """
   Returns `count` random bytes from the OS entropy source.
   """
   fn bytes(count: Int) -> Binary
-    panic("intrinsic")
+    expo_random_bytes(count).to_string().to_binary()
   end
 
   @doc """
@@ -384,6 +384,12 @@ struct Random
   fn int(min: Int, max: Int) -> Int
     expo_random_int(min, max)
   end
+
+  @extern "C"
+  priv fn expo_random_bytes(count: Int64) -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn expo_random_int(min: Int64, max: Int64) -> Int64
 end
 
 impl Int

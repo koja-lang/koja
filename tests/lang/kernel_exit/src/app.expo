@@ -1,0 +1,23 @@
+struct App
+end
+
+enum AppMsg
+  Noop
+end
+
+impl Process<App, AppMsg, String> for App
+  fn start(move config: App) -> Result<Self, StopReason>
+    IO.puts("before exit")
+    Kernel.exit(42)
+    IO.puts("after exit")
+    Result.Ok(config)
+  end
+
+  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(move self) -> StopReason
+    StopReason.Normal
+  end
+end

@@ -16,6 +16,7 @@ const CPTR_METHODS: &[&str] = &[
     "write",
     "null?",
     "to_binary",
+    "to_string",
 ];
 
 pub fn is_cptr_intrinsic(mangled: &str) -> bool {
@@ -131,6 +132,11 @@ pub fn emit_cptr_intrinsic<'ctx>(
                 .build_int_compare(IntPredicate::EQ, self_ptr, ptr_ty.const_null(), "is_null")
                 .unwrap();
             c.builder.build_return(Some(&is_null)).unwrap();
+        }
+
+        "to_string" => {
+            let ptr = fn_val.get_nth_param(0).unwrap();
+            c.builder.build_return(Some(&ptr)).unwrap();
         }
 
         "to_binary" => {
@@ -367,6 +373,7 @@ pub fn emit_cptr_method<'ctx>(
         }
         "null?" => bool_ty.fn_type(&[ptr_ty.into()], false),
         "to_binary" => ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false),
+        "to_string" => ptr_ty.fn_type(&[ptr_ty.into()], false),
         _ => return Ok(EmitResult::NotIntrinsic),
     };
 

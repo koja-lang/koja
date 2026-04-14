@@ -1,0 +1,4 @@
+[project]
+entry = "App"
+name = "test_kernel_exit"
+version = "0.1.0"

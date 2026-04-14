@@ -1,11 +1,8 @@
 pub(crate) mod cptr;
 mod format;
 mod hash;
-mod io;
 mod socket;
 mod string;
-mod system;
-
 use crate::compiler::Compiler;
 
 /// Tag value for `Result.Ok` in the tagged-union layout.
@@ -22,11 +19,8 @@ pub(crate) const STRING_HEADER_BYTES: u64 = 8;
 use self::cptr::{emit_cptr_intrinsic, emit_cstring_intrinsic, is_cptr_intrinsic};
 use self::format::emit_debug_format_intrinsic;
 use self::hash::{emit_bitwise_intrinsic, emit_eq_intrinsic, emit_hash_intrinsic};
-use self::io::{emit_fd_intrinsic, emit_file_intrinsic};
 use self::socket::emit_socket_intrinsic;
 use self::string::{emit_conversion_intrinsic, emit_parse_intrinsic, emit_string_intrinsic};
-use self::system::{emit_kernel_intrinsic, emit_random_intrinsic};
-
 const PRIMITIVE_TYPES: &[&str] = &[
     "Bool", "Int", "Int8", "Int16", "Int32", "String", "UInt8", "UInt16", "UInt32", "UInt64",
 ];
@@ -60,17 +54,6 @@ const DEBUG_TYPES: &[&str] = &[
 
 const PARSE_INTRINSICS: &[&str] = &["Int_parse", "Float_parse"];
 
-const FD_INTRINSICS: &[&str] = &["Fd_read"];
-
-const FILE_INTRINSICS: &[&str] = &[
-    "File_open",
-    "File_read",
-    "File_write",
-    "File_exists?",
-    "File_delete",
-    "File_rename",
-];
-
 const SOCKET_INTRINSICS: &[&str] = &[
     "Socket_create",
     "Socket_bind",
@@ -83,10 +66,6 @@ const SOCKET_INTRINSICS: &[&str] = &[
     "Socket_send_to",
     "Socket_recv_from",
 ];
-
-const RANDOM_INTRINSICS: &[&str] = &["Random_bytes"];
-
-const KERNEL_INTRINSICS: &[&str] = &["Kernel_exit"];
 
 const CSTRING_INTRINSICS: &[&str] = &["String_to_cstring", "CString_to_string"];
 
@@ -111,11 +90,7 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
     if CONVERSION_INTRINSICS.contains(&mangled)
         || STRING_INTRINSICS.contains(&mangled)
         || PARSE_INTRINSICS.contains(&mangled)
-        || FD_INTRINSICS.contains(&mangled)
-        || FILE_INTRINSICS.contains(&mangled)
         || SOCKET_INTRINSICS.contains(&mangled)
-        || RANDOM_INTRINSICS.contains(&mangled)
-        || KERNEL_INTRINSICS.contains(&mangled)
         || is_cptr_intrinsic(mangled)
         || CSTRING_INTRINSICS.contains(&mangled)
     {
@@ -142,24 +117,8 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
         return emit_parse_intrinsic(c, fn_val, mangled);
     }
 
-    if FD_INTRINSICS.contains(&mangled) {
-        return emit_fd_intrinsic(c, fn_val, mangled);
-    }
-
-    if FILE_INTRINSICS.contains(&mangled) {
-        return emit_file_intrinsic(c, fn_val, mangled);
-    }
-
     if SOCKET_INTRINSICS.contains(&mangled) {
         return emit_socket_intrinsic(c, fn_val, mangled);
-    }
-
-    if RANDOM_INTRINSICS.contains(&mangled) {
-        return emit_random_intrinsic(c, fn_val, mangled);
-    }
-
-    if KERNEL_INTRINSICS.contains(&mangled) {
-        return emit_kernel_intrinsic(c, fn_val, mangled);
     }
 
     if is_cptr_intrinsic(mangled) {

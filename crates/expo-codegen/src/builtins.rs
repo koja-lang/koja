@@ -109,32 +109,8 @@ pub(crate) fn declare_builtins<'ctx>(
         i64.fn_type(&[ptr.into(), ptr.into()], false),
     );
 
-    // File I/O
-    decl(
-        "expo_fd_read",
-        ptr.fn_type(&[i32.into(), i64.into()], false),
-    );
-    decl(
-        "expo_fd_write",
-        i64.fn_type(&[i32.into(), ptr.into(), i64.into()], false),
-    );
-    decl("expo_fd_close", i32.fn_type(&[i32.into()], false));
+    // I/O
     decl("expo_last_error", ptr.fn_type(&[], false));
-    decl(
-        "expo_file_open",
-        i32.fn_type(&[ptr.into(), i64.into()], false),
-    );
-    decl("expo_file_read_all", ptr.fn_type(&[ptr.into()], false));
-    decl(
-        "expo_file_write_all",
-        i64.fn_type(&[ptr.into(), ptr.into()], false),
-    );
-    decl("expo_file_exists", i64.fn_type(&[ptr.into()], false));
-    decl("expo_file_delete", i64.fn_type(&[ptr.into()], false));
-    decl(
-        "expo_file_rename",
-        i64.fn_type(&[ptr.into(), ptr.into()], false),
-    );
 
     // System
     decl("expo_get_env", ptr.fn_type(&[ptr.into()], false));
@@ -144,9 +120,6 @@ pub(crate) fn declare_builtins<'ctx>(
     );
     decl("expo_cwd", ptr.fn_type(&[], false));
     decl("expo_hostname", ptr.fn_type(&[], false));
-
-    // Kernel
-    decl("expo_kernel_exit", void.fn_type(&[i64.into()], false));
 
     // Debug formatting
     decl(
@@ -158,7 +131,6 @@ pub(crate) fn declare_builtins<'ctx>(
     decl("expo_time_now_millis", i64.fn_type(&[], false));
 
     // Random
-    decl("expo_random_bytes", ptr.fn_type(&[i64.into()], false));
     decl(
         "expo_random_int",
         i64.fn_type(&[i64.into(), i64.into()], false),
