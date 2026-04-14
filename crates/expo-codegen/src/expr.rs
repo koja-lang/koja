@@ -906,6 +906,27 @@ fn compile_spawn<'ctx>(
     spawn::build_ref_value(compiler, pid, msg_type, reply_type).map(Some)
 }
 
+struct ResolvedReceive {
+    envelope_type: Type,
+    has_timeout: bool,
+}
+
+fn resolve_receive(
+    compiler: &Compiler,
+    after_timeout: Option<&Expr>,
+) -> Result<ResolvedReceive, String> {
+    let envelope_type = compiler
+        .fn_state
+        .process_msg_type
+        .clone()
+        .ok_or("receive requires a typed Process envelope; no message type found")?;
+
+    Ok(ResolvedReceive {
+        envelope_type,
+        has_timeout: after_timeout.is_some(),
+    })
+}
+
 fn compile_receive<'ctx>(
     compiler: &mut Compiler<'ctx>,
     arms: &[MatchArm],
@@ -913,7 +934,7 @@ fn compile_receive<'ctx>(
     after_body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let has_after = after_timeout.is_some();
+    let resolved = resolve_receive(compiler, after_timeout)?;
 
     let raw_ptr = if let Some(timeout_expr) = after_timeout {
         let receive_timeout_fn = *compiler
@@ -941,166 +962,61 @@ fn compile_receive<'ctx>(
 
     let merge_block = compiler.context.append_basic_block(function, "recv_end");
 
-    {
-        let ptr_val = raw_ptr.into_pointer_value();
-        let ptr_ty = compiler.context.ptr_type(AddressSpace::default());
-        let null_ptr = ptr_ty.const_null();
-        let is_null = compiler
-            .builder
-            .build_int_compare(IntPredicate::EQ, ptr_val, null_ptr, "is_timeout")
-            .unwrap();
+    let ptr_val = raw_ptr.into_pointer_value();
+    let ptr_ty = compiler.context.ptr_type(AddressSpace::default());
+    let null_ptr = ptr_ty.const_null();
+    let is_null = compiler
+        .builder
+        .build_int_compare(IntPredicate::EQ, ptr_val, null_ptr, "is_timeout")
+        .unwrap();
 
-        if has_after {
-            let after_block = compiler.context.append_basic_block(function, "recv_after");
-            let got_msg_block = compiler
-                .context
-                .append_basic_block(function, "recv_got_msg");
+    if resolved.has_timeout {
+        let after_block = compiler.context.append_basic_block(function, "recv_after");
+        let got_msg_block = compiler
+            .context
+            .append_basic_block(function, "recv_got_msg");
 
-            compiler
-                .builder
-                .build_conditional_branch(is_null, after_block, got_msg_block)
-                .unwrap();
-
-            compiler.builder.position_at_end(after_block);
-            for stmt in after_body {
-                compile_statement(compiler, stmt, function)?;
-            }
-            if !compiler.current_block_terminated() {
-                compiler
-                    .builder
-                    .build_unconditional_branch(merge_block)
-                    .unwrap();
-            }
-
-            compiler.builder.position_at_end(got_msg_block);
-        } else {
-            let got_msg_block = compiler
-                .context
-                .append_basic_block(function, "recv_got_msg");
-            let empty_block = compiler.context.append_basic_block(function, "recv_empty");
-
-            compiler
-                .builder
-                .build_conditional_branch(is_null, empty_block, got_msg_block)
-                .unwrap();
-
-            compiler.builder.position_at_end(empty_block);
-            compiler.builder.build_unreachable().unwrap();
-
-            compiler.builder.position_at_end(got_msg_block);
-        }
-    }
-
-    let msg_type = compiler.fn_state.process_msg_type.clone();
-    let is_process = msg_type.is_some()
-        && !matches!(
-            msg_type.as_ref().unwrap(),
-            Type::Primitive(Primitive::String)
-        );
-
-    if is_process {
-        return compile_receive_tagged(compiler, arms, raw_ptr, merge_block, function);
-    }
-
-    let is_string = msg_type
-        .as_ref()
-        .is_none_or(|t| matches!(t, Type::Primitive(Primitive::String)));
-
-    let subject_val = if is_string {
-        let i8_type = compiler.context.i8_type();
-        let payload = unsafe {
-            compiler
-                .builder
-                .build_in_bounds_gep(
-                    i8_type,
-                    raw_ptr.into_pointer_value(),
-                    &[compiler.context.i64_type().const_int(16, false)],
-                    "recv_str_payload",
-                )
-                .unwrap()
-        };
-        payload.into()
-    } else {
-        let msg_ty = msg_type.unwrap();
-        let llvm_ty = to_llvm_type(&msg_ty, compiler.context, &compiler.types)
-            .ok_or_else(|| format!("no LLVM type for receive message `{msg_ty:?}`"))?;
-        let i8_type = compiler.context.i8_type();
-        let payload_ptr = unsafe {
-            compiler
-                .builder
-                .build_in_bounds_gep(
-                    i8_type,
-                    raw_ptr.into_pointer_value(),
-                    &[compiler.context.i64_type().const_int(8, false)],
-                    "recv_payload_ptr",
-                )
-                .unwrap()
-        };
         compiler
             .builder
-            .build_load(llvm_ty, payload_ptr, "msg_val")
-            .unwrap()
-    };
+            .build_conditional_branch(is_null, after_block, got_msg_block)
+            .unwrap();
 
-    if arms.is_empty() {
+        compiler.builder.position_at_end(after_block);
+        for stmt in after_body {
+            compile_statement(compiler, stmt, function)?;
+        }
         if !compiler.current_block_terminated() {
             compiler
                 .builder
                 .build_unconditional_branch(merge_block)
                 .unwrap();
         }
-        compiler.builder.position_at_end(merge_block);
-        let ty = compiler
-            .fn_state
-            .process_msg_type
-            .clone()
-            .unwrap_or(Type::Primitive(Primitive::String));
-        return Ok(Some(TypedValue::new(subject_val, ty)));
+
+        compiler.builder.position_at_end(got_msg_block);
+    } else {
+        let got_msg_block = compiler
+            .context
+            .append_basic_block(function, "recv_got_msg");
+        let empty_block = compiler.context.append_basic_block(function, "recv_empty");
+
+        compiler
+            .builder
+            .build_conditional_branch(is_null, empty_block, got_msg_block)
+            .unwrap();
+
+        compiler.builder.position_at_end(empty_block);
+        compiler.builder.build_unreachable().unwrap();
+
+        compiler.builder.position_at_end(got_msg_block);
     }
 
-    let subject_type = compiler
-        .fn_state
-        .process_msg_type
-        .clone()
-        .unwrap_or(Type::Unknown);
-
-    let subject_alloca = compiler
-        .builder
-        .build_alloca(subject_val.get_type(), "recv_subject")
-        .unwrap();
-    compiler
-        .builder
-        .build_store(subject_alloca, subject_val)
-        .unwrap();
-
-    let fallthrough_block = compiler.context.append_basic_block(function, "recv_none");
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
-    let mut reachable_arm_count = 0usize;
-
-    let arm_refs: Vec<&MatchArm> = arms.iter().collect();
-    let arm_context = ReceiveArmCtx {
-        subject_alloca,
-        subject_type: &subject_type,
+    compile_receive_tagged(
+        compiler,
+        arms,
+        raw_ptr,
         merge_block,
-        fallthrough_block,
-        prefix: "recv",
+        &resolved.envelope_type,
         function,
-    };
-    compile_receive_arms(
-        compiler,
-        &arm_refs,
-        &arm_context,
-        &mut incoming,
-        &mut reachable_arm_count,
-    )?;
-
-    compiler.builder.position_at_end(merge_block);
-    build_receive_phi(
-        compiler,
-        &mut incoming,
-        reachable_arm_count,
-        &[fallthrough_block],
-        &subject_type,
     )
 }
 
@@ -1239,29 +1155,20 @@ fn load_io_ready_from_payload<'ctx>(
         .unwrap())
 }
 
-/// Compiles a `receive` expression in a Process context where the mailbox
-/// uses tagged messages. The raw buffer layout is [tag: 8 bytes, payload].
-/// Tag 0 = business message (Pair<M, Option<ReplyTo<R>>>), tag 1 = Lifecycle,
-/// tag 2 = IOReady.
-///
-/// Arms are partitioned by their TypedBinding type annotation: arms whose
-/// resolved type matches `Lifecycle` go to the lifecycle branch, `IOReady`
-/// arms go to the io_ready branch, all others go to the business branch.
-///
-/// When M contains IOReady as a union member but no explicit IOReady arms
-/// exist, a synthetic tag 2 handler wraps IOReady into the business envelope
-/// and dispatches through the shared business dispatch block. When explicit
-/// IOReady arms exist, they are compiled directly against the IOReady type.
-fn compile_receive_tagged<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    arms: &[MatchArm],
-    raw_ptr: BasicValueEnum<'ctx>,
-    merge_block: BasicBlock<'ctx>,
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    let i8_type = compiler.context.i8_type();
-    let i64_type = compiler.context.i64_type();
-    let envelope_type = compiler.fn_state.process_msg_type.clone().unwrap();
+struct ResolvedTaggedReceive<'a> {
+    business_arms: Vec<&'a MatchArm>,
+    envelope_type: Type,
+    io_ready_arms: Vec<&'a MatchArm>,
+    lifecycle_arms: Vec<&'a MatchArm>,
+    m_has_io_ready: bool,
+}
+
+fn resolve_tagged_receive<'a>(
+    compiler: &Compiler,
+    arms: &'a [MatchArm],
+    envelope_type: &Type,
+) -> ResolvedTaggedReceive<'a> {
+    let envelope_type = envelope_type.clone();
 
     let m_type = if let Type::Named { type_args, .. } = &envelope_type {
         type_args.first().cloned()
@@ -1278,6 +1185,57 @@ fn compile_receive_tagged<'ctx>(
             false
         }
     });
+
+    let mut business_arms: Vec<&MatchArm> = Vec::new();
+    let mut io_ready_arms: Vec<&MatchArm> = Vec::new();
+    let mut lifecycle_arms: Vec<&MatchArm> = Vec::new();
+
+    for arm in arms {
+        if let Pattern::TypedBinding { type_expr, .. } = &arm.pattern {
+            let resolved = compiler.resolve_type_expr(type_expr);
+            if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "IOReady" && type_args.is_empty())
+            {
+                io_ready_arms.push(arm);
+                continue;
+            }
+            if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "Lifecycle" && type_args.is_empty())
+            {
+                lifecycle_arms.push(arm);
+                continue;
+            }
+        }
+        business_arms.push(arm);
+    }
+
+    ResolvedTaggedReceive {
+        business_arms,
+        envelope_type,
+        io_ready_arms,
+        lifecycle_arms,
+        m_has_io_ready,
+    }
+}
+
+/// Compiles a `receive` expression in a Process context where the mailbox
+/// uses tagged messages. The raw buffer layout is [tag: 8 bytes, payload].
+/// Tag 0 = business message (Pair<M, Option<ReplyTo<R>>>), tag 1 = Lifecycle,
+/// tag 2 = IOReady.
+fn compile_receive_tagged<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    arms: &[MatchArm],
+    raw_ptr: BasicValueEnum<'ctx>,
+    merge_block: BasicBlock<'ctx>,
+    envelope_type: &Type,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let resolved = resolve_tagged_receive(compiler, arms, envelope_type);
+
+    let has_io_ready = !resolved.io_ready_arms.is_empty();
+    let has_lifecycle = !resolved.lifecycle_arms.is_empty();
+    let needs_synth_io = resolved.m_has_io_ready && !has_io_ready;
+
+    let i8_type = compiler.context.i8_type();
+    let i64_type = compiler.context.i64_type();
 
     let tag_val = compiler
         .builder
@@ -1297,36 +1255,15 @@ fn compile_receive_tagged<'ctx>(
             .unwrap()
     };
 
-    let mut business_arms: Vec<&MatchArm> = Vec::new();
-    let mut lifecycle_arms: Vec<&MatchArm> = Vec::new();
-    let mut io_ready_arms: Vec<&MatchArm> = Vec::new();
-
-    for arm in arms {
-        if let Pattern::TypedBinding { type_expr, .. } = &arm.pattern {
-            let resolved = compiler.resolve_type_expr(type_expr);
-            if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "Lifecycle" && type_args.is_empty())
-            {
-                lifecycle_arms.push(arm);
-                continue;
-            }
-            if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "IOReady" && type_args.is_empty())
-            {
-                io_ready_arms.push(arm);
-                continue;
-            }
-        }
-        business_arms.push(arm);
-    }
-
-    let has_lifecycle = !lifecycle_arms.is_empty();
-    let has_io_ready = !io_ready_arms.is_empty();
-    let needs_synth_io = m_has_io_ready && !has_io_ready;
-
-    let env_llvm = to_llvm_type(&envelope_type, compiler.context, &compiler.types)
-        .ok_or_else(|| format!("no LLVM type for envelope `{}`", envelope_type.display()))?;
+    let env_llvm = to_llvm_type(&resolved.envelope_type, compiler.context, &compiler.types)
+        .ok_or_else(|| {
+            format!(
+                "no LLVM type for envelope `{}`",
+                resolved.envelope_type.display()
+            )
+        })?;
     let env_struct = env_llvm.into_struct_type();
 
-    // Alloca for the business envelope, shared by tag 0 and synthetic tag 2.
     let business_alloca = compiler
         .builder
         .build_alloca(env_struct, "biz_subject")
@@ -1396,10 +1333,15 @@ fn compile_receive_tagged<'ctx>(
         let io_ready_val = load_io_ready_from_payload(compiler, payload_ptr, "synth_io")?;
 
         let io_ready_type = named("IOReady");
+        let m_type = if let Type::Named { type_args, .. } = &resolved.envelope_type {
+            type_args.first().cloned()
+        } else {
+            None
+        };
         let m_ref = m_type.as_ref().unwrap();
         let wrapped_m = compile_union_wrap(compiler, io_ready_val, &io_ready_type, m_ref)?;
 
-        let option_reply_type = if let Type::Named { type_args, .. } = &envelope_type {
+        let option_reply_type = if let Type::Named { type_args, .. } = &resolved.envelope_type {
             type_args.get(1).cloned().unwrap_or(Type::Unknown)
         } else {
             Type::Unknown
@@ -1459,7 +1401,7 @@ fn compile_receive_tagged<'ctx>(
         .append_basic_block(function, "recv_biz_none");
     let business_context = ReceiveArmCtx {
         subject_alloca: business_alloca,
-        subject_type: &envelope_type,
+        subject_type: &resolved.envelope_type,
         merge_block,
         fallthrough_block: business_fallthrough,
         prefix: "recv_biz",
@@ -1467,7 +1409,7 @@ fn compile_receive_tagged<'ctx>(
     };
     compile_receive_arms(
         compiler,
-        &business_arms,
+        &resolved.business_arms,
         &business_context,
         &mut incoming,
         &mut reachable_arm_count,
@@ -1507,7 +1449,7 @@ fn compile_receive_tagged<'ctx>(
         };
         compile_receive_arms(
             compiler,
-            &lifecycle_arms,
+            &resolved.lifecycle_arms,
             &lifecycle_context,
             &mut incoming,
             &mut reachable_arm_count,
@@ -1543,7 +1485,7 @@ fn compile_receive_tagged<'ctx>(
         };
         compile_receive_arms(
             compiler,
-            &io_ready_arms,
+            &resolved.io_ready_arms,
             &io_ready_context,
             &mut incoming,
             &mut reachable_arm_count,
@@ -1552,16 +1494,11 @@ fn compile_receive_tagged<'ctx>(
     }
 
     compiler.builder.position_at_end(merge_block);
-    let result_type = compiler
-        .fn_state
-        .process_msg_type
-        .clone()
-        .unwrap_or(Type::Unknown);
     build_receive_phi(
         compiler,
         &mut incoming,
         reachable_arm_count,
         &fallthrough_blocks,
-        &result_type,
+        &resolved.envelope_type,
     )
 }
