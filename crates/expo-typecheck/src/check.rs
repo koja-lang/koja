@@ -9,15 +9,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use expo_ast::ast::*;
 use expo_ast::span::Span;
 
-use crate::context::{Coercion, FunctionKind, ParamInfo, PassMode, TypeContext};
+use crate::context::{Coercion, FunctionKind, FunctionSig, ParamInfo, PassMode, TypeContext};
 use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr, infer_expr_with_expected};
-use crate::resolve::resolve_type_inline;
 use crate::stmt::check_body;
 use crate::types::numeric_compatible;
-use crate::types::{
-    Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params, substitute_preserving,
-};
+use crate::types::{Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params};
 
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
@@ -196,6 +193,21 @@ fn check_function(
     );
 }
 
+/// Looks up the already-collected [`FunctionSig`] for a function. Methods are
+/// found via the enclosing type's `TypeInfo`; module-level functions live in
+/// `ctx.functions`.
+fn lookup_sig<'a>(
+    name: &str,
+    ctx: &'a TypeContext,
+    enclosing_type: Option<&TypeIdentifier>,
+) -> Option<&'a FunctionSig> {
+    if let Some(tid) = enclosing_type {
+        ctx.get_type(tid).and_then(|ti| ti.functions.get(name))
+    } else {
+        ctx.functions.get(name)
+    }
+}
+
 /// Type-checks a function body, building a [`CheckEnv`] from its parameters
 /// and verifying the return type against the declared signature. When
 /// `override_msg_type` is `Some`, it replaces the process mailbox type.
@@ -208,30 +220,7 @@ fn check_function_with_msg(
     override_msg_type: Option<Type>,
     enclosing_type: Option<&TypeIdentifier>,
 ) {
-    let self_subst: Option<HashMap<String, Type>> =
-        self_type.map(|ty| HashMap::from([("Self".to_string(), ty.clone())]));
-    let self_params: &[&str] = if self_type.is_some() { &["Self"] } else { &[] };
-
-    let name_index: BTreeMap<String, TypeIdentifier> = ctx
-        .types
-        .keys()
-        .map(|id| (id.name.clone(), id.clone()))
-        .collect();
-
-    let resolve = |te: &TypeExpr| -> Type {
-        let mut ty = resolve_type_expr_with_params(
-            te,
-            struct_names,
-            enum_names,
-            self_params,
-            &BTreeMap::new(),
-        );
-        resolve_type_inline(&mut ty, &name_index);
-        match &self_subst {
-            Some(subst) => substitute_preserving(&ty, subst),
-            None => ty,
-        }
-    };
+    let sig = lookup_sig(&f.name, ctx, enclosing_type);
 
     let mut env: HashMap<String, VarInfo> = HashMap::new();
 
@@ -245,23 +234,48 @@ fn check_function_with_msg(
         );
     }
 
-    for param in &f.params {
-        if let Param::Regular {
-            name, type_expr, ..
-        } = param
-        {
-            let ty = resolve(type_expr);
+    if let Some(sig) = &sig {
+        for pi in &sig.params {
             env.insert(
-                name.clone(),
+                pi.name.clone(),
                 VarInfo {
-                    ty,
+                    ty: pi.ty.clone(),
                     state: VarState::Live,
                 },
             );
         }
+    } else {
+        for param in &f.params {
+            if let Param::Regular {
+                name, type_expr, ..
+            } = param
+            {
+                let ty = resolve_type_expr_with_params(
+                    type_expr,
+                    struct_names,
+                    enum_names,
+                    &[],
+                    &BTreeMap::new(),
+                );
+                env.insert(
+                    name.clone(),
+                    VarInfo {
+                        ty,
+                        state: VarState::Live,
+                    },
+                );
+            }
+        }
     }
 
-    let declared_return = f.return_type.as_ref().map(&resolve).unwrap_or(Type::Unit);
+    let declared_return = sig.map(|s| s.return_type.clone()).unwrap_or_else(|| {
+        f.return_type
+            .as_ref()
+            .map(|te| {
+                resolve_type_expr_with_params(te, struct_names, enum_names, &[], &BTreeMap::new())
+            })
+            .unwrap_or(Type::Unit)
+    });
 
     let is_extern_c = f.annotations.iter().any(|a| {
         a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")

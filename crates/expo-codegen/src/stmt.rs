@@ -17,8 +17,44 @@ use crate::compiler::Compiler;
 use crate::drop::Ownership;
 use crate::expr::compile_expr;
 use crate::generics::{ensure_types_exist, monomorphize_impl_method};
+use crate::ops::OperandShape;
 use crate::structs::infer_static_method_return_type;
 use crate::types::to_llvm_type;
+
+/// The resolved compound-assignment operation to emit.
+enum ResolvedCompoundOp {
+    FloatAdd,
+    FloatDiv,
+    FloatMul,
+    FloatSub,
+    IntAdd,
+    IntDiv,
+    IntMul,
+    IntSub,
+}
+
+/// Pure decision function: given an AST compound operator and the operand
+/// shape, returns which concrete operation to emit.
+fn resolve_compound_op(
+    op: &CompoundOp,
+    shape: &OperandShape,
+) -> Result<ResolvedCompoundOp, String> {
+    match shape {
+        OperandShape::Float => match op {
+            CompoundOp::Add => Ok(ResolvedCompoundOp::FloatAdd),
+            CompoundOp::Div => Ok(ResolvedCompoundOp::FloatDiv),
+            CompoundOp::Mul => Ok(ResolvedCompoundOp::FloatMul),
+            CompoundOp::Sub => Ok(ResolvedCompoundOp::FloatSub),
+        },
+        OperandShape::Integer { .. } => match op {
+            CompoundOp::Add => Ok(ResolvedCompoundOp::IntAdd),
+            CompoundOp::Div => Ok(ResolvedCompoundOp::IntDiv),
+            CompoundOp::Mul => Ok(ResolvedCompoundOp::IntMul),
+            CompoundOp::Sub => Ok(ResolvedCompoundOp::IntSub),
+        },
+        _ => Err("compound assignment requires matching numeric types".to_string()),
+    }
+}
 
 fn statement_span(stmt: &Statement) -> Span {
     match stmt {
@@ -231,29 +267,61 @@ pub fn compile_statement<'ctx>(
                 .value;
             let rhs = coerce_numeric(c, rhs, &target_ty);
 
-            if current.is_int_value() && rhs.is_int_value() {
-                let l = current.into_int_value();
-                let r = rhs.into_int_value();
-                let result = match op {
-                    CompoundOp::Add => c.builder.build_int_add(l, r, "cadd").unwrap(),
-                    CompoundOp::Sub => c.builder.build_int_sub(l, r, "csub").unwrap(),
-                    CompoundOp::Mul => c.builder.build_int_mul(l, r, "cmul").unwrap(),
-                    CompoundOp::Div => c.builder.build_int_signed_div(l, r, "cdiv").unwrap(),
-                };
-                c.builder.build_store(ptr, result).unwrap();
-            } else if current.is_float_value() && rhs.is_float_value() {
-                let l = current.into_float_value();
-                let r = rhs.into_float_value();
-                let result = match op {
-                    CompoundOp::Add => c.builder.build_float_add(l, r, "cfadd").unwrap(),
-                    CompoundOp::Sub => c.builder.build_float_sub(l, r, "cfsub").unwrap(),
-                    CompoundOp::Mul => c.builder.build_float_mul(l, r, "cfmul").unwrap(),
-                    CompoundOp::Div => c.builder.build_float_div(l, r, "cfdiv").unwrap(),
-                };
-                c.builder.build_store(ptr, result).unwrap();
+            let shape = if current.is_float_value() && rhs.is_float_value() {
+                OperandShape::Float
+            } else if current.is_int_value() && rhs.is_int_value() {
+                OperandShape::Integer {
+                    bit_width: current.into_int_value().get_type().get_bit_width(),
+                }
             } else {
                 return Err("compound assignment requires matching numeric types".to_string());
-            }
+            };
+
+            let resolved = resolve_compound_op(op, &shape)?;
+
+            let result: BasicValueEnum = match resolved {
+                ResolvedCompoundOp::FloatAdd => c
+                    .builder
+                    .build_float_add(current.into_float_value(), rhs.into_float_value(), "cfadd")
+                    .unwrap()
+                    .into(),
+                ResolvedCompoundOp::FloatDiv => c
+                    .builder
+                    .build_float_div(current.into_float_value(), rhs.into_float_value(), "cfdiv")
+                    .unwrap()
+                    .into(),
+                ResolvedCompoundOp::FloatMul => c
+                    .builder
+                    .build_float_mul(current.into_float_value(), rhs.into_float_value(), "cfmul")
+                    .unwrap()
+                    .into(),
+                ResolvedCompoundOp::FloatSub => c
+                    .builder
+                    .build_float_sub(current.into_float_value(), rhs.into_float_value(), "cfsub")
+                    .unwrap()
+                    .into(),
+                ResolvedCompoundOp::IntAdd => c
+                    .builder
+                    .build_int_add(current.into_int_value(), rhs.into_int_value(), "cadd")
+                    .unwrap()
+                    .into(),
+                ResolvedCompoundOp::IntDiv => c
+                    .builder
+                    .build_int_signed_div(current.into_int_value(), rhs.into_int_value(), "cdiv")
+                    .unwrap()
+                    .into(),
+                ResolvedCompoundOp::IntMul => c
+                    .builder
+                    .build_int_mul(current.into_int_value(), rhs.into_int_value(), "cmul")
+                    .unwrap()
+                    .into(),
+                ResolvedCompoundOp::IntSub => c
+                    .builder
+                    .build_int_sub(current.into_int_value(), rhs.into_int_value(), "csub")
+                    .unwrap()
+                    .into(),
+            };
+            c.builder.build_store(ptr, result).unwrap();
 
             Ok(None)
         }

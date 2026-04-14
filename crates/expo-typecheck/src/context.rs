@@ -387,7 +387,24 @@ impl TypeContext {
                     }
                 }
             } else {
-                self.types.insert(id.clone(), info.clone());
+                let empty_key = TypeIdentifier::new("", &id.name);
+                if id.package != Package::Named(String::new())
+                    && self.types.contains_key(&empty_key)
+                {
+                    // self has Named("", X) from the current buffer while other
+                    // has the real package (e.g. Named("net", X) from stdlib).
+                    // Promote to the real package, letting current-buffer
+                    // functions win so live edits are reflected immediately.
+                    let mut merged = info.clone();
+                    if let Some(current) = self.types.remove(&empty_key) {
+                        for (fn_name, sig) in current.functions {
+                            merged.functions.insert(fn_name, sig);
+                        }
+                    }
+                    self.types.insert(id.clone(), merged);
+                } else {
+                    self.types.insert(id.clone(), info.clone());
+                }
             }
         }
         for (name, ast) in &other.generic_function_asts {

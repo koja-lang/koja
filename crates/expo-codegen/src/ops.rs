@@ -3,15 +3,117 @@
 
 use expo_ast::ast::{BinOp, Expr, ExprKind, UnaryOp};
 use expo_typecheck::types::{Primitive, Type};
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use inkwell::builder::Builder;
+use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::enums::{compile_enum_struct_eq, enum_mangled_name};
 use crate::expr::compile_expr;
 
-/// Compiles a binary operation. Dispatches on operand types (float vs int)
-/// and supports arithmetic, comparison, and logical operators.
+/// The shape of an operand as seen by operator resolution. Derived from the
+/// compiled LLVM value, this carries just enough information for the pure
+/// decision function without any LLVM dependency.
+pub enum OperandShape {
+    Float,
+    Integer { bit_width: u32 },
+    Pointer,
+    Struct { is_enum: bool },
+}
+
+/// The resolved binary operation to emit. Each variant maps to exactly one
+/// LLVM builder call, with no further decision logic required.
+enum ResolvedBinaryOp {
+    BoolAnd,
+    BoolOr,
+    EnumStructEqual { negated: bool },
+    FloatAdd,
+    FloatDiv,
+    FloatEqual,
+    FloatGreater,
+    FloatGreaterEqual,
+    FloatLess,
+    FloatLessEqual,
+    FloatMul,
+    FloatNotEqual,
+    FloatRem,
+    FloatSub,
+    IntAdd,
+    IntDiv,
+    IntEqual,
+    IntGreater,
+    IntGreaterEqual,
+    IntLess,
+    IntLessEqual,
+    IntMul,
+    IntNotEqual,
+    IntRem,
+    IntSub,
+    StringEqual,
+    StringNotEqual,
+}
+
+/// Pure decision function: given an AST binary operator and the operand shape,
+/// returns which concrete operation to emit. No LLVM types involved.
+fn resolve_binary_op(op: &BinOp, shape: &OperandShape) -> Result<ResolvedBinaryOp, String> {
+    match shape {
+        OperandShape::Float => match op {
+            BinOp::Add => Ok(ResolvedBinaryOp::FloatAdd),
+            BinOp::Div => Ok(ResolvedBinaryOp::FloatDiv),
+            BinOp::Eq => Ok(ResolvedBinaryOp::FloatEqual),
+            BinOp::Gt => Ok(ResolvedBinaryOp::FloatGreater),
+            BinOp::GtEq => Ok(ResolvedBinaryOp::FloatGreaterEqual),
+            BinOp::Lt => Ok(ResolvedBinaryOp::FloatLess),
+            BinOp::LtEq => Ok(ResolvedBinaryOp::FloatLessEqual),
+            BinOp::Mod => Ok(ResolvedBinaryOp::FloatRem),
+            BinOp::Mul => Ok(ResolvedBinaryOp::FloatMul),
+            BinOp::NotEq => Ok(ResolvedBinaryOp::FloatNotEqual),
+            BinOp::Sub => Ok(ResolvedBinaryOp::FloatSub),
+            BinOp::And | BinOp::Concat | BinOp::Or => {
+                Err(format!("unsupported float binary op: {op:?}"))
+            }
+        },
+        OperandShape::Integer { bit_width } => {
+            let is_bool = *bit_width == 1;
+            match op {
+                BinOp::Add => Ok(ResolvedBinaryOp::IntAdd),
+                BinOp::And if is_bool => Ok(ResolvedBinaryOp::BoolAnd),
+                BinOp::Div => Ok(ResolvedBinaryOp::IntDiv),
+                BinOp::Eq => Ok(ResolvedBinaryOp::IntEqual),
+                BinOp::Gt => Ok(ResolvedBinaryOp::IntGreater),
+                BinOp::GtEq => Ok(ResolvedBinaryOp::IntGreaterEqual),
+                BinOp::Lt => Ok(ResolvedBinaryOp::IntLess),
+                BinOp::LtEq => Ok(ResolvedBinaryOp::IntLessEqual),
+                BinOp::Mod => Ok(ResolvedBinaryOp::IntRem),
+                BinOp::Mul => Ok(ResolvedBinaryOp::IntMul),
+                BinOp::NotEq => Ok(ResolvedBinaryOp::IntNotEqual),
+                BinOp::Or if is_bool => Ok(ResolvedBinaryOp::BoolOr),
+                BinOp::Sub => Ok(ResolvedBinaryOp::IntSub),
+                BinOp::And | BinOp::Concat | BinOp::Or => {
+                    Err("logical operators require bool operands".to_string())
+                }
+            }
+        }
+        OperandShape::Pointer => match op {
+            BinOp::Eq => Ok(ResolvedBinaryOp::StringEqual),
+            BinOp::NotEq => Ok(ResolvedBinaryOp::StringNotEqual),
+            _ => Err(format!("unsupported string binary op: {op:?}")),
+        },
+        OperandShape::Struct { is_enum } => {
+            if !is_enum {
+                return Err("mismatched types in binary operation".to_string());
+            }
+            match op {
+                BinOp::Eq => Ok(ResolvedBinaryOp::EnumStructEqual { negated: false }),
+                BinOp::NotEq => Ok(ResolvedBinaryOp::EnumStructEqual { negated: true }),
+                _ => Err("mismatched types in binary operation".to_string()),
+            }
+        }
+    }
+}
+
+/// Compiles a binary operation. Uses [`resolve_binary_op`] to decide what to
+/// emit, then mechanically dispatches to the corresponding LLVM builder call.
 pub fn compile_binary<'ctx>(
     c: &mut Compiler<'ctx>,
     op: &BinOp,
@@ -30,170 +132,202 @@ pub fn compile_binary<'ctx>(
     let lhs = lhs_tv.value;
     let rhs = rhs_tv.value;
 
-    let is_comparison = matches!(
-        op,
-        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
-    );
-
-    if lhs.is_float_value() && rhs.is_float_value() {
-        let l = lhs.into_float_value();
-        let r = rhs.into_float_value();
-        let result = match op {
-            BinOp::Add => c.builder.build_float_add(l, r, "fadd").unwrap().into(),
-            BinOp::Sub => c.builder.build_float_sub(l, r, "fsub").unwrap().into(),
-            BinOp::Mul => c.builder.build_float_mul(l, r, "fmul").unwrap().into(),
-            BinOp::Div => c.builder.build_float_div(l, r, "fdiv").unwrap().into(),
-            BinOp::Mod => c.builder.build_float_rem(l, r, "frem").unwrap().into(),
-            BinOp::Eq => c
-                .builder
-                .build_float_compare(FloatPredicate::OEQ, l, r, "feq")
-                .unwrap()
-                .into(),
-            BinOp::NotEq => c
-                .builder
-                .build_float_compare(FloatPredicate::ONE, l, r, "fne")
-                .unwrap()
-                .into(),
-            BinOp::Lt => c
-                .builder
-                .build_float_compare(FloatPredicate::OLT, l, r, "flt")
-                .unwrap()
-                .into(),
-            BinOp::LtEq => c
-                .builder
-                .build_float_compare(FloatPredicate::OLE, l, r, "fle")
-                .unwrap()
-                .into(),
-            BinOp::Gt => c
-                .builder
-                .build_float_compare(FloatPredicate::OGT, l, r, "fgt")
-                .unwrap()
-                .into(),
-            BinOp::GtEq => c
-                .builder
-                .build_float_compare(FloatPredicate::OGE, l, r, "fge")
-                .unwrap()
-                .into(),
-            _ => return Err(format!("unsupported float binary op: {:?}", op)),
-        };
-        let ty = if is_comparison {
-            Type::Primitive(Primitive::Bool)
-        } else {
-            Type::Primitive(Primitive::F64)
-        };
-        Ok(Some(TypedValue::new(result, ty)))
+    let shape = if lhs.is_float_value() && rhs.is_float_value() {
+        OperandShape::Float
     } else if lhs.is_int_value() && rhs.is_int_value() {
-        let mut l = lhs.into_int_value();
-        let mut r = rhs.into_int_value();
-
-        let l_bits = l.get_type().get_bit_width();
-        let r_bits = r.get_type().get_bit_width();
-        if l_bits != r_bits && l_bits > 1 && r_bits > 1 {
-            let narrow = l_bits.min(r_bits);
-            let target = c.context.custom_width_int_type(narrow);
-            if l_bits > narrow {
-                l = c.builder.build_int_truncate(l, target, "trunc").unwrap();
-            } else {
-                r = c.builder.build_int_truncate(r, target, "trunc").unwrap();
-            }
+        OperandShape::Integer {
+            bit_width: lhs.into_int_value().get_type().get_bit_width(),
         }
-
-        let is_bool = l.get_type().get_bit_width() == 1;
-
-        let result: BasicValueEnum = match op {
-            BinOp::Add => c.builder.build_int_add(l, r, "add").unwrap().into(),
-            BinOp::Sub => c.builder.build_int_sub(l, r, "sub").unwrap().into(),
-            BinOp::Mul => c.builder.build_int_mul(l, r, "mul").unwrap().into(),
-            BinOp::Div => c.builder.build_int_signed_div(l, r, "sdiv").unwrap().into(),
-            BinOp::Mod => c.builder.build_int_signed_rem(l, r, "srem").unwrap().into(),
-            BinOp::Eq => c
-                .builder
-                .build_int_compare(IntPredicate::EQ, l, r, "eq")
-                .unwrap()
-                .into(),
-            BinOp::NotEq => c
-                .builder
-                .build_int_compare(IntPredicate::NE, l, r, "ne")
-                .unwrap()
-                .into(),
-            BinOp::Lt => c
-                .builder
-                .build_int_compare(IntPredicate::SLT, l, r, "slt")
-                .unwrap()
-                .into(),
-            BinOp::LtEq => c
-                .builder
-                .build_int_compare(IntPredicate::SLE, l, r, "sle")
-                .unwrap()
-                .into(),
-            BinOp::Gt => c
-                .builder
-                .build_int_compare(IntPredicate::SGT, l, r, "sgt")
-                .unwrap()
-                .into(),
-            BinOp::GtEq => c
-                .builder
-                .build_int_compare(IntPredicate::SGE, l, r, "sge")
-                .unwrap()
-                .into(),
-            BinOp::And if is_bool => c.builder.build_and(l, r, "and").unwrap().into(),
-            BinOp::Or if is_bool => c.builder.build_or(l, r, "or").unwrap().into(),
-            BinOp::And | BinOp::Or => {
-                return Err("logical operators require bool operands".to_string());
-            }
-            BinOp::Concat => unreachable!("handled by early return"),
-        };
-        let ty = if is_comparison || is_bool {
-            Type::Primitive(Primitive::Bool)
-        } else {
-            Type::Primitive(Primitive::I64)
-        };
-        Ok(Some(TypedValue::new(result, ty)))
     } else if lhs.is_pointer_value() && rhs.is_pointer_value() {
-        let l = lhs.into_pointer_value();
-        let r = rhs.into_pointer_value();
-        match op {
-            BinOp::Eq | BinOp::NotEq => {
-                let strcmp = *c.functions.get("strcmp").ok_or("strcmp not declared")?;
-                let cmp_result = c
-                    .call(strcmp, &[l.into(), r.into()], "strcmp_result")
-                    .ok_or("strcmp did not return a value")?
-                    .into_int_value();
-                let zero = c.context.i32_type().const_int(0, false);
-                let pred = if matches!(op, BinOp::Eq) {
-                    IntPredicate::EQ
-                } else {
-                    IntPredicate::NE
-                };
-                let result = c
-                    .builder
-                    .build_int_compare(pred, cmp_result, zero, "str_cmp")
-                    .unwrap();
-                Ok(Some(TypedValue::new(
-                    result.into(),
-                    Type::Primitive(Primitive::Bool),
-                )))
-            }
-            _ => Err(format!("unsupported string binary op: {:?}", op)),
+        OperandShape::Pointer
+    } else if lhs.is_struct_value() && rhs.is_struct_value() {
+        OperandShape::Struct {
+            is_enum: enum_mangled_name(&lhs_tv.expo_type).is_some(),
         }
-    } else if lhs.is_struct_value()
-        && rhs.is_struct_value()
-        && matches!(op, BinOp::Eq | BinOp::NotEq)
-        && enum_mangled_name(&lhs_tv.expo_type).is_some()
-    {
-        let eq = compile_enum_struct_eq(c, lhs, rhs, &lhs_tv.expo_type, function)?;
-        let result = if matches!(op, BinOp::NotEq) {
-            c.builder.build_not(eq, "enum_ne").unwrap()
-        } else {
-            eq
-        };
-        Ok(Some(TypedValue::new(
-            result.into(),
-            Type::Primitive(Primitive::Bool),
-        )))
     } else {
-        Err("mismatched types in binary operation".to_string())
+        return Err("mismatched types in binary operation".to_string());
+    };
+
+    let resolved = resolve_binary_op(op, &shape)?;
+
+    match resolved {
+        ResolvedBinaryOp::BoolAnd => emit_int_arith(c, lhs, rhs, |b, l, r| {
+            b.build_and(l, r, "and").unwrap().into()
+        }),
+        ResolvedBinaryOp::BoolOr => emit_int_arith(c, lhs, rhs, |b, l, r| {
+            b.build_or(l, r, "or").unwrap().into()
+        }),
+        ResolvedBinaryOp::EnumStructEqual { negated } => {
+            let eq = compile_enum_struct_eq(c, lhs, rhs, &lhs_tv.expo_type, function)?;
+            let result = if negated {
+                c.builder.build_not(eq, "enum_ne").unwrap()
+            } else {
+                eq
+            };
+            Ok(Some(TypedValue::new(
+                result.into(),
+                Type::Primitive(Primitive::Bool),
+            )))
+        }
+        ResolvedBinaryOp::FloatAdd => emit_float_arith(c, lhs, rhs, |b, l, r| {
+            b.build_float_add(l, r, "fadd").unwrap().into()
+        }),
+        ResolvedBinaryOp::FloatDiv => emit_float_arith(c, lhs, rhs, |b, l, r| {
+            b.build_float_div(l, r, "fdiv").unwrap().into()
+        }),
+        ResolvedBinaryOp::FloatEqual => emit_float_cmp(c, lhs, rhs, FloatPredicate::OEQ, "feq"),
+        ResolvedBinaryOp::FloatGreater => emit_float_cmp(c, lhs, rhs, FloatPredicate::OGT, "fgt"),
+        ResolvedBinaryOp::FloatGreaterEqual => {
+            emit_float_cmp(c, lhs, rhs, FloatPredicate::OGE, "fge")
+        }
+        ResolvedBinaryOp::FloatLess => emit_float_cmp(c, lhs, rhs, FloatPredicate::OLT, "flt"),
+        ResolvedBinaryOp::FloatLessEqual => emit_float_cmp(c, lhs, rhs, FloatPredicate::OLE, "fle"),
+        ResolvedBinaryOp::FloatMul => emit_float_arith(c, lhs, rhs, |b, l, r| {
+            b.build_float_mul(l, r, "fmul").unwrap().into()
+        }),
+        ResolvedBinaryOp::FloatNotEqual => emit_float_cmp(c, lhs, rhs, FloatPredicate::ONE, "fne"),
+        ResolvedBinaryOp::FloatRem => emit_float_arith(c, lhs, rhs, |b, l, r| {
+            b.build_float_rem(l, r, "frem").unwrap().into()
+        }),
+        ResolvedBinaryOp::FloatSub => emit_float_arith(c, lhs, rhs, |b, l, r| {
+            b.build_float_sub(l, r, "fsub").unwrap().into()
+        }),
+        ResolvedBinaryOp::IntAdd => emit_int_arith(c, lhs, rhs, |b, l, r| {
+            b.build_int_add(l, r, "add").unwrap().into()
+        }),
+        ResolvedBinaryOp::IntDiv => emit_int_arith(c, lhs, rhs, |b, l, r| {
+            b.build_int_signed_div(l, r, "sdiv").unwrap().into()
+        }),
+        ResolvedBinaryOp::IntEqual => emit_int_cmp(c, lhs, rhs, IntPredicate::EQ, "eq"),
+        ResolvedBinaryOp::IntGreater => emit_int_cmp(c, lhs, rhs, IntPredicate::SGT, "sgt"),
+        ResolvedBinaryOp::IntGreaterEqual => emit_int_cmp(c, lhs, rhs, IntPredicate::SGE, "sge"),
+        ResolvedBinaryOp::IntLess => emit_int_cmp(c, lhs, rhs, IntPredicate::SLT, "slt"),
+        ResolvedBinaryOp::IntLessEqual => emit_int_cmp(c, lhs, rhs, IntPredicate::SLE, "sle"),
+        ResolvedBinaryOp::IntMul => emit_int_arith(c, lhs, rhs, |b, l, r| {
+            b.build_int_mul(l, r, "mul").unwrap().into()
+        }),
+        ResolvedBinaryOp::IntNotEqual => emit_int_cmp(c, lhs, rhs, IntPredicate::NE, "ne"),
+        ResolvedBinaryOp::IntRem => emit_int_arith(c, lhs, rhs, |b, l, r| {
+            b.build_int_signed_rem(l, r, "srem").unwrap().into()
+        }),
+        ResolvedBinaryOp::IntSub => emit_int_arith(c, lhs, rhs, |b, l, r| {
+            b.build_int_sub(l, r, "sub").unwrap().into()
+        }),
+        ResolvedBinaryOp::StringEqual => emit_string_cmp(c, lhs, rhs, IntPredicate::EQ),
+        ResolvedBinaryOp::StringNotEqual => emit_string_cmp(c, lhs, rhs, IntPredicate::NE),
     }
+}
+
+fn emit_float_arith<'ctx>(
+    c: &Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    build: impl FnOnce(&Builder<'ctx>, FloatValue<'ctx>, FloatValue<'ctx>) -> BasicValueEnum<'ctx>,
+) -> ExprResult<'ctx> {
+    let result = build(&c.builder, lhs.into_float_value(), rhs.into_float_value());
+    Ok(Some(TypedValue::new(
+        result,
+        Type::Primitive(Primitive::F64),
+    )))
+}
+
+fn emit_float_cmp<'ctx>(
+    c: &Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    pred: FloatPredicate,
+    name: &str,
+) -> ExprResult<'ctx> {
+    let result = c
+        .builder
+        .build_float_compare(pred, lhs.into_float_value(), rhs.into_float_value(), name)
+        .unwrap();
+    Ok(Some(TypedValue::new(
+        result.into(),
+        Type::Primitive(Primitive::Bool),
+    )))
+}
+
+fn emit_int_arith<'ctx>(
+    c: &Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    build: impl FnOnce(&Builder<'ctx>, IntValue<'ctx>, IntValue<'ctx>) -> BasicValueEnum<'ctx>,
+) -> ExprResult<'ctx> {
+    let (l, r) = truncate_to_common_width(c, lhs.into_int_value(), rhs.into_int_value());
+    let is_bool = l.get_type().get_bit_width() == 1;
+    let result = build(&c.builder, l, r);
+    let ty = if is_bool {
+        Type::Primitive(Primitive::Bool)
+    } else {
+        Type::Primitive(Primitive::I64)
+    };
+    Ok(Some(TypedValue::new(result, ty)))
+}
+
+fn emit_int_cmp<'ctx>(
+    c: &Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    pred: IntPredicate,
+    name: &str,
+) -> ExprResult<'ctx> {
+    let (l, r) = truncate_to_common_width(c, lhs.into_int_value(), rhs.into_int_value());
+    let result = c.builder.build_int_compare(pred, l, r, name).unwrap();
+    Ok(Some(TypedValue::new(
+        result.into(),
+        Type::Primitive(Primitive::Bool),
+    )))
+}
+
+fn emit_string_cmp<'ctx>(
+    c: &mut Compiler<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    pred: IntPredicate,
+) -> ExprResult<'ctx> {
+    let strcmp = *c.functions.get("strcmp").ok_or("strcmp not declared")?;
+    let cmp_result = c
+        .call(
+            strcmp,
+            &[
+                lhs.into_pointer_value().into(),
+                rhs.into_pointer_value().into(),
+            ],
+            "strcmp_result",
+        )
+        .ok_or("strcmp did not return a value")?
+        .into_int_value();
+    let zero = c.context.i32_type().const_int(0, false);
+    let result = c
+        .builder
+        .build_int_compare(pred, cmp_result, zero, "str_cmp")
+        .unwrap();
+    Ok(Some(TypedValue::new(
+        result.into(),
+        Type::Primitive(Primitive::Bool),
+    )))
+}
+
+/// Truncates mismatched integer widths to the narrower type. Leaves 1-bit
+/// (bool) operands untouched to avoid truncating i64 to i1.
+fn truncate_to_common_width<'ctx>(
+    c: &Compiler<'ctx>,
+    mut l: IntValue<'ctx>,
+    mut r: IntValue<'ctx>,
+) -> (IntValue<'ctx>, IntValue<'ctx>) {
+    let l_bits = l.get_type().get_bit_width();
+    let r_bits = r.get_type().get_bit_width();
+    if l_bits != r_bits && l_bits > 1 && r_bits > 1 {
+        let narrow = l_bits.min(r_bits);
+        let target = c.context.custom_width_int_type(narrow);
+        if l_bits > narrow {
+            l = c.builder.build_int_truncate(l, target, "trunc").unwrap();
+        } else {
+            r = c.builder.build_int_truncate(r, target, "trunc").unwrap();
+        }
+    }
+    (l, r)
 }
 
 /// Compiles the `<>` concatenation operator for String, Binary, and Bits.
@@ -433,6 +567,25 @@ fn compile_binary_concat<'ctx>(
 }
 
 /// Compiles a unary operation (negation or logical not).
+/// The resolved unary operation to emit.
+enum ResolvedUnaryOp {
+    FloatNeg,
+    IntNeg,
+    IntNot,
+}
+
+/// Pure decision function: given an AST unary operator and the operand shape,
+/// returns which concrete operation to emit.
+fn resolve_unary_op(op: &UnaryOp, shape: &OperandShape) -> Result<ResolvedUnaryOp, String> {
+    match (op, shape) {
+        (UnaryOp::Neg, OperandShape::Float) => Ok(ResolvedUnaryOp::FloatNeg),
+        (UnaryOp::Neg, OperandShape::Integer { .. }) => Ok(ResolvedUnaryOp::IntNeg),
+        (UnaryOp::Neg, _) => Err("cannot negate non-numeric value".to_string()),
+        (UnaryOp::Not, OperandShape::Integer { .. }) => Ok(ResolvedUnaryOp::IntNot),
+        (UnaryOp::Not, _) => Err("cannot apply 'not' to non-integer value".to_string()),
+    }
+}
+
 pub fn compile_unary<'ctx>(
     c: &mut Compiler<'ctx>,
     op: &UnaryOp,
@@ -443,40 +596,39 @@ pub fn compile_unary<'ctx>(
     let val = tv.value;
     let operand_type = tv.expo_type;
 
-    match op {
-        UnaryOp::Neg => {
-            if val.is_int_value() {
-                Ok(Some(TypedValue::new(
-                    c.builder
-                        .build_int_neg(val.into_int_value(), "neg")
-                        .unwrap()
-                        .into(),
-                    operand_type,
-                )))
-            } else if val.is_float_value() {
-                Ok(Some(TypedValue::new(
-                    c.builder
-                        .build_float_neg(val.into_float_value(), "fneg")
-                        .unwrap()
-                        .into(),
-                    operand_type,
-                )))
-            } else {
-                Err("cannot negate non-numeric value".to_string())
-            }
+    let shape = if val.is_float_value() {
+        OperandShape::Float
+    } else if val.is_int_value() {
+        OperandShape::Integer {
+            bit_width: val.into_int_value().get_type().get_bit_width(),
         }
-        UnaryOp::Not => {
-            if val.is_int_value() {
-                Ok(Some(TypedValue::new(
-                    c.builder
-                        .build_not(val.into_int_value(), "not")
-                        .unwrap()
-                        .into(),
-                    Type::Primitive(Primitive::Bool),
-                )))
-            } else {
-                Err("cannot apply 'not' to non-integer value".to_string())
-            }
-        }
+    } else {
+        return Err("unsupported unary operand type".to_string());
+    };
+
+    let resolved = resolve_unary_op(op, &shape)?;
+
+    match resolved {
+        ResolvedUnaryOp::FloatNeg => Ok(Some(TypedValue::new(
+            c.builder
+                .build_float_neg(val.into_float_value(), "fneg")
+                .unwrap()
+                .into(),
+            operand_type,
+        ))),
+        ResolvedUnaryOp::IntNeg => Ok(Some(TypedValue::new(
+            c.builder
+                .build_int_neg(val.into_int_value(), "neg")
+                .unwrap()
+                .into(),
+            operand_type,
+        ))),
+        ResolvedUnaryOp::IntNot => Ok(Some(TypedValue::new(
+            c.builder
+                .build_not(val.into_int_value(), "not")
+                .unwrap()
+                .into(),
+            Type::Primitive(Primitive::Bool),
+        ))),
     }
 }
