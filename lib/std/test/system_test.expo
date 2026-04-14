@@ -1,0 +1,40 @@
+struct SystemTest
+  @test "set_env and get_env roundtrip"
+  fn test_set_get_env -> Result<Bool, String>
+    System.set_env("EXPO_SYSTEM_TEST_VAR", "hello")
+
+    match System.get_env("EXPO_SYSTEM_TEST_VAR")
+      Option.None -> Result.Err("expected Some, got None")
+      Option.Some(val) ->
+        val == "hello"
+          ? Result.Ok(true)
+          : Result.Err("expected 'hello', got '#{val}'")
+    end
+  end
+
+  @test "get_env returns None for unset variable"
+  fn test_get_env_unset -> Result<Bool, String>
+    match System.get_env("EXPO_DEFINITELY_UNSET_VAR_999")
+      Option.Some(_) -> Result.Err("expected None for unset var")
+      Option.None -> Result.Ok(true)
+    end
+  end
+
+  @test "cwd returns a non-empty string"
+  fn test_cwd -> Result<Bool, String>
+    match System.cwd()
+      Result.Err(msg) -> Result.Err("cwd failed: #{msg}")
+      Result.Ok(dir) ->
+        dir.length() > 0
+          ? Result.Ok(true)
+          : Result.Err("cwd returned empty string")
+    end
+  end
+
+  @test "hostname returns a non-empty string"
+  fn test_hostname -> Result<Bool, String>
+    System.hostname().length() > 0
+      ? Result.Ok(true)
+      : Result.Err("hostname returned empty string")
+  end
+end

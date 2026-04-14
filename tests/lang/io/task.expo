@@ -1,9 +1,0 @@
-fn main
-  t =
-    Task.async(fn () -> Int 42 end)
-  r = Task.await(t)
-  match r
-    Result.Ok(v) -> print(v)
-    Result.Err(_) -> print("call failed")
-  end
-end

@@ -1,0 +1,13 @@
+struct TaskTest
+  @test "async and await roundtrip"
+  fn test_async_await -> Result<Bool, String>
+    t =
+      Task.async(fn () -> Int 42 end)
+
+    match Task.await(t)
+      Result.Err(_) -> Result.Err("Task.await returned Err")
+      Result.Ok(v) ->
+        v == 42 ? Result.Ok(true) : Result.Err("expected 42, got #{v}")
+    end
+  end
+end

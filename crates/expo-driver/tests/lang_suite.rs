@@ -341,7 +341,6 @@ lang_test_dir!(lang_generics, "generics");
 lang_test_dir!(lang_protocols, "protocols");
 lang_test_dir!(lang_collections, "collections");
 lang_test_dir!(lang_ownership, "ownership");
-lang_test_dir!(lang_binary, "binary");
 lang_test_dir!(lang_io, "io");
 
 // Failure tests

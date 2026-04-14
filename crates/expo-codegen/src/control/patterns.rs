@@ -9,7 +9,11 @@ use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Type, mangle_name, mangle_type, named, unwrap_indirect};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
+use inkwell::basic_block::BasicBlock;
+use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+
+use crate::compiler::TypeRegistry;
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
@@ -18,6 +22,44 @@ use crate::types::to_llvm_type;
 use crate::util::parse_int_literal;
 
 use super::compile_body_as_value;
+
+enum MatchResultStrategy {
+    Direct,
+    UnionWrap { target: Type },
+    Void,
+}
+
+fn resolve_match_result<'ctx>(
+    pending_arms: &[(BasicValueEnum<'ctx>, Type, BasicBlock<'ctx>)],
+    return_type_hint: &Option<Type>,
+    types: &TypeRegistry<'ctx>,
+) -> MatchResultStrategy {
+    if pending_arms.is_empty() {
+        return MatchResultStrategy::Void;
+    }
+
+    let types_uniform = pending_arms
+        .iter()
+        .all(|(v, _, _)| v.get_type() == pending_arms[0].0.get_type());
+
+    if types_uniform {
+        return MatchResultStrategy::Direct;
+    }
+
+    if let Some(Type::Union(members)) = return_type_hint {
+        let target = Type::Union(members.clone());
+        let target_mangled = mangle_type(&target);
+        let all_members = pending_arms.iter().all(|(_, ty, _)| {
+            matches!(ty, Type::Union(_))
+                || members.iter().any(|m| mangle_type(m) == mangle_type(ty))
+        });
+        if all_members && types.contains_monomorphized(&target_mangled) {
+            return MatchResultStrategy::UnionWrap { target };
+        }
+    }
+
+    MatchResultStrategy::Direct
+}
 
 /// Compiles a `match` expression. Patterns are tested sequentially; the first
 /// matching arm executes. Bindings introduced by patterns are scoped to their
@@ -48,12 +90,8 @@ pub fn compile_match<'ctx>(
     let fallthrough_bb = c.context.append_basic_block(function, "match_none");
     let mut arm_expo_type: Option<Type> = None;
     let mut reachable_arm_count = 0usize;
-    let mut pending_arms: Vec<(
-        BasicValueEnum<'ctx>,
-        Type,
-        inkwell::basic_block::BasicBlock<'ctx>,
-    )> = Vec::new();
-    let mut needs_branch: Vec<inkwell::basic_block::BasicBlock<'ctx>> = Vec::new();
+    let mut pending_arms: Vec<(BasicValueEnum<'ctx>, Type, BasicBlock<'ctx>)> = Vec::new();
+    let mut needs_branch: Vec<BasicBlock<'ctx>> = Vec::new();
 
     for (i, arm) in arms.iter().enumerate() {
         let body_bb = c
@@ -105,50 +143,32 @@ pub fn compile_match<'ctx>(
         c.builder.position_at_end(next_bb);
     }
 
-    // Check whether arm LLVM types are uniform or need union wrapping.
-    let types_uniform = !pending_arms.is_empty()
-        && pending_arms
-            .iter()
-            .all(|(v, _, _)| v.get_type() == pending_arms[0].0.get_type());
+    let strategy = resolve_match_result(&pending_arms, &c.fn_state.return_type_hint, &c.types);
 
-    let union_target = if !types_uniform && !pending_arms.is_empty() {
-        if let Some(Type::Union(ref members)) = c.fn_state.return_type_hint {
-            let target = Type::Union(members.clone());
-            let target_mangled = mangle_type(&target);
-            let all_members = pending_arms.iter().all(|(_, ty, _)| {
-                matches!(ty, Type::Union(_))
-                    || members.iter().any(|m| mangle_type(m) == mangle_type(ty))
-            });
-            if all_members {
-                if c.types.contains_monomorphized(&target_mangled) {
-                    Some(target)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
+    if matches!(strategy, MatchResultStrategy::Void) {
+        for bb in &needs_branch {
+            c.builder.position_at_end(*bb);
+            c.builder.build_unconditional_branch(merge_bb).unwrap();
         }
-    } else {
-        None
-    };
+        c.builder.position_at_end(fallthrough_bb);
+        c.builder.build_unconditional_branch(merge_bb).unwrap();
+        c.builder.position_at_end(merge_bb);
+        return Ok(None);
+    }
 
-    // Emit branches and collect phi values (with wrapping if needed).
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-        Vec::new();
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
 
     for (val, ty, bb) in &pending_arms {
         c.builder.position_at_end(*bb);
-        let final_val = if let Some(ref target) = union_target {
-            if matches!(ty, Type::Union(_)) {
-                *val
-            } else {
-                crate::stmt::compile_union_wrap(c, *val, ty, target)?
+        let final_val = match &strategy {
+            MatchResultStrategy::UnionWrap { target } => {
+                if matches!(ty, Type::Union(_)) {
+                    *val
+                } else {
+                    crate::stmt::compile_union_wrap(c, *val, ty, target)?
+                }
             }
-        } else {
-            *val
+            _ => *val,
         };
         c.builder.build_unconditional_branch(merge_bb).unwrap();
         let end_bb = c.builder.get_insert_block().unwrap();
@@ -169,13 +189,16 @@ pub fn compile_match<'ctx>(
         let first_ty = incoming[0].0.get_type();
         if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
             let undef = first_ty.const_zero();
-
             let phi = c.builder.build_phi(first_ty, "matchval").unwrap();
             for (v, bb) in &incoming {
                 phi.add_incoming(&[(v, *bb)]);
             }
             phi.add_incoming(&[(&undef, fallthrough_bb)]);
-            let result_type = union_target.or(arm_expo_type).unwrap_or(Type::Unknown);
+            let result_type = match strategy {
+                MatchResultStrategy::UnionWrap { target } => Some(target),
+                _ => arm_expo_type,
+            }
+            .unwrap_or(Type::Unknown);
             return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
         }
     }
@@ -374,7 +397,7 @@ fn compile_field_pattern<'ctx>(
     c: &mut Compiler<'ctx>,
     fp: &FieldPattern,
     expected_fields: &[(String, Type)],
-    payload_type: inkwell::types::StructType<'ctx>,
+    payload_type: StructType<'ctx>,
     payload_ptr: PointerValue<'ctx>,
     mut result: IntValue<'ctx>,
     enum_name: &str,
@@ -477,7 +500,7 @@ fn compile_tuple_elements<'ctx>(
     c: &mut Compiler<'ctx>,
     elements: &[Pattern],
     field_types: &[Type],
-    payload_type: inkwell::types::StructType<'ctx>,
+    payload_type: StructType<'ctx>,
     payload_ptr: PointerValue<'ctx>,
     mut result: IntValue<'ctx>,
     function: FunctionValue<'ctx>,
@@ -607,7 +630,7 @@ pub(crate) fn get_payload_ptr<'ctx>(
     subject_ptr: PointerValue<'ctx>,
     enum_name: &str,
     variant: &str,
-) -> Result<(inkwell::types::StructType<'ctx>, PointerValue<'ctx>), String> {
+) -> Result<(StructType<'ctx>, PointerValue<'ctx>), String> {
     let payload_type = c
         .types
         .get_variant_payload_type(enum_name, variant)
