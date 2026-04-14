@@ -4,9 +4,6 @@ Wall-clock time as an epoch-millisecond timestamp.
 struct DateTime
   millis: Int
 
-  @extern "C"
-  priv fn expo_time_now_millis -> Int64
-
   @doc """
   Returns the current wall-clock time as a `DateTime`.
   """
@@ -20,6 +17,9 @@ struct DateTime
   fn timestamp_millis(self) -> Int
     self.millis
   end
+
+  @extern "C"
+  priv fn expo_time_now_millis -> Int64
 end
 
 @doc """

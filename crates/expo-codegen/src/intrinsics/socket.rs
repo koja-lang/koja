@@ -91,7 +91,8 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .unwrap()
                 .into_int_value();
 
-            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let i32_ty = c.context.i32_type();
+            let neg_one = i32_ty.const_int((-1i32) as u64, true);
             let is_err = c
                 .builder
                 .build_int_compare(IntPredicate::EQ, fd_val, neg_one, "is_err")
@@ -246,7 +247,8 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .unwrap()
                 .into_int_value();
 
-            let neg_one = i64_ty.const_int((-1i64) as u64, true);
+            let i32_ty = c.context.i32_type();
+            let neg_one = i32_ty.const_int((-1i32) as u64, true);
             let is_err = c
                 .builder
                 .build_int_compare(IntPredicate::EQ, client_fd, neg_one, "is_err")

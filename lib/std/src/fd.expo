@@ -2,7 +2,7 @@
 Raw file descriptor for I/O operations.
 """
 struct Fd
-  descriptor: Int
+  descriptor: Int32
 
   @doc """
   Suspends the current process until this file descriptor is ready.
@@ -27,21 +27,19 @@ struct Fd
   """
   fn write(self, data: String) -> Result<Int, String>
     bin = data.to_binary()
-
-    match expo_fd_write(self.descriptor, bin.ptr(), bin.byte_size())
-      -1 -> Result.Err("write failed")
-      n -> Result.Ok(n)
-    end
+    result = expo_fd_write(self.descriptor, bin.ptr(), bin.byte_size())
+    result >= 0
+      ? Result.Ok(result)
+      : Result.Err("write failed")
   end
 
   @doc """
   Closes the file descriptor.
   """
   fn close(move self) -> Result<String, String>
-    match expo_fd_close(self.descriptor)
-      0 -> Result.Ok("")
-      _ -> Result.Err("close failed")
-    end
+    expo_fd_close(self.descriptor) == 0
+      ? Result.Ok("")
+      : Result.Err("close failed")
   end
 
   @doc """
@@ -53,7 +51,7 @@ struct Fd
   Interest: 0 = readable, 1 = writable.
   """
   fn watch(self, interest: Int)
-    panic("intrinsic")
+    expo_rt_watch_fd(self.descriptor, interest)
   end
 
   @doc """
@@ -61,17 +59,23 @@ struct Fd
   No further `IOReady` messages will be delivered for this fd.
   """
   fn unwatch(self)
-    panic("intrinsic")
+    expo_rt_unwatch_fd(self.descriptor)
   end
 
   @extern "C"
-  priv fn expo_fd_close(fd: Int64) -> Int64
+  priv fn expo_fd_close(fd: Int32) -> Int32
 
   @extern "C"
-  priv fn expo_fd_write(fd: Int64, data: CPtr<UInt8>, len: Int64) -> Int64
+  priv fn expo_fd_write(fd: Int32, data: CPtr<UInt8>, len: Int64) -> Int64
 
   @extern "C"
-  priv fn expo_io_block(fd: Int64, readable: Int64)
+  priv fn expo_io_block(fd: Int32, readable: Int64)
+
+  @extern "C"
+  priv fn expo_rt_watch_fd(fd: Int32, interest: Int64)
+
+  @extern "C"
+  priv fn expo_rt_unwatch_fd(fd: Int32)
 end
 
 @doc """

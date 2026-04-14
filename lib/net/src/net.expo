@@ -128,7 +128,7 @@ impl Socket
   immediately available, -2 if none is pending, or -1 on error.
   Prefer `TCPListener.try_accept` for a typed wrapper.
   """
-  fn try_accept_raw(self) -> Int
+  fn try_accept_raw(self) -> Int32
     panic("intrinsic")
   end
 

@@ -5,17 +5,21 @@ Provides access to environment variables, the current working directory,
 and the machine hostname.
 """
 struct System
-  @extern "C"
-  priv fn expo_get_env(key: CPtr<UInt8>) -> CPtr<UInt8>
+  @doc """
+  Returns the current working directory as an absolute path.
+  """
+  fn cwd -> Result<String, String>
+    ptr = expo_cwd()
 
-  @extern "C"
-  priv fn expo_set_env(key: CPtr<UInt8>, val: CPtr<UInt8>)
-
-  @extern "C"
-  priv fn expo_cwd -> CPtr<UInt8>
-
-  @extern "C"
-  priv fn expo_hostname -> CPtr<UInt8>
+    if ptr.null?()
+      Result.Err("failed to get current directory")
+    else
+      cs = ptr.to_cstring()
+      result = cs.to_string()
+      cs.free()
+      Result.Ok(result)
+    end
+  end
 
   @doc """
   Returns the value of the environment variable `key`, or `Option.None`
@@ -37,6 +41,17 @@ struct System
   end
 
   @doc """
+  Returns the system hostname.
+  """
+  fn hostname -> String
+    ptr = expo_hostname()
+    cs = ptr.to_cstring()
+    result = cs.to_string()
+    cs.free()
+    result
+  end
+
+  @doc """
   Sets the environment variable `key` to `value`.
   """
   fn set_env(key: String, value: String)
@@ -47,30 +62,15 @@ struct System
     val_cs.free()
   end
 
-  @doc """
-  Returns the current working directory as an absolute path.
-  """
-  fn cwd -> Result<String, String>
-    ptr = expo_cwd()
+  @extern "C"
+  priv fn expo_cwd -> CPtr<UInt8>
 
-    if ptr.null?()
-      Result.Err("failed to get current directory")
-    else
-      cs = ptr.to_cstring()
-      result = cs.to_string()
-      cs.free()
-      Result.Ok(result)
-    end
-  end
+  @extern "C"
+  priv fn expo_get_env(key: CPtr<UInt8>) -> CPtr<UInt8>
 
-  @doc """
-  Returns the system hostname.
-  """
-  fn hostname -> String
-    ptr = expo_hostname()
-    cs = ptr.to_cstring()
-    result = cs.to_string()
-    cs.free()
-    result
-  end
+  @extern "C"
+  priv fn expo_hostname -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn expo_set_env(key: CPtr<UInt8>, val: CPtr<UInt8>)
 end

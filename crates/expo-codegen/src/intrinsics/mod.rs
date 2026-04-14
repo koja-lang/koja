@@ -60,7 +60,7 @@ const DEBUG_TYPES: &[&str] = &[
 
 const PARSE_INTRINSICS: &[&str] = &["Int_parse", "Float_parse"];
 
-const FD_INTRINSICS: &[&str] = &["Fd_read", "Fd_watch", "Fd_unwatch"];
+const FD_INTRINSICS: &[&str] = &["Fd_read"];
 
 const FILE_INTRINSICS: &[&str] = &[
     "File_open",

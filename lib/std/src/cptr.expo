@@ -1,35 +1,49 @@
 struct CPtr<T>
-  @doc "Returns a null pointer."
-  fn null -> CPtr<T>
-    panic("intrinsic")
-  end
-
-  @doc "Allocates memory for `count` elements of type T using C's malloc."
+  @doc """
+  Allocates memory for `count` elements of type T using C's malloc.
+  """
   fn alloc(count: Int) -> CPtr<T>
     panic("intrinsic")
   end
 
-  @doc "Frees the memory at this pointer using C's free."
+  @doc """
+  Returns a null pointer.
+  """
+  fn null -> CPtr<T>
+    panic("intrinsic")
+  end
+
+  @doc """
+  Frees the memory at this pointer using C's free.
+  """
   fn free(move self)
     panic("intrinsic")
   end
 
-  @doc "Returns a pointer offset by `n` elements from this pointer."
+  @doc """
+  Returns a pointer offset by `n` elements from this pointer.
+  """
   fn offset(self, n: Int) -> CPtr<T>
     panic("intrinsic")
   end
 
-  @doc "Reads the value at this pointer."
+  @doc """
+  Reads the value at this pointer.
+  """
   fn read(self) -> T
     panic("intrinsic")
   end
 
-  @doc "Writes a value to this pointer."
+  @doc """
+  Writes a value to this pointer.
+  """
   fn write(self, value: T)
     panic("intrinsic")
   end
 
-  @doc "Returns `true` if this pointer is null."
+  @doc """
+  Returns `true` if this pointer is null.
+  """
   fn null?(self) -> Bool
     panic("intrinsic")
   end
@@ -38,6 +52,7 @@ end
 impl CPtr<UInt8>
   @doc """
   Creates a `Binary` by copying `len` bytes from this pointer.
+
   The caller retains ownership of the pointer.
   """
   fn to_binary(self, len: Int) -> Binary
@@ -46,8 +61,9 @@ impl CPtr<UInt8>
 
   @doc """
   Wraps this pointer in a `CString` by computing the length with `strlen`.
-  The pointer must be a valid null-terminated C string.
-  The caller is responsible for freeing the result.
+
+  The pointer must be a valid null-terminated C string. The caller is 
+  responsible for freeing the result.
   """
   fn to_cstring(self) -> CString
     CString{ptr: self, len: strlen(self)}

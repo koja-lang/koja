@@ -13,8 +13,8 @@ use crate::util::{alloc_expo_string, expo_string_to_slice, set_last_error};
 
 /// Closes a raw file descriptor. Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_fd_close(fd: i64) -> i64 {
-    let ret = unsafe { libc_close(fd as i32) };
+pub extern "C" fn expo_fd_close(fd: i32) -> i32 {
+    let ret = unsafe { libc_close(fd) };
     if ret < 0 {
         set_last_error(io::Error::last_os_error());
         return -1;
@@ -26,16 +26,16 @@ pub extern "C" fn expo_fd_close(fd: i64) -> i64 {
 /// non-blocking (sockets), suspends the process until data is available.
 /// Returns a length-prefixed string pointer, or null on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_fd_read(fd: i64, count: i64) -> *const u8 {
+pub extern "C" fn expo_fd_read(fd: i32, count: i64) -> *const u8 {
     let mut buf = vec![0u8; count as usize];
     loop {
-        let n = unsafe { libc_read(fd as i32, buf.as_mut_ptr(), buf.len()) };
+        let n = unsafe { libc_read(fd, buf.as_mut_ptr(), buf.len()) };
         if n >= 0 {
             buf.truncate(n as usize);
             return unsafe { alloc_expo_string(&buf) };
         }
         if get_errno() == EAGAIN {
-            io_block(fd as i32, Interest::Readable);
+            io_block(fd, Interest::Readable);
             continue;
         }
         set_last_error(io::Error::last_os_error());
@@ -50,15 +50,15 @@ pub extern "C" fn expo_fd_read(fd: i64, count: i64) -> *const u8 {
 /// # Safety
 /// `data_ptr` must point to at least `data_len` readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn expo_fd_write(fd: i64, data_ptr: *const u8, data_len: i64) -> i64 {
+pub unsafe extern "C" fn expo_fd_write(fd: i32, data_ptr: *const u8, data_len: i64) -> i64 {
     let slice = unsafe { std::slice::from_raw_parts(data_ptr, data_len as usize) };
     loop {
-        let n = unsafe { libc_write(fd as i32, slice.as_ptr(), slice.len()) };
+        let n = unsafe { libc_write(fd, slice.as_ptr(), slice.len()) };
         if n >= 0 {
             return n as i64;
         }
         if get_errno() == EAGAIN {
-            io_block(fd as i32, Interest::Writable);
+            io_block(fd, Interest::Writable);
             continue;
         }
         set_last_error(io::Error::last_os_error());
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn expo_file_exists(path_ptr: *const u8) -> i64 {
 /// # Safety
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn expo_file_open(path_ptr: *const u8, mode: i64) -> i64 {
+pub unsafe extern "C" fn expo_file_open(path_ptr: *const u8, mode: i64) -> i32 {
     let path = unsafe { CStr::from_ptr(path_ptr as *const i8) };
     let path = match path.to_str() {
         Ok(s) => s,
@@ -137,7 +137,7 @@ pub unsafe extern "C" fn expo_file_open(path_ptr: *const u8, mode: i64) -> i64 {
     };
 
     match file {
-        Ok(f) => f.into_raw_fd() as i64,
+        Ok(f) => f.into_raw_fd(),
         Err(e) => {
             set_last_error(e);
             -1
@@ -226,11 +226,11 @@ pub unsafe extern "C" fn expo_file_write_all(path_ptr: *const u8, content_ptr: *
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_io_block(fd: i64, readable: i64) {
+pub extern "C" fn expo_io_block(fd: i32, readable: i64) {
     let interest = if readable != 0 {
         Interest::Readable
     } else {
         Interest::Writable
     };
-    io_block(fd as i32, interest);
+    io_block(fd, interest);
 }

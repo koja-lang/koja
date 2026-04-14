@@ -21,15 +21,15 @@ use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_binary, set_last_erro
 /// pending, suspends the process until one arrives. Returns the new
 /// client fd (also set to non-blocking), or -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_socket_accept(fd: i64) -> i64 {
+pub extern "C" fn expo_socket_accept(fd: i32) -> i32 {
     loop {
-        let client = unsafe { libc_accept(fd as i32, ptr::null_mut(), ptr::null_mut()) };
+        let client = unsafe { libc_accept(fd, ptr::null_mut(), ptr::null_mut()) };
         if client >= 0 {
             set_nonblocking(client);
-            return client as i64;
+            return client;
         }
         if get_errno() == EAGAIN {
-            io_block(fd as i32, Interest::Readable);
+            io_block(fd, Interest::Readable);
             continue;
         }
         set_last_error(io::Error::last_os_error());
@@ -40,11 +40,11 @@ pub extern "C" fn expo_socket_accept(fd: i64) -> i64 {
 /// Non-blocking accept: returns the new client fd if a connection is
 /// immediately available, -2 if none is pending (EAGAIN), or -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_socket_try_accept(fd: i64) -> i64 {
-    let client = unsafe { libc_accept(fd as i32, ptr::null_mut(), ptr::null_mut()) };
+pub extern "C" fn expo_socket_try_accept(fd: i32) -> i32 {
+    let client = unsafe { libc_accept(fd, ptr::null_mut(), ptr::null_mut()) };
     if client >= 0 {
         set_nonblocking(client);
-        return client as i64;
+        return client;
     }
     if get_errno() == EAGAIN {
         return -2; // nothing pending
@@ -56,7 +56,7 @@ pub extern "C" fn expo_socket_try_accept(fd: i64) -> i64 {
 /// Binds a socket to a local IP address and port. Returns 0 on success,
 /// -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_socket_bind(fd: i64, ip_ptr: *const u8, port: i64) -> i64 {
+pub extern "C" fn expo_socket_bind(fd: i32, ip_ptr: *const u8, port: i64) -> i64 {
     let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, port) {
         Ok(v) => v,
         Err(e) => {
@@ -64,7 +64,7 @@ pub extern "C" fn expo_socket_bind(fd: i64, ip_ptr: *const u8, port: i64) -> i64
             return -1;
         }
     };
-    let ret = unsafe { libc_bind(fd as i32, &addr as *const SockaddrIn as *const u8, addr_len) };
+    let ret = unsafe { libc_bind(fd, &addr as *const SockaddrIn as *const u8, addr_len) };
     if ret < 0 {
         set_last_error(io::Error::last_os_error());
         return -1;
@@ -76,7 +76,7 @@ pub extern "C" fn expo_socket_bind(fd: i64, ip_ptr: *const u8, port: i64) -> i64
 /// sockets, suspends the process until the TCP handshake completes.
 /// Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_socket_connect(fd: i64, ip_ptr: *const u8, port: i64) -> i64 {
+pub extern "C" fn expo_socket_connect(fd: i32, ip_ptr: *const u8, port: i64) -> i64 {
     let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, port) {
         Ok(v) => v,
         Err(e) => {
@@ -84,19 +84,19 @@ pub extern "C" fn expo_socket_connect(fd: i64, ip_ptr: *const u8, port: i64) -> 
             return -1;
         }
     };
-    let ret = unsafe { libc_connect(fd as i32, &addr as *const SockaddrIn as *const u8, addr_len) };
+    let ret = unsafe { libc_connect(fd, &addr as *const SockaddrIn as *const u8, addr_len) };
     if ret == 0 {
         return 0;
     }
     let errno = get_errno();
     if errno == EINPROGRESS || errno == EAGAIN {
-        io_block(fd as i32, Interest::Writable);
+        io_block(fd, Interest::Writable);
 
         let mut err: i32 = 0;
         let mut len = mem::size_of::<i32>() as u32;
         let ret = unsafe {
             libc_getsockopt(
-                fd as i32,
+                fd,
                 SOL_SOCKET,
                 SO_ERROR,
                 &mut err as *mut i32 as *mut u8,
@@ -122,21 +122,21 @@ pub extern "C" fn expo_socket_connect(fd: i64, ip_ptr: *const u8, port: i64) -> 
 /// the codegen from the Expo `SocketKind` enum.
 /// Returns the fd on success, -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_socket_create(sock_type: i64) -> i64 {
+pub extern "C" fn expo_socket_create(sock_type: i64) -> i32 {
     let fd = unsafe { libc_socket(AF_INET, sock_type as i32, 0) };
     if fd < 0 {
         set_last_error(io::Error::last_os_error());
         return -1;
     }
     set_nonblocking(fd);
-    fd as i64
+    fd
 }
 
 /// Marks a socket as listening for incoming connections with the given
 /// backlog depth. Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_socket_listen(fd: i64, backlog: i64) -> i64 {
-    let ret = unsafe { libc_listen(fd as i32, backlog as i32) };
+pub extern "C" fn expo_socket_listen(fd: i32, backlog: i64) -> i64 {
+    let ret = unsafe { libc_listen(fd, backlog as i32) };
     if ret < 0 {
         set_last_error(io::Error::last_os_error());
         return -1;
@@ -151,7 +151,7 @@ pub extern "C" fn expo_socket_listen(fd: i64, backlog: i64) -> i64 {
 /// # Safety
 /// `fd` must be a valid open socket file descriptor.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn expo_socket_recv_from(fd: i64, count: i64) -> *mut u8 {
+pub unsafe extern "C" fn expo_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
     let mut buf = vec![0u8; count as usize];
     let mut sender_addr: SockaddrIn = unsafe { mem::zeroed() };
     let mut addr_len = mem::size_of::<SockaddrIn>() as u32;
@@ -159,7 +159,7 @@ pub unsafe extern "C" fn expo_socket_recv_from(fd: i64, count: i64) -> *mut u8 {
     let n = loop {
         let n = unsafe {
             libc_recvfrom(
-                fd as i32,
+                fd,
                 buf.as_mut_ptr(),
                 count as usize,
                 0,
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn expo_socket_recv_from(fd: i64, count: i64) -> *mut u8 {
             break n;
         }
         if get_errno() == EAGAIN {
-            io_block(fd as i32, Interest::Readable);
+            io_block(fd, Interest::Readable);
             continue;
         }
         set_last_error(io::Error::last_os_error());
@@ -256,7 +256,7 @@ pub unsafe extern "C" fn expo_socket_resolve(hostname: *const u8) -> *mut u8 {
 /// of a valid Binary allocation (4 or 16 bytes) with an 8-byte length header at offset -8.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_socket_send_to(
-    fd: i64,
+    fd: i32,
     data_ptr: *const u8,
     ip_ptr: *const u8,
     port: i64,
@@ -280,7 +280,7 @@ pub unsafe extern "C" fn expo_socket_send_to(
     loop {
         let sent = unsafe {
             libc_sendto(
-                fd as i32,
+                fd,
                 data_ptr,
                 data_len,
                 0,
@@ -292,7 +292,7 @@ pub unsafe extern "C" fn expo_socket_send_to(
             return sent as i64;
         }
         if get_errno() == EAGAIN {
-            io_block(fd as i32, Interest::Writable);
+            io_block(fd, Interest::Writable);
             continue;
         }
         set_last_error(io::Error::last_os_error());
@@ -302,11 +302,11 @@ pub unsafe extern "C" fn expo_socket_send_to(
 
 /// Enables `SO_REUSEADDR` on a socket. Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_socket_setsockopt_reuse(fd: i64) -> i64 {
+pub extern "C" fn expo_socket_setsockopt_reuse(fd: i32) -> i64 {
     let optval: i32 = 1;
     let ret = unsafe {
         libc_setsockopt(
-            fd as i32,
+            fd,
             SOL_SOCKET,
             SO_REUSEADDR,
             &optval as *const i32 as *const u8,

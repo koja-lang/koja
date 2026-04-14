@@ -11,6 +11,21 @@ enum IOReady
 end
 
 @doc """
+The standard error file descriptor.
+"""
+const STDERR: Fd = Fd{descriptor: 2}
+
+@doc """
+The standard input file descriptor.
+"""
+const STDIN: Fd = Fd{descriptor: 0}
+
+@doc """
+The standard output file descriptor.
+"""
+const STDOUT: Fd = Fd{descriptor: 1}
+
+@doc """
 Standard I/O operations.
 
 Provides `IO.puts`, `IO.warn`, `IO.write`, and `IO.gets` for common
@@ -18,22 +33,6 @@ console I/O. For low-level access, use `STDIN`, `STDOUT`, and `STDERR`
 directly as `Fd` values.
 """
 struct IO
-end
-
-@doc """
-The standard input file descriptor.
-"""
-const STDIN: Fd = Fd{descriptor: 0}
-@doc """
-The standard output file descriptor.
-"""
-const STDOUT: Fd = Fd{descriptor: 1}
-@doc """
-The standard error file descriptor.
-"""
-const STDERR: Fd = Fd{descriptor: 2}
-
-impl IO
   @doc """
   Writes a string to stdout followed by a newline.
   """

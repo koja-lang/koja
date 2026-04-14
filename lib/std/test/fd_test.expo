@@ -113,4 +113,18 @@ struct FdTest
         Result.Err("failed to open /dev/null: #{msg}")
     end
   end
+
+  @test "watch and unwatch do not crash"
+  fn test_watch_unwatch -> Result<Bool, String>
+    match File.open("/dev/null", FileMode.Read)
+      Result.Ok(file) ->
+        file.fd.watch(0)
+        file.fd.unwatch()
+        _ = file.close()
+        Result.Ok(true)
+
+      Result.Err(msg) ->
+        Result.Err("failed to open /dev/null: #{msg}")
+    end
+  end
 end
