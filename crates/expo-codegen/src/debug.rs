@@ -1,12 +1,506 @@
 //! Debug protocol support: synthesizes `format` functions for enums and
 //! structs, and provides `call_format` to invoke `{Type}_format` on any value.
 
-use expo_typecheck::context::VariantData;
+use expo_ast::identifier::TypeIdentifier;
+use expo_typecheck::context::{VariantData, VariantInfo};
 use expo_typecheck::types::{Primitive, Type, named};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
+use inkwell::AddressSpace;
+use inkwell::basic_block::BasicBlock;
+use inkwell::types::StructType;
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
+};
 
 use crate::compiler::Compiler;
 use crate::intrinsics::{emit_primitive_intrinsic, is_primitive_intrinsic, type_display_name};
+
+/// Calls `{Type}_format(val)` and returns the resulting string pointer.
+/// Synthesizes the format function on demand for enums and structs if it
+/// doesn't already exist. Falls back to LLVM type inspection when the
+/// Expo type is unknown.
+pub fn call_format<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    val: BasicValueEnum<'ctx>,
+    expo_type: &Type,
+) -> Result<PointerValue<'ctx>, String> {
+    let resolved_type = if matches!(expo_type, Type::Unknown) {
+        infer_type_from_llvm(val)
+    } else {
+        expo_type.clone()
+    };
+
+    let type_name = type_display_name(&resolved_type);
+    let fn_name = format!("{type_name}_format");
+
+    if !compiler.functions.contains_key(&fn_name) {
+        let Some(kind) = resolve_format_kind(compiler, &fn_name, &type_name) else {
+            return Err(format!("no format function for type `{type_name}`"));
+        };
+        match kind {
+            FormatKind::Enum => {
+                let id = resolve_type_id(compiler, &type_name)?;
+                synthesize_enum_format(compiler, &id)?;
+            }
+            FormatKind::Struct => {
+                let id = resolve_type_id(compiler, &type_name)?;
+                synthesize_struct_format(compiler, &id)?;
+            }
+            FormatKind::PrimitiveIntrinsic => {
+                let parameter_type = val.get_type();
+                let pointer_type = compiler.context.ptr_type(AddressSpace::default());
+                let function_type = pointer_type.fn_type(&[parameter_type.into()], false);
+                let function_value = compiler.module.add_function(&fn_name, function_type, None);
+                compiler.functions.insert(fn_name.clone(), function_value);
+                emit_primitive_intrinsic(compiler, &fn_name)?;
+            }
+        }
+    }
+
+    let format_fn = *compiler
+        .functions
+        .get(&fn_name)
+        .ok_or_else(|| format!("no format function for type `{type_name}`"))?;
+
+    compiler
+        .call(format_fn, &[val.into()], "fmt_result")
+        .map(|value| value.into_pointer_value())
+        .ok_or_else(|| format!("{fn_name} did not return a value"))
+}
+
+/// Pre-synthesizes `{Type}_format` functions for all user-defined structs and
+/// enums. Call after types are registered and functions are declared, but
+/// before function bodies are compiled.
+pub fn synthesize_all_formats<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(), String> {
+    let types: Vec<(TypeIdentifier, bool)> = compiler
+        .type_ctx
+        .types
+        .iter()
+        .filter(|(_, type_info)| {
+            (type_info.is_struct() || type_info.is_enum()) && type_info.type_params.is_empty()
+        })
+        .map(|(id, type_info)| (id.clone(), type_info.is_enum()))
+        .collect();
+
+    for (id, is_enum) in &types {
+        let fn_name = format!("{}_format", id.name);
+        if compiler.functions.contains_key(&fn_name) {
+            continue;
+        }
+        if has_unsynthesizable_fields(compiler, id) {
+            continue;
+        }
+        if *is_enum {
+            synthesize_enum_format(compiler, id)?;
+        } else {
+            synthesize_struct_format(compiler, id)?;
+        }
+    }
+    Ok(())
+}
+
+/// Formats values via `snprintf` into a heap-allocated Expo string
+/// (8-byte bit-length header followed by the character payload).
+///
+/// `fmt` is the printf format string and `args` are the values to substitute.
+/// Returns a pointer to the payload (just past the header).
+pub fn snprintf_to_expo_string<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    fmt: &str,
+    args: &[BasicMetadataValueEnum<'ctx>],
+    label: &str,
+) -> PointerValue<'ctx> {
+    let snprintf = *compiler
+        .functions
+        .get("snprintf")
+        .expect("snprintf not declared");
+    let malloc = *compiler
+        .functions
+        .get("malloc")
+        .expect("malloc not declared");
+    let i32_type = compiler.context.i32_type();
+    let i64_type = compiler.context.i64_type();
+    let i8_type = compiler.context.i8_type();
+    let pointer_type = compiler.context.ptr_type(AddressSpace::default());
+
+    let fmt_global = compiler
+        .builder
+        .build_global_string_ptr(fmt, &format!("{label}_fmt"))
+        .unwrap();
+
+    let mut size_args: Vec<BasicMetadataValueEnum> = vec![
+        pointer_type.const_null().into(),
+        i32_type.const_int(0, false).into(),
+        fmt_global.as_pointer_value().into(),
+    ];
+    size_args.extend_from_slice(args);
+
+    let needed = compiler
+        .call(snprintf, &size_args, &format!("{label}_needed"))
+        .unwrap()
+        .into_int_value();
+
+    let needed_i64 = compiler
+        .builder
+        .build_int_z_extend(needed, i64_type, &format!("{label}_n64"))
+        .unwrap();
+    let alloc_size = compiler
+        .builder
+        .build_int_add(
+            needed_i64,
+            i64_type.const_int(9, false),
+            &format!("{label}_sz"),
+        )
+        .unwrap();
+    let base_ptr = compiler
+        .call(malloc, &[alloc_size.into()], &format!("{label}_base"))
+        .unwrap()
+        .into_pointer_value();
+
+    let bit_length = compiler
+        .builder
+        .build_int_mul(
+            needed_i64,
+            i64_type.const_int(8, false),
+            &format!("{label}_bits"),
+        )
+        .unwrap();
+    compiler.builder.build_store(base_ptr, bit_length).unwrap();
+
+    let payload = unsafe {
+        compiler
+            .builder
+            .build_in_bounds_gep(
+                i8_type,
+                base_ptr,
+                &[i64_type.const_int(8, false)],
+                &format!("{label}_pay"),
+            )
+            .unwrap()
+    };
+
+    let buf_size = compiler
+        .builder
+        .build_int_add(
+            needed,
+            i32_type.const_int(1, false),
+            &format!("{label}_bufsz"),
+        )
+        .unwrap();
+
+    let mut write_args: Vec<BasicMetadataValueEnum> = vec![
+        payload.into(),
+        buf_size.into(),
+        fmt_global.as_pointer_value().into(),
+    ];
+    write_args.extend_from_slice(args);
+    compiler.call_void(snprintf, &write_args, &format!("{label}_write"));
+
+    payload
+}
+
+/// Resolved metadata for synthesizing an enum format function.
+struct ResolvedEnumFormatInfo {
+    function_name: String,
+    variants: Vec<VariantInfo>,
+}
+
+/// Looks up variant metadata from the type context for enum format synthesis.
+fn resolve_enum_format_info(compiler: &Compiler, id: &TypeIdentifier) -> ResolvedEnumFormatInfo {
+    let variants = compiler
+        .type_ctx
+        .get_type(id)
+        .and_then(|type_info| type_info.variants())
+        .cloned()
+        .unwrap_or_default();
+    ResolvedEnumFormatInfo {
+        function_name: format!("{}_format", id.name),
+        variants,
+    }
+}
+
+/// Synthesizes a `{Enum}_format(self) -> String` function that switch-cases
+/// over the tag and returns a string representation of each variant.
+fn synthesize_enum_format<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    id: &TypeIdentifier,
+) -> Result<(), String> {
+    let enum_name = &id.name;
+    let resolved = resolve_enum_format_info(compiler, id);
+    let synthesis = begin_synthesis(compiler, enum_name, &resolved.function_name)?;
+
+    let alloca = compiler
+        .builder
+        .build_alloca(synthesis.llvm_type, "enum_alloca")
+        .unwrap();
+    compiler
+        .builder
+        .build_store(alloca, synthesis.self_value)
+        .unwrap();
+    let tag_ptr = compiler
+        .builder
+        .build_struct_gep(synthesis.llvm_type, alloca, 0, "tag_ptr")
+        .unwrap();
+    let tag = compiler
+        .builder
+        .build_load(compiler.context.i8_type(), tag_ptr, "tag")
+        .unwrap()
+        .into_int_value();
+
+    let variant_name_label = |compiler: &mut Compiler<'ctx>, name: &str| -> PointerValue<'ctx> {
+        compiler.create_string_global(name.as_bytes(), &format!("vn_{name}"))
+    };
+
+    if resolved.variants.is_empty() {
+        let fallback = compiler.create_string_global(enum_name.as_bytes(), "enum_fallback");
+        compiler.builder.build_return(Some(&fallback)).unwrap();
+    } else {
+        let merge_block = compiler
+            .context
+            .append_basic_block(synthesis.function_value, "merge");
+
+        let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let mut incoming: Vec<(PointerValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+
+        for (i, variant_info) in resolved.variants.iter().enumerate() {
+            let basic_block = compiler.context.append_basic_block(
+                synthesis.function_value,
+                &format!("v_{}", variant_info.name),
+            );
+            cases.push((
+                compiler.context.i8_type().const_int(i as u64, false),
+                basic_block,
+            ));
+
+            compiler.builder.position_at_end(basic_block);
+
+            let str_ptr = match &variant_info.data {
+                VariantData::Unit => variant_name_label(compiler, &variant_info.name),
+                VariantData::Tuple(types) => {
+                    if types.len() == 1 && !is_complex_type(&types[0]) {
+                        let payload_struct_type = compiler
+                            .types
+                            .get_variant_payload_type(enum_name, &variant_info.name);
+
+                        if let Some(payload_type) = payload_struct_type {
+                            let payload_ptr = compiler
+                                .builder
+                                .build_struct_gep(synthesis.llvm_type, alloca, 1, "payload_ptr")
+                                .unwrap();
+                            let payload_struct = compiler
+                                .builder
+                                .build_load(payload_type, payload_ptr, "payload")
+                                .unwrap()
+                                .into_struct_value();
+                            let payload_val = compiler
+                                .builder
+                                .build_extract_value(payload_struct, 0, "payload_inner")
+                                .unwrap();
+                            let payload_str = call_format(compiler, payload_val, &types[0])?;
+
+                            concat_variant_name(compiler, &variant_info.name, payload_str)
+                        } else {
+                            variant_name_label(compiler, &variant_info.name)
+                        }
+                    } else {
+                        variant_name_label(compiler, &variant_info.name)
+                    }
+                }
+                VariantData::Struct(_) => variant_name_label(compiler, &variant_info.name),
+            };
+
+            incoming.push((str_ptr, compiler.builder.get_insert_block().unwrap()));
+            compiler
+                .builder
+                .build_unconditional_branch(merge_block)
+                .unwrap();
+        }
+
+        let default_block = compiler
+            .context
+            .append_basic_block(synthesis.function_value, "default");
+        compiler.builder.position_at_end(default_block);
+        let fallback = compiler.create_string_global(b"<unknown>", "unknown_variant");
+        compiler
+            .builder
+            .build_unconditional_branch(merge_block)
+            .unwrap();
+        incoming.push((fallback, default_block));
+
+        compiler
+            .builder
+            .position_at_end(synthesis.function_value.get_first_basic_block().unwrap());
+        compiler
+            .builder
+            .build_switch(tag, default_block, &cases)
+            .unwrap();
+
+        compiler.builder.position_at_end(merge_block);
+        let pointer_type = compiler.context.ptr_type(AddressSpace::default());
+        let phi = compiler.builder.build_phi(pointer_type, "result").unwrap();
+        for (val, basic_block) in &incoming {
+            phi.add_incoming(&[(val, *basic_block)]);
+        }
+        compiler
+            .builder
+            .build_return(Some(&phi.as_basic_value()))
+            .unwrap();
+    }
+
+    end_synthesis(compiler, synthesis.saved_block);
+    Ok(())
+}
+
+/// Formats a variant with a payload as `VariantName(payload_str)`.
+fn concat_variant_name<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    variant_name: &str,
+    payload_str: PointerValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let fmt = format!("{variant_name}(%s)");
+    snprintf_to_expo_string(compiler, &fmt, &[payload_str.into()], "vn")
+}
+
+/// Resolved metadata for synthesizing a struct format function.
+struct ResolvedStructFormatInfo {
+    fields: Vec<(String, Type)>,
+    function_name: String,
+}
+
+/// Looks up field metadata from the type context for struct format synthesis.
+fn resolve_struct_format_info(
+    compiler: &Compiler,
+    id: &TypeIdentifier,
+) -> ResolvedStructFormatInfo {
+    let fields = compiler
+        .type_ctx
+        .get_type(id)
+        .and_then(|type_info| type_info.fields())
+        .cloned()
+        .unwrap_or_default();
+    ResolvedStructFormatInfo {
+        fields,
+        function_name: format!("{}_format", id.name),
+    }
+}
+
+/// Synthesizes a `{Struct}_format(self) -> String` function that reads each
+/// field, formats it, and returns `StructName{field: value, ...}`.
+fn synthesize_struct_format<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    id: &TypeIdentifier,
+) -> Result<(), String> {
+    let struct_name = &id.name;
+    let resolved = resolve_struct_format_info(compiler, id);
+    let synthesis = begin_synthesis(compiler, struct_name, &resolved.function_name)?;
+
+    let fields = &resolved.fields;
+
+    if fields.is_empty() {
+        let empty_label = compiler.create_string_global(struct_name.as_bytes(), "struct_fmt_empty");
+        compiler.builder.build_return(Some(&empty_label)).unwrap();
+    } else {
+        let alloca = compiler
+            .builder
+            .build_alloca(synthesis.llvm_type, "sf_alloca")
+            .unwrap();
+        compiler
+            .builder
+            .build_store(alloca, synthesis.self_value)
+            .unwrap();
+
+        let mut field_strs: Vec<PointerValue<'ctx>> = Vec::new();
+        for (i, (_, field_type)) in fields.iter().enumerate() {
+            let field_ptr = compiler
+                .builder
+                .build_struct_gep(synthesis.llvm_type, alloca, i as u32, &format!("f_{i}"))
+                .unwrap();
+            let field_llvm_type = synthesis
+                .llvm_type
+                .get_field_type_at_index(i as u32)
+                .unwrap();
+            let field_val = compiler
+                .builder
+                .build_load(field_llvm_type, field_ptr, &format!("fv_{i}"))
+                .unwrap();
+            if is_complex_type(field_type) {
+                field_strs.push(compiler.create_string_global(b"...", &format!("f_opaque_{i}")));
+            } else {
+                field_strs.push(call_format(compiler, field_val, field_type)?);
+            }
+        }
+
+        let mut fmt_string = format!("{struct_name}{{");
+        for (i, (name, _)) in fields.iter().enumerate() {
+            if i > 0 {
+                fmt_string.push_str(", ");
+            }
+            fmt_string.push_str(name);
+            fmt_string.push_str(": %s");
+        }
+        fmt_string.push('}');
+
+        let args: Vec<BasicMetadataValueEnum> =
+            field_strs.iter().map(|str_ptr| (*str_ptr).into()).collect();
+        let payload = snprintf_to_expo_string(compiler, &fmt_string, &args, "sf");
+        compiler.builder.build_return(Some(&payload)).unwrap();
+    }
+
+    end_synthesis(compiler, synthesis.saved_block);
+    Ok(())
+}
+
+/// Shared state for the begin/end synthesis pattern used by both enum and
+/// struct format synthesis.
+struct SynthesisContext<'ctx> {
+    function_value: FunctionValue<'ctx>,
+    llvm_type: StructType<'ctx>,
+    saved_block: Option<BasicBlock<'ctx>>,
+    self_value: StructValue<'ctx>,
+}
+
+/// Looks up the LLVM struct type for `type_name`, creates a format function
+/// `function_name(self) -> ptr`, saves the current insert block, and
+/// positions the builder at the new function's entry block.
+fn begin_synthesis<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    type_name: &str,
+    function_name: &str,
+) -> Result<SynthesisContext<'ctx>, String> {
+    let llvm_type = compiler
+        .types
+        .get_stdlib(type_name)
+        .or_else(|| compiler.types.get_monomorphized(type_name))
+        .ok_or_else(|| format!("unknown type: {type_name}"))?;
+
+    let pointer_type = compiler.context.ptr_type(AddressSpace::default());
+    let function_type = pointer_type.fn_type(&[llvm_type.into()], false);
+    let function_value = compiler
+        .module
+        .add_function(function_name, function_type, None);
+    compiler
+        .functions
+        .insert(function_name.to_string(), function_value);
+
+    let saved_block = compiler.builder.get_insert_block();
+    let entry = compiler.context.append_basic_block(function_value, "entry");
+    compiler.builder.position_at_end(entry);
+
+    let self_value = function_value.get_nth_param(0).unwrap().into_struct_value();
+
+    Ok(SynthesisContext {
+        function_value,
+        llvm_type,
+        saved_block,
+        self_value,
+    })
+}
+
+/// Restores the builder to the insert block that was active before synthesis.
+fn end_synthesis(compiler: &mut Compiler, saved_block: Option<BasicBlock>) {
+    if let Some(block) = saved_block {
+        compiler.builder.position_at_end(block);
+    }
+}
 
 /// Which formatting strategy to use for a given type.
 enum FormatKind {
@@ -29,52 +523,17 @@ fn resolve_format_kind(compiler: &Compiler, fn_name: &str, type_name: &str) -> O
     }
 }
 
-/// Calls `{Type}_format(val)` and returns the resulting string pointer.
-/// Synthesizes the format function on demand for enums and structs if it
-/// doesn't already exist. Falls back to LLVM type inspection when the
-/// Expo type is unknown.
-pub fn call_format<'ctx>(
-    c: &mut Compiler<'ctx>,
-    val: BasicValueEnum<'ctx>,
-    expo_type: &Type,
-) -> Result<PointerValue<'ctx>, String> {
-    let resolved_type = if matches!(expo_type, Type::Unknown) {
-        infer_type_from_llvm(val)
-    } else {
-        expo_type.clone()
-    };
-
-    let type_name = type_display_name(&resolved_type);
-    let fn_name = format!("{type_name}_format");
-
-    if !c.functions.contains_key(&fn_name) {
-        let Some(kind) = resolve_format_kind(c, &fn_name, &type_name) else {
-            return Err(format!("no format function for type `{type_name}`"));
-        };
-        match kind {
-            FormatKind::Enum => synthesize_enum_format(c, &type_name)?,
-            FormatKind::PrimitiveIntrinsic => {
-                let param_ty = val.get_type();
-                let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-                let ft = ptr_ty.fn_type(&[param_ty.into()], false);
-                let fv = c.module.add_function(&fn_name, ft, None);
-                c.functions.insert(fn_name.clone(), fv);
-                emit_primitive_intrinsic(c, &fn_name)?;
-            }
-            FormatKind::Struct => synthesize_struct_format(c, &type_name)?,
-        }
-    }
-
-    let format_fn = *c
-        .functions
-        .get(&fn_name)
-        .ok_or_else(|| format!("no format function for type `{type_name}`"))?;
-
-    c.call(format_fn, &[val.into()], "fmt_result")
-        .map(|v| v.into_pointer_value())
-        .ok_or_else(|| format!("{fn_name} did not return a value"))
+/// Resolves a bare type name to its [`TypeIdentifier`] via the type context.
+fn resolve_type_id(compiler: &Compiler, name: &str) -> Result<TypeIdentifier, String> {
+    compiler
+        .type_ctx
+        .resolve_name(name)
+        .cloned()
+        .ok_or_else(|| format!("no type identifier for `{name}`"))
 }
 
+/// Infers an Expo [`Type`] from an LLVM value by inspecting its bit width
+/// or struct name. Used as a fallback when the Expo type is unknown.
 fn infer_type_from_llvm(val: BasicValueEnum) -> Type {
     if val.is_int_value() {
         let width = val.into_int_value().get_type().get_bit_width();
@@ -86,8 +545,8 @@ fn infer_type_from_llvm(val: BasicValueEnum) -> Type {
             _ => Type::Primitive(Primitive::I64),
         }
     } else if val.is_float_value() {
-        let width = val.into_float_value().get_type();
-        if width == width.get_context().f32_type() {
+        let float_type = val.into_float_value().get_type();
+        if float_type == float_type.get_context().f32_type() {
             Type::Primitive(Primitive::F32)
         } else {
             Type::Primitive(Primitive::F64)
@@ -95,8 +554,8 @@ fn infer_type_from_llvm(val: BasicValueEnum) -> Type {
     } else if val.is_pointer_value() {
         Type::Primitive(Primitive::String)
     } else if val.is_struct_value() {
-        let st = val.into_struct_value().get_type();
-        if let Some(name) = st.get_name().and_then(|n| n.to_str().ok()) {
+        let struct_type = val.into_struct_value().get_type();
+        if let Some(name) = struct_type.get_name().and_then(|n| n.to_str().ok()) {
             named(name)
         } else {
             Type::Unknown
@@ -106,393 +565,36 @@ fn infer_type_from_llvm(val: BasicValueEnum) -> Type {
     }
 }
 
-/// Pre-synthesizes `{Type}_format` functions for all user-defined structs and
-/// enums. Call after types are registered and functions are declared, but
-/// before function bodies are compiled.
-pub fn synthesize_all_formats<'ctx>(c: &mut Compiler<'ctx>) -> Result<(), String> {
-    let type_names: Vec<String> = c
-        .type_ctx
-        .types
-        .iter()
-        .filter(|(_, ti)| (ti.is_struct() || ti.is_enum()) && ti.type_params.is_empty())
-        .map(|(n, _)| n.name.clone())
-        .collect();
-
-    for name in &type_names {
-        let fn_name = format!("{name}_format");
-        if c.functions.contains_key(&fn_name) {
-            continue;
-        }
-        if has_unsynthesizable_fields(c, name) {
-            continue;
-        }
-        if c.type_ctx.is_enum(name) {
-            synthesize_enum_format(c, name)?;
-        } else if c.type_ctx.is_struct(name) {
-            synthesize_struct_format(c, name)?;
-        }
-    }
-    Ok(())
-}
-
-fn is_complex_type(ty: &Type) -> bool {
-    match ty {
+/// Returns `true` when a type is too complex for the auto-synthesized
+/// `format` function (e.g. generics, indirects, pointers).
+fn is_complex_type(expo_type: &Type) -> bool {
+    match expo_type {
         Type::Indirect(_) | Type::Pointer(_) | Type::Unknown => true,
         Type::Named { type_args, .. } => !type_args.is_empty(),
         _ => false,
     }
 }
 
-fn has_unsynthesizable_fields(c: &Compiler, name: &str) -> bool {
-    if let Some(ti) = c.type_ctx.find_type(name) {
-        if let Some(fields) = ti.fields() {
-            return fields.iter().any(|(_, ty)| is_complex_type(ty));
+/// Returns `true` if any field or variant payload contains a complex type
+/// that the format synthesizer cannot handle.
+fn has_unsynthesizable_fields(compiler: &Compiler, id: &TypeIdentifier) -> bool {
+    if let Some(type_info) = compiler.type_ctx.get_type(id) {
+        if let Some(fields) = type_info.fields() {
+            return fields
+                .iter()
+                .any(|(_, field_type)| is_complex_type(field_type));
         }
-        if let Some(variants) = ti.variants() {
-            return variants.iter().any(|vi| match &vi.data {
-                VariantData::Tuple(types) => types.iter().any(is_complex_type),
-                VariantData::Struct(fields) => fields.iter().any(|(_, ty)| is_complex_type(ty)),
-                VariantData::Unit => false,
-            });
+        if let Some(variants) = type_info.variants() {
+            return variants
+                .iter()
+                .any(|variant_info| match &variant_info.data {
+                    VariantData::Tuple(types) => types.iter().any(is_complex_type),
+                    VariantData::Struct(fields) => fields
+                        .iter()
+                        .any(|(_, field_type)| is_complex_type(field_type)),
+                    VariantData::Unit => false,
+                });
         }
     }
     false
-}
-
-/// Formats values via `snprintf` into a heap-allocated Expo string
-/// (8-byte bit-length header followed by the character payload).
-///
-/// `fmt` is the printf format string and `args` are the values to substitute.
-/// Returns a pointer to the payload (just past the header).
-pub fn snprintf_to_expo_string<'ctx>(
-    c: &mut Compiler<'ctx>,
-    fmt: &str,
-    args: &[BasicMetadataValueEnum<'ctx>],
-    label: &str,
-) -> PointerValue<'ctx> {
-    let snprintf = *c.functions.get("snprintf").expect("snprintf not declared");
-    let malloc = *c.functions.get("malloc").expect("malloc not declared");
-    let i32_ty = c.context.i32_type();
-    let i64_ty = c.context.i64_type();
-    let i8_ty = c.context.i8_type();
-    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-
-    let fmt_global = c
-        .builder
-        .build_global_string_ptr(fmt, &format!("{label}_fmt"))
-        .unwrap();
-
-    let mut size_args: Vec<BasicMetadataValueEnum> = vec![
-        ptr_ty.const_null().into(),
-        i32_ty.const_int(0, false).into(),
-        fmt_global.as_pointer_value().into(),
-    ];
-    size_args.extend_from_slice(args);
-
-    let needed = c
-        .call(snprintf, &size_args, &format!("{label}_needed"))
-        .unwrap()
-        .into_int_value();
-
-    let needed_i64 = c
-        .builder
-        .build_int_z_extend(needed, i64_ty, &format!("{label}_n64"))
-        .unwrap();
-    let alloc_size = c
-        .builder
-        .build_int_add(
-            needed_i64,
-            i64_ty.const_int(9, false),
-            &format!("{label}_sz"),
-        )
-        .unwrap();
-    let base_ptr = c
-        .call(malloc, &[alloc_size.into()], &format!("{label}_base"))
-        .unwrap()
-        .into_pointer_value();
-
-    let bit_length = c
-        .builder
-        .build_int_mul(
-            needed_i64,
-            i64_ty.const_int(8, false),
-            &format!("{label}_bits"),
-        )
-        .unwrap();
-    c.builder.build_store(base_ptr, bit_length).unwrap();
-
-    let payload = unsafe {
-        c.builder
-            .build_in_bounds_gep(
-                i8_ty,
-                base_ptr,
-                &[i64_ty.const_int(8, false)],
-                &format!("{label}_pay"),
-            )
-            .unwrap()
-    };
-
-    let buf_size = c
-        .builder
-        .build_int_add(
-            needed,
-            i32_ty.const_int(1, false),
-            &format!("{label}_bufsz"),
-        )
-        .unwrap();
-
-    let mut write_args: Vec<BasicMetadataValueEnum> = vec![
-        payload.into(),
-        buf_size.into(),
-        fmt_global.as_pointer_value().into(),
-    ];
-    write_args.extend_from_slice(args);
-    c.call_void(snprintf, &write_args, &format!("{label}_write"));
-
-    payload
-}
-
-// ---------------------------------------------------------------------------
-// Enum format synthesis
-// ---------------------------------------------------------------------------
-
-/// Resolved metadata for synthesizing an enum format function.
-struct ResolvedEnumFormatInfo {
-    fn_name: String,
-    variants: Vec<expo_typecheck::context::VariantInfo>,
-}
-
-/// Looks up variant metadata from the type context for enum format synthesis.
-fn resolve_enum_format_info(compiler: &Compiler, enum_name: &str) -> ResolvedEnumFormatInfo {
-    let variants = compiler
-        .type_ctx
-        .find_type(enum_name)
-        .and_then(|ti| ti.variants())
-        .cloned()
-        .unwrap_or_default();
-    ResolvedEnumFormatInfo {
-        fn_name: format!("{enum_name}_format"),
-        variants,
-    }
-}
-
-fn synthesize_enum_format<'ctx>(c: &mut Compiler<'ctx>, enum_name: &str) -> Result<(), String> {
-    let enum_type = c
-        .types
-        .get_stdlib(enum_name)
-        .or_else(|| c.types.get_monomorphized(enum_name))
-        .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
-
-    let resolved = resolve_enum_format_info(c, enum_name);
-
-    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-    let fn_type = ptr_ty.fn_type(&[enum_type.into()], false);
-    let fn_val = c.module.add_function(&resolved.fn_name, fn_type, None);
-    c.functions.insert(resolved.fn_name.clone(), fn_val);
-
-    let saved_block = c.builder.get_insert_block();
-    let entry = c.context.append_basic_block(fn_val, "entry");
-    c.builder.position_at_end(entry);
-
-    let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-
-    let alloca = c.builder.build_alloca(enum_type, "enum_alloca").unwrap();
-    c.builder.build_store(alloca, self_val).unwrap();
-    let tag_ptr = c
-        .builder
-        .build_struct_gep(enum_type, alloca, 0, "tag_ptr")
-        .unwrap();
-    let tag = c
-        .builder
-        .build_load(c.context.i8_type(), tag_ptr, "tag")
-        .unwrap()
-        .into_int_value();
-
-    let variants = &resolved.variants;
-
-    if variants.is_empty() {
-        let fallback = c.create_string_global(enum_name.as_bytes(), "enum_fallback");
-        c.builder.build_return(Some(&fallback)).unwrap();
-    } else {
-        let merge_bb = c.context.append_basic_block(fn_val, "merge");
-
-        let mut cases: Vec<(
-            inkwell::values::IntValue<'ctx>,
-            inkwell::basic_block::BasicBlock<'ctx>,
-        )> = Vec::new();
-        let mut incoming: Vec<(PointerValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-            Vec::new();
-
-        for (i, vi) in variants.iter().enumerate() {
-            let bb = c
-                .context
-                .append_basic_block(fn_val, &format!("v_{}", vi.name));
-            cases.push((c.context.i8_type().const_int(i as u64, false), bb));
-
-            c.builder.position_at_end(bb);
-
-            let str_ptr = match &vi.data {
-                VariantData::Unit => {
-                    c.create_string_global(vi.name.as_bytes(), &format!("vn_{}", vi.name))
-                }
-                VariantData::Tuple(types) => {
-                    if types.len() == 1 && !is_complex_type(&types[0]) {
-                        let payload_st = c.types.get_variant_payload_type(enum_name, &vi.name);
-
-                        if let Some(payload_type) = payload_st {
-                            let payload_ptr = c
-                                .builder
-                                .build_struct_gep(enum_type, alloca, 1, "payload_ptr")
-                                .unwrap();
-                            let payload_struct = c
-                                .builder
-                                .build_load(payload_type, payload_ptr, "payload")
-                                .unwrap()
-                                .into_struct_value();
-                            let payload_val = c
-                                .builder
-                                .build_extract_value(payload_struct, 0, "payload_inner")
-                                .unwrap();
-                            let payload_str = call_format(c, payload_val, &types[0])?;
-
-                            concat_variant_name(c, &vi.name, payload_str)
-                        } else {
-                            c.create_string_global(vi.name.as_bytes(), &format!("vn_{}", vi.name))
-                        }
-                    } else {
-                        c.create_string_global(vi.name.as_bytes(), &format!("vn_{}", vi.name))
-                    }
-                }
-                VariantData::Struct(_) => {
-                    c.create_string_global(vi.name.as_bytes(), &format!("vn_{}", vi.name))
-                }
-            };
-
-            incoming.push((str_ptr, c.builder.get_insert_block().unwrap()));
-            c.builder.build_unconditional_branch(merge_bb).unwrap();
-        }
-
-        let default_bb = c.context.append_basic_block(fn_val, "default");
-        c.builder.position_at_end(default_bb);
-        let fallback = c.create_string_global(b"<unknown>", "unknown_variant");
-        c.builder.build_unconditional_branch(merge_bb).unwrap();
-        incoming.push((fallback, default_bb));
-
-        c.builder.position_at_end(entry);
-        c.builder.build_switch(tag, default_bb, &cases).unwrap();
-
-        c.builder.position_at_end(merge_bb);
-        let phi = c.builder.build_phi(ptr_ty, "result").unwrap();
-        for (val, bb) in &incoming {
-            phi.add_incoming(&[(val, *bb)]);
-        }
-        c.builder.build_return(Some(&phi.as_basic_value())).unwrap();
-    }
-
-    if let Some(bb) = saved_block {
-        c.builder.position_at_end(bb);
-    }
-    Ok(())
-}
-
-fn concat_variant_name<'ctx>(
-    c: &mut Compiler<'ctx>,
-    variant_name: &str,
-    payload_str: PointerValue<'ctx>,
-) -> PointerValue<'ctx> {
-    let fmt = format!("{variant_name}(%s)");
-    snprintf_to_expo_string(c, &fmt, &[payload_str.into()], "vn")
-}
-
-// ---------------------------------------------------------------------------
-// Struct format synthesis
-// ---------------------------------------------------------------------------
-
-/// Resolved metadata for synthesizing a struct format function.
-struct ResolvedStructFormatInfo {
-    fields: Vec<(String, Type)>,
-    fn_name: String,
-}
-
-/// Looks up field metadata from the type context for struct format synthesis.
-fn resolve_struct_format_info(compiler: &Compiler, struct_name: &str) -> ResolvedStructFormatInfo {
-    let fields = compiler
-        .type_ctx
-        .find_type(struct_name)
-        .and_then(|ti| ti.fields())
-        .cloned()
-        .unwrap_or_default();
-    ResolvedStructFormatInfo {
-        fields,
-        fn_name: format!("{struct_name}_format"),
-    }
-}
-
-fn synthesize_struct_format<'ctx>(c: &mut Compiler<'ctx>, struct_name: &str) -> Result<(), String> {
-    let struct_type = c
-        .types
-        .get_stdlib(struct_name)
-        .or_else(|| c.types.get_monomorphized(struct_name))
-        .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
-
-    let resolved = resolve_struct_format_info(c, struct_name);
-
-    let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-    let fn_type = ptr_ty.fn_type(&[struct_type.into()], false);
-    let fn_val = c.module.add_function(&resolved.fn_name, fn_type, None);
-    c.functions.insert(resolved.fn_name.clone(), fn_val);
-
-    let saved_block = c.builder.get_insert_block();
-    let entry = c.context.append_basic_block(fn_val, "entry");
-    c.builder.position_at_end(entry);
-
-    let self_val = fn_val.get_nth_param(0).unwrap().into_struct_value();
-
-    let fields = &resolved.fields;
-
-    if fields.is_empty() {
-        let s = c.create_string_global(struct_name.as_bytes(), "struct_fmt_empty");
-        c.builder.build_return(Some(&s)).unwrap();
-    } else {
-        let alloca = c.builder.build_alloca(struct_type, "sf_alloca").unwrap();
-        c.builder.build_store(alloca, self_val).unwrap();
-
-        let mut field_strs: Vec<PointerValue<'ctx>> = Vec::new();
-        for (i, (_, field_type)) in fields.iter().enumerate() {
-            let field_ptr = c
-                .builder
-                .build_struct_gep(struct_type, alloca, i as u32, &format!("f_{i}"))
-                .unwrap();
-            let field_llvm_type = struct_type.get_field_type_at_index(i as u32).unwrap();
-            let field_val = c
-                .builder
-                .build_load(field_llvm_type, field_ptr, &format!("fv_{i}"))
-                .unwrap();
-            if is_complex_type(field_type) {
-                field_strs.push(c.create_string_global(b"...", &format!("f_opaque_{i}")));
-            } else {
-                field_strs.push(call_format(c, field_val, field_type)?);
-            }
-        }
-
-        let mut fmt_string = format!("{struct_name}{{");
-        for (i, (name, _)) in fields.iter().enumerate() {
-            if i > 0 {
-                fmt_string.push_str(", ");
-            }
-            fmt_string.push_str(name);
-            fmt_string.push_str(": %s");
-        }
-        fmt_string.push('}');
-
-        let args: Vec<inkwell::values::BasicMetadataValueEnum> =
-            field_strs.iter().map(|s| (*s).into()).collect();
-        let payload = snprintf_to_expo_string(c, &fmt_string, &args, "sf");
-        c.builder.build_return(Some(&payload)).unwrap();
-    }
-
-    if let Some(bb) = saved_block {
-        c.builder.position_at_end(bb);
-    }
-    Ok(())
 }
