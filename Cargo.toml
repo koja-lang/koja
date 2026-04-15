@@ -6,6 +6,7 @@ members = [
     "crates/expo-doc",
     "crates/expo-driver",
     "crates/expo-fmt",
+    "crates/expo-ir",
     "crates/expo-lexer",
     "crates/expo-lsp",
     "crates/expo-parser",

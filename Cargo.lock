@@ -357,6 +357,7 @@ name = "expo-codegen"
 version = "0.9.0"
 dependencies = [
  "expo-ast",
+ "expo-ir",
  "expo-typecheck",
  "inkwell",
 ]
@@ -396,6 +397,13 @@ version = "0.9.0"
 dependencies = [
  "expo-ast",
  "expo-parser",
+]
+
+[[package]]
+name = "expo-ir"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
 ]
 
 [[package]]
