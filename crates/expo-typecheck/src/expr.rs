@@ -1137,7 +1137,14 @@ fn infer_enum_construction(
             EnumConstructionData::Unit => {}
         }
         if ce.enum_names.contains(&enum_name.as_str()) {
-            named(&enum_name)
+            ctx.types
+                .values()
+                .find(|ti| ti.identifier.name == enum_name && ti.is_enum())
+                .map(|ti| Type::Named {
+                    identifier: ti.identifier.clone(),
+                    type_args: vec![],
+                })
+                .unwrap_or_else(|| named(&enum_name))
         } else {
             Type::Unknown
         }
@@ -1542,7 +1549,14 @@ fn infer_struct_construction(
             infer_expr(&mut fi.value, ctx, ce);
         }
         if ce.struct_names.contains(&name.as_str()) {
-            named(&name)
+            ctx.types
+                .values()
+                .find(|ti| ti.identifier.name == name && ti.is_struct())
+                .map(|ti| Type::Named {
+                    identifier: ti.identifier.clone(),
+                    type_args: vec![],
+                })
+                .unwrap_or_else(|| named(&name))
         } else {
             ctx.error(format!("unknown struct `{}`", name), span);
             Type::Error

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::context::{FunctionSig, TypeContext, TypeKind, VariantData};
 use crate::types::{Package, Type, TypeIdentifier};
+use expo_ast::ast::{Diagnostic, Severity};
 
 /// Walks every `Type` in a [`TypeContext`] and replaces `Package::Unresolved`
 /// identifiers with the real package found in the type registry's map keys.
@@ -81,6 +82,28 @@ pub fn resolve_packages(ctx: &mut TypeContext) {
                 .extend(entries);
         }
     }
+
+    let std_names: BTreeSet<&str> = ctx
+        .types
+        .keys()
+        .filter(|id| id.package == Package::Std)
+        .map(|id| id.name.as_str())
+        .collect();
+    let shadow_errors: Vec<_> = ctx
+        .types
+        .iter()
+        .filter(|(id, _)| id.package != Package::Std && std_names.contains(id.name.as_str()))
+        .map(|(id, ti)| Diagnostic {
+            severity: Severity::Error,
+            message: format!(
+                "type `{}` conflicts with stdlib type of the same name",
+                id.name
+            ),
+            hint: None,
+            span: ti.span,
+        })
+        .collect();
+    ctx.diagnostics.extend(shadow_errors);
 
     ctx.name_index = index;
 

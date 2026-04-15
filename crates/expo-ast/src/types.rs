@@ -548,6 +548,14 @@ pub fn named(name: &str) -> Type {
     }
 }
 
+/// Extracts the `TypeIdentifier` from a `Type::Named`, if present.
+pub fn type_identifier(ty: &Type) -> Option<&TypeIdentifier> {
+    match ty {
+        Type::Named { identifier, .. } => Some(identifier),
+        _ => None,
+    }
+}
+
 /// Constructs a non-generic Named type with `Package::Std`. Use for known
 /// stdlib types (e.g. `IOReady`, `Lifecycle`) where the package is certain.
 pub fn named_std(name: &str) -> Type {

@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, FieldInit};
+use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::FnParam;
 use expo_typecheck::types::{Type, mangle_name, substitute, unify, unwrap_indirect};
 use inkwell::AddressSpace;
@@ -36,12 +37,15 @@ enum ResolvedCall<'ctx> {
         return_type: Type,
     },
     Generic,
-    StructConstructor,
+    StructConstructor {
+        identifier: Option<TypeIdentifier>,
+    },
 }
 
 fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ctx>, String> {
     if c.types.get_stdlib(name).is_some() || c.types.contains_monomorphized(name) {
-        return Ok(ResolvedCall::StructConstructor);
+        let identifier = c.type_ctx.resolve_name(name).cloned();
+        return Ok(ResolvedCall::StructConstructor { identifier });
     }
 
     match name {
@@ -212,7 +216,9 @@ pub fn compile_call<'ctx>(
                 .map(|v| TypedValue::new(v, return_type)))
         }
         ResolvedCall::Generic => compile_generic_call(c, name, args, function),
-        ResolvedCall::StructConstructor => compile_call_as_struct(c, name, args, function),
+        ResolvedCall::StructConstructor { identifier } => {
+            compile_call_as_struct(c, name, identifier.as_ref(), args, function)
+        }
     }
 }
 
@@ -325,6 +331,7 @@ fn compile_generic_call<'ctx>(
 fn compile_call_as_struct<'ctx>(
     c: &mut Compiler<'ctx>,
     name: &str,
+    resolved_type: Option<&TypeIdentifier>,
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
@@ -340,7 +347,7 @@ fn compile_call_as_struct<'ctx>(
         })
         .collect();
 
-    compile_struct_construction(c, &[name.to_string()], &fields, None, function)
+    compile_struct_construction(c, &[name.to_string()], &fields, resolved_type, function)
 }
 
 fn compile_print<'ctx>(

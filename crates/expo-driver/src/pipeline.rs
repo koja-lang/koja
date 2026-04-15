@@ -129,6 +129,7 @@ pub fn typecheck_graph(
         resolve_module_aliases(&rm.module, &mut ctx);
         expo_typecheck::resolve_packages(&mut ctx);
         expo_typecheck::check_module(&mut rm.module, &mut ctx);
+        expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
         module_contexts.insert(name, ctx);
     }
 

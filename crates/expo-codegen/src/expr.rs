@@ -6,7 +6,7 @@ use expo_ast::ast::{
 };
 use expo_ast::span::Span;
 
-use expo_ast::types::{named_generic_std, named_std};
+use expo_ast::types::{named_generic_std, named_std, type_identifier};
 use expo_typecheck::context::FnParam;
 use expo_typecheck::types::{Primitive, Type, mangle_name};
 use inkwell::AddressSpace;
@@ -143,7 +143,10 @@ pub fn compile_expr<'ctx>(
 
         ExprKind::StructConstruction {
             type_path, fields, ..
-        } => compile_struct_construction(compiler, type_path, fields, None, function),
+        } => {
+            let resolved_id = expr.resolved_type.as_ref().and_then(type_identifier);
+            compile_struct_construction(compiler, type_path, fields, resolved_id, function)
+        }
 
         ExprKind::FieldAccess {
             receiver, field, ..
@@ -186,7 +189,10 @@ pub fn compile_expr<'ctx>(
             variant,
             data,
             ..
-        } => compile_enum_construction(compiler, type_path, variant, data, None, function),
+        } => {
+            let resolved_id = expr.resolved_type.as_ref().and_then(type_identifier);
+            compile_enum_construction(compiler, type_path, variant, data, resolved_id, function)
+        }
 
         ExprKind::Match { subject, arms, .. } => compile_match(compiler, subject, arms, function),
 

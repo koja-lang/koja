@@ -8,6 +8,7 @@ mod pattern;
 mod resolve;
 mod stmt;
 pub mod types;
+mod validate;
 
 use context::TypeContext;
 use expo_ast::ast::Module;
@@ -21,6 +22,7 @@ pub fn check(module: &mut Module) -> TypeContext {
     let mut ctx = collect::collect(module, &global, "");
     resolve::resolve_packages(&mut ctx);
     check::check_module(module, &mut ctx);
+    validate::validate_resolved_types(module, &mut ctx);
     ctx
 }
 
@@ -61,6 +63,14 @@ pub fn auto_derive_debug(ctx: &mut TypeContext) {
 /// packages from collection). Must be called after merging and before checking.
 pub fn resolve_packages(ctx: &mut TypeContext) {
     resolve::resolve_packages(ctx);
+}
+
+/// Walks every expression in the module and emits an error for any
+/// `expr.resolved_type` that still carries `Package::Unresolved`. Call after
+/// [`check_module`] to enforce the invariant that all types reaching codegen
+/// are fully package-resolved.
+pub fn validate_resolved_types(module: &Module, ctx: &mut TypeContext) {
+    validate::validate_resolved_types(module, ctx);
 }
 
 #[cfg(test)]

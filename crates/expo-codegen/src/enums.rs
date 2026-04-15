@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use expo_ast::ast::EnumConstructionData;
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{
-    Type, TypeIdentifier, mangle_name, named_generic, unify, unwrap_indirect,
+    Package, Type, TypeIdentifier, mangle_name, named_generic, unify, unwrap_indirect,
 };
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -35,17 +35,25 @@ pub fn compile_enum_construction<'ctx>(
         .first()
         .ok_or("empty type path in enum construction")?;
 
-    let type_info = resolved_type
-        .and_then(|id| compiler.type_ctx.get_type(id))
-        .or_else(|| compiler.type_ctx.find_type(base_name.as_str()));
+    let resolved_id = resolved_type
+        .filter(|id| id.package != Package::Unresolved)
+        .or_else(|| compiler.type_ctx.resolve_name(base_name));
+    let type_info = resolved_id.and_then(|id| compiler.type_ctx.get_type(id));
 
     let is_generic = type_info.is_some_and(|ti| ti.is_enum() && !ti.type_params.is_empty());
 
     if is_generic {
-        return compile_generic_enum_construction(compiler, base_name, variant, data, function);
+        return compile_generic_enum_construction(
+            compiler,
+            base_name,
+            variant,
+            data,
+            resolved_id,
+            function,
+        );
     }
 
-    compile_concrete_enum(compiler, base_name, variant, data, function)
+    compile_concrete_enum(compiler, base_name, variant, data, resolved_id, function)
 }
 
 enum ResolvedVariantFields {
@@ -67,6 +75,7 @@ fn resolve_concrete_enum_variant<'ctx>(
     enum_name: &str,
     variant: &str,
     data: &EnumConstructionData,
+    resolved_type: Option<&TypeIdentifier>,
 ) -> Result<ResolvedEnumVariant<'ctx>, String> {
     let enum_type = compiler
         .types
@@ -87,9 +96,11 @@ fn resolve_concrete_enum_variant<'ctx>(
                 .get_variant_payload_type(enum_name, variant)
                 .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
 
-            let element_types = compiler
-                .type_ctx
-                .find_type(enum_name)
+            let resolved_id = resolved_type
+                .filter(|id| id.package != Package::Unresolved)
+                .or_else(|| compiler.type_ctx.resolve_name(enum_name));
+            let element_types = resolved_id
+                .and_then(|id| compiler.type_ctx.get_type(id))
                 .and_then(|ti| ti.variants())
                 .and_then(|vs| vs.iter().find(|v| v.name == variant))
                 .and_then(|vi| match &vi.data {
@@ -109,9 +120,11 @@ fn resolve_concrete_enum_variant<'ctx>(
                 .get_variant_payload_type(enum_name, variant)
                 .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
 
-            let variant_info = compiler
-                .type_ctx
-                .find_type(enum_name)
+            let resolved_id = resolved_type
+                .filter(|id| id.package != Package::Unresolved)
+                .or_else(|| compiler.type_ctx.resolve_name(enum_name));
+            let variant_info = resolved_id
+                .and_then(|id| compiler.type_ctx.get_type(id))
                 .and_then(|ti| ti.variants())
                 .and_then(|vs| vs.iter().find(|v| v.name == variant))
                 .ok_or_else(|| format!("variant info not found for {enum_name}.{variant}"))?;
@@ -142,7 +155,9 @@ fn resolve_concrete_enum_variant<'ctx>(
     };
 
     let result_type = Type::Named {
-        identifier: TypeIdentifier::unresolved(enum_name),
+        identifier: resolved_type
+            .cloned()
+            .unwrap_or_else(|| TypeIdentifier::unresolved(enum_name)),
         type_args: vec![],
     };
 
@@ -160,9 +175,11 @@ fn compile_concrete_enum<'ctx>(
     enum_name: &str,
     variant: &str,
     data: &EnumConstructionData,
+    resolved_type: Option<&TypeIdentifier>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let resolved = resolve_concrete_enum_variant(compiler, enum_name, variant, data)?;
+    let resolved =
+        resolve_concrete_enum_variant(compiler, enum_name, variant, data, resolved_type)?;
 
     let alloca = compiler
         .builder
@@ -253,13 +270,16 @@ fn resolve_generic_enum<'ctx>(
     compiler: &mut Compiler<'ctx>,
     enum_name: &str,
     variant: &str,
+    resolved_type: Option<&TypeIdentifier>,
     data: &EnumConstructionData,
     compiled_values: &[BasicValueEnum<'ctx>],
     compiled_types: &[Type],
 ) -> Result<ResolvedGenericEnum<'ctx>, String> {
-    let enum_info = compiler
-        .type_ctx
-        .find_type(enum_name)
+    let resolved_id = resolved_type
+        .filter(|id| id.package != Package::Unresolved)
+        .or_else(|| compiler.type_ctx.resolve_name(enum_name));
+    let enum_info = resolved_id
+        .and_then(|id| compiler.type_ctx.get_type(id))
         .filter(|ti| ti.is_enum())
         .cloned()
         .ok_or_else(|| format!("no enum info for `{enum_name}`"))?;
@@ -376,6 +396,7 @@ fn compile_generic_enum_construction<'ctx>(
     enum_name: &str,
     variant: &str,
     data: &EnumConstructionData,
+    resolved_type: Option<&TypeIdentifier>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let mut compiled_values: Vec<BasicValueEnum<'ctx>> = Vec::new();
@@ -394,6 +415,7 @@ fn compile_generic_enum_construction<'ctx>(
         compiler,
         enum_name,
         variant,
+        resolved_type,
         data,
         &compiled_values,
         &compiled_types,
