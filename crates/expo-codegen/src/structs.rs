@@ -16,6 +16,10 @@ use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
 
+use expo_ir::resolved::fields::{
+    ResolvedChain, ResolvedFieldStep, ResolvedStructField, ResolvedStructName,
+};
+
 use crate::calls::invoke_closure_fat_ptr;
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::{compile_expr, compile_expr_coerced};
@@ -23,7 +27,6 @@ use crate::generics::{
     ensure_types_exist, monomorphize_enum, monomorphize_impl_method, monomorphize_struct,
     try_parse_mangled_name,
 };
-
 use crate::types::to_llvm_type;
 
 /// Loads a value from `field_ptr`. When `field_type` is [`Type::Indirect`],
@@ -99,15 +102,6 @@ fn llvm_type_size<'ctx>(ty: BasicTypeEnum<'ctx>, c: &Compiler<'ctx>) -> IntValue
             .size_of()
             .unwrap_or_else(|| c.context.i64_type().const_int(8, false)),
     }
-}
-
-use crate::stmt::ResolvedFieldStep;
-
-/// Resolved chain of field accesses from a base variable.
-struct ResolvedChain {
-    base_name: String,
-    base_type: Type,
-    steps: Vec<ResolvedFieldStep>,
 }
 
 /// Resolves a field access chain to a sequence of field indices and types
@@ -779,12 +773,6 @@ fn push_generic_type_subst<'ctx>(
     }
 }
 
-struct ResolvedStructField {
-    field_type: Type,
-    index: u32,
-    name: String,
-}
-
 struct ResolvedStructConstruction<'ctx> {
     fields: Vec<ResolvedStructField>,
     result_type: Type,
@@ -1062,15 +1050,6 @@ fn compile_generic_struct_construction<'ctx>(
         .build_load(resolved.struct_type, alloca, &resolved.mangled_name)
         .unwrap();
     Ok(Some(TypedValue::new(struct_val, resolved.result_type)))
-}
-
-/// The resolved struct name for a method call receiver, carrying the base
-/// name, mangled name, and type args so callers never need to re-parse.
-struct ResolvedStructName {
-    base: String,
-    identifier: Option<TypeIdentifier>,
-    mangled: String,
-    type_args: Vec<Type>,
 }
 
 fn resolve_struct_name<'ctx>(

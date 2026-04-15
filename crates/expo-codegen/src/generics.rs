@@ -17,6 +17,8 @@ use crate::compiler::{Compiler, EmitResult, resolve_process_envelope_type};
 use crate::drop::{Ownership, drop_live_variables};
 use crate::expr::compile_expr;
 use crate::hashtable::monomorphize_hashtable_struct;
+use expo_ir::resolved::methods::ResolvedMethodSignature;
+
 use crate::intrinsics::cptr::emit_cptr_method;
 use crate::list::{emit_list_method, monomorphize_list_struct};
 use crate::map::emit_map_method;
@@ -461,19 +463,6 @@ pub(crate) fn monomorphize_enum<'ctx>(
         .insert(mangled, concrete_variants);
 
     Ok(())
-}
-
-/// Fully resolved method signature: AST, types, substitutions, and self-type.
-/// Produced by `resolve_method_signature` without any LLVM emission.
-struct ResolvedMethodSignature {
-    func_ast: Function,
-    is_static: bool,
-    mangled_fn: String,
-    mangled_type: String,
-    param_types: Vec<Type>,
-    return_type: Type,
-    self_type: Option<Type>,
-    subst: HashMap<String, Type>,
 }
 
 /// Resolves the method signature for a generic impl method by looking up

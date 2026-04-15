@@ -12,6 +12,8 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 
+use expo_ir::resolved::enums::{ResolvedEnumEq, ResolvedVariantEq, ResolvedVariantFields};
+
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::control::{get_payload_ptr, lookup_variant_data, match_values};
 use crate::expr::{compile_expr, compile_expr_coerced};
@@ -54,12 +56,6 @@ pub fn compile_enum_construction<'ctx>(
     }
 
     compile_concrete_enum(compiler, base_name, variant, data, resolved_id, function)
-}
-
-enum ResolvedVariantFields {
-    Struct { fields: Vec<(String, u32, Type)> },
-    Tuple { element_types: Vec<Type> },
-    Unit,
 }
 
 struct ResolvedEnumVariant<'ctx> {
@@ -498,17 +494,6 @@ fn compile_typed_value_eq<'ctx>(
         return compile_enum_struct_eq(c, lhs, rhs, ty, function);
     }
     match_values(c, &lhs, &rhs)
-}
-
-enum ResolvedVariantEq {
-    Struct { field_types: Vec<Type> },
-    Tuple { field_types: Vec<Type> },
-    Unit,
-}
-
-struct ResolvedEnumEq {
-    mangled: String,
-    variants: Vec<(String, ResolvedVariantEq)>,
 }
 
 fn resolve_enum_eq(c: &Compiler, ty: &Type) -> Result<ResolvedEnumEq, String> {

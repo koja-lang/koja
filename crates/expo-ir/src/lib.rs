@@ -9,6 +9,7 @@
 
 mod file;
 mod instruction;
+pub mod resolved;
 mod types;
 
 pub use file::{IRBasicBlock, IRFile, IRFunction, IRStruct};

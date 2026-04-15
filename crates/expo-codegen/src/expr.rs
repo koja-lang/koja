@@ -23,6 +23,9 @@ use crate::control::{
     compile_body_as_value, compile_cond, compile_for, compile_if, compile_loop, compile_match,
     compile_pattern, compile_ternary, compile_unless, compile_while,
 };
+use expo_ir::resolved::closures::ResolvedClosure;
+use expo_ir::resolved::strings::{ResolvedString, resolve_string};
+
 use crate::debug::call_format;
 use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
@@ -296,29 +299,6 @@ fn compile_literal<'ctx>(compiler: &Compiler<'ctx>, literal: &Literal) -> ExprRe
     }
 }
 
-enum ResolvedString {
-    Interpolated,
-    Literal { value: String },
-}
-
-fn resolve_string(parts: &[StringPart]) -> ResolvedString {
-    let has_interpolation = parts
-        .iter()
-        .any(|p| matches!(p, StringPart::Interpolation { .. }));
-
-    if has_interpolation {
-        return ResolvedString::Interpolated;
-    }
-
-    let mut combined = String::new();
-    for part in parts {
-        if let StringPart::Literal { value, .. } = part {
-            combined.push_str(value);
-        }
-    }
-    ResolvedString::Literal { value: combined }
-}
-
 fn compile_string<'ctx>(
     compiler: &mut Compiler<'ctx>,
     parts: &[StringPart],
@@ -492,13 +472,6 @@ fn resolve_closure_params<'ctx>(
             _ => Type::Primitive(Primitive::I32),
         })
         .collect()
-}
-
-struct ResolvedClosure {
-    capture_names: Vec<String>,
-    closure_name: String,
-    parameter_types: Vec<Type>,
-    return_type: Type,
 }
 
 fn resolve_closure(

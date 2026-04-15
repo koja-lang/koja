@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem;
 use std::path::{Path, PathBuf};
 
+use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstEnum, ResolvedConstStruct};
+
 use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
 use crate::generics::{compile_function_body, compile_method_body, ensure_types_exist};
@@ -293,23 +295,6 @@ pub struct Compiler<'ctx> {
     pub debug: DebugContext<'ctx>,
 }
 
-/// Pure decision type: the semantic kind of a constant initializer,
-/// determined without touching LLVM.
-enum ResolvedConst {
-    Bool(bool),
-    EnumVariant {
-        enum_name: String,
-        variant: String,
-    },
-    Float(f64),
-    Int(i64),
-    String(String),
-    Struct {
-        fields: Vec<FieldInit>,
-        struct_name: String,
-    },
-}
-
 /// Resolves a constant expression to its semantic kind by parsing literals
 /// and identifying enum/struct construction shapes.
 fn resolve_const(kind: &ExprKind) -> Option<ResolvedConst> {
@@ -360,11 +345,6 @@ fn resolve_const(kind: &ExprKind) -> Option<ResolvedConst> {
     }
 }
 
-/// Resolved metadata for a constant enum variant.
-struct ResolvedConstEnum {
-    tag: u8,
-}
-
 /// Looks up the tag for a unit enum variant used in a constant initializer.
 fn resolve_const_enum(
     compiler: &Compiler,
@@ -373,11 +353,6 @@ fn resolve_const_enum(
 ) -> Option<ResolvedConstEnum> {
     let tag = compiler.types.get_variant_tag(enum_name, variant)?;
     Some(ResolvedConstEnum { tag })
-}
-
-/// Resolved metadata for a constant struct initializer.
-struct ResolvedConstStruct {
-    field_types: Vec<(String, Type)>,
 }
 
 /// Looks up the field types for a struct used in a constant initializer.

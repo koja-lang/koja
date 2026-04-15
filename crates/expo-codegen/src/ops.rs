@@ -2,6 +2,9 @@
 //! with dispatch based on operand types (integer vs. floating-point).
 
 use expo_ast::ast::{BinOp, Expr, ExprKind, UnaryOp};
+use expo_ir::resolved::ops::{
+    OperandShape, ResolvedBinaryOp, ResolvedUnaryOp, resolve_binary_op, resolve_unary_op,
+};
 use expo_typecheck::types::{Primitive, Type};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue};
@@ -10,107 +13,6 @@ use inkwell::{FloatPredicate, IntPredicate};
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::enums::{compile_enum_struct_eq, enum_mangled_name};
 use crate::expr::compile_expr;
-
-/// The shape of an operand as seen by operator resolution. Derived from the
-/// compiled LLVM value, this carries just enough information for the pure
-/// decision function without any LLVM dependency.
-pub enum OperandShape {
-    Float,
-    Integer { bit_width: u32 },
-    Pointer,
-    Struct { is_enum: bool },
-}
-
-/// The resolved binary operation to emit. Each variant maps to exactly one
-/// LLVM builder call, with no further decision logic required.
-enum ResolvedBinaryOp {
-    BoolAnd,
-    BoolOr,
-    EnumStructEqual { negated: bool },
-    FloatAdd,
-    FloatDiv,
-    FloatEqual,
-    FloatGreater,
-    FloatGreaterEqual,
-    FloatLess,
-    FloatLessEqual,
-    FloatMul,
-    FloatNotEqual,
-    FloatRem,
-    FloatSub,
-    IntAdd,
-    IntDiv,
-    IntEqual,
-    IntGreater,
-    IntGreaterEqual,
-    IntLess,
-    IntLessEqual,
-    IntMul,
-    IntNotEqual,
-    IntRem,
-    IntSub,
-    StringEqual,
-    StringNotEqual,
-}
-
-/// Pure decision function: given an AST binary operator and the operand shape,
-/// returns which concrete operation to emit. No LLVM types involved.
-fn resolve_binary_op(op: &BinOp, shape: &OperandShape) -> Result<ResolvedBinaryOp, String> {
-    match shape {
-        OperandShape::Float => match op {
-            BinOp::Add => Ok(ResolvedBinaryOp::FloatAdd),
-            BinOp::Div => Ok(ResolvedBinaryOp::FloatDiv),
-            BinOp::Eq => Ok(ResolvedBinaryOp::FloatEqual),
-            BinOp::Gt => Ok(ResolvedBinaryOp::FloatGreater),
-            BinOp::GtEq => Ok(ResolvedBinaryOp::FloatGreaterEqual),
-            BinOp::Lt => Ok(ResolvedBinaryOp::FloatLess),
-            BinOp::LtEq => Ok(ResolvedBinaryOp::FloatLessEqual),
-            BinOp::Mod => Ok(ResolvedBinaryOp::FloatRem),
-            BinOp::Mul => Ok(ResolvedBinaryOp::FloatMul),
-            BinOp::NotEq => Ok(ResolvedBinaryOp::FloatNotEqual),
-            BinOp::Sub => Ok(ResolvedBinaryOp::FloatSub),
-            BinOp::And | BinOp::Concat | BinOp::Or => {
-                Err(format!("unsupported float binary op: {op:?}"))
-            }
-        },
-        OperandShape::Integer { bit_width } => {
-            let is_bool = *bit_width == 1;
-            match op {
-                BinOp::Add => Ok(ResolvedBinaryOp::IntAdd),
-                BinOp::And if is_bool => Ok(ResolvedBinaryOp::BoolAnd),
-                BinOp::Div => Ok(ResolvedBinaryOp::IntDiv),
-                BinOp::Eq => Ok(ResolvedBinaryOp::IntEqual),
-                BinOp::Gt => Ok(ResolvedBinaryOp::IntGreater),
-                BinOp::GtEq => Ok(ResolvedBinaryOp::IntGreaterEqual),
-                BinOp::Lt => Ok(ResolvedBinaryOp::IntLess),
-                BinOp::LtEq => Ok(ResolvedBinaryOp::IntLessEqual),
-                BinOp::Mod => Ok(ResolvedBinaryOp::IntRem),
-                BinOp::Mul => Ok(ResolvedBinaryOp::IntMul),
-                BinOp::NotEq => Ok(ResolvedBinaryOp::IntNotEqual),
-                BinOp::Or if is_bool => Ok(ResolvedBinaryOp::BoolOr),
-                BinOp::Sub => Ok(ResolvedBinaryOp::IntSub),
-                BinOp::And | BinOp::Concat | BinOp::Or => {
-                    Err("logical operators require bool operands".to_string())
-                }
-            }
-        }
-        OperandShape::Pointer => match op {
-            BinOp::Eq => Ok(ResolvedBinaryOp::StringEqual),
-            BinOp::NotEq => Ok(ResolvedBinaryOp::StringNotEqual),
-            _ => Err(format!("unsupported string binary op: {op:?}")),
-        },
-        OperandShape::Struct { is_enum } => {
-            if !is_enum {
-                return Err("mismatched types in binary operation".to_string());
-            }
-            match op {
-                BinOp::Eq => Ok(ResolvedBinaryOp::EnumStructEqual { negated: false }),
-                BinOp::NotEq => Ok(ResolvedBinaryOp::EnumStructEqual { negated: true }),
-                _ => Err("mismatched types in binary operation".to_string()),
-            }
-        }
-    }
-}
 
 /// Compiles a binary operation. Uses [`resolve_binary_op`] to decide what to
 /// emit, then mechanically dispatches to the corresponding LLVM builder call.
@@ -576,26 +478,6 @@ fn compile_binary_concat<'ctx>(
     );
 
     Ok(Some(payload.into()))
-}
-
-/// Compiles a unary operation (negation or logical not).
-/// The resolved unary operation to emit.
-enum ResolvedUnaryOp {
-    FloatNeg,
-    IntNeg,
-    IntNot,
-}
-
-/// Pure decision function: given an AST unary operator and the operand shape,
-/// returns which concrete operation to emit.
-fn resolve_unary_op(op: &UnaryOp, shape: &OperandShape) -> Result<ResolvedUnaryOp, String> {
-    match (op, shape) {
-        (UnaryOp::Neg, OperandShape::Float) => Ok(ResolvedUnaryOp::FloatNeg),
-        (UnaryOp::Neg, OperandShape::Integer { .. }) => Ok(ResolvedUnaryOp::IntNeg),
-        (UnaryOp::Neg, _) => Err("cannot negate non-numeric value".to_string()),
-        (UnaryOp::Not, OperandShape::Integer { .. }) => Ok(ResolvedUnaryOp::IntNot),
-        (UnaryOp::Not, _) => Err("cannot apply 'not' to non-integer value".to_string()),
-    }
 }
 
 pub fn compile_unary<'ctx>(

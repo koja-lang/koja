@@ -2,8 +2,7 @@
 //! return, break, and expression statements.
 
 use expo_ast::ast::{
-    AssignTarget, BinOp, ClosureParam, CompoundOp, Expr, ExprKind, Literal, Pattern, Statement,
-    StringPart,
+    AssignTarget, BinOp, ClosureParam, Expr, ExprKind, Literal, Pattern, Statement, StringPart,
 };
 use expo_ast::span::Span;
 use expo_typecheck::context::{Coercion, FnParam};
@@ -14,48 +13,15 @@ use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
+use expo_ir::resolved::fields::ResolvedFieldStep;
+use expo_ir::resolved::ops::{OperandShape, ResolvedCompoundOp, resolve_compound_op};
+
 use crate::compiler::Compiler;
 use crate::drop::Ownership;
 use crate::expr::compile_expr;
 use crate::generics::{ensure_types_exist, monomorphize_impl_method};
-use crate::ops::OperandShape;
 use crate::structs::infer_static_method_return_type;
 use crate::types::to_llvm_type;
-
-/// The resolved compound-assignment operation to emit.
-enum ResolvedCompoundOp {
-    FloatAdd,
-    FloatDiv,
-    FloatMul,
-    FloatSub,
-    IntAdd,
-    IntDiv,
-    IntMul,
-    IntSub,
-}
-
-/// Pure decision function: given an AST compound operator and the operand
-/// shape, returns which concrete operation to emit.
-fn resolve_compound_op(
-    op: &CompoundOp,
-    shape: &OperandShape,
-) -> Result<ResolvedCompoundOp, String> {
-    match shape {
-        OperandShape::Float => match op {
-            CompoundOp::Add => Ok(ResolvedCompoundOp::FloatAdd),
-            CompoundOp::Div => Ok(ResolvedCompoundOp::FloatDiv),
-            CompoundOp::Mul => Ok(ResolvedCompoundOp::FloatMul),
-            CompoundOp::Sub => Ok(ResolvedCompoundOp::FloatSub),
-        },
-        OperandShape::Integer { .. } => match op {
-            CompoundOp::Add => Ok(ResolvedCompoundOp::IntAdd),
-            CompoundOp::Div => Ok(ResolvedCompoundOp::IntDiv),
-            CompoundOp::Mul => Ok(ResolvedCompoundOp::IntMul),
-            CompoundOp::Sub => Ok(ResolvedCompoundOp::IntSub),
-        },
-        _ => Err("compound assignment requires matching numeric types".to_string()),
-    }
-}
 
 fn statement_span(stmt: &Statement) -> Span {
     match stmt {
@@ -355,12 +321,6 @@ pub fn compile_statement<'ctx>(
             Ok(None)
         }
     }
-}
-
-/// One step in a resolved field path: the field index and its Expo type.
-pub(crate) struct ResolvedFieldStep {
-    pub field_index: u32,
-    pub field_type: Type,
 }
 
 /// Resolves a dotted field path to a sequence of field indices and types
