@@ -5,7 +5,7 @@ mod cycle;
 mod env;
 mod expr;
 mod pattern;
-mod resolve;
+pub mod resolve;
 mod stmt;
 pub mod types;
 mod validate;
@@ -21,14 +21,18 @@ pub fn check(module: &mut Module) -> TypeContext {
     let global = collect_all_names(&[module]);
     let mut ctx = collect::collect(module, &global, "");
     resolve::resolve_packages(&mut ctx, &[]);
-    check::check_module(module, &mut ctx);
+    check::check_module(module, &mut ctx, "");
     validate::validate_resolved_types(module, &mut ctx);
     ctx
 }
 
 /// Validates all function bodies, expressions, and patterns against the context.
-pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
-    check::check_module(module, ctx);
+///
+/// `package` is the module's package identifier (e.g. `"std"`, `"alpha"`, or
+/// `""` for single-file usage). Bare-name type references inside the module
+/// are resolved within this package first before falling back to globals.
+pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
+    check::check_module(module, ctx, package);
 }
 
 /// Walks the AST to collect type signatures for functions, structs, and enums.

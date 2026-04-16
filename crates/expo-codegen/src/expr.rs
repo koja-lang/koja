@@ -6,9 +6,10 @@ use expo_ast::ast::{
 };
 use expo_ast::span::Span;
 
+use expo_ast::identifier::TypeIdentifier;
 use expo_ast::types::{named_generic_std, named_std, type_identifier};
 use expo_typecheck::context::FnParam;
-use expo_typecheck::types::{Primitive, Type, TypeIdentifier, mangle_name};
+use expo_typecheck::types::{Primitive, Type, mangle_name};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -727,10 +728,11 @@ fn resolve_list_literal(
     };
 
     let type_args = vec![element_type.clone()];
-    let mangled_type = mangle_name("List", &type_args);
+    let list_id = TypeIdentifier::std("List");
+    let mangled_type = mangle_name(&list_id, &type_args);
 
     if !compiler.types.contains_monomorphized(&mangled_type) {
-        monomorphize_struct(compiler, "List", &type_args)?;
+        monomorphize_struct(compiler, &list_id, &type_args)?;
     }
     if !compiler
         .functions
@@ -768,7 +770,10 @@ fn compile_list_literal<'ctx>(
 
     let resolved = resolve_list_literal(compiler, &compiled)?;
 
-    let mangled_type = mangle_name("List", std::slice::from_ref(&resolved.element_type));
+    let mangled_type = mangle_name(
+        &TypeIdentifier::std("List"),
+        std::slice::from_ref(&resolved.element_type),
+    );
     let new_fn = *compiler
         .functions
         .get(&format!("{mangled_type}_new"))
@@ -804,10 +809,11 @@ fn resolve_map_literal(
     value_type: &Type,
 ) -> Result<ResolvedMapLiteral, String> {
     let type_args = vec![key_type.clone(), value_type.clone()];
-    let mangled_type = mangle_name("Map", &type_args);
+    let map_id = TypeIdentifier::std("Map");
+    let mangled_type = mangle_name(&map_id, &type_args);
 
     if !compiler.types.contains_monomorphized(&mangled_type) {
-        monomorphize_struct(compiler, "Map", &type_args)?;
+        monomorphize_struct(compiler, &map_id, &type_args)?;
     }
     if !compiler
         .functions
@@ -854,7 +860,7 @@ fn compile_map_literal<'ctx>(
     let resolved = resolve_map_literal(compiler, &key_type, &val_type)?;
 
     let mangled_type = mangle_name(
-        "Map",
+        &TypeIdentifier::std("Map"),
         &[resolved.key_type.clone(), resolved.value_type.clone()],
     );
     let new_fn = *compiler
@@ -904,10 +910,24 @@ fn resolve_spawn_info<'ctx>(
 ) -> ResolvedSpawn {
     let mangled_state = spawn::resolve_mangled_state(type_name, config_value);
     let generic_args = try_parse_mangled_name(&mangled_state, compiler);
+    // Non-generic spawns must use the package-qualified method symbol so we
+    // match the prefix emitted at definition time for user packages (e.g.
+    // `myapp.Counter_start`). Generic monomorphizations keep the mangled
+    // state key unchanged; their method symbols continue to be bare-keyed
+    // until the generics flow is migrated.
+    let method_prefix = if generic_args.is_some() {
+        mangled_state.clone()
+    } else {
+        compiler
+            .type_ctx
+            .resolve_name(&mangled_state)
+            .map(|id| compiler.method_symbol_prefix(&id.package, &id.name))
+            .unwrap_or_else(|| mangled_state.clone())
+    };
     ResolvedSpawn {
         generic_args,
-        run_fn_name: format!("{mangled_state}_run"),
-        start_fn_name: format!("{mangled_state}_start"),
+        run_fn_name: format!("{method_prefix}_run"),
+        start_fn_name: format!("{method_prefix}_start"),
         wrapper_name: format!("__spawn_{mangled_state}"),
         mangled_state,
     }
@@ -957,8 +977,8 @@ fn compile_spawn<'ctx>(
         .ok_or_else(|| format!("undefined run function: {}", resolved.run_fn_name))?;
 
     let state_struct_type = compiler
-        .types
-        .get_concrete(&TypeIdentifier::unresolved(&resolved.mangled_state))
+        .resolve_name_current(&resolved.mangled_state)
+        .and_then(|id| compiler.types.get_concrete(id))
         .or_else(|| compiler.types.get_monomorphized(&resolved.mangled_state))
         .ok_or_else(|| format!("no LLVM struct for `{}`", resolved.mangled_state))?;
 

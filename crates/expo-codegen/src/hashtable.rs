@@ -257,7 +257,7 @@ pub fn type_display_name(ty: &Type) -> String {
             if type_args.is_empty() {
                 identifier.name.clone()
             } else {
-                mangle_name(&identifier.name, type_args)
+                mangle_name(identifier, type_args)
             }
         }
         _ => format!("{ty:?}"),

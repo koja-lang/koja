@@ -265,10 +265,14 @@ fn resolve_enumerable_info<'ctx>(
         }
     };
 
+    let base_id = c
+        .resolve_name_current(&base)
+        .ok_or_else(|| format!("no type info for `{base}`"))?
+        .clone();
     let protos = c
         .type_ctx
         .protocol_impls
-        .get(&base)
+        .get(&base_id)
         .ok_or_else(|| format!("`{}` does not implement the Enumeration protocol", base))?;
 
     if !protos.iter().any(|(p, _)| p == "Enumeration") {
@@ -280,7 +284,7 @@ fn resolve_enumerable_info<'ctx>(
 
     let ti = c
         .type_ctx
-        .find_type(&base)
+        .get_type(&base_id)
         .ok_or_else(|| format!("no type info for `{base}`"))?;
     let get_sig = ti
         .functions
@@ -302,7 +306,7 @@ fn resolve_enumerable_info<'ctx>(
 
     let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.types)
         .ok_or("cannot resolve element LLVM type")?;
-    let mangled = mangle_name(&base, &type_args);
+    let mangled = mangle_name(&base_id, &type_args);
 
     Ok((mangled, elem_llvm, elem_expo_ty, base, type_args))
 }

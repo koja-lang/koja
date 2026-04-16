@@ -1,0 +1,23 @@
+struct Config
+  label: String
+
+  fn new(label: String) -> Config
+    Config{label: label}
+  end
+
+  fn describe(self) -> String
+    "beta label=#{self.label}"
+  end
+end
+
+enum Status
+  Online(String)
+  Offline
+
+  fn describe(self) -> String
+    match self
+      Status.Online(host) -> "beta.online(#{host})"
+      Status.Offline -> "beta.offline"
+    end
+  end
+end

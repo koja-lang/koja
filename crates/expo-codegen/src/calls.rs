@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use expo_ast::ast::{Arg, FieldInit};
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::FnParam;
-use expo_typecheck::types::{Type, mangle_name, substitute, unify, unwrap_indirect};
+use expo_typecheck::types::{Type, mangle_method_suffix, substitute, unify, unwrap_indirect};
 use inkwell::AddressSpace;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use inkwell::values::{BasicMetadataValueEnum, FunctionValue, PointerValue, StructValue};
@@ -43,13 +43,14 @@ enum ResolvedCall<'ctx> {
 }
 
 fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ctx>, String> {
-    if c.types
-        .get_concrete(&TypeIdentifier::unresolved(name))
-        .is_some()
-        || c.types.contains_monomorphized(name)
-    {
-        let identifier = c.type_ctx.resolve_name(name).cloned();
-        return Ok(ResolvedCall::StructConstructor { identifier });
+    let resolved_id = c.resolve_name_current(name).cloned();
+    let is_concrete_type = resolved_id
+        .as_ref()
+        .is_some_and(|id| c.types.get_concrete(id).is_some());
+    if is_concrete_type || c.types.contains_monomorphized(name) {
+        return Ok(ResolvedCall::StructConstructor {
+            identifier: resolved_id,
+        });
     }
 
     match name {
@@ -60,11 +61,15 @@ fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ct
         _ => {}
     }
 
-    let mangled_name = c
-        .fn_state
-        .self_type_name
-        .as_ref()
-        .map(|tn| format!("{tn}_{name}"));
+    // When we're inside a method body, the unqualified call `foo(..)` can also
+    // refer to another method on the same type. Build the candidate LLVM symbol
+    // using the same package-qualifying rule as definition-site mangling so the
+    // lookup succeeds for user packages (e.g. `crypto.HMAC_hmac_raw`) without
+    // breaking stdlib symbols (e.g. `Int_hash`).
+    let mangled_name = c.fn_state.self_type_name.as_ref().map(|tn| {
+        let prefix = c.current_method_symbol_prefix(tn);
+        format!("{prefix}_{name}")
+    });
     let callee_opt = c
         .functions
         .get(name)
@@ -80,7 +85,8 @@ fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ct
             c.fn_state
                 .self_type_name
                 .as_ref()
-                .and_then(|tn| c.type_ctx.find_type(tn))
+                .and_then(|tn| c.resolve_name_current(tn))
+                .and_then(|id| c.type_ctx.get_type(id))
                 .and_then(|ti| ti.functions.get(name))
         });
         let param_types: Vec<Type> = sig
@@ -260,7 +266,7 @@ fn resolve_generic_call<'ctx>(
         .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
         .collect();
 
-    let mangled_name = mangle_name(name, &type_args);
+    let mangled_name = mangle_method_suffix(name, &type_args);
 
     if !compiler.functions.contains_key(&mangled_name) {
         monomorphize_function(compiler, name, &type_args)?;

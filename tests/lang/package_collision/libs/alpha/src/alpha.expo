@@ -1,0 +1,25 @@
+struct Config
+  value: Int
+
+  fn new(value: Int) -> Config
+    Config{value: value}
+  end
+
+  fn describe(self) -> String
+    "alpha value=#{self.value}"
+  end
+end
+
+enum Status
+  Ready
+  Busy(Int)
+  Err
+
+  fn describe(self) -> String
+    match self
+      Status.Ready -> "alpha.ready"
+      Status.Busy(n) -> "alpha.busy(#{n})"
+      Status.Err -> "alpha.err"
+    end
+  end
+end

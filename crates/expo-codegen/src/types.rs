@@ -29,7 +29,7 @@ pub fn to_llvm_type<'ctx>(
                     .or_else(|| registry.get_monomorphized(&identifier.name))
                     .map(|st| st.into())
             } else {
-                let mangled = mangle_name(&identifier.name, type_args);
+                let mangled = mangle_name(identifier, type_args);
                 registry.get_monomorphized(&mangled).map(|st| st.into())
             }
         }

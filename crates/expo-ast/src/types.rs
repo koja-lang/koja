@@ -389,12 +389,13 @@ pub fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
                     type_args: substituted,
                 }
             } else {
-                let mangled = mangle_name(&identifier.name, &substituted);
+                // Flatten to a non-generic Named whose `name` field holds the
+                // full mangled key. Package is set to `Unresolved` so
+                // `qualified_name()` just returns the already-qualified mangled
+                // string directly (avoiding a double-package prefix).
+                let mangled = mangle_name(identifier, &substituted);
                 Type::Named {
-                    identifier: TypeIdentifier {
-                        package: identifier.package.clone(),
-                        name: mangled,
-                    },
+                    identifier: TypeIdentifier::unresolved_owned(mangled),
                     type_args: vec![],
                 }
             }
@@ -446,17 +447,47 @@ pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
     }
 }
 
-/// Produces a mangled name for a monomorphized generic using a nesting-safe
-/// scheme: `Pair<i32, string>` becomes `Pair_$i32.string$` and
-/// `List<Pair<i32, i32>>` becomes `List_$Pair_$i32.i32$$`.
-pub fn mangle_name(base: &str, type_args: &[Type]) -> std::string::String {
+/// Produces a mangled symbol name for a type.
+///
+/// The base component follows the same convention as
+/// `Compiler::method_symbol_prefix`: stdlib and unresolved-package types
+/// use their bare name (so `std.String` → `String`), while user packages
+/// stay fully qualified (`alpha.Config` → `alpha.Config`). This keeps
+/// mangled names consistent with how function symbols are registered
+/// (`String_length`, `alpha.Config_new`, etc.) and prevents cross-package
+/// collisions for user types without changing stdlib symbol names.
+///
+/// For generic instances the base is followed by `_$...$` containing the
+/// mangled type arguments: `std.List<Int>` → `List_$Int$`,
+/// `alpha.Pair<Int, String>` → `alpha.Pair_$Int.String$`, and
+/// `std.List<std.Pair<Int, Int>>` → `List_$Pair_$Int.Int$$`.
+pub fn mangle_name(
+    id: &crate::identifier::TypeIdentifier,
+    type_args: &[Type],
+) -> std::string::String {
+    let base = mangle_base(id);
     if type_args.is_empty() {
-        return base.to_string();
+        return base;
     }
     let args: Vec<std::string::String> = type_args.iter().map(mangle_type).collect();
     format!("{}_${}$", base, args.join("."))
 }
 
+/// Returns the symbol-prefix component of a [`TypeIdentifier`]. Matches
+/// `Compiler::method_symbol_prefix`: bare name for stdlib/unresolved,
+/// `{package}.{name}` for user packages.
+fn mangle_base(id: &crate::identifier::TypeIdentifier) -> std::string::String {
+    match &id.package {
+        crate::identifier::Package::Named(pkg) => format!("{pkg}.{}", id.name),
+        crate::identifier::Package::Std | crate::identifier::Package::Unresolved => id.name.clone(),
+    }
+}
+
+/// Produces a mangled string for a [`Type`]. Named types use the same
+/// symbol-prefix convention as [`mangle_name`] so nested generic
+/// arguments from different user packages do not alias
+/// (`List_$alpha.Config$` vs `List_$beta.Config$`) while stdlib types
+/// continue to use their bare names (`List_$Int$`, `Option_$String$`).
 pub fn mangle_type(ty: &Type) -> std::string::String {
     match ty {
         Type::Indirect(inner) => mangle_type(inner),
@@ -464,13 +495,7 @@ pub fn mangle_type(ty: &Type) -> std::string::String {
         Type::Named {
             identifier,
             type_args,
-        } => {
-            if type_args.is_empty() {
-                identifier.name.clone()
-            } else {
-                mangle_name(&identifier.name, type_args)
-            }
-        }
+        } => mangle_name(identifier, type_args),
         Type::Pointer(inner) => format!("CPtr_${}$", mangle_type(inner)),
         Type::Parameter(n) => n.clone(),
         Type::Unit => "unit".to_string(),
@@ -497,6 +522,17 @@ pub fn mangle_type(ty: &Type) -> std::string::String {
         }
         _ => "unknown".to_string(),
     }
+}
+
+/// Mangles type arguments into a suffix for a method name. For example,
+/// `foo<Int>` becomes `foo_$Int$`. Used when building function symbols for
+/// generic method calls where the base is not a type but a method name.
+pub fn mangle_method_suffix(method: &str, type_args: &[Type]) -> std::string::String {
+    if type_args.is_empty() {
+        return method.to_string();
+    }
+    let args: Vec<std::string::String> = type_args.iter().map(mangle_type).collect();
+    format!("{}_${}$", method, args.join("."))
 }
 
 /// Returns true if the type or any nested type contains a [`Type::Parameter`].
@@ -526,13 +562,13 @@ pub fn unwrap_indirect(ty: &Type) -> &Type {
 /// Builds the mailbox envelope type `Pair<M, Option<ReplyTo<R>>>` from M and R.
 pub fn process_envelope_type(m: &Type, r: &Type) -> Type {
     Type::Named {
-        identifier: TypeIdentifier::unresolved("Pair"),
+        identifier: TypeIdentifier::std("Pair"),
         type_args: vec![
             m.clone(),
             Type::Named {
-                identifier: TypeIdentifier::unresolved("Option"),
+                identifier: TypeIdentifier::std("Option"),
                 type_args: vec![Type::Named {
-                    identifier: TypeIdentifier::unresolved("ReplyTo"),
+                    identifier: TypeIdentifier::std("ReplyTo"),
                     type_args: vec![r.clone()],
                 }],
             },

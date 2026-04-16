@@ -340,9 +340,10 @@ pub fn emit_ref_method<'ctx>(
             // Monomorphize Result<R, CallError> as return type.
             let callerror_type = named_std("CallError");
             let result_type_args = vec![reply_type.clone(), callerror_type.clone()];
-            let result_mangled = mangle_name("Result", &result_type_args);
+            let result_id = TypeIdentifier::std("Result");
+            let result_mangled = mangle_name(&result_id, &result_type_args);
             if !c.types.contains_monomorphized(&result_mangled) {
-                monomorphize_enum(c, "Result", &result_type_args)?;
+                monomorphize_enum(c, &result_id, &result_type_args)?;
             }
             let result_struct = c
                 .types
@@ -354,7 +355,7 @@ pub fn emit_ref_method<'ctx>(
                 .get_concrete(&TypeIdentifier::std("CallError"))
                 .is_none()
             {
-                monomorphize_enum(c, "CallError", &[])?;
+                monomorphize_enum(c, &TypeIdentifier::std("CallError"), &[])?;
             }
 
             let envelope_type = process_envelope_type(msg_type, reply_type);

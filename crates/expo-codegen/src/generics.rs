@@ -6,9 +6,10 @@ use std::collections::HashMap;
 use std::mem;
 
 use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr, TypeParam};
+use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_typecheck::context::{FunctionKind, VariantData};
 use expo_typecheck::types::{
-    Primitive, Type, TypeIdentifier, build_substitution, mangle_name, mangle_type, named,
+    Primitive, Type, build_substitution, mangle_method_suffix, mangle_name, mangle_type, named,
     named_generic, substitute,
 };
 use inkwell::types::{BasicType, BasicTypeEnum};
@@ -144,6 +145,13 @@ pub(crate) fn compile_method_body<'ctx>(
             Type::Pointer(Box::new(Type::Unknown))
         } else if let Some(p) = Primitive::from_name(base) {
             Type::Primitive(p)
+        } else if mangled != base {
+            named(mangled)
+        } else if let Some(id) = c.resolve_name_current(base) {
+            Type::Named {
+                identifier: id.clone(),
+                type_args: vec![],
+            }
         } else {
             named(mangled)
         };
@@ -233,7 +241,7 @@ pub(crate) fn monomorphize_function<'ctx>(
         .ok_or_else(|| format!("no generic function `{name}` to monomorphize"))?
         .clone();
 
-    let mangled = mangle_name(name, type_args);
+    let mangled = mangle_method_suffix(name, type_args);
     if c.functions.contains_key(&mangled) {
         return Ok(());
     }
@@ -328,30 +336,34 @@ pub(crate) fn monomorphize_function<'ctx>(
 /// concrete field types and registers it under the mangled name.
 pub(crate) fn monomorphize_struct<'ctx>(
     c: &mut Compiler<'ctx>,
-    name: &str,
+    id: &TypeIdentifier,
     type_args: &[Type],
 ) -> Result<(), String> {
-    let mangled = mangle_name(name, type_args);
+    let mangled = mangle_name(id, type_args);
     if c.types.contains_monomorphized(&mangled) {
         return Ok(());
     }
 
-    if name == "List" {
-        return monomorphize_list_struct(c, &mangled);
-    }
-    if name == "Map" || name == "Set" {
-        return monomorphize_hashtable_struct(c, &mangled);
-    }
-    if name == "Ref" {
-        return monomorphize_ref_struct(c, &mangled);
-    }
-    if name == "ReplyTo" {
-        return monomorphize_reply_to_struct(c, &mangled);
+    let name = id.name.as_str();
+    if id.is_std() {
+        if name == "List" {
+            return monomorphize_list_struct(c, &mangled);
+        }
+        if name == "Map" || name == "Set" {
+            return monomorphize_hashtable_struct(c, &mangled);
+        }
+        if name == "Ref" {
+            return monomorphize_ref_struct(c, &mangled);
+        }
+        if name == "ReplyTo" {
+            return monomorphize_reply_to_struct(c, &mangled);
+        }
     }
 
     let info = c
         .type_ctx
-        .find_type(name)
+        .get_type(id)
+        .cloned()
         .ok_or_else(|| format!("no struct info for generic struct `{name}`"))?;
     let fields = info
         .fields()
@@ -401,17 +413,19 @@ pub(crate) fn monomorphize_struct<'ctx>(
 /// with concrete variant payloads and registers it under the mangled name.
 pub(crate) fn monomorphize_enum<'ctx>(
     c: &mut Compiler<'ctx>,
-    name: &str,
+    id: &TypeIdentifier,
     type_args: &[Type],
 ) -> Result<(), String> {
-    let mangled = mangle_name(name, type_args);
+    let mangled = mangle_name(id, type_args);
     if c.types.contains_monomorphized(&mangled) {
         return Ok(());
     }
 
+    let name = id.name.as_str();
     let info = c
         .type_ctx
-        .find_type(name)
+        .get_type(id)
+        .cloned()
         .ok_or_else(|| format!("no enum info for generic enum `{name}`"))?;
     let variants = info
         .variants()
@@ -478,11 +492,15 @@ fn resolve_method_signature(
     type_args: &[Type],
     method_type_args: &[Type],
 ) -> Result<Option<ResolvedMethodSignature>, String> {
-    let mangled_type = mangle_name(base_type, type_args);
+    let base_id = compiler
+        .resolve_name_current(base_type)
+        .cloned()
+        .ok_or_else(|| format!("cannot resolve package for generic method base `{base_type}`"))?;
+    let mangled_type = mangle_name(&base_id, type_args);
     let mangled_fn = if method_type_args.is_empty() {
         format!("{}_{}", mangled_type, method_name)
     } else {
-        let mangled_method = mangle_name(method_name, method_type_args);
+        let mangled_method = mangle_method_suffix(method_name, method_type_args);
         format!("{}_{}", mangled_type, mangled_method)
     };
     if compiler.functions.contains_key(&mangled_fn) {
@@ -668,11 +686,15 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
     type_args: &[Type],
     method_type_args: &[Type],
 ) -> Result<(), String> {
-    let mangled_type = mangle_name(base_type, type_args);
+    let base_id = c
+        .resolve_name_current(base_type)
+        .cloned()
+        .ok_or_else(|| format!("cannot resolve package for generic method base `{base_type}`"))?;
+    let mangled_type = mangle_name(&base_id, type_args);
     let mangled_fn = if method_type_args.is_empty() {
         format!("{}_{}", mangled_type, method_name)
     } else {
-        let mangled_method = mangle_name(method_name, method_type_args);
+        let mangled_method = mangle_method_suffix(method_name, method_type_args);
         format!("{}_{}", mangled_type, mangled_method)
     };
     if c.functions.contains_key(&mangled_fn) {
@@ -794,28 +816,27 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
         } => {
             let name = &identifier.name;
             if type_args.is_empty() {
-                if c.types
-                    .get_concrete(&TypeIdentifier::unresolved(name))
-                    .is_none()
+                if c.types.get_concrete(identifier).is_none()
                     && !c.types.contains_monomorphized(name)
                     && let Some((base, args)) = parse_mangled_name(name, c)
+                    && let Some(base_id) = c.resolve_name_current(&base).cloned()
                 {
                     if c.type_ctx.is_enum(&base) {
-                        monomorphize_enum(c, &base, &args)?;
+                        monomorphize_enum(c, &base_id, &args)?;
                     } else {
-                        monomorphize_struct(c, &base, &args)?;
+                        monomorphize_struct(c, &base_id, &args)?;
                     }
                 }
             } else {
                 for arg in type_args {
                     ensure_types_exist(c, arg)?;
                 }
-                let mangled = mangle_name(name, type_args);
+                let mangled = mangle_name(identifier, type_args);
                 if !c.types.contains_monomorphized(&mangled) {
                     if c.type_ctx.is_enum(name) {
-                        monomorphize_enum(c, name, type_args)?;
+                        monomorphize_enum(c, identifier, type_args)?;
                     } else {
-                        monomorphize_struct(c, name, type_args)?;
+                        monomorphize_struct(c, identifier, type_args)?;
                     }
                 }
             }
@@ -858,7 +879,7 @@ pub fn try_parse_mangled_name(mangled: &str, c: &Compiler) -> Option<(String, Ve
 }
 
 /// Attempts to recover the base name and concrete type args from a mangled
-/// name like `Pair_$i32.string$`. Returns `None` if the name doesn't match
+/// name like `Pair_$Int.String$`. Returns `None` if the name doesn't match
 /// a known generic struct or enum template.
 fn parse_mangled_name(mangled: &str, c: &Compiler) -> Option<(String, Vec<Type>)> {
     let sep_pos = mangled.find("_$")?;
@@ -872,13 +893,21 @@ fn parse_mangled_name(mangled: &str, c: &Compiler) -> Option<(String, Vec<Type>)
         return None;
     }
     let inner = &mangled[sep_pos + 2..mangled.len() - 1];
-    let parts = split_mangled_args(inner);
-    let type_args: Vec<Type> = parts.iter().map(|s| parse_mangled_type(s)).collect();
+    let parts = split_mangled_args(inner, c);
+    let type_args: Vec<Type> = parts.iter().map(|s| parse_mangled_type(s, c)).collect();
     Some((base.to_string(), type_args))
 }
 
 /// Splits a mangled args string on `.` at depth 0, respecting nested `_$...$`.
-fn split_mangled_args(s: &str) -> Vec<String> {
+///
+/// Because user-package type names use `.` as a package-qualifier separator
+/// (`http.Header`) and mangled args use `.` as a delimiter, a naive split
+/// would turn `Option_$http.Header$` into two args `http` and `Header`. We
+/// resolve the ambiguity by preferring package-qualified types: a `.` split
+/// is treated as a package boundary (not an arg delimiter) when the token
+/// before the `.` names a known package and the token after resolves to a
+/// type in that package.
+fn split_mangled_args(s: &str, c: &Compiler) -> Vec<String> {
     let mut parts = Vec::new();
     let mut depth = 0usize;
     let mut current = String::new();
@@ -895,8 +924,15 @@ fn split_mangled_args(s: &str) -> Vec<String> {
             current.push('$');
             i += 1;
         } else if bytes[i] == b'.' && depth == 0 {
-            parts.push(mem::take(&mut current));
-            i += 1;
+            let rest = &s[i + 1..];
+            let next_token = next_mangled_token(rest);
+            if is_known_package(&current, c) && is_type_in_package(&current, next_token, c) {
+                current.push('.');
+                i += 1;
+            } else {
+                parts.push(mem::take(&mut current));
+                i += 1;
+            }
         } else {
             current.push(bytes[i] as char);
             i += 1;
@@ -908,12 +944,69 @@ fn split_mangled_args(s: &str) -> Vec<String> {
     parts
 }
 
-fn parse_mangled_type(s: &str) -> Type {
+/// Returns the substring up to the next depth-0 `.` or end of string. Used
+/// by [`split_mangled_args`] to peek the token following a candidate split
+/// point so we can decide whether `.` is a package separator or an arg
+/// delimiter.
+fn next_mangled_token(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'_' && bytes[i + 1] == b'$' {
+            depth += 1;
+            i += 2;
+        } else if bytes[i] == b'$' {
+            depth = depth.saturating_sub(1);
+            i += 1;
+        } else if bytes[i] == b'.' && depth == 0 {
+            return &s[..i];
+        } else {
+            i += 1;
+        }
+    }
+    s
+}
+
+fn is_known_package(name: &str, c: &Compiler) -> bool {
+    c.type_ctx.types.keys().any(|id| match &id.package {
+        Package::Named(pkg) => pkg == name,
+        _ => false,
+    })
+}
+
+fn is_type_in_package(pkg: &str, name: &str, c: &Compiler) -> bool {
+    let bare = name.split_once("_$").map(|(b, _)| b).unwrap_or(name);
+    c.type_ctx.types.keys().any(|id| {
+        matches!(
+            &id.package,
+            Package::Named(p) if p == pkg && id.name == bare,
+        )
+    })
+}
+
+fn parse_mangled_type(s: &str, c: &Compiler) -> Type {
     if s == "unit" {
         return Type::Unit;
     }
     if let Some(p) = Primitive::from_name(s) {
         return Type::Primitive(p);
+    }
+    if let Some((base, args)) = parse_mangled_name(s, c) {
+        return if let Some(id) = c.resolve_name_current(&base) {
+            Type::Named {
+                identifier: id.clone(),
+                type_args: args,
+            }
+        } else {
+            named_generic(&base, args, c.type_ctx)
+        };
+    }
+    if let Some(id) = c.resolve_name_current(s) {
+        return Type::Named {
+            identifier: id.clone(),
+            type_args: vec![],
+        };
     }
     named(s)
 }

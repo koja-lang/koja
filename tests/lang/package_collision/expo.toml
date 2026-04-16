@@ -1,0 +1,8 @@
+[project]
+name = "package_collision"
+version = "0.1.0"
+entry = "main"
+
+[dependencies]
+alpha = { path = "libs/alpha" }
+beta = { path = "libs/beta" }

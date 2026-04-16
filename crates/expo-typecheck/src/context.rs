@@ -23,6 +23,12 @@ pub struct TypeContext {
     /// Set while [`crate::check_module`] walks a module; used when recording
     /// [`ClosureInfo`] keys. Not meaningful in merged contexts.
     pub current_module_path: Option<PathBuf>,
+    /// The package whose source is currently being type-checked. Bare-name
+    /// type lookups (e.g. `find_type("Config")`) consult this first so that
+    /// references inside a file always prefer their own package's definition
+    /// over a colliding type in a dependency. Reset to `None` outside an
+    /// active check.
+    pub current_package: Option<Package>,
     pub coercions: HashMap<Span, Coercion>,
     pub constants: BTreeMap<String, Type>,
     pub diagnostics: Vec<Diagnostic>,
@@ -32,7 +38,7 @@ pub struct TypeContext {
     pub generic_impl_asts: BTreeMap<String, Vec<ImplBlock>>,
     pub generic_protocol_asts: BTreeMap<String, ProtocolDecl>,
     pub generic_struct_asts: BTreeMap<String, StructDecl>,
-    pub protocol_impls: BTreeMap<String, Vec<(String, Vec<Type>)>>,
+    pub protocol_impls: BTreeMap<TypeIdentifier, Vec<(String, Vec<Type>)>>,
     pub protocols: BTreeMap<String, ProtocolInfo>,
     pub specialized_impl_asts: BTreeMap<TypeIdentifier, Vec<(Vec<Type>, ImplBlock)>>,
     pub specialized_methods: SpecializedMethodMap,
@@ -289,9 +295,29 @@ impl TypeContext {
     }
 
     /// Resolves a bare type name to its fully qualified [`TypeIdentifier`]
-    /// using the reverse index built by the resolution pass.
+    /// using the reverse index built by the resolution pass. If the context
+    /// has a `current_package` set, that package's qualified entry wins over
+    /// the shared bare entry (which is last-write-wins).
     pub fn resolve_name(&self, name: &str) -> Option<&TypeIdentifier> {
+        if let Some(scope) = &self.current_package
+            && let Some(id) = self.resolve_name_scoped(name, scope)
+        {
+            return Some(id);
+        }
         self.name_index.get(name)
+    }
+
+    /// Resolves `name` preferring `scope.name` (package-qualified) over the
+    /// shared bare entry. Returns `None` when neither lookup matches.
+    pub fn resolve_name_scoped(&self, name: &str, scope: &Package) -> Option<&TypeIdentifier> {
+        let qualified = match scope {
+            Package::Std => format!("std.{name}"),
+            Package::Named(pkg) => format!("{pkg}.{name}"),
+            Package::Unresolved => return self.name_index.get(name),
+        };
+        self.name_index
+            .get(&qualified)
+            .or_else(|| self.name_index.get(name))
     }
 
     /// Looks up a type by bare name: resolves the name to a [`TypeIdentifier`],
@@ -300,10 +326,25 @@ impl TypeContext {
         self.resolve_name(name).and_then(|id| self.get_type(id))
     }
 
+    /// Scope-aware variant of [`Self::find_type`] that ignores any ambient
+    /// `current_package` and uses the caller-provided scope instead. Used by
+    /// resolution passes that walk `TypeInfo`s whose container package differs
+    /// from the context's ambient scope.
+    pub fn find_type_scoped(&self, name: &str, scope: &Package) -> Option<&TypeInfo> {
+        self.resolve_name_scoped(name, scope)
+            .and_then(|id| self.get_type(id))
+    }
+
     /// Resolves `Package::Unresolved` identifiers inside a [`Type`] using the
-    /// name index built by the resolution pass.
+    /// name index built by the resolution pass. When the context has a
+    /// `current_package` set, the active scope is threaded through so bare
+    /// references prefer the scope's own definition over a colliding entry.
     pub fn resolve_type(&self, ty: &mut Type) {
-        crate::resolve::resolve_type_inline(ty, &self.name_index);
+        if let Some(scope) = &self.current_package {
+            crate::resolve::resolve_type_inline_scoped(ty, &self.name_index, scope);
+        } else {
+            crate::resolve::resolve_type_inline(ty, &self.name_index);
+        }
     }
 
     /// Resolves a [`TypeExpr`] annotation using the full cached context: type
@@ -343,6 +384,7 @@ impl TypeContext {
         Self {
             closure_info: HashMap::new(),
             current_module_path: None,
+            current_package: None,
             coercions: HashMap::new(),
             constants: BTreeMap::new(),
             diagnostics: Vec::new(),

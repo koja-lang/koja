@@ -1,0 +1,29 @@
+alias alpha.Config as AlphaConfig
+alias beta.Config as BetaConfig
+alias alpha.Status as AlphaStatus
+alias beta.Status as BetaStatus
+
+fn main
+  a = AlphaConfig.new(42)
+  b = BetaConfig.new("hello")
+
+  print(a.value)
+  print(b.label)
+  print(a.describe())
+  print(b.describe())
+
+  s1 = AlphaStatus.Ready
+  s2 = AlphaStatus.Busy(7)
+  s3 = BetaStatus.Online("localhost")
+  s4 = BetaStatus.Offline
+
+  print(s1.describe())
+  print(s2.describe())
+  print(s3.describe())
+  print(s4.describe())
+
+  print(s1.format())
+  print(s3.format())
+  print(a.format())
+  print(b.format())
+end

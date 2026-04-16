@@ -58,30 +58,42 @@ const SOCKET_INTRINSICS: &[&str] = &["Socket_resolve", "Socket_recv_from"];
 
 const CSTRING_INTRINSICS: &[&str] = &["String_to_cstring", "CString_to_string"];
 
+/// Strips a leading `package.` prefix from a mangled symbol so intrinsic
+/// dispatch can match on the bare `Type_method` form regardless of which
+/// package declared the type. `Int_hash` stays `Int_hash`; `net.Socket_resolve`
+/// becomes `Socket_resolve`.
+fn intrinsic_key(mangled: &str) -> &str {
+    mangled
+        .split_once('.')
+        .map(|(_, rest)| rest)
+        .unwrap_or(mangled)
+}
+
 pub fn is_primitive_intrinsic(mangled: &str) -> bool {
+    let key = intrinsic_key(mangled);
     for prim in PRIMITIVE_TYPES {
-        if mangled == format!("{prim}_hash") || mangled == format!("{prim}_eq") {
+        if key == format!("{prim}_hash") || key == format!("{prim}_eq") {
             return true;
         }
     }
     for prim in BITWISE_TYPES {
         for op in BITWISE_OPS {
-            if mangled == format!("{prim}_{op}") {
+            if key == format!("{prim}_{op}") {
                 return true;
             }
         }
     }
     for prim in DEBUG_TYPES {
-        if mangled == format!("{prim}_format") {
+        if key == format!("{prim}_format") {
             return true;
         }
     }
-    if CONVERSION_INTRINSICS.contains(&mangled)
-        || STRING_INTRINSICS.contains(&mangled)
-        || PARSE_INTRINSICS.contains(&mangled)
-        || SOCKET_INTRINSICS.contains(&mangled)
-        || is_cptr_intrinsic(mangled)
-        || CSTRING_INTRINSICS.contains(&mangled)
+    if CONVERSION_INTRINSICS.contains(&key)
+        || STRING_INTRINSICS.contains(&key)
+        || PARSE_INTRINSICS.contains(&key)
+        || SOCKET_INTRINSICS.contains(&key)
+        || is_cptr_intrinsic(key)
+        || CSTRING_INTRINSICS.contains(&key)
     {
         return true;
     }
@@ -93,42 +105,43 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
         .functions
         .get(mangled)
         .ok_or_else(|| format!("undeclared intrinsic: {mangled}"))?;
+    let key = intrinsic_key(mangled);
 
-    if CONVERSION_INTRINSICS.contains(&mangled) {
-        return emit_conversion_intrinsic(c, fn_val, mangled);
+    if CONVERSION_INTRINSICS.contains(&key) {
+        return emit_conversion_intrinsic(c, fn_val, key);
     }
 
-    if STRING_INTRINSICS.contains(&mangled) {
-        return emit_string_intrinsic(c, fn_val, mangled);
+    if STRING_INTRINSICS.contains(&key) {
+        return emit_string_intrinsic(c, fn_val, key);
     }
 
-    if PARSE_INTRINSICS.contains(&mangled) {
-        return emit_parse_intrinsic(c, fn_val, mangled);
+    if PARSE_INTRINSICS.contains(&key) {
+        return emit_parse_intrinsic(c, fn_val, key);
     }
 
-    if SOCKET_INTRINSICS.contains(&mangled) {
-        return emit_socket_intrinsic(c, fn_val, mangled);
+    if SOCKET_INTRINSICS.contains(&key) {
+        return emit_socket_intrinsic(c, fn_val, key);
     }
 
-    if is_cptr_intrinsic(mangled) {
-        return emit_cptr_intrinsic(c, fn_val, mangled);
+    if is_cptr_intrinsic(key) {
+        return emit_cptr_intrinsic(c, fn_val, key);
     }
 
-    if CSTRING_INTRINSICS.contains(&mangled) {
-        return emit_cstring_intrinsic(c, fn_val, mangled);
+    if CSTRING_INTRINSICS.contains(&key) {
+        return emit_cstring_intrinsic(c, fn_val, key);
     }
 
-    if let Some(type_name) = mangled.strip_suffix("_format") {
+    if let Some(type_name) = key.strip_suffix("_format") {
         return emit_debug_format_intrinsic(c, fn_val, type_name);
     }
 
-    if let Some(type_name) = mangled.strip_suffix("_hash") {
+    if let Some(type_name) = key.strip_suffix("_hash") {
         emit_hash_intrinsic(c, fn_val, type_name)
-    } else if let Some(type_name) = mangled.strip_suffix("_eq") {
+    } else if let Some(type_name) = key.strip_suffix("_eq") {
         emit_eq_intrinsic(c, fn_val, type_name)
     } else {
         for op in BITWISE_OPS {
-            if let Some(type_name) = mangled.strip_suffix(&format!("_{op}")) {
+            if let Some(type_name) = key.strip_suffix(&format!("_{op}")) {
                 return emit_bitwise_intrinsic(c, fn_val, type_name, op);
             }
         }

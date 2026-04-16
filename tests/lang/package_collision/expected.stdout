@@ -1,0 +1,12 @@
+42
+hello
+alpha value=42
+beta label=hello
+alpha.ready
+alpha.busy(7)
+beta.online(localhost)
+beta.offline
+Ready
+Online(localhost)
+Config{value: 42}
+Config{label: hello}

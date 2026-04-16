@@ -466,8 +466,16 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                         } else {
                             Vec::new()
                         };
+                    let impl_key =
+                        resolve_type_key(&ctx, &target_name, package).unwrap_or_else(|| {
+                            if package == "std" {
+                                TypeIdentifier::std(&target_name)
+                            } else {
+                                TypeIdentifier::new(package, &target_name)
+                            }
+                        });
                     ctx.protocol_impls
-                        .entry(target_name.clone())
+                        .entry(impl_key)
                         .or_default()
                         .push((proto.clone(), proto_type_args));
                 }

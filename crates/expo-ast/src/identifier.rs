@@ -80,6 +80,17 @@ impl TypeIdentifier {
             Package::Unresolved => self.name.clone(),
         }
     }
+
+    /// Parses a package-qualified string (as produced by [`Self::qualified_name`])
+    /// back into a [`TypeIdentifier`]. Strings without a `.` separator fall back
+    /// to [`Self::unresolved`], which the caller may prefer to resolve explicitly.
+    pub fn from_qualified_name(qualified: &str) -> Self {
+        match qualified.split_once('.') {
+            Some(("std", name)) => Self::std(name),
+            Some((pkg, name)) if !pkg.is_empty() => Self::new(pkg, name),
+            _ => Self::unresolved(qualified),
+        }
+    }
 }
 
 impl fmt::Display for TypeIdentifier {

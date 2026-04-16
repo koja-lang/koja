@@ -1,7 +1,7 @@
 //! Debug protocol support: synthesizes `format` functions for enums and
 //! structs, and provides `call_format` to invoke `{Type}_format` on any value.
 
-use expo_ast::identifier::TypeIdentifier;
+use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_typecheck::context::{VariantData, VariantInfo};
 use expo_typecheck::types::{Primitive, Type, named};
 use inkwell::AddressSpace;
@@ -30,7 +30,18 @@ pub fn call_format<'ctx>(
     };
 
     let type_name = type_display_name(&resolved_type);
-    let fn_name = format!("{type_name}_format");
+    // Named user/stdlib types carry a package through `Type::Named`; format
+    // symbols are emitted in lockstep with `method_symbol_prefix` so the
+    // synthesized function name matches what call sites generate. Falling
+    // back to the bare name is only correct for primitives or unresolved
+    // types (e.g. intrinsics).
+    let fn_name = match &resolved_type {
+        Type::Named { identifier, .. } if identifier.package != Package::Unresolved => {
+            let prefix = compiler.method_symbol_prefix(&identifier.package, &identifier.name);
+            format!("{prefix}_format")
+        }
+        _ => format!("{type_name}_format"),
+    };
 
     if !compiler.functions.contains_key(&fn_name) {
         let Some(kind) = resolve_format_kind(compiler, &fn_name, &type_name) else {
@@ -82,7 +93,7 @@ pub fn synthesize_all_formats<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(),
         .collect();
 
     for (id, is_enum) in &types {
-        let fn_name = format!("{}_format", id.name);
+        let fn_name = format_fn_name(compiler, id);
         if compiler.functions.contains_key(&fn_name) {
             continue;
         }
@@ -96,6 +107,14 @@ pub fn synthesize_all_formats<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(),
         }
     }
     Ok(())
+}
+
+/// Name of the synthesized `format` function for a type. Mirrors
+/// `Compiler::method_symbol_prefix` so definition sites and call sites
+/// converge on the same LLVM symbol (e.g. `debug_format.Color_format`).
+fn format_fn_name(compiler: &Compiler, id: &TypeIdentifier) -> String {
+    let prefix = compiler.method_symbol_prefix(&id.package, &id.name);
+    format!("{prefix}_format")
 }
 
 /// Formats values via `snprintf` into a heap-allocated Expo string
@@ -213,7 +232,7 @@ fn resolve_enum_format_info(compiler: &Compiler, id: &TypeIdentifier) -> Resolve
         .cloned()
         .unwrap_or_default();
     ResolvedEnumFormatInfo {
-        function_name: format!("{}_format", id.name),
+        function_name: format_fn_name(compiler, id),
         variants,
     }
 }
@@ -227,7 +246,7 @@ fn synthesize_enum_format<'ctx>(
     let qualified = id.qualified_name();
     let enum_name = &id.name;
     let resolved = resolve_enum_format_info(compiler, id);
-    let synthesis = begin_synthesis(compiler, &qualified, &resolved.function_name)?;
+    let synthesis = begin_synthesis(compiler, id, &resolved.function_name)?;
 
     let alloca = compiler
         .builder
@@ -380,7 +399,7 @@ fn resolve_struct_format_info(
         .unwrap_or_default();
     ResolvedStructFormatInfo {
         fields,
-        function_name: format!("{}_format", id.name),
+        function_name: format_fn_name(compiler, id),
     }
 }
 
@@ -390,10 +409,9 @@ fn synthesize_struct_format<'ctx>(
     compiler: &mut Compiler<'ctx>,
     id: &TypeIdentifier,
 ) -> Result<(), String> {
-    let qualified = id.qualified_name();
     let struct_name = &id.name;
     let resolved = resolve_struct_format_info(compiler, id);
-    let synthesis = begin_synthesis(compiler, &qualified, &resolved.function_name)?;
+    let synthesis = begin_synthesis(compiler, id, &resolved.function_name)?;
 
     let fields = &resolved.fields;
 
@@ -460,19 +478,22 @@ struct SynthesisContext<'ctx> {
     self_value: StructValue<'ctx>,
 }
 
-/// Looks up the LLVM struct type for `type_name`, creates a format function
+/// Looks up the LLVM struct type for `id`, creates a format function
 /// `function_name(self) -> ptr`, saves the current insert block, and
 /// positions the builder at the new function's entry block.
+///
+/// Uses the strict `TypeIdentifier`-keyed lookup so synthesis for the
+/// canary's `alpha.Status` can't accidentally resolve to `beta.Status`
+/// via bare-name fallback.
 fn begin_synthesis<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    type_name: &str,
+    id: &TypeIdentifier,
     function_name: &str,
 ) -> Result<SynthesisContext<'ctx>, String> {
     let llvm_type = compiler
         .types
-        .get_concrete(&TypeIdentifier::unresolved(type_name))
-        .or_else(|| compiler.types.get_monomorphized(type_name))
-        .ok_or_else(|| format!("unknown type: {type_name}"))?;
+        .get_concrete(id)
+        .ok_or_else(|| format!("unknown type: {id}"))?;
 
     let pointer_type = compiler.context.ptr_type(AddressSpace::default());
     let function_type = pointer_type.fn_type(&[llvm_type.into()], false);

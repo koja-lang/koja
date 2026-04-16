@@ -307,12 +307,16 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 return Type::Unknown;
             };
 
-            let process_args = ctx.protocol_impls.get(&target).and_then(|impls| {
-                impls
-                    .iter()
-                    .find(|(proto, _)| proto == "Process")
-                    .map(|(_, args)| args.clone())
-            });
+            let process_args = ctx
+                .resolve_name(&target)
+                .cloned()
+                .and_then(|id| ctx.protocol_impls.get(&id).cloned())
+                .and_then(|impls| {
+                    impls
+                        .iter()
+                        .find(|(proto, _)| proto == "Process")
+                        .map(|(_, args)| args.clone())
+                });
 
             let Some(args) = process_args else {
                 ctx.error(
@@ -949,15 +953,18 @@ fn infer_generic_call(
         let Some(concrete) = subst.get(&tp.name) else {
             continue;
         };
-        let type_name = match concrete {
-            Type::Named { identifier, .. } => Some(identifier.name.clone()),
-            Type::Primitive(p) => Some(p.display().to_string()),
-            _ => None,
+        let (type_name, type_id) = match concrete {
+            Type::Named { identifier, .. } => {
+                (Some(identifier.name.clone()), Some(identifier.clone()))
+            }
+            Type::Primitive(p) => (Some(p.display().to_string()), None),
+            _ => (None, None),
         };
         let Some(type_name) = type_name else {
             continue;
         };
-        let impls = ctx.protocol_impls.get(&type_name);
+        let id = type_id.or_else(|| ctx.resolve_name(&type_name).cloned());
+        let impls = id.as_ref().and_then(|id| ctx.protocol_impls.get(id));
         for bound in &tp.bounds {
             let satisfied = impls.is_some_and(|list| list.iter().any(|(proto, _)| proto == bound));
             if !satisfied {
@@ -988,7 +995,17 @@ fn infer_enum_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let enum_name = type_path.join(".");
-    if let Some(type_info) = ctx.find_type(&enum_name).cloned().filter(|ti| ti.is_enum()) {
+    // Aliases are file-local; consult `type_aliases` first so single-segment
+    // aliases like `AlphaStatus` resolve to their package-qualified origin
+    // before the generic `find_type` bare-name lookup.
+    let aliased_type_info = if type_path.len() == 1 {
+        resolve_type_alias_id(&enum_name, &ctx.type_aliases)
+            .and_then(|id| ctx.get_type(&id).cloned())
+    } else {
+        None
+    };
+    let looked_up = aliased_type_info.or_else(|| ctx.find_type(&enum_name).cloned());
+    if let Some(type_info) = looked_up.filter(|ti| ti.is_enum()) {
         let enum_variants = type_info.variants().unwrap();
         if let Some(vi) = enum_variants.iter().find(|v| v.name == *variant) {
             let is_generic = !type_info.type_params.is_empty();
@@ -1831,7 +1848,8 @@ fn resolve_enumerable_element_type(ty: &Type, ctx: &TypeContext) -> Option<Type>
         _ => return None,
     };
 
-    let protos = ctx.protocol_impls.get(&base)?;
+    let protos_id = ctx.resolve_name(&base)?;
+    let protos = ctx.protocol_impls.get(protos_id)?;
     if !protos.iter().any(|(p, _)| p == "Enumeration") {
         return None;
     }

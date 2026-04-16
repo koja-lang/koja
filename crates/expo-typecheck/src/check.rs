@@ -14,13 +14,33 @@ use crate::env::{CheckEnv, VarInfo, VarState};
 use crate::expr::{expr_span, infer_expr, infer_expr_with_expected};
 use crate::stmt::check_body;
 use crate::types::numeric_compatible;
-use crate::types::{Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params};
+use crate::types::{
+    Package, Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params,
+};
+
+/// Converts a caller-facing package label (`"std"`, `"alpha"`, or `""` for
+/// the single-file test path) into the matching [`Package`] variant used by
+/// the scoped name-index lookup.
+pub(crate) fn package_from_str(package: &str) -> Option<Package> {
+    match package {
+        "" => None,
+        "std" => Some(Package::Std),
+        other => Some(Package::Named(other.to_string())),
+    }
+}
 
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
-pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
+///
+/// `package` identifies which package the module belongs to (e.g. `"std"`,
+/// `"alpha"`, or `""` for single-file usage). It is installed as the context's
+/// ambient scope so that bare-name type lookups prefer the module's own
+/// package over colliding definitions in other packages.
+pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
     let prev_path = ctx.current_module_path.clone();
     ctx.current_module_path = module.path.clone();
+    let prev_package = ctx.current_package.clone();
+    ctx.current_package = package_from_str(package);
 
     let struct_names = ctx.struct_names();
     let struct_name_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
@@ -83,20 +103,21 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
                     continue;
                 };
 
-                let impl_process_msg =
-                    ctx.protocol_impls
-                        .get(target_name.as_str())
-                        .and_then(|impls| {
-                            impls.iter().find(|(proto, _)| proto == "Process").and_then(
-                                |(_, args)| {
-                                    let m = args.get(1)?;
-                                    let r = args.get(2)?;
-                                    Some(crate::types::process_envelope_type(m, r))
-                                },
-                            )
-                        });
-
                 let type_id = ctx.resolve_name(target_name).cloned();
+                let impl_process_msg = type_id
+                    .as_ref()
+                    .and_then(|id| ctx.protocol_impls.get(id))
+                    .and_then(|impls| {
+                        impls
+                            .iter()
+                            .find(|(proto, _)| proto == "Process")
+                            .and_then(|(_, args)| {
+                                let m = args.get(1)?;
+                                let r = args.get(2)?;
+                                Some(crate::types::process_envelope_type(m, r))
+                            })
+                    });
+
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(f) = member
                         && f.type_params.is_empty()
@@ -135,6 +156,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext) {
         }
     }
 
+    ctx.current_package = prev_package;
     ctx.current_module_path = prev_path;
 }
 
@@ -147,17 +169,20 @@ fn check_inline_functions(
     struct_names: &[&str],
     enum_names: &[&str],
 ) {
-    let process_msg = ctx.protocol_impls.get(type_name).and_then(|impls| {
-        impls
-            .iter()
-            .find(|(proto, _)| proto == "Process")
-            .and_then(|(_, args)| {
-                let m = args.get(1)?;
-                let r = args.get(2)?;
-                Some(crate::types::process_envelope_type(m, r))
-            })
-    });
     let type_id = ctx.resolve_name(type_name).cloned();
+    let process_msg = type_id
+        .as_ref()
+        .and_then(|id| ctx.protocol_impls.get(id))
+        .and_then(|impls| {
+            impls
+                .iter()
+                .find(|(proto, _)| proto == "Process")
+                .and_then(|(_, args)| {
+                    let m = args.get(1)?;
+                    let r = args.get(2)?;
+                    Some(crate::types::process_envelope_type(m, r))
+                })
+        });
     for f in functions {
         if f.type_params.is_empty() {
             check_function_with_msg(

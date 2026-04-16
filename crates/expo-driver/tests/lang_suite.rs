@@ -248,17 +248,15 @@ fn run_project_dir_with(dir: &Path, label: &str, extra_args: &[&str]) {
         }
     });
 
-    let expected_code = dir
-        .join("expected.exit_code")
-        .exists()
-        .then(|| {
-            fs::read_to_string(dir.join("expected.exit_code"))
-                .unwrap()
-                .trim()
-                .parse::<i32>()
-                .expect("expected.exit_code must be an integer")
-        })
-        .unwrap_or(0);
+    let expected_code = if dir.join("expected.exit_code").exists() {
+        fs::read_to_string(dir.join("expected.exit_code"))
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .expect("expected.exit_code must be an integer")
+    } else {
+        0
+    };
 
     assert!(
         code == expected_code,
@@ -353,6 +351,17 @@ lang_test_dir!(lang_diamond, "diamond", project);
 lang_test_dir!(lang_cross_ref, "cross_ref", project);
 lang_test_dir!(lang_local_dep, "local_dep", project);
 lang_test_dir!(lang_alias_dep, "alias_dep", project);
+
+/// Canary for the TypeIdentifier migration: two packages each define
+/// `struct Config`, used from a root package via aliases. Today the bare-name
+/// entries in `TypeContext::name_index` are last-write-wins, so alpha's own
+/// references to `Config` resolve to beta.Config (or vice versa) and the
+/// program fails at typecheck. This test must pass once the migration is
+/// complete; until then it is the oracle that we are actually fixing the bug.
+#[test]
+fn lang_package_collision() {
+    run_project_dir(&lang_dir().join("package_collision"), "package_collision");
+}
 lang_test_dir!(lang_process_entry, "process_entry", project);
 lang_test_dir!(lang_process_exit, "process_exit", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
@@ -470,17 +479,15 @@ fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let code = output.status.code().unwrap_or(-1);
 
-    let expected_code = dir
-        .join("expected.exit_code")
-        .exists()
-        .then(|| {
-            fs::read_to_string(dir.join("expected.exit_code"))
-                .unwrap()
-                .trim()
-                .parse::<i32>()
-                .expect("expected.exit_code must be an integer")
-        })
-        .unwrap_or(0);
+    let expected_code = if dir.join("expected.exit_code").exists() {
+        fs::read_to_string(dir.join("expected.exit_code"))
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .expect("expected.exit_code must be an integer")
+    } else {
+        0
+    };
 
     assert!(
         code == expected_code,

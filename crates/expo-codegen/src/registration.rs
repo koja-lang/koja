@@ -78,6 +78,20 @@ pub(crate) fn register_types(c: &mut Compiler) {
             .filter_map(|(_, ty)| to_llvm_type(ty, c.context, &c.types))
             .collect();
         struct_type.set_body(&field_types, false);
+
+        // Also publish the field layout into `mono_struct_info` under the
+        // package-qualified name so `Compiler::get_field_index/type` lookups
+        // can be package-scoped without falling back to the bare-name
+        // `TypeContext::find_type` path.
+        let fields_owned: Vec<(String, Type)> = info
+            .fields()
+            .unwrap()
+            .iter()
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        c.types
+            .mono_struct_info
+            .insert(id.qualified_name(), fields_owned);
     }
 
     // Pass 3: set enum bodies (skip generic templates)
@@ -137,8 +151,8 @@ pub(crate) fn register_types(c: &mut Compiler) {
 }
 
 /// Builds the LLVM tagged-union layout for an enum: creates variant payload
-/// structs, sets the body on the (already-registered) opaque struct, populates
-/// `enum_variant_payloads`, and builds the variant name table.
+/// structs, sets the body on the (already-registered) opaque struct, and
+/// populates `enum_variant_payloads`.
 pub(crate) fn build_enum_layout<'ctx>(
     c: &mut Compiler<'ctx>,
     name: &str,
@@ -193,31 +207,6 @@ pub(crate) fn build_enum_layout<'ctx>(
     c.types
         .enum_variant_payloads
         .insert(name.to_string(), variant_payloads);
-
-    let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
-    let name_ptrs: Vec<_> = variants
-        .iter()
-        .map(|(vname, _)| {
-            let bytes = c.context.const_string(vname.as_bytes(), true);
-            let g = c
-                .module
-                .add_global(bytes.get_type(), None, &format!("{name}_{vname}_name"));
-            g.set_initializer(&bytes);
-            g.set_constant(true);
-            g.as_pointer_value()
-        })
-        .collect();
-    let table_init = ptr_type.const_array(&name_ptrs);
-    let table_global = c.module.add_global(
-        table_init.get_type(),
-        None,
-        &format!("{name}_variant_names"),
-    );
-    table_global.set_initializer(&table_init);
-    table_global.set_constant(true);
-    c.types
-        .enum_name_tables
-        .insert(name.to_string(), table_global.as_pointer_value());
 }
 
 /// Builds the LLVM tagged-union layout for a union type: creates variant

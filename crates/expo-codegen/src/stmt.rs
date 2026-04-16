@@ -311,26 +311,29 @@ pub(crate) fn resolve_field_path(
     let mut steps = Vec::with_capacity(segments.len() - 1);
 
     for field_name in &segments[1..] {
-        let struct_name = match &current_type {
-            Type::Named {
-                identifier,
-                type_args,
-            } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
-            Type::Named { identifier, .. } => identifier.name.clone(),
-            _ => {
-                return Err(format!(
-                    "cannot access field `{field_name}` on non-struct type"
-                ));
-            }
-        };
+        if !matches!(&current_type, Type::Named { .. }) {
+            return Err(format!(
+                "cannot access field `{field_name}` on non-struct type"
+            ));
+        }
 
         let field_index = compiler
-            .get_field_index(&struct_name, field_name)
-            .ok_or_else(|| format!("unknown field `{field_name}` on struct `{struct_name}`"))?;
+            .struct_field_index_for_type(&current_type, field_name)
+            .ok_or_else(|| {
+                format!(
+                    "unknown field `{field_name}` on struct `{}`",
+                    current_type.display()
+                )
+            })?;
 
         let field_type = compiler
-            .get_field_type(&struct_name, field_name)
-            .ok_or_else(|| format!("unknown field `{field_name}` on struct `{struct_name}`"))?;
+            .struct_field_type_for_type(&current_type, field_name)
+            .ok_or_else(|| {
+                format!(
+                    "unknown field `{field_name}` on struct `{}`",
+                    current_type.display()
+                )
+            })?;
 
         steps.push(ResolvedFieldStep {
             field_index,
@@ -783,17 +786,19 @@ fn convert_list_literal_if_needed<'ctx>(
     list_val: BasicValueEnum<'ctx>,
     target_type: &Type,
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    let (base, type_args) = match target_type {
+    let (base, identifier, type_args) = match target_type {
         Type::Named {
             identifier,
             type_args,
-        } if identifier.name != "List" && !type_args.is_empty() => {
-            (identifier.name.clone(), type_args.clone())
-        }
+        } if identifier.name != "List" && !type_args.is_empty() => (
+            identifier.name.clone(),
+            identifier.clone(),
+            type_args.clone(),
+        ),
         _ => return Ok(list_val),
     };
 
-    let target_mangled = mangle_name(&base, &type_args);
+    let target_mangled = mangle_name(&identifier, &type_args);
     let from_list_fn_name = format!("{target_mangled}_from_list");
     if !compiler.functions.contains_key(&from_list_fn_name) {
         monomorphize_impl_method(compiler, &base, "from_list", &type_args, &[])?;

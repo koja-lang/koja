@@ -543,7 +543,7 @@ fn compile_tag_check<'ctx>(
     let tag = resolve_variant_tag(compiler, enum_name, variant)?;
     let enum_type = compiler
         .types
-        .get_concrete(&TypeIdentifier::unresolved(enum_name))
+        .get_concrete(&TypeIdentifier::from_qualified_name(enum_name))
         .or_else(|| compiler.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
     let tag_ptr = compiler
@@ -611,52 +611,64 @@ fn enum_name_from_path<'ctx>(
         Type::Named {
             identifier,
             type_args,
-        } if !type_args.is_empty() => Ok(mangle_name(&identifier.name, type_args)),
+        } if !type_args.is_empty() => Ok(mangle_name(identifier, type_args)),
         Type::Named { identifier, .. } => {
             let name = &identifier.name;
             if let Some((base, _)) = crate::generics::try_parse_mangled_name(name, compiler)
                 && compiler.type_ctx.is_enum(&base)
             {
                 Ok(name.clone())
+            } else if identifier.package != expo_ast::identifier::Package::Unresolved {
+                // Non-generic user/stdlib enums are registered under their
+                // package-qualified identifier; pattern lookups must use the
+                // same key to avoid collisions between packages that share an
+                // enum name.
+                Ok(identifier.qualified_name())
             } else if !type_path.is_empty() {
                 let joined = type_path.join(".");
-                if compiler
-                    .types
-                    .get_concrete(&TypeIdentifier::unresolved(&joined))
-                    .is_some()
-                    || compiler.types.contains_monomorphized(&joined)
-                    || compiler.types.mono_enum_variants.contains_key(&joined)
-                {
-                    Ok(joined)
-                } else {
-                    Err(format!(
-                        "cannot resolve enum name from pattern `{joined}` for match subject type `{}`",
-                        subject_type.display()
-                    ))
-                }
+                resolve_pattern_enum_key(compiler, &joined, subject_type)
             } else {
                 Err("cannot determine enum name for pattern".to_string())
             }
         }
         _ if !type_path.is_empty() => {
             let joined = type_path.join(".");
-            if compiler
-                .types
-                .get_concrete(&TypeIdentifier::unresolved(&joined))
-                .is_some()
-                || compiler.types.contains_monomorphized(&joined)
-                || compiler.types.mono_enum_variants.contains_key(&joined)
-            {
-                Ok(joined)
-            } else {
-                Err(format!(
-                    "cannot resolve enum name from pattern `{joined}` for match subject type `{}`",
-                    subject_type.display()
-                ))
-            }
+            resolve_pattern_enum_key(compiler, &joined, subject_type)
         }
         _ => Err("cannot determine enum name for pattern".to_string()),
     }
+}
+
+/// Resolves a raw pattern path like `"Status"` or `"AlphaStatus"` into the
+/// key actually used by `TypeRegistry` — usually a package-qualified name
+/// (`alpha.Status`) — so pattern-side lookups stay aligned with registration.
+fn resolve_pattern_enum_key(
+    compiler: &Compiler,
+    joined: &str,
+    subject_type: &Type,
+) -> Result<String, String> {
+    if let Some(id) = compiler.resolve_name_current(joined) {
+        let qualified = id.qualified_name();
+        if compiler.types.get_concrete(id).is_some()
+            || compiler.types.contains_monomorphized(&qualified)
+            || compiler.types.mono_enum_variants.contains_key(&qualified)
+        {
+            return Ok(qualified);
+        }
+    }
+    if compiler
+        .types
+        .get_concrete(&TypeIdentifier::from_qualified_name(joined))
+        .is_some()
+        || compiler.types.contains_monomorphized(joined)
+        || compiler.types.mono_enum_variants.contains_key(joined)
+    {
+        return Ok(joined.to_string());
+    }
+    Err(format!(
+        "cannot resolve enum name from pattern `{joined}` for match subject type `{}`",
+        subject_type.display()
+    ))
 }
 
 fn find_constructor_enum<'ctx>(
@@ -672,12 +684,20 @@ fn find_constructor_enum<'ctx>(
     {
         let name = &identifier.name;
         if !type_args.is_empty() {
-            return Ok(mangle_name(name, type_args));
+            return Ok(mangle_name(identifier, type_args));
         }
         if let Some((base, _)) = crate::generics::try_parse_mangled_name(name, compiler)
             && compiler.type_ctx.is_enum(&base)
         {
             return Ok(name.clone());
+        }
+        if identifier.package != expo_ast::identifier::Package::Unresolved
+            && compiler
+                .type_ctx
+                .get_type(identifier)
+                .is_some_and(|ti| ti.is_enum())
+        {
+            return Ok(identifier.qualified_name());
         }
         if compiler.type_ctx.is_enum(name) {
             return Ok(name.clone());
@@ -723,7 +743,7 @@ fn resolve_payload_info<'ctx>(
         .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
     let enum_type = compiler
         .types
-        .get_concrete(&TypeIdentifier::unresolved(enum_name))
+        .get_concrete(&TypeIdentifier::from_qualified_name(enum_name))
         .or_else(|| compiler.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
     Ok(ResolvedPayloadInfo {

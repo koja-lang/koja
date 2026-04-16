@@ -7,8 +7,9 @@ use expo_ast::ast::PassMode;
 use expo_ast::ast::{Arg, ClosureParam, Expr, ExprKind, FieldInit, TypeParam};
 use expo_typecheck::context::{FnParam, FunctionKind, TypeInfo};
 use expo_typecheck::types::{
-    Package, Type, TypeIdentifier, build_substitution, mangle_name, named_generic,
-    resolve_type_alias_id, resolve_type_alias_name, substitute, unify, unwrap_indirect,
+    Package, Type, TypeIdentifier, build_substitution, mangle_method_suffix, mangle_name,
+    named_generic, resolve_type_alias_id, resolve_type_alias_name, substitute, unify,
+    unwrap_indirect,
 };
 use inkwell::AddressSpace;
 use inkwell::types::{BasicTypeEnum, StructType};
@@ -136,9 +137,8 @@ fn resolve_chain_steps(compiler: &Compiler, receiver: &Expr, field: &str) -> Opt
     };
 
     let current_type = steps.last().map(|s| &s.field_type).unwrap_or(&base_type);
-    let sn = struct_name_from_type(current_type)?;
-    let field_idx = compiler.get_field_index(&sn.mangled, field)?;
-    let field_ty = compiler.get_field_type(&sn.mangled, field)?;
+    let field_idx = compiler.struct_field_index_for_type(current_type, field)?;
+    let field_ty = compiler.struct_field_type_for_type(current_type, field)?;
 
     steps.push(ResolvedFieldStep {
         field_index: field_idx,
@@ -216,6 +216,21 @@ fn resolve_field_access<'ctx>(
     }
 
     let struct_value = recv_val.into_struct_value();
+
+    // Prefer the type-checker's resolved type: it carries the
+    // package-qualified `TypeIdentifier` so we can avoid consulting the
+    // bare-name `find_type` fallback entirely.
+    if let Some(ref recv_ty) = receiver.resolved_type
+        && let Some(field_index) = compiler.struct_field_index_for_type(recv_ty, field)
+        && let Some(field_type) = compiler.struct_field_type_for_type(recv_ty, field)
+    {
+        return Ok(ResolvedFieldAccess::ValueStruct {
+            field_index,
+            field_type,
+            struct_value,
+        });
+    }
+
     let struct_name = struct_value
         .get_type()
         .get_name()
@@ -223,11 +238,11 @@ fn resolve_field_access<'ctx>(
         .ok_or("cannot determine struct type for field access")?;
 
     let field_index = compiler
-        .get_field_index(&struct_name, field)
+        .get_mono_field_index(&struct_name, field)
         .ok_or_else(|| format!("unknown field `{field}` on struct `{struct_name}`"))?;
 
     let field_type = compiler
-        .get_field_type(&struct_name, field)
+        .get_mono_field_type(&struct_name, field)
         .ok_or_else(|| format!("unknown field `{field}` on struct `{struct_name}`"))?;
 
     Ok(ResolvedFieldAccess::ValueStruct {
@@ -337,7 +352,9 @@ pub fn compile_method_call<'ctx>(
         .and_then(|id| c.type_ctx.get_type(id))
         .and_then(|ti| ti.functions.get(method))
         .is_some();
-    if !has_impl_method && let Some(field_ty) = c.get_field_type(&resolved_name.mangled, method) {
+    if !has_impl_method
+        && let Some(field_ty) = c.get_mono_field_type(&resolved_name.mangled, method)
+    {
         let inner = unwrap_indirect(&field_ty);
         if let Type::Function {
             params,
@@ -446,7 +463,20 @@ fn resolve_method_call<'ctx>(
         .or_else(|| c.type_ctx.resolve_name(base));
     let is_generic = !type_args.is_empty();
 
-    let mut mangled = format!("{}_{}", struct_name, method);
+    // Pick the symbol prefix in lockstep with definition-site mangling:
+    //   * non-generic types with a resolved package → `{pkg}.{TypeName}` for
+    //     user packages, plain `{TypeName}` for stdlib/primitives;
+    //   * generics continue to use the existing bare-name mangled key until
+    //     registration migrates in a later stage.
+    let symbol_prefix = if is_generic {
+        struct_name.to_string()
+    } else {
+        resolved_id
+            .map(|id| c.method_symbol_prefix(&id.package, &id.name))
+            .unwrap_or_else(|| struct_name.to_string())
+    };
+
+    let mut mangled = format!("{}_{}", symbol_prefix, method);
     let mut resolved_method_type_args: Vec<Type> = Vec::new();
 
     if is_generic {
@@ -455,8 +485,8 @@ fn resolve_method_call<'ctx>(
         if !method_type_params.is_empty() {
             let method_type_args = infer_method_type_args(c, base, method, type_args, args)?;
             resolved_method_type_args = method_type_args.clone();
-            let method_suffix = mangle_name(method, &method_type_args);
-            mangled = format!("{}_{}", struct_name, method_suffix);
+            let method_suffix = mangle_method_suffix(method, &method_type_args);
+            mangled = format!("{}_{}", symbol_prefix, method_suffix);
 
             if !c.functions.contains_key(&mangled) {
                 monomorphize_impl_method(c, base, method, type_args, &method_type_args)?;
@@ -784,20 +814,33 @@ fn resolve_struct_construction<'ctx>(
     compiler: &Compiler<'ctx>,
     type_path: &[String],
     field_inits: &[FieldInit],
+    resolved_type: Option<&TypeIdentifier>,
 ) -> Result<ResolvedStructConstruction<'ctx>, String> {
     let raw_name = type_path
         .first()
         .ok_or("empty type path in struct construction")?;
     let struct_name = resolve_type_alias_name(raw_name, &compiler.type_ctx.type_aliases);
 
+    // Prefer the type-checker's resolved identifier — it already carries the
+    // right package, so two packages with the same struct name can be told
+    // apart without consulting the shared bare-name index.
+    let resolved_id = resolved_type
+        .filter(|id| id.package != Package::Unresolved)
+        .cloned()
+        .or_else(|| resolve_type_alias_id(raw_name, &compiler.type_ctx.type_aliases))
+        .or_else(|| compiler.resolve_name_current(&struct_name).cloned());
+
+    let lookup_id = resolved_id
+        .clone()
+        .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
     let struct_type = compiler
         .types
-        .get_concrete(&TypeIdentifier::unresolved(&struct_name))
+        .get_concrete(&lookup_id)
         .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
     let struct_info = compiler
         .type_ctx
-        .find_type(&struct_name)
+        .get_type(&lookup_id)
         .filter(|ti| ti.is_struct())
         .ok_or_else(|| format!("unknown struct: {struct_name}"))?;
 
@@ -825,11 +868,7 @@ fn resolve_struct_construction<'ctx>(
         });
     }
 
-    let identifier = compiler
-        .type_ctx
-        .resolve_name(&struct_name)
-        .cloned()
-        .unwrap_or_else(|| TypeIdentifier::unresolved(&struct_name));
+    let identifier = lookup_id.clone();
     let result_type = Type::Named {
         identifier,
         type_args: vec![],
@@ -883,7 +922,7 @@ pub fn compile_struct_construction<'ctx>(
         );
     }
 
-    let resolved = resolve_struct_construction(compiler, type_path, fields)?;
+    let resolved = resolve_struct_construction(compiler, type_path, fields, resolved_type)?;
     let alloca = compiler.build_entry_alloca(
         resolved.struct_type,
         &format!("{}_tmp", resolved.struct_name),
@@ -946,8 +985,7 @@ fn concrete_type_for_field_init<'ctx>(
         } => {
             if let ExprKind::Ident { name, .. } = &receiver.as_ref().kind
                 && let Some((_, recv_ty, _)) = compiler.fn_state.variables.get(name)
-                && let Some(sn) = struct_name_from_type(recv_ty)
-                && let Some(ft) = compiler.get_field_type(&sn.mangled, field)
+                && let Some(ft) = compiler.struct_field_type_for_type(recv_ty, field)
             {
                 substitute(&ft, &compiler.fn_state.type_subst)
             } else {
@@ -993,10 +1031,16 @@ fn resolve_generic_struct<'ctx>(
         .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
         .collect();
 
-    let mangled_name = mangle_name(struct_name, &type_args);
+    // We must have a package-resolved TypeIdentifier here so generic structs
+    // from different packages produce distinct mangled LLVM keys.
+    let struct_id = compiler
+        .resolve_name_current(struct_name)
+        .cloned()
+        .ok_or_else(|| format!("cannot resolve package for generic struct `{struct_name}`"))?;
+    let mangled_name = mangle_name(&struct_id, &type_args);
 
     if !compiler.types.contains_monomorphized(&mangled_name) {
-        monomorphize_struct(compiler, struct_name, &type_args)?;
+        monomorphize_struct(compiler, &struct_id, &type_args)?;
     }
 
     let struct_type = compiler
@@ -1036,9 +1080,9 @@ fn compile_generic_struct_construction<'ctx>(
 
     for (field_name, field_val, _) in &compiled_fields {
         let field_idx = compiler
-            .get_field_index(&resolved.mangled_name, field_name)
+            .get_mono_field_index(&resolved.mangled_name, field_name)
             .ok_or_else(|| format!("unknown field `{field_name}` in struct `{struct_name}`"))?;
-        let field_type = compiler.get_field_type(&resolved.mangled_name, field_name);
+        let field_type = compiler.get_mono_field_type(&resolved.mangled_name, field_name);
         let field_ptr = compiler
             .builder
             .build_struct_gep(resolved.struct_type, alloca, field_idx, field_name)
@@ -1106,11 +1150,11 @@ fn struct_name_from_type(ty: &Type) -> Option<ResolvedStructName> {
     match ty {
         Type::Indirect(inner) => struct_name_from_type(inner),
         Type::Pointer(inner) => {
-            let base = "CPtr".to_string();
-            let mangled = mangle_name(&base, &[*inner.clone()]);
+            let cptr_id = TypeIdentifier::std("CPtr");
+            let mangled = mangle_name(&cptr_id, &[*inner.clone()]);
             Some(ResolvedStructName {
-                base,
-                identifier: None,
+                base: cptr_id.name.clone(),
+                identifier: Some(cptr_id),
                 mangled,
                 type_args: vec![*inner.clone()],
             })
@@ -1121,7 +1165,7 @@ fn struct_name_from_type(ty: &Type) -> Option<ResolvedStructName> {
         } if !type_args.is_empty() => Some(ResolvedStructName {
             base: identifier.name.clone(),
             identifier: Some(identifier.clone()),
-            mangled: mangle_name(&identifier.name, type_args),
+            mangled: mangle_name(identifier, type_args),
             type_args: type_args.clone(),
         }),
         Type::Named { identifier, .. } => Some(ResolvedStructName {
@@ -1184,18 +1228,32 @@ fn resolve_static_call<'ctx>(
     let mangled_type = if type_args.is_empty() {
         type_name.to_string()
     } else {
-        let m = mangle_name(type_name, &type_args);
+        let type_id = resolved_id.cloned().ok_or_else(|| {
+            format!("cannot resolve package for generic static call on `{type_name}`")
+        })?;
+        let m = mangle_name(&type_id, &type_args);
         if !c.types.contains_monomorphized(&m) {
             if c.type_ctx.is_struct(type_name) {
-                monomorphize_struct(c, type_name, &type_args)?;
+                monomorphize_struct(c, &type_id, &type_args)?;
             } else {
-                monomorphize_enum(c, type_name, &type_args)?;
+                monomorphize_enum(c, &type_id, &type_args)?;
             }
         }
         m
     };
 
-    let mangled_name = format!("{}_{}", mangled_type, method);
+    // Pick the symbol prefix in lockstep with definition-site mangling:
+    // non-generic user types use `{pkg}.{TypeName}`; stdlib/primitives and
+    // generics keep the existing bare-name prefix until later migration stages.
+    let symbol_prefix = if type_args.is_empty() {
+        resolved_id
+            .map(|id| c.method_symbol_prefix(&id.package, &id.name))
+            .unwrap_or_else(|| mangled_type.clone())
+    } else {
+        mangled_type.clone()
+    };
+
+    let mangled_name = format!("{}_{}", symbol_prefix, method);
 
     if !c.functions.contains_key(&mangled_name) {
         if !type_args.is_empty() {

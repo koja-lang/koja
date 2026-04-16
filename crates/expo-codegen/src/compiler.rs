@@ -20,6 +20,7 @@ pub enum EmitResult {
     Emitted,
     NotIntrinsic,
 }
+
 use expo_ast::ast::{
     AnnotationValue, Diagnostic, EnumConstructionData, ExprKind, FieldInit, Function, ImplMember,
     Item, Literal, Module, Param, Severity, StringPart, TypeExpr,
@@ -164,13 +165,7 @@ pub struct TypeRegistry<'ctx> {
     /// strings (e.g. `"List_$Int32$"`, `"Union_$Int.String$"`).
     pub monomorphized: HashMap<String, StructType<'ctx>>,
 
-    /// Reverse index from bare type name to its fully qualified
-    /// `TypeIdentifier`. Copied from `TypeContext::name_index` during init
-    /// so `get_concrete` can resolve `Package::Unresolved` identifiers.
-    pub name_index: BTreeMap<String, TypeIdentifier>,
-
     pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
-    pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
     pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
     pub mono_enum_variants: HashMap<String, Vec<(String, VariantData)>>,
 }
@@ -180,9 +175,7 @@ impl<'ctx> TypeRegistry<'ctx> {
         Self {
             concrete: HashMap::new(),
             monomorphized: HashMap::new(),
-            name_index: BTreeMap::new(),
             enum_variant_payloads: HashMap::new(),
-            enum_name_tables: HashMap::new(),
             mono_struct_info: HashMap::new(),
             mono_enum_variants: HashMap::new(),
         }
@@ -200,17 +193,10 @@ impl<'ctx> TypeRegistry<'ctx> {
     }
 
     /// Look up a non-generic type by its package-qualified identifier.
-    /// When `id` has `Package::Unresolved`, resolves the name through the
-    /// name index first.
+    /// `Package::Unresolved` identifiers return `None`; callers must supply
+    /// a fully-qualified [`TypeIdentifier`].
     pub fn get_concrete(&self, id: &TypeIdentifier) -> Option<StructType<'ctx>> {
-        self.concrete.get(id).copied().or_else(|| {
-            if id.package == Package::Unresolved {
-                let resolved = self.name_index.get(&id.name)?;
-                self.concrete.get(resolved).copied()
-            } else {
-                None
-            }
-        })
+        self.concrete.get(id).copied()
     }
 
     /// Look up a monomorphized generic or union type by its mangled name.
@@ -223,43 +209,29 @@ impl<'ctx> TypeRegistry<'ctx> {
         self.monomorphized.contains_key(mangled)
     }
 
-    /// Returns the LLVM struct type for an enum variant's payload, if it has one.
-    /// Tries a direct key match first (covers mangled and already-qualified
-    /// names), then falls back through `name_index` to resolve bare names to
-    /// their package-qualified key.
+    /// Returns the LLVM struct type for an enum variant's payload, if it has
+    /// one. Callers pass the same key used at registration (package-qualified
+    /// for non-generic enums, mangled for monomorphizations).
     pub fn get_variant_payload_type(
         &self,
         enum_name: &str,
         variant_name: &str,
     ) -> Option<StructType<'ctx>> {
-        self.enum_variant_payloads
-            .get(enum_name)
-            .or_else(|| {
-                let resolved = self.name_index.get(enum_name)?;
-                self.enum_variant_payloads.get(&resolved.qualified_name())
-            })
-            .and_then(|vs| {
-                vs.iter()
-                    .find(|(name, _)| name == variant_name)
-                    .and_then(|(_, pt)| *pt)
-            })
+        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
+            vs.iter()
+                .find(|(name, _)| name == variant_name)
+                .and_then(|(_, pt)| *pt)
+        })
     }
 
-    /// Returns the tag index (0-based) for an enum variant.
-    /// Tries a direct key match first, then resolves bare names through
-    /// `name_index` to their package-qualified key.
+    /// Returns the tag index (0-based) for an enum variant. Same keying
+    /// convention as [`Self::get_variant_payload_type`].
     pub fn get_variant_tag(&self, enum_name: &str, variant_name: &str) -> Option<u8> {
-        self.enum_variant_payloads
-            .get(enum_name)
-            .or_else(|| {
-                let resolved = self.name_index.get(enum_name)?;
-                self.enum_variant_payloads.get(&resolved.qualified_name())
-            })
-            .and_then(|vs| {
-                vs.iter()
-                    .position(|(name, _)| name == variant_name)
-                    .map(|i| i as u8)
-            })
+        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
+            vs.iter()
+                .position(|(name, _)| name == variant_name)
+                .map(|i| i as u8)
+        })
     }
 }
 
@@ -315,6 +287,11 @@ pub struct Compiler<'ctx> {
     pub closure_site_path: Option<PathBuf>,
     /// DWARF debug info state (always present; emitted in all builds).
     pub debug: DebugContext<'ctx>,
+    /// Package of the module whose items are currently being declared/defined.
+    /// Set by [`run_codegen`] around each module's declare and define passes so
+    /// method symbols can be qualified per package (e.g. `alpha.Config_new`)
+    /// and disambiguated across user packages that share a type name.
+    pub current_package: Option<Package>,
 }
 
 /// Resolves a constant expression to its semantic kind by parsing literals
@@ -377,13 +354,6 @@ fn resolve_const_enum(
     Some(ResolvedConstEnum { tag })
 }
 
-/// Looks up the field types for a struct used in a constant initializer.
-fn resolve_const_struct(compiler: &Compiler, struct_name: &str) -> Option<ResolvedConstStruct> {
-    let info = compiler.type_ctx.find_type(struct_name)?;
-    let field_types = info.fields()?.to_vec();
-    Some(ResolvedConstStruct { field_types })
-}
-
 impl<'ctx> Compiler<'ctx> {
     /// Creates a new compiler instance with an empty LLVM module.
     pub fn new(
@@ -396,8 +366,7 @@ impl<'ctx> Compiler<'ctx> {
         let module = context.create_module("expo_module");
         let builder = context.create_builder();
         let debug = DebugContext::new(&module, filename, directory, release);
-        let mut types = TypeRegistry::new();
-        types.name_index = type_ctx.name_index.clone();
+        let types = TypeRegistry::new();
         Self {
             context,
             module,
@@ -411,6 +380,30 @@ impl<'ctx> Compiler<'ctx> {
             fn_state: FnState::new(),
             closure_site_path: None,
             debug,
+            current_package: None,
+        }
+    }
+
+    /// Builds the symbol prefix used for an impl method (before the trailing
+    /// `_{method}` suffix). Stdlib types keep their bare type name to preserve
+    /// existing intrinsic symbols (e.g. `Int_hash`). User packages are
+    /// qualified (e.g. `alpha.Config_new`) so two packages with the same type
+    /// name never collide on a single LLVM symbol.
+    pub fn method_symbol_prefix(&self, pkg: &Package, type_name: &str) -> String {
+        match pkg {
+            Package::Named(name) => format!("{name}.{type_name}"),
+            Package::Std | Package::Unresolved => type_name.to_string(),
+        }
+    }
+
+    /// Convenience wrapper: like [`Self::method_symbol_prefix`] but reads the
+    /// current module's package from [`Self::current_package`]. Use at
+    /// definition sites where the owning package is the one we're currently
+    /// compiling. Defaults to bare `type_name` when no package is set.
+    pub fn current_method_symbol_prefix(&self, type_name: &str) -> String {
+        match &self.current_package {
+            Some(pkg) => self.method_symbol_prefix(pkg, type_name),
+            None => type_name.to_string(),
         }
     }
 
@@ -608,38 +601,110 @@ impl<'ctx> Compiler<'ctx> {
             .map_err(|e| format!("failed to write object file: {}", e.to_string()))
     }
 
-    pub fn get_field_index(&self, struct_name: &str, field_name: &str) -> Option<u32> {
-        if let Some(fields) = self.types.mono_struct_info.get(struct_name) {
-            return fields
-                .iter()
-                .position(|(name, _)| name == field_name)
-                .map(|i| i as u32);
-        }
-        self.type_ctx.find_type(struct_name).and_then(|info| {
-            info.fields().and_then(|fields| {
-                fields
-                    .iter()
-                    .position(|(name, _)| name == field_name)
-                    .map(|i| i as u32)
-            })
-        })
+    /// Strict lookup for a non-generic struct's field index by
+    /// [`TypeIdentifier`]. A `Package::Unresolved` identifier returns `None`
+    /// rather than masking bugs with a last-write-wins resolution.
+    pub fn get_concrete_field_index(&self, id: &TypeIdentifier, field_name: &str) -> Option<u32> {
+        let info = self.type_ctx.get_type(id)?;
+        let fields = info.fields()?;
+        fields
+            .iter()
+            .position(|(name, _)| name == field_name)
+            .map(|i| i as u32)
     }
 
-    pub fn get_field_type(&self, struct_name: &str, field_name: &str) -> Option<Type> {
-        if let Some(fields) = self.types.mono_struct_info.get(struct_name) {
-            return fields
-                .iter()
-                .find(|(name, _)| name == field_name)
-                .map(|(_, ty)| ty.clone());
+    /// Strict counterpart of [`Self::get_concrete_field_index`] that returns
+    /// the field type.
+    pub fn get_concrete_field_type(&self, id: &TypeIdentifier, field_name: &str) -> Option<Type> {
+        let info = self.type_ctx.get_type(id)?;
+        let fields = info.fields()?;
+        fields
+            .iter()
+            .find(|(name, _)| name == field_name)
+            .map(|(_, ty)| ty.clone())
+    }
+
+    /// Strict lookup for a monomorphized struct's field index by its mangled
+    /// key. The key is exactly what registration stores in `mono_struct_info`:
+    /// either a `Type_$Arg$` generic mangling or a non-generic type's LLVM
+    /// struct name. No fallbacks.
+    pub fn get_mono_field_index(&self, mangled: &str, field_name: &str) -> Option<u32> {
+        let fields = self.types.mono_struct_info.get(mangled)?;
+        fields
+            .iter()
+            .position(|(name, _)| name == field_name)
+            .map(|i| i as u32)
+    }
+
+    /// Strict counterpart of [`Self::get_mono_field_index`] that returns the
+    /// field type.
+    pub fn get_mono_field_type(&self, mangled: &str, field_name: &str) -> Option<Type> {
+        let fields = self.types.mono_struct_info.get(mangled)?;
+        fields
+            .iter()
+            .find(|(name, _)| name == field_name)
+            .map(|(_, ty)| ty.clone())
+    }
+
+    /// Look up a struct's field index, dispatching on the struct's resolved
+    /// [`Type`] to pick a collision-safe lookup path:
+    ///   * Non-generic `Type::Named` with a resolved package → strict
+    ///     TypeIdentifier-keyed lookup via [`Self::get_concrete_field_index`].
+    ///   * Generic `Type::Named` → mangled lookup in `mono_struct_info`.
+    ///   * `Type::Indirect`/`Type::Pointer` → recursively unwrap.
+    ///
+    /// Unresolved identifiers return `None`: callers are expected to thread a
+    /// package-qualified `TypeIdentifier` from typecheck, not a bare name.
+    pub fn struct_field_index_for_type(&self, ty: &Type, field_name: &str) -> Option<u32> {
+        use expo_ast::types::mangle_name;
+        match ty {
+            Type::Indirect(inner) | Type::Pointer(inner) => {
+                self.struct_field_index_for_type(inner, field_name)
+            }
+            Type::Named {
+                identifier,
+                type_args,
+            } if !type_args.is_empty() => {
+                let mangled = mangle_name(identifier, type_args);
+                self.get_mono_field_index(&mangled, field_name)
+            }
+            Type::Named { identifier, .. } if identifier.package != Package::Unresolved => {
+                self.get_concrete_field_index(identifier, field_name)
+            }
+            // Flattened form: generic Named with empty type_args where
+            // `identifier.name` already holds the mangled key.
+            Type::Named { identifier, .. } => {
+                self.get_mono_field_index(&identifier.name, field_name)
+            }
+            _ => None,
         }
-        self.type_ctx.find_type(struct_name).and_then(|info| {
-            info.fields().and_then(|fields| {
-                fields
-                    .iter()
-                    .find(|(name, _)| name == field_name)
-                    .map(|(_, ty)| ty.clone())
-            })
-        })
+    }
+
+    /// Same dispatch as [`Self::struct_field_index_for_type`] but returns the
+    /// field type.
+    pub fn struct_field_type_for_type(&self, ty: &Type, field_name: &str) -> Option<Type> {
+        use expo_ast::types::mangle_name;
+        match ty {
+            Type::Indirect(inner) | Type::Pointer(inner) => {
+                self.struct_field_type_for_type(inner, field_name)
+            }
+            Type::Named {
+                identifier,
+                type_args,
+            } if !type_args.is_empty() => {
+                let mangled = mangle_name(identifier, type_args);
+                self.get_mono_field_type(&mangled, field_name)
+            }
+            Type::Named { identifier, .. } if identifier.package != Package::Unresolved => {
+                self.get_concrete_field_type(identifier, field_name)
+            }
+            // Flattened form: generic Named with empty type_args where
+            // `identifier.name` already holds the mangled key.
+            Type::Named { identifier, .. } => {
+                self.get_mono_field_type(&identifier.name, field_name)
+            }
+            _ => None,
+        }
     }
 
     /// Resolves a type expression AST node into an Expo type, using the
@@ -679,9 +744,16 @@ impl<'ctx> Compiler<'ctx> {
             &self.type_ctx.package_types,
             &self.type_ctx.module_aliases,
         );
-        self.type_ctx.resolve_type(&mut ty);
+        match &self.current_package {
+            Some(pkg) => expo_typecheck::resolve::resolve_type_inline_scoped(
+                &mut ty,
+                &self.type_ctx.name_index,
+                pkg,
+            ),
+            None => self.type_ctx.resolve_type(&mut ty),
+        }
         if let Some(ref name) = self.fn_state.self_type_name {
-            let Some(id) = self.type_ctx.resolve_name(name) else {
+            let Some(id) = self.resolve_name_current(name) else {
                 return substitute_preserving(&ty, &self.fn_state.type_subst);
             };
             let self_ty = Type::Named {
@@ -696,10 +768,32 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    /// Package-aware replacement for `type_ctx.resolve_name` that honours the
+    /// `Compiler::current_package` when set. Use this everywhere codegen would
+    /// otherwise consult the shared bare-name index so two packages with the
+    /// same type name don't alias to a last-write-wins winner.
+    pub fn resolve_name_current(&self, name: &str) -> Option<&TypeIdentifier> {
+        match &self.current_package {
+            Some(pkg) => self
+                .type_ctx
+                .resolve_name_scoped(name, pkg)
+                .or_else(|| self.type_ctx.resolve_name(name)),
+            None => self.type_ctx.resolve_name(name),
+        }
+    }
+
+    /// Declares a function at the LLVM level. `mangling_prefix` is the
+    /// (possibly package-qualified) prefix prepended before `_{fn_name}`
+    /// for the LLVM symbol name; top-level functions pass `None`. The
+    /// prefix is *distinct* from the type's bare name because method
+    /// symbols are qualified (`alpha.Config_new`) while the `Self` type
+    /// lookup still uses the unqualified type name (`Config`), resolved
+    /// under the current module's package scope.
     fn declare_function(
         &self,
         func: &Function,
-        self_type_name: Option<&str>,
+        mangling_prefix: Option<&str>,
+        self_type_bare_name: Option<&str>,
     ) -> Result<FunctionValue<'ctx>, String> {
         let return_type = func
             .return_type
@@ -708,13 +802,18 @@ impl<'ctx> Compiler<'ctx> {
             .unwrap_or(Type::Unit);
         let mut param_types = Vec::new();
 
-        if let Some(name) = self_type_name
+        if let Some(name) = self_type_bare_name
             && func
                 .params
                 .first()
                 .is_some_and(|p| matches!(p, Param::Self_ { .. }))
         {
-            if let Some(id) = self.type_ctx.resolve_name(name)
+            let resolved_id = self
+                .current_package
+                .as_ref()
+                .and_then(|pkg| self.type_ctx.resolve_name_scoped(name, pkg))
+                .or_else(|| self.type_ctx.resolve_name(name));
+            if let Some(id) = resolved_id
                 && let Some(st) = self.types.get_concrete(id)
             {
                 param_types.push(st.into());
@@ -735,13 +834,13 @@ impl<'ctx> Compiler<'ctx> {
         let mangled = if is_extern_c {
             extract_link_symbol(&func.annotations).unwrap_or_else(|| func.name.clone())
         } else {
-            match self_type_name {
-                Some(tn) => format!("{}_{}", tn, func.name),
+            match mangling_prefix {
+                Some(prefix) => format!("{}_{}", prefix, func.name),
                 None => func.name.clone(),
             }
         };
 
-        let fn_type = if func.name == "main" && self_type_name.is_none() {
+        let fn_type = if func.name == "main" && mangling_prefix.is_none() {
             self.context.i32_type().fn_type(&param_types, false)
         } else {
             match to_llvm_type(&return_type, self.context, &self.types) {
@@ -768,13 +867,15 @@ impl<'ctx> Compiler<'ctx> {
                         .const_int(if b { 1 } else { 0 }, false)
                         .into(),
                     Some(ResolvedConst::EnumVariant { enum_name, variant }) => {
-                        let Some(info) = resolve_const_enum(self, &enum_name, &variant) else {
+                        let Some(enum_id) = self.resolve_name_current(&enum_name).cloned() else {
                             continue;
                         };
-                        let Some(enum_type) = self
-                            .types
-                            .get_concrete(&TypeIdentifier::unresolved(&enum_name))
+                        let Some(info) =
+                            resolve_const_enum(self, &enum_id.qualified_name(), &variant)
                         else {
+                            continue;
+                        };
+                        let Some(enum_type) = self.types.get_concrete(&enum_id) else {
                             continue;
                         };
                         let tag_val = self.context.i8_type().const_int(info.tag as u64, false);
@@ -799,13 +900,21 @@ impl<'ctx> Compiler<'ctx> {
                         fields,
                         struct_name,
                     }) => {
-                        let Some(info) = resolve_const_struct(self, &struct_name) else {
+                        let Some(struct_id) = self.resolve_name_current(&struct_name).cloned()
+                        else {
                             continue;
                         };
-                        let Some(struct_type) = self
-                            .types
-                            .get_concrete(&TypeIdentifier::unresolved(&struct_name))
+                        let Some(info) = self
+                            .type_ctx
+                            .get_type(&struct_id)
+                            .and_then(|ti| ti.fields())
+                            .map(|fs| ResolvedConstStruct {
+                                field_types: fs.to_vec(),
+                            })
                         else {
+                            continue;
+                        };
+                        let Some(struct_type) = self.types.get_concrete(&struct_id) else {
                             continue;
                         };
                         match self.build_const_struct(struct_type, &info.field_types, &fields) {
@@ -888,13 +997,17 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    /// Declares a set of methods belonging to `type_name`, mangling as
-    /// `{TypeName}_{fn_name}`. Shared by inline functions and impl blocks.
+    /// Declares a set of methods belonging to `type_name`. Mangles as
+    /// `{prefix}_{fn_name}` where `prefix` comes from
+    /// [`Self::current_method_symbol_prefix`] — stdlib methods stay
+    /// unqualified (e.g. `Int_hash`), user-package methods are qualified
+    /// (e.g. `alpha.Config_new`). Shared by inline functions and impl blocks.
     fn declare_type_methods(
         &mut self,
         type_name: &str,
         functions: &[Function],
     ) -> Result<(), String> {
+        let prefix = self.current_method_symbol_prefix(type_name);
         self.fn_state.self_type_name = Some(type_name.to_string());
         for func in functions {
             if let Some(rt) = &func.return_type {
@@ -907,11 +1020,11 @@ impl<'ctx> Compiler<'ctx> {
                     ensure_types_exist(self, &pt)?;
                 }
             }
-            let mangled = format!("{type_name}_{}", func.name);
+            let mangled = format!("{prefix}_{}", func.name);
             if self.functions.contains_key(&mangled) {
                 continue;
             }
-            let fn_value = self.declare_function(func, Some(type_name))?;
+            let fn_value = self.declare_function(func, Some(&prefix), Some(type_name))?;
             self.functions.insert(mangled, fn_value);
         }
         self.fn_state.self_type_name = None;
@@ -925,8 +1038,9 @@ impl<'ctx> Compiler<'ctx> {
         type_name: &str,
         functions: &[Function],
     ) -> Result<(), String> {
+        let prefix = self.current_method_symbol_prefix(type_name);
         for func in functions {
-            self.define_function(func, Some(type_name))?;
+            self.define_function(func, Some(&prefix), Some(type_name))?;
         }
         Ok(())
     }
@@ -975,7 +1089,7 @@ impl<'ctx> Compiler<'ctx> {
                     if self.functions.contains_key(&func.name) {
                         continue;
                     }
-                    let fn_value = self.declare_function(func, None)?;
+                    let fn_value = self.declare_function(func, None, None)?;
                     self.functions.insert(func.name.clone(), fn_value);
                 }
                 Item::Struct(s) if !s.type_params.is_empty() => {}
@@ -1017,18 +1131,26 @@ impl<'ctx> Compiler<'ctx> {
     /// Emits the LLVM IR body for a single Expo function. Handles parameter
     /// binding (including `self`), implicit return of the last expression, and
     /// auto-inserted terminators for `main`.
+    ///
+    /// `mangling_prefix` is the (possibly package-qualified) prefix used to
+    /// look up the declared LLVM function symbol (e.g. `alpha.Config` →
+    /// `alpha.Config_new`). `type_bare_name` is the unqualified type name
+    /// (e.g. `Config`) stored in `fn_state.self_type_name` so the body can
+    /// resolve `Self` and call impl methods through the usual bare-name
+    /// path. Top-level functions pass `None` for both.
     fn define_function(
         &mut self,
         func: &Function,
-        self_type_name: Option<&str>,
+        mangling_prefix: Option<&str>,
+        type_bare_name: Option<&str>,
     ) -> Result<(), String> {
         if func.body.is_none() {
             return Ok(());
         }
-        self.fn_state.self_type_name = self_type_name.map(|s| s.to_string());
+        self.fn_state.self_type_name = type_bare_name.map(|s| s.to_string());
 
-        let mangled = match self_type_name {
-            Some(tn) => format!("{}_{}", tn, func.name),
+        let mangled = match mangling_prefix {
+            Some(prefix) => format!("{}_{}", prefix, func.name),
             None => func.name.clone(),
         };
 
@@ -1047,7 +1169,7 @@ impl<'ctx> Compiler<'ctx> {
             return Ok(());
         }
 
-        let is_main = func.name == "main" && self_type_name.is_none();
+        let is_main = func.name == "main" && mangling_prefix.is_none();
 
         if is_main {
             let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
@@ -1144,7 +1266,7 @@ impl<'ctx> Compiler<'ctx> {
             .map(|t| self.resolve_type_expr(t))
             .unwrap_or(Type::Unit);
 
-        let self_type = self_type_name.map(|n| (n, n));
+        let self_type = type_bare_name.map(|n| (n, n));
         let result = compile_method_body(
             self,
             fn_value,
@@ -1177,7 +1299,7 @@ impl<'ctx> Compiler<'ctx> {
                     if !func.type_params.is_empty() {
                         continue;
                     }
-                    self.define_function(func, None)?;
+                    self.define_function(func, None, None)?;
                 }
                 Item::Struct(s) if !s.type_params.is_empty() => {}
                 Item::Struct(s) => {
@@ -1289,10 +1411,16 @@ impl<'ctx> Compiler<'ctx> {
     fn emit_process_entry(&mut self, type_name: &str) -> Result<(), String> {
         use crate::spawn::{self, ExitCodeCtx};
 
+        let entry_id = self
+            .type_ctx
+            .resolve_name(type_name)
+            .cloned()
+            .ok_or_else(|| format!("entry type `{type_name}` not found"))?;
+
         let process_args = self
             .type_ctx
             .protocol_impls
-            .get(type_name)
+            .get(&entry_id)
             .and_then(|impls| {
                 impls
                     .iter()
@@ -1310,7 +1438,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let struct_type = self
             .types
-            .get_concrete(&TypeIdentifier::unresolved(type_name))
+            .get_concrete(&entry_id)
             .ok_or_else(|| format!("entry type `{type_name}` has no LLVM struct layout"))?;
 
         let config_llvm =
@@ -1321,13 +1449,15 @@ impl<'ctx> Compiler<'ctx> {
                 )
             })?;
 
-        let start_fn_name = format!("{type_name}_start");
+        let method_prefix = self.method_symbol_prefix(&entry_id.package, &entry_id.name);
+
+        let start_fn_name = format!("{method_prefix}_start");
         let start_fn = self
             .module
             .get_function(&start_fn_name)
             .ok_or_else(|| format!("entry type `{type_name}` has no `start` function"))?;
 
-        let run_fn_name = format!("{type_name}_run");
+        let run_fn_name = format!("{method_prefix}_run");
         let run_fn = self
             .module
             .get_function(&run_fn_name)
@@ -1455,12 +1585,35 @@ pub fn compile(
     release: bool,
     app_name: &str,
 ) -> Result<(), Vec<Diagnostic>> {
-    compile_modules(&[module], type_ctx, output_path, release, app_name, None)
+    compile_modules(
+        &[module],
+        &[""],
+        type_ctx,
+        output_path,
+        release,
+        app_name,
+        None,
+    )
 }
 
-/// Runs codegen for all modules: register types, declare, define.
+/// Resolves a package-name string (as produced by the driver) into the
+/// `Package` enum used throughout the type system. Empty strings and
+/// `"std"` map to `Package::Std`; everything else is a user package.
+fn package_from_str(pkg: &str) -> Package {
+    if pkg.is_empty() || pkg == "std" {
+        Package::Std
+    } else {
+        Package::Named(pkg.to_string())
+    }
+}
+
+/// Runs codegen for all modules: register types, declare, define. `packages`
+/// is a parallel slice: `packages[i]` is the owning package of `modules[i]`.
+/// An empty string is treated as `Package::Std` (stdlib-style unqualified
+/// method symbols).
 fn run_codegen<'ctx>(
     modules: &[&Module],
+    packages: &[&str],
     type_ctx: &'ctx TypeContext,
     context: &'ctx Context,
     release: bool,
@@ -1495,26 +1648,32 @@ fn run_codegen<'ctx>(
         }
     }
 
-    for module in modules {
-        compiler.declare_constants(module).map_err(|e| {
+    for (module, pkg) in modules.iter().zip(packages.iter()) {
+        compiler.current_package = Some(package_from_str(pkg));
+        let result = compiler.declare_constants(module).map_err(|e| {
             vec![Diagnostic {
                 severity: Severity::Error,
                 message: e,
                 hint: None,
                 span: module.span,
             }]
-        })?;
+        });
+        compiler.current_package = None;
+        result?;
     }
 
-    for module in modules {
-        compiler.declare_functions(module).map_err(|e| {
+    for (module, pkg) in modules.iter().zip(packages.iter()) {
+        compiler.current_package = Some(package_from_str(pkg));
+        let result = compiler.declare_functions(module).map_err(|e| {
             vec![Diagnostic {
                 severity: Severity::Error,
                 message: e,
                 hint: None,
                 span: module.span,
             }]
-        })?;
+        });
+        compiler.current_package = None;
+        result?;
     }
 
     synthesize_all_formats(&mut compiler).map_err(|e| {
@@ -1527,15 +1686,18 @@ fn run_codegen<'ctx>(
         }]
     })?;
 
-    for module in modules {
-        compiler.define_functions(module).map_err(|e| {
+    for (module, pkg) in modules.iter().zip(packages.iter()) {
+        compiler.current_package = Some(package_from_str(pkg));
+        let result = compiler.define_functions(module).map_err(|e| {
             vec![Diagnostic {
                 severity: Severity::Error,
                 message: e,
                 hint: None,
                 span: module.span,
             }]
-        })?;
+        });
+        compiler.current_package = None;
+        result?;
     }
 
     if let Some(type_name) = entry_type {
@@ -1555,8 +1717,14 @@ fn run_codegen<'ctx>(
 
 /// Compiles multiple Expo modules into a single native object file. Registers
 /// types, declares all functions across modules, then defines their bodies.
+///
+/// `packages` is parallel to `modules`: each entry is the owning package for
+/// the corresponding module. Empty strings and `"std"` are treated as the
+/// stdlib (unqualified method symbols like `Int_hash`); any other value is a
+/// user package whose method symbols are prefixed (e.g. `alpha.Config_new`).
 pub fn compile_modules(
     modules: &[&Module],
+    packages: &[&str],
     type_ctx: &TypeContext,
     output_path: &Path,
     release: bool,
@@ -1564,7 +1732,9 @@ pub fn compile_modules(
     entry_type: Option<&str>,
 ) -> Result<(), Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(modules, type_ctx, &context, release, app_name, entry_type)?;
+    let compiler = run_codegen(
+        modules, packages, type_ctx, &context, release, app_name, entry_type,
+    )?;
 
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
@@ -1594,14 +1764,19 @@ pub fn compile_modules(
 
 /// Compiles multiple Expo modules and returns the LLVM IR as a string.
 /// Skips verification so IR can be inspected even when it contains errors.
+///
+/// See [`compile_modules`] for the `packages` parameter semantics.
 pub fn emit_llvm_ir(
     modules: &[&Module],
+    packages: &[&str],
     type_ctx: &TypeContext,
     app_name: &str,
     entry_type: Option<&str>,
 ) -> Result<String, Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(modules, type_ctx, &context, false, app_name, entry_type)?;
+    let compiler = run_codegen(
+        modules, packages, type_ctx, &context, false, app_name, entry_type,
+    )?;
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
     Ok(compiler.module.print_to_string().to_string())
@@ -1681,7 +1856,8 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
     c: &Compiler<'ctx>,
     target: &str,
 ) -> Option<Type> {
-    if let Some(impls) = c.type_ctx.protocol_impls.get(target)
+    if let Some(id) = c.resolve_name_current(target)
+        && let Some(impls) = c.type_ctx.protocol_impls.get(id)
         && let Some((_, args)) = impls.iter().find(|(proto, _)| proto == "Process")
     {
         let m = args.get(1)?;
@@ -1689,9 +1865,10 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
         return Some(process_envelope_type(m, r));
     }
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(target, c) {
-        let impls = c.type_ctx.protocol_impls.get(&base)?;
+        let base_id = c.resolve_name_current(&base)?;
+        let impls = c.type_ctx.protocol_impls.get(base_id)?;
         let (_, proto_args) = impls.iter().find(|(proto, _)| proto == "Process")?;
-        let ti = c.type_ctx.find_type(&base)?;
+        let ti = c.type_ctx.get_type(base_id)?;
         let subst = build_substitution(&ti.type_params, &type_args);
         let m = substitute(proto_args.get(1)?, &subst);
         let r = substitute(proto_args.get(2)?, &subst);

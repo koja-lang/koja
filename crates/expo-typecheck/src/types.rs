@@ -4,8 +4,8 @@ use expo_ast::ast::{TypeExpr, TypeParam};
 
 pub use expo_ast::identifier::{Package, TypeIdentifier};
 pub use expo_ast::types::{
-    FnParam, Primitive, Type, contains_parameter, mangle_name, mangle_type, named,
-    numeric_compatible, process_envelope_type, substitute, substitute_preserving, unify,
+    FnParam, Primitive, Type, contains_parameter, mangle_method_suffix, mangle_name, mangle_type,
+    named, numeric_compatible, process_envelope_type, substitute, substitute_preserving, unify,
     unwrap_indirect,
 };
 

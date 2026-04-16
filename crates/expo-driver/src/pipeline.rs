@@ -126,9 +126,10 @@ pub fn typecheck_graph(
         };
         ctx.merge(&unified_project_ctx);
         let rm = graph.modules.get_mut(&name).unwrap();
+        let pkg = fqn_to_package(&name);
         resolve_module_aliases(&rm.module, &mut ctx);
         expo_typecheck::resolve_packages(&mut ctx, &graph.dep_packages);
-        expo_typecheck::check_module(&mut rm.module, &mut ctx);
+        expo_typecheck::check_module(&mut rm.module, &mut ctx, &pkg);
         expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
         module_contexts.insert(name, ctx);
     }
@@ -218,6 +219,12 @@ pub fn build_from_graph(
         .iter()
         .map(|name| &graph.modules[name].module)
         .collect();
+    let module_packages: Vec<String> = graph
+        .order
+        .iter()
+        .map(|name| fqn_to_package(name))
+        .collect();
+    let module_packages_refs: Vec<&str> = module_packages.iter().map(String::as_str).collect();
 
     let app_name = graph
         .entry
@@ -229,7 +236,13 @@ pub fn build_from_graph(
     let entry_type = graph.entry_type.as_deref();
 
     if emit_llvm {
-        match expo_codegen::emit_llvm_ir(&modules_ast, &merged_ctx, &app_name, entry_type) {
+        match expo_codegen::emit_llvm_ir(
+            &modules_ast,
+            &module_packages_refs,
+            &merged_ctx,
+            &app_name,
+            entry_type,
+        ) {
             Ok(ir) => print!("{ir}"),
             Err(diagnostics) => {
                 let entry_rm = &graph.modules[&graph.entry];
@@ -248,6 +261,7 @@ pub fn build_from_graph(
     let obj_path = format!("{output}.o");
     if let Err(diagnostics) = expo_codegen::compile_modules(
         &modules_ast,
+        &module_packages_refs,
         &merged_ctx,
         Path::new(&obj_path),
         release,

@@ -4,6 +4,7 @@
 
 use inkwell::values::PointerValue;
 
+use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Primitive, Type, mangle_name};
 
@@ -122,36 +123,53 @@ fn has_indirect_fields(c: &Compiler, ty: &Type) -> bool {
             identifier,
             type_args,
         } if !type_args.is_empty() => {
-            let mangled = mangle_name(&identifier.name, type_args);
-            has_indirect_fields_by_name(c, &mangled)
+            let mangled = mangle_name(identifier, type_args);
+            has_indirect_fields_by_mono(c, &mangled) || has_indirect_fields_by_id(c, identifier)
         }
-        Type::Named { identifier, .. } => has_indirect_fields_by_name(c, &identifier.name),
+        Type::Named { identifier, .. } => has_indirect_fields_by_id(c, identifier),
         _ => false,
     }
 }
 
-fn has_indirect_fields_by_name(c: &Compiler, name: &str) -> bool {
-    if let Some(fields) = c.types.mono_struct_info.get(name) {
+/// Lookup by a monomorphized name (generics only). Only consults the keyed
+/// tables; typecheck's bare-name resolution is handled by `by_id` for
+/// non-generics.
+fn has_indirect_fields_by_mono(c: &Compiler, mangled: &str) -> bool {
+    if let Some(fields) = c.types.mono_struct_info.get(mangled) {
         return fields
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
     }
-    if let Some(info) = c.type_ctx.find_type(name)
-        && let Some(fields) = info.fields()
-    {
-        return fields
-            .iter()
-            .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
-    }
-    if let Some(variants) = c.types.mono_enum_variants.get(name) {
+    if let Some(variants) = c.types.mono_enum_variants.get(mangled) {
         return variants
             .iter()
             .any(|(_, vdata)| variant_has_indirect(vdata));
     }
-    if let Some(info) = c.type_ctx.find_type(name)
-        && let Some(vs) = info.variants()
-    {
-        return vs.iter().any(|v| variant_has_indirect(&v.data));
+    false
+}
+
+/// Strict, TypeIdentifier-keyed indirect-field check for non-generic types.
+/// Skips bare-name lookups entirely so cross-package collisions can't return
+/// a foreign package's layout by accident.
+fn has_indirect_fields_by_id(c: &Compiler, id: &TypeIdentifier) -> bool {
+    if id.package == Package::Unresolved {
+        return false;
+    }
+    let qualified = id.qualified_name();
+    if let Some(fields) = c.types.mono_struct_info.get(&qualified) {
+        return fields
+            .iter()
+            .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
+    }
+    if let Some(info) = c.type_ctx.get_type(id) {
+        if let Some(fields) = info.fields() {
+            return fields
+                .iter()
+                .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
+        }
+        if let Some(vs) = info.variants() {
+            return vs.iter().any(|v| variant_has_indirect(&v.data));
+        }
     }
     false
 }
@@ -201,41 +219,43 @@ fn emit_drop<'ctx>(c: &mut Compiler<'ctx>, ptr: PointerValue<'ctx>, ty: &Type) {
 
 /// Identifies struct fields that use [`Type::Indirect`] and returns their
 /// indices and types. Checks monomorphized struct info first, then falls
-/// back to the type context.
+/// back to the type context via the package-qualified identifier so
+/// cross-package collisions don't return a foreign struct's layout.
 fn resolve_indirect_field_indices(compiler: &Compiler, ty: &Type) -> Vec<(usize, Type)> {
-    let struct_name = match ty {
+    let (mono_key, identifier) = match ty {
         Type::Named {
             identifier,
             type_args,
-        } if !type_args.is_empty() => mangle_name(&identifier.name, type_args),
-        Type::Named { identifier, .. } => identifier.name.clone(),
+        } if !type_args.is_empty() => (Some(mangle_name(identifier, type_args)), Some(identifier)),
+        Type::Named { identifier, .. } => (Some(identifier.qualified_name()), Some(identifier)),
         _ => return Vec::new(),
     };
 
-    compiler
-        .types
-        .mono_struct_info
-        .get(&struct_name)
-        .map(|fs| {
-            fs.iter()
-                .enumerate()
-                .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
-                .map(|(i, (_, fty))| (i, fty.clone()))
-                .collect()
-        })
-        .or_else(|| {
-            compiler.type_ctx.find_type(&struct_name).and_then(|ti| {
-                ti.fields().map(|fields| {
-                    fields
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
-                        .map(|(i, (_, fty))| (i, fty.clone()))
-                        .collect()
-                })
-            })
-        })
-        .unwrap_or_default()
+    if let Some(key) = mono_key.as_deref()
+        && let Some(fs) = compiler.types.mono_struct_info.get(key)
+    {
+        return fs
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
+            .map(|(i, (_, fty))| (i, fty.clone()))
+            .collect();
+    }
+
+    if let Some(id) = identifier
+        && id.package != Package::Unresolved
+        && let Some(ti) = compiler.type_ctx.get_type(id)
+        && let Some(fields) = ti.fields()
+    {
+        return fields
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
+            .map(|(i, (_, fty))| (i, fty.clone()))
+            .collect();
+    }
+
+    Vec::new()
 }
 
 /// Frees heap pointers for each [`Type::Indirect`] field in a struct.

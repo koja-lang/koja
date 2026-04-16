@@ -73,15 +73,25 @@ fn resolve_concrete_enum_variant<'ctx>(
     data: &EnumConstructionData,
     resolved_type: Option<&TypeIdentifier>,
 ) -> Result<ResolvedEnumVariant<'ctx>, String> {
-    let enum_type = compiler
-        .types
-        .get_concrete(&TypeIdentifier::unresolved(enum_name))
+    // Prefer the typecheck-resolved identifier (which already honours aliases
+    // and cross-package qualification); fall back to a package-aware lookup
+    // from the current compilation scope when it's missing.
+    let resolved_id = resolved_type
+        .filter(|id| id.package != Package::Unresolved)
+        .cloned()
+        .or_else(|| compiler.resolve_name_current(enum_name).cloned())
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
+    let enum_type = compiler
+        .types
+        .get_concrete(&resolved_id)
+        .ok_or_else(|| format!("unknown enum type: {resolved_id}"))?;
+
+    let key = resolved_id.qualified_name();
     let tag = compiler
         .types
-        .get_variant_tag(enum_name, variant)
-        .ok_or_else(|| format!("unknown variant `{variant}` on enum `{enum_name}`"))?
+        .get_variant_tag(&key, variant)
+        .ok_or_else(|| format!("unknown variant `{variant}` on enum `{resolved_id}`"))?
         as u64;
 
     let (payload_type, variant_fields) = match data {
@@ -89,14 +99,12 @@ fn resolve_concrete_enum_variant<'ctx>(
         EnumConstructionData::Tuple(_) => {
             let payload = compiler
                 .types
-                .get_variant_payload_type(enum_name, variant)
-                .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
+                .get_variant_payload_type(&key, variant)
+                .ok_or_else(|| format!("no payload type for {resolved_id}.{variant}"))?;
 
-            let resolved_id = resolved_type
-                .filter(|id| id.package != Package::Unresolved)
-                .or_else(|| compiler.type_ctx.resolve_name(enum_name));
-            let element_types = resolved_id
-                .and_then(|id| compiler.type_ctx.get_type(id))
+            let element_types = compiler
+                .type_ctx
+                .get_type(&resolved_id)
                 .and_then(|ti| ti.variants())
                 .and_then(|vs| vs.iter().find(|v| v.name == variant))
                 .and_then(|vi| match &vi.data {
@@ -113,21 +121,21 @@ fn resolve_concrete_enum_variant<'ctx>(
         EnumConstructionData::Struct(field_inits) => {
             let payload = compiler
                 .types
-                .get_variant_payload_type(enum_name, variant)
-                .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
+                .get_variant_payload_type(&key, variant)
+                .ok_or_else(|| format!("no payload type for {resolved_id}.{variant}"))?;
 
-            let resolved_id = resolved_type
-                .filter(|id| id.package != Package::Unresolved)
-                .or_else(|| compiler.type_ctx.resolve_name(enum_name));
-            let variant_info = resolved_id
-                .and_then(|id| compiler.type_ctx.get_type(id))
+            let variant_info = compiler
+                .type_ctx
+                .get_type(&resolved_id)
                 .and_then(|ti| ti.variants())
                 .and_then(|vs| vs.iter().find(|v| v.name == variant))
-                .ok_or_else(|| format!("variant info not found for {enum_name}.{variant}"))?;
+                .ok_or_else(|| format!("variant info not found for {resolved_id}.{variant}"))?;
 
             let expected_fields = match &variant_info.data {
                 VariantData::Struct(f) => f,
-                _ => return Err(format!("{enum_name}.{variant} is not a struct variant")),
+                _ => {
+                    return Err(format!("{resolved_id}.{variant} is not a struct variant"));
+                }
             };
 
             let mut fields = Vec::new();
@@ -139,8 +147,8 @@ fn resolve_concrete_enum_variant<'ctx>(
                     .map(|(i, (_, ty))| (i as u32, ty.clone()))
                     .ok_or_else(|| {
                         format!(
-                            "unknown field `{}` in {enum_name}.{variant}",
-                            field_init.name
+                            "unknown field `{}` in {resolved_id}.{variant}",
+                            field_init.name,
                         )
                     })?;
                 fields.push((field_init.name.clone(), idx, field_type));
@@ -150,15 +158,8 @@ fn resolve_concrete_enum_variant<'ctx>(
         }
     };
 
-    let identifier = resolved_type.cloned().unwrap_or_else(|| {
-        compiler
-            .type_ctx
-            .resolve_name(enum_name)
-            .cloned()
-            .unwrap_or_else(|| TypeIdentifier::unresolved(enum_name))
-    });
     let result_type = Type::Named {
-        identifier,
+        identifier: resolved_id,
         type_args: vec![],
     };
 
@@ -342,10 +343,15 @@ fn resolve_generic_enum<'ctx>(
         }
     }
 
-    let mangled_name = mangle_name(enum_name, &type_args);
+    // We need a resolved TypeIdentifier here for the mangled key; without a
+    // package we cannot guarantee uniqueness across crates.
+    let enum_id = resolved_id.cloned().ok_or_else(|| {
+        format!("cannot resolve package for generic enum `{enum_name}` during construction")
+    })?;
+    let mangled_name = mangle_name(&enum_id, &type_args);
 
     if !compiler.types.contains_monomorphized(&mangled_name) {
-        monomorphize_enum(compiler, enum_name, &type_args)?;
+        monomorphize_enum(compiler, &enum_id, &type_args)?;
     }
 
     let enum_type = compiler
@@ -482,7 +488,7 @@ pub(crate) fn enum_mangled_name(ty: &Type) -> Option<String> {
         Type::Named {
             identifier,
             type_args,
-        } if !type_args.is_empty() => Some(mangle_name(&identifier.name, type_args)),
+        } if !type_args.is_empty() => Some(mangle_name(identifier, type_args)),
         Type::Named { identifier, .. } => Some(identifier.qualified_name()),
         _ => None,
     }

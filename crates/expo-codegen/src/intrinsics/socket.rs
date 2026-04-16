@@ -1,4 +1,5 @@
 use expo_ast::identifier::TypeIdentifier;
+use expo_typecheck::types::{Primitive, Type, mangle_name};
 use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
 
@@ -68,15 +69,22 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .unwrap()
                 .into_int_value();
 
-            let list_type_name = "List_$IPAddress$";
+            let ip_id = TypeIdentifier::new("net", "IPAddress");
+            let list_type_name = mangle_name(
+                &TypeIdentifier::std("List"),
+                &[Type::Named {
+                    identifier: ip_id.clone(),
+                    type_args: vec![],
+                }],
+            );
             let list_struct = c
                 .types
-                .get_monomorphized(list_type_name)
-                .ok_or(format!("{list_type_name} struct type not found"))?;
+                .get_monomorphized(&list_type_name)
+                .ok_or_else(|| format!("{list_type_name} struct type not found"))?;
 
             let ip_struct_ty = c
                 .types
-                .get_concrete(&TypeIdentifier::new("net", "IPAddress"))
+                .get_concrete(&ip_id)
                 .ok_or("IPAddress struct type not found")?;
             let ip_size = crate::compiler::llvm_field_byte_size(ip_struct_ty.into()) as u64;
             let alloc_size = c
@@ -255,11 +263,21 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .unwrap()
                 .into_struct_value();
 
-            let pair_type_name = "Pair_$String.SocketAddress$";
+            let sa_id = TypeIdentifier::new("net", "SocketAddress");
+            let pair_type_name = mangle_name(
+                &TypeIdentifier::std("Pair"),
+                &[
+                    Type::Primitive(Primitive::String),
+                    Type::Named {
+                        identifier: sa_id.clone(),
+                        type_args: vec![],
+                    },
+                ],
+            );
             let pair_struct = c
                 .types
-                .get_monomorphized(pair_type_name)
-                .ok_or(format!("{pair_type_name} struct type not found"))?;
+                .get_monomorphized(&pair_type_name)
+                .ok_or_else(|| format!("{pair_type_name} struct type not found"))?;
             let pair_val = pair_struct.get_undef();
             let pair_val = c
                 .builder
