@@ -127,7 +127,7 @@ pub fn typecheck_graph(
         ctx.merge(&unified_project_ctx);
         let rm = graph.modules.get_mut(&name).unwrap();
         resolve_module_aliases(&rm.module, &mut ctx);
-        expo_typecheck::resolve_packages(&mut ctx);
+        expo_typecheck::resolve_packages(&mut ctx, &graph.dep_packages);
         expo_typecheck::check_module(&mut rm.module, &mut ctx);
         expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
         module_contexts.insert(name, ctx);
@@ -211,7 +211,7 @@ pub fn build_from_graph(
     for name in &graph.order {
         merged_ctx.merge(&module_contexts[name]);
     }
-    expo_typecheck::resolve_packages(&mut merged_ctx);
+    expo_typecheck::resolve_packages(&mut merged_ctx, &graph.dep_packages);
 
     let modules_ast: Vec<&Module> = graph
         .order

@@ -80,7 +80,7 @@ impl Backend {
             ctx.merge(&mod_ctx);
         }
 
-        expo_typecheck::resolve_packages(&mut ctx);
+        expo_typecheck::resolve_packages(&mut ctx, &[]);
 
         Self {
             client,

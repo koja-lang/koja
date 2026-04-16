@@ -11,12 +11,12 @@ use expo_ast::ast::{Diagnostic, Severity};
 /// the map keys carry real packages (set by `collect_module`) while most
 /// `Type::Named` identifiers still carry `Package::Unresolved` from the type
 /// expression resolver. This pass bridges that gap.
-pub fn resolve_packages(ctx: &mut TypeContext) {
-    let index: BTreeMap<String, TypeIdentifier> = ctx
-        .types
-        .keys()
-        .map(|id| (id.name.clone(), id.clone()))
-        .collect();
+pub fn resolve_packages(ctx: &mut TypeContext, _dep_packages: &[String]) {
+    let mut index: BTreeMap<String, TypeIdentifier> = BTreeMap::new();
+    for id in ctx.types.keys() {
+        index.insert(id.qualified_name(), id.clone());
+        index.insert(id.name.clone(), id.clone());
+    }
 
     for ti in ctx.types.values_mut() {
         resolve_identifier(&mut ti.identifier, &index);

@@ -21,7 +21,7 @@ use expo_ir::resolved::fields::{
 };
 
 use crate::calls::invoke_closure_fat_ptr;
-use crate::compiler::{Compiler, ExprResult, TypedValue, bare_type_name};
+use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::{
     ensure_types_exist, monomorphize_enum, monomorphize_impl_method, monomorphize_struct,
@@ -1078,12 +1078,12 @@ fn resolve_struct_name<'ctx>(
         if let Some(n) = st.get_name()
             && let Ok(s) = n.to_str()
         {
-            let bare = bare_type_name(s).to_string();
-            let identifier = c.type_ctx.resolve_name(&bare).cloned();
+            let name = s.to_string();
+            let identifier = c.type_ctx.resolve_name(&name).cloned();
             result = Some(ResolvedStructName {
-                base: bare.clone(),
+                base: name.clone(),
                 identifier,
-                mangled: bare,
+                mangled: name,
                 type_args: vec![],
             });
         }

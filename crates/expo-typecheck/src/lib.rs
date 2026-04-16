@@ -20,7 +20,7 @@ pub use collect::{GlobalNames, collect_all_names};
 pub fn check(module: &mut Module) -> TypeContext {
     let global = collect_all_names(&[module]);
     let mut ctx = collect::collect(module, &global, "");
-    resolve::resolve_packages(&mut ctx);
+    resolve::resolve_packages(&mut ctx, &[]);
     check::check_module(module, &mut ctx);
     validate::validate_resolved_types(module, &mut ctx);
     ctx
@@ -61,8 +61,11 @@ pub fn auto_derive_debug(ctx: &mut TypeContext) {
 /// Resolves all `Package::Unresolved` identifiers in a [`TypeContext`] by
 /// matching bare names against the type registry's map keys (which carry real
 /// packages from collection). Must be called after merging and before checking.
-pub fn resolve_packages(ctx: &mut TypeContext) {
-    resolve::resolve_packages(ctx);
+///
+/// `dep_packages` lists dependency package names whose types should only be
+/// accessible via qualified paths (e.g. `json.Parser`), not bare names.
+pub fn resolve_packages(ctx: &mut TypeContext, dep_packages: &[String]) {
+    resolve::resolve_packages(ctx, dep_packages);
 }
 
 /// Walks every expression in the module and emits an error for any

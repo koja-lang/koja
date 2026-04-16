@@ -152,13 +152,6 @@ impl<'ctx> TailCallCtx<'ctx> {
     }
 }
 
-/// Strips the package prefix from a qualified LLVM struct name, returning the
-/// bare type name. For example, `"std.Option"` becomes `"Option"` and
-/// `"myapp.Config"` becomes `"Config"`. Bare names pass through unchanged.
-pub(crate) fn bare_type_name(qualified: &str) -> &str {
-    qualified.rsplit('.').next().unwrap_or(qualified)
-}
-
 /// LLVM struct types, enum payloads, name tables, and monomorphisation info.
 /// Populated during type registration / monomorphisation and read during body
 /// compilation. Mirrors the read-only `TypeContext` pattern from COMPILER.md.
@@ -615,9 +608,6 @@ impl<'ctx> Compiler<'ctx> {
             .map_err(|e| format!("failed to write object file: {}", e.to_string()))
     }
 
-    /// Returns the LLVM struct field index for the given struct and field name.
-    /// Accepts both bare names (`"Point"`) and package-qualified LLVM names
-    /// (`"std.Point"`), stripping the prefix for `find_type` lookups.
     pub fn get_field_index(&self, struct_name: &str, field_name: &str) -> Option<u32> {
         if let Some(fields) = self.types.mono_struct_info.get(struct_name) {
             return fields
@@ -625,8 +615,7 @@ impl<'ctx> Compiler<'ctx> {
                 .position(|(name, _)| name == field_name)
                 .map(|i| i as u32);
         }
-        let bare = bare_type_name(struct_name);
-        self.type_ctx.find_type(bare).and_then(|info| {
+        self.type_ctx.find_type(struct_name).and_then(|info| {
             info.fields().and_then(|fields| {
                 fields
                     .iter()
@@ -636,8 +625,6 @@ impl<'ctx> Compiler<'ctx> {
         })
     }
 
-    /// Returns the Expo type of a struct field.
-    /// Accepts both bare and package-qualified LLVM struct names.
     pub fn get_field_type(&self, struct_name: &str, field_name: &str) -> Option<Type> {
         if let Some(fields) = self.types.mono_struct_info.get(struct_name) {
             return fields
@@ -645,8 +632,7 @@ impl<'ctx> Compiler<'ctx> {
                 .find(|(name, _)| name == field_name)
                 .map(|(_, ty)| ty.clone());
         }
-        let bare = bare_type_name(struct_name);
-        self.type_ctx.find_type(bare).and_then(|info| {
+        self.type_ctx.find_type(struct_name).and_then(|info| {
             info.fields().and_then(|fields| {
                 fields
                     .iter()

@@ -1,3 +1,5 @@
+alias greeter.Greeter
+
 fn main
   g = Greeter.new("World")
   print(g.greet())

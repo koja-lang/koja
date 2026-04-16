@@ -11,7 +11,7 @@ use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
 
-use crate::compiler::{Compiler, bare_type_name};
+use crate::compiler::Compiler;
 use crate::intrinsics::{emit_primitive_intrinsic, is_primitive_intrinsic, type_display_name};
 
 /// Calls `{Type}_format(val)` and returns the resulting string pointer.
@@ -224,9 +224,10 @@ fn synthesize_enum_format<'ctx>(
     compiler: &mut Compiler<'ctx>,
     id: &TypeIdentifier,
 ) -> Result<(), String> {
+    let qualified = id.qualified_name();
     let enum_name = &id.name;
     let resolved = resolve_enum_format_info(compiler, id);
-    let synthesis = begin_synthesis(compiler, enum_name, &resolved.function_name)?;
+    let synthesis = begin_synthesis(compiler, &qualified, &resolved.function_name)?;
 
     let alloca = compiler
         .builder
@@ -279,7 +280,7 @@ fn synthesize_enum_format<'ctx>(
                     if types.len() == 1 && !is_complex_type(&types[0]) {
                         let payload_struct_type = compiler
                             .types
-                            .get_variant_payload_type(enum_name, &variant_info.name);
+                            .get_variant_payload_type(&qualified, &variant_info.name);
 
                         if let Some(payload_type) = payload_struct_type {
                             let payload_ptr = compiler
@@ -389,9 +390,10 @@ fn synthesize_struct_format<'ctx>(
     compiler: &mut Compiler<'ctx>,
     id: &TypeIdentifier,
 ) -> Result<(), String> {
+    let qualified = id.qualified_name();
     let struct_name = &id.name;
     let resolved = resolve_struct_format_info(compiler, id);
-    let synthesis = begin_synthesis(compiler, struct_name, &resolved.function_name)?;
+    let synthesis = begin_synthesis(compiler, &qualified, &resolved.function_name)?;
 
     let fields = &resolved.fields;
 
@@ -556,7 +558,7 @@ fn infer_type_from_llvm(val: BasicValueEnum) -> Type {
     } else if val.is_struct_value() {
         let struct_type = val.into_struct_value().get_type();
         if let Some(name) = struct_type.get_name().and_then(|n| n.to_str().ok()) {
-            named(bare_type_name(name))
+            named(name)
         } else {
             Type::Unknown
         }

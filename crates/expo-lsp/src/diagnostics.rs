@@ -177,7 +177,7 @@ impl Backend {
             ctx.merge(&unified_ctx);
             expo_typecheck::auto_derive_debug(&mut ctx);
             expo_typecheck::mark_recursive_fields(&mut ctx);
-            expo_typecheck::resolve_packages(&mut ctx);
+            expo_typecheck::resolve_packages(&mut ctx, &[]);
             expo_typecheck::check_module(&mut parse_result.module, &mut ctx);
             all_diags.extend(ctx.diagnostics.clone());
             (ctx, sibling_modules)

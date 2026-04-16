@@ -23,8 +23,8 @@ use crate::env::CheckEnv;
 use crate::pattern::{check_match_exhaustiveness, check_pattern, collect_pattern_bindings};
 use crate::stmt::{check_body, check_statement};
 use crate::types::{
-    Primitive, Type, build_substitution, named, named_generic, resolve_type_alias_name,
-    substitute_preserving, unify, unwrap_indirect,
+    Primitive, Type, build_substitution, named, named_generic, resolve_type_alias_id,
+    resolve_type_alias_name, substitute_preserving, unify, unwrap_indirect,
 };
 
 /// Infers the type of an expression, emitting diagnostics for any type errors
@@ -1292,7 +1292,10 @@ fn infer_method_call(
     } = &receiver.kind
     {
         let resolved_name = resolve_type_alias_name(type_name, &ctx.type_aliases);
-        let static_sig_info = ctx.find_type(&resolved_name).and_then(|ti| {
+        let type_info = resolve_type_alias_id(type_name, &ctx.type_aliases)
+            .and_then(|id| ctx.get_type(&id))
+            .or_else(|| ctx.find_type(&resolved_name));
+        let static_sig_info = type_info.and_then(|ti| {
             ti.functions.get(method).and_then(|sig| {
                 if sig.kind == FunctionKind::Static {
                     Some((sig.clone(), ti.type_params.clone()))

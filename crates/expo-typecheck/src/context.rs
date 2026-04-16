@@ -41,8 +41,9 @@ pub struct TypeContext {
     pub types: BTreeMap<TypeIdentifier, TypeInfo>,
     /// File-private aliases from `alias` declarations. NOT merged across modules.
     pub module_aliases: BTreeMap<String, Type>,
-    /// Reverse index from bare type name to its fully qualified
-    /// [`TypeIdentifier`]. Populated by the resolution pass; empty before that.
+    /// Reverse index from type name to its fully qualified [`TypeIdentifier`].
+    /// Contains both qualified (`"std.Option"`) and bare (`"Option"`) entries.
+    /// Populated by the resolution pass; empty before that.
     pub name_index: BTreeMap<String, TypeIdentifier>,
     /// Package-to-type-names index for resolving qualified type paths like
     /// `http.Request`. Populated by the resolution pass alongside `name_index`.
