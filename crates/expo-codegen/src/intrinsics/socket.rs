@@ -1,3 +1,4 @@
+use expo_ast::identifier::TypeIdentifier;
 use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
 
@@ -75,7 +76,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let ip_struct_ty = c
                 .types
-                .get_stdlib("IPAddress")
+                .get_concrete(&TypeIdentifier::new("net", "IPAddress"))
                 .ok_or("IPAddress struct type not found")?;
             let ip_size = crate::compiler::llvm_field_byte_size(ip_struct_ty.into()) as u64;
             let alloc_size = c
@@ -229,7 +230,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let ip_struct_ty = c
                 .types
-                .get_stdlib("IPAddress")
+                .get_concrete(&TypeIdentifier::new("net", "IPAddress"))
                 .ok_or("IPAddress struct type not found")?;
             let ip_val = ip_struct_ty.get_undef();
             let ip_val = c
@@ -240,7 +241,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let sa_struct_ty = c
                 .types
-                .get_stdlib("SocketAddress")
+                .get_concrete(&TypeIdentifier::new("net", "SocketAddress"))
                 .ok_or("SocketAddress struct type not found")?;
             let sa_val = sa_struct_ty.get_undef();
             let sa_val = c

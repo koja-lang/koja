@@ -690,7 +690,9 @@ impl<'ctx> Compiler<'ctx> {
                 .first()
                 .is_some_and(|p| matches!(p, Param::Self_ { .. }))
         {
-            if let Some(st) = self.types.get_stdlib(name) {
+            if let Some(id) = self.type_ctx.resolve_name(name)
+                && let Some(st) = self.types.get_concrete(id)
+            {
                 param_types.push(st.into());
             } else {
                 let prim_ty = crate::types::primitive_name_to_type(name);
@@ -1308,7 +1310,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let stop_reason_llvm = self
             .types
-            .get_stdlib("StopReason")
+            .get_concrete(&TypeIdentifier::std("StopReason"))
             .ok_or("StopReason LLVM type not found")?;
 
         let i32_ty = self.context.i32_type();

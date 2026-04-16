@@ -3,6 +3,7 @@
 //! Both types are represented as a bare i64 (the pid) at runtime.
 //! `Ref<M, R>` supports `cast` and `call`; `ReplyTo<R>` supports `send`.
 
+use expo_ast::identifier::TypeIdentifier;
 use expo_ast::types::{named_generic_std, named_std};
 use expo_typecheck::types::{Primitive, Type, mangle_name, process_envelope_type};
 use inkwell::AddressSpace;
@@ -349,7 +350,10 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("Result<R, CallError> struct not found")?;
 
             // Ensure CallError enum exists in LLVM.
-            if c.types.get_stdlib("CallError").is_none() {
+            if c.types
+                .get_concrete(&TypeIdentifier::std("CallError"))
+                .is_none()
+            {
                 monomorphize_enum(c, "CallError", &[])?;
             }
 
