@@ -8,7 +8,7 @@ use expo_ast::span::Span;
 
 use expo_ast::types::{named_generic_std, named_std, type_identifier};
 use expo_typecheck::context::FnParam;
-use expo_typecheck::types::{Primitive, Type, mangle_name};
+use expo_typecheck::types::{Primitive, Type, TypeIdentifier, mangle_name};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -958,7 +958,7 @@ fn compile_spawn<'ctx>(
 
     let state_struct_type = compiler
         .types
-        .get_stdlib(&resolved.mangled_state)
+        .get_concrete(&TypeIdentifier::unresolved(&resolved.mangled_state))
         .or_else(|| compiler.types.get_monomorphized(&resolved.mangled_state))
         .ok_or_else(|| format!("no LLVM struct for `{}`", resolved.mangled_state))?;
 

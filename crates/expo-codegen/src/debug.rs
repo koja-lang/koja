@@ -468,7 +468,7 @@ fn begin_synthesis<'ctx>(
 ) -> Result<SynthesisContext<'ctx>, String> {
     let llvm_type = compiler
         .types
-        .get_stdlib(type_name)
+        .get_concrete(&TypeIdentifier::unresolved(type_name))
         .or_else(|| compiler.types.get_monomorphized(type_name))
         .ok_or_else(|| format!("unknown type: {type_name}"))?;
 

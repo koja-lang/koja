@@ -75,7 +75,7 @@ fn resolve_concrete_enum_variant<'ctx>(
 ) -> Result<ResolvedEnumVariant<'ctx>, String> {
     let enum_type = compiler
         .types
-        .get_stdlib(enum_name)
+        .get_concrete(&TypeIdentifier::unresolved(enum_name))
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
     let tag = compiler

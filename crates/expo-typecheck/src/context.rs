@@ -241,16 +241,16 @@ impl TypeContext {
 
     /// Returns `true` if `name` is registered as a struct in the type registry.
     pub fn is_struct(&self, name: &str) -> bool {
-        self.types
-            .values()
-            .any(|ti| ti.identifier.name == name && ti.is_struct())
+        self.find_type(name)
+            .or_else(|| self.types.values().find(|ti| ti.identifier.name == name))
+            .is_some_and(|ti| ti.is_struct())
     }
 
     /// Returns `true` if `name` is registered as an enum in the type registry.
     pub fn is_enum(&self, name: &str) -> bool {
-        self.types
-            .values()
-            .any(|ti| ti.identifier.name == name && ti.is_enum())
+        self.find_type(name)
+            .or_else(|| self.types.values().find(|ti| ti.identifier.name == name))
+            .is_some_and(|ti| ti.is_enum())
     }
 
     /// Collects the names of all registered struct types.

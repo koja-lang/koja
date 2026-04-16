@@ -8,7 +8,8 @@ use std::mem;
 use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr, TypeParam};
 use expo_typecheck::context::{FunctionKind, VariantData};
 use expo_typecheck::types::{
-    Primitive, Type, build_substitution, mangle_name, mangle_type, named, named_generic, substitute,
+    Primitive, Type, TypeIdentifier, build_substitution, mangle_name, mangle_type, named,
+    named_generic, substitute,
 };
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{FunctionValue, PointerValue};
@@ -793,7 +794,9 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
         } => {
             let name = &identifier.name;
             if type_args.is_empty() {
-                if c.types.get_stdlib(name).is_none()
+                if c.types
+                    .get_concrete(&TypeIdentifier::unresolved(name))
+                    .is_none()
                     && !c.types.contains_monomorphized(name)
                     && let Some((base, args)) = parse_mangled_name(name, c)
                 {

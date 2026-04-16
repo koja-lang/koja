@@ -218,16 +218,6 @@ impl<'ctx> TypeRegistry<'ctx> {
         self.monomorphized.get(mangled).copied()
     }
 
-    /// Look up a type by bare name in the concrete map regardless of
-    /// package. Used for intrinsic/stdlib lookups where the caller only
-    /// knows the type name (e.g. `"Fd"`, `"Socket"`, `"StopReason"`).
-    pub fn get_stdlib(&self, name: &str) -> Option<StructType<'ctx>> {
-        self.concrete
-            .iter()
-            .find(|(id, _)| id.name == name)
-            .map(|(_, ty)| *ty)
-    }
-
     /// Check whether a monomorphized type is registered.
     pub fn contains_monomorphized(&self, mangled: &str) -> bool {
         self.monomorphized.contains_key(mangled)
@@ -766,7 +756,10 @@ impl<'ctx> Compiler<'ctx> {
                         let Some(info) = resolve_const_enum(self, &enum_name, &variant) else {
                             continue;
                         };
-                        let Some(enum_type) = self.types.get_stdlib(&enum_name) else {
+                        let Some(enum_type) = self
+                            .types
+                            .get_concrete(&TypeIdentifier::unresolved(&enum_name))
+                        else {
                             continue;
                         };
                         let tag_val = self.context.i8_type().const_int(info.tag as u64, false);
@@ -794,7 +787,10 @@ impl<'ctx> Compiler<'ctx> {
                         let Some(info) = resolve_const_struct(self, &struct_name) else {
                             continue;
                         };
-                        let Some(struct_type) = self.types.get_stdlib(&struct_name) else {
+                        let Some(struct_type) = self
+                            .types
+                            .get_concrete(&TypeIdentifier::unresolved(&struct_name))
+                        else {
                             continue;
                         };
                         match self.build_const_struct(struct_type, &info.field_types, &fields) {
@@ -1299,7 +1295,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let struct_type = self
             .types
-            .get_stdlib(type_name)
+            .get_concrete(&TypeIdentifier::unresolved(type_name))
             .ok_or_else(|| format!("entry type `{type_name}` has no LLVM struct layout"))?;
 
         let config_llvm =

@@ -792,7 +792,7 @@ fn resolve_struct_construction<'ctx>(
 
     let struct_type = compiler
         .types
-        .get_stdlib(&struct_name)
+        .get_concrete(&TypeIdentifier::unresolved(&struct_name))
         .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
     let struct_info = compiler

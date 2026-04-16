@@ -6,7 +6,9 @@ use crate::binary::patterns::compile_binary_pattern;
 use crate::drop::Ownership;
 use expo_ast::ast::{Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern};
 use expo_typecheck::context::VariantData;
-use expo_typecheck::types::{Type, mangle_name, mangle_type, named, unwrap_indirect};
+use expo_typecheck::types::{
+    Type, TypeIdentifier, mangle_name, mangle_type, named, unwrap_indirect,
+};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -541,7 +543,7 @@ fn compile_tag_check<'ctx>(
     let tag = resolve_variant_tag(compiler, enum_name, variant)?;
     let enum_type = compiler
         .types
-        .get_stdlib(enum_name)
+        .get_concrete(&TypeIdentifier::unresolved(enum_name))
         .or_else(|| compiler.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
     let tag_ptr = compiler
@@ -618,7 +620,10 @@ fn enum_name_from_path<'ctx>(
                 Ok(name.clone())
             } else if !type_path.is_empty() {
                 let joined = type_path.join(".");
-                if compiler.types.get_stdlib(&joined).is_some()
+                if compiler
+                    .types
+                    .get_concrete(&TypeIdentifier::unresolved(&joined))
+                    .is_some()
                     || compiler.types.contains_monomorphized(&joined)
                     || compiler.types.mono_enum_variants.contains_key(&joined)
                 {
@@ -635,7 +640,10 @@ fn enum_name_from_path<'ctx>(
         }
         _ if !type_path.is_empty() => {
             let joined = type_path.join(".");
-            if compiler.types.get_stdlib(&joined).is_some()
+            if compiler
+                .types
+                .get_concrete(&TypeIdentifier::unresolved(&joined))
+                .is_some()
                 || compiler.types.contains_monomorphized(&joined)
                 || compiler.types.mono_enum_variants.contains_key(&joined)
             {
@@ -715,7 +723,7 @@ fn resolve_payload_info<'ctx>(
         .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
     let enum_type = compiler
         .types
-        .get_stdlib(enum_name)
+        .get_concrete(&TypeIdentifier::unresolved(enum_name))
         .or_else(|| compiler.types.get_monomorphized(enum_name))
         .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
     Ok(ResolvedPayloadInfo {

@@ -43,7 +43,11 @@ enum ResolvedCall<'ctx> {
 }
 
 fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ctx>, String> {
-    if c.types.get_stdlib(name).is_some() || c.types.contains_monomorphized(name) {
+    if c.types
+        .get_concrete(&TypeIdentifier::unresolved(name))
+        .is_some()
+        || c.types.contains_monomorphized(name)
+    {
         let identifier = c.type_ctx.resolve_name(name).cloned();
         return Ok(ResolvedCall::StructConstructor { identifier });
     }
