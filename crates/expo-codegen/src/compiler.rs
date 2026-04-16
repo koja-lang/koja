@@ -28,7 +28,7 @@ use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
 use expo_typecheck::context::{ClosureInfo, TypeContext, VariantData};
 use expo_typecheck::types::{
-    Type, build_substitution, named, process_envelope_type, resolve_type_expr_full, substitute,
+    Package, Type, build_substitution, process_envelope_type, resolve_type_expr_full, substitute,
     substitute_preserving,
 };
 use inkwell::OptimizationLevel;
@@ -164,6 +164,11 @@ pub struct TypeRegistry<'ctx> {
     /// strings (e.g. `"List_$Int32$"`, `"Union_$Int.String$"`).
     pub monomorphized: HashMap<String, StructType<'ctx>>,
 
+    /// Reverse index from bare type name to its fully qualified
+    /// `TypeIdentifier`. Copied from `TypeContext::name_index` during init
+    /// so `get_concrete` can resolve `Package::Unresolved` identifiers.
+    pub name_index: BTreeMap<String, TypeIdentifier>,
+
     pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
     pub enum_name_tables: HashMap<String, PointerValue<'ctx>>,
     pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
@@ -175,6 +180,7 @@ impl<'ctx> TypeRegistry<'ctx> {
         Self {
             concrete: HashMap::new(),
             monomorphized: HashMap::new(),
+            name_index: BTreeMap::new(),
             enum_variant_payloads: HashMap::new(),
             enum_name_tables: HashMap::new(),
             mono_struct_info: HashMap::new(),
@@ -194,8 +200,17 @@ impl<'ctx> TypeRegistry<'ctx> {
     }
 
     /// Look up a non-generic type by its package-qualified identifier.
+    /// When `id` has `Package::Unresolved`, resolves the name through the
+    /// name index first.
     pub fn get_concrete(&self, id: &TypeIdentifier) -> Option<StructType<'ctx>> {
-        self.concrete.get(id).copied()
+        self.concrete.get(id).copied().or_else(|| {
+            if id.package == Package::Unresolved {
+                let resolved = self.name_index.get(&id.name)?;
+                self.concrete.get(resolved).copied()
+            } else {
+                None
+            }
+        })
     }
 
     /// Look up a monomorphized generic or union type by its mangled name.
@@ -374,6 +389,8 @@ impl<'ctx> Compiler<'ctx> {
         let module = context.create_module("expo_module");
         let builder = context.create_builder();
         let debug = DebugContext::new(&module, filename, directory, release);
+        let mut types = TypeRegistry::new();
+        types.name_index = type_ctx.name_index.clone();
         Self {
             context,
             module,
@@ -383,7 +400,7 @@ impl<'ctx> Compiler<'ctx> {
             type_ctx,
             generic_fn_asts: HashMap::new(),
             fn_ref_thunks: HashMap::new(),
-            types: TypeRegistry::new(),
+            types,
             fn_state: FnState::new(),
             closure_site_path: None,
             debug,
@@ -659,10 +676,12 @@ impl<'ctx> Compiler<'ctx> {
         );
         self.type_ctx.resolve_type(&mut ty);
         if let Some(ref name) = self.fn_state.self_type_name {
-            let self_ty = if self.type_ctx.is_struct(name) || self.type_ctx.is_enum(name) {
-                named(name)
-            } else {
+            let Some(id) = self.type_ctx.resolve_name(name) else {
                 return substitute_preserving(&ty, &self.fn_state.type_subst);
+            };
+            let self_ty = Type::Named {
+                identifier: id.clone(),
+                type_args: vec![],
             };
             let mut subst = self.fn_state.type_subst.clone();
             subst.insert("Self".to_string(), self_ty);

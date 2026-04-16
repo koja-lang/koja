@@ -825,8 +825,13 @@ fn resolve_struct_construction<'ctx>(
         });
     }
 
+    let identifier = compiler
+        .type_ctx
+        .resolve_name(&struct_name)
+        .cloned()
+        .unwrap_or_else(|| TypeIdentifier::unresolved(&struct_name));
     let result_type = Type::Named {
-        identifier: TypeIdentifier::unresolved(&struct_name),
+        identifier,
         type_args: vec![],
     };
 

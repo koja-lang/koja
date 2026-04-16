@@ -150,10 +150,15 @@ fn resolve_concrete_enum_variant<'ctx>(
         }
     };
 
-    let result_type = Type::Named {
-        identifier: resolved_type
+    let identifier = resolved_type.cloned().unwrap_or_else(|| {
+        compiler
+            .type_ctx
+            .resolve_name(enum_name)
             .cloned()
-            .unwrap_or_else(|| TypeIdentifier::unresolved(enum_name)),
+            .unwrap_or_else(|| TypeIdentifier::unresolved(enum_name))
+    });
+    let result_type = Type::Named {
+        identifier,
         type_args: vec![],
     };
 

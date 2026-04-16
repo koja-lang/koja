@@ -26,7 +26,6 @@ pub fn to_llvm_type<'ctx>(
             if type_args.is_empty() {
                 registry
                     .get_concrete(identifier)
-                    .or_else(|| registry.get_stdlib(&identifier.name))
                     .or_else(|| registry.get_monomorphized(&identifier.name))
                     .map(|st| st.into())
             } else {
