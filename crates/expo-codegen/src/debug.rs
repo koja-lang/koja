@@ -11,7 +11,7 @@ use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, bare_type_name};
 use crate::intrinsics::{emit_primitive_intrinsic, is_primitive_intrinsic, type_display_name};
 
 /// Calls `{Type}_format(val)` and returns the resulting string pointer.
@@ -556,7 +556,7 @@ fn infer_type_from_llvm(val: BasicValueEnum) -> Type {
     } else if val.is_struct_value() {
         let struct_type = val.into_struct_value().get_type();
         if let Some(name) = struct_type.get_name().and_then(|n| n.to_str().ok()) {
-            named(name)
+            named(bare_type_name(name))
         } else {
             Type::Unknown
         }

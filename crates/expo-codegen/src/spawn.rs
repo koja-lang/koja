@@ -17,7 +17,7 @@ use inkwell::IntPredicate;
 use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue};
 
-use crate::compiler::{Compiler, TypedValue};
+use crate::compiler::{Compiler, TypedValue, bare_type_name};
 use crate::generics::{monomorphize_struct, try_parse_mangled_name};
 
 // ---------------------------------------------------------------------------
@@ -80,10 +80,11 @@ pub(crate) fn extract_spawn_target(expr: &Expr) -> Result<SpawnTarget<'_>, Strin
 pub(crate) fn resolve_mangled_state(type_name: &str, config_value: BasicValueEnum) -> String {
     if config_value.is_struct_value() {
         let config_struct = config_value.into_struct_value().get_type();
-        if let Some(name) = config_struct.get_name().and_then(|n| n.to_str().ok())
-            && (name.starts_with(&format!("{type_name}_$")) || name == type_name)
-        {
-            return name.to_string();
+        if let Some(name) = config_struct.get_name().and_then(|n| n.to_str().ok()) {
+            let bare = bare_type_name(name);
+            if bare.starts_with(&format!("{type_name}_$")) || bare == type_name {
+                return bare.to_string();
+            }
         }
     }
     type_name.to_string()

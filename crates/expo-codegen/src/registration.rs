@@ -19,14 +19,14 @@ pub(crate) fn register_types(c: &mut Compiler) {
         if !info.type_params.is_empty() {
             continue;
         }
-        let st = c.context.opaque_struct_type(&id.name);
+        let st = c.context.opaque_struct_type(&id.qualified_name());
         c.types.register_concrete(id, st);
     }
     for (id, info) in c.type_ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
         if !info.type_params.is_empty() {
             continue;
         }
-        let et = c.context.opaque_struct_type(&id.name);
+        let et = c.context.opaque_struct_type(&id.qualified_name());
         c.types.register_concrete(id, et);
     }
 
@@ -92,7 +92,7 @@ pub(crate) fn register_types(c: &mut Compiler) {
             .iter()
             .map(|v| (v.name.clone(), v.data.clone()))
             .collect();
-        build_enum_layout(c, &id.name, enum_type, &variants);
+        build_enum_layout(c, &id.qualified_name(), enum_type, &variants);
     }
 
     // Pass 4: register union types (tagged-union layout reusing enum infrastructure)

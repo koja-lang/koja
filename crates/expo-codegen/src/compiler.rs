@@ -152,6 +152,13 @@ impl<'ctx> TailCallCtx<'ctx> {
     }
 }
 
+/// Strips the package prefix from a qualified LLVM struct name, returning the
+/// bare type name. For example, `"std.Option"` becomes `"Option"` and
+/// `"myapp.Config"` becomes `"Config"`. Bare names pass through unchanged.
+pub(crate) fn bare_type_name(qualified: &str) -> &str {
+    qualified.rsplit('.').next().unwrap_or(qualified)
+}
+
 /// LLVM struct types, enum payloads, name tables, and monomorphisation info.
 /// Populated during type registration / monomorphisation and read during body
 /// compilation. Mirrors the read-only `TypeContext` pattern from COMPILER.md.
@@ -224,25 +231,42 @@ impl<'ctx> TypeRegistry<'ctx> {
     }
 
     /// Returns the LLVM struct type for an enum variant's payload, if it has one.
+    /// Tries a direct key match first (covers mangled and already-qualified
+    /// names), then falls back through `name_index` to resolve bare names to
+    /// their package-qualified key.
     pub fn get_variant_payload_type(
         &self,
         enum_name: &str,
         variant_name: &str,
     ) -> Option<StructType<'ctx>> {
-        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
-            vs.iter()
-                .find(|(name, _)| name == variant_name)
-                .and_then(|(_, pt)| *pt)
-        })
+        self.enum_variant_payloads
+            .get(enum_name)
+            .or_else(|| {
+                let resolved = self.name_index.get(enum_name)?;
+                self.enum_variant_payloads.get(&resolved.qualified_name())
+            })
+            .and_then(|vs| {
+                vs.iter()
+                    .find(|(name, _)| name == variant_name)
+                    .and_then(|(_, pt)| *pt)
+            })
     }
 
     /// Returns the tag index (0-based) for an enum variant.
+    /// Tries a direct key match first, then resolves bare names through
+    /// `name_index` to their package-qualified key.
     pub fn get_variant_tag(&self, enum_name: &str, variant_name: &str) -> Option<u8> {
-        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
-            vs.iter()
-                .position(|(name, _)| name == variant_name)
-                .map(|i| i as u8)
-        })
+        self.enum_variant_payloads
+            .get(enum_name)
+            .or_else(|| {
+                let resolved = self.name_index.get(enum_name)?;
+                self.enum_variant_payloads.get(&resolved.qualified_name())
+            })
+            .and_then(|vs| {
+                vs.iter()
+                    .position(|(name, _)| name == variant_name)
+                    .map(|i| i as u8)
+            })
     }
 }
 
@@ -592,6 +616,8 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     /// Returns the LLVM struct field index for the given struct and field name.
+    /// Accepts both bare names (`"Point"`) and package-qualified LLVM names
+    /// (`"std.Point"`), stripping the prefix for `find_type` lookups.
     pub fn get_field_index(&self, struct_name: &str, field_name: &str) -> Option<u32> {
         if let Some(fields) = self.types.mono_struct_info.get(struct_name) {
             return fields
@@ -599,7 +625,8 @@ impl<'ctx> Compiler<'ctx> {
                 .position(|(name, _)| name == field_name)
                 .map(|i| i as u32);
         }
-        self.type_ctx.find_type(struct_name).and_then(|info| {
+        let bare = bare_type_name(struct_name);
+        self.type_ctx.find_type(bare).and_then(|info| {
             info.fields().and_then(|fields| {
                 fields
                     .iter()
@@ -610,6 +637,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     /// Returns the Expo type of a struct field.
+    /// Accepts both bare and package-qualified LLVM struct names.
     pub fn get_field_type(&self, struct_name: &str, field_name: &str) -> Option<Type> {
         if let Some(fields) = self.types.mono_struct_info.get(struct_name) {
             return fields
@@ -617,7 +645,8 @@ impl<'ctx> Compiler<'ctx> {
                 .find(|(name, _)| name == field_name)
                 .map(|(_, ty)| ty.clone());
         }
-        self.type_ctx.find_type(struct_name).and_then(|info| {
+        let bare = bare_type_name(struct_name);
+        self.type_ctx.find_type(bare).and_then(|info| {
             info.fields().and_then(|fields| {
                 fields
                     .iter()

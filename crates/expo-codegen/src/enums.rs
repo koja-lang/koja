@@ -483,7 +483,7 @@ pub(crate) fn enum_mangled_name(ty: &Type) -> Option<String> {
             identifier,
             type_args,
         } if !type_args.is_empty() => Some(mangle_name(&identifier.name, type_args)),
-        Type::Named { identifier, .. } => Some(identifier.name.clone()),
+        Type::Named { identifier, .. } => Some(identifier.qualified_name()),
         _ => None,
     }
 }

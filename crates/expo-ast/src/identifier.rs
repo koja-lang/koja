@@ -69,6 +69,17 @@ impl TypeIdentifier {
     pub fn is_std(&self) -> bool {
         self.package == Package::Std
     }
+
+    /// Returns a package-qualified name that is always unique across packages.
+    /// Unlike `Display`, this prefixes `std.` for stdlib types so they never
+    /// collide with user-defined types of the same name.
+    pub fn qualified_name(&self) -> String {
+        match &self.package {
+            Package::Std => format!("std.{}", self.name),
+            Package::Named(pkg) => format!("{pkg}.{}", self.name),
+            Package::Unresolved => self.name.clone(),
+        }
+    }
 }
 
 impl fmt::Display for TypeIdentifier {
