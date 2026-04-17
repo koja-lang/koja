@@ -35,25 +35,38 @@ pub fn call_format<'ctx>(
     // synthesized function name matches what call sites generate. Falling
     // back to the bare name is only correct for primitives or unresolved
     // types (e.g. intrinsics).
-    let fn_name = match &resolved_type {
+    let resolved_id = match &resolved_type {
         Type::Named { identifier, .. } if identifier.package != Package::Unresolved => {
-            let prefix = compiler.method_symbol_prefix(&identifier.package, &identifier.name);
+            Some(identifier.clone())
+        }
+        _ => None,
+    };
+    let fn_name = match &resolved_id {
+        Some(id) => {
+            let prefix = compiler.method_symbol_prefix(&id.package, &id.name);
             format!("{prefix}_format")
         }
-        _ => format!("{type_name}_format"),
+        None => format!("{type_name}_format"),
     };
 
     if !compiler.functions.contains_key(&fn_name) {
-        let Some(kind) = resolve_format_kind(compiler, &fn_name, &type_name) else {
+        let Some(kind) = resolve_format_kind(compiler, resolved_id.as_ref(), &fn_name, &type_name)
+        else {
             return Err(format!("no format function for type `{type_name}`"));
         };
         match kind {
             FormatKind::Enum => {
-                let id = resolve_type_id(compiler, &type_name)?;
+                let id = resolved_id
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(|| resolve_type_id(compiler, &type_name))?;
                 synthesize_enum_format(compiler, &id)?;
             }
             FormatKind::Struct => {
-                let id = resolve_type_id(compiler, &type_name)?;
+                let id = resolved_id
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(|| resolve_type_id(compiler, &type_name))?;
                 synthesize_struct_format(compiler, &id)?;
             }
             FormatKind::PrimitiveIntrinsic => {
@@ -534,12 +547,30 @@ enum FormatKind {
 
 /// Determines the formatting strategy for a type by checking the type
 /// context (enum vs struct) and the intrinsics table.
-fn resolve_format_kind(compiler: &Compiler, fn_name: &str, type_name: &str) -> Option<FormatKind> {
-    if compiler.type_ctx.is_enum(type_name) {
-        Some(FormatKind::Enum)
-    } else if compiler.type_ctx.is_struct(type_name) {
-        Some(FormatKind::Struct)
-    } else if is_primitive_intrinsic(fn_name) {
+fn resolve_format_kind(
+    compiler: &Compiler,
+    resolved_id: Option<&TypeIdentifier>,
+    fn_name: &str,
+    type_name: &str,
+) -> Option<FormatKind> {
+    if let Some(id) = resolved_id
+        && let Some(ti) = compiler.type_ctx.get_type(id)
+    {
+        if ti.is_enum() {
+            return Some(FormatKind::Enum);
+        }
+        if ti.is_struct() {
+            return Some(FormatKind::Struct);
+        }
+    } else {
+        if compiler.type_ctx.is_enum(type_name) {
+            return Some(FormatKind::Enum);
+        }
+        if compiler.type_ctx.is_struct(type_name) {
+            return Some(FormatKind::Struct);
+        }
+    }
+    if is_primitive_intrinsic(fn_name) {
         Some(FormatKind::PrimitiveIntrinsic)
     } else {
         None

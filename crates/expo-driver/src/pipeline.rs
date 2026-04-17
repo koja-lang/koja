@@ -113,14 +113,14 @@ pub fn typecheck_graph(
         true
     }
 
-    // Check: type-check each module backed by real (non-embedded) source.
-    // Packages named `std` still place tests under `std.test.*`; those must
-    // be checked like any other project code.
+    // Check: every module needs alias resolution + package resolution so that
+    // its bodies (compiled later by codegen) can resolve cross-package
+    // identifiers via aliases. Only modules backed by real source need body
+    // type-checking; embedded stdlib/lib modules ship with pre-validated
+    // signatures but still must have their `alias` declarations honored.
     for name in graph.order.clone() {
-        let path = &graph.modules[&name].path;
-        if !module_needs_body_typecheck(path) {
-            continue;
-        }
+        let path = graph.modules[&name].path.clone();
+        let needs_body = module_needs_body_typecheck(&path);
         let Some(mut ctx) = module_contexts.remove(&name) else {
             continue;
         };
@@ -129,8 +129,10 @@ pub fn typecheck_graph(
         let pkg = fqn_to_package(&name);
         resolve_module_aliases(&rm.module, &mut ctx);
         expo_typecheck::resolve_packages(&mut ctx, &graph.dep_packages);
-        expo_typecheck::check_module(&mut rm.module, &mut ctx, &pkg);
-        expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
+        if needs_body {
+            expo_typecheck::check_module(&mut rm.module, &mut ctx, &pkg);
+            expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
+        }
         module_contexts.insert(name, ctx);
     }
 
@@ -159,8 +161,12 @@ pub fn typecheck_graph(
 
 /// Resolves `alias` declarations in a module, validating against known package
 /// types and inserting resolved aliases into `ctx.type_aliases` so they are
-/// visible during type checking of this module.
+/// visible during type checking of this module. Duplicate `local_name` entries
+/// within the same module are reported as errors so two `alias`es never
+/// silently shadow each other (e.g. `alias alpha.Config` + `alias beta.Config`).
 fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
+    let mut seen: std::collections::BTreeMap<String, expo_ast::span::Span> =
+        std::collections::BTreeMap::new();
     for item in &module.items {
         if let Item::Alias(a) = item {
             if a.path.len() != 2 {
@@ -179,6 +185,22 @@ fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
                 ctx.error(format!("unknown package type `{pkg}.{type_name}`"), a.span);
                 continue;
             }
+            if let Some(prev_span) = seen.get(&a.local_name) {
+                ctx.diagnostics.push(expo_ast::ast::Diagnostic {
+                    severity: expo_ast::ast::Severity::Error,
+                    message: format!(
+                        "duplicate alias `{}`: a local name can refer to only one type",
+                        a.local_name
+                    ),
+                    hint: Some(format!(
+                        "the previous alias for `{}` was at line {}",
+                        a.local_name, prev_span.start.line
+                    )),
+                    span: a.span,
+                });
+                continue;
+            }
+            seen.insert(a.local_name.clone(), a.span);
             let resolved = Type::Named {
                 identifier: TypeIdentifier::new(pkg, type_name),
                 type_args: vec![],

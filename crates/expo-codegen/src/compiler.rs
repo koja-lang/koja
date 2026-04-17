@@ -769,15 +769,12 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     /// Package-aware replacement for `type_ctx.resolve_name` that honours the
-    /// `Compiler::current_package` when set. Use this everywhere codegen would
-    /// otherwise consult the shared bare-name index so two packages with the
-    /// same type name don't alias to a last-write-wins winner.
+    /// `Compiler::current_package` when set. Bare lookups resolve only within
+    /// the current package or to `std`; dependency types must be qualified or
+    /// imported via `alias` upstream.
     pub fn resolve_name_current(&self, name: &str) -> Option<&TypeIdentifier> {
         match &self.current_package {
-            Some(pkg) => self
-                .type_ctx
-                .resolve_name_scoped(name, pkg)
-                .or_else(|| self.type_ctx.resolve_name(name)),
+            Some(pkg) => self.type_ctx.resolve_name_scoped(name, pkg),
             None => self.type_ctx.resolve_name(name),
         }
     }
@@ -811,8 +808,7 @@ impl<'ctx> Compiler<'ctx> {
             let resolved_id = self
                 .current_package
                 .as_ref()
-                .and_then(|pkg| self.type_ctx.resolve_name_scoped(name, pkg))
-                .or_else(|| self.type_ctx.resolve_name(name));
+                .and_then(|pkg| self.type_ctx.resolve_name_scoped(name, pkg));
             if let Some(id) = resolved_id
                 && let Some(st) = self.types.get_concrete(id)
             {
@@ -1412,8 +1408,7 @@ impl<'ctx> Compiler<'ctx> {
         use crate::spawn::{self, ExitCodeCtx};
 
         let entry_id = self
-            .type_ctx
-            .resolve_name(type_name)
+            .resolve_name_current(type_name)
             .cloned()
             .ok_or_else(|| format!("entry type `{type_name}` not found"))?;
 
@@ -1702,14 +1697,17 @@ fn run_codegen<'ctx>(
 
     if let Some(type_name) = entry_type {
         let span = modules.first().map(|m| m.span).unwrap_or_default();
-        compiler.emit_process_entry(type_name).map_err(|e| {
+        compiler.current_package = Some(package_from_str(app_name));
+        let result = compiler.emit_process_entry(type_name).map_err(|e| {
             vec![Diagnostic {
                 severity: Severity::Error,
                 message: e,
                 hint: None,
                 span,
             }]
-        })?;
+        });
+        compiler.current_package = None;
+        result?;
     }
 
     Ok(compiler)

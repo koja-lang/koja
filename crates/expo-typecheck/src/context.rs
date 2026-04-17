@@ -248,16 +248,25 @@ impl TypeContext {
 
     /// Returns `true` if `name` is registered as a struct in the type registry.
     pub fn is_struct(&self, name: &str) -> bool {
-        self.find_type(name)
-            .or_else(|| self.types.values().find(|ti| ti.identifier.name == name))
-            .is_some_and(|ti| ti.is_struct())
+        self.lookup_by_name(name).is_some_and(|ti| ti.is_struct())
     }
 
     /// Returns `true` if `name` is registered as an enum in the type registry.
     pub fn is_enum(&self, name: &str) -> bool {
-        self.find_type(name)
-            .or_else(|| self.types.values().find(|ti| ti.identifier.name == name))
-            .is_some_and(|ti| ti.is_enum())
+        self.lookup_by_name(name).is_some_and(|ti| ti.is_enum())
+    }
+
+    /// Scope-aware [`TypeInfo`] lookup by bare name. Prefers the current
+    /// package's definition (when set), then falls back to `std`. Returns
+    /// `None` for cross-package dependency types — callers must use the
+    /// qualified form or declare an `alias` to reach them.
+    pub fn lookup_by_name(&self, name: &str) -> Option<&TypeInfo> {
+        if let Some(Package::Named(pkg)) = &self.current_package
+            && let Some(ti) = self.types.get(&TypeIdentifier::new(pkg, name))
+        {
+            return Some(ti);
+        }
+        self.types.get(&TypeIdentifier::std(name))
     }
 
     /// Collects the names of all registered struct types.

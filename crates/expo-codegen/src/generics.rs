@@ -507,7 +507,7 @@ fn resolve_method_signature(
         return Ok(None);
     }
 
-    let spec_id = compiler.type_ctx.resolve_name(base_type).cloned();
+    let spec_id = compiler.resolve_name_current(base_type).cloned();
     let specialized_match = spec_id.as_ref().and_then(|id| {
         compiler
             .type_ctx
@@ -657,6 +657,7 @@ fn resolve_method_signature(
             base_type,
             type_args.to_vec(),
             compiler.type_ctx,
+            compiler.current_package.as_ref(),
         ))
     };
 
@@ -999,7 +1000,7 @@ fn parse_mangled_type(s: &str, c: &Compiler) -> Type {
                 type_args: args,
             }
         } else {
-            named_generic(&base, args, c.type_ctx)
+            named_generic(&base, args, c.type_ctx, c.current_package.as_ref())
         };
     }
     if let Some(id) = c.resolve_name_current(s) {

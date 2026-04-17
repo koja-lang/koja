@@ -326,7 +326,7 @@ pub fn compile_method_call<'ctx>(
     if let ExprKind::Ident { name, .. } = &receiver.kind {
         let resolved = resolve_type_alias_name(name, &c.type_ctx.type_aliases);
         let resolved_id = resolve_type_alias_id(name, &c.type_ctx.type_aliases)
-            .or_else(|| c.type_ctx.resolve_name(&resolved).cloned());
+            .or_else(|| c.resolve_name_current(&resolved).cloned());
         if let Some(ref id) = resolved_id
             && c.type_ctx.get_type(id).is_some()
         {
@@ -348,7 +348,7 @@ pub fn compile_method_call<'ctx>(
         .identifier
         .as_ref()
         .filter(|id| id.package != Package::Unresolved)
-        .or_else(|| c.type_ctx.resolve_name(&resolved_name.base))
+        .or_else(|| c.resolve_name_current(&resolved_name.base))
         .and_then(|id| c.type_ctx.get_type(id))
         .and_then(|ti| ti.functions.get(method))
         .is_some();
@@ -458,9 +458,10 @@ fn resolve_method_call<'ctx>(
     method: &str,
     args: &[Arg],
 ) -> Result<ResolvedMethodCall<'ctx>, String> {
-    let resolved_id = type_id
+    let resolved_id: Option<TypeIdentifier> = type_id
         .filter(|id| id.package != Package::Unresolved)
-        .or_else(|| c.type_ctx.resolve_name(base));
+        .cloned()
+        .or_else(|| c.resolve_name_current(base).cloned());
     let is_generic = !type_args.is_empty();
 
     // Pick the symbol prefix in lockstep with definition-site mangling:
@@ -472,6 +473,7 @@ fn resolve_method_call<'ctx>(
         struct_name.to_string()
     } else {
         resolved_id
+            .as_ref()
             .map(|id| c.method_symbol_prefix(&id.package, &id.name))
             .unwrap_or_else(|| struct_name.to_string())
     };
@@ -507,7 +509,7 @@ fn resolve_method_call<'ctx>(
             sig.return_type.clone(),
         )
     } else if is_generic
-        && let Some(ti) = resolved_id.and_then(|id| c.type_ctx.get_type(id))
+        && let Some(ti) = resolved_id.as_ref().and_then(|id| c.type_ctx.get_type(id))
         && let Some(sig) = ti.functions.get(method)
     {
         let mut subst = build_substitution(&ti.type_params, type_args);
@@ -522,7 +524,7 @@ fn resolve_method_call<'ctx>(
                 .collect(),
             substitute(&sig.return_type, &subst),
         )
-    } else if let Some(ti) = resolved_id.and_then(|id| c.type_ctx.get_type(id))
+    } else if let Some(ti) = resolved_id.as_ref().and_then(|id| c.type_ctx.get_type(id))
         && let Some(sig) = ti.functions.get(method)
     {
         (
@@ -530,7 +532,7 @@ fn resolve_method_call<'ctx>(
             sig.return_type.clone(),
         )
     } else if is_generic
-        && let Some(spec_id) = resolved_id
+        && let Some(spec_id) = resolved_id.as_ref()
         && let Some(entries) = c.type_ctx.specialized_methods.get(spec_id)
         && let Some((_, sigs)) = entries.iter().find(|(a, _)| *a == type_args)
         && let Some(sig) = sigs.get(method)
@@ -544,6 +546,7 @@ fn resolve_method_call<'ctx>(
     };
 
     let is_move = resolved_id
+        .as_ref()
         .and_then(|id| c.type_ctx.get_type(id))
         .and_then(|ti| ti.functions.get(method))
         .is_some_and(|sig| sig.kind == FunctionKind::Instance(PassMode::Move));
@@ -620,7 +623,7 @@ fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
             type_args: ta,
         } if ta.is_empty() => {
             if let Some((base, type_args)) = try_parse_mangled_name(&identifier.name, c) {
-                named_generic(&base, type_args, c.type_ctx)
+                named_generic(&base, type_args, c.type_ctx, c.current_package.as_ref())
             } else {
                 ty.clone()
             }
@@ -1048,7 +1051,12 @@ fn resolve_generic_struct<'ctx>(
         .get_monomorphized(&mangled_name)
         .ok_or_else(|| format!("monomorphized struct `{mangled_name}` not found"))?;
 
-    let result_type = named_generic(struct_name, type_args, compiler.type_ctx);
+    let result_type = named_generic(
+        struct_name,
+        type_args,
+        compiler.type_ctx,
+        compiler.current_package.as_ref(),
+    );
 
     Ok(ResolvedGenericStruct {
         mangled_name,
@@ -1123,7 +1131,7 @@ fn resolve_struct_name<'ctx>(
             && let Ok(s) = n.to_str()
         {
             let name = s.to_string();
-            let identifier = c.type_ctx.resolve_name(&name).cloned();
+            let identifier = c.resolve_name_current(&name).cloned();
             result = Some(ResolvedStructName {
                 base: name.clone(),
                 identifier,
@@ -1138,7 +1146,7 @@ fn resolve_struct_name<'ctx>(
     if sn.type_args.is_empty()
         && let Some((base, type_args)) = try_parse_mangled_name(&sn.mangled, c)
     {
-        sn.identifier = c.type_ctx.resolve_name(&base).cloned();
+        sn.identifier = c.resolve_name_current(&base).cloned();
         sn.base = base;
         sn.type_args = type_args;
     }
@@ -1201,14 +1209,16 @@ fn resolve_static_call<'ctx>(
     method: &str,
     args: &[Arg],
 ) -> Result<ResolvedStaticCall<'ctx>, String> {
-    let resolved_id = resolved_type
+    let resolved_id: Option<TypeIdentifier> = resolved_type
         .filter(|id| id.package != Package::Unresolved)
-        .or_else(|| c.type_ctx.resolve_name(type_name));
-    let type_params = resolved_id
+        .cloned()
+        .or_else(|| c.resolve_name_current(type_name).cloned());
+    let type_params: Option<Vec<TypeParam>> = resolved_id
+        .as_ref()
         .and_then(|id| c.type_ctx.get_type(id))
-        .map(|ti| &ti.type_params);
+        .map(|ti| ti.type_params.clone());
 
-    let mut type_args: Vec<Type> = if let Some(tp) = type_params
+    let mut type_args: Vec<Type> = if let Some(ref tp) = type_params
         && !tp.is_empty()
     {
         tp.iter()
@@ -1218,7 +1228,7 @@ fn resolve_static_call<'ctx>(
         Vec::new()
     };
 
-    if let Some(tp) = type_params
+    if let Some(ref tp) = type_params
         && !tp.is_empty()
         && type_args.len() != tp.len()
     {
@@ -1228,7 +1238,7 @@ fn resolve_static_call<'ctx>(
     let mangled_type = if type_args.is_empty() {
         type_name.to_string()
     } else {
-        let type_id = resolved_id.cloned().ok_or_else(|| {
+        let type_id = resolved_id.clone().ok_or_else(|| {
             format!("cannot resolve package for generic static call on `{type_name}`")
         })?;
         let m = mangle_name(&type_id, &type_args);
@@ -1247,6 +1257,7 @@ fn resolve_static_call<'ctx>(
     // generics keep the existing bare-name prefix until later migration stages.
     let symbol_prefix = if type_args.is_empty() {
         resolved_id
+            .as_ref()
             .map(|id| c.method_symbol_prefix(&id.package, &id.name))
             .unwrap_or_else(|| mangled_type.clone())
     } else {
@@ -1279,7 +1290,9 @@ fn resolve_static_call<'ctx>(
             (pts, sig.return_type.clone())
         })
         .or_else(|| {
-            let ti = resolved_id.and_then(|id| c.type_ctx.get_type(id))?;
+            let ti = resolved_id
+                .as_ref()
+                .and_then(|id| c.type_ctx.get_type(id))?;
             let sig = ti.functions.get(method)?;
             if !type_args.is_empty() {
                 let subst = build_substitution(&ti.type_params, &type_args);

@@ -6,11 +6,14 @@ use expo_ast::ast::{
 };
 use expo_ast::span::Span;
 
+use crate::check::package_from_str;
 use crate::context::{
     FunctionKind, FunctionSig, ParamInfo, PassMode, ProtocolInfo, TypeContext, TypeInfo, TypeKind,
     VariantData, VariantInfo, Visibility,
 };
-use crate::types::{Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params};
+use crate::types::{
+    Package, Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params,
+};
 
 /// Resolves a bare type name to a [`TypeIdentifier`] by trying the current
 /// package first, then falling back to `Package::Std`.
@@ -73,6 +76,7 @@ pub fn collect_all_names(modules: &[&Module]) -> GlobalNames {
 /// [`TypeInfo`]'s [`TypeIdentifier`] for package-aware collision detection.
 pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> TypeContext {
     let mut ctx = TypeContext::new();
+    ctx.current_package = Some(package_from_str(package));
 
     let struct_names: Vec<&str> = global_names
         .struct_names
@@ -670,7 +674,90 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
         },
     );
 
+    resolve_same_package_refs(&mut ctx, package);
+
     ctx
+}
+
+/// Final pass of [`collect`]: rewrites `Package::Unresolved` identifiers that
+/// match a type already registered in the current package to that package's
+/// qualified form. This ensures that free function signatures, constants, and
+/// type aliases defined in the module carry the right package before any
+/// merge (which would otherwise require a global-scope resolver to guess).
+///
+/// Stdlib and cross-package references remain unresolved here; they are
+/// handled later by [`crate::resolve::resolve_packages`] via the bare
+/// `name_index` entries (stdlib only) or reported as errors.
+fn resolve_same_package_refs(ctx: &mut TypeContext, package: &str) {
+    let scope = package_from_str(package);
+    let local_names: HashSet<String> = ctx
+        .types
+        .keys()
+        .filter(|id| id.package == scope)
+        .map(|id| id.name.clone())
+        .collect();
+    if local_names.is_empty() {
+        return;
+    }
+
+    for sig in ctx.functions.values_mut() {
+        resolve_sig_locally(sig, &local_names, &scope);
+    }
+    for ty in ctx.constants.values_mut() {
+        resolve_type_locally(ty, &local_names, &scope);
+    }
+    for ty in ctx.type_aliases.values_mut() {
+        resolve_type_locally(ty, &local_names, &scope);
+    }
+    let keys: Vec<TypeIdentifier> = ctx.types.keys().cloned().collect();
+    for key in keys {
+        if let Some(ti) = ctx.types.get_mut(&key) {
+            for sig in ti.functions.values_mut() {
+                resolve_sig_locally(sig, &local_names, &scope);
+            }
+        }
+    }
+}
+
+fn resolve_sig_locally(sig: &mut FunctionSig, local_names: &HashSet<String>, scope: &Package) {
+    for p in &mut sig.params {
+        resolve_type_locally(&mut p.ty, local_names, scope);
+    }
+    resolve_type_locally(&mut sig.return_type, local_names, scope);
+}
+
+fn resolve_type_locally(ty: &mut Type, local_names: &HashSet<String>, scope: &Package) {
+    match ty {
+        Type::Named {
+            identifier,
+            type_args,
+        } => {
+            if identifier.package == Package::Unresolved && local_names.contains(&identifier.name) {
+                identifier.package = scope.clone();
+            }
+            for arg in type_args {
+                resolve_type_locally(arg, local_names, scope);
+            }
+        }
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            for p in params {
+                resolve_type_locally(&mut p.ty, local_names, scope);
+            }
+            resolve_type_locally(return_type, local_names, scope);
+        }
+        Type::Indirect(inner) | Type::Pointer(inner) => {
+            resolve_type_locally(inner, local_names, scope);
+        }
+        Type::Union(members) => {
+            for m in members {
+                resolve_type_locally(m, local_names, scope);
+            }
+        }
+        Type::Primitive(_) | Type::Parameter(_) | Type::Unit | Type::Unknown | Type::Error => {}
+    }
 }
 
 /// Synthesizes default protocol method implementations for impl blocks whose

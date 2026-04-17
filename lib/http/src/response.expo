@@ -1,3 +1,5 @@
+alias json.StringBuilder
+
 @doc """
 An HTTP response with status, headers, body, and protocol
 version. Returned by the parser when reading server responses,

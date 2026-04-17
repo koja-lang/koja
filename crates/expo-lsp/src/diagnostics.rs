@@ -41,6 +41,16 @@ fn default_src() -> Vec<String> {
     vec!["src".to_string()]
 }
 
+/// Derives a synthetic package name for an LSP-owned module from its on-disk
+/// path. Untitled buffers (no path) fall back to `"__lsp_preview__"` so every
+/// call site passes a real, non-empty package to the type checker.
+fn package_for_module(path: Option<&Path>) -> String {
+    path.and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "__lsp_preview__".to_string())
+}
+
 /// Walks up from `start` looking for a directory containing `expo.toml`.
 fn find_project_root(start: &Path) -> Option<PathBuf> {
     let mut dir = start;
@@ -167,18 +177,22 @@ impl Backend {
             all_for_names.push(&parse_result.module);
             let global_names = expo_typecheck::collect_all_names(&all_for_names);
 
+            let current_pkg = package_for_module(file_path.as_deref());
+
             let mut unified_ctx = self.stdlib_ctx.clone();
             for m in &sibling_modules {
-                let mod_ctx = expo_typecheck::collect_module(m, &global_names, "");
+                let sibling_pkg = package_for_module(m.path.as_deref());
+                let mod_ctx = expo_typecheck::collect_module(m, &global_names, &sibling_pkg);
                 unified_ctx.merge(&mod_ctx);
             }
 
-            let mut ctx = expo_typecheck::collect_module(&parse_result.module, &global_names, "");
+            let mut ctx =
+                expo_typecheck::collect_module(&parse_result.module, &global_names, &current_pkg);
             ctx.merge(&unified_ctx);
             expo_typecheck::auto_derive_debug(&mut ctx);
             expo_typecheck::mark_recursive_fields(&mut ctx);
             expo_typecheck::resolve_packages(&mut ctx, &[]);
-            expo_typecheck::check_module(&mut parse_result.module, &mut ctx, "");
+            expo_typecheck::check_module(&mut parse_result.module, &mut ctx, &current_pkg);
             all_diags.extend(ctx.diagnostics.clone());
             (ctx, sibling_modules)
         } else {

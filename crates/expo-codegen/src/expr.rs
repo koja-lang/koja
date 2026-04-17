@@ -919,8 +919,7 @@ fn resolve_spawn_info<'ctx>(
         mangled_state.clone()
     } else {
         compiler
-            .type_ctx
-            .resolve_name(&mangled_state)
+            .resolve_name_current(&mangled_state)
             .map(|id| compiler.method_symbol_prefix(&id.package, &id.name))
             .unwrap_or_else(|| mangled_state.clone())
     };

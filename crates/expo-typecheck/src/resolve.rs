@@ -11,20 +11,32 @@ use expo_ast::ast::{Diagnostic, Severity};
 /// the map keys carry real packages (set by `collect_module`) while most
 /// `Type::Named` identifiers still carry `Package::Unresolved` from the type
 /// expression resolver. This pass bridges that gap.
+///
+/// Bare entries in `name_index` are restricted to `std` types so a bare
+/// reference to `X` resolves only to `{current_package}.X` (via the qualified
+/// entry) or `std.X` (via the bare entry). Cross-package bare references to
+/// dependency types must be qualified (`dep.X`) or imported via `alias`.
 pub fn resolve_packages(ctx: &mut TypeContext, _dep_packages: &[String]) {
     let mut index: BTreeMap<String, TypeIdentifier> = BTreeMap::new();
     for id in ctx.types.keys() {
         index.insert(id.qualified_name(), id.clone());
-        if let Some(prev) = index.insert(id.name.clone(), id.clone())
-            && &prev != id
-            && std::env::var_os("EXPO_COLLISION_DEBUG").is_some()
+        if id.package == Package::Std {
+            index.insert(id.name.clone(), id.clone());
+        }
+    }
+    // Aliases let a module use a short local name for a type owned by another
+    // package (`alias json.StringBuilder` → `StringBuilder` ↦ `json.StringBuilder`).
+    // Seed the resolution index with each alias so collected signatures whose
+    // bodies were never type-checked (embedded stdlib/lib modules) can still
+    // upgrade their `Package::Unresolved` references to the right package.
+    for (local_name, ty) in &ctx.type_aliases {
+        if index.contains_key(local_name) {
+            continue;
+        }
+        if let Type::Named { identifier, .. } = ty
+            && identifier.package != Package::Unresolved
         {
-            eprintln!(
-                "[collision-debug] name_index: bare `{}` overwritten: `{}` -> `{}`",
-                id.name,
-                prev.qualified_name(),
-                id.qualified_name()
-            );
+            index.insert(local_name.clone(), identifier.clone());
         }
     }
 
@@ -52,10 +64,14 @@ pub fn resolve_packages(ctx: &mut TypeContext, _dep_packages: &[String]) {
         resolve_type(ty, &index);
     }
 
-    for impls in ctx.protocol_impls.values_mut() {
-        for (_, type_args) in impls {
-            for ty in type_args {
-                resolve_type(ty, &index);
+    let impl_keys: Vec<TypeIdentifier> = ctx.protocol_impls.keys().cloned().collect();
+    for key in impl_keys {
+        let scope = key.package.clone();
+        if let Some(impls) = ctx.protocol_impls.get_mut(&key) {
+            for (_, type_args) in impls {
+                for ty in type_args {
+                    resolve_type_scoped(ty, &index, &scope);
+                }
             }
         }
     }
@@ -67,13 +83,14 @@ pub fn resolve_packages(ctx: &mut TypeContext, _dep_packages: &[String]) {
     let spec_keys: Vec<TypeIdentifier> = ctx.specialized_methods.keys().cloned().collect();
     for mut key in spec_keys {
         if let Some(mut entries) = ctx.specialized_methods.remove(&key) {
+            let scope = key.package.clone();
             for (type_args, sigs) in &mut entries {
                 for ty in type_args.iter_mut() {
-                    resolve_type(ty, &index);
+                    resolve_type_scoped(ty, &index, &scope);
                 }
-                resolve_function_sigs(sigs, &index);
+                resolve_function_sigs_scoped(sigs, &index, &scope);
             }
-            resolve_identifier(&mut key, &index);
+            resolve_identifier_scoped(&mut key, &index, &scope);
             ctx.specialized_methods
                 .entry(key)
                 .or_default()
@@ -84,12 +101,13 @@ pub fn resolve_packages(ctx: &mut TypeContext, _dep_packages: &[String]) {
     let spec_ast_keys: Vec<TypeIdentifier> = ctx.specialized_impl_asts.keys().cloned().collect();
     for mut key in spec_ast_keys {
         if let Some(mut entries) = ctx.specialized_impl_asts.remove(&key) {
+            let scope = key.package.clone();
             for (type_args, _) in &mut entries {
                 for ty in type_args.iter_mut() {
-                    resolve_type(ty, &index);
+                    resolve_type_scoped(ty, &index, &scope);
                 }
             }
-            resolve_identifier(&mut key, &index);
+            resolve_identifier_scoped(&mut key, &index, &scope);
             ctx.specialized_impl_asts
                 .entry(key)
                 .or_default()

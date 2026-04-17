@@ -18,14 +18,19 @@ use crate::types::{
     Package, Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params,
 };
 
-/// Converts a caller-facing package label (`"std"`, `"alpha"`, or `""` for
-/// the single-file test path) into the matching [`Package`] variant used by
-/// the scoped name-index lookup.
-pub(crate) fn package_from_str(package: &str) -> Option<Package> {
-    match package {
-        "" => None,
-        "std" => Some(Package::Std),
-        other => Some(Package::Named(other.to_string())),
+/// Converts a caller-facing package label (`"std"` or a real package name such
+/// as `"alpha"`) into the matching [`Package`] variant used by the scoped
+/// name-index lookup. Empty strings are rejected because every module must
+/// carry a real package so bare-name lookups have a deterministic scope.
+pub(crate) fn package_from_str(package: &str) -> Package {
+    assert!(
+        !package.is_empty(),
+        "package_from_str called with empty package name; callers must supply a real package (file stem, project name, or \"std\")"
+    );
+    if package == "std" {
+        Package::Std
+    } else {
+        Package::Named(package.to_string())
     }
 }
 
@@ -40,7 +45,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
     let prev_path = ctx.current_module_path.clone();
     ctx.current_module_path = module.path.clone();
     let prev_package = ctx.current_package.clone();
-    ctx.current_package = package_from_str(package);
+    ctx.current_package = Some(package_from_str(package));
 
     let struct_names = ctx.struct_names();
     let struct_name_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();

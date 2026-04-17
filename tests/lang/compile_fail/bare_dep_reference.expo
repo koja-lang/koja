@@ -1,0 +1,4 @@
+fn main
+  h = Headers{}
+  print(h)
+end

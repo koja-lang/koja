@@ -116,13 +116,22 @@ pub fn resolve_project_modules(
     scan_directories(&config.name, &src_roots, &mut graph)?;
     resolve_dependencies(config, project_root, &mut graph)?;
 
+    let project_prefix = format!("{}.", config.name);
     if is_type_entry {
-        if graph.order.iter().all(|n| n.starts_with("std.")) {
+        if !graph
+            .order
+            .iter()
+            .any(|n| n.starts_with(&project_prefix) || n == &config.name)
+        {
             return Err("no source files found in src directories".to_string());
         }
         if !graph.modules.contains_key(&entry_fqn) {
-            let first_src = graph.order.iter().find(|n| !n.starts_with("std.")).cloned();
-            if let Some(name) = first_src {
+            let first_project = graph
+                .order
+                .iter()
+                .find(|n| n.starts_with(&project_prefix) || *n == &config.name)
+                .cloned();
+            if let Some(name) = first_project {
                 graph.entry = name;
             }
         }

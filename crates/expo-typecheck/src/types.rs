@@ -276,12 +276,21 @@ pub fn build_substitution(
 }
 
 /// Helper to construct a generic Named type, resolving the package via the
-/// type context's name index when available.
-pub fn named_generic(name: &str, type_args: Vec<Type>, ctx: &crate::context::TypeContext) -> Type {
-    let identifier = ctx
-        .resolve_name(name)
-        .cloned()
-        .unwrap_or_else(|| TypeIdentifier::unresolved(name));
+/// type context's name index when available. When `scope` is provided the
+/// resolver prefers a same-package definition (`scope.name`) before falling
+/// back to a bare/std entry.
+pub fn named_generic(
+    name: &str,
+    type_args: Vec<Type>,
+    ctx: &crate::context::TypeContext,
+    scope: Option<&Package>,
+) -> Type {
+    let identifier = match scope {
+        Some(pkg) => ctx.resolve_name_scoped(name, pkg),
+        None => ctx.resolve_name(name),
+    }
+    .cloned()
+    .unwrap_or_else(|| TypeIdentifier::unresolved(name));
     Type::Named {
         identifier,
         type_args,

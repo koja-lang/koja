@@ -15,13 +15,29 @@ use expo_ast::ast::Module;
 
 pub use collect::{GlobalNames, collect_all_names};
 
+/// Derives a package name for a single-file module from its on-disk file stem.
+/// Files without a path (e.g. in-memory test fixtures) fall back to
+/// `"__test__"` so every module still carries a concrete package.
+fn package_for_single_file(module: &Module) -> String {
+    module
+        .path
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "__test__".to_string())
+}
+
 /// Runs collection and type-checking in one step, returning a populated context.
-/// Uses module-local names only (for single-file / test usage).
+/// Uses module-local names only (for single-file / test usage). The module's
+/// file stem is used as the synthetic package name so bare-name lookups have
+/// a deterministic scope.
 pub fn check(module: &mut Module) -> TypeContext {
+    let package = package_for_single_file(module);
     let global = collect_all_names(&[module]);
-    let mut ctx = collect::collect(module, &global, "");
+    let mut ctx = collect::collect(module, &global, &package);
     resolve::resolve_packages(&mut ctx, &[]);
-    check::check_module(module, &mut ctx, "");
+    check::check_module(module, &mut ctx, &package);
     validate::validate_resolved_types(module, &mut ctx);
     ctx
 }

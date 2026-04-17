@@ -37,10 +37,13 @@ pub fn compile_enum_construction<'ctx>(
         .first()
         .ok_or("empty type path in enum construction")?;
 
-    let resolved_id = resolved_type
+    let resolved_id: Option<TypeIdentifier> = resolved_type
         .filter(|id| id.package != Package::Unresolved)
-        .or_else(|| compiler.type_ctx.resolve_name(base_name));
-    let type_info = resolved_id.and_then(|id| compiler.type_ctx.get_type(id));
+        .cloned()
+        .or_else(|| compiler.resolve_name_current(base_name).cloned());
+    let type_info = resolved_id
+        .as_ref()
+        .and_then(|id| compiler.type_ctx.get_type(id));
 
     let is_generic = type_info.is_some_and(|ti| ti.is_enum() && !ti.type_params.is_empty());
 
@@ -50,12 +53,19 @@ pub fn compile_enum_construction<'ctx>(
             base_name,
             variant,
             data,
-            resolved_id,
+            resolved_id.as_ref(),
             function,
         );
     }
 
-    compile_concrete_enum(compiler, base_name, variant, data, resolved_id, function)
+    compile_concrete_enum(
+        compiler,
+        base_name,
+        variant,
+        data,
+        resolved_id.as_ref(),
+        function,
+    )
 }
 
 struct ResolvedEnumVariant<'ctx> {
@@ -277,10 +287,12 @@ fn resolve_generic_enum<'ctx>(
     compiled_values: &[BasicValueEnum<'ctx>],
     compiled_types: &[Type],
 ) -> Result<ResolvedGenericEnum<'ctx>, String> {
-    let resolved_id = resolved_type
+    let resolved_id: Option<TypeIdentifier> = resolved_type
         .filter(|id| id.package != Package::Unresolved)
-        .or_else(|| compiler.type_ctx.resolve_name(enum_name));
+        .cloned()
+        .or_else(|| compiler.resolve_name_current(enum_name).cloned());
     let enum_info = resolved_id
+        .as_ref()
         .and_then(|id| compiler.type_ctx.get_type(id))
         .filter(|ti| ti.is_enum())
         .cloned()
@@ -345,7 +357,7 @@ fn resolve_generic_enum<'ctx>(
 
     // We need a resolved TypeIdentifier here for the mangled key; without a
     // package we cannot guarantee uniqueness across crates.
-    let enum_id = resolved_id.cloned().ok_or_else(|| {
+    let enum_id = resolved_id.ok_or_else(|| {
         format!("cannot resolve package for generic enum `{enum_name}` during construction")
     })?;
     let mangled_name = mangle_name(&enum_id, &type_args);
@@ -386,7 +398,12 @@ fn resolve_generic_enum<'ctx>(
             _ => None,
         });
 
-    let result_type = named_generic(enum_name, type_args, compiler.type_ctx);
+    let result_type = named_generic(
+        enum_name,
+        type_args,
+        compiler.type_ctx,
+        compiler.current_package.as_ref(),
+    );
 
     Ok(ResolvedGenericEnum {
         enum_type,

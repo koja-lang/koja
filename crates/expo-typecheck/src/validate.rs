@@ -242,13 +242,11 @@ fn check_type_resolved(ty: &Type, expr: &Expr, ctx: &mut TypeContext) {
             type_args,
         } => {
             if identifier.package == Package::Unresolved {
+                let (message, hint) = unresolved_type_diagnostic(&identifier.name, ctx);
                 ctx.diagnostics.push(Diagnostic {
                     severity: Severity::Error,
-                    message: format!(
-                        "internal: unresolved type `{}` reached codegen boundary",
-                        identifier.name
-                    ),
-                    hint: None,
+                    message,
+                    hint,
                     span: expr.span,
                 });
             }
@@ -275,4 +273,42 @@ fn check_type_resolved(ty: &Type, expr: &Expr, ctx: &mut TypeContext) {
         }
         Type::Error | Type::Parameter(_) | Type::Primitive(_) | Type::Unit | Type::Unknown => {}
     }
+}
+
+/// Builds a helpful error message and optional hint for an unresolved type
+/// reference. When dependency packages contain a matching type, the hint
+/// suggests qualifying the reference (`dep.Name`) or adding an `alias`.
+fn unresolved_type_diagnostic(name: &str, ctx: &TypeContext) -> (String, Option<String>) {
+    let owners: Vec<String> = ctx
+        .package_types
+        .iter()
+        .filter_map(|(pkg, names)| match pkg {
+            Package::Named(p) if names.contains(name) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    if owners.is_empty() {
+        return (
+            format!("unknown type `{name}`: not in current package or `std`"),
+            Some(format!(
+                "qualify with the owning package (`pkg.{name}`) or import via `alias pkg.{name}`"
+            )),
+        );
+    }
+    let suggestions = owners
+        .iter()
+        .map(|p| format!("`{p}.{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let alias_hint = owners
+        .iter()
+        .map(|p| format!("`alias {p}.{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        format!("unknown type `{name}`: bare names resolve to the current package or `std` only"),
+        Some(format!(
+            "qualify the reference ({suggestions}) or import via {alias_hint}"
+        )),
+    )
 }

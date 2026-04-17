@@ -610,7 +610,7 @@ fn infer_type_from_expr(compiler: &Compiler, expr: &Expr) -> Option<Type> {
             name: type_name, ..
         } = &receiver.kind
         {
-            let is_type_name = compiler.type_ctx.resolve_name(type_name).is_some();
+            let is_type_name = compiler.resolve_name_current(type_name).is_some();
             if is_type_name {
                 return infer_static_method_return_type(compiler, type_name, method, args);
             }

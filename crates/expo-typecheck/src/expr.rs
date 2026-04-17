@@ -183,7 +183,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                     );
                 }
             }
-            named_generic("List", vec![elem_type], ctx)
+            named_generic("List", vec![elem_type], ctx, ctx.current_package.as_ref())
         }
 
         ExprKind::Map { entries } => {
@@ -219,7 +219,12 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                     );
                 }
             }
-            named_generic("Map", vec![key_type, val_type], ctx)
+            named_generic(
+                "Map",
+                vec![key_type, val_type],
+                ctx,
+                ctx.current_package.as_ref(),
+            )
         }
 
         ExprKind::Literal { value, .. } => match value {
@@ -371,7 +376,12 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 _ => reply_type_template.clone(),
             };
 
-            named_generic("Ref", vec![msg_type, reply_type], ctx)
+            named_generic(
+                "Ref",
+                vec![msg_type, reply_type],
+                ctx,
+                ctx.current_package.as_ref(),
+            )
         }
 
         ExprKind::Receive {
@@ -849,7 +859,7 @@ fn expand_mangled_generic_type(ty: &Type, ctx: &TypeContext) -> Type {
             type_args,
         } if type_args.is_empty() => {
             if let Some((base, type_args)) = try_parse_mangled_generic(&identifier.name, ctx) {
-                named_generic(&base, type_args, ctx)
+                named_generic(&base, type_args, ctx, ctx.current_package.as_ref())
             } else {
                 ty.clone()
             }
@@ -1154,9 +1164,8 @@ fn infer_enum_construction(
             EnumConstructionData::Unit => {}
         }
         if ce.enum_names.contains(&enum_name.as_str()) {
-            ctx.types
-                .values()
-                .find(|ti| ti.identifier.name == enum_name && ti.is_enum())
+            ctx.lookup_by_name(&enum_name)
+                .filter(|ti| ti.is_enum())
                 .map(|ti| Type::Named {
                     identifier: ti.identifier.clone(),
                     type_args: vec![],
@@ -1569,9 +1578,8 @@ fn infer_struct_construction(
             infer_expr(&mut fi.value, ctx, ce);
         }
         if ce.struct_names.contains(&name.as_str()) {
-            ctx.types
-                .values()
-                .find(|ti| ti.identifier.name == name && ti.is_struct())
+            ctx.lookup_by_name(&name)
+                .filter(|ti| ti.is_struct())
                 .map(|ti| Type::Named {
                     identifier: ti.identifier.clone(),
                     type_args: vec![],
