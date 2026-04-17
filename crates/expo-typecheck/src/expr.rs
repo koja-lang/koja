@@ -315,13 +315,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             let process_args = ctx
                 .resolve_name(&target)
                 .cloned()
-                .and_then(|id| ctx.protocol_impls.get(&id).cloned())
-                .and_then(|impls| {
-                    impls
-                        .iter()
-                        .find(|(proto, _)| proto == "Process")
-                        .map(|(_, args)| args.clone())
-                });
+                .and_then(|id| ctx.process_impl_args(&id).map(<[Type]>::to_vec));
 
             let Some(args) = process_args else {
                 ctx.error(

@@ -1,3 +1,4 @@
+mod aliases;
 mod check;
 mod collect;
 pub mod context;
@@ -13,30 +14,19 @@ mod validate;
 use context::TypeContext;
 use expo_ast::ast::Module;
 
+pub use aliases::resolve_module_aliases;
 pub use collect::{GlobalNames, collect_all_names};
-
-/// Derives a package name for a single-file module from its on-disk file stem.
-/// Files without a path (e.g. in-memory test fixtures) fall back to
-/// `"__test__"` so every module still carries a concrete package.
-fn package_for_single_file(module: &Module) -> String {
-    module
-        .path
-        .as_ref()
-        .and_then(|p| p.file_stem())
-        .and_then(|s| s.to_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| "__test__".to_string())
-}
+pub use types::{fqn_to_package, package_for_path, package_from_str};
 
 /// Runs collection and type-checking in one step, returning a populated context.
 /// Uses module-local names only (for single-file / test usage). The module's
 /// file stem is used as the synthetic package name so bare-name lookups have
 /// a deterministic scope.
 pub fn check(module: &mut Module) -> TypeContext {
-    let package = package_for_single_file(module);
+    let package = types::package_for_path(module.path.as_deref(), "__test__");
     let global = collect_all_names(&[module]);
     let mut ctx = collect::collect(module, &global, &package);
-    resolve::resolve_packages(&mut ctx, &[]);
+    resolve::resolve_packages(&mut ctx);
     check::check_module(module, &mut ctx, &package);
     validate::validate_resolved_types(module, &mut ctx);
     ctx
@@ -45,8 +35,9 @@ pub fn check(module: &mut Module) -> TypeContext {
 /// Validates all function bodies, expressions, and patterns against the context.
 ///
 /// `package` is the module's package identifier (e.g. `"std"`, `"alpha"`, or
-/// `""` for single-file usage). Bare-name type references inside the module
-/// are resolved within this package first before falling back to globals.
+/// a synthetic file-stem-based name). Bare-name type references inside the
+/// module are resolved within this package first before falling back to
+/// globals.
 pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
     check::check_module(module, ctx, package);
 }
@@ -81,11 +72,8 @@ pub fn auto_derive_debug(ctx: &mut TypeContext) {
 /// Resolves all `Package::Unresolved` identifiers in a [`TypeContext`] by
 /// matching bare names against the type registry's map keys (which carry real
 /// packages from collection). Must be called after merging and before checking.
-///
-/// `dep_packages` lists dependency package names whose types should only be
-/// accessible via qualified paths (e.g. `json.Parser`), not bare names.
-pub fn resolve_packages(ctx: &mut TypeContext, dep_packages: &[String]) {
-    resolve::resolve_packages(ctx, dep_packages);
+pub fn resolve_packages(ctx: &mut TypeContext) {
+    resolve::resolve_packages(ctx);
 }
 
 /// Walks every expression in the module and emits an error for any

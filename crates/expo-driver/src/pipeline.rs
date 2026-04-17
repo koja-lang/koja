@@ -11,18 +11,11 @@ use std::{env, fs, mem, process};
 use expo_ast::ast::{Annotation, AnnotationValue, ImplMember, Item, Module, Severity};
 
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::{Type, TypeIdentifier};
+use expo_typecheck::types::fqn_to_package;
 
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
 use crate::resolve::{self, ModuleGraph};
-
-/// Extracts the package name from a fully-qualified module name.
-/// e.g. `"json.decoder"` → `"json"`, `"my_app.main"` → `"my_app"`,
-/// `"json"` → `"json"` (single-segment FQN).
-fn fqn_to_package(fqn: &str) -> String {
-    fqn.split('.').next().unwrap_or(fqn).to_string()
-}
 
 /// Runs the type-checking pipeline for every module in a graph.
 ///
@@ -86,10 +79,10 @@ pub fn typecheck_graph(
     for name in &project_names {
         let rm = &graph.modules[*name];
         let pkg = fqn_to_package(name);
-        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, &pkg);
+        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, pkg);
         ctx.merge(&stdlib_ctx);
         expo_typecheck::auto_derive_debug(&mut ctx);
-        expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx, &pkg);
+        expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx, pkg);
         expo_typecheck::mark_recursive_fields(&mut ctx);
         module_contexts.insert((*name).clone(), ctx);
     }
@@ -127,10 +120,10 @@ pub fn typecheck_graph(
         ctx.merge(&unified_project_ctx);
         let rm = graph.modules.get_mut(&name).unwrap();
         let pkg = fqn_to_package(&name);
-        resolve_module_aliases(&rm.module, &mut ctx);
-        expo_typecheck::resolve_packages(&mut ctx, &graph.dep_packages);
+        expo_typecheck::resolve_module_aliases(&rm.module, &mut ctx);
+        expo_typecheck::resolve_packages(&mut ctx);
         if needs_body {
-            expo_typecheck::check_module(&mut rm.module, &mut ctx, &pkg);
+            expo_typecheck::check_module(&mut rm.module, &mut ctx, pkg);
             expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
         }
         module_contexts.insert(name, ctx);
@@ -159,59 +152,6 @@ pub fn typecheck_graph(
     (module_contexts, has_errors)
 }
 
-/// Resolves `alias` declarations in a module, validating against known package
-/// types and inserting resolved aliases into `ctx.type_aliases` so they are
-/// visible during type checking of this module. Duplicate `local_name` entries
-/// within the same module are reported as errors so two `alias`es never
-/// silently shadow each other (e.g. `alias alpha.Config` + `alias beta.Config`).
-fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
-    let mut seen: std::collections::BTreeMap<String, expo_ast::span::Span> =
-        std::collections::BTreeMap::new();
-    for item in &module.items {
-        if let Item::Alias(a) = item {
-            if a.path.len() != 2 {
-                ctx.error(
-                    format!(
-                        "alias path must be `package.Type`, got `{}`",
-                        a.path.join(".")
-                    ),
-                    a.span,
-                );
-                continue;
-            }
-            let pkg = &a.path[0];
-            let type_name = &a.path[1];
-            if !ctx.is_package_type(pkg, type_name) {
-                ctx.error(format!("unknown package type `{pkg}.{type_name}`"), a.span);
-                continue;
-            }
-            if let Some(prev_span) = seen.get(&a.local_name) {
-                ctx.diagnostics.push(expo_ast::ast::Diagnostic {
-                    severity: expo_ast::ast::Severity::Error,
-                    message: format!(
-                        "duplicate alias `{}`: a local name can refer to only one type",
-                        a.local_name
-                    ),
-                    hint: Some(format!(
-                        "the previous alias for `{}` was at line {}",
-                        a.local_name, prev_span.start.line
-                    )),
-                    span: a.span,
-                });
-                continue;
-            }
-            seen.insert(a.local_name.clone(), a.span);
-            let resolved = Type::Named {
-                identifier: TypeIdentifier::new(pkg, type_name),
-                type_args: vec![],
-            };
-            ctx.module_aliases
-                .insert(a.local_name.clone(), resolved.clone());
-            ctx.type_aliases.insert(a.local_name.clone(), resolved);
-        }
-    }
-}
-
 /// Compiles a fully resolved module graph into an executable.
 ///
 /// Type-checks all modules, merges contexts, emits LLVM IR, and links.
@@ -234,7 +174,7 @@ pub fn build_from_graph(
     for name in &graph.order {
         merged_ctx.merge(&module_contexts[name]);
     }
-    expo_typecheck::resolve_packages(&mut merged_ctx, &graph.dep_packages);
+    expo_typecheck::resolve_packages(&mut merged_ctx);
 
     let modules_ast: Vec<&Module> = graph
         .order
@@ -244,7 +184,7 @@ pub fn build_from_graph(
     let module_packages: Vec<String> = graph
         .order
         .iter()
-        .map(|name| fqn_to_package(name))
+        .map(|name| fqn_to_package(name).to_string())
         .collect();
     let module_packages_refs: Vec<&str> = module_packages.iter().map(String::as_str).collect();
 

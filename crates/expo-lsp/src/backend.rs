@@ -14,6 +14,7 @@ use tower_lsp_server::{Client, LanguageServer};
 
 use expo_ast::ast::Module;
 use expo_typecheck::context::TypeContext;
+use expo_typecheck::types::fqn_to_package;
 
 /// Cached state for a single open document, including the parsed AST
 /// and type-checking context.
@@ -73,14 +74,14 @@ impl Backend {
             let pkg = if name.starts_with("std.") {
                 "std"
             } else {
-                name.split('.').next().unwrap_or(name)
+                fqn_to_package(name)
             };
             let mut mod_ctx = expo_typecheck::collect_module(module, &global_names, pkg);
             mod_ctx.merge(&ctx);
             ctx.merge(&mod_ctx);
         }
 
-        expo_typecheck::resolve_packages(&mut ctx, &[]);
+        expo_typecheck::resolve_packages(&mut ctx);
 
         Self {
             client,

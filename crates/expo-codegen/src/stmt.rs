@@ -317,8 +317,8 @@ pub(crate) fn resolve_field_path(
             ));
         }
 
-        let field_index = compiler
-            .struct_field_index_for_type(&current_type, field_name)
+        let step = compiler
+            .struct_field_lookup(&current_type, field_name)
             .ok_or_else(|| {
                 format!(
                     "unknown field `{field_name}` on struct `{}`",
@@ -326,21 +326,8 @@ pub(crate) fn resolve_field_path(
                 )
             })?;
 
-        let field_type = compiler
-            .struct_field_type_for_type(&current_type, field_name)
-            .ok_or_else(|| {
-                format!(
-                    "unknown field `{field_name}` on struct `{}`",
-                    current_type.display()
-                )
-            })?;
-
-        steps.push(ResolvedFieldStep {
-            field_index,
-            field_type: field_type.clone(),
-        });
-
-        current_type = field_type;
+        current_type = step.field_type.clone();
+        steps.push(step);
     }
 
     Ok((variable_type, steps))
@@ -661,7 +648,7 @@ fn infer_type_from_expr(compiler: &Compiler, expr: &Expr) -> Option<Type> {
         });
     }
     if let ExprKind::Ident { name, .. } = &expr.kind
-        && let Some(sig) = compiler.type_ctx.functions.get(name)
+        && let Some(sig) = compiler.type_ctx.function_sig(name)
         && sig.type_params.is_empty()
     {
         return Some(Type::Function {
@@ -671,7 +658,7 @@ fn infer_type_from_expr(compiler: &Compiler, expr: &Expr) -> Option<Type> {
     }
     if let ExprKind::Call { callee, .. } = &expr.kind
         && let ExprKind::Ident { name, .. } = &callee.kind
-        && let Some(sig) = compiler.type_ctx.functions.get(name)
+        && let Some(sig) = compiler.type_ctx.function_sig(name)
         && sig.type_params.is_empty()
     {
         return Some(sig.return_type.clone());

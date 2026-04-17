@@ -13,6 +13,20 @@ pub enum Package {
     Unresolved,
 }
 
+impl Package {
+    /// Builds a package-qualified key (e.g. `"std.List"` or `"alpha.Config"`)
+    /// suitable for the `name_index` reverse lookup. Returns `None` for
+    /// [`Package::Unresolved`] since unresolved packages have no scope to
+    /// qualify against.
+    pub fn qualify(&self, name: &str) -> Option<String> {
+        match self {
+            Package::Std => Some(format!("std.{name}")),
+            Package::Named(p) => Some(format!("{p}.{name}")),
+            Package::Unresolved => None,
+        }
+    }
+}
+
 impl fmt::Display for Package {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

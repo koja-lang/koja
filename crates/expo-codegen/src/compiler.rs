@@ -6,11 +6,13 @@ use std::mem;
 use std::path::{Path, PathBuf};
 
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstEnum, ResolvedConstStruct};
+use expo_ir::resolved::fields::ResolvedFieldStep;
 
 use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
 use crate::generics::{compile_function_body, compile_method_body, ensure_types_exist};
 use crate::registration::register_types;
+use crate::spawn::{self, ExitCodeCtx};
 use crate::util::parse_int_literal;
 
 /// Result of attempting to emit an intrinsic method for a built-in type.
@@ -27,10 +29,11 @@ use expo_ast::ast::{
 };
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
+use expo_ast::types::mangle_name;
 use expo_typecheck::context::{ClosureInfo, TypeContext, VariantData};
 use expo_typecheck::types::{
-    Package, Type, build_substitution, process_envelope_type, resolve_type_expr_full, substitute,
-    substitute_preserving,
+    Package, Type, build_substitution, package_from_str, process_envelope_type,
+    resolve_type_expr_full, substitute, substitute_preserving,
 };
 use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -384,6 +387,17 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    /// Sets [`Self::current_package`] to `pkg` for the duration of `f`,
+    /// restoring whatever scope was previously active. Used by `run_codegen`
+    /// to thread per-module package context through declare/define passes.
+    pub fn with_package<R>(&mut self, pkg: Package, f: impl FnOnce(&mut Self) -> R) -> R {
+        let prev = self.current_package.take();
+        self.current_package = Some(pkg);
+        let r = f(self);
+        self.current_package = prev;
+        r
+    }
+
     /// Builds the symbol prefix used for an impl method (before the trailing
     /// `_{method}` suffix). Stdlib types keep their bare type name to preserve
     /// existing intrinsic symbols (e.g. `Int_hash`). User packages are
@@ -646,62 +660,53 @@ impl<'ctx> Compiler<'ctx> {
             .map(|(_, ty)| ty.clone())
     }
 
-    /// Look up a struct's field index, dispatching on the struct's resolved
-    /// [`Type`] to pick a collision-safe lookup path:
+    /// Look up a struct's field index and type, dispatching on the struct's
+    /// resolved [`Type`] to pick a collision-safe lookup path:
     ///   * Non-generic `Type::Named` with a resolved package → strict
-    ///     TypeIdentifier-keyed lookup via [`Self::get_concrete_field_index`].
+    ///     TypeIdentifier-keyed lookup via [`Self::get_concrete_field_index`]
+    ///     and [`Self::get_concrete_field_type`].
     ///   * Generic `Type::Named` → mangled lookup in `mono_struct_info`.
     ///   * `Type::Indirect`/`Type::Pointer` → recursively unwrap.
     ///
     /// Unresolved identifiers return `None`: callers are expected to thread a
     /// package-qualified `TypeIdentifier` from typecheck, not a bare name.
-    pub fn struct_field_index_for_type(&self, ty: &Type, field_name: &str) -> Option<u32> {
-        use expo_ast::types::mangle_name;
+    /// Returns a [`ResolvedFieldStep`] (the IR-level pair of `field_index`
+    /// and `field_type`) so call sites that already build `ResolvedChain`
+    /// values can forward the result directly.
+    pub fn struct_field_lookup(&self, ty: &Type, field_name: &str) -> Option<ResolvedFieldStep> {
         match ty {
             Type::Indirect(inner) | Type::Pointer(inner) => {
-                self.struct_field_index_for_type(inner, field_name)
+                self.struct_field_lookup(inner, field_name)
             }
             Type::Named {
                 identifier,
                 type_args,
             } if !type_args.is_empty() => {
                 let mangled = mangle_name(identifier, type_args);
-                self.get_mono_field_index(&mangled, field_name)
+                let field_index = self.get_mono_field_index(&mangled, field_name)?;
+                let field_type = self.get_mono_field_type(&mangled, field_name)?;
+                Some(ResolvedFieldStep {
+                    field_index,
+                    field_type,
+                })
             }
             Type::Named { identifier, .. } if identifier.package != Package::Unresolved => {
-                self.get_concrete_field_index(identifier, field_name)
+                let field_index = self.get_concrete_field_index(identifier, field_name)?;
+                let field_type = self.get_concrete_field_type(identifier, field_name)?;
+                Some(ResolvedFieldStep {
+                    field_index,
+                    field_type,
+                })
             }
             // Flattened form: generic Named with empty type_args where
             // `identifier.name` already holds the mangled key.
             Type::Named { identifier, .. } => {
-                self.get_mono_field_index(&identifier.name, field_name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Same dispatch as [`Self::struct_field_index_for_type`] but returns the
-    /// field type.
-    pub fn struct_field_type_for_type(&self, ty: &Type, field_name: &str) -> Option<Type> {
-        use expo_ast::types::mangle_name;
-        match ty {
-            Type::Indirect(inner) | Type::Pointer(inner) => {
-                self.struct_field_type_for_type(inner, field_name)
-            }
-            Type::Named {
-                identifier,
-                type_args,
-            } if !type_args.is_empty() => {
-                let mangled = mangle_name(identifier, type_args);
-                self.get_mono_field_type(&mangled, field_name)
-            }
-            Type::Named { identifier, .. } if identifier.package != Package::Unresolved => {
-                self.get_concrete_field_type(identifier, field_name)
-            }
-            // Flattened form: generic Named with empty type_args where
-            // `identifier.name` already holds the mangled key.
-            Type::Named { identifier, .. } => {
-                self.get_mono_field_type(&identifier.name, field_name)
+                let field_index = self.get_mono_field_index(&identifier.name, field_name)?;
+                let field_type = self.get_mono_field_type(&identifier.name, field_name)?;
+                Some(ResolvedFieldStep {
+                    field_index,
+                    field_type,
+                })
             }
             _ => None,
         }
@@ -715,16 +720,16 @@ impl<'ctx> Compiler<'ctx> {
         let struct_names: Vec<&str> = self
             .type_ctx
             .types
-            .iter()
-            .filter(|(_, ti)| ti.is_struct())
-            .map(|(name, _)| name.name.as_str())
+            .values()
+            .filter(|ti| ti.is_struct())
+            .map(|ti| ti.identifier.name.as_str())
             .collect();
         let enum_names: Vec<&str> = self
             .type_ctx
             .types
-            .iter()
-            .filter(|(_, ti)| ti.is_enum())
-            .map(|(name, _)| name.name.as_str())
+            .values()
+            .filter(|ti| ti.is_enum())
+            .map(|ti| ti.identifier.name.as_str())
             .collect();
         let mut type_params: Vec<&str> = self
             .fn_state
@@ -777,6 +782,19 @@ impl<'ctx> Compiler<'ctx> {
             Some(pkg) => self.type_ctx.resolve_name_scoped(name, pkg),
             None => self.type_ctx.resolve_name(name),
         }
+    }
+
+    /// Returns a fully-resolved [`TypeIdentifier`] for `name`, preferring the
+    /// typecheck-supplied `resolved` identifier when it carries a real
+    /// package, and falling back to the package-aware bare-name resolver. This
+    /// collapses the recurring `resolved_type.filter(...).cloned().or_else(||
+    /// resolve_name_current(...).cloned())` pattern at enum/struct
+    /// construction sites.
+    pub fn id_for(&self, name: &str, resolved: Option<&TypeIdentifier>) -> Option<TypeIdentifier> {
+        resolved
+            .filter(|id| id.package != Package::Unresolved)
+            .cloned()
+            .or_else(|| self.resolve_name_current(name).cloned())
     }
 
     /// Declares a function at the LLVM level. `mangling_prefix` is the
@@ -1405,8 +1423,6 @@ impl<'ctx> Compiler<'ctx> {
     /// (with exit-code tracking), then emits a C `main` that serialises
     /// config, spawns the entry process, and waits for completion.
     fn emit_process_entry(&mut self, type_name: &str) -> Result<(), String> {
-        use crate::spawn::{self, ExitCodeCtx};
-
         let entry_id = self
             .resolve_name_current(type_name)
             .cloned()
@@ -1582,7 +1598,7 @@ pub fn compile(
 ) -> Result<(), Vec<Diagnostic>> {
     compile_modules(
         &[module],
-        &[""],
+        &[app_name],
         type_ctx,
         output_path,
         release,
@@ -1591,21 +1607,22 @@ pub fn compile(
     )
 }
 
-/// Resolves a package-name string (as produced by the driver) into the
-/// `Package` enum used throughout the type system. Empty strings and
-/// `"std"` map to `Package::Std`; everything else is a user package.
-fn package_from_str(pkg: &str) -> Package {
-    if pkg.is_empty() || pkg == "std" {
-        Package::Std
-    } else {
-        Package::Named(pkg.to_string())
-    }
+/// Wraps an error string into the `Vec<Diagnostic>` shape that `run_codegen`
+/// returns on failure. Centralizes the `Severity::Error` + no-hint pattern
+/// used at every codegen call site.
+fn codegen_error(message: String, span: Span) -> Vec<Diagnostic> {
+    vec![Diagnostic {
+        severity: Severity::Error,
+        message,
+        hint: None,
+        span,
+    }]
 }
 
 /// Runs codegen for all modules: register types, declare, define. `packages`
 /// is a parallel slice: `packages[i]` is the owning package of `modules[i]`.
-/// An empty string is treated as `Package::Std` (stdlib-style unqualified
-/// method symbols).
+/// Every entry must be a real, non-empty package name (the typecheck-side
+/// `package_from_str` panics on `""`).
 fn run_codegen<'ctx>(
     modules: &[&Module],
     packages: &[&str],
@@ -1644,70 +1661,32 @@ fn run_codegen<'ctx>(
     }
 
     for (module, pkg) in modules.iter().zip(packages.iter()) {
-        compiler.current_package = Some(package_from_str(pkg));
-        let result = compiler.declare_constants(module).map_err(|e| {
-            vec![Diagnostic {
-                severity: Severity::Error,
-                message: e,
-                hint: None,
-                span: module.span,
-            }]
-        });
-        compiler.current_package = None;
-        result?;
+        compiler
+            .with_package(package_from_str(pkg), |c| c.declare_constants(module))
+            .map_err(|e| codegen_error(e, module.span))?;
     }
 
     for (module, pkg) in modules.iter().zip(packages.iter()) {
-        compiler.current_package = Some(package_from_str(pkg));
-        let result = compiler.declare_functions(module).map_err(|e| {
-            vec![Diagnostic {
-                severity: Severity::Error,
-                message: e,
-                hint: None,
-                span: module.span,
-            }]
-        });
-        compiler.current_package = None;
-        result?;
+        compiler
+            .with_package(package_from_str(pkg), |c| c.declare_functions(module))
+            .map_err(|e| codegen_error(e, module.span))?;
     }
 
-    synthesize_all_formats(&mut compiler).map_err(|e| {
-        let span = modules.first().map(|m| m.span).unwrap_or_default();
-        vec![Diagnostic {
-            severity: Severity::Error,
-            message: e,
-            hint: None,
-            span,
-        }]
-    })?;
+    let entry_span = modules.first().map(|m| m.span).unwrap_or_default();
+    synthesize_all_formats(&mut compiler).map_err(|e| codegen_error(e, entry_span))?;
 
     for (module, pkg) in modules.iter().zip(packages.iter()) {
-        compiler.current_package = Some(package_from_str(pkg));
-        let result = compiler.define_functions(module).map_err(|e| {
-            vec![Diagnostic {
-                severity: Severity::Error,
-                message: e,
-                hint: None,
-                span: module.span,
-            }]
-        });
-        compiler.current_package = None;
-        result?;
+        compiler
+            .with_package(package_from_str(pkg), |c| c.define_functions(module))
+            .map_err(|e| codegen_error(e, module.span))?;
     }
 
     if let Some(type_name) = entry_type {
-        let span = modules.first().map(|m| m.span).unwrap_or_default();
-        compiler.current_package = Some(package_from_str(app_name));
-        let result = compiler.emit_process_entry(type_name).map_err(|e| {
-            vec![Diagnostic {
-                severity: Severity::Error,
-                message: e,
-                hint: None,
-                span,
-            }]
-        });
-        compiler.current_package = None;
-        result?;
+        compiler
+            .with_package(package_from_str(app_name), |c| {
+                c.emit_process_entry(type_name)
+            })
+            .map_err(|e| codegen_error(e, entry_span))?;
     }
 
     Ok(compiler)
@@ -1717,9 +1696,10 @@ fn run_codegen<'ctx>(
 /// types, declares all functions across modules, then defines their bodies.
 ///
 /// `packages` is parallel to `modules`: each entry is the owning package for
-/// the corresponding module. Empty strings and `"std"` are treated as the
-/// stdlib (unqualified method symbols like `Int_hash`); any other value is a
-/// user package whose method symbols are prefixed (e.g. `alpha.Config_new`).
+/// the corresponding module. `"std"` is the stdlib (unqualified method
+/// symbols like `Int_hash`); any other value is a user package whose method
+/// symbols are prefixed (e.g. `alpha.Config_new`). Empty strings are
+/// rejected by the typecheck-side `package_from_str`.
 pub fn compile_modules(
     modules: &[&Module],
     packages: &[&str],

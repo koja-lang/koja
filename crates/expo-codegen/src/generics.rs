@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::mem;
 
 use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr, TypeParam};
-use expo_ast::identifier::{Package, TypeIdentifier};
+use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::{FunctionKind, VariantData};
 use expo_typecheck::types::{
     Primitive, Type, build_substitution, mangle_method_suffix, mangle_name, mangle_type, named,
@@ -970,20 +970,12 @@ fn next_mangled_token(s: &str) -> &str {
 }
 
 fn is_known_package(name: &str, c: &Compiler) -> bool {
-    c.type_ctx.types.keys().any(|id| match &id.package {
-        Package::Named(pkg) => pkg == name,
-        _ => false,
-    })
+    c.type_ctx.has_named_package(name)
 }
 
 fn is_type_in_package(pkg: &str, name: &str, c: &Compiler) -> bool {
     let bare = name.split_once("_$").map(|(b, _)| b).unwrap_or(name);
-    c.type_ctx.types.keys().any(|id| {
-        matches!(
-            &id.package,
-            Package::Named(p) if p == pkg && id.name == bare,
-        )
-    })
+    c.type_ctx.has_type_in_named_package(pkg, bare)
 }
 
 fn parse_mangled_type(s: &str, c: &Compiler) -> Type {

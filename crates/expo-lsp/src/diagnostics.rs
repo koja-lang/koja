@@ -15,6 +15,7 @@ use tower_lsp_server::ls_types::*;
 
 use expo_ast::ast::{Diagnostic as ExpoDiagnostic, Module, Severity as ExpoSeverity};
 use expo_typecheck::context::TypeContext;
+use expo_typecheck::types::package_for_path;
 
 use crate::backend::{Backend, DocumentState};
 use crate::convert::{span_to_range, uri_to_path};
@@ -45,10 +46,7 @@ fn default_src() -> Vec<String> {
 /// path. Untitled buffers (no path) fall back to `"__lsp_preview__"` so every
 /// call site passes a real, non-empty package to the type checker.
 fn package_for_module(path: Option<&Path>) -> String {
-    path.and_then(|p| p.file_stem())
-        .and_then(|s| s.to_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| "__lsp_preview__".to_string())
+    package_for_path(path, "__lsp_preview__")
 }
 
 /// Walks up from `start` looking for a directory containing `expo.toml`.
@@ -191,7 +189,8 @@ impl Backend {
             ctx.merge(&unified_ctx);
             expo_typecheck::auto_derive_debug(&mut ctx);
             expo_typecheck::mark_recursive_fields(&mut ctx);
-            expo_typecheck::resolve_packages(&mut ctx, &[]);
+            expo_typecheck::resolve_module_aliases(&parse_result.module, &mut ctx);
+            expo_typecheck::resolve_packages(&mut ctx);
             expo_typecheck::check_module(&mut parse_result.module, &mut ctx, &current_pkg);
             all_diags.extend(ctx.diagnostics.clone());
             (ctx, sibling_modules)

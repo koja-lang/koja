@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use expo_ast::ast::EnumConstructionData;
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{
-    Package, Type, TypeIdentifier, mangle_name, named_generic, unify, unwrap_indirect,
+    Type, TypeIdentifier, mangle_name, named_generic, unify, unwrap_indirect,
 };
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -37,10 +37,7 @@ pub fn compile_enum_construction<'ctx>(
         .first()
         .ok_or("empty type path in enum construction")?;
 
-    let resolved_id: Option<TypeIdentifier> = resolved_type
-        .filter(|id| id.package != Package::Unresolved)
-        .cloned()
-        .or_else(|| compiler.resolve_name_current(base_name).cloned());
+    let resolved_id = compiler.id_for(base_name, resolved_type);
     let type_info = resolved_id
         .as_ref()
         .and_then(|id| compiler.type_ctx.get_type(id));
@@ -86,10 +83,8 @@ fn resolve_concrete_enum_variant<'ctx>(
     // Prefer the typecheck-resolved identifier (which already honours aliases
     // and cross-package qualification); fall back to a package-aware lookup
     // from the current compilation scope when it's missing.
-    let resolved_id = resolved_type
-        .filter(|id| id.package != Package::Unresolved)
-        .cloned()
-        .or_else(|| compiler.resolve_name_current(enum_name).cloned())
+    let resolved_id = compiler
+        .id_for(enum_name, resolved_type)
         .ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
     let enum_type = compiler
@@ -287,10 +282,7 @@ fn resolve_generic_enum<'ctx>(
     compiled_values: &[BasicValueEnum<'ctx>],
     compiled_types: &[Type],
 ) -> Result<ResolvedGenericEnum<'ctx>, String> {
-    let resolved_id: Option<TypeIdentifier> = resolved_type
-        .filter(|id| id.package != Package::Unresolved)
-        .cloned()
-        .or_else(|| compiler.resolve_name_current(enum_name).cloned());
+    let resolved_id = compiler.id_for(enum_name, resolved_type);
     let enum_info = resolved_id
         .as_ref()
         .and_then(|id| compiler.type_ctx.get_type(id))

@@ -137,13 +137,7 @@ fn resolve_chain_steps(compiler: &Compiler, receiver: &Expr, field: &str) -> Opt
     };
 
     let current_type = steps.last().map(|s| &s.field_type).unwrap_or(&base_type);
-    let field_idx = compiler.struct_field_index_for_type(current_type, field)?;
-    let field_ty = compiler.struct_field_type_for_type(current_type, field)?;
-
-    steps.push(ResolvedFieldStep {
-        field_index: field_idx,
-        field_type: field_ty,
-    });
+    steps.push(compiler.struct_field_lookup(current_type, field)?);
 
     Some(ResolvedChain {
         base_name,
@@ -221,8 +215,10 @@ fn resolve_field_access<'ctx>(
     // package-qualified `TypeIdentifier` so we can avoid consulting the
     // bare-name `find_type` fallback entirely.
     if let Some(ref recv_ty) = receiver.resolved_type
-        && let Some(field_index) = compiler.struct_field_index_for_type(recv_ty, field)
-        && let Some(field_type) = compiler.struct_field_type_for_type(recv_ty, field)
+        && let Some(ResolvedFieldStep {
+            field_index,
+            field_type,
+        }) = compiler.struct_field_lookup(recv_ty, field)
     {
         return Ok(ResolvedFieldAccess::ValueStruct {
             field_index,
@@ -458,10 +454,7 @@ fn resolve_method_call<'ctx>(
     method: &str,
     args: &[Arg],
 ) -> Result<ResolvedMethodCall<'ctx>, String> {
-    let resolved_id: Option<TypeIdentifier> = type_id
-        .filter(|id| id.package != Package::Unresolved)
-        .cloned()
-        .or_else(|| c.resolve_name_current(base).cloned());
+    let resolved_id = c.id_for(base, type_id);
     let is_generic = !type_args.is_empty();
 
     // Pick the symbol prefix in lockstep with definition-site mangling:
@@ -503,7 +496,7 @@ fn resolve_method_call<'ctx>(
         .get(&mangled)
         .ok_or_else(|| format!("undefined method `{method}` on `{struct_name}`"))?;
 
-    let (param_types, return_type) = if let Some(sig) = c.type_ctx.functions.get(&mangled) {
+    let (param_types, return_type) = if let Some(sig) = c.type_ctx.function_sig(&mangled) {
         (
             sig.params.iter().map(|p| p.ty.clone()).collect(),
             sig.return_type.clone(),
@@ -723,7 +716,7 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
             .get(name)
             .map(|(_, ty, _)| ty.clone())
             .or_else(|| {
-                let sig = c.type_ctx.functions.get(name)?;
+                let sig = c.type_ctx.function_sig(name)?;
                 if sig.type_params.is_empty() {
                     Some(Type::Function {
                         params: sig.params.iter().map(FnParam::from).collect(),
@@ -988,9 +981,9 @@ fn concrete_type_for_field_init<'ctx>(
         } => {
             if let ExprKind::Ident { name, .. } = &receiver.as_ref().kind
                 && let Some((_, recv_ty, _)) = compiler.fn_state.variables.get(name)
-                && let Some(ft) = compiler.struct_field_type_for_type(recv_ty, field)
+                && let Some(step) = compiler.struct_field_lookup(recv_ty, field)
             {
-                substitute(&ft, &compiler.fn_state.type_subst)
+                substitute(&step.field_type, &compiler.fn_state.type_subst)
             } else {
                 Type::Unknown
             }
@@ -1209,10 +1202,7 @@ fn resolve_static_call<'ctx>(
     method: &str,
     args: &[Arg],
 ) -> Result<ResolvedStaticCall<'ctx>, String> {
-    let resolved_id: Option<TypeIdentifier> = resolved_type
-        .filter(|id| id.package != Package::Unresolved)
-        .cloned()
-        .or_else(|| c.resolve_name_current(type_name).cloned());
+    let resolved_id = c.id_for(type_name, resolved_type);
     let type_params: Option<Vec<TypeParam>> = resolved_id
         .as_ref()
         .and_then(|id| c.type_ctx.get_type(id))

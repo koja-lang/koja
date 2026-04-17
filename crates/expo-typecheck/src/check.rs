@@ -15,32 +15,17 @@ use crate::expr::{expr_span, infer_expr, infer_expr_with_expected};
 use crate::stmt::check_body;
 use crate::types::numeric_compatible;
 use crate::types::{
-    Package, Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params,
+    Primitive, Type, TypeIdentifier, named, package_from_str, resolve_type_expr_with_params,
 };
-
-/// Converts a caller-facing package label (`"std"` or a real package name such
-/// as `"alpha"`) into the matching [`Package`] variant used by the scoped
-/// name-index lookup. Empty strings are rejected because every module must
-/// carry a real package so bare-name lookups have a deterministic scope.
-pub(crate) fn package_from_str(package: &str) -> Package {
-    assert!(
-        !package.is_empty(),
-        "package_from_str called with empty package name; callers must supply a real package (file stem, project name, or \"std\")"
-    );
-    if package == "std" {
-        Package::Std
-    } else {
-        Package::Named(package.to_string())
-    }
-}
 
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
 ///
 /// `package` identifies which package the module belongs to (e.g. `"std"`,
-/// `"alpha"`, or `""` for single-file usage). It is installed as the context's
-/// ambient scope so that bare-name type lookups prefer the module's own
-/// package over colliding definitions in other packages.
+/// `"alpha"`, or a synthetic name like `"__test__"` derived from the file
+/// stem). It is installed as the context's ambient scope so that bare-name
+/// type lookups prefer the module's own package over colliding definitions
+/// in other packages.
 pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
     let prev_path = ctx.current_module_path.clone();
     ctx.current_module_path = module.path.clone();
@@ -109,19 +94,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
                 };
 
                 let type_id = ctx.resolve_name(target_name).cloned();
-                let impl_process_msg = type_id
-                    .as_ref()
-                    .and_then(|id| ctx.protocol_impls.get(id))
-                    .and_then(|impls| {
-                        impls
-                            .iter()
-                            .find(|(proto, _)| proto == "Process")
-                            .and_then(|(_, args)| {
-                                let m = args.get(1)?;
-                                let r = args.get(2)?;
-                                Some(crate::types::process_envelope_type(m, r))
-                            })
-                    });
+                let impl_process_msg = type_id.as_ref().and_then(|id| ctx.process_envelope_for(id));
 
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(f) = member
@@ -175,19 +148,7 @@ fn check_inline_functions(
     enum_names: &[&str],
 ) {
     let type_id = ctx.resolve_name(type_name).cloned();
-    let process_msg = type_id
-        .as_ref()
-        .and_then(|id| ctx.protocol_impls.get(id))
-        .and_then(|impls| {
-            impls
-                .iter()
-                .find(|(proto, _)| proto == "Process")
-                .and_then(|(_, args)| {
-                    let m = args.get(1)?;
-                    let r = args.get(2)?;
-                    Some(crate::types::process_envelope_type(m, r))
-                })
-        });
+    let process_msg = type_id.as_ref().and_then(|id| ctx.process_envelope_for(id));
     for f in functions {
         if f.type_params.is_empty() {
             check_function_with_msg(

@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::context::{FunctionSig, TypeContext, TypeKind, VariantData};
 use crate::types::{Package, Type, TypeIdentifier};
-use expo_ast::ast::{Diagnostic, Severity};
 
 /// Walks every `Type` in a [`TypeContext`] and replaces `Package::Unresolved`
 /// identifiers with the real package found in the type registry's map keys.
@@ -16,7 +15,7 @@ use expo_ast::ast::{Diagnostic, Severity};
 /// reference to `X` resolves only to `{current_package}.X` (via the qualified
 /// entry) or `std.X` (via the bare entry). Cross-package bare references to
 /// dependency types must be qualified (`dep.X`) or imported via `alias`.
-pub fn resolve_packages(ctx: &mut TypeContext, _dep_packages: &[String]) {
+pub fn resolve_packages(ctx: &mut TypeContext) {
     let mut index: BTreeMap<String, TypeIdentifier> = BTreeMap::new();
     for id in ctx.types.keys() {
         index.insert(id.qualified_name(), id.clone());
@@ -80,40 +79,11 @@ pub fn resolve_packages(ctx: &mut TypeContext, _dep_packages: &[String]) {
         resolve_function_sigs(&mut pi.methods, &index);
     }
 
-    let spec_keys: Vec<TypeIdentifier> = ctx.specialized_methods.keys().cloned().collect();
-    for mut key in spec_keys {
-        if let Some(mut entries) = ctx.specialized_methods.remove(&key) {
-            let scope = key.package.clone();
-            for (type_args, sigs) in &mut entries {
-                for ty in type_args.iter_mut() {
-                    resolve_type_scoped(ty, &index, &scope);
-                }
-                resolve_function_sigs_scoped(sigs, &index, &scope);
-            }
-            resolve_identifier_scoped(&mut key, &index, &scope);
-            ctx.specialized_methods
-                .entry(key)
-                .or_default()
-                .extend(entries);
-        }
-    }
+    resolve_specialized_keys(&mut ctx.specialized_methods, &index, |sigs, scope, idx| {
+        resolve_function_sigs_scoped(sigs, idx, scope)
+    });
 
-    let spec_ast_keys: Vec<TypeIdentifier> = ctx.specialized_impl_asts.keys().cloned().collect();
-    for mut key in spec_ast_keys {
-        if let Some(mut entries) = ctx.specialized_impl_asts.remove(&key) {
-            let scope = key.package.clone();
-            for (type_args, _) in &mut entries {
-                for ty in type_args.iter_mut() {
-                    resolve_type_scoped(ty, &index, &scope);
-                }
-            }
-            resolve_identifier_scoped(&mut key, &index, &scope);
-            ctx.specialized_impl_asts
-                .entry(key)
-                .or_default()
-                .extend(entries);
-        }
-    }
+    resolve_specialized_keys(&mut ctx.specialized_impl_asts, &index, |_, _, _| {});
 
     let std_names: BTreeSet<&str> = ctx
         .types
@@ -125,17 +95,19 @@ pub fn resolve_packages(ctx: &mut TypeContext, _dep_packages: &[String]) {
         .types
         .iter()
         .filter(|(id, _)| id.package != Package::Std && std_names.contains(id.name.as_str()))
-        .map(|(id, ti)| Diagnostic {
-            severity: Severity::Error,
-            message: format!(
-                "type `{}` conflicts with stdlib type of the same name",
-                id.name
-            ),
-            hint: None,
-            span: ti.span,
+        .map(|(id, ti)| {
+            (
+                format!(
+                    "type `{}` conflicts with stdlib type of the same name",
+                    id.name
+                ),
+                ti.span,
+            )
         })
         .collect();
-    ctx.diagnostics.extend(shadow_errors);
+    for (msg, span) in shadow_errors {
+        ctx.error(msg, span);
+    }
 
     ctx.name_index = index;
 
@@ -218,19 +190,11 @@ fn resolve_identifier_scoped(
     if id.package != Package::Unresolved {
         return;
     }
-    let qualified = match scope {
-        Package::Std => format!("std.{}", id.name),
-        Package::Named(pkg) => format!("{pkg}.{}", id.name),
-        Package::Unresolved => {
-            if let Some(resolved) = index.get(&id.name) {
-                id.package = resolved.package.clone();
-            }
-            return;
-        }
-    };
-    if let Some(resolved) = index.get(&qualified) {
-        id.package = resolved.package.clone();
-    } else if let Some(resolved) = index.get(&id.name) {
+    let resolved = scope
+        .qualify(&id.name)
+        .and_then(|q| index.get(&q))
+        .or_else(|| index.get(&id.name));
+    if let Some(resolved) = resolved {
         id.package = resolved.package.clone();
     }
 }
@@ -319,5 +283,32 @@ fn resolve_function_sigs(
             resolve_type(&mut p.ty, index);
         }
         resolve_type(&mut sig.return_type, index);
+    }
+}
+
+/// Drains the specialized-instantiation map (keyed by [`TypeIdentifier`],
+/// valued by lists of `(type_args, payload)`), resolves every type in each
+/// entry's `type_args` and re-resolves the key itself, then re-inserts under
+/// the resolved key. `on_value` lets the caller perform any additional
+/// resolution on the per-entry payload (e.g. resolving function signatures
+/// inside `specialized_methods`).
+fn resolve_specialized_keys<V>(
+    map: &mut BTreeMap<TypeIdentifier, Vec<(Vec<Type>, V)>>,
+    index: &BTreeMap<String, TypeIdentifier>,
+    mut on_value: impl FnMut(&mut V, &Package, &BTreeMap<String, TypeIdentifier>),
+) {
+    let keys: Vec<TypeIdentifier> = map.keys().cloned().collect();
+    for mut key in keys {
+        if let Some(mut entries) = map.remove(&key) {
+            let scope = key.package.clone();
+            for (type_args, payload) in &mut entries {
+                for ty in type_args.iter_mut() {
+                    resolve_type_scoped(ty, index, &scope);
+                }
+                on_value(payload, &scope, index);
+            }
+            resolve_identifier_scoped(&mut key, index, &scope);
+            map.entry(key).or_default().extend(entries);
+        }
     }
 }

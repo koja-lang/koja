@@ -81,7 +81,7 @@ fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ct
         .copied();
 
     if let Some(callee) = callee_opt {
-        let sig = c.type_ctx.functions.get(name).or_else(|| {
+        let sig = c.type_ctx.function_sig(name).or_else(|| {
             c.fn_state
                 .self_type_name
                 .as_ref()

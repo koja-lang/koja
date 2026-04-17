@@ -2,8 +2,8 @@
 //! remain in `expr.resolved_type` before the AST reaches codegen.
 
 use expo_ast::ast::{
-    BinarySegment, CondArm, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Function,
-    Item, MatchArm, Module, Severity, Statement, StringPart,
+    BinarySegment, CondArm, EnumConstructionData, Expr, ExprKind, FieldInit, Function, Item,
+    MatchArm, Module, Statement, StringPart,
 };
 use expo_ast::identifier::Package;
 use expo_ast::types::Type;
@@ -243,12 +243,10 @@ fn check_type_resolved(ty: &Type, expr: &Expr, ctx: &mut TypeContext) {
         } => {
             if identifier.package == Package::Unresolved {
                 let (message, hint) = unresolved_type_diagnostic(&identifier.name, ctx);
-                ctx.diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    message,
-                    hint,
-                    span: expr.span,
-                });
+                match hint {
+                    Some(h) => ctx.error_with_hint(message, h, expr.span),
+                    None => ctx.error(message, expr.span),
+                }
             }
             for arg in type_args {
                 check_type_resolved(arg, expr, ctx);

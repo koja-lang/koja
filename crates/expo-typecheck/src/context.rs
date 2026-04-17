@@ -287,6 +287,40 @@ impl TypeContext {
             .collect()
     }
 
+    /// Iterator over the bare names of every registered struct or enum type.
+    /// Useful for callers that need to test "is this a known user-defined
+    /// type name?" without distinguishing struct vs enum.
+    pub fn struct_and_enum_names(&self) -> impl Iterator<Item = &str> {
+        self.types
+            .values()
+            .filter(|ti| ti.is_struct() || ti.is_enum())
+            .map(|ti| ti.identifier.name.as_str())
+    }
+
+    /// Returns true if any registered type lives in the named package.
+    /// Names like `"std"` are matched against the synthetic [`Package::Std`]
+    /// variant, not [`Package::Named("std")`], so use [`Package::matches_name`]
+    /// indirectly via this helper instead of pattern-matching at call sites.
+    pub fn has_named_package(&self, package: &str) -> bool {
+        self.types.keys().any(|id| match &id.package {
+            Package::Named(p) => p == package,
+            _ => false,
+        })
+    }
+
+    /// Returns true if a struct/enum/alias with `name` exists in the named
+    /// (non-`std`) package `package`.
+    pub fn has_type_in_named_package(&self, package: &str, name: &str) -> bool {
+        self.types
+            .keys()
+            .any(|id| matches!(&id.package, Package::Named(p) if p == package && id.name == name))
+    }
+
+    /// Looks up a function signature by its (possibly mangled) name.
+    pub fn function_sig(&self, name: &str) -> Option<&FunctionSig> {
+        self.functions.get(name)
+    }
+
     /// Inserts a type into the registry keyed by its [`TypeIdentifier`].
     pub fn insert_type(&mut self, id: TypeIdentifier, mut info: TypeInfo) {
         info.identifier = id.clone();
@@ -319,13 +353,9 @@ impl TypeContext {
     /// Resolves `name` preferring `scope.name` (package-qualified) over the
     /// shared bare entry. Returns `None` when neither lookup matches.
     pub fn resolve_name_scoped(&self, name: &str, scope: &Package) -> Option<&TypeIdentifier> {
-        let qualified = match scope {
-            Package::Std => format!("std.{name}"),
-            Package::Named(pkg) => format!("{pkg}.{name}"),
-            Package::Unresolved => return self.name_index.get(name),
-        };
-        self.name_index
-            .get(&qualified)
+        scope
+            .qualify(name)
+            .and_then(|q| self.name_index.get(&q))
             .or_else(|| self.name_index.get(name))
     }
 
@@ -342,6 +372,28 @@ impl TypeContext {
     pub fn find_type_scoped(&self, name: &str, scope: &Package) -> Option<&TypeInfo> {
         self.resolve_name_scoped(name, scope)
             .and_then(|id| self.get_type(id))
+    }
+
+    /// Returns the type-argument slice of the `Process` protocol implementation
+    /// for the type identified by `id`, or `None` when the type does not
+    /// implement `Process`. The first argument is the implementing type, the
+    /// second is the message type, and the third is the reply type.
+    pub fn process_impl_args(&self, id: &TypeIdentifier) -> Option<&[Type]> {
+        self.protocol_impls
+            .get(id)?
+            .iter()
+            .find(|(proto, _)| proto == "Process")
+            .map(|(_, args)| args.as_slice())
+    }
+
+    /// Convenience over [`Self::process_impl_args`]: returns the
+    /// `process_envelope` (msg/reply) type for the given impl, when both
+    /// arguments are present.
+    pub fn process_envelope_for(&self, id: &TypeIdentifier) -> Option<Type> {
+        let args = self.process_impl_args(id)?;
+        let msg = args.get(1)?;
+        let reply = args.get(2)?;
+        Some(crate::types::process_envelope_type(msg, reply))
     }
 
     /// Resolves `Package::Unresolved` identifiers inside a [`Type`] using the

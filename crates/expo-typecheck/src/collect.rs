@@ -6,11 +6,11 @@ use expo_ast::ast::{
 };
 use expo_ast::span::Span;
 
-use crate::check::package_from_str;
 use crate::context::{
     FunctionKind, FunctionSig, ParamInfo, PassMode, ProtocolInfo, TypeContext, TypeInfo, TypeKind,
     VariantData, VariantInfo, Visibility,
 };
+use crate::types::package_from_str;
 use crate::types::{
     Package, Primitive, Type, TypeIdentifier, named, resolve_type_expr_with_params,
 };

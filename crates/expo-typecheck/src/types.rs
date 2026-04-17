@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use expo_ast::ast::{TypeExpr, TypeParam};
 
@@ -8,6 +9,40 @@ pub use expo_ast::types::{
     named, numeric_compatible, process_envelope_type, substitute, substitute_preserving, unify,
     unwrap_indirect,
 };
+
+/// Converts a caller-facing package label (`"std"` or a real package name such
+/// as `"alpha"`) into the matching [`Package`] variant used by the scoped
+/// name-index lookup. Empty strings are rejected because every module must
+/// carry a real package so bare-name lookups have a deterministic scope.
+pub fn package_from_str(package: &str) -> Package {
+    assert!(
+        !package.is_empty(),
+        "package_from_str called with empty package name; callers must supply a real package (file stem, project name, or \"std\")"
+    );
+    if package == "std" {
+        Package::Std
+    } else {
+        Package::Named(package.to_string())
+    }
+}
+
+/// Derives a synthetic package name from a module's on-disk file stem.
+/// Modules without a path (e.g. in-memory test fixtures or LSP preview
+/// buffers) fall back to `fallback`, so every module still carries a
+/// concrete package suitable for [`package_from_str`].
+pub fn package_for_path(path: Option<&Path>, fallback: &str) -> String {
+    path.and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Extracts the package name from a fully-qualified module name.
+/// e.g. `"json.decoder"` → `"json"`, `"my_app.main"` → `"my_app"`,
+/// `"json"` → `"json"` (single-segment FQN).
+pub fn fqn_to_package(fqn: &str) -> &str {
+    fqn.split('.').next().unwrap_or(fqn)
+}
 
 /// Converts an AST type expression into a resolved [`Type`], looking up user-defined
 /// struct and enum names from the provided slices. Pass an empty map for
