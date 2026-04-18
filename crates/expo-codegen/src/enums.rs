@@ -544,6 +544,25 @@ fn resolve_enum_eq(c: &Compiler, ty: &Type) -> Result<ResolvedEnumEq, String> {
     Ok(ResolvedEnumEq { mangled, variants })
 }
 
+/// Branch the current insert block into `merge_bb` and record `(value, predecessor)`
+/// for a downstream phi.
+///
+/// Always uses `get_insert_block()` rather than the block we *think* we are in,
+/// because nested calls (e.g. recursive enum-equality on a payload field) may
+/// have left the builder positioned at an inner merge block. Trusting a stale
+/// block here is exactly how "PHINode predecessors mismatch" verifier errors
+/// sneak in.
+fn branch_to_merge_phi<'ctx>(
+    c: &Compiler<'ctx>,
+    merge_bb: BasicBlock<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    incoming: &mut Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)>,
+) {
+    let pred = c.builder.get_insert_block().unwrap();
+    c.builder.build_unconditional_branch(merge_bb).unwrap();
+    incoming.push((value, pred));
+}
+
 /// Structural `==` for two enum LLVM struct values (tag + optional payload).
 pub(crate) fn compile_enum_struct_eq<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -606,7 +625,8 @@ pub(crate) fn compile_enum_struct_eq<'ctx>(
 
     c.builder.position_at_end(bb_tags_diff);
     let false_val = c.context.bool_type().const_int(0, false);
-    c.builder.build_unconditional_branch(merge_bb).unwrap();
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+    branch_to_merge_phi(c, merge_bb, false_val.into(), &mut incoming);
 
     c.builder.position_at_end(bb_tags_same);
     let i1_ty = c.context.bool_type();
@@ -625,9 +645,6 @@ pub(crate) fn compile_enum_struct_eq<'ctx>(
     c.builder
         .build_switch(tag_l, bb_default, &switch_cases)
         .unwrap();
-
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> =
-        vec![(false_val.into(), bb_tags_diff)];
 
     for (i, (vname, variant_eq)) in resolved.variants.iter().enumerate() {
         c.builder.position_at_end(variant_bbs[i]);
@@ -669,13 +686,11 @@ pub(crate) fn compile_enum_struct_eq<'ctx>(
             }
         };
 
-        c.builder.build_unconditional_branch(merge_bb).unwrap();
-        incoming.push((eq_val.into(), variant_bbs[i]));
+        branch_to_merge_phi(c, merge_bb, eq_val.into(), &mut incoming);
     }
 
     c.builder.position_at_end(bb_default);
-    c.builder.build_unconditional_branch(merge_bb).unwrap();
-    incoming.push((false_val.into(), bb_default));
+    branch_to_merge_phi(c, merge_bb, false_val.into(), &mut incoming);
 
     c.builder.position_at_end(merge_bb);
     let phi = c.builder.build_phi(i1_ty, "enum_eq_phi").unwrap();

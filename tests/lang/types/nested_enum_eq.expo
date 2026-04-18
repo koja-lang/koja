@@ -1,0 +1,20 @@
+enum Color
+  Red
+  Green
+  Blue
+  Yellow
+  Cyan
+  Magenta
+end
+
+fn main
+  a: Option<Color> = Option.Some(Color.Green)
+  b: Option<Color> = Option.Some(Color.Green)
+  c: Option<Color> = Option.Some(Color.Blue)
+  n: Option<Color> = Option.None
+
+  print(a == b)
+  print(a == c)
+  print(a == n)
+  print(n == n)
+end

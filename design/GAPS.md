@@ -63,18 +63,6 @@ Surfaced during the self-hosted lexer port (`continues_line?`).
 
 ---
 
-## Nested enum equality codegen
-
-Comparing `Option<SomeEnum>` with `==` generates invalid LLVM IR (phi node
-predecessors mismatch) when the inner enum has many variants.
-
-**Workaround:** use `match` instead of `==` for `Option<Enum>` comparisons.
-
-Surfaced during the self-hosted lexer port (`lex_newline` duplicate newline
-check).
-
----
-
 ## `match` inside `while`/`loop` with `return`
 
 When a `match` expression appears inside a `while` or `loop` body and any
@@ -103,6 +91,21 @@ error (`"functions must be declared inside impl blocks"`), or finish codegen
 support.
 
 Surfaced during the agent expression evaluator test.
+
+**Why this is still around:** the long-term plan is to remove free
+functions entirely in favour of a "single file mode" where the whole file
+is implicitly the body of `main`. That mode requires being able to declare
+`struct`/`enum` _inside_ a function body (so a script can define its own
+local types without falling back to top-level items). Local types in
+function bodies is currently deferred — the `(package, bare_name)` type
+identity model used everywhere in `expo-typecheck` and `expo-codegen`
+needs a `DefId`-style overhaul before nested decls can be represented
+cleanly, and that's a multi-week refactor on top of an already-fragile
+generic-impl pipeline (see the four "user-defined generic types" entries
+below and the "Cached impl ASTs" entry). Order of operations when this
+becomes a priority: chip away at the inherent-generic-impl gaps first,
+then introduce `DefId`, then local types fall out almost mechanically,
+then free functions can finally be deleted.
 
 ---
 
@@ -137,7 +140,7 @@ fix (April 2026).
 
 ## Generic methods on generic impls cannot infer their own type parameters
 
-A generic method *inside* a generic impl (e.g.
+A generic method _inside_ a generic impl (e.g.
 `impl MyBox<T> { fn map_to_pair<U>(self, other: U) -> Pair<T, U> ... }`)
 fails at codegen with a mangled-name including `unknown`:
 
@@ -201,7 +204,7 @@ fix (April 2026).
 
 ## Struct construction inside generic impl method bodies
 
-Constructing a generic struct *inside* a method on its own generic impl
+Constructing a generic struct _inside_ a method on its own generic impl
 fails with the bare-name lookup, distinct from the (now-fixed) `find_type`
 path:
 
@@ -218,7 +221,7 @@ type identifier via `Compiler::resolve_name_current` correctly, but then
 calls `compiler.types.get_concrete(&lookup_id)`, which has no entry for
 the monomorphized `MyBox<Int>` registered under the user package.
 
-**Workaround:** construct the struct *outside* the method body and pass
+**Workaround:** construct the struct _outside_ the method body and pass
 it in, or reach for a free function.
 
 **Fix sketch:** ensure the monomorphization driver registers concrete
@@ -234,7 +237,7 @@ fix (April 2026).
 ## Cached impl ASTs are pre-typecheck clones
 
 `expo-typecheck/src/collect.rs` clones every `ImplBlock` into
-`ctx.generic_impl_asts` and `ctx.specialized_impl_asts` *before*
+`ctx.generic_impl_asts` and `ctx.specialized_impl_asts` _before_
 `check.rs` runs. Type-checking mutates `module.items` in place (populating
 `Expr::resolved_type` etc.), so the cached clones used by codegen never
 see those mutations. Same story for protocol-default bodies stored in
@@ -259,3 +262,52 @@ type-check its outputs eagerly so the stored AST is authoritative.
 
 Surfaced during Stage 5 of the fix-generic-impl-typecheck plan; that stage
 is paused until this is sorted.
+
+---
+
+## Nested types (`MyApp.Config`) deferred
+
+Declaring a `struct` or `enum` inside another `struct`/`enum` body, accessed
+via dotted syntax (`MyApp.Config`, `Lexer.Token`, `Json.Decoder`), is not
+supported. The struct/enum body parser in
+`expo-parser/src/decl.rs` only accepts fields and inline `fn` methods --
+nested type items would need to be allowed in the same loop. Collection in
+`expo-typecheck/src/collect.rs` would need to recurse into bodies and
+register nested decls under their dotted name.
+
+The naming machinery is already friendly: `TypeIdentifier.name` is an
+opaque `String`, and `qualified_name()` / `mangle_name` preserve dots, so
+`name = "MyApp.Config"` flows through codegen registration with zero
+changes. Identity stays at `(package, name)` -- no `DefId` overhaul needed
+(unlike local-types-in-function-bodies).
+
+The two real obstacles:
+
+1. **`path.len() == 2` resolver assumption.**
+   `expo-typecheck/src/types.rs::resolve_type_expr_full` treats a 2-segment
+   path as `package.Type`. We'd need a third precedence rule for
+   `OuterType.NestedType` and a tie-break when both interpretations exist
+   (e.g. an aliased package whose name shadows a local type).
+
+2. **`Foo.Bar` ambiguity with enum variants.**
+   The parser sends both `Color.Red` (variant) and `MyApp.Config` (would-be
+   nested type) down the same enum-construction AST shape. Today
+   `expo-typecheck/src/expr.rs::infer_enum_construction` only succeeds if
+   the head is an enum; the fallback would need to also try resolving the
+   path as a nested type when followed by a struct literal or in type
+   position.
+
+Side bits: `classify_impl_target` in `check.rs` only handles
+`path.len() == 1`, so `impl MyApp.Config` would need a one-line extension.
+Bare `Config` resolving to `MyApp.Config` inside `impl MyApp` (the
+"implicit prefix" nicety) would add ~1-2 days of `CheckEnv` plumbing and
+can be deferred to a v2 by requiring fully-qualified names initially.
+
+**Cost estimate:** ~1-2 weeks for non-generic nested types; +1-2 more
+weeks for generics (which would also benefit from closing the four
+"user-defined generic types" gaps above first to avoid debugging on two
+axes at once).
+
+**Why deferred:** much cheaper than local-types-in-function-bodies but
+still a sizeable feature; not a 1.0 blocker. Tracked here so the design
+analysis isn't lost.
