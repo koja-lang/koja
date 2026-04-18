@@ -1,10 +1,38 @@
 //! Pattern matching compilation: `match` expressions and pattern-to-boolean
 //! lowering for all pattern variants (bindings, literals, enum variants, typed
 //! bindings, constructors).
+//!
+//! The pattern pipeline is split into two phases:
+//!
+//! - [`lower_pattern`] consumes the AST `Pattern` plus the subject's `Type`
+//!   and produces an [`expo_ir::resolved::patterns::ResolvedPattern`]. All
+//!   package-aware enum-key resolution (`alpha.Status` vs bare `Status`),
+//!   variant tag lookup, payload-shape lookup, and field-index resolution
+//!   happens here. This is the only side that touches `compiler.types`,
+//!   `compiler.type_ctx`, or any string-keyed resolution helper.
+//!
+//! - [`emit_pattern`] consumes the `ResolvedPattern` and emits LLVM IR. It
+//!   only performs deterministic `Type` -> `BasicTypeEnum` translations and
+//!   builder calls; it never resolves a name.
+//!
+//! [`compile_pattern`] is the public entry point and a thin
+//! `lower(...)?.then(emit(...))` shim, kept for callers in `expr.rs`,
+//! `compile_match`, and the binary-pattern code path.
+//!
+//! ### Why the GEPIndex panic is unreachable here
+//!
+//! The deferred panic at `build_struct_gep` for the payload pointer was
+//! produced by code that asked for the payload of a unit variant. After this
+//! split, [`ResolvedPattern::EnumUnit`](expo_ir::resolved::patterns::ResolvedPattern::EnumUnit)
+//! carries no payload information, and the emission match arm for it does
+//! not call [`get_payload_ptr`]. A unit variant cannot be lowered into any
+//! shape that triggers a payload GEP -- the bug becomes structurally
+//! impossible.
 
 use crate::binary::patterns::compile_binary_pattern;
 use crate::drop::Ownership;
-use expo_ast::ast::{Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern};
+use expo_ast::ast::{BinarySegment, Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern};
+use expo_ir::resolved::patterns::{ResolvedFieldPattern, ResolvedLiteral, ResolvedPattern};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{
     Type, TypeIdentifier, mangle_name, mangle_type, named, unwrap_indirect,
@@ -255,8 +283,12 @@ fn infer_subject_type(compiler: &Compiler, subject: &Expr) -> Type {
     Type::Unknown
 }
 
-/// Recursively compiles a match pattern into a boolean condition. As a side
-/// effect, binds matched variables into the compiler's variable scope.
+/// Compiles a match pattern into a boolean condition. Bindings introduced by
+/// the pattern are inserted into the compiler's variable scope.
+///
+/// This is a thin shim over [`lower_pattern`] + [`emit_pattern`]. Lowering
+/// performs all name resolution and shape lookups; emission performs only
+/// LLVM builder calls.
 pub(crate) fn compile_pattern<'ctx>(
     compiler: &mut Compiler<'ctx>,
     pattern: &Pattern,
@@ -264,43 +296,49 @@ pub(crate) fn compile_pattern<'ctx>(
     subject_type: &Type,
     function: FunctionValue<'ctx>,
 ) -> Result<IntValue<'ctx>, String> {
-    let true_val = compiler.context.bool_type().const_int(1, false);
+    let resolved = lower_pattern(compiler, pattern, subject_type)?;
+    emit_pattern(compiler, &resolved, subject_ptr, function)
+}
 
+// ---------------------------------------------------------------------------
+// Lowering: AST Pattern + subject Type -> ResolvedPattern.
+//
+// Every helper in this region may consult `compiler.types` and
+// `compiler.type_ctx`. None of them touches the LLVM builder.
+// ---------------------------------------------------------------------------
+
+/// Resolves an AST pattern against the subject's Expo type, producing a
+/// `ResolvedPattern` whose enum keys, tags, field indices, and variant shapes
+/// have all been validated against the type registry.
+fn lower_pattern(
+    compiler: &Compiler<'_>,
+    pattern: &Pattern,
+    subject_type: &Type,
+) -> Result<ResolvedPattern, String> {
     match pattern {
-        Pattern::Wildcard { .. } => Ok(true_val),
+        Pattern::Wildcard { .. } => Ok(ResolvedPattern::AlwaysMatch),
 
-        Pattern::Binding { name, .. } => {
-            let llvm_ty = to_llvm_type(subject_type, compiler.context, &compiler.types)
-                .unwrap_or_else(|| compiler.context.i8_type().into());
-            let val = compiler
-                .builder
-                .build_load(llvm_ty, subject_ptr, name)
-                .unwrap();
-            let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
-            compiler.builder.build_store(alloca, val).unwrap();
-            compiler.fn_state.variables.insert(
-                name.clone(),
-                (alloca, subject_type.clone(), Ownership::Unowned),
-            );
-            Ok(true_val)
-        }
+        Pattern::Binding { name, .. } => Ok(ResolvedPattern::Bind {
+            name: name.clone(),
+            ty: subject_type.clone(),
+            strict_llvm: false,
+        }),
 
-        Pattern::Literal { value, .. } => {
-            let llvm_ty = to_llvm_type(subject_type, compiler.context, &compiler.types)
-                .ok_or("cannot load subject for literal comparison")?;
-            let subject_val = compiler
-                .builder
-                .build_load(llvm_ty, subject_ptr, "lit_subj")
-                .unwrap();
-            let lit_val = compile_literal_for_pattern(compiler, value)?;
-            match_values(compiler, &subject_val, &lit_val)
-        }
+        Pattern::Literal { value, .. } => Ok(ResolvedPattern::LiteralEq {
+            lit: lower_literal(value)?,
+            subject_ty: subject_type.clone(),
+        }),
 
         Pattern::EnumUnit {
             type_path, variant, ..
         } => {
-            let enum_name = enum_name_from_path(compiler, type_path, subject_type)?;
-            compile_tag_check(compiler, subject_ptr, &enum_name, variant)
+            let enum_key = resolve_enum_key_from_path(compiler, type_path, subject_type)?;
+            let tag = lookup_variant_tag(compiler, &enum_key, variant)?;
+            Ok(ResolvedPattern::EnumUnit {
+                enum_key,
+                variant: variant.clone(),
+                tag,
+            })
         }
 
         Pattern::EnumTuple {
@@ -309,21 +347,15 @@ pub(crate) fn compile_pattern<'ctx>(
             elements,
             ..
         } => {
-            let enum_name = enum_name_from_path(compiler, type_path, subject_type)?;
-            let mut result = compile_tag_check(compiler, subject_ptr, &enum_name, variant)?;
-            let (payload_type, payload_ptr) =
-                get_payload_ptr(compiler, subject_ptr, &enum_name, variant)?;
-            let field_types = get_tuple_variant_types(compiler, &enum_name, variant)?;
-            result = compile_tuple_elements(
-                compiler,
+            let enum_key = resolve_enum_key_from_path(compiler, type_path, subject_type)?;
+            let tag = lookup_variant_tag(compiler, &enum_key, variant)?;
+            let elements = lower_tuple_elements(compiler, &enum_key, variant, elements)?;
+            Ok(ResolvedPattern::EnumTuple {
+                enum_key,
+                variant: variant.clone(),
+                tag,
                 elements,
-                &field_types,
-                payload_type,
-                payload_ptr,
-                result,
-                function,
-            )?;
-            Ok(result)
+            })
         }
 
         Pattern::EnumStruct {
@@ -332,277 +364,152 @@ pub(crate) fn compile_pattern<'ctx>(
             fields,
             ..
         } => {
-            let enum_name = enum_name_from_path(compiler, type_path, subject_type)?;
-            let mut result = compile_tag_check(compiler, subject_ptr, &enum_name, variant)?;
-            let (payload_type, payload_ptr) =
-                get_payload_ptr(compiler, subject_ptr, &enum_name, variant)?;
-            let expected_fields = get_struct_variant_fields(compiler, &enum_name, variant)?;
-
-            for fp in fields {
-                result = compile_field_pattern(
-                    compiler,
-                    fp,
-                    &expected_fields,
-                    payload_type,
-                    payload_ptr,
-                    result,
-                    &enum_name,
-                    variant,
-                    function,
-                )?;
-            }
-
-            Ok(result)
+            let enum_key = resolve_enum_key_from_path(compiler, type_path, subject_type)?;
+            let tag = lookup_variant_tag(compiler, &enum_key, variant)?;
+            let fields = lower_struct_fields(compiler, &enum_key, variant, fields)?;
+            Ok(ResolvedPattern::EnumStruct {
+                enum_key,
+                variant: variant.clone(),
+                tag,
+                fields,
+            })
         }
 
         Pattern::Constructor { name, elements, .. } => {
-            let enum_name = find_constructor_enum(compiler, name, subject_type)?;
-            let mut result = compile_tag_check(compiler, subject_ptr, &enum_name, name)?;
-
-            if !elements.is_empty() {
-                let (payload_type, payload_ptr) =
-                    get_payload_ptr(compiler, subject_ptr, &enum_name, name)?;
-                let field_types = get_tuple_variant_types(compiler, &enum_name, name)?;
-                result = compile_tuple_elements(
-                    compiler,
+            let enum_key = resolve_enum_key_from_constructor(compiler, name, subject_type)?;
+            let tag = lookup_variant_tag(compiler, &enum_key, name)?;
+            if elements.is_empty() {
+                // Constructor with no payload acts as a unit-variant tag check
+                // -- collapsing to `EnumUnit` keeps emission's no-payload-GEP
+                // invariant uniform.
+                Ok(ResolvedPattern::EnumUnit {
+                    enum_key,
+                    variant: name.clone(),
+                    tag,
+                })
+            } else {
+                let elements = lower_tuple_elements(compiler, &enum_key, name, elements)?;
+                Ok(ResolvedPattern::EnumTuple {
+                    enum_key,
+                    variant: name.clone(),
+                    tag,
                     elements,
-                    &field_types,
-                    payload_type,
-                    payload_ptr,
-                    result,
-                    function,
-                )?;
+                })
             }
-
-            Ok(result)
         }
 
         Pattern::TypedBinding {
             name, type_expr, ..
         } => {
             let resolved = compiler.resolve_type_expr(type_expr);
+            let subject_inner = unwrap_indirect(subject_type);
 
-            if mangle_type(&resolved) == mangle_type(unwrap_indirect(subject_type)) {
-                let llvm_ty = to_llvm_type(&resolved, compiler.context, &compiler.types)
-                    .ok_or_else(|| {
-                        format!("unsupported type in typed binding: {}", resolved.display())
-                    })?;
-                let val = compiler
-                    .builder
-                    .build_load(llvm_ty, subject_ptr, name)
-                    .unwrap();
-                let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
-                compiler.builder.build_store(alloca, val).unwrap();
-                compiler
-                    .fn_state
-                    .variables
-                    .insert(name.clone(), (alloca, resolved, Ownership::Unowned));
-                Ok(compiler.context.bool_type().const_int(1, false))
+            if mangle_type(&resolved) == mangle_type(subject_inner) {
+                Ok(ResolvedPattern::Bind {
+                    name: name.clone(),
+                    ty: resolved,
+                    strict_llvm: true,
+                })
             } else {
+                let union_mangled = mangle_type(subject_inner);
                 let member_mangled = mangle_type(&resolved);
-                let union_mangled = mangle_type(unwrap_indirect(subject_type));
-
-                let result =
-                    compile_tag_check(compiler, subject_ptr, &union_mangled, &member_mangled)?;
-
-                let (_payload_type, payload_ptr) =
-                    get_payload_ptr(compiler, subject_ptr, &union_mangled, &member_mangled)?;
-                let llvm_ty = to_llvm_type(&resolved, compiler.context, &compiler.types)
-                    .ok_or_else(|| {
-                        format!("unsupported type in typed binding: {}", resolved.display())
-                    })?;
-                let val = compiler
-                    .builder
-                    .build_load(llvm_ty, payload_ptr, name)
-                    .unwrap();
-                let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
-                compiler.builder.build_store(alloca, val).unwrap();
-                compiler
-                    .fn_state
-                    .variables
-                    .insert(name.clone(), (alloca, resolved, Ownership::Unowned));
-
-                Ok(result)
+                let tag = lookup_variant_tag(compiler, &union_mangled, &member_mangled)?;
+                Ok(ResolvedPattern::UnionMember {
+                    union_mangled,
+                    member_mangled,
+                    tag,
+                    member_ty: resolved,
+                    bind_name: name.clone(),
+                })
             }
         }
 
         Pattern::List { .. } => Err("list patterns not yet supported in compilation".to_string()),
-        Pattern::Binary { segments, .. } => {
-            compile_binary_pattern(compiler, segments, subject_ptr, function)
-        }
+
+        Pattern::Binary { segments, .. } => Ok(ResolvedPattern::Binary {
+            segments: segments.clone(),
+        }),
+
         Pattern::Or { patterns, .. } => {
-            let mut result = compiler.context.bool_type().const_int(0, false);
-            for sub in patterns {
-                let cond = compile_pattern(compiler, sub, subject_ptr, subject_type, function)?;
-                result = compiler.builder.build_or(result, cond, "or_pat").unwrap();
+            let mut subs = Vec::with_capacity(patterns.len());
+            for p in patterns {
+                subs.push(lower_pattern(compiler, p, subject_type)?);
             }
-            Ok(result)
+            Ok(ResolvedPattern::Or(subs))
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn compile_field_pattern<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    fp: &FieldPattern,
-    expected_fields: &[(String, Type)],
-    payload_type: StructType<'ctx>,
-    payload_ptr: PointerValue<'ctx>,
-    mut result: IntValue<'ctx>,
-    enum_name: &str,
-    variant: &str,
-    function: FunctionValue<'ctx>,
-) -> Result<IntValue<'ctx>, String> {
-    let (field_idx, (_, field_type)) = expected_fields
-        .iter()
-        .enumerate()
-        .find(|(_, (name, _))| *name == fp.name)
-        .ok_or_else(|| format!("unknown field `{}` in {enum_name}.{variant}", fp.name))?;
-
-    let inner_ty = unwrap_indirect(field_type);
-    let inner_llvm_ty = to_llvm_type(inner_ty, compiler.context, &compiler.types)
-        .ok_or_else(|| format!("unsupported field type for `{}`", fp.name))?;
-    let field_ptr = compiler
-        .builder
-        .build_struct_gep(payload_type, payload_ptr, field_idx as u32, &fp.name)
-        .unwrap();
-    let field_val =
-        load_maybe_indirect(compiler, field_ptr, field_type, &format!("{}_val", fp.name));
-    let field_alloca = compiler
-        .builder
-        .build_alloca(inner_llvm_ty, &format!("{}_tmp", fp.name))
-        .unwrap();
-    compiler
-        .builder
-        .build_store(field_alloca, field_val)
-        .unwrap();
-
-    if let Some(sub_pat) = &fp.pattern {
-        let sub_result = compile_pattern(compiler, sub_pat, field_alloca, inner_ty, function)?;
-        result = compiler
-            .builder
-            .build_and(result, sub_result, &format!("{}_and", fp.name))
-            .unwrap();
-    } else {
-        compiler.fn_state.variables.insert(
-            fp.name.clone(),
-            (field_alloca, inner_ty.clone(), Ownership::Unowned),
-        );
-    }
-
-    Ok(result)
-}
-
-fn compile_literal_for_pattern<'ctx>(
-    compiler: &Compiler<'ctx>,
-    lit: &Literal,
-) -> Result<BasicValueEnum<'ctx>, String> {
+fn lower_literal(lit: &Literal) -> Result<ResolvedLiteral, String> {
     match lit {
-        Literal::Int(s) => {
-            let val = parse_int_literal(s)?;
-            Ok(compiler
-                .context
-                .i64_type()
-                .const_int(val as u64, true)
-                .into())
-        }
-        Literal::Float(s) => {
-            let val: f64 = s.parse().map_err(|_| format!("invalid float: {s}"))?;
-            Ok(compiler.context.f64_type().const_float(val).into())
-        }
-        Literal::Bool(b) => Ok(compiler
-            .context
-            .bool_type()
-            .const_int(if *b { 1 } else { 0 }, false)
-            .into()),
-        Literal::String(s) => {
-            let global = compiler
-                .builder
-                .build_global_string_ptr(s, "str_pat")
-                .unwrap();
-            Ok(global.as_pointer_value().into())
-        }
-        _ => Err("unsupported literal in match pattern".to_string()),
+        Literal::Int(s) => parse_int_literal(s).map(ResolvedLiteral::Int),
+        Literal::Float(s) => s
+            .parse::<f64>()
+            .map(ResolvedLiteral::Float)
+            .map_err(|_| format!("invalid float: {s}")),
+        Literal::Bool(b) => Ok(ResolvedLiteral::Bool(*b)),
+        Literal::String(s) => Ok(ResolvedLiteral::String(s.clone())),
+        Literal::Unit => Err("unsupported literal in match pattern".to_string()),
     }
 }
 
-/// Looks up the tag value for an enum variant from the type registry.
-fn resolve_variant_tag(compiler: &Compiler, enum_name: &str, variant: &str) -> Result<u8, String> {
-    compiler
-        .types
-        .get_variant_tag(enum_name, variant)
-        .ok_or_else(|| format!("unknown variant: {enum_name}.{variant}"))
-}
-
-fn compile_tag_check<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    subject_ptr: PointerValue<'ctx>,
-    enum_name: &str,
+fn lower_tuple_elements(
+    compiler: &Compiler<'_>,
+    enum_key: &str,
     variant: &str,
-) -> Result<IntValue<'ctx>, String> {
-    let tag = resolve_variant_tag(compiler, enum_name, variant)?;
-    let enum_type = compiler
-        .types
-        .get_concrete(&TypeIdentifier::from_qualified_name(enum_name))
-        .or_else(|| compiler.types.get_monomorphized(enum_name))
-        .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
-    let tag_ptr = compiler
-        .builder
-        .build_struct_gep(enum_type, subject_ptr, 0, "tag_ptr")
-        .unwrap();
-    let tag_val = compiler
-        .builder
-        .build_load(compiler.context.i8_type(), tag_ptr, "tag")
-        .unwrap()
-        .into_int_value();
-    let expected = compiler.context.i8_type().const_int(tag as u64, false);
-    Ok(compiler
-        .builder
-        .build_int_compare(IntPredicate::EQ, tag_val, expected, "tag_eq")
-        .unwrap())
-}
-
-fn compile_tuple_elements<'ctx>(
-    compiler: &mut Compiler<'ctx>,
     elements: &[Pattern],
-    field_types: &[Type],
-    payload_type: StructType<'ctx>,
-    payload_ptr: PointerValue<'ctx>,
-    mut result: IntValue<'ctx>,
-    function: FunctionValue<'ctx>,
-) -> Result<IntValue<'ctx>, String> {
-    for (i, sub_pat) in elements.iter().enumerate() {
-        let field_type = &field_types[i];
-        let inner_ty = unwrap_indirect(field_type);
-        // Align with monomorphized enum payloads: ZST fields use an i8 placeholder when
-        // `to_llvm_type` is `None` (e.g. `()`), so LLVM layout and pattern loads stay in sync.
-        let inner_llvm_ty = to_llvm_type(inner_ty, compiler.context, &compiler.types)
-            .unwrap_or_else(|| compiler.context.i8_type().into());
-        let field_ptr = compiler
-            .builder
-            .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("tp{i}"))
-            .unwrap();
-        let field_val = load_maybe_indirect(compiler, field_ptr, field_type, &format!("tp{i}_val"));
-        let field_alloca = compiler
-            .builder
-            .build_alloca(inner_llvm_ty, &format!("tp{i}_tmp"))
-            .unwrap();
-        compiler
-            .builder
-            .build_store(field_alloca, field_val)
-            .unwrap();
-
-        let sub_result = compile_pattern(compiler, sub_pat, field_alloca, inner_ty, function)?;
-        result = compiler
-            .builder
-            .build_and(result, sub_result, &format!("tp{i}_and"))
-            .unwrap();
+) -> Result<Vec<(Type, ResolvedPattern)>, String> {
+    let field_types = get_tuple_variant_types(compiler, enum_key, variant)?;
+    if elements.len() != field_types.len() {
+        return Err(format!(
+            "variant {enum_key}.{variant} expects {} payload elements, got {}",
+            field_types.len(),
+            elements.len()
+        ));
     }
-    Ok(result)
+    let mut out = Vec::with_capacity(elements.len());
+    for (sub, ft) in elements.iter().zip(field_types.iter()) {
+        let inner = unwrap_indirect(ft).clone();
+        let sub_resolved = lower_pattern(compiler, sub, &inner)?;
+        out.push((ft.clone(), sub_resolved));
+    }
+    Ok(out)
 }
 
-fn enum_name_from_path<'ctx>(
-    compiler: &Compiler<'ctx>,
+fn lower_struct_fields(
+    compiler: &Compiler<'_>,
+    enum_key: &str,
+    variant: &str,
+    fields: &[FieldPattern],
+) -> Result<Vec<ResolvedFieldPattern>, String> {
+    let expected = get_struct_variant_fields(compiler, enum_key, variant)?;
+    let mut out = Vec::with_capacity(fields.len());
+    for fp in fields {
+        let (idx, (_, field_type)) = expected
+            .iter()
+            .enumerate()
+            .find(|(_, (n, _))| *n == fp.name)
+            .ok_or_else(|| format!("unknown field `{}` in {enum_key}.{variant}", fp.name))?;
+        let inner_ty = unwrap_indirect(field_type);
+        let sub = match &fp.pattern {
+            Some(p) => Some(lower_pattern(compiler, p, inner_ty)?),
+            None => None,
+        };
+        out.push(ResolvedFieldPattern {
+            name: fp.name.clone(),
+            field_index: idx as u32,
+            field_type: field_type.clone(),
+            sub,
+        });
+    }
+    Ok(out)
+}
+
+/// Resolves the canonical TypeRegistry key for an enum referenced via an
+/// AST type path (`Color`, `alpha.Status`, generic-args-bearing `Option<T>`
+/// already monomorphized in the subject type, etc.).
+fn resolve_enum_key_from_path(
+    compiler: &Compiler<'_>,
     type_path: &[String],
     subject_type: &Type,
 ) -> Result<String, String> {
@@ -619,31 +526,22 @@ fn enum_name_from_path<'ctx>(
             {
                 Ok(name.clone())
             } else if identifier.package != expo_ast::identifier::Package::Unresolved {
-                // Non-generic user/stdlib enums are registered under their
-                // package-qualified identifier; pattern lookups must use the
-                // same key to avoid collisions between packages that share an
-                // enum name.
                 Ok(identifier.qualified_name())
             } else if !type_path.is_empty() {
-                let joined = type_path.join(".");
-                resolve_pattern_enum_key(compiler, &joined, subject_type)
+                resolve_enum_key_from_joined(compiler, &type_path.join("."), subject_type)
             } else {
                 Err("cannot determine enum name for pattern".to_string())
             }
         }
         _ if !type_path.is_empty() => {
-            let joined = type_path.join(".");
-            resolve_pattern_enum_key(compiler, &joined, subject_type)
+            resolve_enum_key_from_joined(compiler, &type_path.join("."), subject_type)
         }
         _ => Err("cannot determine enum name for pattern".to_string()),
     }
 }
 
-/// Resolves a raw pattern path like `"Status"` or `"AlphaStatus"` into the
-/// key actually used by `TypeRegistry` — usually a package-qualified name
-/// (`alpha.Status`) — so pattern-side lookups stay aligned with registration.
-fn resolve_pattern_enum_key(
-    compiler: &Compiler,
+fn resolve_enum_key_from_joined(
+    compiler: &Compiler<'_>,
     joined: &str,
     subject_type: &Type,
 ) -> Result<String, String> {
@@ -671,8 +569,11 @@ fn resolve_pattern_enum_key(
     ))
 }
 
-fn find_constructor_enum<'ctx>(
-    compiler: &Compiler<'ctx>,
+/// Resolves the canonical TypeRegistry key for a shorthand constructor
+/// pattern (`Some(x)`, `Ok(_)`) -- where the variant name is given without
+/// an enum-name qualifier.
+fn resolve_enum_key_from_constructor(
+    compiler: &Compiler<'_>,
     variant_name: &str,
     subject_type: &Type,
 ) -> Result<String, String> {
@@ -725,6 +626,320 @@ fn find_constructor_enum<'ctx>(
     Err(format!("no enum found with variant `{variant_name}`"))
 }
 
+fn lookup_variant_tag(
+    compiler: &Compiler<'_>,
+    enum_key: &str,
+    variant: &str,
+) -> Result<u8, String> {
+    compiler
+        .types
+        .get_variant_tag(enum_key, variant)
+        .ok_or_else(|| format!("unknown variant: {enum_key}.{variant}"))
+}
+
+fn get_struct_variant_fields(
+    compiler: &Compiler<'_>,
+    enum_key: &str,
+    variant: &str,
+) -> Result<Vec<(String, Type)>, String> {
+    let data = lookup_variant_data(compiler, enum_key, variant)?;
+    match data {
+        VariantData::Struct(fields) => Ok(fields),
+        _ => Err(format!("{enum_key}.{variant} is not a struct variant")),
+    }
+}
+
+fn get_tuple_variant_types(
+    compiler: &Compiler<'_>,
+    enum_key: &str,
+    variant: &str,
+) -> Result<Vec<Type>, String> {
+    let data = lookup_variant_data(compiler, enum_key, variant)?;
+    match data {
+        VariantData::Tuple(types) => Ok(types),
+        _ => Err(format!("{enum_key}.{variant} is not a tuple variant")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Emission: ResolvedPattern -> LLVM IR.
+//
+// Functions in this region only call `compiler.builder`,
+// `compiler.context`, and `compiler.fn_state.variables`. Type-registry
+// touches are limited to deterministic `Type` -> `BasicTypeEnum`
+// translations (`to_llvm_type`, `lookup_enum_struct_type`,
+// `get_variant_payload_type`) for keys that lowering already validated.
+// They never perform name resolution or fallback chains.
+// ---------------------------------------------------------------------------
+
+fn emit_pattern<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    resolved: &ResolvedPattern,
+    subject_ptr: PointerValue<'ctx>,
+    function: FunctionValue<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    let true_val = compiler.context.bool_type().const_int(1, false);
+
+    match resolved {
+        ResolvedPattern::AlwaysMatch => Ok(true_val),
+
+        ResolvedPattern::Bind {
+            name,
+            ty,
+            strict_llvm,
+        } => {
+            emit_bind(compiler, name, ty, *strict_llvm, subject_ptr)?;
+            Ok(true_val)
+        }
+
+        ResolvedPattern::LiteralEq { lit, subject_ty } => {
+            let llvm_ty = to_llvm_type(subject_ty, compiler.context, &compiler.types)
+                .ok_or("cannot load subject for literal comparison")?;
+            let subject_val = compiler
+                .builder
+                .build_load(llvm_ty, subject_ptr, "lit_subj")
+                .unwrap();
+            let lit_val = emit_literal_const(compiler, lit);
+            match_values(compiler, &subject_val, &lit_val)
+        }
+
+        ResolvedPattern::EnumUnit { enum_key, tag, .. } => {
+            // Note: a unit variant has no payload. There is no path from this
+            // arm to `get_payload_ptr`; the previously-deferred GEPIndex panic
+            // (payload GEP at index 1 on a tag-only enum) is unreachable here.
+            emit_tag_check(compiler, subject_ptr, enum_key, *tag)
+        }
+
+        ResolvedPattern::EnumTuple {
+            enum_key,
+            variant,
+            tag,
+            elements,
+        } => {
+            let mut result = emit_tag_check(compiler, subject_ptr, enum_key, *tag)?;
+            let (payload_type, payload_ptr) =
+                get_payload_ptr(compiler, subject_ptr, enum_key, variant)?;
+            for (i, (field_ty, sub)) in elements.iter().enumerate() {
+                let inner = unwrap_indirect(field_ty);
+                // Align with monomorphized enum payloads: ZST fields use an
+                // i8 placeholder when `to_llvm_type` is `None` (e.g. `()`),
+                // so LLVM layout and pattern loads stay in sync.
+                let inner_llvm_ty = to_llvm_type(inner, compiler.context, &compiler.types)
+                    .unwrap_or_else(|| compiler.context.i8_type().into());
+                let field_ptr = compiler
+                    .builder
+                    .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("tp{i}"))
+                    .unwrap();
+                let field_val =
+                    load_maybe_indirect(compiler, field_ptr, field_ty, &format!("tp{i}_val"));
+                let field_alloca = compiler
+                    .builder
+                    .build_alloca(inner_llvm_ty, &format!("tp{i}_tmp"))
+                    .unwrap();
+                compiler
+                    .builder
+                    .build_store(field_alloca, field_val)
+                    .unwrap();
+                let sub_result = emit_pattern(compiler, sub, field_alloca, function)?;
+                result = compiler
+                    .builder
+                    .build_and(result, sub_result, &format!("tp{i}_and"))
+                    .unwrap();
+            }
+            Ok(result)
+        }
+
+        ResolvedPattern::EnumStruct {
+            enum_key,
+            variant,
+            tag,
+            fields,
+        } => {
+            let mut result = emit_tag_check(compiler, subject_ptr, enum_key, *tag)?;
+            let (payload_type, payload_ptr) =
+                get_payload_ptr(compiler, subject_ptr, enum_key, variant)?;
+            for fp in fields {
+                let inner_ty = unwrap_indirect(&fp.field_type);
+                let inner_llvm_ty = to_llvm_type(inner_ty, compiler.context, &compiler.types)
+                    .ok_or_else(|| format!("unsupported field type for `{}`", fp.name))?;
+                let field_ptr = compiler
+                    .builder
+                    .build_struct_gep(payload_type, payload_ptr, fp.field_index, &fp.name)
+                    .unwrap();
+                let field_val = load_maybe_indirect(
+                    compiler,
+                    field_ptr,
+                    &fp.field_type,
+                    &format!("{}_val", fp.name),
+                );
+                let field_alloca = compiler
+                    .builder
+                    .build_alloca(inner_llvm_ty, &format!("{}_tmp", fp.name))
+                    .unwrap();
+                compiler
+                    .builder
+                    .build_store(field_alloca, field_val)
+                    .unwrap();
+
+                if let Some(sub) = &fp.sub {
+                    let sub_result = emit_pattern(compiler, sub, field_alloca, function)?;
+                    result = compiler
+                        .builder
+                        .build_and(result, sub_result, &format!("{}_and", fp.name))
+                        .unwrap();
+                } else {
+                    compiler.fn_state.variables.insert(
+                        fp.name.clone(),
+                        (field_alloca, inner_ty.clone(), Ownership::Unowned),
+                    );
+                }
+            }
+            Ok(result)
+        }
+
+        ResolvedPattern::UnionMember {
+            union_mangled,
+            member_mangled,
+            tag,
+            member_ty,
+            bind_name,
+        } => {
+            let result = emit_tag_check(compiler, subject_ptr, union_mangled, *tag)?;
+            let (_payload_type, payload_ptr) =
+                get_payload_ptr(compiler, subject_ptr, union_mangled, member_mangled)?;
+            let llvm_ty =
+                to_llvm_type(member_ty, compiler.context, &compiler.types).ok_or_else(|| {
+                    format!("unsupported type in typed binding: {}", member_ty.display())
+                })?;
+            let val = compiler
+                .builder
+                .build_load(llvm_ty, payload_ptr, bind_name)
+                .unwrap();
+            let alloca = compiler.builder.build_alloca(llvm_ty, bind_name).unwrap();
+            compiler.builder.build_store(alloca, val).unwrap();
+            compiler.fn_state.variables.insert(
+                bind_name.clone(),
+                (alloca, member_ty.clone(), Ownership::Unowned),
+            );
+            Ok(result)
+        }
+
+        ResolvedPattern::Or(subs) => {
+            let mut result = compiler.context.bool_type().const_int(0, false);
+            for sub in subs {
+                let cond = emit_pattern(compiler, sub, subject_ptr, function)?;
+                result = compiler.builder.build_or(result, cond, "or_pat").unwrap();
+            }
+            Ok(result)
+        }
+
+        ResolvedPattern::Binary { segments } => {
+            emit_binary_pattern(compiler, segments, subject_ptr, function)
+        }
+    }
+}
+
+fn emit_bind<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    name: &str,
+    ty: &Type,
+    strict_llvm: bool,
+    subject_ptr: PointerValue<'ctx>,
+) -> Result<(), String> {
+    let llvm_ty = if strict_llvm {
+        to_llvm_type(ty, compiler.context, &compiler.types)
+            .ok_or_else(|| format!("unsupported type in typed binding: {}", ty.display()))?
+    } else {
+        to_llvm_type(ty, compiler.context, &compiler.types)
+            .unwrap_or_else(|| compiler.context.i8_type().into())
+    };
+    let val = compiler
+        .builder
+        .build_load(llvm_ty, subject_ptr, name)
+        .unwrap();
+    let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
+    compiler.builder.build_store(alloca, val).unwrap();
+    compiler
+        .fn_state
+        .variables
+        .insert(name.to_string(), (alloca, ty.clone(), Ownership::Unowned));
+    Ok(())
+}
+
+fn emit_literal_const<'ctx>(
+    compiler: &Compiler<'ctx>,
+    lit: &ResolvedLiteral,
+) -> BasicValueEnum<'ctx> {
+    match lit {
+        ResolvedLiteral::Int(v) => compiler
+            .context
+            .i64_type()
+            .const_int(*v as u64, true)
+            .into(),
+        ResolvedLiteral::Float(v) => compiler.context.f64_type().const_float(*v).into(),
+        ResolvedLiteral::Bool(b) => compiler
+            .context
+            .bool_type()
+            .const_int(if *b { 1 } else { 0 }, false)
+            .into(),
+        ResolvedLiteral::String(s) => compiler
+            .builder
+            .build_global_string_ptr(s, "str_pat")
+            .unwrap()
+            .as_pointer_value()
+            .into(),
+    }
+}
+
+fn emit_tag_check<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    subject_ptr: PointerValue<'ctx>,
+    enum_key: &str,
+    tag: u8,
+) -> Result<IntValue<'ctx>, String> {
+    let enum_type = lookup_enum_struct_type(compiler, enum_key)?;
+    let tag_ptr = compiler
+        .builder
+        .build_struct_gep(enum_type, subject_ptr, 0, "tag_ptr")
+        .unwrap();
+    let tag_val = compiler
+        .builder
+        .build_load(compiler.context.i8_type(), tag_ptr, "tag")
+        .unwrap()
+        .into_int_value();
+    let expected = compiler.context.i8_type().const_int(tag as u64, false);
+    Ok(compiler
+        .builder
+        .build_int_compare(IntPredicate::EQ, tag_val, expected, "tag_eq")
+        .unwrap())
+}
+
+fn lookup_enum_struct_type<'ctx>(
+    compiler: &Compiler<'ctx>,
+    enum_key: &str,
+) -> Result<StructType<'ctx>, String> {
+    compiler
+        .types
+        .get_concrete(&TypeIdentifier::from_qualified_name(enum_key))
+        .or_else(|| compiler.types.get_monomorphized(enum_key))
+        .ok_or_else(|| format!("unknown enum: {enum_key}"))
+}
+
+fn emit_binary_pattern<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    segments: &[BinarySegment],
+    subject_ptr: PointerValue<'ctx>,
+    function: FunctionValue<'ctx>,
+) -> Result<IntValue<'ctx>, String> {
+    compile_binary_pattern(compiler, segments, subject_ptr, function)
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers used by both lowering and emission, plus by other codegen
+// modules (`enums.rs` consumes `get_payload_ptr`, `lookup_variant_data`,
+// `match_values` for enum equality compilation).
+// ---------------------------------------------------------------------------
+
 /// Resolved payload metadata for an enum variant.
 struct ResolvedPayloadInfo<'ctx> {
     enum_type: StructType<'ctx>,
@@ -741,11 +956,7 @@ fn resolve_payload_info<'ctx>(
         .types
         .get_variant_payload_type(enum_name, variant)
         .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
-    let enum_type = compiler
-        .types
-        .get_concrete(&TypeIdentifier::from_qualified_name(enum_name))
-        .or_else(|| compiler.types.get_monomorphized(enum_name))
-        .ok_or_else(|| format!("unknown enum: {enum_name}"))?;
+    let enum_type = lookup_enum_struct_type(compiler, enum_name)?;
     Ok(ResolvedPayloadInfo {
         enum_type,
         payload_type,
@@ -764,30 +975,6 @@ pub(crate) fn get_payload_ptr<'ctx>(
         .build_struct_gep(resolved.enum_type, subject_ptr, 1, "payload_ptr")
         .unwrap();
     Ok((resolved.payload_type, payload_ptr))
-}
-
-fn get_struct_variant_fields(
-    compiler: &Compiler<'_>,
-    enum_name: &str,
-    variant: &str,
-) -> Result<Vec<(String, Type)>, String> {
-    let data = lookup_variant_data(compiler, enum_name, variant)?;
-    match data {
-        VariantData::Struct(fields) => Ok(fields),
-        _ => Err(format!("{enum_name}.{variant} is not a struct variant")),
-    }
-}
-
-fn get_tuple_variant_types(
-    compiler: &Compiler<'_>,
-    enum_name: &str,
-    variant: &str,
-) -> Result<Vec<Type>, String> {
-    let data = lookup_variant_data(compiler, enum_name, variant)?;
-    match data {
-        VariantData::Tuple(types) => Ok(types),
-        _ => Err(format!("{enum_name}.{variant} is not a tuple variant")),
-    }
 }
 
 pub(crate) fn lookup_variant_data(

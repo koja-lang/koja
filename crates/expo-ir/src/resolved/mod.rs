@@ -8,4 +8,5 @@ pub mod enums;
 pub mod fields;
 pub mod methods;
 pub mod ops;
+pub mod patterns;
 pub mod strings;
