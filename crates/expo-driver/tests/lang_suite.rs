@@ -563,6 +563,33 @@ fn lang_project_check_test() {
     );
 }
 
+/// Locks in the duplicate-package-name rule: a project that names itself
+/// `greeter` and also depends on a `greeter` package must fail to build with
+/// a clear error message. Same rule catches `name = "std"` collisions and
+/// duplicate transitive deps.
+#[test]
+fn lang_dup_pkg_name() {
+    let dir = lang_dir().join("dup_pkg_name");
+    assert!(dir.exists(), "test fixture dup_pkg_name/ not found");
+
+    let mut cmd = Command::new(expo_bin());
+    cmd.arg("check").current_dir(&dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute expo check");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    assert!(
+        !output.status.success(),
+        "expected expo check to fail for duplicate package name, but it succeeded\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("duplicate package name `greeter`"),
+        "expected stderr to mention duplicate package name `greeter`, got:\n{stderr}"
+    );
+}
+
 #[test]
 fn lang_release_build_test() {
     let project_dir = lang_dir().join("project");

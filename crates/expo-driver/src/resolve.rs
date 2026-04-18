@@ -5,7 +5,7 @@
 //! - **Project** ([`resolve_project_modules`]): uses [`ProjectConfig`] to scan directories
 //!   for `.expo` files, building a flat namespace with stdlib auto-imported
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -112,7 +112,9 @@ pub fn resolve_project_modules(
         entry_type: config.entry_type_name().map(|s| s.to_string()),
     };
 
-    insert_stdlib(&mut graph);
+    if config.name != "std" {
+        insert_stdlib(&mut graph);
+    }
     scan_directories(&config.name, &src_roots, &mut graph)?;
     resolve_dependencies(config, project_root, &mut graph)?;
 
@@ -235,7 +237,9 @@ pub fn resolve_test_project_modules(
         entry_type: None,
     };
 
-    insert_stdlib(&mut graph);
+    if config.name != "std" {
+        insert_stdlib(&mut graph);
+    }
     scan_directories(&config.name, &all_roots, &mut graph)?;
     resolve_dependencies(config, project_root, &mut graph)?;
 
@@ -255,11 +259,22 @@ pub fn resolve_test_project_modules(
 /// Scans each dependency declared in `[dependencies]` and adds its source
 /// modules to the graph. The dep's entry module is skipped to avoid `fn main`
 /// conflicts with the consuming project.
+///
+/// Enforces the duplicate-package-name rule: every project implicitly imports
+/// `std`, and no two packages in the dep graph (project + implicit `std` +
+/// each declared dep's `[project] name`) may share a name. The real stdlib
+/// (the lone project with `name = "std"`) is the one project that doesn't get
+/// the implicit `std` entry, so its self-build does not collide.
 fn resolve_dependencies(
     config: &ProjectConfig,
     project_root: &Path,
     graph: &mut ModuleGraph,
 ) -> Result<(), String> {
+    let mut seen_pkgs: BTreeSet<String> = BTreeSet::new();
+    seen_pkgs.insert(config.name.clone());
+    if config.name != "std" {
+        seen_pkgs.insert("std".to_string());
+    }
     for (alias, dep) in &config.dependencies {
         let dep_path = match &dep.path {
             Some(p) => project_root.join(p),
@@ -276,6 +291,13 @@ fn resolve_dependencies(
                 dep_path.display()
             )
         })?;
+
+        if !seen_pkgs.insert(dep_config.name.clone()) {
+            return Err(format!(
+                "duplicate package name `{}` in dep graph (declared by project, dependency `{alias}`, or implicit `std` import)",
+                dep_config.name
+            ));
+        }
 
         let dep_src_roots: Vec<PathBuf> = dep_config.src.iter().map(|s| dep_path.join(s)).collect();
         scan_directories(&dep_config.name, &dep_src_roots, graph)?;
