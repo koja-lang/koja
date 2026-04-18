@@ -12,7 +12,7 @@ use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
 
 use crate::check::{
-    check_call_args, check_literal_overflow, check_type, try_parse_mangled_generic,
+    check_call_args, check_literal_overflow, check_type, is_diverging, try_parse_mangled_generic,
     types_compatible,
 };
 use crate::context::{
@@ -254,7 +254,12 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                     check_type(&guard_ty, &Type::Primitive(Primitive::Bool), arm.span, ctx);
                 }
                 let arm_ty = infer_body_type(&mut arm.body, ctx, &mut arm_ce);
-                if result_type == Type::Unknown && arm_ty.is_known() {
+                let arm_diverges = matches!(
+                    arm.body.last(),
+                    Some(Statement::Expr(e)) if is_diverging(e)
+                );
+                let arm_meaningful = arm_ty.is_known() || matches!(arm_ty, Type::Parameter(_));
+                if matches!(result_type, Type::Unknown) && arm_meaningful && !arm_diverges {
                     result_type = arm_ty;
                 }
                 for (name, name_span) in &bound_vars {
@@ -758,6 +763,24 @@ fn infer_binary_literal(
     }
 }
 
+/// Looks up a sibling function by name inside the current specialized impl
+/// (e.g. `priv fn strlen(...)` declared in `impl CPtr<UInt8>` and called
+/// from `to_cstring`). Returns `None` outside of specialized impl method
+/// bodies.
+fn lookup_specialized_sibling(name: &str, ctx: &TypeContext, ce: &CheckEnv) -> Option<FunctionSig> {
+    let tid = ce.enclosing_type.as_ref()?;
+    let args = ce.enclosing_specialization.as_ref()?;
+    let entries = ctx.specialized_methods.get(tid)?;
+    for (concrete, sigs) in entries {
+        if concrete == args
+            && let Some(sig) = sigs.get(name)
+        {
+            return Some(sig.clone());
+        }
+    }
+    None
+}
+
 /// Type-checks a function call expression, resolving the callee and validating arguments.
 fn infer_call(
     callee: &mut Expr,
@@ -798,6 +821,14 @@ fn infer_call(
             .and_then(|ti| ti.functions.get(name))
             .cloned()
         {
+            if !sig.type_params.is_empty() {
+                return infer_generic_call(name, &sig, args, span, ctx, ce);
+            }
+            let return_type = sig.return_type.clone();
+            let params = sig.params.clone();
+            check_call_args(name, &params, args, "", span, ctx, ce);
+            return_type
+        } else if let Some(sig) = lookup_specialized_sibling(name, ctx, ce) {
             if !sig.type_params.is_empty() {
                 return infer_generic_call(name, &sig, args, span, ctx, ce);
             }
@@ -1465,6 +1496,10 @@ fn infer_method_call(
 
         check_call_args(method, &params, args, "self, ", span, ctx, ce);
         return_type
+    } else if let Some(field_call) =
+        try_function_field_call(&base_id, &subst, method, args, span, ctx, ce)
+    {
+        field_call
     } else {
         for arg in args {
             infer_expr(&mut arg.value, ctx, ce);
@@ -1524,6 +1559,50 @@ fn infer_method_call(
     }
 }
 
+/// Falls back from method dispatch to a function-typed field call.
+///
+/// When `recv.method()` doesn't resolve to a method, this checks whether the
+/// receiver is a struct with a field named `method` whose type is a function
+/// (e.g. `struct Task<R> { work: fn () -> R }` -> `self.work()`). If so, the
+/// field is treated as the callee, the arguments are checked against its
+/// `Type::Function` signature, and the function's return type is returned.
+fn try_function_field_call(
+    base_id: &Option<TypeIdentifier>,
+    subst: &Option<HashMap<String, Type>>,
+    method: &str,
+    args: &mut [Arg],
+    span: Span,
+    ctx: &mut TypeContext,
+    ce: &mut CheckEnv,
+) -> Option<Type> {
+    let id = base_id.as_ref()?;
+    let ti = ctx.get_type(id)?;
+    let fields = ti.fields()?;
+    let (_, field_ty) = fields.iter().find(|(name, _)| name == method)?;
+    let field_ty = match subst {
+        Some(s) => substitute_preserving(field_ty, s),
+        None => field_ty.clone(),
+    };
+    let Type::Function {
+        params,
+        return_type,
+    } = field_ty
+    else {
+        return None;
+    };
+    let param_infos: Vec<ParamInfo> = params
+        .iter()
+        .enumerate()
+        .map(|(i, fp)| ParamInfo {
+            mode: fp.mode,
+            name: format!("_{i}"),
+            ty: fp.ty.clone(),
+        })
+        .collect();
+    check_call_args(method, &param_infos, args, "", span, ctx, ce);
+    Some(*return_type)
+}
+
 /// Type-checks a struct construction expression, validating fields and their types.
 fn infer_struct_construction(
     type_path: &[String],
@@ -1533,13 +1612,21 @@ fn infer_struct_construction(
     ce: &mut CheckEnv,
 ) -> Type {
     let name = type_path.join(".");
-    let lookup = ctx
-        .find_type(&name)
-        .map(|ti| (ti.identifier.clone(), ti.fields().cloned()));
-    if let Some((resolved_id, Some(struct_fields))) = lookup {
+    let lookup = ctx.find_type(&name).map(|ti| {
+        (
+            ti.identifier.clone(),
+            ti.fields().cloned(),
+            ti.type_params.clone(),
+        )
+    });
+    if let Some((resolved_id, Some(struct_fields), struct_type_params)) = lookup {
+        let mut subst: HashMap<String, Type> = HashMap::new();
         for fi in fields {
             let value_ty = infer_expr(&mut fi.value, ctx, ce);
             if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
+                if !struct_type_params.is_empty() {
+                    unify(field_ty, &value_ty, &mut subst);
+                }
                 if field_ty.is_known()
                     && value_ty.is_known()
                     && !types_compatible(field_ty, &value_ty)
@@ -1563,9 +1650,21 @@ fn infer_struct_construction(
                 );
             }
         }
+        let type_args: Vec<Type> = if !struct_type_params.is_empty()
+            && struct_type_params
+                .iter()
+                .all(|tp| subst.contains_key(&tp.name))
+        {
+            struct_type_params
+                .iter()
+                .map(|tp| subst[&tp.name].clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         Type::Named {
             identifier: resolved_id,
-            type_args: vec![],
+            type_args,
         }
     } else {
         for fi in fields {
@@ -1644,6 +1743,7 @@ fn infer_closure(
         process_msg_type: ce.process_msg_type.clone(),
         fn_type_params: ce.fn_type_params.clone(),
         enclosing_type: ce.enclosing_type.clone(),
+        enclosing_specialization: ce.enclosing_specialization.clone(),
     };
     let fn_params = bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
 
@@ -1708,6 +1808,7 @@ fn infer_short_closure(
         process_msg_type: ce.process_msg_type.clone(),
         fn_type_params: ce.fn_type_params.clone(),
         enclosing_type: ce.enclosing_type.clone(),
+        enclosing_specialization: ce.enclosing_specialization.clone(),
     };
     let fn_params = bind_closure_params(params, expected_param_types, &mut closure_env, ctx, span);
 

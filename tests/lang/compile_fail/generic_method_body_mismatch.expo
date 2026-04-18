@@ -1,0 +1,14 @@
+struct Counter
+  value: Int
+end
+
+impl Counter
+  fn bad<U>(self) -> U
+    self.value + "string"
+  end
+end
+
+fn main
+  c = Counter{value: 1}
+  print(c.value)
+end

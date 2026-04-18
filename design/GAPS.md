@@ -103,3 +103,64 @@ error (`"functions must be declared inside impl blocks"`), or finish codegen
 support.
 
 Surfaced during the agent expression evaluator test.
+
+---
+
+## Codegen `find_type` lookup misses user-defined generic types
+
+Calling a method on a user-defined generic struct via an inherent generic
+impl (e.g. `impl MyBox<T> { fn get(self) -> T self.value end }` followed by
+`MyBox{value: 7}.get()`) fails at codegen with
+`"no type info for \`MyBox\`"`. The dispatch path in
+`expo-codegen/src/generics.rs` (`resolve_method_signature`) calls
+`compiler.type_ctx.find_type(base_type)` with the bare name; `find_type`
+goes through unscoped `resolve_name`, which only finds types in the global
+`name_index`. User-defined types (in the project's package) only get
+package-qualified entries, so the bare lookup fails -- but the *same*
+function does a successful `resolve_name_current(base_type)` lookup a few
+lines above, proving the type is in fact registered.
+
+The same pattern works for stdlib types (`Option`, `List`, `Pair`, etc.)
+because they happen to be in the global bare index.
+
+**Workaround:** none for inherent generic impls today; works through
+`impl Trait<T> for MyBox` (protocol dispatch hits a different path).
+
+**Fix:** swap `type_ctx.find_type(base_type)` for the package-aware
+equivalent (`resolve_name_current(base_type)` + `get_type(&id)`) in
+`resolve_method_signature` and the matching sites in `structs.rs` /
+`control/loops.rs`.
+
+Surfaced while writing positive lock-in tests for the
+fix-generic-impl-typecheck PR.
+
+---
+
+## Cached impl ASTs are pre-typecheck clones
+
+`expo-typecheck/src/collect.rs` clones every `ImplBlock` into
+`ctx.generic_impl_asts` and `ctx.specialized_impl_asts` *before*
+`check.rs` runs. Type-checking mutates `module.items` in place (populating
+`Expr::resolved_type` etc.), so the cached clones used by codegen never
+see those mutations. Same story for protocol-default bodies stored in
+`ctx.synthesized_default_fns`.
+
+Today's `compile_match` hides this by emitting the subject first and
+reading `subject_tv.expo_type` from codegen's own type tracking; pure
+lower-then-emit splits in IR can't rely on `subject.resolved_type` because
+of this gap. (See the doc comment on `patterns.rs::compile_match` for the
+"why pre-emit" rationale.)
+
+A naive fix -- writing the typechecked `impl_block` back into both caches
+keyed by `Span`, plus running a `rebuild_impl_asts_from_modules` pass after
+context merge -- gets `test-rust` green but still leaves `test-stdlib`
+failing on protocol-default bodies (their synthesized functions share
+spans across impls and the dedupe-by-span logic in `TypeContext::merge`
+prefers the stale clone).
+
+**Fix:** make the caches store references / IDs back into `module.items`
+so there's only one source of truth, or have `synthesize_protocol_defaults`
+type-check its outputs eagerly so the stored AST is authoritative.
+
+Surfaced during Stage 5 of the fix-generic-impl-typecheck plan; that stage
+is paused until this is sorted.

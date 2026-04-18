@@ -18,6 +18,95 @@ use crate::types::{
     Primitive, Type, TypeIdentifier, named, package_from_str, resolve_type_expr_with_params,
 };
 
+/// Classifies an `impl` target into the form used by body type-checking.
+///
+/// Returns `Some((target_name, impl_type_params))` when the target is one of:
+/// - `impl Foo` or `impl Trait for Foo` -> `(Foo, [])`
+/// - `impl Foo<T, U>` or `impl Trait<...> for Foo<T, U>` -> `(Foo, [T, U])`
+///
+/// Returns `None` for unsupported shapes (multi-segment paths, weird args)
+/// or for cases handled elsewhere:
+/// - Specialized impls like `impl Foo<Int>` -- see [`classify_specialized_impl_target`].
+/// - Mixed concrete + type parameter args have already been reported as
+///   errors during collection.
+fn classify_impl_target(
+    target: &TypeExpr,
+    struct_names: &[&str],
+    enum_names: &[&str],
+) -> Option<(String, Vec<TypeParam>)> {
+    match target {
+        TypeExpr::Named { path, .. } if path.len() == 1 => Some((path[0].clone(), Vec::new())),
+        TypeExpr::Generic { path, args, .. } if path.len() == 1 => {
+            let mut type_params = Vec::new();
+            let mut concrete_count = 0;
+            for arg in args {
+                let TypeExpr::Named { path: p, span } = arg else {
+                    continue;
+                };
+                if p.len() != 1 {
+                    continue;
+                }
+                let name = &p[0];
+                if Primitive::from_name(name).is_some()
+                    || struct_names.contains(&name.as_str())
+                    || enum_names.contains(&name.as_str())
+                {
+                    concrete_count += 1;
+                } else {
+                    type_params.push(TypeParam {
+                        name: name.clone(),
+                        bounds: Vec::new(),
+                        span: *span,
+                    });
+                }
+            }
+            if concrete_count > 0 {
+                // Specialized (`impl Foo<Int>`) or mixed -- handled elsewhere.
+                return None;
+            }
+            Some((path[0].clone(), type_params))
+        }
+        _ => None,
+    }
+}
+
+/// Classifies a specialized `impl` target (`impl Foo<Int>` /
+/// `impl Trait<...> for Foo<Int>`) into `(target_name, concrete_args)`.
+///
+/// Returns `None` when the target isn't fully specialized -- generic and
+/// plain impls flow through [`classify_impl_target`] instead.
+fn classify_specialized_impl_target(
+    target: &TypeExpr,
+    struct_names: &[&str],
+    enum_names: &[&str],
+) -> Option<(String, Vec<Type>)> {
+    let TypeExpr::Generic { path, args, .. } = target else {
+        return None;
+    };
+    if path.len() != 1 || args.is_empty() {
+        return None;
+    }
+    let mut concrete_args = Vec::with_capacity(args.len());
+    for arg in args {
+        let TypeExpr::Named { path: p, .. } = arg else {
+            return None;
+        };
+        if p.len() != 1 {
+            return None;
+        }
+        let name = &p[0];
+        if let Some(prim) = Primitive::from_name(name) {
+            concrete_args.push(Type::Primitive(prim));
+        } else if struct_names.contains(&name.as_str()) || enum_names.contains(&name.as_str()) {
+            concrete_args.push(named(name));
+        } else {
+            // Free type parameter -- not a specialized impl.
+            return None;
+        }
+    }
+    Some((path[0].clone(), concrete_args))
+}
+
 /// Type-checks all function bodies and impl blocks in a module, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
 ///
@@ -75,60 +164,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
                 );
             }
             Item::Impl(impl_block) => {
-                let (target_name, is_generic_impl) = match &impl_block.target {
-                    TypeExpr::Named { path, .. } if path.len() == 1 => (&path[0], false),
-                    TypeExpr::Generic { path, .. } if path.len() == 1 => (&path[0], true),
-                    _ => continue,
-                };
-                if is_generic_impl {
-                    continue;
-                }
-                let self_type = if ctx.is_struct(target_name) || ctx.is_enum(target_name) {
-                    let mut ty = named(target_name);
-                    ctx.resolve_type(&mut ty);
-                    ty
-                } else if let Some(p) = Primitive::from_name(target_name) {
-                    Type::Primitive(p)
-                } else {
-                    continue;
-                };
-
-                let type_id = ctx.resolve_name(target_name).cloned();
-                let impl_process_msg = type_id.as_ref().and_then(|id| ctx.process_envelope_for(id));
-
-                for member in &mut impl_block.members {
-                    if let ImplMember::Function(f) = member
-                        && f.type_params.is_empty()
-                    {
-                        check_function_with_msg(
-                            f,
-                            ctx,
-                            Some(&self_type),
-                            &struct_name_refs,
-                            &enum_name_refs,
-                            impl_process_msg.clone(),
-                            type_id.as_ref(),
-                        );
-                    }
-                }
-                let mut synth_fns = ctx
-                    .synthesized_default_fns
-                    .get(target_name.as_str())
-                    .cloned()
-                    .unwrap_or_default();
-                for f in &mut synth_fns {
-                    if f.type_params.is_empty() {
-                        check_function_with_msg(
-                            f,
-                            ctx,
-                            Some(&self_type),
-                            &struct_name_refs,
-                            &enum_name_refs,
-                            impl_process_msg.clone(),
-                            type_id.as_ref(),
-                        );
-                    }
-                }
+                check_impl_block(impl_block, ctx, &struct_name_refs, &enum_name_refs);
             }
             _ => {}
         }
@@ -159,6 +195,150 @@ fn check_inline_functions(
                 enum_names,
                 process_msg.clone(),
                 type_id.as_ref(),
+                &[],
+                None,
+            );
+        }
+    }
+}
+
+/// Type-checks all method bodies in an `impl` block.
+///
+/// Handles non-generic impls (`impl Foo` / `impl Trait for Foo`), generic
+/// impls (`impl Foo<T>` / `impl Trait<...> for Foo<T>`), and specialized
+/// impls (`impl Foo<Int>` / `impl Trait<...> for Foo<Int>`).
+///
+/// For generic impls the impl-level type parameters are surfaced as
+/// `Type::Parameter`s in `self_type` and threaded into each method's
+/// `CheckEnv.fn_type_params`, so generic-receiver method dispatch and
+/// `Self` substitution work the same way they do for free generic
+/// functions. For specialized impls the concrete args are threaded through
+/// to [`lookup_sig`] so it can find the per-specialization signatures
+/// stored in `ctx.specialized_methods`.
+fn check_impl_block(
+    impl_block: &mut ImplBlock,
+    ctx: &mut TypeContext,
+    struct_names: &[&str],
+    enum_names: &[&str],
+) {
+    if let Some((target_name, concrete_args)) =
+        classify_specialized_impl_target(&impl_block.target, struct_names, enum_names)
+    {
+        check_specialized_impl_block(
+            impl_block,
+            &target_name,
+            concrete_args,
+            ctx,
+            struct_names,
+            enum_names,
+        );
+        return;
+    }
+
+    let Some((target_name, impl_type_params)) =
+        classify_impl_target(&impl_block.target, struct_names, enum_names)
+    else {
+        return;
+    };
+
+    let tp_names: Vec<&str> = impl_type_params.iter().map(|tp| tp.name.as_str()).collect();
+    let mut self_type = if !impl_type_params.is_empty() {
+        resolve_type_expr_with_params(
+            &impl_block.target,
+            struct_names,
+            enum_names,
+            &tp_names,
+            &BTreeMap::new(),
+        )
+    } else if ctx.is_struct(&target_name) || ctx.is_enum(&target_name) {
+        named(&target_name)
+    } else if let Some(p) = Primitive::from_name(&target_name) {
+        Type::Primitive(p)
+    } else {
+        return;
+    };
+    ctx.resolve_type(&mut self_type);
+
+    let type_id = ctx.resolve_name(&target_name).cloned();
+    let impl_process_msg = type_id.as_ref().and_then(|id| ctx.process_envelope_for(id));
+
+    for member in &mut impl_block.members {
+        if let ImplMember::Function(f) = member {
+            check_function_with_msg(
+                f,
+                ctx,
+                Some(&self_type),
+                struct_names,
+                enum_names,
+                impl_process_msg.clone(),
+                type_id.as_ref(),
+                &impl_type_params,
+                None,
+            );
+        }
+    }
+    let mut synth_fns = ctx
+        .synthesized_default_fns
+        .get(target_name.as_str())
+        .cloned()
+        .unwrap_or_default();
+    for f in &mut synth_fns {
+        check_function_with_msg(
+            f,
+            ctx,
+            Some(&self_type),
+            struct_names,
+            enum_names,
+            impl_process_msg.clone(),
+            type_id.as_ref(),
+            &impl_type_params,
+            None,
+        );
+    }
+}
+
+/// Type-checks the methods of a specialized `impl` block (`impl Foo<Int>`).
+///
+/// `concrete_args` are the resolved type arguments (e.g. `[Type::Primitive(Int)]`).
+/// They are passed to [`lookup_sig`] so the per-specialization signature
+/// stored in `ctx.specialized_methods` can be found and used to seed the
+/// method's `CheckEnv`.
+fn check_specialized_impl_block(
+    impl_block: &mut ImplBlock,
+    target_name: &str,
+    mut concrete_args: Vec<Type>,
+    ctx: &mut TypeContext,
+    struct_names: &[&str],
+    enum_names: &[&str],
+) {
+    for ty in &mut concrete_args {
+        ctx.resolve_type(ty);
+    }
+
+    let mut self_type = resolve_type_expr_with_params(
+        &impl_block.target,
+        struct_names,
+        enum_names,
+        &[],
+        &BTreeMap::new(),
+    );
+    ctx.resolve_type(&mut self_type);
+
+    let type_id = ctx.resolve_name(target_name).cloned();
+    let impl_process_msg = type_id.as_ref().and_then(|id| ctx.process_envelope_for(id));
+
+    for member in &mut impl_block.members {
+        if let ImplMember::Function(f) = member {
+            check_function_with_msg(
+                f,
+                ctx,
+                Some(&self_type),
+                struct_names,
+                enum_names,
+                impl_process_msg.clone(),
+                type_id.as_ref(),
+                &[],
+                Some(&concrete_args),
             );
         }
     }
@@ -181,17 +361,34 @@ fn check_function(
         enum_names,
         None,
         enclosing_type,
+        &[],
+        None,
     );
 }
 
 /// Looks up the already-collected [`FunctionSig`] for a function. Methods are
 /// found via the enclosing type's `TypeInfo`; module-level functions live in
-/// `ctx.functions`.
+/// `ctx.functions`. When `specialized_args` is provided, the per-
+/// specialization signatures in `ctx.specialized_methods` are consulted
+/// first so `impl Foo<Int>` methods resolve to their concrete sigs rather
+/// than the generic ones.
 fn lookup_sig<'a>(
     name: &str,
     ctx: &'a TypeContext,
     enclosing_type: Option<&TypeIdentifier>,
+    specialized_args: Option<&[Type]>,
 ) -> Option<&'a FunctionSig> {
+    if let (Some(tid), Some(args)) = (enclosing_type, specialized_args)
+        && let Some(entries) = ctx.specialized_methods.get(tid)
+    {
+        for (concrete, sigs) in entries {
+            if concrete.as_slice() == args
+                && let Some(sig) = sigs.get(name)
+            {
+                return Some(sig);
+            }
+        }
+    }
     if let Some(tid) = enclosing_type {
         ctx.get_type(tid).and_then(|ti| ti.functions.get(name))
     } else {
@@ -202,6 +399,13 @@ fn lookup_sig<'a>(
 /// Type-checks a function body, building a [`CheckEnv`] from its parameters
 /// and verifying the return type against the declared signature. When
 /// `override_msg_type` is `Some`, it replaces the process mailbox type.
+///
+/// `impl_type_params` carries the type parameters introduced by the enclosing
+/// generic `impl` block (empty for non-impl callers and non-generic impls).
+/// They are merged with the method's own `type_params` into
+/// `CheckEnv.fn_type_params` so generic-receiver dispatch and `Self`
+/// substitution have access to both layers of generics.
+#[allow(clippy::too_many_arguments)]
 fn check_function_with_msg(
     f: &mut Function,
     ctx: &mut TypeContext,
@@ -210,8 +414,10 @@ fn check_function_with_msg(
     enum_names: &[&str],
     override_msg_type: Option<Type>,
     enclosing_type: Option<&TypeIdentifier>,
+    impl_type_params: &[TypeParam],
+    specialized_args: Option<&[Type]>,
 ) {
-    let sig = lookup_sig(&f.name, ctx, enclosing_type);
+    let sig = lookup_sig(&f.name, ctx, enclosing_type, specialized_args);
 
     let mut env: HashMap<String, VarInfo> = HashMap::new();
 
@@ -317,8 +523,13 @@ fn check_function_with_msg(
         enum_names,
         type_hint: None,
         process_msg_type,
-        fn_type_params: f.type_params.clone(),
+        fn_type_params: impl_type_params
+            .iter()
+            .chain(f.type_params.iter())
+            .cloned()
+            .collect(),
         enclosing_type: enclosing_type.cloned(),
+        enclosing_specialization: specialized_args.map(|args| args.to_vec()),
     };
 
     let check_implicit_return = declared_return != Type::Unit && declared_return != Type::Unknown;
@@ -557,7 +768,7 @@ fn split_mangled_args(s: &str) -> Vec<String> {
 
 /// Returns `true` when `expr` is a call to a diverging function (e.g. `panic`)
 /// whose return type should be treated as compatible with any declared type.
-fn is_diverging(expr: &Expr) -> bool {
+pub(crate) fn is_diverging(expr: &Expr) -> bool {
     matches!(
         &expr.kind,
         ExprKind::Call { callee, .. }

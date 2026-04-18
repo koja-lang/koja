@@ -49,6 +49,12 @@ pub(crate) struct CheckEnv<'a> {
     /// The enclosing type when checking a function inside a struct/enum.
     /// Used by `infer_call` to resolve bare calls to same-type methods.
     pub enclosing_type: Option<TypeIdentifier>,
+    /// Concrete type arguments when checking a method body inside a
+    /// specialized impl (e.g. `[Int]` for `impl Foo<Int>`). `None` for
+    /// non-impl bodies, plain impls, and generic impls. Used by
+    /// `infer_call` and the sig lookup helpers to find sibling functions
+    /// stored in `ctx.specialized_methods`.
+    pub enclosing_specialization: Option<Vec<Type>>,
 }
 
 impl<'a> CheckEnv<'a> {
@@ -67,6 +73,7 @@ impl<'a> CheckEnv<'a> {
             process_msg_type: self.process_msg_type.clone(),
             fn_type_params: self.fn_type_params.clone(),
             enclosing_type: self.enclosing_type.clone(),
+            enclosing_specialization: self.enclosing_specialization.clone(),
         }
     }
 

@@ -1,0 +1,18 @@
+protocol Show
+  fn show(self) -> String
+end
+
+struct Box<T>
+  value: T
+end
+
+impl Show for Box<T>
+  fn show(self) -> String
+    42
+  end
+end
+
+fn main
+  b = Box{value: 1}
+  print(b.show())
+end

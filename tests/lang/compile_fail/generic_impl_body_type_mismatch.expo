@@ -1,0 +1,14 @@
+struct Box<T>
+  value: T
+end
+
+impl Box<T>
+  fn typo(self) -> Int
+    "not an int"
+  end
+end
+
+fn main
+  b = Box{value: 1}
+  print(b.typo())
+end

@@ -67,13 +67,14 @@ use super::compile_body_as_value;
 ///
 /// The lower/emit split would prefer lowering to run *before* any emission.
 /// That requires `subject.resolved_type` (and every other expression's
-/// `resolved_type`) to be populated by typecheck. It currently isn't for
-/// expressions inside generic `impl` blocks -- typecheck skips those bodies
-/// (see `expo-typecheck/src/check.rs`'s `is_generic_impl` short-circuit), so
-/// codegen is the only stage that knows e.g. `self.handle(...)` returns
-/// `Step<MyProcess>`. Until typecheck body-checks generic impls, we lean on
-/// the post-emit `subject_tv.expo_type` for those cases. The Ident/Self_
-/// branch below is a final defensive fallback for residual gaps.
+/// `resolved_type`) to be populated by typecheck on the AST that codegen
+/// monomorphizes from. It currently isn't: collect.rs clones impl blocks
+/// into `ctx.generic_impl_asts` / `ctx.specialized_impl_asts` *before*
+/// check.rs runs, and codegen reads those clones rather than the
+/// typechecked AST in `module.items`. Until that AST-clone story is fixed
+/// (see fix-generic-impl-typecheck plan, Stage 5), we lean on the
+/// post-emit `subject_tv.expo_type`. The Ident/Self_ branch in
+/// `resolve_subject_ty` is a final defensive fallback for residual gaps.
 ///
 /// ### Behavior change vs the pre-IR implementation
 ///
@@ -97,10 +98,11 @@ pub fn compile_match<'ctx>(
 
 /// Picks the most specific Expo type available for the match subject. Prefers
 /// the post-emit `expo_type` (codegen has full monomorphization context, even
-/// inside generic impls that typecheck currently skips); falls back to the
-/// typecheck-populated `resolved_type` and finally to the variable-binding
-/// heuristic. Always returns a usable type when any source has one; only
-/// returns `Type::Unknown` when every source agrees there is none.
+/// inside generic impl bodies whose typechecked `resolved_type` doesn't reach
+/// the cached AST clones); falls back to the typecheck-populated
+/// `resolved_type` and finally to the variable-binding heuristic. Always
+/// returns a usable type when any source has one; only returns `Type::Unknown`
+/// when every source agrees there is none.
 fn resolve_subject_ty(compiler: &Compiler<'_>, subject: &Expr, post_emit_ty: &Type) -> Type {
     if !matches!(post_emit_ty, Type::Unknown) {
         return post_emit_ty.clone();
@@ -133,9 +135,10 @@ fn resolve_subject_ty(compiler: &Compiler<'_>, subject: &Expr, post_emit_ty: &Ty
 // happens here.
 // ---------------------------------------------------------------------------
 
-/// Lowers a match expression to a `ResolvedMatch` given the resolved subject
-/// type. Lowers each pattern via [`lower_pattern`] and decides the result-type
-/// strategy via [`lower_result_ty`].
+/// Lowers a match expression to a `ResolvedMatch`. The subject type is
+/// passed in by `compile_match` (resolved via `resolve_subject_ty`); each
+/// pattern is resolved via [`lower_pattern`] and the result-type strategy is
+/// decided via [`lower_result_ty`].
 fn lower_match(
     compiler: &Compiler<'_>,
     subject_ty: &Type,
@@ -371,24 +374,15 @@ fn emit_match<'ctx>(
     }
     phi.add_incoming(&[(&undef, fallthrough_bb)]);
 
-    // Trust the lowered strategy for the result type, but fall back to the
-    // first arm's observed Expo type when typecheck left the strategy as
-    // `Direct { ty: Unknown }` (e.g. integer-literal arms whose `Expr` lacks
-    // a `resolved_type`). Without this fallback the binding consuming the
-    // match result would carry `Type::Unknown` into later code.
     let result_type = match &resolved.result_ty {
         ResolvedMatchType::UnionWrap { target } => target.clone(),
-        ResolvedMatchType::Direct { ty } => {
-            if matches!(ty, Type::Unknown) {
-                pending_arms
-                    .iter()
-                    .map(|(_, t, _)| t.clone())
-                    .find(|t| !matches!(t, Type::Unknown))
-                    .unwrap_or(Type::Unknown)
-            } else {
-                ty.clone()
-            }
-        }
+        ResolvedMatchType::Direct { ty } if !matches!(ty, Type::Unknown) => ty.clone(),
+        // Fallback: lowering had no typecheck-derived result type (e.g. an
+        // arm body whose `resolved_type` didn't propagate into the cached
+        // impl-AST clone). Trust the post-emit Expo type of the first
+        // value-producing arm instead. Once the AST-clone story is fixed
+        // this branch can go away.
+        ResolvedMatchType::Direct { .. } => pending_arms[0].1.clone(),
     };
     Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)))
 }
