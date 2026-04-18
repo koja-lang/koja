@@ -621,8 +621,7 @@ fn resolve_method_signature(
             }
 
             let info = compiler
-                .type_ctx
-                .find_type(base_type)
+                .find_type_current(base_type)
                 .map(|ti| (&ti.functions, &ti.type_params));
 
             let (return_type, param_types, is_static) = if let Some((methods, _)) = info {

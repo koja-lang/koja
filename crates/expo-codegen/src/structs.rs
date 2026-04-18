@@ -554,7 +554,7 @@ fn resolve_method_call<'ctx>(
 }
 
 fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<TypeParam> {
-    let methods = c.type_ctx.find_type(base_type).map(|ti| &ti.functions);
+    let methods = c.find_type_current(base_type).map(|ti| &ti.functions);
     if let Some(methods) = methods
         && let Some(sig) = methods.get(method)
     {
@@ -571,8 +571,7 @@ fn infer_method_type_args(
     args: &[Arg],
 ) -> Result<Vec<Type>, String> {
     let (methods, type_params) = c
-        .type_ctx
-        .find_type(base_type)
+        .find_type_current(base_type)
         .map(|ti| (&ti.functions, &ti.type_params))
         .ok_or_else(|| format!("no type info for `{base_type}`"))?;
 
@@ -653,8 +652,7 @@ fn infer_static_struct_type_args_from_args(
         return Ok(vec![]);
     }
     let methods = c
-        .type_ctx
-        .find_type(type_name)
+        .find_type_current(type_name)
         .map(|ti| &ti.functions)
         .ok_or_else(|| format!("unknown type `{type_name}`"))?;
     let sig = methods
@@ -695,8 +693,7 @@ pub fn infer_static_method_return_type(
     args: &[Arg],
 ) -> Option<Type> {
     let (methods, type_params) = c
-        .type_ctx
-        .find_type(type_name)
+        .find_type_current(type_name)
         .map(|ti| (&ti.functions, &ti.type_params))?;
     let sig = methods.get(method)?;
     if type_params.is_empty() {

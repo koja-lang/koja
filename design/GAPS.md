@@ -106,33 +106,128 @@ Surfaced during the agent expression evaluator test.
 
 ---
 
-## Codegen `find_type` lookup misses user-defined generic types
+## Static-method type inference on user-defined generic types
 
-Calling a method on a user-defined generic struct via an inherent generic
-impl (e.g. `impl MyBox<T> { fn get(self) -> T self.value end }` followed by
-`MyBox{value: 7}.get()`) fails at codegen with
-`"no type info for \`MyBox\`"`. The dispatch path in
-`expo-codegen/src/generics.rs` (`resolve_method_signature`) calls
-`compiler.type_ctx.find_type(base_type)` with the bare name; `find_type`
-goes through unscoped `resolve_name`, which only finds types in the global
-`name_index`. User-defined types (in the project's package) only get
-package-qualified entries, so the bare lookup fails -- but the *same*
-function does a successful `resolve_name_current(base_type)` lookup a few
-lines above, proving the type is in fact registered.
+Calling a generic static method on a user-defined generic struct/enum fails
+type inference (e.g. `MyBox.new(42)` for `impl MyBox<T> { fn new(v: T) -> MyBox<T> ... }`):
 
-The same pattern works for stdlib types (`Option`, `List`, `Pair`, etc.)
-because they happen to be in the global bare index.
+```
+error: cannot infer type parameter `T` for `MyBox.new`
+```
 
-**Workaround:** none for inherent generic impls today; works through
-`impl Trait<T> for MyBox` (protocol dispatch hits a different path).
+The typechecker does not propagate argument types into static-method calls
+on user generic types, even though it does the equivalent inference for
+free generic functions (`fn make_pair<A, B>(a: A, b: B) -> Pair<A, B>`).
+The same machinery presumably exists; it just isn't wired up for the
+`Type.method(...)` static-call path on user types.
 
-**Fix:** swap `type_ctx.find_type(base_type)` for the package-aware
-equivalent (`resolve_name_current(base_type)` + `get_type(&id)`) in
-`resolve_method_signature` and the matching sites in `structs.rs` /
-`control/loops.rs`.
+**Workaround:** construct via struct literal (`MyBox{value: 42}`) where
+field types pin the type parameters, or annotate the binding's type and
+let the inner construction propagate (`b: MyBox<Int> = MyBox.new(42)` --
+untested but expected to work via expected-type propagation).
 
-Surfaced while writing positive lock-in tests for the
-fix-generic-impl-typecheck PR.
+The same pattern works for stdlib types because they go through
+specialized inference paths (or have explicit type-arg syntax in the
+collection `new` helpers).
+
+Surfaced while writing lock-in tests for the codegen `find_type_current`
+fix (April 2026).
+
+---
+
+## Generic methods on generic impls cannot infer their own type parameters
+
+A generic method *inside* a generic impl (e.g.
+`impl MyBox<T> { fn map_to_pair<U>(self, other: U) -> Pair<T, U> ... }`)
+fails at codegen with a mangled-name including `unknown`:
+
+```
+error: no LLVM type for method parameter type `Unknown` in
+       `inherent_generic_impl.MyBox_$Int$_map_to_pair_$unknown$`
+```
+
+The outer type parameters (`T`) are resolved by the receiver type, but the
+method-local parameter (`U`) never gets bound from the call site's
+argument types. Codegen receives `Unknown` for `U` and the method-mangled
+symbol carries `$unknown$` straight through to LLVM type construction.
+
+**Workaround:** lift the helper to a free function or split into a
+non-generic method that takes a pre-built generic value.
+
+Surfaced while writing lock-in tests for the codegen `find_type_current`
+fix (April 2026).
+
+---
+
+## Pattern matching on user-defined generic enums
+
+Matching a value of a monomorphized user-defined generic enum fails to
+re-resolve the bare enum name from the mangled type. With:
+
+```
+enum MyEither<A, B>
+  Left(A)
+  Right(B)
+end
+
+l: MyEither<Int, String> = MyEither.Left(7)
+match l
+  MyEither.Left(n) -> ...
+  MyEither.Right(s) -> ...
+end
+```
+
+codegen reports:
+
+```
+error: cannot resolve enum name from pattern `MyEither` for match subject
+       type `<pkg>.MyEither_$Int.String$`
+```
+
+The same pattern works for stdlib generic enums (`Option`, `Result`)
+because their bare names are in the global `name_index`. The pattern
+resolver has a path that strips monomorphization suffixes for stdlib
+types but doesn't account for user-package qualification on top of the
+mangled name.
+
+**Workaround:** none today for user-defined generic enums. Use stdlib
+`Option`/`Result` if their shape fits, or wrap your sum-type in a
+non-generic enum.
+
+Surfaced while writing lock-in tests for the codegen `find_type_current`
+fix (April 2026).
+
+---
+
+## Struct construction inside generic impl method bodies
+
+Constructing a generic struct *inside* a method on its own generic impl
+fails with the bare-name lookup, distinct from the (now-fixed) `find_type`
+path:
+
+```
+impl MyBox<T>
+  fn replace(self, new_value: T) -> MyBox<T>
+    MyBox{value: new_value}   # error: unknown struct type: MyBox
+  end
+end
+```
+
+The struct-construction path in `expo-codegen/src/structs.rs` resolves the
+type identifier via `Compiler::resolve_name_current` correctly, but then
+calls `compiler.types.get_concrete(&lookup_id)`, which has no entry for
+the monomorphized `MyBox<Int>` registered under the user package.
+
+**Workaround:** construct the struct *outside* the method body and pass
+it in, or reach for a free function.
+
+**Fix sketch:** ensure the monomorphization driver registers concrete
+types under the package-qualified `TypeIdentifier`, or have
+`get_concrete` fall back to the bare-name index the way
+`find_type_current` now does.
+
+Surfaced while writing lock-in tests for the codegen `find_type_current`
+fix (April 2026).
 
 ---
 

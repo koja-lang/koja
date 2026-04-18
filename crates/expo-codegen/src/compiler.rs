@@ -30,7 +30,7 @@ use expo_ast::ast::{
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
 use expo_ast::types::mangle_name;
-use expo_typecheck::context::{ClosureInfo, TypeContext, VariantData};
+use expo_typecheck::context::{ClosureInfo, TypeContext, TypeInfo, VariantData};
 use expo_typecheck::types::{
     Package, Type, build_substitution, package_from_str, process_envelope_type,
     resolve_type_expr_full, substitute, substitute_preserving,
@@ -804,6 +804,16 @@ impl<'ctx> Compiler<'ctx> {
             Some(pkg) => self.type_ctx.resolve_name_scoped(name, pkg),
             None => self.type_ctx.resolve_name(name),
         }
+    }
+
+    /// Package-aware replacement for `type_ctx.find_type`. Use this anywhere
+    /// codegen looks up a type by bare name so user-defined types in the
+    /// current project's package are found alongside stdlib bare-entry types.
+    /// Plain `type_ctx.find_type` only consults the global bare index, which
+    /// silently skips user types registered under their package-qualified key.
+    pub fn find_type_current(&self, name: &str) -> Option<&TypeInfo> {
+        self.resolve_name_current(name)
+            .and_then(|id| self.type_ctx.get_type(id))
     }
 
     /// Returns a fully-resolved [`TypeIdentifier`] for `name`, preferring the

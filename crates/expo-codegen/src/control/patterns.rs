@@ -1093,7 +1093,7 @@ pub(crate) fn lookup_variant_data(
     enum_name: &str,
     variant: &str,
 ) -> Result<VariantData, String> {
-    if let Some(ti) = compiler.type_ctx.find_type(enum_name)
+    if let Some(ti) = compiler.find_type_current(enum_name)
         && let Some(vs) = ti.variants()
         && let Some(vi) = vs.iter().find(|v| v.name == variant)
     {

@@ -1,0 +1,20 @@
+struct MyBox<T>
+  value: T
+end
+
+impl MyBox<T>
+  fn get(self) -> T
+    self.value
+  end
+end
+
+fn main
+  b = MyBox{value: 42}
+  print(b.get())
+
+  s = MyBox{value: "hello"}
+  print(s.get())
+
+  nested = MyBox{value: MyBox{value: 7}}
+  print(nested.get().get())
+end
