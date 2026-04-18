@@ -31,19 +31,20 @@
 
 use crate::binary::patterns::compile_binary_pattern;
 use crate::drop::Ownership;
-use expo_ast::ast::{BinarySegment, Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern};
+use expo_ast::ast::{
+    BinarySegment, Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern, Statement,
+};
+use expo_ir::resolved::match_expr::{ResolvedMatch, ResolvedMatchType};
 use expo_ir::resolved::patterns::{ResolvedFieldPattern, ResolvedLiteral, ResolvedPattern};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{
-    Type, TypeIdentifier, mangle_name, mangle_type, named, unwrap_indirect,
+    Type, TypeIdentifier, mangle_name, mangle_type, named, substitute_preserving, unwrap_indirect,
 };
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
-
-use crate::compiler::TypeRegistry;
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
@@ -53,47 +54,22 @@ use crate::util::parse_int_literal;
 
 use super::compile_body_as_value;
 
-enum MatchResultStrategy {
-    Direct,
-    UnionWrap { target: Type },
-    Void,
-}
-
-fn resolve_match_result<'ctx>(
-    pending_arms: &[(BasicValueEnum<'ctx>, Type, BasicBlock<'ctx>)],
-    return_type_hint: &Option<Type>,
-    types: &TypeRegistry<'ctx>,
-) -> MatchResultStrategy {
-    if pending_arms.is_empty() {
-        return MatchResultStrategy::Void;
-    }
-
-    let types_uniform = pending_arms
-        .iter()
-        .all(|(v, _, _)| v.get_type() == pending_arms[0].0.get_type());
-
-    if types_uniform {
-        return MatchResultStrategy::Direct;
-    }
-
-    if let Some(Type::Union(members)) = return_type_hint {
-        let target = Type::Union(members.clone());
-        let target_mangled = mangle_type(&target);
-        let all_members = pending_arms.iter().all(|(_, ty, _)| {
-            matches!(ty, Type::Union(_))
-                || members.iter().any(|m| mangle_type(m) == mangle_type(ty))
-        });
-        if all_members && types.contains_monomorphized(&target_mangled) {
-            return MatchResultStrategy::UnionWrap { target };
-        }
-    }
-
-    MatchResultStrategy::Direct
-}
-
 /// Compiles a `match` expression. Patterns are tested sequentially; the first
 /// matching arm executes. Bindings introduced by patterns are scoped to their
 /// arm. Returns a phi value when all arms produce a value of the same type.
+///
+/// This shim emits the subject first (so its runtime Expo type carries any
+/// monomorphization context typecheck couldn't infer alone), then [`lower_match`]
+/// decides the result-type strategy and resolves all arm patterns, and finally
+/// [`emit_match`] emits the per-arm scaffolding and final phi.
+///
+/// ### Behavior change vs the pre-IR implementation
+///
+/// Under the lower/emit split, the "Direct vs UnionWrap" strategy is a
+/// typecheck decision (taken in [`lower_match`]). If LLVM phi types disagree
+/// with that decision at emission time, [`emit_match`] returns an error
+/// rather than silently returning `Ok(None)`. This surfaces typecheck/codegen
+/// disagreements instead of swallowing them.
 pub fn compile_match<'ctx>(
     compiler: &mut Compiler<'ctx>,
     subject: &Expr,
@@ -102,14 +78,134 @@ pub fn compile_match<'ctx>(
 ) -> ExprResult<'ctx> {
     let subject_tv =
         compile_expr(compiler, subject, function)?.ok_or("match subject produced no value")?;
-    let subject_val = subject_tv.value;
-
-    let subject_type = if subject_tv.expo_type != Type::Unknown {
-        subject_tv.expo_type
+    let subject_ty = if subject_tv.expo_type != Type::Unknown {
+        subject_tv.expo_type.clone()
     } else {
-        infer_subject_type(compiler, subject)
+        infer_subject_ty_fallback(compiler, subject)
     };
+    let resolved = lower_match(compiler, &subject_ty, arms)?;
+    emit_match(compiler, &resolved, subject_tv.value, arms, function)
+}
 
+// ---------------------------------------------------------------------------
+// Lowering: AST Match -> ResolvedMatch.
+//
+// Reads typecheck-supplied `resolved_type` from the subject and from each
+// arm's last expression. Decides the result-type strategy from those alone;
+// no LLVM emission happens here.
+// ---------------------------------------------------------------------------
+
+/// Lowers a match expression to a `ResolvedMatch` given the already-emitted
+/// subject's Expo type. Lowers each pattern via [`lower_pattern`] and decides
+/// the result-type strategy purely from typecheck information.
+fn lower_match(
+    compiler: &Compiler<'_>,
+    subject_ty: &Type,
+    arms: &[MatchArm],
+) -> Result<ResolvedMatch, String> {
+    let mut patterns = Vec::with_capacity(arms.len());
+    for arm in arms {
+        patterns.push(lower_pattern(compiler, &arm.pattern, subject_ty)?);
+    }
+
+    let result_ty = lower_result_ty(compiler, arms);
+
+    Ok(ResolvedMatch {
+        subject_ty: subject_ty.clone(),
+        patterns,
+        result_ty,
+    })
+}
+
+/// Subject-type fallback for the rare cases where compile_expr produced a
+/// `Type::Unknown` (e.g. plain identifier with no enriched type info on the
+/// expression node). Mirrors the pre-IR `infer_subject_type` heuristic.
+fn infer_subject_ty_fallback(compiler: &Compiler<'_>, subject: &Expr) -> Type {
+    if let ExprKind::Ident { name, .. } = &subject.kind
+        && let Some((_, ty, _)) = compiler.fn_state.variables.get(name)
+    {
+        return ty.clone();
+    }
+    if matches!(subject.kind, ExprKind::Self_)
+        && let Some((_, ty, _)) = compiler.fn_state.variables.get("self")
+    {
+        return ty.clone();
+    }
+    Type::Unknown
+}
+
+/// Decides the result-type strategy for a match expression from arm-body
+/// typecheck data plus the surrounding function's union return-type hint.
+///
+/// "All arm types equal" -> [`ResolvedMatchType::Direct`]. "Arm types differ
+/// but every value-producing arm is a member of the hinted union, and the
+/// union itself is monomorphized" -> [`ResolvedMatchType::UnionWrap`].
+/// Everything else falls back to `Direct` with the first contributing arm's
+/// type; if emission later observes mismatched LLVM types under that
+/// fallback, it errors.
+fn lower_result_ty(compiler: &Compiler<'_>, arms: &[MatchArm]) -> ResolvedMatchType {
+    let arm_types: Vec<Type> = arms
+        .iter()
+        .filter_map(|a| arm_value_type(a, compiler))
+        .collect();
+
+    if arm_types.is_empty() {
+        return ResolvedMatchType::Direct { ty: Type::Unknown };
+    }
+
+    let first_mangled = mangle_type(&arm_types[0]);
+    let all_eq = arm_types.iter().all(|t| mangle_type(t) == first_mangled);
+    if all_eq {
+        return ResolvedMatchType::Direct {
+            ty: arm_types[0].clone(),
+        };
+    }
+
+    if let Some(Type::Union(members)) = &compiler.fn_state.return_type_hint {
+        let target = Type::Union(members.clone());
+        let target_mangled = mangle_type(&target);
+        let all_members = arm_types.iter().all(|t| {
+            matches!(t, Type::Union(_)) || members.iter().any(|m| mangle_type(m) == mangle_type(t))
+        });
+        if all_members && compiler.types.contains_monomorphized(&target_mangled) {
+            return ResolvedMatchType::UnionWrap { target };
+        }
+    }
+
+    ResolvedMatchType::Direct {
+        ty: arm_types[0].clone(),
+    }
+}
+
+/// The Expo type the arm body would yield to the match's phi, derived from
+/// the last statement's expression. Returns `None` for arms whose last
+/// statement is not an `Expr` (e.g. ends in a `let`); those arms contribute
+/// no value to the phi at runtime.
+fn arm_value_type(arm: &MatchArm, compiler: &Compiler<'_>) -> Option<Type> {
+    let Statement::Expr(last) = arm.body.last()? else {
+        return None;
+    };
+    last.resolved_type
+        .as_ref()
+        .map(|t| substitute_preserving(t, &compiler.fn_state.type_subst))
+}
+
+// ---------------------------------------------------------------------------
+// Emission: ResolvedMatch + AST arms -> LLVM IR.
+//
+// Mechanically scaffolds blocks, evaluates the subject, emits each pattern
+// (via `emit_pattern`) plus its guard, compiles the arm body, and assembles
+// the result phi using the lowered strategy. No strategy decision happens
+// here; if the LLVM phi types disagree with `result_ty`, emission errors.
+// ---------------------------------------------------------------------------
+
+fn emit_match<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    resolved: &ResolvedMatch,
+    subject_val: BasicValueEnum<'ctx>,
+    arms: &[MatchArm],
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
     let subject_alloca = compiler
         .builder
         .build_alloca(subject_val.get_type(), "match_subject")
@@ -121,12 +217,11 @@ pub fn compile_match<'ctx>(
 
     let merge_bb = compiler.context.append_basic_block(function, "match_end");
     let fallthrough_bb = compiler.context.append_basic_block(function, "match_none");
-    let mut arm_expo_type: Option<Type> = None;
-    let mut reachable_arm_count = 0usize;
+
     let mut pending_arms: Vec<(BasicValueEnum<'ctx>, Type, BasicBlock<'ctx>)> = Vec::new();
     let mut needs_branch: Vec<BasicBlock<'ctx>> = Vec::new();
 
-    for (i, arm) in arms.iter().enumerate() {
+    for (i, (arm, resolved_pattern)) in arms.iter().zip(resolved.patterns.iter()).enumerate() {
         let body_bb = compiler
             .context
             .append_basic_block(function, &format!("match_body_{i}"));
@@ -140,13 +235,7 @@ pub fn compile_match<'ctx>(
 
         let saved_vars = compiler.fn_state.variables.clone();
 
-        let condition = compile_pattern(
-            compiler,
-            &arm.pattern,
-            subject_alloca,
-            &subject_type,
-            function,
-        )?;
+        let condition = emit_pattern(compiler, resolved_pattern, subject_alloca, function)?;
 
         let final_cond = if let Some(guard) = &arm.guard {
             let guard_val = compile_expr(compiler, guard, function)?
@@ -170,11 +259,7 @@ pub fn compile_match<'ctx>(
         let arm_terminated = compiler.current_block_terminated();
         let arm_end_bb = compiler.builder.get_insert_block().unwrap();
         if !arm_terminated {
-            reachable_arm_count += 1;
             if let Some(tv) = arm_tv {
-                if arm_expo_type.is_none() {
-                    arm_expo_type = Some(tv.expo_type.clone());
-                }
                 pending_arms.push((tv.value, tv.expo_type, arm_end_bb));
             } else {
                 needs_branch.push(arm_end_bb);
@@ -185,13 +270,9 @@ pub fn compile_match<'ctx>(
         compiler.builder.position_at_end(next_bb);
     }
 
-    let strategy = resolve_match_result(
-        &pending_arms,
-        &compiler.fn_state.return_type_hint,
-        &compiler.types,
-    );
-
-    if matches!(strategy, MatchResultStrategy::Void) {
+    // Structural Void: zero arms produced a value (all terminated or all
+    // ended in non-Expr statements). Emission has nothing to phi.
+    if pending_arms.is_empty() {
         for bb in &needs_branch {
             compiler.builder.position_at_end(*bb);
             compiler
@@ -208,19 +289,21 @@ pub fn compile_match<'ctx>(
         return Ok(None);
     }
 
+    // Apply the lowered strategy to each value-producing arm and branch to
+    // merge. UnionWrap may fail if the lowered union member resolution is
+    // wrong -- the `?` surfaces that as an emission error.
     let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
-
     for (val, ty, bb) in &pending_arms {
         compiler.builder.position_at_end(*bb);
-        let final_val = match &strategy {
-            MatchResultStrategy::UnionWrap { target } => {
+        let final_val = match &resolved.result_ty {
+            ResolvedMatchType::UnionWrap { target } => {
                 if matches!(ty, Type::Union(_)) {
                     *val
                 } else {
                     crate::stmt::compile_union_wrap(compiler, *val, ty, target)?
                 }
             }
-            _ => *val,
+            ResolvedMatchType::Direct { .. } => *val,
         };
         compiler
             .builder
@@ -237,7 +320,6 @@ pub fn compile_match<'ctx>(
             .build_unconditional_branch(merge_bb)
             .unwrap();
     }
-
     compiler.builder.position_at_end(fallthrough_bb);
     compiler
         .builder
@@ -246,41 +328,55 @@ pub fn compile_match<'ctx>(
 
     compiler.builder.position_at_end(merge_bb);
 
-    if !incoming.is_empty() && incoming.len() == reachable_arm_count {
-        let first_ty = incoming[0].0.get_type();
-        if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
-            let undef = first_ty.const_zero();
-            let phi = compiler.builder.build_phi(first_ty, "matchval").unwrap();
-            for (v, bb) in &incoming {
-                phi.add_incoming(&[(v, *bb)]);
-            }
-            phi.add_incoming(&[(&undef, fallthrough_bb)]);
-            let result_type = match strategy {
-                MatchResultStrategy::UnionWrap { target } => Some(target),
-                _ => arm_expo_type,
-            }
-            .unwrap_or(Type::Unknown);
-            return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
-        }
+    // If any reachable arm produced no value while others did, we have no
+    // unified phi shape -- this is a structural emission outcome (not a
+    // strategy disagreement), so return Ok(None) the same as today.
+    if !needs_branch.is_empty() {
+        return Ok(None);
     }
 
-    Ok(None)
+    let first_ty = incoming[0].0.get_type();
+    if !incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
+        return Err(format!(
+            "match arms produced incompatible LLVM types under lowered strategy `{}`",
+            describe_match_strategy(&resolved.result_ty),
+        ));
+    }
+
+    let undef = first_ty.const_zero();
+    let phi = compiler.builder.build_phi(first_ty, "matchval").unwrap();
+    for (v, bb) in &incoming {
+        phi.add_incoming(&[(v, *bb)]);
+    }
+    phi.add_incoming(&[(&undef, fallthrough_bb)]);
+
+    // Trust the lowered strategy for the result type, but fall back to the
+    // first arm's observed Expo type when typecheck left the strategy as
+    // `Direct { ty: Unknown }` (e.g. integer-literal arms whose `Expr` lacks
+    // a `resolved_type`). Without this fallback the binding consuming the
+    // match result would carry `Type::Unknown` into later code.
+    let result_type = match &resolved.result_ty {
+        ResolvedMatchType::UnionWrap { target } => target.clone(),
+        ResolvedMatchType::Direct { ty } => {
+            if matches!(ty, Type::Unknown) {
+                pending_arms
+                    .iter()
+                    .map(|(_, t, _)| t.clone())
+                    .find(|t| !matches!(t, Type::Unknown))
+                    .unwrap_or(Type::Unknown)
+            } else {
+                ty.clone()
+            }
+        }
+    };
+    Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)))
 }
 
-/// Infers the Expo type for a match subject from variable bindings when
-/// the TypedValue carries `Type::Unknown`.
-fn infer_subject_type(compiler: &Compiler, subject: &Expr) -> Type {
-    if let ExprKind::Ident { name, .. } = &subject.kind
-        && let Some((_, ty, _)) = compiler.fn_state.variables.get(name)
-    {
-        return ty.clone();
+fn describe_match_strategy(strategy: &ResolvedMatchType) -> String {
+    match strategy {
+        ResolvedMatchType::Direct { ty } => format!("Direct({})", ty.display()),
+        ResolvedMatchType::UnionWrap { target } => format!("UnionWrap({})", target.display()),
     }
-    if matches!(subject.kind, ExprKind::Self_)
-        && let Some((_, ty, _)) = compiler.fn_state.variables.get("self")
-    {
-        return ty.clone();
-    }
-    Type::Unknown
 }
 
 /// Compiles a match pattern into a boolean condition. Bindings introduced by
