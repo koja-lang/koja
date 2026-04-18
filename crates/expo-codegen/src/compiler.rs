@@ -773,6 +773,28 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    /// Applies the surrounding function's type-parameter substitution -- and,
+    /// when inside an `impl` block, the `Self -> <self type>` binding -- to an
+    /// already-resolved [`Type`]. Use this on typecheck-supplied
+    /// `Expr::resolved_type` values that need to be interpreted in the current
+    /// monomorphization context (e.g. lowering match subjects whose type is
+    /// `Step<Self>` to the concrete `Step<MyProcess>`).
+    pub fn monomorphize_type(&self, ty: &Type) -> Type {
+        if let Some(ref name) = self.fn_state.self_type_name
+            && let Some(id) = self.resolve_name_current(name)
+        {
+            let self_ty = Type::Named {
+                identifier: id.clone(),
+                type_args: vec![],
+            };
+            let mut subst = self.fn_state.type_subst.clone();
+            subst.insert("Self".to_string(), self_ty);
+            substitute_preserving(ty, &subst)
+        } else {
+            substitute_preserving(ty, &self.fn_state.type_subst)
+        }
+    }
+
     /// Package-aware replacement for `type_ctx.resolve_name` that honours the
     /// `Compiler::current_package` when set. Bare lookups resolve only within
     /// the current package or to `std`; dependency types must be qualified or

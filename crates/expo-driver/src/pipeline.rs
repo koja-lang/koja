@@ -93,27 +93,12 @@ pub fn typecheck_graph(
         unified_project_ctx.merge(&module_contexts[*name]);
     }
 
-    /// Embedded stdlib modules use synthetic paths like `<std.list>`; only
-    /// workspace sources and the generated test harness need body checking.
-    fn module_needs_body_typecheck(path: &Path) -> bool {
-        let s = path.to_string_lossy();
-        if s.as_ref() == "<test_harness>" {
-            return true;
-        }
-        if s.starts_with('<') && s.ends_with('>') {
-            return false;
-        }
-        true
-    }
-
-    // Check: every module needs alias resolution + package resolution so that
-    // its bodies (compiled later by codegen) can resolve cross-package
-    // identifiers via aliases. Only modules backed by real source need body
-    // type-checking; embedded stdlib/lib modules ship with pre-validated
-    // signatures but still must have their `alias` declarations honored.
+    // Check: every module needs alias resolution, package resolution, and
+    // body typechecking. Embedded stdlib modules (synthetic `<std.x>` paths)
+    // are checked alongside workspace sources so every expression carries a
+    // populated `resolved_type` -- downstream codegen / IR lowering relies on
+    // this invariant rather than re-deriving types from emission output.
     for name in graph.order.clone() {
-        let path = graph.modules[&name].path.clone();
-        let needs_body = module_needs_body_typecheck(&path);
         let Some(mut ctx) = module_contexts.remove(&name) else {
             continue;
         };
@@ -122,10 +107,8 @@ pub fn typecheck_graph(
         let pkg = fqn_to_package(&name);
         expo_typecheck::resolve_module_aliases(&rm.module, &mut ctx);
         expo_typecheck::resolve_packages(&mut ctx);
-        if needs_body {
-            expo_typecheck::check_module(&mut rm.module, &mut ctx, pkg);
-            expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
-        }
+        expo_typecheck::check_module(&mut rm.module, &mut ctx, pkg);
+        expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
         module_contexts.insert(name, ctx);
     }
 

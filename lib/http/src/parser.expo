@@ -1,3 +1,5 @@
+alias json.StringBuilder
+
 @doc """
 Recursive descent HTTP/1.1 parser. Parses raw HTTP messages
 into Request and Response structs. Handles Content-Length

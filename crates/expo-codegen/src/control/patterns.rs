@@ -38,7 +38,7 @@ use expo_ir::resolved::match_expr::{ResolvedMatch, ResolvedMatchType};
 use expo_ir::resolved::patterns::{ResolvedFieldPattern, ResolvedLiteral, ResolvedPattern};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{
-    Type, TypeIdentifier, mangle_name, mangle_type, named, substitute_preserving, unwrap_indirect,
+    Type, TypeIdentifier, mangle_name, mangle_type, named, unwrap_indirect,
 };
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
@@ -58,18 +58,30 @@ use super::compile_body_as_value;
 /// matching arm executes. Bindings introduced by patterns are scoped to their
 /// arm. Returns a phi value when all arms produce a value of the same type.
 ///
-/// This shim emits the subject first (so its runtime Expo type carries any
-/// monomorphization context typecheck couldn't infer alone), then [`lower_match`]
-/// decides the result-type strategy and resolves all arm patterns, and finally
-/// [`emit_match`] emits the per-arm scaffolding and final phi.
+/// Today's ordering is: emit the subject first (so its post-emit Expo type is
+/// available), then [`lower_match`] resolves all arm patterns and the
+/// result-type strategy from typecheck info, then [`emit_match`] emits the
+/// per-arm scaffolding and final phi.
+///
+/// ### Why pre-emit (and not pure lower-then-emit)
+///
+/// The lower/emit split would prefer lowering to run *before* any emission.
+/// That requires `subject.resolved_type` (and every other expression's
+/// `resolved_type`) to be populated by typecheck. It currently isn't for
+/// expressions inside generic `impl` blocks -- typecheck skips those bodies
+/// (see `expo-typecheck/src/check.rs`'s `is_generic_impl` short-circuit), so
+/// codegen is the only stage that knows e.g. `self.handle(...)` returns
+/// `Step<MyProcess>`. Until typecheck body-checks generic impls, we lean on
+/// the post-emit `subject_tv.expo_type` for those cases. The Ident/Self_
+/// branch below is a final defensive fallback for residual gaps.
 ///
 /// ### Behavior change vs the pre-IR implementation
 ///
-/// Under the lower/emit split, the "Direct vs UnionWrap" strategy is a
-/// typecheck decision (taken in [`lower_match`]). If LLVM phi types disagree
-/// with that decision at emission time, [`emit_match`] returns an error
-/// rather than silently returning `Ok(None)`. This surfaces typecheck/codegen
-/// disagreements instead of swallowing them.
+/// The "Direct vs UnionWrap" strategy is a typecheck decision (taken in
+/// [`lower_match`]). If LLVM phi types disagree with that decision at
+/// emission time, [`emit_match`] returns an error rather than silently
+/// returning `Ok(None)`. This surfaces typecheck/codegen disagreements
+/// instead of swallowing them.
 pub fn compile_match<'ctx>(
     compiler: &mut Compiler<'ctx>,
     subject: &Expr,
@@ -78,26 +90,52 @@ pub fn compile_match<'ctx>(
 ) -> ExprResult<'ctx> {
     let subject_tv =
         compile_expr(compiler, subject, function)?.ok_or("match subject produced no value")?;
-    let subject_ty = if subject_tv.expo_type != Type::Unknown {
-        subject_tv.expo_type.clone()
-    } else {
-        infer_subject_ty_fallback(compiler, subject)
-    };
+    let subject_ty = resolve_subject_ty(compiler, subject, &subject_tv.expo_type);
     let resolved = lower_match(compiler, &subject_ty, arms)?;
     emit_match(compiler, &resolved, subject_tv.value, arms, function)
 }
 
+/// Picks the most specific Expo type available for the match subject. Prefers
+/// the post-emit `expo_type` (codegen has full monomorphization context, even
+/// inside generic impls that typecheck currently skips); falls back to the
+/// typecheck-populated `resolved_type` and finally to the variable-binding
+/// heuristic. Always returns a usable type when any source has one; only
+/// returns `Type::Unknown` when every source agrees there is none.
+fn resolve_subject_ty(compiler: &Compiler<'_>, subject: &Expr, post_emit_ty: &Type) -> Type {
+    if !matches!(post_emit_ty, Type::Unknown) {
+        return post_emit_ty.clone();
+    }
+    if let Some(ty) = subject.resolved_type.as_ref() {
+        let substituted = compiler.monomorphize_type(ty);
+        if !matches!(substituted, Type::Unknown) {
+            return substituted;
+        }
+    }
+    if let ExprKind::Ident { name, .. } = &subject.kind
+        && let Some((_, ty, _)) = compiler.fn_state.variables.get(name)
+    {
+        return ty.clone();
+    }
+    if matches!(subject.kind, ExprKind::Self_)
+        && let Some((_, ty, _)) = compiler.fn_state.variables.get("self")
+    {
+        return ty.clone();
+    }
+    Type::Unknown
+}
+
 // ---------------------------------------------------------------------------
-// Lowering: AST Match -> ResolvedMatch.
+// Lowering: AST Match + resolved subject type -> ResolvedMatch.
 //
-// Reads typecheck-supplied `resolved_type` from the subject and from each
-// arm's last expression. Decides the result-type strategy from those alone;
-// no LLVM emission happens here.
+// Reads typecheck-supplied `resolved_type` from each arm's last expression,
+// applying the surrounding function's monomorphization substitution. Decides
+// the result-type strategy from typecheck data alone; no LLVM emission
+// happens here.
 // ---------------------------------------------------------------------------
 
-/// Lowers a match expression to a `ResolvedMatch` given the already-emitted
-/// subject's Expo type. Lowers each pattern via [`lower_pattern`] and decides
-/// the result-type strategy purely from typecheck information.
+/// Lowers a match expression to a `ResolvedMatch` given the resolved subject
+/// type. Lowers each pattern via [`lower_pattern`] and decides the result-type
+/// strategy via [`lower_result_ty`].
 fn lower_match(
     compiler: &Compiler<'_>,
     subject_ty: &Type,
@@ -115,23 +153,6 @@ fn lower_match(
         patterns,
         result_ty,
     })
-}
-
-/// Subject-type fallback for the rare cases where compile_expr produced a
-/// `Type::Unknown` (e.g. plain identifier with no enriched type info on the
-/// expression node). Mirrors the pre-IR `infer_subject_type` heuristic.
-fn infer_subject_ty_fallback(compiler: &Compiler<'_>, subject: &Expr) -> Type {
-    if let ExprKind::Ident { name, .. } = &subject.kind
-        && let Some((_, ty, _)) = compiler.fn_state.variables.get(name)
-    {
-        return ty.clone();
-    }
-    if matches!(subject.kind, ExprKind::Self_)
-        && let Some((_, ty, _)) = compiler.fn_state.variables.get("self")
-    {
-        return ty.clone();
-    }
-    Type::Unknown
 }
 
 /// Decides the result-type strategy for a match expression from arm-body
@@ -187,7 +208,7 @@ fn arm_value_type(arm: &MatchArm, compiler: &Compiler<'_>) -> Option<Type> {
     };
     last.resolved_type
         .as_ref()
-        .map(|t| substitute_preserving(t, &compiler.fn_state.type_subst))
+        .map(|t| compiler.monomorphize_type(t))
 }
 
 // ---------------------------------------------------------------------------
