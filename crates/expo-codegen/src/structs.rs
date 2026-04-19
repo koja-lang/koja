@@ -1,10 +1,54 @@
-//! Struct compilation: field access, struct construction (both regular and
-//! generic), and method calls on struct instances.
+//! Struct compilation: field access, struct construction, and method calls on
+//! struct instances.
+//!
+//! Construction and field access both follow the lower/emit split established
+//! by `control/patterns.rs` and mirrored in `enums.rs`.
+//!
+//! ## Construction
+//!
+//! - [`lower_struct_construction`] consumes the AST `FieldInit`s plus the
+//!   type-checker's resolved identifier and produces a
+//!   [`ResolvedStructConstruction`]. All struct lookup, package-aware name
+//!   resolution, generic monomorphization, and `unify`-driven type-arg
+//!   inference happens here. Lower is the only side that touches
+//!   `compiler.types`, `compiler.type_ctx`, or `monomorphize_struct`.
+//!
+//! - [`emit_struct_construction`] consumes the resolved IR plus the AST
+//!   data and emits LLVM IR (alloca, GEP, store). Coercion and per-field
+//!   type-substitution context push/pop also live here, since they need a
+//!   live function context.
+//!
+//! [`compile_struct_construction`] is the public entry point and a thin
+//! shim. For generics it pre-compiles the field initializers so lower can
+//! drive `unify` over their resolved types before triggering monomorphization
+//! -- see the design note in `expo/design/EXPOIR.md` for why the boundary
+//! relaxes here vs. patterns.
+//!
+//! ## Field access
+//!
+//! - [`resolve_chain_steps`] (already IR-only) produces a [`ResolvedChain`]
+//!   for variable / `self` / nested-field receivers.
+//! - [`lower_value_struct_field`] handles arbitrary receiver expressions,
+//!   returning a [`ResolvedFieldStep`]. It tries `receiver.resolved_type`
+//!   first (semantic), then falls back to the LLVM struct-name lookup via
+//!   `get_mono_field_index` / `get_mono_field_type`.
+//! - [`emit_chain_field_access`] walks the resolved chain with GEPs and a
+//!   final `load_maybe_indirect`. [`emit_value_struct_field_access`]
+//!   allocas, stores the receiver value, GEPs the field, and loads.
+//!
+//! [`compile_field_access`] is the public entry point and a thin dispatcher
+//! between the static-chain and dynamic-receiver paths.
+//!
+//! Method calls and static calls still mix concerns -- separate future
+//! targets.
 
 use std::collections::HashMap;
 
-use expo_ast::ast::PassMode;
-use expo_ast::ast::{Arg, ClosureParam, Expr, ExprKind, FieldInit, TypeParam};
+use expo_ast::ast::{Arg, ClosureParam, Expr, ExprKind, FieldInit, PassMode, TypeParam};
+use expo_ir::resolved::construction::ResolvedStructConstruction;
+use expo_ir::resolved::fields::{
+    ResolvedChain, ResolvedFieldStep, ResolvedStructField, ResolvedStructName,
+};
 use expo_typecheck::context::{FnParam, FunctionKind, TypeInfo};
 use expo_typecheck::types::{
     Package, Type, TypeIdentifier, build_substitution, mangle_method_suffix, mangle_name,
@@ -14,11 +58,7 @@ use expo_typecheck::types::{
 use inkwell::AddressSpace;
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
-};
-
-use expo_ir::resolved::fields::{
-    ResolvedChain, ResolvedFieldStep, ResolvedStructField, ResolvedStructName,
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
 
 use crate::calls::invoke_closure_fat_ptr;
@@ -146,88 +186,52 @@ fn resolve_chain_steps(compiler: &Compiler, receiver: &Expr, field: &str) -> Opt
     })
 }
 
-/// Tries to resolve a field access chain to a pointer via GEP without loading
-/// intermediate struct values. Returns `(pointer, field_type)` on success.
-/// Works for `ident.field`, `self.field`, and chains like `self.span.start`.
-fn resolve_field_chain<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    receiver: &Expr,
-    field: &str,
-) -> Option<(PointerValue<'ctx>, Type)> {
-    let resolved = resolve_chain_steps(compiler, receiver, field)?;
-
-    let (mut ptr, _, _) = compiler
-        .fn_state
-        .variables
-        .get(&resolved.base_name)
-        .cloned()?;
-    let mut current_type = resolved.base_type;
-
-    for step in &resolved.steps {
-        let struct_type =
-            to_llvm_type(&current_type, compiler.context, &compiler.types)?.into_struct_type();
-        ptr = compiler
-            .builder
-            .build_struct_gep(struct_type, ptr, step.field_index, field)
-            .unwrap();
-        current_type = step.field_type.clone();
-    }
-
-    Some((ptr, current_type))
-}
-
-enum ResolvedFieldAccess<'ctx> {
-    Chain {
-        field_pointer: PointerValue<'ctx>,
-        field_type: Type,
-    },
-    ValueStruct {
-        field_index: u32,
-        field_type: Type,
-        struct_value: StructValue<'ctx>,
-    },
-}
-
-fn resolve_field_access<'ctx>(
+/// Compiles a field access expression (`receiver.field`). Thin dispatcher:
+/// uses the static-chain path (variable / `self` / nested) when
+/// [`resolve_chain_steps`] succeeds; otherwise falls back to compiling the
+/// receiver and walking through [`lower_value_struct_field`] +
+/// [`emit_value_struct_field_access`].
+pub fn compile_field_access<'ctx>(
     compiler: &mut Compiler<'ctx>,
     receiver: &Expr,
     field: &str,
     function: FunctionValue<'ctx>,
-) -> Result<ResolvedFieldAccess<'ctx>, String> {
-    if let Some((field_pointer, field_type)) = resolve_field_chain(compiler, receiver, field) {
-        return Ok(ResolvedFieldAccess::Chain {
-            field_pointer,
-            field_type,
-        });
+) -> ExprResult<'ctx> {
+    if let Some(chain) = resolve_chain_steps(compiler, receiver, field)
+        && let Some(result) = emit_chain_field_access(compiler, &chain, field)
+    {
+        return result;
     }
 
-    let recv_val = compile_expr(compiler, receiver, function)?
-        .ok_or("field access on expression that produced no value")?
-        .value;
+    let recv_tv = compile_expr(compiler, receiver, function)?
+        .ok_or("field access on expression that produced no value")?;
+    let step = lower_value_struct_field(compiler, receiver, &recv_tv, field)?;
+    emit_value_struct_field_access(compiler, recv_tv, &step, field)
+}
 
-    if !recv_val.is_struct_value() {
+/// Resolves the field index/type for a value-struct receiver. Tries the
+/// type-checker's resolved type first (package-qualified, so it avoids the
+/// shared bare-name index), then falls back to looking up the LLVM struct
+/// name attached to the compiled `StructValue`.
+fn lower_value_struct_field(
+    compiler: &Compiler,
+    receiver: &Expr,
+    recv_tv: &TypedValue,
+    field: &str,
+) -> Result<ResolvedFieldStep, String> {
+    if let Some(ref recv_ty) = receiver.resolved_type
+        && let Some(step) = compiler.struct_field_lookup(recv_ty, field)
+    {
+        return Ok(step);
+    }
+
+    if !recv_tv.value.is_struct_value() {
         return Err("field access on non-struct value".to_string());
     }
 
-    let struct_value = recv_val.into_struct_value();
-
-    // Prefer the type-checker's resolved type: it carries the
-    // package-qualified `TypeIdentifier` so we can avoid consulting the
-    // bare-name `find_type` fallback entirely.
-    if let Some(ref recv_ty) = receiver.resolved_type
-        && let Some(ResolvedFieldStep {
-            field_index,
-            field_type,
-        }) = compiler.struct_field_lookup(recv_ty, field)
-    {
-        return Ok(ResolvedFieldAccess::ValueStruct {
-            field_index,
-            field_type,
-            struct_value,
-        });
-    }
-
-    let struct_name = struct_value
+    let struct_name = recv_tv
+        .value
+        .into_struct_value()
         .get_type()
         .get_name()
         .map(|n| n.to_str().unwrap_or("").to_string())
@@ -241,62 +245,73 @@ fn resolve_field_access<'ctx>(
         .get_mono_field_type(&struct_name, field)
         .ok_or_else(|| format!("unknown field `{field}` on struct `{struct_name}`"))?;
 
-    Ok(ResolvedFieldAccess::ValueStruct {
+    Ok(ResolvedFieldStep {
         field_index,
         field_type,
-        struct_value,
     })
 }
 
-/// Compiles a field access expression (`receiver.field`). Uses direct GEP
-/// chains for variable/self receivers and their nested field accesses,
-/// falling back to a temporary alloca for arbitrary expression receivers.
-pub fn compile_field_access<'ctx>(
+/// Emits a static GEP chain for a [`ResolvedChain`] and loads the final
+/// field. Returns `None` when an intermediate struct type lacks an LLVM
+/// representation, so the shim can retry via the dynamic path.
+fn emit_chain_field_access<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    receiver: &Expr,
-    field: &str,
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    let resolved = resolve_field_access(compiler, receiver, field, function)?;
+    chain: &ResolvedChain,
+    label: &str,
+) -> Option<ExprResult<'ctx>> {
+    let (mut ptr, _, _) = compiler.fn_state.variables.get(&chain.base_name).cloned()?;
+    let mut current_type = chain.base_type.clone();
 
-    match resolved {
-        ResolvedFieldAccess::Chain {
-            field_pointer,
-            field_type,
-        } => {
-            let val = load_maybe_indirect(compiler, field_pointer, &field_type, field);
-            Ok(Some(TypedValue::new(
-                val,
-                unwrap_indirect(&field_type).clone(),
-            )))
-        }
-        ResolvedFieldAccess::ValueStruct {
-            field_index,
-            field_type,
-            struct_value,
-        } => {
-            let struct_llvm_type = struct_value.get_type();
-            let tmp_alloca = compiler
-                .builder
-                .build_alloca(struct_llvm_type, "tmp_struct")
-                .unwrap();
-            compiler
-                .builder
-                .build_store(tmp_alloca, struct_value)
-                .unwrap();
-
-            let field_ptr = compiler
-                .builder
-                .build_struct_gep(struct_llvm_type, tmp_alloca, field_index, field)
-                .unwrap();
-
-            let val = load_maybe_indirect(compiler, field_ptr, &field_type, field);
-            Ok(Some(TypedValue::new(
-                val,
-                unwrap_indirect(&field_type).clone(),
-            )))
-        }
+    for step in &chain.steps {
+        let struct_type =
+            to_llvm_type(&current_type, compiler.context, &compiler.types)?.into_struct_type();
+        ptr = compiler
+            .builder
+            .build_struct_gep(struct_type, ptr, step.field_index, label)
+            .unwrap();
+        current_type = step.field_type.clone();
     }
+
+    let val = load_maybe_indirect(compiler, ptr, &current_type, label);
+    Some(Ok(Some(TypedValue::new(
+        val,
+        unwrap_indirect(&current_type).clone(),
+    ))))
+}
+
+/// Emits a field access on a value-struct receiver: alloca a scratch slot,
+/// store the receiver into it, GEP the field, and load.
+fn emit_value_struct_field_access<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    recv_tv: TypedValue<'ctx>,
+    step: &ResolvedFieldStep,
+    field: &str,
+) -> ExprResult<'ctx> {
+    if !recv_tv.value.is_struct_value() {
+        return Err("field access on non-struct value".to_string());
+    }
+
+    let struct_value = recv_tv.value.into_struct_value();
+    let struct_llvm_type = struct_value.get_type();
+    let tmp_alloca = compiler
+        .builder
+        .build_alloca(struct_llvm_type, "tmp_struct")
+        .unwrap();
+    compiler
+        .builder
+        .build_store(tmp_alloca, struct_value)
+        .unwrap();
+
+    let field_ptr = compiler
+        .builder
+        .build_struct_gep(struct_llvm_type, tmp_alloca, step.field_index, field)
+        .unwrap();
+
+    let val = load_maybe_indirect(compiler, field_ptr, &step.field_type, field);
+    Ok(Some(TypedValue::new(
+        val,
+        unwrap_indirect(&step.field_type).clone(),
+    )))
 }
 
 /// Compiles a method call (`receiver.method(args)`).
@@ -796,86 +811,10 @@ fn push_generic_type_subst<'ctx>(
     }
 }
 
-struct ResolvedStructConstruction<'ctx> {
-    fields: Vec<ResolvedStructField>,
-    result_type: Type,
-    struct_name: String,
-    struct_type: StructType<'ctx>,
-}
-
-fn resolve_struct_construction<'ctx>(
-    compiler: &Compiler<'ctx>,
-    type_path: &[String],
-    field_inits: &[FieldInit],
-    resolved_type: Option<&TypeIdentifier>,
-) -> Result<ResolvedStructConstruction<'ctx>, String> {
-    let raw_name = type_path
-        .first()
-        .ok_or("empty type path in struct construction")?;
-    let struct_name = resolve_type_alias_name(raw_name, &compiler.type_ctx.type_aliases);
-
-    // Prefer the type-checker's resolved identifier — it already carries the
-    // right package, so two packages with the same struct name can be told
-    // apart without consulting the shared bare-name index.
-    let resolved_id = resolved_type
-        .filter(|id| id.package != Package::Unresolved)
-        .cloned()
-        .or_else(|| resolve_type_alias_id(raw_name, &compiler.type_ctx.type_aliases))
-        .or_else(|| compiler.resolve_name_current(&struct_name).cloned());
-
-    let lookup_id = resolved_id
-        .clone()
-        .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
-    let struct_type = compiler
-        .types
-        .get_concrete(&lookup_id)
-        .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
-
-    let struct_info = compiler
-        .type_ctx
-        .get_type(&lookup_id)
-        .filter(|ti| ti.is_struct())
-        .ok_or_else(|| format!("unknown struct: {struct_name}"))?;
-
-    let struct_fields = struct_info
-        .fields()
-        .ok_or_else(|| format!("internal: `{struct_name}` is not a struct"))?;
-
-    let mut fields = Vec::new();
-    for field_init in field_inits {
-        let (idx, field_type) = struct_fields
-            .iter()
-            .enumerate()
-            .find(|(_, (name, _))| name == &field_init.name)
-            .map(|(i, (_, ty))| (i as u32, ty.clone()))
-            .ok_or_else(|| {
-                format!(
-                    "unknown field `{}` in struct `{}`",
-                    field_init.name, struct_name
-                )
-            })?;
-        fields.push(ResolvedStructField {
-            field_type,
-            index: idx,
-            name: field_init.name.clone(),
-        });
-    }
-
-    let identifier = lookup_id.clone();
-    let result_type = Type::Named {
-        identifier,
-        type_args: vec![],
-    };
-
-    Ok(ResolvedStructConstruction {
-        fields,
-        result_type,
-        struct_name,
-        struct_type,
-    })
-}
-
-/// Compiles a struct literal (`StructName { field: value, ... }`).
+/// Compiles a struct literal (`StructName { field: value, ... }`). Thin
+/// lower/emit shim. For generic structs, pre-compiles the field initializers
+/// so [`lower_struct_construction`] can drive `unify` over their resolved
+/// types before triggering monomorphization.
 pub fn compile_struct_construction<'ctx>(
     compiler: &mut Compiler<'ctx>,
     type_path: &[String],
@@ -886,83 +825,59 @@ pub fn compile_struct_construction<'ctx>(
     let raw_name = type_path
         .first()
         .ok_or("empty type path in struct construction")?;
-    let struct_name = resolve_type_alias_name(raw_name, &compiler.type_ctx.type_aliases);
 
-    let type_info_lookup = resolved_type
-        .filter(|id| id.package != Package::Unresolved)
-        .and_then(|id| compiler.type_ctx.get_type(id))
-        .or_else(|| {
-            resolve_type_alias_id(raw_name, &compiler.type_ctx.type_aliases)
-                .and_then(|id| compiler.type_ctx.get_type(&id))
-        })
-        .or_else(|| {
-            compiler
-                .type_ctx
-                .resolve_name(&struct_name)
-                .and_then(|id| compiler.type_ctx.get_type(id))
-        });
+    let is_generic = lookup_struct_info(compiler, raw_name, resolved_type)
+        .is_some_and(|info| info.is_struct() && !info.type_params.is_empty());
 
-    if let Some(info) = type_info_lookup
-        && info.is_struct()
-        && !info.type_params.is_empty()
-    {
-        return compile_generic_struct_construction(
-            compiler,
-            &struct_name,
-            info.clone(),
-            fields,
-            function,
-        );
-    }
+    let pre_compiled = if is_generic {
+        precompile_generic_struct_fields(compiler, fields, function)?
+    } else {
+        PreCompiledFields::default()
+    };
 
-    let resolved = resolve_struct_construction(compiler, type_path, fields, resolved_type)?;
-    let alloca = compiler.build_entry_alloca(
-        resolved.struct_type,
-        &format!("{}_tmp", resolved.struct_name),
-    );
+    let resolved = lower_struct_construction(
+        compiler,
+        raw_name,
+        fields,
+        resolved_type,
+        &pre_compiled.types,
+    )?;
 
-    for (resolved_field, field_init) in resolved.fields.iter().zip(fields.iter()) {
-        let saved_subst = push_generic_type_subst(compiler, &resolved_field.field_type);
-
-        let coerce_ty = unwrap_indirect(&resolved_field.field_type);
-        let val = compile_expr_coerced(compiler, &field_init.value, coerce_ty, function)?
-            .ok_or_else(|| format!("field `{}` produced no value", resolved_field.name))?;
-
-        if let Some(saved) = saved_subst {
-            compiler.fn_state.type_subst = saved;
-        }
-
-        let field_ptr = compiler
-            .builder
-            .build_struct_gep(
-                resolved.struct_type,
-                alloca,
-                resolved_field.index,
-                &resolved_field.name,
-            )
-            .unwrap();
-        store_maybe_indirect(
-            compiler,
-            field_ptr,
-            val,
-            &resolved_field.field_type,
-            &resolved_field.name,
-        );
-    }
-
-    let struct_val = compiler
-        .builder
-        .build_load(resolved.struct_type, alloca, &resolved.struct_name)
-        .unwrap();
-    Ok(Some(TypedValue::new(struct_val, resolved.result_type)))
+    emit_struct_construction(compiler, &resolved, fields, &pre_compiled.values, function)
 }
 
-/// For generic struct literals, infer the field expression type for unification.
-fn concrete_type_for_field_init<'ctx>(
-    compiler: &Compiler<'ctx>,
-    expr: &Expr,
-    compiled_type: &Type,
-) -> Type {
+/// Pre-compiled field values for the generic struct-construction path,
+/// where lower needs the resolved types to drive `unify`.
+#[derive(Default)]
+struct PreCompiledFields<'ctx> {
+    types: Vec<Type>,
+    values: Vec<BasicValueEnum<'ctx>>,
+}
+
+fn precompile_generic_struct_fields<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    fields: &[FieldInit],
+    function: FunctionValue<'ctx>,
+) -> Result<PreCompiledFields<'ctx>, String> {
+    let mut types = Vec::with_capacity(fields.len());
+    let mut values = Vec::with_capacity(fields.len());
+    for field_init in fields {
+        let tv = compile_expr(compiler, &field_init.value, function)?
+            .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
+        types.push(infer_field_init_type(
+            compiler,
+            &field_init.value,
+            &tv.expo_type,
+        ));
+        values.push(tv.value);
+    }
+    Ok(PreCompiledFields { types, values })
+}
+
+/// Best-effort field-init type for `unify`. When the compiled value's type is
+/// `Unknown` (e.g. closures), looks through identifiers and field accesses to
+/// pull a more specific type from the variable scope.
+fn infer_field_init_type(compiler: &Compiler, expr: &Expr, compiled_type: &Type) -> Type {
     if *compiled_type != Type::Unknown {
         return compiled_type.clone();
     }
@@ -989,30 +904,142 @@ fn concrete_type_for_field_init<'ctx>(
     }
 }
 
-struct ResolvedGenericStruct<'ctx> {
-    mangled_name: String,
-    result_type: Type,
-    struct_type: StructType<'ctx>,
+// ---------------------------------------------------------------------------
+// Lowering
+// ---------------------------------------------------------------------------
+
+/// Lowers a struct construction to its resolved IR. Handles both concrete and
+/// generic structs uniformly: for generics, runs `unify` over the supplied
+/// `compiled_field_types` and triggers monomorphization. The returned
+/// `mangled_name` is always the post-monomorphization key suitable for
+/// `compiler.types.get_monomorphized` / `get_concrete`.
+fn lower_struct_construction(
+    compiler: &mut Compiler,
+    raw_name: &str,
+    field_inits: &[FieldInit],
+    resolved_type: Option<&TypeIdentifier>,
+    compiled_field_types: &[Type],
+) -> Result<ResolvedStructConstruction, String> {
+    let is_generic = lookup_struct_info(compiler, raw_name, resolved_type)
+        .is_some_and(|info| info.is_struct() && !info.type_params.is_empty());
+
+    if is_generic {
+        let info = lookup_struct_info(compiler, raw_name, resolved_type)
+            .cloned()
+            .expect("is_generic implies info exists");
+        let struct_name = resolve_type_alias_name(raw_name, &compiler.type_ctx.type_aliases);
+        return lower_generic_struct(
+            compiler,
+            &struct_name,
+            &info,
+            field_inits,
+            compiled_field_types,
+        );
+    }
+
+    lower_concrete_struct(compiler, raw_name, field_inits, resolved_type)
 }
 
-fn resolve_generic_struct<'ctx>(
-    compiler: &mut Compiler<'ctx>,
+fn lookup_struct_info<'a>(
+    compiler: &'a Compiler,
+    raw_name: &str,
+    resolved_type: Option<&TypeIdentifier>,
+) -> Option<&'a TypeInfo> {
+    let struct_name = resolve_type_alias_name(raw_name, &compiler.type_ctx.type_aliases);
+    resolved_type
+        .filter(|id| id.package != Package::Unresolved)
+        .and_then(|id| compiler.type_ctx.get_type(id))
+        .or_else(|| {
+            resolve_type_alias_id(raw_name, &compiler.type_ctx.type_aliases)
+                .and_then(|id| compiler.type_ctx.get_type(&id))
+        })
+        .or_else(|| {
+            compiler
+                .type_ctx
+                .resolve_name(&struct_name)
+                .and_then(|id| compiler.type_ctx.get_type(id))
+        })
+}
+
+fn lower_concrete_struct(
+    compiler: &Compiler,
+    raw_name: &str,
+    field_inits: &[FieldInit],
+    resolved_type: Option<&TypeIdentifier>,
+) -> Result<ResolvedStructConstruction, String> {
+    let struct_name = resolve_type_alias_name(raw_name, &compiler.type_ctx.type_aliases);
+
+    // Prefer the type-checker's resolved identifier - it already carries the
+    // right package, so two packages with the same struct name can be told
+    // apart without consulting the shared bare-name index.
+    let lookup_id = resolved_type
+        .filter(|id| id.package != Package::Unresolved)
+        .cloned()
+        .or_else(|| resolve_type_alias_id(raw_name, &compiler.type_ctx.type_aliases))
+        .or_else(|| compiler.resolve_name_current(&struct_name).cloned())
+        .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
+
+    let struct_fields = compiler
+        .type_ctx
+        .get_type(&lookup_id)
+        .filter(|ti| ti.is_struct())
+        .ok_or_else(|| format!("unknown struct: {struct_name}"))?
+        .fields()
+        .ok_or_else(|| format!("internal: `{struct_name}` is not a struct"))?;
+
+    let mut fields = Vec::with_capacity(field_inits.len());
+    for field_init in field_inits {
+        let (idx, field_type) = struct_fields
+            .iter()
+            .enumerate()
+            .find(|(_, (name, _))| name == &field_init.name)
+            .map(|(i, (_, ty))| (i as u32, ty.clone()))
+            .ok_or_else(|| {
+                format!(
+                    "unknown field `{}` in struct `{}`",
+                    field_init.name, struct_name
+                )
+            })?;
+        fields.push(ResolvedStructField {
+            field_type,
+            index: idx,
+            name: field_init.name.clone(),
+        });
+    }
+
+    Ok(ResolvedStructConstruction {
+        fields,
+        is_generic: false,
+        mangled_name: lookup_id.qualified_name(),
+        result_type: Type::Named {
+            identifier: lookup_id,
+            type_args: vec![],
+        },
+    })
+}
+
+fn lower_generic_struct(
+    compiler: &mut Compiler,
     struct_name: &str,
     info: &TypeInfo,
-    fields: &[FieldInit],
-    compiled_fields: &[(String, BasicValueEnum<'ctx>, Type)],
-) -> Result<ResolvedGenericStruct<'ctx>, String> {
+    field_inits: &[FieldInit],
+    compiled_field_types: &[Type],
+) -> Result<ResolvedStructConstruction, String> {
     let struct_fields = info
         .fields()
         .ok_or_else(|| format!("internal: generic construction expected struct `{struct_name}`"))?;
 
     let mut subst = HashMap::new();
-    for (i, (field_init_name, _field_val, compiled_type)) in compiled_fields.iter().enumerate() {
-        if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| n == field_init_name) {
-            let concrete = concrete_type_for_field_init(compiler, &fields[i].value, compiled_type);
-            if !unify(field_ty, &concrete, &mut subst) {
+    for (i, field_init) in field_inits.iter().enumerate() {
+        if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| n == &field_init.name) {
+            let compiled_type = compiled_field_types
+                .get(i)
+                .cloned()
+                .unwrap_or(Type::Unknown);
+            if !unify(field_ty, &compiled_type, &mut subst) {
                 return Err(format!(
-                    "type mismatch for field `{field_init_name}` in generic struct `{struct_name}`"
+                    "type mismatch for field `{}` in generic struct `{struct_name}`",
+                    field_init.name
                 ));
             }
         }
@@ -1036,10 +1063,25 @@ fn resolve_generic_struct<'ctx>(
         monomorphize_struct(compiler, &struct_id, &type_args)?;
     }
 
-    let struct_type = compiler
-        .types
-        .get_monomorphized(&mangled_name)
-        .ok_or_else(|| format!("monomorphized struct `{mangled_name}` not found"))?;
+    let mut fields = Vec::with_capacity(field_inits.len());
+    for field_init in field_inits {
+        let index = compiler
+            .get_mono_field_index(&mangled_name, &field_init.name)
+            .ok_or_else(|| {
+                format!(
+                    "unknown field `{}` in struct `{struct_name}`",
+                    field_init.name
+                )
+            })?;
+        let field_type = compiler
+            .get_mono_field_type(&mangled_name, &field_init.name)
+            .unwrap_or(Type::Unknown);
+        fields.push(ResolvedStructField {
+            field_type,
+            index,
+            name: field_init.name.clone(),
+        });
+    }
 
     let result_type = named_generic(
         struct_name,
@@ -1048,55 +1090,106 @@ fn resolve_generic_struct<'ctx>(
         compiler.current_package.as_ref(),
     );
 
-    Ok(ResolvedGenericStruct {
+    Ok(ResolvedStructConstruction {
+        fields,
+        is_generic: true,
         mangled_name,
         result_type,
-        struct_type,
     })
 }
 
-fn compile_generic_struct_construction<'ctx>(
+// ---------------------------------------------------------------------------
+// Emission
+// ---------------------------------------------------------------------------
+
+/// Emits LLVM IR for a lowered struct construction. Allocates the struct and
+/// stores each field. For the generic path, callers supply
+/// `pre_compiled_values` (already evaluated to drive `unify`); for concrete,
+/// the slice is empty and emit walks `field_inits` itself with per-field
+/// coercion plus a generic-type-substitution context push/pop.
+fn emit_struct_construction<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    struct_name: &str,
-    info: TypeInfo,
-    fields: &[FieldInit],
+    resolved: &ResolvedStructConstruction,
+    field_inits: &[FieldInit],
+    pre_compiled_values: &[BasicValueEnum<'ctx>],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let mut compiled_fields: Vec<(String, BasicValueEnum<'ctx>, Type)> = Vec::new();
-    for field_init in fields {
-        let tv = compile_expr(compiler, &field_init.value, function)?
-            .ok_or_else(|| format!("field `{}` produced no value", field_init.name))?;
-        compiled_fields.push((field_init.name.clone(), tv.value, tv.expo_type));
-    }
+    let struct_type = lookup_struct_llvm_type(compiler, resolved)?;
+    let alloca =
+        compiler.build_entry_alloca(struct_type, &format!("{}_tmp", resolved.mangled_name));
 
-    let resolved = resolve_generic_struct(compiler, struct_name, &info, fields, &compiled_fields)?;
+    for (i, resolved_field) in resolved.fields.iter().enumerate() {
+        let val = if let Some(v) = pre_compiled_values.get(i) {
+            *v
+        } else {
+            compile_field_with_subst(compiler, resolved_field, &field_inits[i], function)?
+        };
 
-    let alloca = compiler.build_entry_alloca(
-        resolved.struct_type,
-        &format!("{}_tmp", resolved.mangled_name),
-    );
-
-    for (field_name, field_val, _) in &compiled_fields {
-        let field_idx = compiler
-            .get_mono_field_index(&resolved.mangled_name, field_name)
-            .ok_or_else(|| format!("unknown field `{field_name}` in struct `{struct_name}`"))?;
-        let field_type = compiler.get_mono_field_type(&resolved.mangled_name, field_name);
         let field_ptr = compiler
             .builder
-            .build_struct_gep(resolved.struct_type, alloca, field_idx, field_name)
+            .build_struct_gep(
+                struct_type,
+                alloca,
+                resolved_field.index,
+                &resolved_field.name,
+            )
             .unwrap();
-        if let Some(ref ft) = field_type {
-            store_maybe_indirect(compiler, field_ptr, *field_val, ft, field_name);
+
+        if matches!(resolved_field.field_type, Type::Unknown) {
+            compiler.builder.build_store(field_ptr, val).unwrap();
         } else {
-            compiler.builder.build_store(field_ptr, *field_val).unwrap();
+            store_maybe_indirect(
+                compiler,
+                field_ptr,
+                val,
+                &resolved_field.field_type,
+                &resolved_field.name,
+            );
         }
     }
 
     let struct_val = compiler
         .builder
-        .build_load(resolved.struct_type, alloca, &resolved.mangled_name)
+        .build_load(struct_type, alloca, &resolved.mangled_name)
         .unwrap();
-    Ok(Some(TypedValue::new(struct_val, resolved.result_type)))
+    Ok(Some(TypedValue::new(
+        struct_val,
+        resolved.result_type.clone(),
+    )))
+}
+
+fn lookup_struct_llvm_type<'ctx>(
+    compiler: &Compiler<'ctx>,
+    resolved: &ResolvedStructConstruction,
+) -> Result<StructType<'ctx>, String> {
+    if resolved.is_generic {
+        return compiler
+            .types
+            .get_monomorphized(&resolved.mangled_name)
+            .ok_or_else(|| format!("monomorphized struct `{}` not found", resolved.mangled_name));
+    }
+    if let Type::Named { identifier, .. } = &resolved.result_type
+        && let Some(t) = compiler.types.get_concrete(identifier)
+    {
+        return Ok(t);
+    }
+    Err(format!("unknown struct type: {}", resolved.mangled_name))
+}
+
+fn compile_field_with_subst<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    resolved_field: &ResolvedStructField,
+    field_init: &FieldInit,
+    function: FunctionValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let saved_subst = push_generic_type_subst(compiler, &resolved_field.field_type);
+    let coerce_ty = unwrap_indirect(&resolved_field.field_type);
+    let val = compile_expr_coerced(compiler, &field_init.value, coerce_ty, function)?
+        .ok_or_else(|| format!("field `{}` produced no value", resolved_field.name))?;
+    if let Some(saved) = saved_subst {
+        compiler.fn_state.type_subst = saved;
+    }
+    Ok(val)
 }
 
 fn resolve_struct_name<'ctx>(
