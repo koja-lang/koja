@@ -14,6 +14,7 @@ fn early_return(x: Int) -> String
   if x > 10
     return "big"
   end
+
   "small"
 end
 

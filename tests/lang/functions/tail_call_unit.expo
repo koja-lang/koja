@@ -6,6 +6,7 @@ struct Counter
       print(self.n)
       return
     end
+
     Counter{n: self.n - 1}.count_down()
   end
 end

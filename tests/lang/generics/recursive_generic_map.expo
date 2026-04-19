@@ -12,9 +12,11 @@ fn main
     "name": JsonValue.JStr("Expo"), "version": JsonValue.JInt(1)
   ]
   v = JsonValue.JObj(obj)
+
   match v
     JsonValue.JObj(m) ->
       result = m.get("name")
+
       match result
         Option.Some(name) ->
           match name

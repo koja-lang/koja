@@ -28,13 +28,16 @@ fn print_json(v: JsonValue)
     JsonValue.JArr(items) ->
       print("[")
       i = 0
+
       while i < items.length()
         match items.get(i)
           Option.Some(item) -> print_json(item)
           Option.None -> ()
         end
+
         i += 1
       end
+
       print("]")
 
     JsonValue.JObj(m) ->

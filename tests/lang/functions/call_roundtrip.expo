@@ -13,17 +13,17 @@ impl Process<CalcConfig, CalcMsg, Int> for Calc
     Result.Ok(Calc{})
   end
 
-  fn handle(move self, msg: CalcMsg, from: Option<ReplyTo<Int>>)
-    -> Step<Self>
-
+  fn handle(move self, msg: CalcMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
     match msg
       CalcMsg.Add(a, b) ->
         sum = a + b
         print("calc: #{sum}")
+
         match from
           Option.Some(reply) -> reply.send(sum)
           Option.None -> ()
         end
+
         Step.Continue(self)
     end
   end
@@ -32,6 +32,7 @@ end
 fn main
   calc = spawn Calc.start(CalcConfig{})
   result = calc.call(CalcMsg.Add(10, 32), 5000)
+
   match result
     Result.Ok(n) -> print("result: #{n}")
     Result.Err(_) -> print("call failed!")

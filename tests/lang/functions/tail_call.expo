@@ -5,6 +5,7 @@ struct Counter
     if self.n <= 0
       return self
     end
+
     Counter{n: self.n - 1}.count_down()
   end
 end

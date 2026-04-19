@@ -19,6 +19,7 @@ impl Process<List<String>, AppMsg, String> for App
     for arg in self.args
       IO.puts(arg)
     end
+
     StopReason.Normal
   end
 end

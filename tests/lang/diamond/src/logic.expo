@@ -1,5 +1,4 @@
 struct Geometry
-
   fn midpoint_distance(a: Point, b: Point) -> Int
     a.distance() + b.distance()
   end

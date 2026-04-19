@@ -20,6 +20,7 @@ impl Process<Ponger, PingMsg, String> for Ponger
           Option.Some(r) -> r.send("pong #{name}")
           Option.None -> ()
         end
+
         Step.Continue(self)
 
       PingMsg.Stop ->
@@ -27,6 +28,7 @@ impl Process<Ponger, PingMsg, String> for Ponger
           Option.Some(r) -> r.send("bye")
           Option.None -> ()
         end
+
         Step.Done(StopReason.Normal)
     end
   end
@@ -52,19 +54,24 @@ impl Process<Coordinator, CoordMsg, String> for Coordinator
       CoordMsg.RunTest ->
         p = spawn Ponger.start(Ponger{label: "ponger"})
         ping_result = p.call(PingMsg.Ping("multi"), 5000)
+
         match ping_result
           Result.Ok(v) -> print("ping: #{v}")
           Result.Err(_) -> print("ping: failed")
         end
+
         stop_result = p.call(PingMsg.Stop, 5000)
+
         match stop_result
           Result.Ok(v) -> print("stop: #{v}")
           Result.Err(_) -> print("stop: failed")
         end
+
         match from
           Option.Some(r) -> r.send("done")
           Option.None -> ()
         end
+
         Step.Continue(self)
 
       CoordMsg.Done ->
@@ -72,6 +79,7 @@ impl Process<Coordinator, CoordMsg, String> for Coordinator
           Option.Some(r) -> r.send("shutting down")
           Option.None -> ()
         end
+
         Step.Done(StopReason.Normal)
     end
   end

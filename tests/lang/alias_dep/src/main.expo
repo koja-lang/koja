@@ -1,5 +1,4 @@
 alias greeter.Greeter
-
 alias greeter.Greeter as G
 
 fn main

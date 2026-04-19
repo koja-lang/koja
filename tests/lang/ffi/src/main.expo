@@ -49,13 +49,17 @@ fn main
   # Build a CString from the returned pointer to read the greeting
   greeting_len: Int = 0
   i: Int = 0
+
   loop
     byte = greeting_ptr.offset(i).read()
+
     if byte == 0
       break
     end
+
     i += 1
   end
+
   greeting_len = i
 
   greeting_cs = CString{ptr: greeting_ptr, len: greeting_len}

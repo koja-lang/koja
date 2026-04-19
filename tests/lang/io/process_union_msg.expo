@@ -20,6 +20,7 @@ impl Process<ParentConfig, MsgA | MsgB, String> for Parent
 
   fn handle(move self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>)
     -> Step<Self>
+
     match msg
       a: MsgA ->
         match a
@@ -28,6 +29,7 @@ impl Process<ParentConfig, MsgA | MsgB, String> for Parent
             ReplyTo.reply(from, "ok")
             Step.Continue(Parent{count: self.count + 1})
         end
+
       b: MsgB ->
         match b
           MsgB.Pong(n) ->

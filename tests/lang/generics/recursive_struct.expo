@@ -13,6 +13,7 @@ fn main
   match head.next
     Option.Some(n) ->
       print(n.value)
+
       match n.next
         Option.Some(n2) -> print(n2.value)
         Option.None -> print("none")

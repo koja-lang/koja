@@ -21,6 +21,7 @@ fn main
   # bare function ref with list.map
   nums: List<Int> = [1, 2, 3]
   doubled = nums.map(double)
+
   for d in doubled
     print(d)
   end

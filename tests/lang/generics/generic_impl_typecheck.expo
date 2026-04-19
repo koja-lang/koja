@@ -25,16 +25,20 @@ fn main
   some: Option<Int> = Option.Some(7)
   print(some.unwrap())
 
-  doubled = some.map(fn (x: Int) -> Int x * 2 end)
+  doubled =
+    some.map(fn (x: Int) -> Int x * 2 end)
   print(doubled.unwrap())
 
   none: Option<Int> = Option.None
   print(none.or(99))
 
-  evens = [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n % 2 == 0 end)
+  evens =
+    [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n % 2 == 0 end)
   print(evens.length())
 
-  labels = [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
+  labels =
+    [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
+
   match labels.get(0)
     Option.Some(s) -> print(s)
     Option.None -> print("missing")

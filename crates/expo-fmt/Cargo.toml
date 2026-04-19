@@ -8,3 +8,6 @@ version.workspace = true
 [dependencies]
 expo-ast = { path = "../expo-ast" }
 expo-parser = { path = "../expo-parser" }
+
+[dev-dependencies]
+proptest = "1.11.0"

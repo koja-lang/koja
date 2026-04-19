@@ -16,15 +16,16 @@ impl Process<CounterConfig, CounterMsg, Int> for Counter
 
   fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>)
     -> Step<Self>
-
     match msg
       CounterMsg.Increment ->
         new_count = self.count + 1
         print("count: #{new_count}")
+
         match from
           Option.Some(r) -> r.send(new_count)
           Option.None -> ()
         end
+
         Step.Continue(Counter{count: new_count})
     end
   end
