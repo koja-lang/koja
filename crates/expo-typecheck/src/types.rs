@@ -150,18 +150,21 @@ pub fn resolve_type_expr_full(
                 );
                 return Type::Pointer(Box::new(inner));
             }
-            let base_name = if path.len() == 1 {
-                Some(path[0].as_str())
+            let identifier = if path.len() == 1 {
+                let name = path[0].as_str();
+                if known_structs.contains(&name) || known_enums.contains(&name) {
+                    Some(TypeIdentifier::unresolved(name))
+                } else {
+                    None
+                }
             } else if path.len() == 2
                 && is_package_type(&Package::Named(path[0].clone()), &path[1], package_types)
             {
-                Some(path[1].as_str())
+                Some(TypeIdentifier::new(&path[0], &path[1]))
             } else {
                 None
             };
-            if let Some(name) = base_name
-                && (known_structs.contains(&name) || known_enums.contains(&name))
-            {
+            if let Some(identifier) = identifier {
                 let resolved_args: Vec<Type> = args
                     .iter()
                     .map(|a| {
@@ -177,7 +180,7 @@ pub fn resolve_type_expr_full(
                     })
                     .collect();
                 return Type::Named {
-                    identifier: TypeIdentifier::unresolved(name),
+                    identifier,
                     type_args: resolved_args,
                 };
             }
@@ -221,14 +224,9 @@ pub fn resolve_type_expr_full(
             } else if path.len() == 2
                 && is_package_type(&Package::Named(path[0].clone()), &path[1], package_types)
             {
-                let name = path[1].as_str();
-                if known_structs.contains(&name) || known_enums.contains(&name) {
-                    Type::Named {
-                        identifier: TypeIdentifier::unresolved(name),
-                        type_args: vec![],
-                    }
-                } else {
-                    Type::Unknown
+                Type::Named {
+                    identifier: TypeIdentifier::new(&path[0], &path[1]),
+                    type_args: vec![],
                 }
             } else {
                 Type::Unknown
