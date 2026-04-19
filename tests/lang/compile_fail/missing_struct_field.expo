@@ -1,0 +1,9 @@
+struct User
+  name: String
+  age: Int
+end
+
+fn main
+  u = User{age: 30}
+  print(u.age)
+end

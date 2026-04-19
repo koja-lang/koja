@@ -1650,7 +1650,7 @@ fn infer_struct_construction(
     });
     if let Some((resolved_id, Some(struct_fields), struct_type_params)) = lookup {
         let mut subst: HashMap<String, Type> = HashMap::new();
-        for fi in fields {
+        for fi in &mut *fields {
             let value_ty = infer_expr(&mut fi.value, ctx, ce);
             if let Some((_, field_ty)) = struct_fields.iter().find(|(n, _)| *n == fi.name) {
                 if !struct_type_params.is_empty() {
@@ -1678,6 +1678,23 @@ fn infer_struct_construction(
                     fi.span,
                 );
             }
+        }
+        let provided: HashSet<&str> = fields.iter().map(|fi| fi.name.as_str()).collect();
+        let missing: Vec<&str> = struct_fields
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .filter(|n| !provided.contains(n))
+            .collect();
+        if !missing.is_empty() {
+            ctx.error(
+                format!(
+                    "struct `{}` is missing field{}: {}",
+                    name,
+                    if missing.len() == 1 { "" } else { "s" },
+                    missing.join(", ")
+                ),
+                span,
+            );
         }
         let type_args: Vec<Type> = if !struct_type_params.is_empty()
             && struct_type_params

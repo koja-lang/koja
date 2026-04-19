@@ -248,43 +248,6 @@ is paused until this is sorted.
 
 ---
 
-## Struct construction does not check for required fields
-
-A struct literal that omits one or more required fields is silently accepted.
-The omitted fields are left uninitialized, producing zero/garbage at runtime
-and -- for pointer-bearing fields like `String` -- a null pointer that
-segfaults on access.
-
-```expo
-struct User
-  name: String
-  age: Int
-end
-
-u = User{age: 30}     # accepted; `name` is uninitialized
-print(u.name)         # prints "(null)"; dereferencing it crashes
-```
-
-```expo
-struct Pt
-  x: Int
-  y: Int
-end
-
-p = Pt{x: 1}          # accepted
-print(p.y)            # prints 0
-```
-
-This is a memory-safety hole, not just a usability gap -- the type checker
-should reject any struct literal whose declared fields are not all supplied
-(absent a future "default field value" feature). Self-referential structs
-without indirection (e.g. `next: Node` inside `Node`) compound the problem
-because the only way to construct one today is via this missing-field path.
-
-Surfaced during agent compiler-fuzz testing (April 2026).
-
----
-
 ## `Debug.format` for tuple variants drops payloads beyond the first
 
 The auto-derived `Debug` implementation only renders the payload of
