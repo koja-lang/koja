@@ -705,7 +705,13 @@ fn get_union_payload_ptr<'ctx>(
     let payload_ptr = compiler
         .builder
         .build_struct_gep(union_type, subject_ptr, 1, "payload_ptr")
-        .unwrap();
+        .map_err(|_| {
+            format!(
+                "union `{union_mangled}` has no payload field at index 1; \
+                 its body was sized to tag-only, likely because member \
+                 bodies were not yet defined when the union was laid out"
+            )
+        })?;
     Ok(payload_ptr)
 }
 

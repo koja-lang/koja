@@ -30,7 +30,7 @@ use crate::map::emit_map_method;
 use crate::process::{
     emit_ref_method, emit_reply_to_method, monomorphize_ref_struct, monomorphize_reply_to_struct,
 };
-use crate::registration::{build_enum_layout, build_union_layout};
+use crate::registration::build_enum_layout;
 use crate::set::emit_set_method;
 use crate::stmt::{apply_coercion, compile_statement};
 use crate::types::to_llvm_type;
@@ -678,7 +678,14 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
             if !c.llvm_types.contains_monomorphized(&mangled) {
                 let opaque = c.context.opaque_struct_type(&mangled);
                 c.llvm_types.register_monomorphized(mangled.clone(), opaque);
-                build_union_layout(c, opaque, members);
+                // Defer body sizing: at this point member enum/struct bodies
+                // may still be opaque (Pass 1b runs before Pass 2/3 set
+                // bodies), which would size the union to `[i8 tag]` only.
+                // `finalize_pending_unions` lays out the body once member
+                // bodies are known.
+                c.llvm_types
+                    .pending_union_layouts
+                    .push((opaque, members.clone()));
             }
         }
         _ => {}

@@ -578,6 +578,20 @@ impl Parser {
                 path.push(field.clone());
                 path
             }
+            // `pkg.Type.Variant` (and similar deeper paths) parses the prefix
+            // `pkg.Type` as a Unit `EnumConstruction`. When the postfix `.Variant`
+            // arrives we need to flatten the synthetic construction back into a
+            // type path so the new outer `EnumConstruction` carries
+            // `type_path = ["pkg", "Type"]` and `variant = "Variant"`.
+            ExprKind::EnumConstruction {
+                type_path,
+                variant,
+                data: EnumConstructionData::Unit,
+            } => {
+                let mut path = type_path.clone();
+                path.push(variant.clone());
+                path
+            }
             _ => vec!["<error>".to_string()],
         }
     }

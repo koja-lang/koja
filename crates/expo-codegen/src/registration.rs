@@ -147,8 +147,28 @@ pub(crate) fn register_types(c: &mut Compiler) {
 
         let opaque = c.context.opaque_struct_type(&mangled);
         c.llvm_types.register_monomorphized(mangled.clone(), opaque);
+        // Defer until member bodies are known. Pass 4 runs after struct/enum
+        // bodies are set, so most members are sized; finalize handles any
+        // unions-of-unions in dependency order.
+        c.llvm_types
+            .pending_union_layouts
+            .push((opaque, members.clone()));
+    }
 
-        build_union_layout(c, opaque, members);
+    finalize_pending_unions(c);
+}
+
+/// Drains [`LLVMTypeCache::pending_union_layouts`] and lays out each union
+/// body now that its members are sized. Loops until the queue is empty so
+/// any unions-of-unions enqueued during finalize are handled in dependency
+/// order.
+pub(crate) fn finalize_pending_unions<'ctx>(c: &mut Compiler<'ctx>) {
+    while !c.llvm_types.pending_union_layouts.is_empty() {
+        let drained: Vec<(StructType<'ctx>, Vec<Type>)> =
+            std::mem::take(&mut c.llvm_types.pending_union_layouts);
+        for (opaque, members) in drained {
+            build_union_layout(c, opaque, &members);
+        }
     }
 }
 

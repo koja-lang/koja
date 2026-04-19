@@ -17,7 +17,7 @@ use expo_ir::{FnLowerState, TypeLayouts};
 use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
 use crate::generics::{compile_function_body, compile_method_body, ensure_types_exist};
-use crate::registration::register_types;
+use crate::registration::{finalize_pending_unions, register_types};
 use crate::spawn::{self, ExitCodeCtx};
 
 /// Result of attempting to emit an intrinsic method for a built-in type.
@@ -93,6 +93,13 @@ pub struct LLVMTypeCache<'ctx> {
     /// Map for monomorphized generic types and unions, keyed by mangled name
     /// strings (e.g. `"List_$Int32$"`, `"Union_$Int.String$"`).
     pub monomorphized: HashMap<String, StructType<'ctx>>,
+
+    /// Union opaque structs registered during type collection but whose
+    /// payload layout has been deferred until member bodies are set. Drained
+    /// by [`crate::registration::finalize_pending_unions`] after struct/enum
+    /// bodies are defined. Holding `(opaque, members)` in insertion order so
+    /// dependency order is preserved when finalize runs.
+    pub pending_union_layouts: Vec<(StructType<'ctx>, Vec<Type>)>,
 }
 
 impl<'ctx> LLVMTypeCache<'ctx> {
@@ -101,6 +108,7 @@ impl<'ctx> LLVMTypeCache<'ctx> {
             concrete: HashMap::new(),
             enum_variant_payloads: HashMap::new(),
             monomorphized: HashMap::new(),
+            pending_union_layouts: Vec::new(),
         }
     }
 
@@ -1364,14 +1372,23 @@ fn run_codegen<'ctx>(
             .map_err(|e| codegen_error(e, module.span))?;
     }
 
+    // Impl-block parameter/return types may have monomorphized new generic
+    // instances (and enqueued unions) during declaration. Finalize before
+    // format synthesis and body compilation so union sizes are correct.
+    finalize_pending_unions(&mut compiler);
+
     let entry_span = modules.first().map(|m| m.span).unwrap_or_default();
     synthesize_all_formats(&mut compiler).map_err(|e| codegen_error(e, entry_span))?;
+
+    finalize_pending_unions(&mut compiler);
 
     for (module, pkg) in modules.iter().zip(packages.iter()) {
         compiler
             .with_package(package_from_str(pkg), |c| c.define_functions(module))
             .map_err(|e| codegen_error(e, module.span))?;
     }
+
+    finalize_pending_unions(&mut compiler);
 
     if let Some(type_name) = entry_type {
         compiler
