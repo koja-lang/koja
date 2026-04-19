@@ -36,12 +36,12 @@ use expo_ir::identity::VariantId;
 use expo_ir::lower::enums::{
     enum_mangled_name, lower_concrete_enum, resolve_enum_eq, resolve_generic_type_args,
 };
-use expo_ir::lower::types::{id_for, resolve_name_current};
+use expo_ir::lower::types::id_for;
 use expo_ir::resolved::construction::ResolvedEnumConstruction;
 use expo_ir::resolved::enums::{ResolvedVariantEq, ResolvedVariantFields};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{
-    Package, Type, TypeIdentifier, mangle_name, named_generic, unify, unwrap_indirect,
+    Type, TypeIdentifier, mangle_name, named_generic, unify, unwrap_indirect,
 };
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -281,7 +281,7 @@ fn emit_enum_construction<'ctx>(
     pre_compiled_values: &[BasicValueEnum<'ctx>],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let enum_type = lookup_enum_llvm_type(compiler, &resolved.mangled_name)?;
+    let enum_type = lookup_enum_llvm_type(compiler, resolved)?;
     let alloca_label = format!("{}_{}", resolved.mangled_name, resolved.variant_name);
     let alloca = compiler
         .builder
@@ -317,24 +317,20 @@ fn emit_enum_construction<'ctx>(
 
 fn lookup_enum_llvm_type<'ctx>(
     compiler: &Compiler<'ctx>,
-    mangled_name: &str,
+    resolved: &ResolvedEnumConstruction,
 ) -> Result<StructType<'ctx>, String> {
-    if let Some(t) = compiler.llvm_types.get_monomorphized(mangled_name) {
-        return Ok(t);
+    if resolved.is_generic {
+        return compiler
+            .llvm_types
+            .get_monomorphized(&resolved.mangled_name)
+            .ok_or_else(|| format!("monomorphized enum `{}` not found", resolved.mangled_name));
     }
-    if let Some(id) = resolve_name_current(&compiler.lower_ctx(), mangled_name)
-        && let Some(t) = compiler.llvm_types.get_concrete(id)
+    if let Type::Named { identifier, .. } = &resolved.result_type
+        && let Some(t) = compiler.llvm_types.get_concrete(identifier)
     {
         return Ok(t);
     }
-    let id = TypeIdentifier {
-        name: mangled_name.to_string(),
-        package: Package::Unresolved,
-    };
-    compiler
-        .llvm_types
-        .get_concrete(&id)
-        .ok_or_else(|| format!("unknown enum type: {mangled_name}"))
+    Err(format!("unknown enum type: {}", resolved.mangled_name))
 }
 
 fn store_variant_tag<'ctx>(
