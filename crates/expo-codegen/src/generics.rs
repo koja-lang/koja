@@ -43,7 +43,7 @@ pub(crate) fn compile_function_body<'ctx>(
     _is_main: bool,
 ) -> Result<(), String> {
     let saved_hint = mem::replace(
-        &mut c.fn_state.return_type_hint,
+        &mut c.fn_lower.return_type_hint,
         if *return_type != Type::Unit {
             Some(return_type.clone())
         } else {
@@ -61,9 +61,9 @@ pub(crate) fn compile_function_body<'ctx>(
         }
 
         if is_last && let Statement::Expr(expr) = stmt {
-            c.fn_state.tco.mark_tail();
+            c.fn_lower.mark_tail();
             let val = compile_expr(c, expr, fn_value)?.map(|tv| tv.value);
-            c.fn_state.tco.clear_tail();
+            c.fn_lower.clear_tail();
             if !c.current_block_terminated() && *return_type != Type::Unit {
                 if let Some(v) = val {
                     let v = apply_coercion(c, v, expr)?;
@@ -87,7 +87,7 @@ pub(crate) fn compile_function_body<'ctx>(
         }
     }
 
-    c.fn_state.return_type_hint = saved_hint;
+    c.fn_lower.return_type_hint = saved_hint;
     Ok(())
 }
 
@@ -122,7 +122,7 @@ pub(crate) fn compile_method_body<'ctx>(
     let entry = c.context.append_basic_block(fn_value, "entry");
     let saved_vars = mem::take(&mut c.fn_state.variables);
     let saved_block = c.builder.get_insert_block();
-    let saved_subst = mem::replace(&mut c.fn_state.type_subst, subst);
+    let saved_subst = mem::replace(&mut c.fn_lower.type_subst, subst);
 
     c.builder.position_at_end(entry);
     c.debug.set_location(
@@ -191,19 +191,18 @@ pub(crate) fn compile_method_body<'ctx>(
     c.builder.build_unconditional_branch(loop_header).unwrap();
     c.builder.position_at_end(loop_header);
 
-    let saved_process_msg = c.fn_state.process_msg_type.take();
+    let saved_process_msg = c.fn_lower.process_msg_type.take();
     if let Some((mangled, _)) = self_type {
-        c.fn_state.process_msg_type = resolve_process_envelope_type(c, mangled);
-        if let Some(env_type) = c.fn_state.process_msg_type.clone() {
+        c.fn_lower.process_msg_type = resolve_process_envelope_type(c, mangled);
+        if let Some(env_type) = c.fn_lower.process_msg_type.clone() {
             let _ = ensure_types_exist(c, &env_type);
         }
     }
 
     let saved_fn = c
-        .fn_state
-        .tco
+        .fn_lower
         .enter_fn(fn_value.get_name().to_str().unwrap_or("").to_string());
-    let saved_loop = c.fn_state.tco.set_loop(loop_header, param_allocas);
+    let saved_loop = c.fn_state.set_loop(loop_header, param_allocas);
 
     let result = compile_function_body(
         c,
@@ -213,11 +212,11 @@ pub(crate) fn compile_method_body<'ctx>(
         false,
     );
 
-    c.fn_state.tco.leave_fn(saved_fn);
-    c.fn_state.tco.restore_loop(saved_loop);
-    c.fn_state.process_msg_type = saved_process_msg;
+    c.fn_lower.leave_fn(saved_fn);
+    c.fn_state.restore_loop(saved_loop);
+    c.fn_lower.process_msg_type = saved_process_msg;
     c.fn_state.variables = saved_vars;
-    c.fn_state.type_subst = saved_subst;
+    c.fn_lower.type_subst = saved_subst;
     if let Some(bb) = saved_block {
         c.builder.position_at_end(bb);
     }
@@ -288,7 +287,7 @@ pub(crate) fn monomorphize_function<'ctx>(
     let entry = c.context.append_basic_block(fn_value, "entry");
     let saved_vars = mem::take(&mut c.fn_state.variables);
     let saved_block = c.builder.get_insert_block();
-    let saved_subst = mem::replace(&mut c.fn_state.type_subst, subst.clone());
+    let saved_subst = mem::replace(&mut c.fn_lower.type_subst, subst.clone());
 
     c.builder.position_at_end(entry);
     c.debug.set_location(
@@ -321,7 +320,7 @@ pub(crate) fn monomorphize_function<'ctx>(
     )?;
 
     c.fn_state.variables = saved_vars;
-    c.fn_state.type_subst = saved_subst;
+    c.fn_lower.type_subst = saved_subst;
     if let Some(bb) = saved_block {
         c.builder.position_at_end(bb);
     }

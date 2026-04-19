@@ -71,7 +71,7 @@ pub fn compile_expr<'ctx>(
                 let ty = ty.clone();
                 let llvm_ty = to_llvm_type(&ty, compiler.context, &compiler.llvm_types)
                     .ok_or_else(|| {
-                        let fn_name = compiler.fn_state.self_type_name.as_deref().unwrap_or("(top)");
+                        let fn_name = compiler.fn_lower.self_type_name.as_deref().unwrap_or("(top)");
                         format!("cannot load variable of unsupported type: {name} (type: {ty:?}, in fn {fn_name})")
                     })?;
                 let value = compiler.builder.build_load(llvm_ty, *ptr, name).unwrap();
@@ -586,9 +586,9 @@ fn compile_closure_core<'ctx>(
         if extra.is_empty() {
             None
         } else {
-            let mut merged = compiler.fn_state.type_subst.clone();
+            let mut merged = compiler.fn_lower.type_subst.clone();
             merged.extend(extra);
-            Some(std::mem::replace(&mut compiler.fn_state.type_subst, merged))
+            Some(std::mem::replace(&mut compiler.fn_lower.type_subst, merged))
         }
     };
 
@@ -650,7 +650,7 @@ fn compile_closure_core<'ctx>(
 
     compiler.fn_state.variables = saved_vars;
     if let Some(old) = saved_subst {
-        compiler.fn_state.type_subst = old;
+        compiler.fn_lower.type_subst = old;
     }
     if let Some(block) = saved_block {
         compiler.builder.position_at_end(block);
@@ -723,7 +723,7 @@ fn resolve_list_literal(
     compiler: &mut Compiler,
     compiled_elements: &[TypedValue],
 ) -> Result<ResolvedListLiteral, String> {
-    let element_type = if let Some(subst) = compiler.fn_state.type_subst.get("T") {
+    let element_type = if let Some(subst) = compiler.fn_lower.type_subst.get("T") {
         subst.clone()
     } else if let Some(first) = compiled_elements.first() {
         first.expo_type.clone()
@@ -847,8 +847,8 @@ fn compile_map_literal<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let (key_type, val_type) = if let (Some(key_subst), Some(val_subst)) = (
-        compiler.fn_state.type_subst.get("K"),
-        compiler.fn_state.type_subst.get("V"),
+        compiler.fn_lower.type_subst.get("K"),
+        compiler.fn_lower.type_subst.get("V"),
     ) {
         (key_subst.clone(), val_subst.clone())
     } else if let Some((first_key, first_val)) = entries.first() {
@@ -1038,7 +1038,7 @@ fn resolve_receive(
     after_timeout: Option<&Expr>,
 ) -> Result<ResolvedReceive, String> {
     let envelope_type = compiler
-        .fn_state
+        .fn_lower
         .process_msg_type
         .clone()
         .ok_or("receive requires a typed Process envelope; no message type found")?;

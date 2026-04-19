@@ -66,7 +66,7 @@ fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ct
     // using the same package-qualifying rule as definition-site mangling so the
     // lookup succeeds for user packages (e.g. `crypto.HMAC_hmac_raw`) without
     // breaking stdlib symbols (e.g. `Int_hash`).
-    let mangled_name = c.fn_state.self_type_name.as_ref().map(|tn| {
+    let mangled_name = c.fn_lower.self_type_name.as_ref().map(|tn| {
         let prefix = c.current_method_symbol_prefix(tn);
         format!("{prefix}_{name}")
     });
@@ -82,7 +82,7 @@ fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ct
 
     if let Some(callee) = callee_opt {
         let sig = c.type_ctx.function_sig(name).or_else(|| {
-            c.fn_state
+            c.fn_lower
                 .self_type_name
                 .as_ref()
                 .and_then(|tn| c.resolve_name_current(tn))

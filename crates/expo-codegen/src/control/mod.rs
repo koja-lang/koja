@@ -37,9 +37,9 @@ pub(crate) fn compile_body_as_value<'ctx>(
             val = compile_expr(c, expr, function)?;
             continue;
         }
-        let was_tail = c.fn_state.tco.save_tail();
+        let was_tail = c.fn_lower.save_tail();
         compile_statement(c, stmt, function)?;
-        c.fn_state.tco.restore_tail(was_tail);
+        c.fn_lower.restore_tail(was_tail);
     }
     Ok(val)
 }

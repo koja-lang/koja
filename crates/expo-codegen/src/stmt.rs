@@ -57,9 +57,9 @@ pub fn compile_statement<'ctx>(
 
         Statement::Return { value, .. } => {
             if let Some(expr) = value {
-                compiler.fn_state.tco.mark_tail();
+                compiler.fn_lower.mark_tail();
                 let val = compile_expr(compiler, expr, function)?.map(|tv| tv.value);
-                compiler.fn_state.tco.clear_tail();
+                compiler.fn_lower.clear_tail();
                 if !compiler.current_block_terminated() {
                     let skip = match &expr.kind {
                         ExprKind::Ident { name, .. } => Some(name.as_str()),
@@ -115,9 +115,9 @@ fn compile_assignment<'ctx>(
     if let Some(type_expression) = type_annotation {
         let entries = resolve_annotation_subst(compiler, type_expression);
         if !entries.is_empty() {
-            saved_subst = Some(compiler.fn_state.type_subst.clone());
+            saved_subst = Some(compiler.fn_lower.type_subst.clone());
             for (name, resolved_type) in entries {
-                compiler.fn_state.type_subst.insert(name, resolved_type);
+                compiler.fn_lower.type_subst.insert(name, resolved_type);
             }
         }
     }
@@ -128,7 +128,7 @@ fn compile_assignment<'ctx>(
     let compiled_type = val_tv.expo_type;
 
     if let Some(saved) = saved_subst {
-        compiler.fn_state.type_subst = saved;
+        compiler.fn_lower.type_subst = saved;
     }
 
     let assigned_type = if let Some(type_expression) = type_annotation {
@@ -538,7 +538,7 @@ fn resolve_annotation_subst(
                 .iter()
                 .zip(type_args.iter())
                 .map(|(param, arg)| {
-                    let concrete = substitute(arg, &compiler.fn_state.type_subst);
+                    let concrete = substitute(arg, &compiler.fn_lower.type_subst);
                     (param.name.clone(), concrete)
                 })
                 .collect()
@@ -571,7 +571,7 @@ fn resolve_final_annotation_type(compiler: &Compiler, type_annotation: &TypeExpr
         } if !type_args.is_empty() => {
             let resolved_args: Vec<Type> = type_args
                 .iter()
-                .map(|t| substitute_preserving(t, &compiler.fn_state.type_subst))
+                .map(|t| substitute_preserving(t, &compiler.fn_lower.type_subst))
                 .collect();
             Type::Named {
                 identifier,
@@ -664,7 +664,7 @@ fn infer_type_from_expr(compiler: &Compiler, expr: &Expr) -> Option<Type> {
         return Some(sig.return_type.clone());
     }
     if matches!(&expr.kind, ExprKind::Receive { .. }) {
-        return compiler.fn_state.process_msg_type.clone();
+        return compiler.fn_lower.process_msg_type.clone();
     }
     if let ExprKind::Binary {
         op: BinOp::Concat,

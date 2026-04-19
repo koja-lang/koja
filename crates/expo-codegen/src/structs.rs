@@ -332,7 +332,7 @@ pub fn compile_method_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let was_tail = c.fn_state.tco.save_tail();
+    let was_tail = c.fn_lower.save_tail();
 
     if let ExprKind::Ident { name, .. } = &receiver.kind {
         let resolved = resolve_type_alias_name(name, &c.type_ctx.type_aliases);
@@ -418,16 +418,15 @@ pub fn compile_method_call<'ctx>(
         llvm_args.push(val.into());
     }
 
-    c.fn_state.tco.restore_tail(was_tail);
+    c.fn_lower.restore_tail(was_tail);
 
     let is_tail = c
-        .fn_state
-        .tco
+        .fn_lower
         .is_self_tail_call(&resolved.mangled_name, was_tail);
 
-    if is_tail && let Some(loop_header) = c.fn_state.tco.loop_header {
+    if is_tail && let Some(loop_header) = c.fn_state.loop_header {
         crate::drop::drop_live_variables(c, Some("self"));
-        for (arg, alloca) in llvm_args.iter().zip(c.fn_state.tco.param_allocas.iter()) {
+        for (arg, alloca) in llvm_args.iter().zip(c.fn_state.param_allocas.iter()) {
             let val: BasicValueEnum = (*arg).try_into().unwrap();
             c.builder.build_store(*alloca, val).unwrap();
         }
@@ -800,10 +799,10 @@ fn push_generic_type_subst<'ctx>(
             .type_ctx
             .get_type(identifier)
             .map(|ti| ti.type_params.clone())?;
-        let saved = c.fn_state.type_subst.clone();
+        let saved = c.fn_lower.type_subst.clone();
         for (param, arg) in type_params.iter().zip(type_args.iter()) {
-            let concrete = substitute(arg, &c.fn_state.type_subst);
-            c.fn_state.type_subst.insert(param.name.clone(), concrete);
+            let concrete = substitute(arg, &c.fn_lower.type_subst);
+            c.fn_lower.type_subst.insert(param.name.clone(), concrete);
         }
         Some(saved)
     } else {
@@ -895,7 +894,7 @@ fn infer_field_init_type(compiler: &Compiler, expr: &Expr, compiled_type: &Type)
                 && let Some((_, recv_ty, _)) = compiler.fn_state.variables.get(name)
                 && let Some(step) = compiler.struct_field_lookup(recv_ty, field)
             {
-                substitute(&step.field_type, &compiler.fn_state.type_subst)
+                substitute(&step.field_type, &compiler.fn_lower.type_subst)
             } else {
                 Type::Unknown
             }
@@ -1187,7 +1186,7 @@ fn compile_field_with_subst<'ctx>(
     let val = compile_expr_coerced(compiler, &field_init.value, coerce_ty, function)?
         .ok_or_else(|| format!("field `{}` produced no value", resolved_field.name))?;
     if let Some(saved) = saved_subst {
-        compiler.fn_state.type_subst = saved;
+        compiler.fn_lower.type_subst = saved;
     }
     Ok(val)
 }
@@ -1302,7 +1301,7 @@ fn resolve_static_call<'ctx>(
         && !tp.is_empty()
     {
         tp.iter()
-            .filter_map(|param| c.fn_state.type_subst.get(&param.name).cloned())
+            .filter_map(|param| c.fn_lower.type_subst.get(&param.name).cloned())
             .collect()
     } else {
         Vec::new()

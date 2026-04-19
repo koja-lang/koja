@@ -5,11 +5,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use expo_ir::TypeLayouts;
 use expo_ir::identity::VariantId;
 use expo_ir::lower::fields::lower_struct_field;
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstEnum, ResolvedConstStruct};
 use expo_ir::resolved::fields::ResolvedFieldStep;
+use expo_ir::{FnLowerState, TypeLayouts};
 
 use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
@@ -69,94 +69,6 @@ impl<'ctx> TypedValue<'ctx> {
 
 /// Shorthand for the return type of `compile_expr` and related functions.
 pub type ExprResult<'ctx> = Result<Option<TypedValue<'ctx>>, String>;
-
-/// Tracks state needed to detect and rewrite self-recursive tail calls
-/// as loops. Isolated as a struct so it can move independently when
-/// `Compiler` is broken into smaller pieces.
-pub struct TailCallCtx<'ctx> {
-    /// Mangled name of the function currently being compiled.
-    current_fn: Option<String>,
-    /// Whether the current expression is in tail position.
-    tail_position: bool,
-    /// Loop header block for the current function. When a self-recursive
-    /// tail call is detected, codegen stores new arguments into the
-    /// parameter allocas and branches here instead of emitting a call.
-    pub loop_header: Option<BasicBlock<'ctx>>,
-    /// Parameter allocas in call order (self first, then regular params).
-    pub param_allocas: Vec<PointerValue<'ctx>>,
-}
-
-impl<'ctx> TailCallCtx<'ctx> {
-    pub fn new() -> Self {
-        Self {
-            current_fn: None,
-            tail_position: false,
-            loop_header: None,
-            param_allocas: Vec::new(),
-        }
-    }
-
-    /// Set the current function name at method-body entry. Returns the
-    /// previous value so the caller can restore it on exit.
-    pub fn enter_fn(&mut self, name: String) -> Option<String> {
-        self.current_fn.replace(name)
-    }
-
-    /// Restore the previous function name when leaving a method body.
-    pub fn leave_fn(&mut self, saved: Option<String>) {
-        self.current_fn = saved;
-    }
-
-    /// Set the loop header and parameter allocas for the current function.
-    /// Returns the previous values for restoration on exit.
-    pub fn set_loop(
-        &mut self,
-        header: BasicBlock<'ctx>,
-        allocas: Vec<PointerValue<'ctx>>,
-    ) -> (Option<BasicBlock<'ctx>>, Vec<PointerValue<'ctx>>) {
-        let saved_header = self.loop_header.replace(header);
-        let saved_allocas = mem::replace(&mut self.param_allocas, allocas);
-        (saved_header, saved_allocas)
-    }
-
-    /// Restore the previous loop header and parameter allocas.
-    pub fn restore_loop(&mut self, saved: (Option<BasicBlock<'ctx>>, Vec<PointerValue<'ctx>>)) {
-        self.loop_header = saved.0;
-        self.param_allocas = saved.1;
-    }
-
-    /// Mark the current compile position as tail position.
-    pub fn mark_tail(&mut self) {
-        self.tail_position = true;
-    }
-
-    /// Clear the tail-position flag.
-    pub fn clear_tail(&mut self) {
-        self.tail_position = false;
-    }
-
-    /// Save and clear the tail-position flag. The flag is cleared so that
-    /// subexpressions (receiver, arguments) don't inherit it. The returned
-    /// value must be passed to `restore_tail` and `is_self_tail_call`.
-    pub fn save_tail(&mut self) -> bool {
-        mem::replace(&mut self.tail_position, false)
-    }
-
-    /// Restore the tail-position flag after subexpression compilation.
-    /// This ensures sibling code paths (other match arms, if/else branches)
-    /// still see the flag.
-    pub fn restore_tail(&mut self, was_tail: bool) {
-        if was_tail {
-            self.tail_position = true;
-        }
-    }
-
-    /// Check whether `callee` is a self-recursive call that should be
-    /// rewritten as a loop jump. `was_tail` should come from `save_tail`.
-    pub fn is_self_tail_call(&self, callee: &str, was_tail: bool) -> bool {
-        was_tail && self.current_fn.as_deref() == Some(callee)
-    }
-}
 
 /// LLVM-only struct type cache: handles for non-generic types, monomorphized
 /// generics/unions, and enum variant payloads. Populated during type
@@ -229,33 +141,49 @@ impl<'ctx> LLVMTypeCache<'ctx> {
     }
 }
 
-/// Per-function ephemeral state that is set/reset at each `define_function`
-/// call. Extends the pattern established by `TailCallCtx`.
+/// Per-function LLVM-bound state that is set/reset at each `define_function`
+/// call. Holds variable allocas, loop-exit stack, and tail-call rewrite
+/// scaffolding (`loop_header` + `param_allocas`). Pure-semantic per-function
+/// state lives in [`expo_ir::FnLowerState`] on `Compiler.fn_lower`.
 pub struct FnState<'ctx> {
-    pub variables: BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>,
-    pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
-    pub process_msg_type: Option<Type>,
-    pub return_type_hint: Option<Type>,
-    pub type_subst: HashMap<String, Type>,
-    pub tco: TailCallCtx<'ctx>,
     pub closure_counter: usize,
-    /// When inside an `impl` block, the concrete type name (e.g. "Counter").
-    /// Used by `resolve_type_expr` to substitute `Self` automatically.
-    pub self_type_name: Option<String>,
+    pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
+    /// Loop header block for the current function. When a self-recursive
+    /// tail call is detected, codegen stores new arguments into the
+    /// parameter allocas and branches here instead of emitting a call.
+    pub loop_header: Option<BasicBlock<'ctx>>,
+    /// Parameter allocas in call order (self first, then regular params).
+    pub param_allocas: Vec<PointerValue<'ctx>>,
+    pub variables: BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>,
 }
 
 impl<'ctx> FnState<'ctx> {
     pub fn new() -> Self {
         Self {
-            variables: BTreeMap::new(),
-            loop_exit_stack: Vec::new(),
-            process_msg_type: None,
-            return_type_hint: None,
-            type_subst: HashMap::new(),
-            tco: TailCallCtx::new(),
             closure_counter: 0,
-            self_type_name: None,
+            loop_exit_stack: Vec::new(),
+            loop_header: None,
+            param_allocas: Vec::new(),
+            variables: BTreeMap::new(),
         }
+    }
+
+    /// Restore the previous loop header and parameter allocas.
+    pub fn restore_loop(&mut self, saved: (Option<BasicBlock<'ctx>>, Vec<PointerValue<'ctx>>)) {
+        self.loop_header = saved.0;
+        self.param_allocas = saved.1;
+    }
+
+    /// Set the loop header and parameter allocas for the current function.
+    /// Returns the previous values for restoration on exit.
+    pub fn set_loop(
+        &mut self,
+        header: BasicBlock<'ctx>,
+        allocas: Vec<PointerValue<'ctx>>,
+    ) -> (Option<BasicBlock<'ctx>>, Vec<PointerValue<'ctx>>) {
+        let saved_header = self.loop_header.replace(header);
+        let saved_allocas = mem::replace(&mut self.param_allocas, allocas);
+        (saved_header, saved_allocas)
     }
 }
 
@@ -272,6 +200,12 @@ pub struct Compiler<'ctx> {
     /// Cache of generated thunk wrappers for bare function references.
     /// Maps original function name to the thunk `FunctionValue`.
     pub fn_ref_thunks: HashMap<String, FunctionValue<'ctx>>,
+    /// LLVM-free per-function semantic state (lives in `expo-ir`). Hosts
+    /// `return_type_hint`, `process_msg_type`, `type_subst`, `self_type_name`,
+    /// and the TCO ambient flags (`current_fn`, `tail_position`). Companion
+    /// to [`Self::layouts`]: layouts is type-scoped, fn_lower is
+    /// function-scoped.
+    pub fn_lower: FnLowerState,
     /// LLVM type cache: handles for non-generic and monomorphized struct
     /// types, plus identity-keyed enum payload structs. Populated during
     /// type registration; read during body compilation.
@@ -280,7 +214,9 @@ pub struct Compiler<'ctx> {
     /// monomorphized struct field layouts and the canonical enum variant
     /// lists; tag values come from [`TypeLayouts::variant_index`].
     pub layouts: TypeLayouts,
-    /// Per-function ephemeral state (variables, loops, TCO, etc.).
+    /// Per-function LLVM-bound state: variable allocas, loop-exit stack,
+    /// and tail-call loop scaffolding. Semantic per-function state lives
+    /// in [`Self::fn_lower`].
     pub fn_state: FnState<'ctx>,
     /// Source path of the Expo module currently being defined; matches
     /// [`TypeContext::closure_info`] keys during lookup.
@@ -376,6 +312,7 @@ impl<'ctx> Compiler<'ctx> {
             type_ctx,
             generic_fn_asts: HashMap::new(),
             fn_ref_thunks: HashMap::new(),
+            fn_lower: FnLowerState::new(),
             llvm_types,
             layouts: TypeLayouts::new(),
             fn_state: FnState::new(),
@@ -656,12 +593,12 @@ impl<'ctx> Compiler<'ctx> {
             .map(|ti| ti.identifier.name.as_str())
             .collect();
         let mut type_params: Vec<&str> = self
-            .fn_state
+            .fn_lower
             .type_subst
             .keys()
             .map(|s| s.as_str())
             .collect();
-        if self.fn_state.self_type_name.is_some() && !type_params.contains(&"Self") {
+        if self.fn_lower.self_type_name.is_some() && !type_params.contains(&"Self") {
             type_params.push("Self");
         }
         let mut ty = resolve_type_expr_full(
@@ -681,19 +618,19 @@ impl<'ctx> Compiler<'ctx> {
             ),
             None => self.type_ctx.resolve_type(&mut ty),
         }
-        if let Some(ref name) = self.fn_state.self_type_name {
+        if let Some(ref name) = self.fn_lower.self_type_name {
             let Some(id) = self.resolve_name_current(name) else {
-                return substitute_preserving(&ty, &self.fn_state.type_subst);
+                return substitute_preserving(&ty, &self.fn_lower.type_subst);
             };
             let self_ty = Type::Named {
                 identifier: id.clone(),
                 type_args: vec![],
             };
-            let mut subst = self.fn_state.type_subst.clone();
+            let mut subst = self.fn_lower.type_subst.clone();
             subst.insert("Self".to_string(), self_ty);
             substitute_preserving(&ty, &subst)
         } else {
-            substitute_preserving(&ty, &self.fn_state.type_subst)
+            substitute_preserving(&ty, &self.fn_lower.type_subst)
         }
     }
 
@@ -704,18 +641,18 @@ impl<'ctx> Compiler<'ctx> {
     /// monomorphization context (e.g. lowering match subjects whose type is
     /// `Step<Self>` to the concrete `Step<MyProcess>`).
     pub fn monomorphize_type(&self, ty: &Type) -> Type {
-        if let Some(ref name) = self.fn_state.self_type_name
+        if let Some(ref name) = self.fn_lower.self_type_name
             && let Some(id) = self.resolve_name_current(name)
         {
             let self_ty = Type::Named {
                 identifier: id.clone(),
                 type_args: vec![],
             };
-            let mut subst = self.fn_state.type_subst.clone();
+            let mut subst = self.fn_lower.type_subst.clone();
             subst.insert("Self".to_string(), self_ty);
             substitute_preserving(ty, &subst)
         } else {
-            substitute_preserving(ty, &self.fn_state.type_subst)
+            substitute_preserving(ty, &self.fn_lower.type_subst)
         }
     }
 
@@ -978,7 +915,7 @@ impl<'ctx> Compiler<'ctx> {
         functions: &[Function],
     ) -> Result<(), String> {
         let prefix = self.current_method_symbol_prefix(type_name);
-        self.fn_state.self_type_name = Some(type_name.to_string());
+        self.fn_lower.self_type_name = Some(type_name.to_string());
         for func in functions {
             if let Some(rt) = &func.return_type {
                 let return_type = self.resolve_type_expr(rt);
@@ -997,7 +934,7 @@ impl<'ctx> Compiler<'ctx> {
             let fn_value = self.declare_function(func, Some(&prefix), Some(type_name))?;
             self.functions.insert(mangled, fn_value);
         }
-        self.fn_state.self_type_name = None;
+        self.fn_lower.self_type_name = None;
         Ok(())
     }
 
@@ -1117,7 +1054,7 @@ impl<'ctx> Compiler<'ctx> {
         if func.body.is_none() {
             return Ok(());
         }
-        self.fn_state.self_type_name = type_bare_name.map(|s| s.to_string());
+        self.fn_lower.self_type_name = type_bare_name.map(|s| s.to_string());
 
         let mangled = match mangling_prefix {
             Some(prefix) => format!("{}_{}", prefix, func.name),
@@ -1125,7 +1062,7 @@ impl<'ctx> Compiler<'ctx> {
         };
 
         if crate::intrinsics::is_primitive_intrinsic(&mangled) {
-            self.fn_state.self_type_name = None;
+            self.fn_lower.self_type_name = None;
             return crate::intrinsics::emit_primitive_intrinsic(self, &mangled);
         }
 
@@ -1135,7 +1072,7 @@ impl<'ctx> Compiler<'ctx> {
             .ok_or_else(|| format!("undeclared function: {}", mangled))?;
 
         if fn_value.count_basic_blocks() > 0 {
-            self.fn_state.self_type_name = None;
+            self.fn_lower.self_type_name = None;
             return Ok(());
         }
 
@@ -1246,7 +1183,7 @@ impl<'ctx> Compiler<'ctx> {
             &return_type,
             HashMap::new(),
         );
-        self.fn_state.self_type_name = None;
+        self.fn_lower.self_type_name = None;
         result
     }
 

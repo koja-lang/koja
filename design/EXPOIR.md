@@ -642,6 +642,30 @@ member list at the use site). `VariantId` is intentionally a transitional
 no call-site changes, making it the on-ramp from today's name-keyed
 side-tables to true IR identities.
 
+_Wave 5 followup._ The semantic half of `FnState` is now extracted into
+`expo-ir::FnLowerState` and lives on `Compiler.fn_lower`. Migrated fields:
+`process_msg_type`, `return_type_hint`, `self_type_name`, `type_subst`,
+plus the TCO ambient flags `current_fn` and `tail_position` together with
+their seven traversal methods (`mark_tail`, `clear_tail`, `save_tail`,
+`restore_tail`, `enter_fn`, `leave_fn`, `is_self_tail_call`). `TailCallCtx`
+is dissolved entirely rather than carved into a parallel `TailCallLower`
+sub-struct: the LLVM half (`loop_header`, `param_allocas`, `set_loop`,
+`restore_loop`) is inlined directly onto the trimmed `FnState`. The
+sub-struct existed solely to make this very split possible, so once the
+split happens it has no remaining cohesion to preserve. Long-term, the
+TCO ambient state is itself transitional -- once `expo-ir` carries
+explicit `IRInstruction::Call { tail }`, the flag and the loop
+scaffolding both disappear (tail-ness becomes a property on the call
+instruction; loop headers and parameter allocas become emit-time data
+derived from the IR's function header). `FnLowerState` is the
+function-scoped sister to the type-scoped `TypeLayouts`: between them,
+all per-type and per-function semantic state for lowering now lives in
+`expo-ir`, with `Compiler` retaining only the LLVM-bound parts.
+`FnState` still owns `variables`, `loop_exit_stack`, and
+`closure_counter` because they're either LLVM-bound
+(`PointerValue`/`BasicBlock`) or fused with emission state; teasing them
+apart waits for a later wave.
+
 _Typed AST._ `Expr` was restructured from a flat enum to
 `struct Expr { kind: ExprKind, span, resolved_type: Option<Type> }` --
 every expression carries its resolved type after type checking.

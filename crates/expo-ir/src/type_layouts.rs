@@ -23,7 +23,7 @@
 //! - **Wave 3** — pure rename in `expo-codegen`: `TypeRegistry` →
 //!   `LLVMTypeCache` and `Compiler.types` → `Compiler.llvm_types`, making the
 //!   surviving registry's LLVM-only role explicit at every call site.
-//! - **Wave 4 (current)** — split `enum_variant_payloads` along the semantic /
+//! - **Wave 4** — split `enum_variant_payloads` along the semantic /
 //!   LLVM seam. Variant order (= tag value) moves entirely here as
 //!   `variant_index`, with the non-generic enum side backfilled into
 //!   `mono_enum_variants` so every enum has a single source of truth. The
@@ -33,7 +33,19 @@
 //!   `VariantId` is a transitional `(String, String)` today; in the IR
 //!   end-state (Phase 5+) it becomes an opaque `(EnumId, u8)` with no
 //!   call-site changes.
-//! - **Wave 5+** — carve up `FnState`.
+//! - **Wave 5 (current)** — extract per-function semantic state out of
+//!   `expo-codegen`'s `FnState` into [`crate::FnLowerState`]
+//!   (`process_msg_type`, `return_type_hint`, `self_type_name`, `type_subst`,
+//!   plus the TCO ambient flags `current_fn`/`tail_position` and their seven
+//!   methods). `TailCallCtx` is dissolved entirely — its LLVM half
+//!   (`loop_header`, `param_allocas`, `set_loop`, `restore_loop`) is inlined
+//!   directly onto the trimmed `FnState`. Sister to `TypeLayouts`:
+//!   `TypeLayouts` is the type-scoped semantic store, `FnLowerState` is the
+//!   function-scoped semantic store.
+//! - **Wave 6+** — `variables`, `loop_exit_stack`, and `closure_counter`
+//!   are still on `FnState` because they're either LLVM-bound
+//!   (`PointerValue`/`BasicBlock`) or fused with LLVM emission state.
+//!   Future waves will tease them apart.
 
 use std::collections::HashMap;
 

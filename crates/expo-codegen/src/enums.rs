@@ -345,7 +345,7 @@ fn resolve_generic_type_args(
             subst
                 .get(&tp.name)
                 .cloned()
-                .or_else(|| compiler.fn_state.type_subst.get(&tp.name).cloned())
+                .or_else(|| compiler.fn_lower.type_subst.get(&tp.name).cloned())
                 .unwrap_or(Type::Unknown)
         })
         .collect();
@@ -354,7 +354,7 @@ fn resolve_generic_type_args(
         return type_args;
     }
 
-    let Some(hint) = compiler.fn_state.return_type_hint.as_ref() else {
+    let Some(hint) = compiler.fn_lower.return_type_hint.as_ref() else {
         return type_args;
     };
 

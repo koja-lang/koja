@@ -186,7 +186,7 @@ fn lower_result_ty(compiler: &Compiler<'_>, arms: &[MatchArm]) -> ResolvedMatchT
         };
     }
 
-    if let Some(Type::Union(members)) = &compiler.fn_state.return_type_hint {
+    if let Some(Type::Union(members)) = &compiler.fn_lower.return_type_hint {
         let target = Type::Union(members.clone());
         let target_mangled = mangle_type(&target);
         let all_members = arm_types.iter().all(|t| {
