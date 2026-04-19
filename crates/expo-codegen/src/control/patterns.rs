@@ -660,7 +660,7 @@ fn resolve_enum_key_from_joined(
         let qualified = id.qualified_name();
         if compiler.types.get_concrete(id).is_some()
             || compiler.types.contains_monomorphized(&qualified)
-            || compiler.types.mono_enum_variants.contains_key(&qualified)
+            || compiler.layouts.contains_enum(&qualified)
         {
             return Ok(qualified);
         }
@@ -670,7 +670,7 @@ fn resolve_enum_key_from_joined(
         .get_concrete(&TypeIdentifier::from_qualified_name(joined))
         .is_some()
         || compiler.types.contains_monomorphized(joined)
-        || compiler.types.mono_enum_variants.contains_key(joined)
+        || compiler.layouts.contains_enum(joined)
     {
         return Ok(joined.to_string());
     }
@@ -1099,7 +1099,7 @@ pub(crate) fn lookup_variant_data(
     {
         return Ok(vi.data.clone());
     }
-    if let Some(variants) = compiler.types.mono_enum_variants.get(enum_name)
+    if let Some(variants) = compiler.layouts.enum_variants(enum_name)
         && let Some((_, data)) = variants.iter().find(|(n, _)| n == variant)
     {
         return Ok(data.clone());

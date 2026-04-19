@@ -140,7 +140,7 @@ fn has_indirect_fields_by_mono(c: &Compiler, mangled: &str) -> bool {
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
     }
-    if let Some(variants) = c.types.mono_enum_variants.get(mangled) {
+    if let Some(variants) = c.layouts.enum_variants(mangled) {
         return variants
             .iter()
             .any(|(_, vdata)| variant_has_indirect(vdata));

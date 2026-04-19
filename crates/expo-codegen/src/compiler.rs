@@ -6,6 +6,7 @@ use std::mem;
 use std::path::{Path, PathBuf};
 
 use expo_ir::TypeLayouts;
+use expo_ir::lower::fields::lower_struct_field;
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstEnum, ResolvedConstStruct};
 use expo_ir::resolved::fields::ResolvedFieldStep;
 
@@ -30,8 +31,7 @@ use expo_ast::ast::{
 };
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
-use expo_ast::types::mangle_name;
-use expo_typecheck::context::{ClosureInfo, TypeContext, TypeInfo, VariantData};
+use expo_typecheck::context::{ClosureInfo, TypeContext, TypeInfo};
 use expo_typecheck::types::{
     Package, Type, build_substitution, package_from_str, process_envelope_type,
     resolve_type_expr_full, substitute, substitute_preserving,
@@ -170,7 +170,6 @@ pub struct TypeRegistry<'ctx> {
     pub monomorphized: HashMap<String, StructType<'ctx>>,
 
     pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
-    pub mono_enum_variants: HashMap<String, Vec<(String, VariantData)>>,
 }
 
 impl<'ctx> TypeRegistry<'ctx> {
@@ -179,7 +178,6 @@ impl<'ctx> TypeRegistry<'ctx> {
             concrete: HashMap::new(),
             monomorphized: HashMap::new(),
             enum_variant_payloads: HashMap::new(),
-            mono_enum_variants: HashMap::new(),
         }
     }
 
@@ -619,29 +617,6 @@ impl<'ctx> Compiler<'ctx> {
             .map_err(|e| format!("failed to write object file: {}", e.to_string()))
     }
 
-    /// Strict lookup for a non-generic struct's field index by
-    /// [`TypeIdentifier`]. A `Package::Unresolved` identifier returns `None`
-    /// rather than masking bugs with a last-write-wins resolution.
-    pub fn get_concrete_field_index(&self, id: &TypeIdentifier, field_name: &str) -> Option<u32> {
-        let info = self.type_ctx.get_type(id)?;
-        let fields = info.fields()?;
-        fields
-            .iter()
-            .position(|(name, _)| name == field_name)
-            .map(|i| i as u32)
-    }
-
-    /// Strict counterpart of [`Self::get_concrete_field_index`] that returns
-    /// the field type.
-    pub fn get_concrete_field_type(&self, id: &TypeIdentifier, field_name: &str) -> Option<Type> {
-        let info = self.type_ctx.get_type(id)?;
-        let fields = info.fields()?;
-        fields
-            .iter()
-            .find(|(name, _)| name == field_name)
-            .map(|(_, ty)| ty.clone())
-    }
-
     /// Strict lookup for a monomorphized struct's field index by its mangled
     /// key. The key is exactly what registration stores via
     /// [`TypeLayouts::register_struct_layout`]: either a `Type_$Arg$` generic
@@ -658,56 +633,11 @@ impl<'ctx> Compiler<'ctx> {
         self.layouts.field_type(mangled, field_name)
     }
 
-    /// Look up a struct's field index and type, dispatching on the struct's
-    /// resolved [`Type`] to pick a collision-safe lookup path:
-    ///   * Non-generic `Type::Named` with a resolved package → strict
-    ///     TypeIdentifier-keyed lookup via [`Self::get_concrete_field_index`]
-    ///     and [`Self::get_concrete_field_type`].
-    ///   * Generic `Type::Named` → mangled lookup via [`TypeLayouts`].
-    ///   * `Type::Indirect`/`Type::Pointer` → recursively unwrap.
-    ///
-    /// Unresolved identifiers return `None`: callers are expected to thread a
-    /// package-qualified `TypeIdentifier` from typecheck, not a bare name.
-    /// Returns a [`ResolvedFieldStep`] (the IR-level pair of `field_index`
-    /// and `field_type`) so call sites that already build `ResolvedChain`
-    /// values can forward the result directly.
+    /// Look up a struct's field index and type by its resolved [`Type`].
+    /// Thin wrapper kept for caller convenience; the dispatch lives in
+    /// [`expo_ir::lower::fields::lower_struct_field`].
     pub fn struct_field_lookup(&self, ty: &Type, field_name: &str) -> Option<ResolvedFieldStep> {
-        match ty {
-            Type::Indirect(inner) | Type::Pointer(inner) => {
-                self.struct_field_lookup(inner, field_name)
-            }
-            Type::Named {
-                identifier,
-                type_args,
-            } if !type_args.is_empty() => {
-                let mangled = mangle_name(identifier, type_args);
-                let field_index = self.get_mono_field_index(&mangled, field_name)?;
-                let field_type = self.get_mono_field_type(&mangled, field_name)?;
-                Some(ResolvedFieldStep {
-                    field_index,
-                    field_type,
-                })
-            }
-            Type::Named { identifier, .. } if identifier.package != Package::Unresolved => {
-                let field_index = self.get_concrete_field_index(identifier, field_name)?;
-                let field_type = self.get_concrete_field_type(identifier, field_name)?;
-                Some(ResolvedFieldStep {
-                    field_index,
-                    field_type,
-                })
-            }
-            // Flattened form: generic Named with empty type_args where
-            // `identifier.name` already holds the mangled key.
-            Type::Named { identifier, .. } => {
-                let field_index = self.get_mono_field_index(&identifier.name, field_name)?;
-                let field_type = self.get_mono_field_type(&identifier.name, field_name)?;
-                Some(ResolvedFieldStep {
-                    field_index,
-                    field_type,
-                })
-            }
-            _ => None,
-        }
+        lower_struct_field(&self.layouts, self.type_ctx, ty, field_name)
     }
 
     /// Resolves a type expression AST node into an Expo type, using the

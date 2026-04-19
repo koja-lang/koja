@@ -9,6 +9,7 @@
 
 mod file;
 mod instruction;
+pub mod lower;
 pub mod resolved;
 mod type_layouts;
 mod types;

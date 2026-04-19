@@ -473,9 +473,7 @@ pub(crate) fn monomorphize_enum<'ctx>(
 
     build_enum_layout(c, &mangled, enum_type, &concrete_variants);
 
-    c.types
-        .mono_enum_variants
-        .insert(mangled, concrete_variants);
+    c.layouts.register_enum_variants(mangled, concrete_variants);
 
     Ok(())
 }

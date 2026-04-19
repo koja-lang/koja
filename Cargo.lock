@@ -404,6 +404,7 @@ name = "expo-ir"
 version = "0.9.0"
 dependencies = [
  "expo-ast",
+ "expo-typecheck",
 ]
 
 [[package]]

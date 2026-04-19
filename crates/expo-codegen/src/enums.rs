@@ -270,9 +270,8 @@ fn lower_generic_enum(
         as u64;
 
     let element_types = compiler
-        .types
-        .mono_enum_variants
-        .get(&mangled_name)
+        .layouts
+        .enum_variants(&mangled_name)
         .and_then(|vs| vs.iter().find(|(n, _)| n == variant))
         .and_then(|(_, vdata)| match vdata {
             VariantData::Tuple(types) => Some(types.clone()),
