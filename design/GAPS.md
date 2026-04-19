@@ -248,6 +248,211 @@ is paused until this is sorted.
 
 ---
 
+## Struct construction does not check for required fields
+
+A struct literal that omits one or more required fields is silently accepted.
+The omitted fields are left uninitialized, producing zero/garbage at runtime
+and -- for pointer-bearing fields like `String` -- a null pointer that
+segfaults on access.
+
+```expo
+struct User
+  name: String
+  age: Int
+end
+
+u = User{age: 30}     # accepted; `name` is uninitialized
+print(u.name)         # prints "(null)"; dereferencing it crashes
+```
+
+```expo
+struct Pt
+  x: Int
+  y: Int
+end
+
+p = Pt{x: 1}          # accepted
+print(p.y)            # prints 0
+```
+
+This is a memory-safety hole, not just a usability gap -- the type checker
+should reject any struct literal whose declared fields are not all supplied
+(absent a future "default field value" feature). Self-referential structs
+without indirection (e.g. `next: Node` inside `Node`) compound the problem
+because the only way to construct one today is via this missing-field path.
+
+Surfaced during agent compiler-fuzz testing (April 2026).
+
+---
+
+## `Debug.format` for tuple variants drops payloads beyond the first
+
+The auto-derived `Debug` implementation only renders the payload of
+single-arg tuple variants. Multi-arg tuple variants render only the variant
+name and recursive payloads through deeply-nested constructions print only
+the head:
+
+```expo
+enum Shape
+  Circle(Int)
+  Rect(Int, Int)
+end
+
+print(Shape.Circle(5))    # "Circle(5)"        (correct)
+print(Shape.Rect(3, 4))   # "Rect"             (payload dropped)
+```
+
+```expo
+enum Expr
+  Num(Int)
+  Add(Expr, Expr)
+end
+
+print(Expr.Add(Expr.Num(1), Expr.Num(2)))   # "Add"
+print(Expr.Num(1))                          # "Num(1)"
+```
+
+The single-arg path in `expo-codegen/src/debug.rs` works; the multi-arg
+case appears to short-circuit before formatting the tuple body. Fix should
+also exercise nested cases (variant inside variant) since printing is the
+default debug surface.
+
+Surfaced during agent compiler-fuzz testing (April 2026).
+
+---
+
+## Nested type-aliased unions don't expand inner aliases
+
+A `type` alias whose RHS is a union of unions leaves the inner alias
+unexpanded in the type checker, causing both arm-membership errors and a
+spurious `unknown` member in the union:
+
+```expo
+type AB = A | B
+type ABC = AB | C
+
+abc: ABC = ...
+match abc
+  x: A -> ...    # error: type `A` is not a member of union `C | unknown`
+  x: B -> ...
+  x: C -> ...
+end
+# also: error: non-exhaustive match on union type: missing `unknown`
+```
+
+Widening (`abc: ABC = ab` where `ab: AB`) is accepted; the bug is in how
+`ABC`'s definition is resolved. The inner `AB` alias doesn't get expanded
+into its members, leaving the union as effectively `<unresolved> | C` and
+later normalized to `C | unknown`.
+
+**Workaround:** flatten unions manually -- write `type ABC = A | B | C`
+instead of composing aliases.
+
+Surfaced during agent compiler-fuzz testing (April 2026).
+
+---
+
+## Bare closure expression as a statement fails to parse
+
+A `fn (...)` closure used as an expression-statement (no surrounding
+assignment, return, or call) is misparsed as a nested function declaration
+and produces a cascade of errors complaining about a missing identifier
+between `fn` and `(`:
+
+```expo
+fn main
+  fn (x: Int) -> Int x + 1 end   # error: expected identifier, found LParen
+  print("ok")
+end
+```
+
+The issue is purely syntactic -- assigning the closure first
+(`f = fn (x: Int) -> Int x + 1 end`) parses fine. In practice this matters
+inside method bodies that try to return a closure as the final expression,
+because the parser hits the same `fn (` start-of-statement ambiguity:
+
+```expo
+impl Foo
+  fn make(self) -> fn (Int) -> Int
+    fn (x: Int) -> Int x + 1 end   # same parse error
+  end
+end
+```
+
+**Workaround:** bind the closure to a local first and return the local
+(`f = fn ... end; f`).
+
+**Fix sketch:** when `parse_statement` sees `fn` followed by `(`, treat it
+as an expression-statement (closure) rather than a function declaration.
+
+Surfaced during agent compiler-fuzz testing (April 2026).
+
+---
+
+## Closures inside impl methods cannot capture `self`
+
+A closure created inside an `impl` method that references `self`
+(directly or through field access) is rejected with a misleading
+"self used outside of impl method" error pointing at the struct
+declaration, not the offending closure:
+
+```expo
+impl Counter
+  fn make_adder(self) -> fn (Int) -> Int
+    f = fn (x: Int) -> Int
+      x + self.value     # error: self used outside of impl method
+    end
+    f
+  end
+end
+```
+
+Capturing through a local works (`v = self.value` then capture `v`), so
+the closure capture machinery is fine -- the limitation is that `self`
+specifically isn't visible from inside a nested closure scope. The error
+span is also wrong (it points at the struct decl rather than the `self`
+reference inside the closure).
+
+**Workaround:** copy the relevant fields into locals before constructing
+the closure.
+
+Surfaced during agent compiler-fuzz testing (April 2026).
+
+---
+
+## Specialized impl loses concrete type when the type parameter recurses through itself
+
+For an `impl` specialized to a self-nested instantiation
+(`impl Box<Box<Int>>`), inner field access is type-checked using the
+struct's _generic_ parameter rather than the inner concrete substitution:
+
+```expo
+struct Box<T>
+  value: T
+end
+
+impl Box<Box<Int>>
+  fn get_inner(self) -> Int
+    self.value.value     # error: field access on non-struct type `T`
+  end
+end
+```
+
+`self.value` is correctly typed as `Box<Int>`, but the next field access
+sees that inner `Box`'s declared field type as the original `T` and
+refuses the field access. Specializations to a single concrete level
+(`impl Box<Int>` where `self.value` is `Int`, or `impl Box<Inner>` for
+some non-generic struct `Inner`) work correctly -- the bug is specifically
+the case where the specialization substitutes the same generic shape.
+
+**Workaround:** decompose the access through a local
+(`inner = self.value; inner.value`), or lift the helper to a free
+function that takes the inner type explicitly.
+
+Surfaced during agent compiler-fuzz testing (April 2026).
+
+---
+
 ## Nested types (`MyApp.Config`) deferred
 
 Declaring a `struct` or `enum` inside another `struct`/`enum` body, accessed
