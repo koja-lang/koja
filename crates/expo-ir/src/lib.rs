@@ -8,6 +8,7 @@
 //! emission is mechanical: walk IR instructions, emit target-specific code.
 
 mod file;
+pub mod identity;
 mod instruction;
 pub mod lower;
 pub mod resolved;
@@ -15,6 +16,7 @@ mod type_layouts;
 mod types;
 
 pub use file::{IRBasicBlock, IRFile, IRFunction, IRStruct};
+pub use identity::VariantId;
 pub use instruction::{IRInstruction, IRTerminator};
 pub use type_layouts::TypeLayouts;
 pub use types::{IRBuiltinOp, IROperand, IRType, IRVar};

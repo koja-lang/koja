@@ -20,11 +20,20 @@
 //!   reader. Companion change: `Compiler::struct_field_lookup` and the two
 //!   `concrete_field_*` helpers move into `crate::lower::fields` as the
 //!   first true lowering functions hosted in `expo-ir`.
-//! - **Wave 3 (current)** — pure rename in `expo-codegen`: `TypeRegistry` →
+//! - **Wave 3** — pure rename in `expo-codegen`: `TypeRegistry` →
 //!   `LLVMTypeCache` and `Compiler.types` → `Compiler.llvm_types`, making the
 //!   surviving registry's LLVM-only role explicit at every call site.
-//! - **Wave 4+** — split `enum_variant_payloads` (mixed semantic / LLVM),
-//!   then carve up `FnState`.
+//! - **Wave 4 (current)** — split `enum_variant_payloads` along the semantic /
+//!   LLVM seam. Variant order (= tag value) moves entirely here as
+//!   `variant_index`, with the non-generic enum side backfilled into
+//!   `mono_enum_variants` so every enum has a single source of truth. The
+//!   LLVM payload table on `LLVMTypeCache` is rekeyed by `expo_ir::VariantId`
+//!   — an identity, not a position — so the two stores have no positional
+//!   contract and `LLVMTypeCache` no longer reaches across to `TypeLayouts`.
+//!   `VariantId` is a transitional `(String, String)` today; in the IR
+//!   end-state (Phase 5+) it becomes an opaque `(EnumId, u8)` with no
+//!   call-site changes.
+//! - **Wave 5+** — carve up `FnState`.
 
 use std::collections::HashMap;
 
@@ -104,5 +113,15 @@ impl TypeLayouts {
     /// Borrow the field layout for `mangled`, if registered.
     pub fn struct_layout(&self, mangled: &str) -> Option<&[(String, Type)]> {
         self.mono_struct_info.get(mangled).map(Vec::as_slice)
+    }
+
+    /// 0-based position of `variant` within the enum registered under
+    /// `mangled`, equal to the tag value used at codegen.
+    pub fn variant_index(&self, mangled: &str, variant: &str) -> Option<u8> {
+        let variants = self.mono_enum_variants.get(mangled)?;
+        variants
+            .iter()
+            .position(|(n, _)| n == variant)
+            .map(|i| i as u8)
     }
 }

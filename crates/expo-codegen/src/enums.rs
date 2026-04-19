@@ -10,7 +10,8 @@
 //!   [`ResolvedEnumConstruction`]. All package-aware enum lookup, generic
 //!   monomorphization, variant tag/payload-shape resolution, and
 //!   `unify`-driven type-arg inference happens here. This is the only side
-//!   that touches `compiler.types`, `compiler.type_ctx`, or `monomorphize_*`.
+//!   that touches `compiler.layouts`, `compiler.llvm_types`,
+//!   `compiler.type_ctx`, or `monomorphize_*`.
 //!
 //! - [`emit_enum_construction`] consumes the resolved IR plus the AST data
 //!   and emits LLVM IR (alloca, store-tag, GEP-into-payload, store-fields,
@@ -31,6 +32,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{EnumConstructionData, Expr, FieldInit, TypeParam};
+use expo_ir::identity::VariantId;
 use expo_ir::resolved::construction::ResolvedEnumConstruction;
 use expo_ir::resolved::enums::{ResolvedEnumEq, ResolvedVariantEq, ResolvedVariantFields};
 use expo_typecheck::context::VariantData;
@@ -43,7 +45,7 @@ use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
-use crate::control::{get_payload_ptr, lookup_variant_data, match_values};
+use crate::control::{get_payload_ptr, match_values};
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::monomorphize_enum;
 use crate::structs::{load_maybe_indirect, store_maybe_indirect};
@@ -167,8 +169,8 @@ fn lower_concrete_enum(
 
     let key = resolved_id.qualified_name();
     let tag = compiler
-        .llvm_types
-        .get_variant_tag(&key, variant)
+        .layouts
+        .variant_index(&key, variant)
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{resolved_id}`"))?
         as u64;
 
@@ -264,8 +266,8 @@ fn lower_generic_enum(
     }
 
     let tag = compiler
-        .llvm_types
-        .get_variant_tag(&mangled_name, variant)
+        .layouts
+        .variant_index(&mangled_name, variant)
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{mangled_name}`"))?
         as u64;
 
@@ -472,15 +474,13 @@ fn emit_variant_payload<'ctx>(
     payload_ptr: PointerValue<'ctx>,
     function: FunctionValue<'ctx>,
 ) -> Result<(), String> {
-    let payload_type = compiler
-        .llvm_types
-        .get_variant_payload_type(&resolved.mangled_name, &resolved.variant_name)
-        .ok_or_else(|| {
-            format!(
-                "no payload type for {}.{}",
-                resolved.mangled_name, resolved.variant_name
-            )
-        })?;
+    let id = VariantId::new(&resolved.mangled_name, &resolved.variant_name);
+    let payload_type = compiler.llvm_types.variant_payload(&id).ok_or_else(|| {
+        format!(
+            "no payload type for {}.{}",
+            resolved.mangled_name, resolved.variant_name
+        )
+    })?;
 
     match (&resolved.variant_fields, data) {
         (ResolvedVariantFields::Tuple { element_types }, EnumConstructionData::Tuple(exprs)) => {
@@ -636,16 +636,14 @@ fn resolve_enum_eq(c: &Compiler, ty: &Type) -> Result<ResolvedEnumEq, String> {
     let mangled = enum_mangled_name(ty)
         .ok_or_else(|| "compile_enum_struct_eq called with non-enum type".to_string())?;
 
-    let payloads = c
-        .llvm_types
-        .enum_variant_payloads
-        .get(&mangled)
-        .ok_or_else(|| format!("enum variant payloads not found for `{mangled}`"))?;
+    let registered = c
+        .layouts
+        .enum_variants(&mangled)
+        .ok_or_else(|| format!("enum variants not found for `{mangled}`"))?;
 
-    let mut variants = Vec::with_capacity(payloads.len());
-    for (name, _) in payloads {
-        let vdata = lookup_variant_data(c, &mangled, name)?;
-        let resolved = match &vdata {
+    let mut variants = Vec::with_capacity(registered.len());
+    for (name, vdata) in registered {
+        let resolved = match vdata {
             VariantData::Struct(fields) => ResolvedVariantEq::Struct {
                 field_types: fields.iter().map(|(_, t)| t.clone()).collect(),
             },

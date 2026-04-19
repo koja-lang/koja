@@ -10,7 +10,7 @@ use expo_ast::ast::Statement;
 pub use conditionals::{compile_cond, compile_if, compile_ternary, compile_unless};
 pub use loops::{compile_for, compile_loop, compile_while};
 pub use patterns::compile_match;
-pub(crate) use patterns::{compile_pattern, get_payload_ptr, lookup_variant_data, match_values};
+pub(crate) use patterns::{compile_pattern, get_payload_ptr, match_values};
 
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};

@@ -6,6 +6,7 @@ use std::mem;
 use std::path::{Path, PathBuf};
 
 use expo_ir::TypeLayouts;
+use expo_ir::identity::VariantId;
 use expo_ir::lower::fields::lower_struct_field;
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstEnum, ResolvedConstStruct};
 use expo_ir::resolved::fields::ResolvedFieldStep;
@@ -160,40 +161,41 @@ impl<'ctx> TailCallCtx<'ctx> {
 /// LLVM-only struct type cache: handles for non-generic types, monomorphized
 /// generics/unions, and enum variant payloads. Populated during type
 /// registration / monomorphisation and read during body compilation.
+///
 /// Semantic layout data (field order, variant lists) lives in
 /// [`expo_ir::TypeLayouts`] on `Compiler.layouts`; this struct holds only
-/// `inkwell::StructType<'ctx>` handles and the (Wave-4-pending) variant
-/// payload table that still mixes both concerns.
+/// `inkwell::StructType<'ctx>` handles. The variant payload table is keyed
+/// by an identity ([`VariantId`]) rather than positionally, so there is no
+/// positional contract between this cache and `TypeLayouts` — variant order
+/// (= tag value) is owned solely by `TypeLayouts::variant_index`.
 pub struct LLVMTypeCache<'ctx> {
     /// Collision-safe map for non-generic types, keyed by package-qualified
     /// `TypeIdentifier`. Used for concrete structs and enums.
     pub concrete: HashMap<TypeIdentifier, StructType<'ctx>>,
 
+    /// Identity-keyed cache of LLVM payload struct handles for each enum
+    /// variant. `None` records that a variant has been registered but has
+    /// no payload (a nullary variant). Lookups go through
+    /// [`Self::variant_payload`].
+    pub enum_variant_payloads: HashMap<VariantId, Option<StructType<'ctx>>>,
+
     /// Map for monomorphized generic types and unions, keyed by mangled name
     /// strings (e.g. `"List_$Int32$"`, `"Union_$Int.String$"`).
     pub monomorphized: HashMap<String, StructType<'ctx>>,
-
-    pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
 }
 
 impl<'ctx> LLVMTypeCache<'ctx> {
     pub fn new() -> Self {
         Self {
             concrete: HashMap::new(),
-            monomorphized: HashMap::new(),
             enum_variant_payloads: HashMap::new(),
+            monomorphized: HashMap::new(),
         }
     }
 
-    /// Register a non-generic struct or enum type by its package-qualified
-    /// identifier.
-    pub fn register_concrete(&mut self, id: &TypeIdentifier, ty: StructType<'ctx>) {
-        self.concrete.insert(id.clone(), ty);
-    }
-
-    /// Register a monomorphized generic or union type by its mangled name.
-    pub fn register_monomorphized(&mut self, mangled: String, ty: StructType<'ctx>) {
-        self.monomorphized.insert(mangled, ty);
+    /// Check whether a monomorphized type is registered.
+    pub fn contains_monomorphized(&self, mangled: &str) -> bool {
+        self.monomorphized.contains_key(mangled)
     }
 
     /// Look up a non-generic type by its package-qualified identifier.
@@ -208,34 +210,22 @@ impl<'ctx> LLVMTypeCache<'ctx> {
         self.monomorphized.get(mangled).copied()
     }
 
-    /// Check whether a monomorphized type is registered.
-    pub fn contains_monomorphized(&self, mangled: &str) -> bool {
-        self.monomorphized.contains_key(mangled)
+    /// Register a non-generic struct or enum type by its package-qualified
+    /// identifier.
+    pub fn register_concrete(&mut self, id: &TypeIdentifier, ty: StructType<'ctx>) {
+        self.concrete.insert(id.clone(), ty);
     }
 
-    /// Returns the LLVM struct type for an enum variant's payload, if it has
-    /// one. Callers pass the same key used at registration (package-qualified
-    /// for non-generic enums, mangled for monomorphizations).
-    pub fn get_variant_payload_type(
-        &self,
-        enum_name: &str,
-        variant_name: &str,
-    ) -> Option<StructType<'ctx>> {
-        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
-            vs.iter()
-                .find(|(name, _)| name == variant_name)
-                .and_then(|(_, pt)| *pt)
-        })
+    /// Register a monomorphized generic or union type by its mangled name.
+    pub fn register_monomorphized(&mut self, mangled: String, ty: StructType<'ctx>) {
+        self.monomorphized.insert(mangled, ty);
     }
 
-    /// Returns the tag index (0-based) for an enum variant. Same keying
-    /// convention as [`Self::get_variant_payload_type`].
-    pub fn get_variant_tag(&self, enum_name: &str, variant_name: &str) -> Option<u8> {
-        self.enum_variant_payloads.get(enum_name).and_then(|vs| {
-            vs.iter()
-                .position(|(name, _)| name == variant_name)
-                .map(|i| i as u8)
-        })
+    /// Returns the LLVM payload struct for an enum variant, if it has one.
+    /// Returns `None` both for unknown variants and for nullary variants;
+    /// callers that need to distinguish these cases can ask `TypeLayouts`.
+    pub fn variant_payload(&self, id: &VariantId) -> Option<StructType<'ctx>> {
+        self.enum_variant_payloads.get(id).copied().flatten()
     }
 }
 
@@ -283,13 +273,12 @@ pub struct Compiler<'ctx> {
     /// Maps original function name to the thunk `FunctionValue`.
     pub fn_ref_thunks: HashMap<String, FunctionValue<'ctx>>,
     /// LLVM type cache: handles for non-generic and monomorphized struct
-    /// types, plus enum payload structs. Populated during type registration;
-    /// read during body compilation.
+    /// types, plus identity-keyed enum payload structs. Populated during
+    /// type registration; read during body compilation.
     pub llvm_types: LLVMTypeCache<'ctx>,
     /// LLVM-free semantic layout tables (lives in `expo-ir`). Hosts
-    /// monomorphized struct field layouts and enum variant lists. Wave 4
-    /// will further split `LLVMTypeCache::enum_variant_payloads` so the
-    /// semantic half (variant order, has-payload bits) lands here too.
+    /// monomorphized struct field layouts and the canonical enum variant
+    /// lists; tag values come from [`TypeLayouts::variant_index`].
     pub layouts: TypeLayouts,
     /// Per-function ephemeral state (variables, loops, TCO, etc.).
     pub fn_state: FnState<'ctx>,
@@ -361,7 +350,7 @@ fn resolve_const_enum(
     enum_name: &str,
     variant: &str,
 ) -> Option<ResolvedConstEnum> {
-    let tag = compiler.llvm_types.get_variant_tag(enum_name, variant)?;
+    let tag = compiler.layouts.variant_index(enum_name, variant)?;
     Some(ResolvedConstEnum { tag })
 }
 

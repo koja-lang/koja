@@ -34,6 +34,7 @@ use crate::drop::Ownership;
 use expo_ast::ast::{
     BinarySegment, Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern, Statement,
 };
+use expo_ir::identity::VariantId;
 use expo_ir::resolved::match_expr::{ResolvedMatch, ResolvedMatchType};
 use expo_ir::resolved::patterns::{ResolvedFieldPattern, ResolvedLiteral, ResolvedPattern};
 use expo_typecheck::context::VariantData;
@@ -524,7 +525,9 @@ fn lower_pattern(
             } else {
                 let union_mangled = mangle_type(subject_inner);
                 let member_mangled = mangle_type(&resolved);
-                let tag = lookup_variant_tag(compiler, &union_mangled, &member_mangled)?;
+                let tag = union_member_tag(subject_inner, &member_mangled).ok_or_else(|| {
+                    format!("unknown union member: {union_mangled}.{member_mangled}")
+                })?;
                 Ok(ResolvedPattern::UnionMember {
                     union_mangled,
                     member_mangled,
@@ -743,9 +746,23 @@ fn lookup_variant_tag(
     variant: &str,
 ) -> Result<u8, String> {
     compiler
-        .llvm_types
-        .get_variant_tag(enum_key, variant)
+        .layouts
+        .variant_index(enum_key, variant)
         .ok_or_else(|| format!("unknown variant: {enum_key}.{variant}"))
+}
+
+/// Tag (= position) of a union member, derived directly from the union's
+/// member list. Unions do not flow through `TypeLayouts` or `LLVMTypeCache`
+/// — their tag and payload are fully determined by the surrounding
+/// `Type::Union(members)` at the use site.
+fn union_member_tag(union_ty: &Type, member_mangled: &str) -> Option<u8> {
+    let Type::Union(members) = union_ty else {
+        return None;
+    };
+    members
+        .iter()
+        .position(|m| mangle_type(m) == member_mangled)
+        .map(|i| i as u8)
 }
 
 fn get_struct_variant_fields(
@@ -910,14 +927,13 @@ fn emit_pattern<'ctx>(
 
         ResolvedPattern::UnionMember {
             union_mangled,
-            member_mangled,
+            member_mangled: _,
             tag,
             member_ty,
             bind_name,
         } => {
             let result = emit_tag_check(compiler, subject_ptr, union_mangled, *tag)?;
-            let (_payload_type, payload_ptr) =
-                get_payload_ptr(compiler, subject_ptr, union_mangled, member_mangled)?;
+            let payload_ptr = get_union_payload_ptr(compiler, subject_ptr, union_mangled)?;
             let llvm_ty = to_llvm_type(member_ty, compiler.context, &compiler.llvm_types)
                 .ok_or_else(|| {
                     format!("unsupported type in typed binding: {}", member_ty.display())
@@ -1047,8 +1063,8 @@ fn emit_binary_pattern<'ctx>(
 
 // ---------------------------------------------------------------------------
 // Shared helpers used by both lowering and emission, plus by other codegen
-// modules (`enums.rs` consumes `get_payload_ptr`, `lookup_variant_data`,
-// `match_values` for enum equality compilation).
+// modules (`enums.rs` consumes `get_payload_ptr` and `match_values` for enum
+// equality compilation).
 // ---------------------------------------------------------------------------
 
 /// Resolved payload metadata for an enum variant.
@@ -1063,9 +1079,10 @@ fn resolve_payload_info<'ctx>(
     enum_name: &str,
     variant: &str,
 ) -> Result<ResolvedPayloadInfo<'ctx>, String> {
+    let id = VariantId::new(enum_name, variant);
     let payload_type = compiler
         .llvm_types
-        .get_variant_payload_type(enum_name, variant)
+        .variant_payload(&id)
         .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
     let enum_type = lookup_enum_struct_type(compiler, enum_name)?;
     Ok(ResolvedPayloadInfo {
@@ -1088,7 +1105,24 @@ pub(crate) fn get_payload_ptr<'ctx>(
     Ok((resolved.payload_type, payload_ptr))
 }
 
-pub(crate) fn lookup_variant_data(
+/// Union counterpart to [`get_payload_ptr`]. Returns just the GEP into the
+/// union's payload field; the caller already knows the member's LLVM type
+/// from the static `Type::Union(members)` and decodes it via `to_llvm_type`,
+/// so there is no per-member payload struct to look up.
+fn get_union_payload_ptr<'ctx>(
+    compiler: &Compiler<'ctx>,
+    subject_ptr: PointerValue<'ctx>,
+    union_mangled: &str,
+) -> Result<PointerValue<'ctx>, String> {
+    let union_type = lookup_enum_struct_type(compiler, union_mangled)?;
+    let payload_ptr = compiler
+        .builder
+        .build_struct_gep(union_type, subject_ptr, 1, "payload_ptr")
+        .unwrap();
+    Ok(payload_ptr)
+}
+
+fn lookup_variant_data(
     compiler: &Compiler<'_>,
     enum_name: &str,
     variant: &str,

@@ -863,7 +863,7 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
             if !c.llvm_types.contains_monomorphized(&mangled) {
                 let opaque = c.context.opaque_struct_type(&mangled);
                 c.llvm_types.register_monomorphized(mangled.clone(), opaque);
-                build_union_layout(c, &mangled, opaque, members);
+                build_union_layout(c, opaque, members);
             }
         }
         _ => {}

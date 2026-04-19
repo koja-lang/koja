@@ -2,6 +2,7 @@
 //! structs, and provides `call_format` to invoke `{Type}_format` on any value.
 
 use expo_ast::identifier::{Package, TypeIdentifier};
+use expo_ir::identity::VariantId;
 use expo_typecheck::context::{VariantData, VariantInfo};
 use expo_typecheck::types::{Primitive, Type, named};
 use inkwell::AddressSpace;
@@ -310,9 +311,8 @@ fn synthesize_enum_format<'ctx>(
                 VariantData::Unit => variant_name_label(compiler, &variant_info.name),
                 VariantData::Tuple(types) => {
                     if types.len() == 1 && !is_complex_type(&types[0]) {
-                        let payload_struct_type = compiler
-                            .llvm_types
-                            .get_variant_payload_type(&qualified, &variant_info.name);
+                        let id = VariantId::new(&qualified, &variant_info.name);
+                        let payload_struct_type = compiler.llvm_types.variant_payload(&id);
 
                         if let Some(payload_type) = payload_struct_type {
                             let payload_ptr = compiler

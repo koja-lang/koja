@@ -2,6 +2,7 @@
 //! into LLVM struct types using a multi-pass approach so cross-referencing
 //! types resolve correctly.
 
+use expo_ir::identity::VariantId;
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Type, mangle_type};
 use inkwell::types::StructType;
@@ -106,6 +107,8 @@ pub(crate) fn register_types(c: &mut Compiler) {
             .map(|v| (v.name.clone(), v.data.clone()))
             .collect();
         build_enum_layout(c, &id.qualified_name(), enum_type, &variants);
+        c.layouts
+            .register_enum_variants(id.qualified_name(), variants);
     }
 
     // Pass 4: register union types (tagged-union layout reusing enum infrastructure)
@@ -145,27 +148,26 @@ pub(crate) fn register_types(c: &mut Compiler) {
         let opaque = c.context.opaque_struct_type(&mangled);
         c.llvm_types.register_monomorphized(mangled.clone(), opaque);
 
-        build_union_layout(c, &mangled, opaque, members);
+        build_union_layout(c, opaque, members);
     }
 }
 
-/// Builds the LLVM tagged-union layout for an enum: creates variant payload
-/// structs, sets the body on the (already-registered) opaque struct, and
-/// populates `enum_variant_payloads`.
+/// Builds the LLVM tagged-union layout for an enum: creates each variant's
+/// payload struct, inserts it into `enum_variant_payloads` keyed by a
+/// [`VariantId`], and sets the body on the already-registered opaque struct.
+/// Variant order (the tag value) is owned by `TypeLayouts` — this function
+/// only owns LLVM handles.
 pub(crate) fn build_enum_layout<'ctx>(
     c: &mut Compiler<'ctx>,
     name: &str,
     enum_type: StructType<'ctx>,
     variants: &[(String, VariantData)],
 ) {
-    let mut variant_payloads = Vec::new();
     let mut max_payload_size: u32 = 0;
 
     for (vname, vdata) in variants {
-        match vdata {
-            VariantData::Unit => {
-                variant_payloads.push((vname.clone(), None));
-            }
+        let payload_option = match vdata {
+            VariantData::Unit => None,
             VariantData::Tuple(types) => {
                 let mut field_llvm: Vec<_> = types
                     .iter()
@@ -177,7 +179,7 @@ pub(crate) fn build_enum_layout<'ctx>(
                 let payload = c.context.struct_type(&field_llvm, true);
                 let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                 max_payload_size = max_payload_size.max(size);
-                variant_payloads.push((vname.clone(), Some(payload)));
+                Some(payload)
             }
             VariantData::Struct(fields) => {
                 let mut field_llvm: Vec<_> = fields
@@ -190,9 +192,13 @@ pub(crate) fn build_enum_layout<'ctx>(
                 let payload = c.context.struct_type(&field_llvm, true);
                 let size: u32 = field_llvm.iter().map(|t| llvm_field_byte_size(*t)).sum();
                 max_payload_size = max_payload_size.max(size);
-                variant_payloads.push((vname.clone(), Some(payload)));
+                Some(payload)
             }
-        }
+        };
+        let id = VariantId::new(name, vname.clone());
+        c.llvm_types
+            .enum_variant_payloads
+            .insert(id, payload_option);
     }
 
     let i8_type = c.context.i8_type();
@@ -202,34 +208,24 @@ pub(crate) fn build_enum_layout<'ctx>(
     } else {
         enum_type.set_body(&[i8_type.into()], false);
     }
-
-    c.llvm_types
-        .enum_variant_payloads
-        .insert(name.to_string(), variant_payloads);
 }
 
-/// Builds the LLVM tagged-union layout for a union type: creates variant
-/// payload structs from member types and sets the body. Unlike enums, unions
-/// do not have a variant name table.
+/// Builds the LLVM tagged-union layout for a union type: sizes the body to
+/// fit the largest member. Unions do not register variant payloads in
+/// `LLVMTypeCache`; their tag and member type are derived directly from the
+/// member list at the use site.
 pub(crate) fn build_union_layout<'ctx>(
     c: &mut Compiler<'ctx>,
-    name: &str,
     opaque: StructType<'ctx>,
     members: &[Type],
 ) {
     let i8_type = c.context.i8_type();
-    let mut variant_payloads = Vec::new();
     let mut max_payload_size: u32 = 0;
 
     for member in members {
-        let member_name = mangle_type(member);
         if let Some(llvm_ty) = to_llvm_type(member, c.context, &c.llvm_types) {
-            let payload = c.context.struct_type(&[llvm_ty], true);
             let size = llvm_field_byte_size(llvm_ty);
             max_payload_size = max_payload_size.max(size);
-            variant_payloads.push((member_name, Some(payload)));
-        } else {
-            variant_payloads.push((member_name, None));
         }
     }
 
@@ -239,10 +235,6 @@ pub(crate) fn build_union_layout<'ctx>(
     } else {
         opaque.set_body(&[i8_type.into()], false);
     }
-
-    c.llvm_types
-        .enum_variant_payloads
-        .insert(name.to_string(), variant_payloads);
 }
 
 /// Recursively collects all `Type::Union` variants reachable from `ty`.

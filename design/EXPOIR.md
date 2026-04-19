@@ -624,6 +624,24 @@ site that the surviving cache is purely an LLVM-handle store. The semantic
 half (struct/enum layouts) lives in `expo-ir`'s `TypeLayouts`; Wave 4 will
 split `enum_variant_payloads` along the same seam.
 
+_Wave 4 followup._ `enum_variant_payloads` is now split. Variant order
+(= tag value) is owned solely by `TypeLayouts`, exposed via
+`TypeLayouts::variant_index`. Non-generic enums are backfilled into
+`mono_enum_variants` at registration so every enum, generic or not, has
+the same single source of truth. The LLVM-side payload table is rekeyed
+from positional `Vec<(String, Option<StructType>)>` to identity-keyed
+`HashMap<VariantId, Option<StructType>>`, where `VariantId` is a new
+`expo-ir` struct holding `(enum_mangled, variant_name)`. There is no
+positional contract between `TypeLayouts` and `LLVMTypeCache` anymore --
+they are independent stores keyed by name and identity respectively, so
+drift is structurally impossible. The dead `enum_variant_payloads` write
+in `build_union_layout` was removed in the same wave (no reader had ever
+consumed it; the union tag-lookup path derives the tag directly from the
+member list at the use site). `VariantId` is intentionally a transitional
+`(String, String)`; in Phase 5+ it becomes an opaque `(EnumId, u8)` with
+no call-site changes, making it the on-ramp from today's name-keyed
+side-tables to true IR identities.
+
 _Typed AST._ `Expr` was restructured from a flat enum to
 `struct Expr { kind: ExprKind, span, resolved_type: Option<Type> }` --
 every expression carries its resolved type after type checking.
