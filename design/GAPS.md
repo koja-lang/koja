@@ -63,23 +63,6 @@ Surfaced during the self-hosted lexer port (`continues_line?`).
 
 ---
 
-## `match` inside `while`/`loop` with `return`
-
-When a `match` expression appears inside a `while` or `loop` body and any
-arm contains a `return` statement, the generated binary segfaults on startup
-(before `main` runs). The crash is in LLVM codegen -- likely incorrect basic
-block wiring for the match's phi nodes when nested inside a loop's
-back-edge structure.
-
-**Workaround:** use recursion instead of loops with `match`. Since Expo is
-FP-oriented, recursive helpers with `move` parameters are idiomatic and
-avoid the bug entirely.
-
-Surfaced during the `json` package decoder (recursive descent parser for
-arrays and objects).
-
----
-
 ## Free function codegen gap
 
 Free functions (outside `impl` blocks) pass `expo check` but crash at

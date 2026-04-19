@@ -1,0 +1,51 @@
+struct Walker
+  data: List<Int>
+end
+
+impl Walker
+  # Regression: a `match` whose value is bound (forcing a real phi at
+  # match_end) inside a `while` body, with one arm that `return`s and one
+  # arm that yields a value. Earlier codegen mis-wired the merge phi's
+  # predecessor list when an arm terminated under the loop's back-edge.
+  fn doubled_sum(self) -> Int
+    i = 0
+    sum = 0
+    while i < self.data.length()
+      x = match self.data.get(i)
+        Option.Some(v) -> v * 2
+        Option.None -> return -99
+      end
+      sum = sum + x
+      i = i + 1
+    end
+    sum
+  end
+
+  # Same shape with `loop` (infinite) -- the back-edge structure differs
+  # from `while`, so exercise both.
+  fn first_marker(self) -> Int
+    i = 0
+    loop
+      match self.data.get(i)
+        Option.Some(v) ->
+          if v == 0
+            return i
+          end
+          i = i + 1
+        Option.None -> return -1
+      end
+    end
+    -2
+  end
+end
+
+fn main
+  w = Walker{data: [1, 2, 3]}
+  print(w.doubled_sum())
+
+  marker = Walker{data: [10, 20, 0, 30]}
+  print(marker.first_marker())
+
+  no_marker = Walker{data: [1, 2, 3]}
+  print(no_marker.first_marker())
+end
