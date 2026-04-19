@@ -5,7 +5,7 @@ use expo_ast::ast::{
     BinarySegment, CondArm, EnumConstructionData, Expr, ExprKind, FieldInit, Function, Item,
     MatchArm, Module, Statement, StringPart,
 };
-use expo_ast::identifier::Package;
+use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_ast::types::Type;
 
 use crate::context::TypeContext;
@@ -241,12 +241,22 @@ fn check_type_resolved(ty: &Type, expr: &Expr, ctx: &mut TypeContext) {
             identifier,
             type_args,
         } => {
-            if identifier.package == Package::Unresolved {
-                let (message, hint) = unresolved_type_diagnostic(&identifier.name, ctx);
-                match hint {
-                    Some(h) => ctx.error_with_hint(message, h, expr.span),
-                    None => ctx.error(message, expr.span),
+            match &identifier.package {
+                Package::Unresolved => {
+                    let (message, hint) = unresolved_type_diagnostic(&identifier.name, ctx);
+                    match hint {
+                        Some(h) => ctx.error_with_hint(message, h, expr.span),
+                        None => ctx.error(message, expr.span),
+                    }
                 }
+                _ if !ctx.types.contains_key(identifier) => {
+                    let (message, hint) = unknown_qualified_diagnostic(identifier, ctx);
+                    match hint {
+                        Some(h) => ctx.error_with_hint(message, h, expr.span),
+                        None => ctx.error(message, expr.span),
+                    }
+                }
+                _ => {}
             }
             for arg in type_args {
                 check_type_resolved(arg, expr, ctx);
@@ -309,4 +319,17 @@ fn unresolved_type_diagnostic(name: &str, ctx: &TypeContext) -> (String, Option<
             "qualify the reference ({suggestions}) or import via {alias_hint}"
         )),
     )
+}
+
+/// Builds an error for a qualified `pkg.Type` reference that names a known
+/// package but no such type within it. Reuses
+/// [`unresolved_type_diagnostic`] when the bare name is found in some other
+/// dependency, since the suggested fix is identical.
+fn unknown_qualified_diagnostic(
+    identifier: &TypeIdentifier,
+    ctx: &TypeContext,
+) -> (String, Option<String>) {
+    let qualified = identifier.qualified_name();
+    let (_, hint) = unresolved_type_diagnostic(&identifier.name, ctx);
+    (format!("unknown type `{qualified}`"), hint)
 }

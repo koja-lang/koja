@@ -4,7 +4,7 @@
 //! bodies and impl blocks, plus shared helper functions used across the
 //! type-checking modules.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use expo_ast::ast::*;
 use expo_ast::span::Span;
@@ -15,7 +15,8 @@ use crate::expr::{expr_span, infer_expr, infer_expr_with_expected};
 use crate::stmt::check_body;
 use crate::types::numeric_compatible;
 use crate::types::{
-    Primitive, Type, TypeIdentifier, named, package_from_str, resolve_type_expr_with_params,
+    Package, Primitive, Type, TypeIdentifier, named, package_from_str,
+    resolve_type_expr_with_params,
 };
 
 /// Classifies an `impl` target into the form used by body type-checking.
@@ -242,6 +243,7 @@ fn check_impl_block(
     };
 
     let tp_names: Vec<&str> = impl_type_params.iter().map(|tp| tp.name.as_str()).collect();
+    let known_packages: BTreeSet<Package> = ctx.package_types.keys().cloned().collect();
     let mut self_type = if !impl_type_params.is_empty() {
         resolve_type_expr_with_params(
             &impl_block.target,
@@ -249,6 +251,7 @@ fn check_impl_block(
             enum_names,
             &tp_names,
             &BTreeMap::new(),
+            &known_packages,
         )
     } else if ctx.is_struct(&target_name) || ctx.is_enum(&target_name) {
         named(&target_name)
@@ -315,12 +318,14 @@ fn check_specialized_impl_block(
         ctx.resolve_type(ty);
     }
 
+    let known_packages: BTreeSet<Package> = ctx.package_types.keys().cloned().collect();
     let mut self_type = resolve_type_expr_with_params(
         &impl_block.target,
         struct_names,
         enum_names,
         &[],
         &BTreeMap::new(),
+        &known_packages,
     );
     ctx.resolve_type(&mut self_type);
 
@@ -442,6 +447,7 @@ fn check_function_with_msg(
             );
         }
     } else {
+        let known_packages: BTreeSet<Package> = ctx.package_types.keys().cloned().collect();
         for param in &f.params {
             if let Param::Regular {
                 name, type_expr, ..
@@ -453,6 +459,7 @@ fn check_function_with_msg(
                     enum_names,
                     &[],
                     &BTreeMap::new(),
+                    &known_packages,
                 );
                 env.insert(
                     name.clone(),
@@ -469,7 +476,15 @@ fn check_function_with_msg(
         f.return_type
             .as_ref()
             .map(|te| {
-                resolve_type_expr_with_params(te, struct_names, enum_names, &[], &BTreeMap::new())
+                let known_packages: BTreeSet<Package> = ctx.package_types.keys().cloned().collect();
+                resolve_type_expr_with_params(
+                    te,
+                    struct_names,
+                    enum_names,
+                    &[],
+                    &BTreeMap::new(),
+                    &known_packages,
+                )
             })
             .unwrap_or(Type::Unit)
     });

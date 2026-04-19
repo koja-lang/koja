@@ -1,0 +1,10 @@
+fn main
+  h = http.Headers.new()
+    .set("Content-Type", "text/plain")
+    .set("Connection", "close")
+
+  match h.get("Content-Type")
+    Option.Some(v) -> print(v)
+    Option.None -> print("missing")
+  end
+end

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use expo_ast::ast::{
     EnumConstructionData, EnumVariantData, Expr, ExprKind, Function, ImplMember, Item, Literal,
@@ -33,22 +33,28 @@ fn resolve_type_key(ctx: &TypeContext, name: &str, package: &str) -> Option<Type
     None
 }
 
-/// Pre-collected struct and enum names across all modules in the program.
-/// Passed into [`collect`] so that type resolution sees every type name
-/// from the start, eliminating the need for re-resolution patches.
+/// Pre-collected struct and enum names across all modules in the program,
+/// plus the set of known package labels. Passed into [`collect`] so that type
+/// resolution sees every type name from the start and can validate qualified
+/// `pkg.Type` paths against the known package set on the first pass.
 pub struct GlobalNames {
-    pub struct_names: HashSet<String>,
     pub enum_names: HashSet<String>,
+    pub packages: BTreeSet<Package>,
+    pub struct_names: HashSet<String>,
 }
 
 /// Scans all modules for struct and enum names without resolving any types.
-/// This is the first phase of a two-phase collection: names are gathered
+/// `packages` is the set of package labels visible to the program (typically
+/// derived from the module graph: `Package::Std` for `std.*` modules and
+/// `Package::Named(...)` for everything else). Together they form the
+/// first phase of a two-phase collection: names and packages are gathered
 /// globally, then passed into [`collect`] so cross-module type references
 /// resolve correctly on the first pass.
-pub fn collect_all_names(modules: &[&Module]) -> GlobalNames {
+pub fn collect_all_names(modules: &[&Module], packages: BTreeSet<Package>) -> GlobalNames {
     let mut names = GlobalNames {
-        struct_names: HashSet::new(),
         enum_names: HashSet::new(),
+        packages,
+        struct_names: HashSet::new(),
     };
     for module in modules {
         for item in &module.items {
@@ -84,6 +90,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
         .map(|s| s.as_str())
         .collect();
     let enum_names: Vec<&str> = global_names.enum_names.iter().map(|s| s.as_str()).collect();
+    let known_packages = &global_names.packages;
 
     // Pre-pass: collect type aliases so they're available for resolving
     // function signatures and struct/enum fields in the main pass.
@@ -95,6 +102,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                 &enum_names,
                 &[],
                 &std::collections::BTreeMap::new(),
+                known_packages,
             );
             if let Some(existing) = ctx.type_aliases.get(&ta.name) {
                 if *existing != resolved {
@@ -134,6 +142,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                                             &enum_names,
                                             &tp_refs,
                                             &type_aliases,
+                                            known_packages,
                                         );
                                         (f.name.clone(), ty)
                                     })
@@ -150,6 +159,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                                             &enum_names,
                                             &tp_refs,
                                             &type_aliases,
+                                            known_packages,
                                         )
                                     })
                                     .collect();
@@ -181,8 +191,9 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                 );
                 let self_type = named(&e.name);
                 let resolve = ResolveCtx {
-                    struct_names: &struct_names,
                     enum_names: &enum_names,
+                    packages: known_packages,
+                    struct_names: &struct_names,
                     tp_refs: &tp_refs,
                     type_aliases: &type_aliases,
                 };
@@ -191,7 +202,8 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                 }
             }
             Item::Function(f) => {
-                if let Some(sig) = build_function_sig(f, &struct_names, &enum_names, &type_aliases)
+                if let Some(sig) =
+                    build_function_sig(f, &struct_names, &enum_names, &type_aliases, known_packages)
                 {
                     if !f.type_params.is_empty() {
                         ctx.generic_function_asts.insert(f.name.clone(), f.clone());
@@ -250,6 +262,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                                         &enum_names,
                                         &[],
                                         &type_aliases,
+                                        known_packages,
                                     )
                                 })
                                 .collect()
@@ -271,6 +284,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                         &enum_names,
                         &[],
                         &type_aliases,
+                        known_packages,
                     );
 
                     let mut method_sigs: BTreeMap<String, FunctionSig> = BTreeMap::new();
@@ -282,6 +296,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                                 &enum_names,
                                 &[],
                                 &type_aliases,
+                                known_packages,
                             );
                             let Some(sig) = sig else { continue };
                             let sig = substitute_self_type(sig, &self_type);
@@ -319,6 +334,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                     &enum_names,
                     &tp_refs,
                     &type_aliases,
+                    known_packages,
                 );
 
                 for member in &impl_block.members {
@@ -329,6 +345,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                             &enum_names,
                             &tp_refs,
                             &type_aliases,
+                            known_packages,
                         );
                         let Some(sig) = sig else { continue };
                         let sig = substitute_self_type(sig, &self_type);
@@ -434,6 +451,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                                 &enum_names,
                                 &tp_refs,
                                 &type_aliases,
+                                known_packages,
                             );
                             if let Some(sig) = sig {
                                 let sig = substitute_self_type(sig, &self_type);
@@ -464,6 +482,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                                         &enum_names,
                                         &tp_refs,
                                         &type_aliases,
+                                        known_packages,
                                     )
                                 })
                                 .collect()
@@ -492,6 +511,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                         &enum_names,
                         &[],
                         &ctx.type_aliases,
+                        known_packages,
                     )
                 } else {
                     match &c.value.kind {
@@ -574,6 +594,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                         &enum_names,
                         &tp_refs,
                         &type_aliases,
+                        known_packages,
                     ) {
                         methods.insert(m.name.clone(), sig);
                     }
@@ -606,6 +627,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                             &enum_names,
                             &tp_refs,
                             &type_aliases,
+                            known_packages,
                         );
                         (f.name.clone(), ty)
                     })
@@ -628,8 +650,9 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                 );
                 let self_type = named(&s.name);
                 let resolve = ResolveCtx {
-                    struct_names: &struct_names,
                     enum_names: &enum_names,
+                    packages: known_packages,
+                    struct_names: &struct_names,
                     tp_refs: &tp_refs,
                     type_aliases: &type_aliases,
                 };
@@ -779,6 +802,7 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, pack
     let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
     let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
     let type_aliases = ctx.type_aliases.clone();
+    let known_packages: BTreeSet<Package> = ctx.package_types.keys().cloned().collect();
     let tp_refs: Vec<&str> = Vec::new();
 
     for item in &module.items {
@@ -878,6 +902,7 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, pack
                         &enum_refs,
                         &tp_refs,
                         &type_aliases,
+                        &known_packages,
                     );
                     if let Some(sig) = sig {
                         let sig = substitute_self_type(sig, &self_type);
@@ -904,8 +929,9 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, pack
 
 /// Name-resolution context passed to helpers that build function signatures.
 struct ResolveCtx<'a> {
-    struct_names: &'a [&'a str],
     enum_names: &'a [&'a str],
+    packages: &'a BTreeSet<Package>,
+    struct_names: &'a [&'a str],
     tp_refs: &'a [&'a str],
     type_aliases: &'a BTreeMap<String, Type>,
 }
@@ -926,6 +952,7 @@ fn register_method_on_type(
         resolve.enum_names,
         resolve.tp_refs,
         resolve.type_aliases,
+        resolve.packages,
     ) else {
         return;
     };
@@ -954,8 +981,16 @@ fn build_function_sig(
     known_structs: &[&str],
     known_enums: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
+    known_packages: &BTreeSet<Package>,
 ) -> Option<FunctionSig> {
-    build_function_sig_with_params(f, known_structs, known_enums, &[], known_type_aliases)
+    build_function_sig_with_params(
+        f,
+        known_structs,
+        known_enums,
+        &[],
+        known_type_aliases,
+        known_packages,
+    )
 }
 
 /// Resolves a function AST node into a [`FunctionSig`], handling `self` receivers,
@@ -966,6 +1001,7 @@ fn build_function_sig_with_params(
     known_enums: &[&str],
     extra_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
+    known_packages: &BTreeSet<Package>,
 ) -> Option<FunctionSig> {
     let mut all_tp: Vec<&str> = f.type_params.iter().map(|s| s.name.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
@@ -991,6 +1027,7 @@ fn build_function_sig_with_params(
                     known_enums,
                     &all_tp,
                     known_type_aliases,
+                    known_packages,
                 ),
             }),
             Param::Self_ { .. } => None,
@@ -1007,6 +1044,7 @@ fn build_function_sig_with_params(
                 known_enums,
                 &all_tp,
                 known_type_aliases,
+                known_packages,
             )
         })
         .unwrap_or(Type::Unit);
@@ -1038,6 +1076,7 @@ fn build_protocol_method_sig(
     known_enums: &[&str],
     extra_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
+    known_packages: &BTreeSet<Package>,
 ) -> Option<FunctionSig> {
     let mut all_tp: Vec<&str> = m.type_params.iter().map(|s| s.name.as_str()).collect();
     all_tp.extend_from_slice(extra_type_params);
@@ -1063,6 +1102,7 @@ fn build_protocol_method_sig(
                     known_enums,
                     &all_tp,
                     known_type_aliases,
+                    known_packages,
                 ),
             }),
             Param::Self_ { .. } => None,
@@ -1079,6 +1119,7 @@ fn build_protocol_method_sig(
                 known_enums,
                 &all_tp,
                 known_type_aliases,
+                known_packages,
             )
         })
         .unwrap_or(Type::Unit);

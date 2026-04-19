@@ -6,7 +6,7 @@
 //! files are parsed and merged into a unified type context so that
 //! cross-file type references resolve correctly.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +15,7 @@ use tower_lsp_server::ls_types::*;
 
 use expo_ast::ast::{Diagnostic as ExpoDiagnostic, Module, Severity as ExpoSeverity};
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::package_for_path;
+use expo_typecheck::types::{Package, package_for_path, package_from_str};
 
 use crate::backend::{Backend, DocumentState};
 use crate::convert::{span_to_range, uri_to_path};
@@ -211,12 +211,17 @@ impl Backend {
                 all_for_names.push(m);
             }
             all_for_names.push(&parse_result.module);
-            let global_names = expo_typecheck::collect_all_names(&all_for_names);
 
             let current_pkg = project_root
                 .as_deref()
                 .and_then(read_project_name)
                 .unwrap_or_else(|| package_for_module(file_path.as_deref()));
+            let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Std]);
+            for (_, sibling_pkg) in &sibling_modules {
+                known_packages.insert(package_from_str(sibling_pkg));
+            }
+            known_packages.insert(package_from_str(&current_pkg));
+            let global_names = expo_typecheck::collect_all_names(&all_for_names, known_packages);
 
             let mut unified_ctx = self.stdlib_ctx.clone();
             for (m, sibling_pkg) in &sibling_modules {

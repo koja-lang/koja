@@ -417,13 +417,14 @@ impl TypeContext {
         struct_names: &[&str],
         enum_names: &[&str],
     ) -> Type {
+        let known_packages: BTreeSet<Package> = self.package_types.keys().cloned().collect();
         let mut ty = resolve_type_expr_full(
             te,
             struct_names,
             enum_names,
             &[],
             &self.type_aliases,
-            &self.package_types,
+            &known_packages,
             &self.module_aliases,
         );
         self.resolve_type(&mut ty);

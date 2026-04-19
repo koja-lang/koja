@@ -4,7 +4,7 @@
 //! variables into the type environment, and checks that match expressions
 //! cover all enum variants.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use expo_ast::ast::*;
 use expo_ast::span::Span;
@@ -13,7 +13,8 @@ use crate::check::check_literal_overflow;
 use crate::context::{TypeContext, VariantData};
 use crate::env::{VarInfo, VarState};
 use crate::types::{
-    Primitive, Type, TypeIdentifier, build_substitution, resolve_type_expr, substitute_preserving,
+    Package, Primitive, Type, TypeIdentifier, build_substitution, resolve_type_expr,
+    substitute_preserving,
 };
 
 fn pattern_is_catch_all(pat: &Pattern) -> bool {
@@ -121,7 +122,10 @@ pub(crate) fn check_match_exhaustiveness(
                     Pattern::EnumStruct { type_path, .. } => Some(type_path.join(".")),
                     Pattern::Constructor { name, .. } => Some(name.clone()),
                     Pattern::TypedBinding { type_expr, .. } => {
-                        let mut resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+                        let known_packages: BTreeSet<Package> =
+                            ctx.package_types.keys().cloned().collect();
+                        let mut resolved =
+                            resolve_type_expr(type_expr, &struct_refs, &enum_refs, &known_packages);
                         ctx.resolve_type(&mut resolved);
                         Some(resolved.display())
                     }
@@ -448,7 +452,9 @@ pub(crate) fn check_pattern(
             let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
             let enum_names = ctx.enum_names();
             let enum_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
-            let mut resolved = resolve_type_expr(type_expr, &struct_refs, &enum_refs);
+            let known_packages: BTreeSet<Package> = ctx.package_types.keys().cloned().collect();
+            let mut resolved =
+                resolve_type_expr(type_expr, &struct_refs, &enum_refs, &known_packages);
             ctx.resolve_type(&mut resolved);
 
             if let Type::Union(members) = subject_type {
@@ -532,6 +538,7 @@ fn check_binary_pattern(
     let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();
     let enum_name_keys = ctx.enum_names();
     let enum_refs: Vec<&str> = enum_name_keys.iter().map(|s| s.as_str()).collect();
+    let known_packages: BTreeSet<Package> = ctx.package_types.keys().cloned().collect();
 
     let mut total_fixed_bits: u64 = 0;
     let mut has_greedy = false;
@@ -547,8 +554,12 @@ fn check_binary_pattern(
         );
 
         let is_greedy_rest = seg.type_ann.is_some() && seg.size.is_none() && {
-            let mut ann_ty =
-                resolve_type_expr(seg.type_ann.as_ref().unwrap(), &struct_refs, &enum_refs);
+            let mut ann_ty = resolve_type_expr(
+                seg.type_ann.as_ref().unwrap(),
+                &struct_refs,
+                &enum_refs,
+                &known_packages,
+            );
             ctx.resolve_type(&mut ann_ty);
             matches!(
                 ann_ty,
@@ -571,8 +582,12 @@ fn check_binary_pattern(
             }
             has_greedy = true;
 
-            let mut ann_ty =
-                resolve_type_expr(seg.type_ann.as_ref().unwrap(), &struct_refs, &enum_refs);
+            let mut ann_ty = resolve_type_expr(
+                seg.type_ann.as_ref().unwrap(),
+                &struct_refs,
+                &enum_refs,
+                &known_packages,
+            );
             ctx.resolve_type(&mut ann_ty);
             if matches!(ann_ty, Type::Primitive(Primitive::Binary))
                 && !total_fixed_bits.is_multiple_of(8)
@@ -625,7 +640,7 @@ fn check_binary_pattern(
                 None
             }
         } else if let Some(type_ann) = &seg.type_ann {
-            let mut ann_ty = resolve_type_expr(type_ann, &struct_refs, &enum_refs);
+            let mut ann_ty = resolve_type_expr(type_ann, &struct_refs, &enum_refs, &known_packages);
             ctx.resolve_type(&mut ann_ty);
             match &ann_ty {
                 Type::Primitive(p) => {
@@ -664,7 +679,8 @@ fn check_binary_pattern(
         if is_binding {
             if let ExprKind::Ident { name, .. } = &seg.value.kind {
                 let binding_ty = if let Some(type_ann) = &seg.type_ann {
-                    let mut ty = resolve_type_expr(type_ann, &struct_refs, &enum_refs);
+                    let mut ty =
+                        resolve_type_expr(type_ann, &struct_refs, &enum_refs, &known_packages);
                     ctx.resolve_type(&mut ty);
                     ty
                 } else if seg.size.is_some() && seg.unit == BinaryUnit::Byte {

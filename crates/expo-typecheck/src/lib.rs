@@ -11,12 +11,14 @@ mod stmt;
 pub mod types;
 mod validate;
 
+use std::collections::BTreeSet;
+
 use context::TypeContext;
 use expo_ast::ast::Module;
 
 pub use aliases::resolve_module_aliases;
 pub use collect::{GlobalNames, collect_all_names};
-pub use types::{fqn_to_package, package_for_path, package_from_str};
+pub use types::{Package, fqn_to_package, package_for_path, package_from_str};
 
 /// Runs collection and type-checking in one step, returning a populated context.
 /// Uses module-local names only (for single-file / test usage). The module's
@@ -24,7 +26,8 @@ pub use types::{fqn_to_package, package_for_path, package_from_str};
 /// a deterministic scope.
 pub fn check(module: &mut Module) -> TypeContext {
     let package = types::package_for_path(module.path.as_deref(), "__test__");
-    let global = collect_all_names(&[module]);
+    let packages = BTreeSet::from([Package::Std, package_from_str(&package)]);
+    let global = collect_all_names(&[module], packages);
     let mut ctx = collect::collect(module, &global, &package);
     resolve::resolve_packages(&mut ctx);
     check::check_module(module, &mut ctx, &package);

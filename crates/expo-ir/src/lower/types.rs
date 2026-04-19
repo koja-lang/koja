@@ -6,6 +6,8 @@
 //! These were lifted off `Compiler` in Wave 6; their bodies are direct
 //! translations of the original inherent methods.
 
+use std::collections::BTreeSet;
+
 use expo_ast::ast::TypeExpr;
 use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_typecheck::context::TypeInfo;
@@ -95,13 +97,14 @@ pub fn resolve_type_expr(ctx: &LowerCtx<'_>, type_expr: &TypeExpr) -> Type {
     if ctx.fn_lower.self_type_name.is_some() && !type_params.contains(&"Self") {
         type_params.push("Self");
     }
+    let known_packages: BTreeSet<Package> = ctx.type_ctx.package_types.keys().cloned().collect();
     let mut ty = resolve_type_expr_full(
         type_expr,
         &struct_names,
         &enum_names,
         &type_params,
         &ctx.type_ctx.type_aliases,
-        &ctx.type_ctx.package_types,
+        &known_packages,
         &ctx.type_ctx.module_aliases,
     );
     match ctx.package {

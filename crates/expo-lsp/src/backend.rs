@@ -4,7 +4,7 @@
 //! [`LanguageServer`] trait implementation that dispatches to focused
 //! handler modules.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -14,7 +14,7 @@ use tower_lsp_server::{Client, LanguageServer};
 
 use expo_ast::ast::Module;
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::fqn_to_package;
+use expo_typecheck::types::{Package, fqn_to_package};
 
 /// Cached state for a single open document, including the parsed AST
 /// and type-checking context.
@@ -63,7 +63,13 @@ impl Backend {
         }
 
         let stdlib_refs: Vec<&Module> = stdlib_modules.iter().collect();
-        let global_names = expo_typecheck::collect_all_names(&stdlib_refs);
+        let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Std]);
+        for name in &source_names {
+            if !name.starts_with("std.") {
+                known_packages.insert(Package::Named(fqn_to_package(name).to_string()));
+            }
+        }
+        let global_names = expo_typecheck::collect_all_names(&stdlib_refs, known_packages);
 
         // Collect all stdlib modules. Auto-imported modules (std.*) use
         // package "std". Qualified modules (json, net, etc.) use their

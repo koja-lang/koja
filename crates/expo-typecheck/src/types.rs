@@ -45,14 +45,23 @@ pub fn fqn_to_package(fqn: &str) -> &str {
 }
 
 /// Converts an AST type expression into a resolved [`Type`], looking up user-defined
-/// struct and enum names from the provided slices. Pass an empty map for
-/// `known_type_aliases` when none are available.
+/// struct and enum names from the provided slices. `known_packages` is the
+/// set of package labels the resolver may use to validate qualified `pkg.Type`
+/// paths; pass an empty set when no cross-package context is available.
 pub fn resolve_type_expr(
     type_expr: &TypeExpr,
     known_structs: &[&str],
     known_enums: &[&str],
+    known_packages: &BTreeSet<Package>,
 ) -> Type {
-    resolve_type_expr_with_params(type_expr, known_structs, known_enums, &[], &BTreeMap::new())
+    resolve_type_expr_with_params(
+        type_expr,
+        known_structs,
+        known_enums,
+        &[],
+        &BTreeMap::new(),
+        known_packages,
+    )
 }
 
 /// Checks both global type aliases and file-private module aliases for a name.
@@ -93,15 +102,14 @@ pub fn resolve_type_alias_id(
     })
 }
 
-/// Checks if a two-segment qualified type path like `json.Decoder` is valid.
-fn is_package_type(
-    package: &Package,
-    type_name: &str,
-    package_types: &BTreeMap<Package, BTreeSet<String>>,
-) -> bool {
-    package_types
-        .get(package)
-        .is_some_and(|types| types.contains(type_name))
+/// Builds the `Package` value for a 2-segment path's leading segment.
+/// `"std"` maps to [`Package::Std`]; everything else is a [`Package::Named`].
+fn path_package(label: &str) -> Package {
+    if label == "std" {
+        Package::Std
+    } else {
+        Package::Named(label.to_string())
+    }
 }
 
 /// Like [`resolve_type_expr`] but also resolves type parameter names (e.g. `T`, `A`)
@@ -113,6 +121,7 @@ pub fn resolve_type_expr_with_params(
     known_enums: &[&str],
     known_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
+    known_packages: &BTreeSet<Package>,
 ) -> Type {
     resolve_type_expr_full(
         type_expr,
@@ -120,20 +129,21 @@ pub fn resolve_type_expr_with_params(
         known_enums,
         known_type_params,
         known_type_aliases,
-        &BTreeMap::new(),
+        known_packages,
         &BTreeMap::new(),
     )
 }
 
-/// Resolves a type expression with full context including package-qualified types
-/// and file-private module aliases.
+/// Resolves a type expression with full context including the set of known
+/// package labels (used to validate qualified `pkg.Type` paths) and
+/// file-private module aliases.
 pub fn resolve_type_expr_full(
     type_expr: &TypeExpr,
     known_structs: &[&str],
     known_enums: &[&str],
     known_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
-    package_types: &BTreeMap<Package, BTreeSet<String>>,
+    known_packages: &BTreeSet<Package>,
     module_aliases: &BTreeMap<String, Type>,
 ) -> Type {
     match type_expr {
@@ -145,7 +155,7 @@ pub fn resolve_type_expr_full(
                     known_enums,
                     known_type_params,
                     known_type_aliases,
-                    package_types,
+                    known_packages,
                     module_aliases,
                 );
                 return Type::Pointer(Box::new(inner));
@@ -157,10 +167,8 @@ pub fn resolve_type_expr_full(
                 } else {
                     None
                 }
-            } else if path.len() == 2
-                && is_package_type(&Package::Named(path[0].clone()), &path[1], package_types)
-            {
-                Some(TypeIdentifier::new(&path[0], &path[1]))
+            } else if path.len() == 2 && known_packages.contains(&path_package(&path[0])) {
+                Some(qualified_identifier(&path[0], &path[1]))
             } else {
                 None
             };
@@ -174,7 +182,7 @@ pub fn resolve_type_expr_full(
                             known_enums,
                             known_type_params,
                             known_type_aliases,
-                            package_types,
+                            known_packages,
                             module_aliases,
                         )
                     })
@@ -221,11 +229,9 @@ pub fn resolve_type_expr_full(
                         }
                     }
                 }
-            } else if path.len() == 2
-                && is_package_type(&Package::Named(path[0].clone()), &path[1], package_types)
-            {
+            } else if path.len() == 2 && known_packages.contains(&path_package(&path[0])) {
                 Type::Named {
-                    identifier: TypeIdentifier::new(&path[0], &path[1]),
+                    identifier: qualified_identifier(&path[0], &path[1]),
                     type_args: vec![],
                 }
             } else {
@@ -256,7 +262,7 @@ pub fn resolve_type_expr_full(
                         known_enums,
                         known_type_params,
                         known_type_aliases,
-                        package_types,
+                        known_packages,
                         module_aliases,
                     );
                     FnParam { ty, mode: *mode }
@@ -268,7 +274,7 @@ pub fn resolve_type_expr_full(
                 known_enums,
                 known_type_params,
                 known_type_aliases,
-                package_types,
+                known_packages,
                 module_aliases,
             );
             Type::Function {
@@ -286,13 +292,25 @@ pub fn resolve_type_expr_full(
                         known_enums,
                         known_type_params,
                         known_type_aliases,
-                        package_types,
+                        known_packages,
                         module_aliases,
                     )
                 })
                 .collect();
             Type::union(resolved)
         }
+    }
+}
+
+/// Builds a [`TypeIdentifier`] from a 2-segment qualified path, mapping the
+/// `"std"` package label to [`Package::Std`] and everything else to
+/// [`Package::Named`]. The caller has already verified that `package_label`
+/// names a known package via [`path_package`] + `known_packages.contains(...)`.
+fn qualified_identifier(package_label: &str, type_name: &str) -> TypeIdentifier {
+    if package_label == "std" {
+        TypeIdentifier::std(type_name)
+    } else {
+        TypeIdentifier::new(package_label, type_name)
     }
 }
 

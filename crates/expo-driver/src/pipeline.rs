@@ -11,11 +11,33 @@ use std::{env, fs, mem, process};
 use expo_ast::ast::{Annotation, AnnotationValue, ImplMember, Item, Module, Severity};
 
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::fqn_to_package;
+use expo_typecheck::types::{Package, fqn_to_package};
 
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
 use crate::resolve::{self, ModuleGraph};
+
+/// Builds the set of [`Package`]s visible to the resolver from a module
+/// graph's FQNs. `std.*` modules collapse to a single [`Package::Std`];
+/// every other module's leading segment becomes a [`Package::Named`] so the
+/// type resolver can validate qualified `pkg.Type` paths during signature
+/// collection without waiting for the full type tables to be merged.
+fn packages_from_module_names<I, S>(names: I) -> BTreeSet<Package>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut packages = BTreeSet::new();
+    for name in names {
+        let pkg = fqn_to_package(name.as_ref());
+        if pkg == "std" {
+            packages.insert(Package::Std);
+        } else {
+            packages.insert(Package::Named(pkg.to_string()));
+        }
+    }
+    packages
+}
 
 /// Runs the type-checking pipeline for every module in a graph.
 ///
@@ -56,7 +78,8 @@ pub fn typecheck_graph(
         .iter()
         .map(|n| &graph.modules[n].module)
         .collect();
-    let global_names = expo_typecheck::collect_all_names(&all_modules);
+    let known_packages = packages_from_module_names(&graph.order);
+    let global_names = expo_typecheck::collect_all_names(&all_modules, known_packages);
 
     let mut stdlib_ctx = expo_typecheck::context::TypeContext::new();
 

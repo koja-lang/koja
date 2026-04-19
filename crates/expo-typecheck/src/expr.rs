@@ -1329,6 +1329,34 @@ pub(crate) fn resolve_receiver_base_name(
     }
 }
 
+/// Resolves the parser-level ambiguity between `Enum.Variant.method()` (a
+/// method call on a unit variant value) and `pkg.Type.method()` (a static
+/// method call on a qualified type). The parser emits both as a method call
+/// on a unit `EnumConstruction { type_path: [X], variant: Y }`; here we
+/// detect the qualified-type case by checking whether `X.Y` names a real
+/// type and, when it does, rewrite the receiver to a single `Ident("X.Y")`
+/// so the existing static-call path picks it up.
+fn rewrite_qualified_static_receiver(receiver: &mut Expr, ctx: &TypeContext) {
+    let ExprKind::EnumConstruction {
+        type_path,
+        variant,
+        data: EnumConstructionData::Unit,
+    } = &receiver.kind
+    else {
+        return;
+    };
+    if type_path.len() != 1 {
+        return;
+    }
+    let qualified = TypeIdentifier::new(&type_path[0], variant);
+    if !ctx.types.contains_key(&qualified) {
+        return;
+    }
+    receiver.kind = ExprKind::Ident {
+        name: format!("{}.{}", type_path[0], variant),
+    };
+}
+
 /// Type-checks a method call, resolving type functions.
 fn infer_method_call(
     receiver: &mut Expr,
@@ -1338,6 +1366,7 @@ fn infer_method_call(
     ctx: &mut TypeContext,
     ce: &mut CheckEnv,
 ) -> Type {
+    rewrite_qualified_static_receiver(receiver, ctx);
     if let ExprKind::Ident {
         name: type_name, ..
     } = &receiver.kind
