@@ -6,7 +6,10 @@ use std::mem;
 use std::path::{Path, PathBuf};
 
 use expo_ir::identity::VariantId;
+use expo_ir::lower::LowerCtx;
 use expo_ir::lower::fields::lower_struct_field;
+use expo_ir::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
+use expo_ir::lower::types::{resolve_name_current, resolve_type_expr, type_name_from_expr};
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstEnum, ResolvedConstStruct};
 use expo_ir::resolved::fields::ResolvedFieldStep;
 use expo_ir::{FnLowerState, TypeLayouts};
@@ -28,14 +31,13 @@ pub enum EmitResult {
 
 use expo_ast::ast::{
     AnnotationValue, Diagnostic, EnumConstructionData, ExprKind, FieldInit, Function, ImplMember,
-    Item, Literal, Module, Param, Severity, StringPart, TypeExpr,
+    Item, Literal, Module, Param, Severity, StringPart,
 };
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
-use expo_typecheck::context::{ClosureInfo, TypeContext, TypeInfo};
+use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{
-    Package, Type, build_substitution, package_from_str, process_envelope_type,
-    resolve_type_expr_full, substitute, substitute_preserving,
+    Package, Type, build_substitution, package_from_str, process_envelope_type, substitute,
 };
 use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -333,33 +335,21 @@ impl<'ctx> Compiler<'ctx> {
         r
     }
 
-    /// Builds the symbol prefix used for an impl method (before the trailing
-    /// `_{method}` suffix). Stdlib types keep their bare type name to preserve
-    /// existing intrinsic symbols (e.g. `Int_hash`). User packages are
-    /// qualified (e.g. `alpha.Config_new`) so two packages with the same type
-    /// name never collide on a single LLVM symbol.
-    pub fn method_symbol_prefix(&self, pkg: &Package, type_name: &str) -> String {
-        match pkg {
-            Package::Named(name) => format!("{name}.{type_name}"),
-            Package::Std | Package::Unresolved => type_name.to_string(),
+    /// Constructs a read-only [`LowerCtx`] borrow bundle for the LLVM-free
+    /// lowering helpers in [`expo_ir::lower`]. Call this at the start of any
+    /// site that needs `resolve_type_expr`, `monomorphize_type`,
+    /// `resolve_name_current`, etc., and pass `&ctx` (or batch one bundle
+    /// across several lowering calls). This method is the only gateway from
+    /// the LLVM-bound `Compiler` into the LLVM-free lowering surface --
+    /// `Compiler` itself no longer exposes inherent semantic-decision
+    /// methods.
+    pub fn lower_ctx(&self) -> LowerCtx<'_> {
+        LowerCtx {
+            closure_site_path: self.closure_site_path.as_deref(),
+            fn_lower: &self.fn_lower,
+            package: self.current_package.as_ref(),
+            type_ctx: self.type_ctx,
         }
-    }
-
-    /// Convenience wrapper: like [`Self::method_symbol_prefix`] but reads the
-    /// current module's package from [`Self::current_package`]. Use at
-    /// definition sites where the owning package is the one we're currently
-    /// compiling. Defaults to bare `type_name` when no package is set.
-    pub fn current_method_symbol_prefix(&self, type_name: &str) -> String {
-        match &self.current_package {
-            Some(pkg) => self.method_symbol_prefix(pkg, type_name),
-            None => type_name.to_string(),
-        }
-    }
-
-    pub fn closure_info_at(&self, span: Span) -> Option<&ClosureInfo> {
-        self.type_ctx
-            .closure_info
-            .get(&(self.closure_site_path.clone(), span))
     }
 
     /// Applies `uwtable` and `frame-pointer=all` to every defined function
@@ -573,123 +563,6 @@ impl<'ctx> Compiler<'ctx> {
         lower_struct_field(&self.layouts, self.type_ctx, ty, field_name)
     }
 
-    /// Resolves a type expression AST node into an Expo type, using the
-    /// currently registered struct and enum names for lookup. When inside an
-    /// `impl` block (`fn_state.self_type_name` is set), `Self` is automatically
-    /// substituted with the concrete target type.
-    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Type {
-        let struct_names: Vec<&str> = self
-            .type_ctx
-            .types
-            .values()
-            .filter(|ti| ti.is_struct())
-            .map(|ti| ti.identifier.name.as_str())
-            .collect();
-        let enum_names: Vec<&str> = self
-            .type_ctx
-            .types
-            .values()
-            .filter(|ti| ti.is_enum())
-            .map(|ti| ti.identifier.name.as_str())
-            .collect();
-        let mut type_params: Vec<&str> = self
-            .fn_lower
-            .type_subst
-            .keys()
-            .map(|s| s.as_str())
-            .collect();
-        if self.fn_lower.self_type_name.is_some() && !type_params.contains(&"Self") {
-            type_params.push("Self");
-        }
-        let mut ty = resolve_type_expr_full(
-            type_expr,
-            &struct_names,
-            &enum_names,
-            &type_params,
-            &self.type_ctx.type_aliases,
-            &self.type_ctx.package_types,
-            &self.type_ctx.module_aliases,
-        );
-        match &self.current_package {
-            Some(pkg) => expo_typecheck::resolve::resolve_type_inline_scoped(
-                &mut ty,
-                &self.type_ctx.name_index,
-                pkg,
-            ),
-            None => self.type_ctx.resolve_type(&mut ty),
-        }
-        if let Some(ref name) = self.fn_lower.self_type_name {
-            let Some(id) = self.resolve_name_current(name) else {
-                return substitute_preserving(&ty, &self.fn_lower.type_subst);
-            };
-            let self_ty = Type::Named {
-                identifier: id.clone(),
-                type_args: vec![],
-            };
-            let mut subst = self.fn_lower.type_subst.clone();
-            subst.insert("Self".to_string(), self_ty);
-            substitute_preserving(&ty, &subst)
-        } else {
-            substitute_preserving(&ty, &self.fn_lower.type_subst)
-        }
-    }
-
-    /// Applies the surrounding function's type-parameter substitution -- and,
-    /// when inside an `impl` block, the `Self -> <self type>` binding -- to an
-    /// already-resolved [`Type`]. Use this on typecheck-supplied
-    /// `Expr::resolved_type` values that need to be interpreted in the current
-    /// monomorphization context (e.g. lowering match subjects whose type is
-    /// `Step<Self>` to the concrete `Step<MyProcess>`).
-    pub fn monomorphize_type(&self, ty: &Type) -> Type {
-        if let Some(ref name) = self.fn_lower.self_type_name
-            && let Some(id) = self.resolve_name_current(name)
-        {
-            let self_ty = Type::Named {
-                identifier: id.clone(),
-                type_args: vec![],
-            };
-            let mut subst = self.fn_lower.type_subst.clone();
-            subst.insert("Self".to_string(), self_ty);
-            substitute_preserving(ty, &subst)
-        } else {
-            substitute_preserving(ty, &self.fn_lower.type_subst)
-        }
-    }
-
-    /// Package-aware replacement for `type_ctx.resolve_name` that honours the
-    /// `Compiler::current_package` when set. Bare lookups resolve only within
-    /// the current package or to `std`; dependency types must be qualified or
-    /// imported via `alias` upstream.
-    pub fn resolve_name_current(&self, name: &str) -> Option<&TypeIdentifier> {
-        match &self.current_package {
-            Some(pkg) => self.type_ctx.resolve_name_scoped(name, pkg),
-            None => self.type_ctx.resolve_name(name),
-        }
-    }
-
-    /// Package-aware replacement for `type_ctx.find_type`. Use this anywhere
-    /// codegen looks up a type by bare name so user-defined types in the
-    /// current project's package are found alongside stdlib bare-entry types.
-    /// Plain `type_ctx.find_type` only consults the global bare index, which
-    /// silently skips user types registered under their package-qualified key.
-    pub fn find_type_current(&self, name: &str) -> Option<&TypeInfo> {
-        self.resolve_name_current(name)
-            .and_then(|id| self.type_ctx.get_type(id))
-    }
-
-    /// Returns a fully-resolved [`TypeIdentifier`] for `name`, preferring the
-    /// typecheck-supplied `resolved` identifier when it carries a real
-    /// package, and falling back to the package-aware bare-name resolver. This
-    /// collapses the recurring `resolved_type.filter(...).cloned().or_else(||
-    /// resolve_name_current(...).cloned())` pattern at enum/struct
-    /// construction sites.
-    pub fn id_for(&self, name: &str, resolved: Option<&TypeIdentifier>) -> Option<TypeIdentifier> {
-        resolved
-            .filter(|id| id.package != Package::Unresolved)
-            .cloned()
-            .or_else(|| self.resolve_name_current(name).cloned())
-    }
-
     /// Declares a function at the LLVM level. `mangling_prefix` is the
     /// (possibly package-qualified) prefix prepended before `_{fn_name}`
     /// for the LLVM symbol name; top-level functions pass `None`. The
@@ -706,7 +579,7 @@ impl<'ctx> Compiler<'ctx> {
         let return_type = func
             .return_type
             .as_ref()
-            .map(|t| self.resolve_type_expr(t))
+            .map(|t| resolve_type_expr(&self.lower_ctx(), t))
             .unwrap_or(Type::Unit);
         let mut param_types = Vec::new();
 
@@ -774,7 +647,9 @@ impl<'ctx> Compiler<'ctx> {
                         .const_int(if b { 1 } else { 0 }, false)
                         .into(),
                     Some(ResolvedConst::EnumVariant { enum_name, variant }) => {
-                        let Some(enum_id) = self.resolve_name_current(&enum_name).cloned() else {
+                        let Some(enum_id) =
+                            resolve_name_current(&self.lower_ctx(), &enum_name).cloned()
+                        else {
                             continue;
                         };
                         let Some(info) =
@@ -807,7 +682,8 @@ impl<'ctx> Compiler<'ctx> {
                         fields,
                         struct_name,
                     }) => {
-                        let Some(struct_id) = self.resolve_name_current(&struct_name).cloned()
+                        let Some(struct_id) =
+                            resolve_name_current(&self.lower_ctx(), &struct_name).cloned()
                         else {
                             continue;
                         };
@@ -893,12 +769,12 @@ impl<'ctx> Compiler<'ctx> {
         for func in functions {
             for param in &func.params {
                 if let Param::Regular { type_expr, .. } = param {
-                    let ty = self.resolve_type_expr(type_expr);
+                    let ty = resolve_type_expr(&self.lower_ctx(), type_expr);
                     let _ = ensure_types_exist(self, &ty);
                 }
             }
             if let Some(ret_te) = &func.return_type {
-                let ret_ty = self.resolve_type_expr(ret_te);
+                let ret_ty = resolve_type_expr(&self.lower_ctx(), ret_te);
                 let _ = ensure_types_exist(self, &ret_ty);
             }
         }
@@ -906,7 +782,7 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Declares a set of methods belonging to `type_name`. Mangles as
     /// `{prefix}_{fn_name}` where `prefix` comes from
-    /// [`Self::current_method_symbol_prefix`] — stdlib methods stay
+    /// [`expo_ir::lower::naming::current_method_symbol_prefix`] — stdlib methods stay
     /// unqualified (e.g. `Int_hash`), user-package methods are qualified
     /// (e.g. `alpha.Config_new`). Shared by inline functions and impl blocks.
     fn declare_type_methods(
@@ -914,16 +790,16 @@ impl<'ctx> Compiler<'ctx> {
         type_name: &str,
         functions: &[Function],
     ) -> Result<(), String> {
-        let prefix = self.current_method_symbol_prefix(type_name);
+        let prefix = current_method_symbol_prefix(&self.lower_ctx(), type_name);
         self.fn_lower.self_type_name = Some(type_name.to_string());
         for func in functions {
             if let Some(rt) = &func.return_type {
-                let return_type = self.resolve_type_expr(rt);
+                let return_type = resolve_type_expr(&self.lower_ctx(), rt);
                 ensure_types_exist(self, &return_type)?;
             }
             for param in &func.params {
                 if let Param::Regular { type_expr, .. } = param {
-                    let pt = self.resolve_type_expr(type_expr);
+                    let pt = resolve_type_expr(&self.lower_ctx(), type_expr);
                     ensure_types_exist(self, &pt)?;
                 }
             }
@@ -945,7 +821,7 @@ impl<'ctx> Compiler<'ctx> {
         type_name: &str,
         functions: &[Function],
     ) -> Result<(), String> {
-        let prefix = self.current_method_symbol_prefix(type_name);
+        let prefix = current_method_symbol_prefix(&self.lower_ctx(), type_name);
         for func in functions {
             self.define_function(func, Some(&prefix), Some(type_name))?;
         }
@@ -970,12 +846,12 @@ impl<'ctx> Compiler<'ctx> {
                     for func in &fns {
                         for param in &func.params {
                             if let Param::Regular { type_expr, .. } = param {
-                                let ty = self.resolve_type_expr(type_expr);
+                                let ty = resolve_type_expr(&self.lower_ctx(), type_expr);
                                 let _ = ensure_types_exist(self, &ty);
                             }
                         }
                         if let Some(ret_te) = &func.return_type {
-                            let ret_ty = self.resolve_type_expr(ret_te);
+                            let ret_ty = resolve_type_expr(&self.lower_ctx(), ret_te);
                             let _ = ensure_types_exist(self, &ret_ty);
                         }
                     }
@@ -1008,7 +884,7 @@ impl<'ctx> Compiler<'ctx> {
                     self.declare_type_methods(&e.name, &e.functions)?;
                 }
                 Item::Impl(impl_block) => {
-                    let target_name = self.type_name_from_expr(&impl_block.target);
+                    let target_name = type_name_from_expr(&impl_block.target);
                     if let Some(target_name) = target_name {
                         let impl_fns: Vec<Function> = impl_block
                             .members
@@ -1160,7 +1036,7 @@ impl<'ctx> Compiler<'ctx> {
             .iter()
             .filter_map(|p| {
                 if let Param::Regular { type_expr, .. } = p {
-                    Some(self.resolve_type_expr(type_expr))
+                    Some(resolve_type_expr(&self.lower_ctx(), type_expr))
                 } else {
                     None
                 }
@@ -1170,7 +1046,7 @@ impl<'ctx> Compiler<'ctx> {
         let return_type = func
             .return_type
             .as_ref()
-            .map(|t| self.resolve_type_expr(t))
+            .map(|t| resolve_type_expr(&self.lower_ctx(), t))
             .unwrap_or(Type::Unit);
 
         let self_type = type_bare_name.map(|n| (n, n));
@@ -1217,7 +1093,7 @@ impl<'ctx> Compiler<'ctx> {
                     self.define_type_methods(&e.name, &e.functions)?;
                 }
                 Item::Impl(impl_block) => {
-                    let target_name = self.type_name_from_expr(&impl_block.target);
+                    let target_name = type_name_from_expr(&impl_block.target);
                     if let Some(target_name) = target_name {
                         let impl_fns: Vec<Function> = impl_block
                             .members
@@ -1251,22 +1127,13 @@ impl<'ctx> Compiler<'ctx> {
         let mut types = Vec::new();
         for param in params {
             if let Param::Regular { type_expr, .. } = param {
-                let ty = self.resolve_type_expr(type_expr);
+                let ty = resolve_type_expr(&self.lower_ctx(), type_expr);
                 if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context, &self.llvm_types) {
                     types.push(llvm_ty);
                 }
             }
         }
         Ok(types)
-    }
-
-    fn type_name_from_expr(&self, te: &TypeExpr) -> Option<String> {
-        if let TypeExpr::Named { path, .. } = te
-            && path.len() == 1
-        {
-            return Some(path[0].clone());
-        }
-        None
     }
 
     /// Emits a panic sequence: formats a message into a temporary buffer
@@ -1316,8 +1183,7 @@ impl<'ctx> Compiler<'ctx> {
     /// (with exit-code tracking), then emits a C `main` that serialises
     /// config, spawns the entry process, and waits for completion.
     fn emit_process_entry(&mut self, type_name: &str) -> Result<(), String> {
-        let entry_id = self
-            .resolve_name_current(type_name)
+        let entry_id = resolve_name_current(&self.lower_ctx(), type_name)
             .cloned()
             .ok_or_else(|| format!("entry type `{type_name}` not found"))?;
 
@@ -1353,7 +1219,7 @@ impl<'ctx> Compiler<'ctx> {
                 )
             })?;
 
-        let method_prefix = self.method_symbol_prefix(&entry_id.package, &entry_id.name);
+        let method_prefix = method_symbol_prefix(&entry_id.package, &entry_id.name);
 
         let start_fn_name = format!("{method_prefix}_start");
         let start_fn = self
@@ -1727,7 +1593,7 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
     c: &Compiler<'ctx>,
     target: &str,
 ) -> Option<Type> {
-    if let Some(id) = c.resolve_name_current(target)
+    if let Some(id) = resolve_name_current(&c.lower_ctx(), target)
         && let Some(impls) = c.type_ctx.protocol_impls.get(id)
         && let Some((_, args)) = impls.iter().find(|(proto, _)| proto == "Process")
     {
@@ -1736,7 +1602,7 @@ pub(crate) fn resolve_process_envelope_type<'ctx>(
         return Some(process_envelope_type(m, r));
     }
     if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(target, c) {
-        let base_id = c.resolve_name_current(&base)?;
+        let base_id = resolve_name_current(&c.lower_ctx(), &base)?;
         let impls = c.type_ctx.protocol_impls.get(base_id)?;
         let (_, proto_args) = impls.iter().find(|(proto, _)| proto == "Process")?;
         let ti = c.type_ctx.get_type(base_id)?;

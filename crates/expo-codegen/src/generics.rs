@@ -19,6 +19,7 @@ use crate::compiler::{Compiler, EmitResult, resolve_process_envelope_type};
 use crate::drop::{Ownership, drop_live_variables};
 use crate::expr::compile_expr;
 use crate::hashtable::monomorphize_hashtable_struct;
+use expo_ir::lower::types::{find_type_current, resolve_name_current};
 use expo_ir::resolved::methods::ResolvedMethodSignature;
 
 use crate::intrinsics::cptr::emit_cptr_method;
@@ -147,7 +148,7 @@ pub(crate) fn compile_method_body<'ctx>(
             Type::Primitive(p)
         } else if mangled != base {
             named(mangled)
-        } else if let Some(id) = c.resolve_name_current(base) {
+        } else if let Some(id) = resolve_name_current(&c.lower_ctx(), base) {
             Type::Named {
                 identifier: id.clone(),
                 type_args: vec![],
@@ -490,8 +491,7 @@ fn resolve_method_signature(
     type_args: &[Type],
     method_type_args: &[Type],
 ) -> Result<Option<ResolvedMethodSignature>, String> {
-    let base_id = compiler
-        .resolve_name_current(base_type)
+    let base_id = resolve_name_current(&compiler.lower_ctx(), base_type)
         .cloned()
         .ok_or_else(|| format!("cannot resolve package for generic method base `{base_type}`"))?;
     let mangled_type = mangle_name(&base_id, type_args);
@@ -505,7 +505,7 @@ fn resolve_method_signature(
         return Ok(None);
     }
 
-    let spec_id = compiler.resolve_name_current(base_type).cloned();
+    let spec_id = resolve_name_current(&compiler.lower_ctx(), base_type).cloned();
     let specialized_match = spec_id.as_ref().and_then(|id| {
         compiler
             .type_ctx
@@ -618,8 +618,7 @@ fn resolve_method_signature(
                 subst.insert(tp.name.clone(), ta.clone());
             }
 
-            let info = compiler
-                .find_type_current(base_type)
+            let info = find_type_current(&compiler.lower_ctx(), base_type)
                 .map(|ti| (&ti.functions, &ti.type_params));
 
             let (return_type, param_types, is_static) = if let Some((methods, _)) = info {
@@ -684,8 +683,7 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
     type_args: &[Type],
     method_type_args: &[Type],
 ) -> Result<(), String> {
-    let base_id = c
-        .resolve_name_current(base_type)
+    let base_id = resolve_name_current(&c.lower_ctx(), base_type)
         .cloned()
         .ok_or_else(|| format!("cannot resolve package for generic method base `{base_type}`"))?;
     let mangled_type = mangle_name(&base_id, type_args);
@@ -817,7 +815,7 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
                 if c.llvm_types.get_concrete(identifier).is_none()
                     && !c.llvm_types.contains_monomorphized(name)
                     && let Some((base, args)) = parse_mangled_name(name, c)
-                    && let Some(base_id) = c.resolve_name_current(&base).cloned()
+                    && let Some(base_id) = resolve_name_current(&c.lower_ctx(), &base).cloned()
                 {
                     if c.type_ctx.is_enum(&base) {
                         monomorphize_enum(c, &base_id, &args)?;
@@ -983,7 +981,7 @@ fn parse_mangled_type(s: &str, c: &Compiler) -> Type {
         return Type::Primitive(p);
     }
     if let Some((base, args)) = parse_mangled_name(s, c) {
-        return if let Some(id) = c.resolve_name_current(&base) {
+        return if let Some(id) = resolve_name_current(&c.lower_ctx(), &base) {
             Type::Named {
                 identifier: id.clone(),
                 type_args: args,
@@ -992,7 +990,7 @@ fn parse_mangled_type(s: &str, c: &Compiler) -> Type {
             named_generic(&base, args, c.type_ctx, c.current_package.as_ref())
         };
     }
-    if let Some(id) = c.resolve_name_current(s) {
+    if let Some(id) = resolve_name_current(&c.lower_ctx(), s) {
         return Type::Named {
             identifier: id.clone(),
             type_args: vec![],

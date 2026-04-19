@@ -33,6 +33,7 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{EnumConstructionData, Expr, FieldInit, TypeParam};
 use expo_ir::identity::VariantId;
+use expo_ir::lower::types::{id_for, resolve_name_current};
 use expo_ir::resolved::construction::ResolvedEnumConstruction;
 use expo_ir::resolved::enums::{ResolvedEnumEq, ResolvedVariantEq, ResolvedVariantFields};
 use expo_typecheck::context::VariantData;
@@ -67,8 +68,7 @@ pub fn compile_enum_construction<'ctx>(
         .first()
         .ok_or("empty type path in enum construction")?;
 
-    let is_generic = compiler
-        .id_for(base_name, resolved_type)
+    let is_generic = id_for(&compiler.lower_ctx(), base_name, resolved_type)
         .as_ref()
         .and_then(|id| compiler.type_ctx.get_type(id))
         .is_some_and(|ti| ti.is_enum() && !ti.type_params.is_empty());
@@ -136,7 +136,7 @@ fn lower_enum_construction(
     resolved_type: Option<&TypeIdentifier>,
     compiled_arg_types: &[Type],
 ) -> Result<ResolvedEnumConstruction, String> {
-    let resolved_id = compiler.id_for(enum_name, resolved_type);
+    let resolved_id = id_for(&compiler.lower_ctx(), enum_name, resolved_type);
     let info = resolved_id
         .as_ref()
         .and_then(|id| compiler.type_ctx.get_type(id))
@@ -437,7 +437,7 @@ fn lookup_enum_llvm_type<'ctx>(
     if let Some(t) = compiler.llvm_types.get_monomorphized(mangled_name) {
         return Ok(t);
     }
-    if let Some(id) = compiler.resolve_name_current(mangled_name)
+    if let Some(id) = resolve_name_current(&compiler.lower_ctx(), mangled_name)
         && let Some(t) = compiler.llvm_types.get_concrete(id)
     {
         return Ok(t);

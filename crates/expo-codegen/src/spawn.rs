@@ -13,6 +13,7 @@
 use expo_ast::ast::{Arg, Expr, ExprKind};
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::types::named_generic_std;
+use expo_ir::lower::types::resolve_name_current;
 use expo_typecheck::types::{Primitive, Type, build_substitution, mangle_name, substitute};
 use inkwell::IntPredicate;
 use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
@@ -105,8 +106,7 @@ pub(crate) fn resolve_process_msg_reply(
     mangled_state: &str,
 ) -> Result<(Type, Type), String> {
     if let Some((base, type_args)) = try_parse_mangled_name(mangled_state, c) {
-        let base_id = c
-            .resolve_name_current(&base)
+        let base_id = resolve_name_current(&c.lower_ctx(), &base)
             .ok_or_else(|| format!("no type `{base}` for Process impl"))?
             .clone();
         let impls = c
@@ -128,8 +128,7 @@ pub(crate) fn resolve_process_msg_reply(
         let r = substitute(proto_args.get(2).unwrap_or(&default), &subst);
         Ok((m, r))
     } else {
-        let type_id = c
-            .resolve_name_current(type_name)
+        let type_id = resolve_name_current(&c.lower_ctx(), type_name)
             .ok_or_else(|| format!("`{type_name}` does not implement Process"))?;
         let process_args = c
             .type_ctx

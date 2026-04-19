@@ -666,6 +666,25 @@ all per-type and per-function semantic state for lowering now lives in
 (`PointerValue`/`BasicBlock`) or fused with emission state; teasing them
 apart waits for a later wave.
 
+_Wave 6 followup._ With per-type and per-function semantic _state_ now
+in `expo-ir`, Wave 6 lifts the semantic _functions_ that consume it.
+Nine LLVM-free helpers move off `Compiler` entirely (no shims) into
+`expo_ir::lower::{types, naming, closures}`: type/name resolution
+(`resolve_type_expr`, `monomorphize_type`, `resolve_name_current`,
+`find_type_current`, `id_for`, `type_name_from_expr`), symbol naming
+(`method_symbol_prefix`, `current_method_symbol_prefix`), and closure
+metadata lookup (`closure_info_at`). Each takes a small `LowerCtx<'a>`
+borrow bundle (`type_ctx`, current `package`, `fn_lower`,
+`closure_site_path`) constructed via the new `Compiler::lower_ctx()`
+gateway -- the only inherent method on `Compiler` that bridges the
+LLVM-bound driver to the LLVM-free lowering surface. After this wave
+`Compiler` exposes no semantic-decision methods at all: it holds state,
+manages LLVM emission, and hands out a `LowerCtx` on demand. Roughly 80
+call sites across `compiler.rs` and ten codegen modules now call free
+functions with `&self.lower_ctx()` (or batch one bundle for several
+calls). Future waves can grow `LowerCtx` (add `&LLVMTypeCache` for an
+emit-side context, etc.) without disturbing the existing surface.
+
 _Typed AST._ `Expr` was restructured from a flat enum to
 `struct Expr { kind: ExprKind, span, resolved_type: Option<Type> }` --
 every expression carries its resolved type after type checking.

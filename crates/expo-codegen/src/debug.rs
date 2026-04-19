@@ -3,6 +3,7 @@
 
 use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_ir::identity::VariantId;
+use expo_ir::lower::naming::method_symbol_prefix;
 use expo_typecheck::context::{VariantData, VariantInfo};
 use expo_typecheck::types::{Primitive, Type, named};
 use inkwell::AddressSpace;
@@ -44,7 +45,7 @@ pub fn call_format<'ctx>(
     };
     let fn_name = match &resolved_id {
         Some(id) => {
-            let prefix = compiler.method_symbol_prefix(&id.package, &id.name);
+            let prefix = method_symbol_prefix(&id.package, &id.name);
             format!("{prefix}_format")
         }
         None => format!("{type_name}_format"),
@@ -124,10 +125,10 @@ pub fn synthesize_all_formats<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(),
 }
 
 /// Name of the synthesized `format` function for a type. Mirrors
-/// `Compiler::method_symbol_prefix` so definition sites and call sites
+/// `expo_ir::lower::naming::method_symbol_prefix` so definition sites and call sites
 /// converge on the same LLVM symbol (e.g. `debug_format.Color_format`).
-fn format_fn_name(compiler: &Compiler, id: &TypeIdentifier) -> String {
-    let prefix = compiler.method_symbol_prefix(&id.package, &id.name);
+fn format_fn_name(_compiler: &Compiler, id: &TypeIdentifier) -> String {
+    let prefix = method_symbol_prefix(&id.package, &id.name);
     format!("{prefix}_format")
 }
 

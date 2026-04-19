@@ -14,6 +14,7 @@ use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
+use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::fields::ResolvedFieldStep;
 use expo_ir::resolved::ops::{OperandShape, ResolvedCompoundOp, resolve_compound_op};
 
@@ -521,7 +522,7 @@ fn resolve_annotation_subst(
     compiler: &Compiler,
     type_annotation: &TypeExpr,
 ) -> Vec<(String, Type)> {
-    let annotated = compiler.resolve_type_expr(type_annotation);
+    let annotated = resolve_type_expr(&compiler.lower_ctx(), type_annotation);
     match &annotated {
         Type::Named {
             identifier,
@@ -563,7 +564,7 @@ fn resolve_annotation_subst(
 /// Resolves the final annotated type after the RHS has been compiled,
 /// substituting generic type args with their concrete bindings.
 fn resolve_final_annotation_type(compiler: &Compiler, type_annotation: &TypeExpr) -> Type {
-    let annotated = compiler.resolve_type_expr(type_annotation);
+    let annotated = resolve_type_expr(&compiler.lower_ctx(), type_annotation);
     match annotated {
         Type::Named {
             identifier,
@@ -597,7 +598,7 @@ fn infer_type_from_expr(compiler: &Compiler, expr: &Expr) -> Option<Type> {
             name: type_name, ..
         } = &receiver.kind
         {
-            let is_type_name = compiler.resolve_name_current(type_name).is_some();
+            let is_type_name = resolve_name_current(&compiler.lower_ctx(), type_name).is_some();
             if is_type_name {
                 return infer_static_method_return_type(compiler, type_name, method, args);
             }
@@ -634,12 +635,12 @@ fn infer_type_from_expr(compiler: &Compiler, expr: &Expr) -> Option<Type> {
                 ClosureParam::Name {
                     type_expr: Some(type_expression),
                     ..
-                } => compiler.resolve_type_expr(type_expression),
+                } => resolve_type_expr(&compiler.lower_ctx(), type_expression),
                 _ => Type::Primitive(Primitive::I32),
             })
             .collect();
         let ret = match return_type {
-            Some(type_expression) => compiler.resolve_type_expr(type_expression),
+            Some(type_expression) => resolve_type_expr(&compiler.lower_ctx(), type_expression),
             None => Type::Unit,
         };
         return Some(Type::Function {

@@ -33,7 +33,7 @@
 //!   `VariantId` is a transitional `(String, String)` today; in the IR
 //!   end-state (Phase 5+) it becomes an opaque `(EnumId, u8)` with no
 //!   call-site changes.
-//! - **Wave 5 (current)** — extract per-function semantic state out of
+//! - **Wave 5** — extract per-function semantic state out of
 //!   `expo-codegen`'s `FnState` into [`crate::FnLowerState`]
 //!   (`process_msg_type`, `return_type_hint`, `self_type_name`, `type_subst`,
 //!   plus the TCO ambient flags `current_fn`/`tail_position` and their seven
@@ -42,7 +42,18 @@
 //!   directly onto the trimmed `FnState`. Sister to `TypeLayouts`:
 //!   `TypeLayouts` is the type-scoped semantic store, `FnLowerState` is the
 //!   function-scoped semantic store.
-//! - **Wave 6+** — `variables`, `loop_exit_stack`, and `closure_counter`
+//! - **Wave 6 (current)** — lift the nine LLVM-free semantic helpers off
+//!   `Compiler` (`resolve_type_expr`, `monomorphize_type`,
+//!   `resolve_name_current`, `find_type_current`, `id_for`,
+//!   `type_name_from_expr`, `method_symbol_prefix`,
+//!   `current_method_symbol_prefix`, `closure_info_at`) into
+//!   [`crate::lower::types`], [`crate::lower::naming`], and
+//!   [`crate::lower::closures`] as free functions taking a
+//!   [`crate::lower::LowerCtx`] borrow bundle. `Compiler` is now LLVM-only:
+//!   it holds state and emits IR but no longer owns semantic-decision
+//!   methods. The bridge is `Compiler::lower_ctx()`, the gateway from the
+//!   LLVM-bound driver to the LLVM-free lowering surface.
+//! - **Wave 7+** — `variables`, `loop_exit_stack`, and `closure_counter`
 //!   are still on `FnState` because they're either LLVM-bound
 //!   (`PointerValue`/`BasicBlock`) or fused with LLVM emission state.
 //!   Future waves will tease them apart.

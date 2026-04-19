@@ -450,7 +450,7 @@ pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
 /// Produces a mangled symbol name for a type.
 ///
 /// The base component follows the same convention as
-/// `Compiler::method_symbol_prefix`: stdlib and unresolved-package types
+/// `expo_ir::lower::naming::method_symbol_prefix`: stdlib and unresolved-package types
 /// use their bare name (so `std.String` → `String`), while user packages
 /// stay fully qualified (`alpha.Config` → `alpha.Config`). This keeps
 /// mangled names consistent with how function symbols are registered
@@ -474,7 +474,7 @@ pub fn mangle_name(
 }
 
 /// Returns the symbol-prefix component of a [`TypeIdentifier`]. Matches
-/// `Compiler::method_symbol_prefix`: bare name for stdlib/unresolved,
+/// `expo_ir::lower::naming::method_symbol_prefix`: bare name for stdlib/unresolved,
 /// `{package}.{name}` for user packages.
 fn mangle_base(id: &crate::identifier::TypeIdentifier) -> std::string::String {
     match &id.package {

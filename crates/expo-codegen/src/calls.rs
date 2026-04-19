@@ -5,6 +5,8 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, FieldInit};
 use expo_ast::identifier::TypeIdentifier;
+use expo_ir::lower::naming::current_method_symbol_prefix;
+use expo_ir::lower::types::resolve_name_current;
 use expo_typecheck::context::FnParam;
 use expo_typecheck::types::{Type, mangle_method_suffix, substitute, unify, unwrap_indirect};
 use inkwell::AddressSpace;
@@ -43,7 +45,7 @@ enum ResolvedCall<'ctx> {
 }
 
 fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ctx>, String> {
-    let resolved_id = c.resolve_name_current(name).cloned();
+    let resolved_id = resolve_name_current(&c.lower_ctx(), name).cloned();
     let is_concrete_type = resolved_id
         .as_ref()
         .is_some_and(|id| c.llvm_types.get_concrete(id).is_some());
@@ -67,7 +69,7 @@ fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ct
     // lookup succeeds for user packages (e.g. `crypto.HMAC_hmac_raw`) without
     // breaking stdlib symbols (e.g. `Int_hash`).
     let mangled_name = c.fn_lower.self_type_name.as_ref().map(|tn| {
-        let prefix = c.current_method_symbol_prefix(tn);
+        let prefix = current_method_symbol_prefix(&c.lower_ctx(), tn);
         format!("{prefix}_{name}")
     });
     let callee_opt = c
@@ -85,7 +87,7 @@ fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ct
             c.fn_lower
                 .self_type_name
                 .as_ref()
-                .and_then(|tn| c.resolve_name_current(tn))
+                .and_then(|tn| resolve_name_current(&c.lower_ctx(), tn))
                 .and_then(|id| c.type_ctx.get_type(id))
                 .and_then(|ti| ti.functions.get(name))
         });

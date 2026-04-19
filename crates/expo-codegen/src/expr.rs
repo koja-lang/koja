@@ -24,6 +24,9 @@ use crate::control::{
     compile_body_as_value, compile_cond, compile_for, compile_if, compile_loop, compile_match,
     compile_pattern, compile_ternary, compile_unless, compile_while,
 };
+use expo_ir::lower::closures::closure_info_at;
+use expo_ir::lower::naming::method_symbol_prefix;
+use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::closures::ResolvedClosure;
 use expo_ir::resolved::strings::{ResolvedString, resolve_string};
 
@@ -215,8 +218,7 @@ pub fn compile_expr<'ctx>(
 
         ExprKind::ShortClosure { params, body } => {
             let body_stmts = vec![Statement::Expr((**body).clone())];
-            let ret_type = compiler
-                .closure_info_at(expr.span)
+            let ret_type = closure_info_at(&compiler.lower_ctx(), expr.span)
                 .and_then(|ci| ci.return_type.clone())
                 .unwrap_or(Type::Unit);
             compile_closure_core(compiler, params, ret_type, &body_stmts, function, expr.span)
@@ -453,13 +455,13 @@ fn resolve_closure_params<'ctx>(
                 ClosureParam::Name {
                     type_expr: Some(type_expr),
                     ..
-                } => compiler.resolve_type_expr(type_expr),
+                } => resolve_type_expr(&compiler.lower_ctx(), type_expr),
                 _ => unreachable!(),
             })
             .collect();
     }
 
-    if let Some(closure_info) = compiler.closure_info_at(span) {
+    if let Some(closure_info) = closure_info_at(&compiler.lower_ctx(), span) {
         return closure_info.param_types.clone();
     }
 
@@ -469,7 +471,7 @@ fn resolve_closure_params<'ctx>(
             ClosureParam::Name {
                 type_expr: Some(type_expr),
                 ..
-            } => compiler.resolve_type_expr(type_expr),
+            } => resolve_type_expr(&compiler.lower_ctx(), type_expr),
             _ => Type::Primitive(Primitive::I32),
         })
         .collect()
@@ -486,8 +488,7 @@ fn resolve_closure(
     let closure_name = format!("__closure_{}", compiler.fn_state.closure_counter);
     compiler.fn_state.closure_counter += 1;
 
-    let capture_names = compiler
-        .closure_info_at(span)
+    let capture_names = closure_info_at(&compiler.lower_ctx(), span)
         .map(|ci| ci.captures.iter().map(|cap| cap.name.clone()).collect())
         .unwrap_or_default();
 
@@ -511,7 +512,7 @@ fn compile_closure<'ctx>(
     span: Span,
 ) -> ExprResult<'ctx> {
     let ret_type = match return_type {
-        Some(type_expr) => compiler.resolve_type_expr(type_expr),
+        Some(type_expr) => resolve_type_expr(&compiler.lower_ctx(), type_expr),
         None => Type::Unit,
     };
     compile_closure_core(compiler, params, ret_type, body, parent_function, span)
@@ -922,9 +923,8 @@ fn resolve_spawn_info<'ctx>(
     let method_prefix = if generic_args.is_some() {
         mangled_state.clone()
     } else {
-        compiler
-            .resolve_name_current(&mangled_state)
-            .map(|id| compiler.method_symbol_prefix(&id.package, &id.name))
+        resolve_name_current(&compiler.lower_ctx(), &mangled_state)
+            .map(|id| method_symbol_prefix(&id.package, &id.name))
             .unwrap_or_else(|| mangled_state.clone())
     };
     ResolvedSpawn {
@@ -979,8 +979,7 @@ fn compile_spawn<'ctx>(
         .get_function(&resolved.run_fn_name)
         .ok_or_else(|| format!("undefined run function: {}", resolved.run_fn_name))?;
 
-    let state_struct_type = compiler
-        .resolve_name_current(&resolved.mangled_state)
+    let state_struct_type = resolve_name_current(&compiler.lower_ctx(), &resolved.mangled_state)
         .and_then(|id| compiler.llvm_types.get_concrete(id))
         .or_else(|| {
             compiler
@@ -1314,7 +1313,7 @@ fn resolve_tagged_receive<'a>(
 
     for arm in arms {
         if let Pattern::TypedBinding { type_expr, .. } = &arm.pattern {
-            let resolved = compiler.resolve_type_expr(type_expr);
+            let resolved = resolve_type_expr(&compiler.lower_ctx(), type_expr);
             if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "IOReady" && type_args.is_empty())
             {
                 io_ready_arms.push(arm);

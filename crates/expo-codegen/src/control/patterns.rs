@@ -35,6 +35,9 @@ use expo_ast::ast::{
     BinarySegment, Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern, Statement,
 };
 use expo_ir::identity::VariantId;
+use expo_ir::lower::types::{
+    find_type_current, monomorphize_type, resolve_name_current, resolve_type_expr,
+};
 use expo_ir::resolved::match_expr::{ResolvedMatch, ResolvedMatchType};
 use expo_ir::resolved::patterns::{ResolvedFieldPattern, ResolvedLiteral, ResolvedPattern};
 use expo_typecheck::context::VariantData;
@@ -109,7 +112,7 @@ fn resolve_subject_ty(compiler: &Compiler<'_>, subject: &Expr, post_emit_ty: &Ty
         return post_emit_ty.clone();
     }
     if let Some(ty) = subject.resolved_type.as_ref() {
-        let substituted = compiler.monomorphize_type(ty);
+        let substituted = monomorphize_type(&compiler.lower_ctx(), ty);
         if !matches!(substituted, Type::Unknown) {
             return substituted;
         }
@@ -212,7 +215,7 @@ fn arm_value_type(arm: &MatchArm, compiler: &Compiler<'_>) -> Option<Type> {
     };
     last.resolved_type
         .as_ref()
-        .map(|t| compiler.monomorphize_type(t))
+        .map(|t| monomorphize_type(&compiler.lower_ctx(), t))
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +516,7 @@ fn lower_pattern(
         Pattern::TypedBinding {
             name, type_expr, ..
         } => {
-            let resolved = compiler.resolve_type_expr(type_expr);
+            let resolved = resolve_type_expr(&compiler.lower_ctx(), type_expr);
             let subject_inner = unwrap_indirect(subject_type);
 
             if mangle_type(&resolved) == mangle_type(subject_inner) {
@@ -659,7 +662,7 @@ fn resolve_enum_key_from_joined(
     joined: &str,
     subject_type: &Type,
 ) -> Result<String, String> {
-    if let Some(id) = compiler.resolve_name_current(joined) {
+    if let Some(id) = resolve_name_current(&compiler.lower_ctx(), joined) {
         let qualified = id.qualified_name();
         if compiler.llvm_types.get_concrete(id).is_some()
             || compiler.llvm_types.contains_monomorphized(&qualified)
@@ -1127,7 +1130,7 @@ fn lookup_variant_data(
     enum_name: &str,
     variant: &str,
 ) -> Result<VariantData, String> {
-    if let Some(ti) = compiler.find_type_current(enum_name)
+    if let Some(ti) = find_type_current(&compiler.lower_ctx(), enum_name)
         && let Some(vs) = ti.variants()
         && let Some(vi) = vs.iter().find(|v| v.name == variant)
     {

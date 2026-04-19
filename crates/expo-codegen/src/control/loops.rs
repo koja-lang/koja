@@ -3,6 +3,7 @@
 
 use crate::drop::Ownership;
 use expo_ast::ast::{Expr, Pattern, Statement};
+use expo_ir::lower::types::resolve_name_current;
 use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute_preserving};
 use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
@@ -265,8 +266,7 @@ fn resolve_enumerable_info<'ctx>(
         }
     };
 
-    let base_id = c
-        .resolve_name_current(&base)
+    let base_id = resolve_name_current(&c.lower_ctx(), &base)
         .ok_or_else(|| format!("no type info for `{base}`"))?
         .clone();
     let protos = c

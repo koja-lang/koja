@@ -45,6 +45,9 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, ClosureParam, Expr, ExprKind, FieldInit, PassMode, TypeParam};
+use expo_ir::lower::closures::closure_info_at;
+use expo_ir::lower::naming::method_symbol_prefix;
+use expo_ir::lower::types::{find_type_current, id_for, resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::construction::ResolvedStructConstruction;
 use expo_ir::resolved::fields::{
     ResolvedChain, ResolvedFieldStep, ResolvedStructField, ResolvedStructName,
@@ -337,7 +340,7 @@ pub fn compile_method_call<'ctx>(
     if let ExprKind::Ident { name, .. } = &receiver.kind {
         let resolved = resolve_type_alias_name(name, &c.type_ctx.type_aliases);
         let resolved_id = resolve_type_alias_id(name, &c.type_ctx.type_aliases)
-            .or_else(|| c.resolve_name_current(&resolved).cloned());
+            .or_else(|| resolve_name_current(&c.lower_ctx(), &resolved).cloned());
         if let Some(ref id) = resolved_id
             && c.type_ctx.get_type(id).is_some()
         {
@@ -359,7 +362,7 @@ pub fn compile_method_call<'ctx>(
         .identifier
         .as_ref()
         .filter(|id| id.package != Package::Unresolved)
-        .or_else(|| c.resolve_name_current(&resolved_name.base))
+        .or_else(|| resolve_name_current(&c.lower_ctx(), &resolved_name.base))
         .and_then(|id| c.type_ctx.get_type(id))
         .and_then(|ti| ti.functions.get(method))
         .is_some();
@@ -468,7 +471,7 @@ fn resolve_method_call<'ctx>(
     method: &str,
     args: &[Arg],
 ) -> Result<ResolvedMethodCall<'ctx>, String> {
-    let resolved_id = c.id_for(base, type_id);
+    let resolved_id = id_for(&c.lower_ctx(), base, type_id);
     let is_generic = !type_args.is_empty();
 
     // Pick the symbol prefix in lockstep with definition-site mangling:
@@ -481,7 +484,7 @@ fn resolve_method_call<'ctx>(
     } else {
         resolved_id
             .as_ref()
-            .map(|id| c.method_symbol_prefix(&id.package, &id.name))
+            .map(|id| method_symbol_prefix(&id.package, &id.name))
             .unwrap_or_else(|| struct_name.to_string())
     };
 
@@ -568,7 +571,7 @@ fn resolve_method_call<'ctx>(
 }
 
 fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<TypeParam> {
-    let methods = c.find_type_current(base_type).map(|ti| &ti.functions);
+    let methods = find_type_current(&c.lower_ctx(), base_type).map(|ti| &ti.functions);
     if let Some(methods) = methods
         && let Some(sig) = methods.get(method)
     {
@@ -584,8 +587,7 @@ fn infer_method_type_args(
     struct_type_args: &[Type],
     args: &[Arg],
 ) -> Result<Vec<Type>, String> {
-    let (methods, type_params) = c
-        .find_type_current(base_type)
+    let (methods, type_params) = find_type_current(&c.lower_ctx(), base_type)
         .map(|ti| (&ti.functions, &ti.type_params))
         .ok_or_else(|| format!("no type info for `{base_type}`"))?;
 
@@ -665,8 +667,7 @@ fn infer_static_struct_type_args_from_args(
     if type_params.is_empty() {
         return Ok(vec![]);
     }
-    let methods = c
-        .find_type_current(type_name)
+    let methods = find_type_current(&c.lower_ctx(), type_name)
         .map(|ti| &ti.functions)
         .ok_or_else(|| format!("unknown type `{type_name}`"))?;
     let sig = methods
@@ -706,9 +707,8 @@ pub fn infer_static_method_return_type(
     method: &str,
     args: &[Arg],
 ) -> Option<Type> {
-    let (methods, type_params) = c
-        .find_type_current(type_name)
-        .map(|ti| (&ti.functions, &ti.type_params))?;
+    let (methods, type_params) =
+        find_type_current(&c.lower_ctx(), type_name).map(|ti| (&ti.functions, &ti.type_params))?;
     let sig = methods.get(method)?;
     if type_params.is_empty() {
         return Some(sig.return_type.clone());
@@ -751,14 +751,14 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
                         ..
                     } = p
                     {
-                        Some(c.resolve_type_expr(te))
+                        Some(resolve_type_expr(&c.lower_ctx(), te))
                     } else {
                         None
                     }
                 })
                 .collect();
             let ret = match return_type {
-                Some(te) => c.resolve_type_expr(te),
+                Some(te) => resolve_type_expr(&c.lower_ctx(), te),
                 None => Type::Unit,
             };
             Type::Function {
@@ -766,8 +766,7 @@ fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
                 return_type: Box::new(ret),
             }
         }
-        ExprKind::ShortClosure { .. } => c
-            .closure_info_at(expr.span)
+        ExprKind::ShortClosure { .. } => closure_info_at(&c.lower_ctx(), expr.span)
             .map(|ci| Type::Function {
                 params: ci
                     .param_types
@@ -975,7 +974,7 @@ fn lower_concrete_struct(
         .filter(|id| id.package != Package::Unresolved)
         .cloned()
         .or_else(|| resolve_type_alias_id(raw_name, &compiler.type_ctx.type_aliases))
-        .or_else(|| compiler.resolve_name_current(&struct_name).cloned())
+        .or_else(|| resolve_name_current(&compiler.lower_ctx(), &struct_name).cloned())
         .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
 
     let struct_fields = compiler
@@ -1052,8 +1051,7 @@ fn lower_generic_struct(
 
     // We must have a package-resolved TypeIdentifier here so generic structs
     // from different packages produce distinct mangled LLVM keys.
-    let struct_id = compiler
-        .resolve_name_current(struct_name)
+    let struct_id = resolve_name_current(&compiler.lower_ctx(), struct_name)
         .cloned()
         .ok_or_else(|| format!("cannot resolve package for generic struct `{struct_name}`"))?;
     let mangled_name = mangle_name(&struct_id, &type_args);
@@ -1213,7 +1211,7 @@ fn resolve_struct_name<'ctx>(
             && let Ok(s) = n.to_str()
         {
             let name = s.to_string();
-            let identifier = c.resolve_name_current(&name).cloned();
+            let identifier = resolve_name_current(&c.lower_ctx(), &name).cloned();
             result = Some(ResolvedStructName {
                 base: name.clone(),
                 identifier,
@@ -1228,7 +1226,7 @@ fn resolve_struct_name<'ctx>(
     if sn.type_args.is_empty()
         && let Some((base, type_args)) = try_parse_mangled_name(&sn.mangled, c)
     {
-        sn.identifier = c.resolve_name_current(&base).cloned();
+        sn.identifier = resolve_name_current(&c.lower_ctx(), &base).cloned();
         sn.base = base;
         sn.type_args = type_args;
     }
@@ -1291,7 +1289,7 @@ fn resolve_static_call<'ctx>(
     method: &str,
     args: &[Arg],
 ) -> Result<ResolvedStaticCall<'ctx>, String> {
-    let resolved_id = c.id_for(type_name, resolved_type);
+    let resolved_id = id_for(&c.lower_ctx(), type_name, resolved_type);
     let type_params: Option<Vec<TypeParam>> = resolved_id
         .as_ref()
         .and_then(|id| c.type_ctx.get_type(id))
@@ -1337,7 +1335,7 @@ fn resolve_static_call<'ctx>(
     let symbol_prefix = if type_args.is_empty() {
         resolved_id
             .as_ref()
-            .map(|id| c.method_symbol_prefix(&id.package, &id.name))
+            .map(|id| method_symbol_prefix(&id.package, &id.name))
             .unwrap_or_else(|| mangled_type.clone())
     } else {
         mangled_type.clone()
