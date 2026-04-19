@@ -1,11 +1,15 @@
 //! Property-based tests for the formatter.
 //!
-//! - `corpus_idempotence`: every `.expo` fixture under `tests/lang/` (excluding
-//!   `compile_fail/`) must format successfully and reach a fixed point on the
-//!   second formatting pass.
-//! - The `proptest!` block exercises the formatter with random inputs, asserting
-//!   that it never panics and that any successfully-formatted output is itself
-//!   parseable and idempotent.
+//! - `corpus_idempotence`: every `.expo` file under `lib/` and `tests/lang/`
+//!   (excluding `compile_fail/`) must format successfully and reach a fixed
+//!   point on the second formatting pass.
+//! - `corpus_canonical`: every `.expo` file under `lib/` (the standard
+//!   library) must already be in canonical form: `format(src) == src`
+//!   byte-for-byte. Test fixtures under `tests/lang/` are not held to this
+//!   bar — they may intentionally exercise non-canonical input.
+//! - The `proptest!` block exercises the formatter with random inputs,
+//!   asserting that it never panics and that any successfully-formatted
+//!   output is itself parseable and idempotent.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,9 +17,9 @@ use std::path::{Path, PathBuf};
 use expo_fmt::{FormatResult, format};
 use proptest::prelude::*;
 
-fn collect_expo_fixtures(root: &Path) -> Vec<PathBuf> {
+fn collect_expo_files(roots: &[&Path]) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
+    let mut stack: Vec<PathBuf> = roots.iter().map(|r| r.to_path_buf()).collect();
     while let Some(dir) = stack.pop() {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
@@ -37,6 +41,14 @@ fn collect_expo_fixtures(root: &Path) -> Vec<PathBuf> {
     out
 }
 
+fn lib_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib")
+}
+
+fn tests_lang_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/lang")
+}
+
 fn fmt_ok(src: &str) -> Option<String> {
     match format(src) {
         FormatResult::Ok(s) => Some(s),
@@ -46,13 +58,11 @@ fn fmt_ok(src: &str) -> Option<String> {
 
 #[test]
 fn corpus_idempotence() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/lang");
-    let fixtures = collect_expo_fixtures(&root);
-    assert!(
-        !fixtures.is_empty(),
-        "no fixtures found under {}",
-        root.display()
-    );
+    let lib = lib_root();
+    let tests_lang = tests_lang_root();
+    let roots = [lib.as_path(), tests_lang.as_path()];
+    let fixtures = collect_expo_files(&roots);
+    assert!(!fixtures.is_empty(), "no fixtures found");
 
     let mut failures = Vec::new();
     for path in &fixtures {
@@ -87,6 +97,39 @@ fn corpus_idempotence() {
         "{} fixture(s) failed idempotence:\n\n{}",
         failures.len(),
         failures.join("\n\n")
+    );
+}
+
+#[test]
+fn corpus_canonical() {
+    let root = lib_root();
+    let fixtures = collect_expo_files(&[root.as_path()]);
+    assert!(
+        !fixtures.is_empty(),
+        "no stdlib files found under {}",
+        root.display()
+    );
+
+    let mut failures = Vec::new();
+    for path in &fixtures {
+        let src = fs::read_to_string(path).unwrap();
+        let Some(formatted) = fmt_ok(&src) else {
+            failures.push(format!("{}: failed to parse/format", path.display()));
+            continue;
+        };
+        if src != formatted {
+            failures.push(format!(
+                "{}: not in canonical form (run `expo format --write`)",
+                path.display()
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} stdlib file(s) drifted from canonical form:\n\n{}",
+        failures.len(),
+        failures.join("\n")
     );
 }
 

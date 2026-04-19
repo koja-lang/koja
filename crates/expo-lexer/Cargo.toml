@@ -7,3 +7,6 @@ version.workspace = true
 
 [dependencies]
 expo-ast = { path = "../expo-ast" }
+
+[dev-dependencies]
+proptest = "1.11.0"
