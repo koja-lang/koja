@@ -6,6 +6,7 @@
 //! resulting Expo type. Emission consumes these and is purely mechanical:
 //! `to_llvm_type`, GEP, store.
 
+use expo_ast::ast::BinaryEndianness;
 use expo_ast::types::Type;
 
 use crate::resolved::enums::ResolvedVariantFields;
@@ -25,6 +26,29 @@ pub struct ResolvedStructConstruction {
     pub mangled_name: String,
     /// The resulting Expo type of the construction expression.
     pub result_type: Type,
+}
+
+/// The fully resolved layout of a `<<segments...>>` binary literal.
+/// Computed without LLVM by walking the AST segments and validating
+/// byte-alignment; emission then packs values according to each
+/// [`ResolvedBinarySegment::kind`].
+pub struct ResolvedBinaryLayout {
+    pub segments: Vec<ResolvedBinarySegment>,
+    pub total_bits: u64,
+}
+
+/// A single resolved binary segment with its kind and byte-aligned bit
+/// width.
+pub struct ResolvedBinarySegment {
+    pub bit_width: u64,
+    pub kind: ResolvedBinarySegmentKind,
+}
+
+/// The resolved kind of a single binary segment, determined without LLVM.
+pub enum ResolvedBinarySegmentKind {
+    Float,
+    Integer { endianness: BinaryEndianness },
+    String,
 }
 
 /// An enum variant construction after lowering. Carries the mangled enum

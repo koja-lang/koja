@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 
 use expo_ir::identity::VariantId;
 use expo_ir::lower::LowerCtx;
-use expo_ir::lower::fields::lower_struct_field;
+use expo_ir::lower::constants::{resolve_const, resolve_const_enum};
 use expo_ir::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr, type_name_from_expr};
-use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstEnum, ResolvedConstStruct};
-use expo_ir::resolved::fields::ResolvedFieldStep;
+use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstStruct};
+use expo_ir::util::parse_int_literal;
 use expo_ir::{FnLowerState, TypeLayouts};
 
 use crate::debug::synthesize_all_formats;
@@ -19,7 +19,6 @@ use crate::drop::Ownership;
 use crate::generics::{compile_function_body, compile_method_body, ensure_types_exist};
 use crate::registration::register_types;
 use crate::spawn::{self, ExitCodeCtx};
-use crate::util::parse_int_literal;
 
 /// Result of attempting to emit an intrinsic method for a built-in type.
 /// `NotIntrinsic` signals the caller to fall through to body compilation.
@@ -30,15 +29,13 @@ pub enum EmitResult {
 }
 
 use expo_ast::ast::{
-    AnnotationValue, Diagnostic, EnumConstructionData, ExprKind, FieldInit, Function, ImplMember,
-    Item, Literal, Module, Param, Severity, StringPart,
+    AnnotationValue, Diagnostic, ExprKind, FieldInit, Function, ImplMember, Item, Literal, Module,
+    Param, Severity, StringPart,
 };
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::{
-    Package, Type, build_substitution, package_from_str, process_envelope_type, substitute,
-};
+use expo_typecheck::types::{Package, Type, package_from_str};
 use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
@@ -232,66 +229,6 @@ pub struct Compiler<'ctx> {
     pub current_package: Option<Package>,
 }
 
-/// Resolves a constant expression to its semantic kind by parsing literals
-/// and identifying enum/struct construction shapes.
-fn resolve_const(kind: &ExprKind) -> Option<ResolvedConst> {
-    match kind {
-        ExprKind::Literal {
-            value: Literal::Bool(b),
-            ..
-        } => Some(ResolvedConst::Bool(*b)),
-        ExprKind::Literal {
-            value: Literal::Float(s),
-            ..
-        } => {
-            let v: f64 = s.parse().ok()?;
-            Some(ResolvedConst::Float(v))
-        }
-        ExprKind::Literal {
-            value: Literal::Int(s),
-            ..
-        } => {
-            let v = parse_int_literal(s).ok()?;
-            Some(ResolvedConst::Int(v))
-        }
-        ExprKind::EnumConstruction {
-            type_path,
-            variant,
-            data: EnumConstructionData::Unit,
-            ..
-        } => Some(ResolvedConst::EnumVariant {
-            enum_name: type_path.join("."),
-            variant: variant.clone(),
-        }),
-        ExprKind::String { parts, .. } => {
-            let mut combined = String::new();
-            for part in parts {
-                if let StringPart::Literal { value, .. } = part {
-                    combined.push_str(value);
-                }
-            }
-            Some(ResolvedConst::String(combined))
-        }
-        ExprKind::StructConstruction {
-            type_path, fields, ..
-        } => Some(ResolvedConst::Struct {
-            fields: fields.clone(),
-            struct_name: type_path.join("."),
-        }),
-        _ => None,
-    }
-}
-
-/// Looks up the tag for a unit enum variant used in a constant initializer.
-fn resolve_const_enum(
-    compiler: &Compiler,
-    enum_name: &str,
-    variant: &str,
-) -> Option<ResolvedConstEnum> {
-    let tag = compiler.layouts.variant_index(enum_name, variant)?;
-    Some(ResolvedConstEnum { tag })
-}
-
 impl<'ctx> Compiler<'ctx> {
     /// Creates a new compiler instance with an empty LLVM module.
     pub fn new(
@@ -347,6 +284,7 @@ impl<'ctx> Compiler<'ctx> {
         LowerCtx {
             closure_site_path: self.closure_site_path.as_deref(),
             fn_lower: &self.fn_lower,
+            layouts: &self.layouts,
             package: self.current_package.as_ref(),
             type_ctx: self.type_ctx,
         }
@@ -556,13 +494,6 @@ impl<'ctx> Compiler<'ctx> {
         self.layouts.field_type(mangled, field_name)
     }
 
-    /// Look up a struct's field index and type by its resolved [`Type`].
-    /// Thin wrapper kept for caller convenience; the dispatch lives in
-    /// [`expo_ir::lower::fields::lower_struct_field`].
-    pub fn struct_field_lookup(&self, ty: &Type, field_name: &str) -> Option<ResolvedFieldStep> {
-        lower_struct_field(&self.layouts, self.type_ctx, ty, field_name)
-    }
-
     /// Declares a function at the LLVM level. `mangling_prefix` is the
     /// (possibly package-qualified) prefix prepended before `_{fn_name}`
     /// for the LLVM symbol name; top-level functions pass `None`. The
@@ -652,9 +583,11 @@ impl<'ctx> Compiler<'ctx> {
                         else {
                             continue;
                         };
-                        let Some(info) =
-                            resolve_const_enum(self, &enum_id.qualified_name(), &variant)
-                        else {
+                        let Some(info) = resolve_const_enum(
+                            &self.lower_ctx(),
+                            &enum_id.qualified_name(),
+                            &variant,
+                        ) else {
                             continue;
                         };
                         let Some(enum_type) = self.llvm_types.get_concrete(&enum_id) else {
@@ -1583,33 +1516,4 @@ fn extract_link_symbol(annotations: &[expo_ast::ast::Annotation]) -> Option<Stri
         }
         None
     })
-}
-
-/// Resolves the mailbox message type `Pair<M, Option<ReplyTo<R>>>` for `receive`
-/// when compiling a `Process` impl method. Uses an exact `protocol_impls` key
-/// (e.g. `Task`) or, for monomorphized impls, the base type name plus substitution
-/// from the mangled self type (e.g. `Task_$Int$`).
-pub(crate) fn resolve_process_envelope_type<'ctx>(
-    c: &Compiler<'ctx>,
-    target: &str,
-) -> Option<Type> {
-    if let Some(id) = resolve_name_current(&c.lower_ctx(), target)
-        && let Some(impls) = c.type_ctx.protocol_impls.get(id)
-        && let Some((_, args)) = impls.iter().find(|(proto, _)| proto == "Process")
-    {
-        let m = args.get(1)?;
-        let r = args.get(2)?;
-        return Some(process_envelope_type(m, r));
-    }
-    if let Some((base, type_args)) = crate::generics::try_parse_mangled_name(target, c) {
-        let base_id = resolve_name_current(&c.lower_ctx(), &base)?;
-        let impls = c.type_ctx.protocol_impls.get(base_id)?;
-        let (_, proto_args) = impls.iter().find(|(proto, _)| proto == "Process")?;
-        let ti = c.type_ctx.get_type(base_id)?;
-        let subst = build_substitution(&ti.type_params, &type_args);
-        let m = substitute(proto_args.get(1)?, &subst);
-        let r = substitute(proto_args.get(2)?, &subst);
-        return Some(process_envelope_type(&m, &r));
-    }
-    None
 }

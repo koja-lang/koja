@@ -2,7 +2,7 @@
 //! binary/unary ops, calls, closures, string interpolation, etc.) into LLVM IR.
 
 use expo_ast::ast::{
-    ClosureParam, Expr, ExprKind, Literal, MatchArm, Pattern, Statement, StringPart, TypeExpr,
+    ClosureParam, Expr, ExprKind, Literal, MatchArm, Statement, StringPart, TypeExpr,
 };
 use expo_ast::span::Span;
 
@@ -24,22 +24,27 @@ use crate::control::{
     compile_body_as_value, compile_cond, compile_for, compile_if, compile_loop, compile_match,
     compile_pattern, compile_ternary, compile_unless, compile_while,
 };
-use expo_ir::lower::closures::closure_info_at;
+use expo_ir::lower::closures::{closure_info_at, resolve_closure_params};
+use expo_ir::lower::mangling::try_parse_mangled_name;
 use expo_ir::lower::naming::method_symbol_prefix;
+use expo_ir::lower::processes::{
+    resolve_process_msg_reply, resolve_receive, resolve_tagged_receive,
+};
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::closures::ResolvedClosure;
 use expo_ir::resolved::strings::{ResolvedString, resolve_string};
+use expo_ir::util::parse_int_literal;
 
 use crate::debug::call_format;
 use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
-use crate::generics::{monomorphize_impl_method, monomorphize_struct, try_parse_mangled_name};
+use crate::generics::{monomorphize_impl_method, monomorphize_struct};
 use crate::ops::{compile_binary, compile_unary};
 use crate::spawn;
 use crate::stmt::{apply_coercion, coerce_numeric, compile_statement, compile_union_wrap};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
-use crate::util::{parse_int_literal, printf_format_spec};
+use crate::util::printf_format_spec;
 
 /// Compiles an expression and coerces the result to the expected type.
 /// Use when the target type is known (e.g. function arguments, struct fields).
@@ -433,57 +438,13 @@ fn compile_string<'ctx>(
     )))
 }
 
-fn resolve_closure_params<'ctx>(
-    compiler: &Compiler<'ctx>,
-    params: &[ClosureParam],
-    span: Span,
-) -> Vec<Type> {
-    let all_annotated = params.iter().all(|p| {
-        matches!(
-            p,
-            ClosureParam::Name {
-                type_expr: Some(_),
-                ..
-            }
-        )
-    });
-
-    if all_annotated {
-        return params
-            .iter()
-            .map(|p| match p {
-                ClosureParam::Name {
-                    type_expr: Some(type_expr),
-                    ..
-                } => resolve_type_expr(&compiler.lower_ctx(), type_expr),
-                _ => unreachable!(),
-            })
-            .collect();
-    }
-
-    if let Some(closure_info) = closure_info_at(&compiler.lower_ctx(), span) {
-        return closure_info.param_types.clone();
-    }
-
-    params
-        .iter()
-        .map(|p| match p {
-            ClosureParam::Name {
-                type_expr: Some(type_expr),
-                ..
-            } => resolve_type_expr(&compiler.lower_ctx(), type_expr),
-            _ => Type::Primitive(Primitive::I32),
-        })
-        .collect()
-}
-
 fn resolve_closure(
     compiler: &mut Compiler,
     params: &[ClosureParam],
     return_type: Type,
     span: Span,
 ) -> ResolvedClosure {
-    let parameter_types = resolve_closure_params(compiler, params, span);
+    let parameter_types = resolve_closure_params(&compiler.lower_ctx(), params, span);
 
     let closure_name = format!("__closure_{}", compiler.fn_state.closure_counter);
     compiler.fn_state.closure_counter += 1;
@@ -914,7 +875,7 @@ fn resolve_spawn_info<'ctx>(
     config_value: BasicValueEnum<'ctx>,
 ) -> ResolvedSpawn {
     let mangled_state = spawn::resolve_mangled_state(type_name, config_value);
-    let generic_args = try_parse_mangled_name(&mangled_state, compiler);
+    let generic_args = try_parse_mangled_name(&compiler.lower_ctx(), &mangled_state);
     // Non-generic spawns must use the package-qualified method symbol so we
     // match the prefix emitted at definition time for user packages (e.g.
     // `myapp.Counter_start`). Generic monomorphizations keep the mangled
@@ -1021,31 +982,13 @@ fn compile_spawn<'ctx>(
         .ok_or("expo_rt_spawn did not return a value")?
         .into_int_value();
 
-    let (msg_type, reply_type) =
-        spawn::resolve_process_msg_reply(compiler, &target.type_name, &resolved.mangled_state)?;
+    let (msg_type, reply_type) = resolve_process_msg_reply(
+        &compiler.lower_ctx(),
+        &target.type_name,
+        &resolved.mangled_state,
+    )?;
 
     spawn::build_ref_value(compiler, pid, msg_type, reply_type).map(Some)
-}
-
-struct ResolvedReceive {
-    envelope_type: Type,
-    has_timeout: bool,
-}
-
-fn resolve_receive(
-    compiler: &Compiler,
-    after_timeout: Option<&Expr>,
-) -> Result<ResolvedReceive, String> {
-    let envelope_type = compiler
-        .fn_lower
-        .process_msg_type
-        .clone()
-        .ok_or("receive requires a typed Process envelope; no message type found")?;
-
-    Ok(ResolvedReceive {
-        envelope_type,
-        has_timeout: after_timeout.is_some(),
-    })
 }
 
 fn compile_receive<'ctx>(
@@ -1055,7 +998,7 @@ fn compile_receive<'ctx>(
     after_body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let resolved = resolve_receive(compiler, after_timeout)?;
+    let resolved = resolve_receive(&compiler.lower_ctx(), after_timeout)?;
 
     let raw_ptr = if let Some(timeout_expr) = after_timeout {
         let receive_timeout_fn = *compiler
@@ -1276,67 +1219,6 @@ fn load_io_ready_from_payload<'ctx>(
         .unwrap())
 }
 
-struct ResolvedTaggedReceive<'a> {
-    business_arms: Vec<&'a MatchArm>,
-    envelope_type: Type,
-    io_ready_arms: Vec<&'a MatchArm>,
-    lifecycle_arms: Vec<&'a MatchArm>,
-    m_has_io_ready: bool,
-}
-
-fn resolve_tagged_receive<'a>(
-    compiler: &Compiler,
-    arms: &'a [MatchArm],
-    envelope_type: &Type,
-) -> ResolvedTaggedReceive<'a> {
-    let envelope_type = envelope_type.clone();
-
-    let m_type = if let Type::Named { type_args, .. } = &envelope_type {
-        type_args.first().cloned()
-    } else {
-        None
-    };
-
-    let m_has_io_ready = m_type.as_ref().is_some_and(|m| {
-        if let Type::Union(members) = m {
-            members.iter().any(|member| {
-                matches!(member, Type::Named { identifier, .. } if identifier.name == "IOReady")
-            })
-        } else {
-            false
-        }
-    });
-
-    let mut business_arms: Vec<&MatchArm> = Vec::new();
-    let mut io_ready_arms: Vec<&MatchArm> = Vec::new();
-    let mut lifecycle_arms: Vec<&MatchArm> = Vec::new();
-
-    for arm in arms {
-        if let Pattern::TypedBinding { type_expr, .. } = &arm.pattern {
-            let resolved = resolve_type_expr(&compiler.lower_ctx(), type_expr);
-            if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "IOReady" && type_args.is_empty())
-            {
-                io_ready_arms.push(arm);
-                continue;
-            }
-            if matches!(&resolved, Type::Named { identifier, type_args } if identifier.name == "Lifecycle" && type_args.is_empty())
-            {
-                lifecycle_arms.push(arm);
-                continue;
-            }
-        }
-        business_arms.push(arm);
-    }
-
-    ResolvedTaggedReceive {
-        business_arms,
-        envelope_type,
-        io_ready_arms,
-        lifecycle_arms,
-        m_has_io_ready,
-    }
-}
-
 /// Compiles a `receive` expression in a Process context where the mailbox
 /// uses tagged messages. The raw buffer layout is [tag: 8 bytes, payload].
 /// Tag 0 = business message (Pair<M, Option<ReplyTo<R>>>), tag 1 = Lifecycle,
@@ -1349,7 +1231,7 @@ fn compile_receive_tagged<'ctx>(
     envelope_type: &Type,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let resolved = resolve_tagged_receive(compiler, arms, envelope_type);
+    let resolved = resolve_tagged_receive(&compiler.lower_ctx(), arms, envelope_type);
 
     let has_io_ready = !resolved.io_ready_arms.is_empty();
     let has_lifecycle = !resolved.lifecycle_arms.is_empty();

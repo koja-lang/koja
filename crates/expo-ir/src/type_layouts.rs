@@ -42,7 +42,7 @@
 //!   directly onto the trimmed `FnState`. Sister to `TypeLayouts`:
 //!   `TypeLayouts` is the type-scoped semantic store, `FnLowerState` is the
 //!   function-scoped semantic store.
-//! - **Wave 6 (current)** — lift the nine LLVM-free semantic helpers off
+//! - **Wave 6** — lift the nine LLVM-free semantic helpers off
 //!   `Compiler` (`resolve_type_expr`, `monomorphize_type`,
 //!   `resolve_name_current`, `find_type_current`, `id_for`,
 //!   `type_name_from_expr`, `method_symbol_prefix`,
@@ -53,10 +53,26 @@
 //!   it holds state and emits IR but no longer owns semantic-decision
 //!   methods. The bridge is `Compiler::lower_ctx()`, the gateway from the
 //!   LLVM-bound driver to the LLVM-free lowering surface.
-//! - **Wave 7+** — `variables`, `loop_exit_stack`, and `closure_counter`
+//! - **Wave 7 (current)** — Phase 4a sweep. ~28 pure-semantic
+//!   `resolve_*`/`lower_*` helpers move out of `expo-codegen` into ten new
+//!   [`crate::lower`] modules (`binary`, `constants`, `debug`, `enums`,
+//!   `methods`, `patterns`, `processes`, `stmt`, `strings`, `structs`,
+//!   plus additions to existing `closures`, `fields`, `mangling`).
+//!   [`crate::lower::LowerCtx`] grows a `&TypeLayouts` field so layout-
+//!   aware lowering can run as free functions; LLVM-bound state
+//!   (variable type maps, function caches) is threaded in via small
+//!   closures rather than coupling `expo-ir` to a backend. The
+//!   `Resolved*`/`Format*` decision types those helpers return move
+//!   alongside into [`crate::resolved`].
+//! - **Wave 8+** — `variables`, `loop_exit_stack`, and `closure_counter`
 //!   are still on `FnState` because they're either LLVM-bound
 //!   (`PointerValue`/`BasicBlock`) or fused with LLVM emission state.
-//!   Future waves will tease them apart.
+//!   The remaining `<'ctx>`-bound resolvers (`resolve_call`,
+//!   `resolve_method_call`, `resolve_struct_name`, `resolve_static_call`,
+//!   `resolve_spawn_info`, `resolve_field_ptr`, `resolve_union_member`,
+//!   `resolve_payload_info`, `resolve_enumerable_info`, `resolve_closure`)
+//!   need a decision/LLVM split before they can move; this is the
+//!   Phase 4b backlog.
 
 use std::collections::HashMap;
 
@@ -88,6 +104,14 @@ impl TypeLayouts {
     /// Whether `mangled` is registered as a monomorphized enum.
     pub fn contains_enum(&self, mangled: &str) -> bool {
         self.mono_enum_variants.contains_key(mangled)
+    }
+
+    /// Whether `mangled` is registered as a monomorphized struct or enum.
+    /// Mirrors `LLVMTypeCache::contains_monomorphized` for lowering paths
+    /// that need to know "have we seen this generic instantiation?" without
+    /// reaching into the LLVM-bound cache.
+    pub fn contains_monomorphized(&self, mangled: &str) -> bool {
+        self.mono_enum_variants.contains_key(mangled) || self.mono_struct_info.contains_key(mangled)
     }
 
     /// Borrow the variant list for `mangled`, if registered. Returned in

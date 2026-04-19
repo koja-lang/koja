@@ -12,15 +12,14 @@
 
 use expo_ast::ast::{Arg, Expr, ExprKind};
 use expo_ast::identifier::TypeIdentifier;
-use expo_ast::types::named_generic_std;
-use expo_ir::lower::types::resolve_name_current;
-use expo_typecheck::types::{Primitive, Type, build_substitution, mangle_name, substitute};
+use expo_ir::lower::processes::resolve_ref_type;
+use expo_typecheck::types::Type;
 use inkwell::IntPredicate;
 use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue};
 
 use crate::compiler::{Compiler, TypedValue};
-use crate::generics::{monomorphize_struct, try_parse_mangled_name};
+use crate::generics::monomorphize_struct;
 
 // ---------------------------------------------------------------------------
 // AST extraction
@@ -92,60 +91,6 @@ pub(crate) fn resolve_mangled_state(type_name: &str, config_value: BasicValueEnu
         }
     }
     type_name.to_string()
-}
-
-/// Looks up the `Process<C, M, R>` protocol implementation for a type and
-/// returns the concrete `(M, R)` message/reply types.
-///
-/// For generic processes the type parameters from the mangled name are
-/// substituted into the protocol arguments. Non-generic processes use the
-/// protocol args directly.
-pub(crate) fn resolve_process_msg_reply(
-    c: &Compiler,
-    type_name: &str,
-    mangled_state: &str,
-) -> Result<(Type, Type), String> {
-    if let Some((base, type_args)) = try_parse_mangled_name(mangled_state, c) {
-        let base_id = resolve_name_current(&c.lower_ctx(), &base)
-            .ok_or_else(|| format!("no type `{base}` for Process impl"))?
-            .clone();
-        let impls = c
-            .type_ctx
-            .protocol_impls
-            .get(&base_id)
-            .ok_or_else(|| format!("`{base}` does not implement Process"))?;
-        let (_, proto_args) = impls
-            .iter()
-            .find(|(proto, _)| proto == "Process")
-            .ok_or_else(|| format!("`{base}` does not implement Process"))?;
-        let ti = c
-            .type_ctx
-            .get_type(&base_id)
-            .ok_or_else(|| format!("no type `{base}` for Process impl"))?;
-        let subst = build_substitution(&ti.type_params, &type_args);
-        let default = Type::Primitive(Primitive::String);
-        let m = substitute(proto_args.get(1).unwrap_or(&default), &subst);
-        let r = substitute(proto_args.get(2).unwrap_or(&default), &subst);
-        Ok((m, r))
-    } else {
-        let type_id = resolve_name_current(&c.lower_ctx(), type_name)
-            .ok_or_else(|| format!("`{type_name}` does not implement Process"))?;
-        let process_args = c
-            .type_ctx
-            .protocol_impls
-            .get(type_id)
-            .and_then(|impls| {
-                impls
-                    .iter()
-                    .find(|(proto, _)| proto == "Process")
-                    .map(|(_, args)| args.clone())
-            })
-            .ok_or_else(|| format!("`{type_name}` does not implement Process"))?;
-        let default = Type::Primitive(Primitive::String);
-        let m = process_args.get(1).cloned().unwrap_or(default.clone());
-        let r = process_args.get(2).cloned().unwrap_or(default);
-        Ok((m, r))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -357,27 +302,6 @@ pub(crate) fn build_spawn_wrapper<'ctx>(
 // ---------------------------------------------------------------------------
 // Ref<M, R> construction
 // ---------------------------------------------------------------------------
-
-/// Resolved `Ref<M, R>` type metadata.
-struct ResolvedRefType {
-    expo_type: Type,
-    mangled_name: String,
-    msg_type: Type,
-    reply_type: Type,
-}
-
-/// Computes the mangled name and Expo type for a `Ref<M, R>` struct.
-fn resolve_ref_type(msg_type: Type, reply_type: Type) -> ResolvedRefType {
-    let type_args = vec![msg_type.clone(), reply_type.clone()];
-    let mangled_name = mangle_name(&TypeIdentifier::std("Ref"), &type_args);
-    let expo_type = named_generic_std("Ref", type_args);
-    ResolvedRefType {
-        expo_type,
-        mangled_name,
-        msg_type,
-        reply_type,
-    }
-}
 
 /// Wraps a runtime pid in a `Ref<M, R>` struct value.
 ///

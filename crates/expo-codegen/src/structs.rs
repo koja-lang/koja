@@ -46,7 +46,10 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, ClosureParam, Expr, ExprKind, FieldInit, PassMode, TypeParam};
 use expo_ir::lower::closures::closure_info_at;
+use expo_ir::lower::fields::{lower_struct_field, resolve_chain_steps};
+use expo_ir::lower::mangling::try_parse_mangled_name;
 use expo_ir::lower::naming::method_symbol_prefix;
+use expo_ir::lower::structs::lower_concrete_struct;
 use expo_ir::lower::types::{find_type_current, id_for, resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::construction::ResolvedStructConstruction;
 use expo_ir::resolved::fields::{
@@ -69,7 +72,6 @@ use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::{
     ensure_types_exist, monomorphize_enum, monomorphize_impl_method, monomorphize_struct,
-    try_parse_mangled_name,
 };
 use crate::types::to_llvm_type;
 
@@ -148,47 +150,6 @@ fn llvm_type_size<'ctx>(ty: BasicTypeEnum<'ctx>, c: &Compiler<'ctx>) -> IntValue
     }
 }
 
-/// Resolves a field access chain to a sequence of field indices and types
-/// by walking the AST recursively. No LLVM emission.
-fn resolve_chain_steps(compiler: &Compiler, receiver: &Expr, field: &str) -> Option<ResolvedChain> {
-    let (base_name, base_type, mut steps) = match &receiver.kind {
-        ExprKind::Ident { name, .. } => {
-            let (_, ty, _) = compiler.fn_state.variables.get(name.as_str()).cloned()?;
-            (name.clone(), ty, Vec::new())
-        }
-        ExprKind::Self_ => {
-            let (_, ty, _) = compiler.fn_state.variables.get("self").cloned()?;
-            ("self".to_string(), ty, Vec::new())
-        }
-        ExprKind::FieldAccess {
-            receiver: inner_recv,
-            field: inner_field,
-            ..
-        } => {
-            let inner = resolve_chain_steps(compiler, inner_recv, inner_field)?;
-            let last_type = inner
-                .steps
-                .last()
-                .map(|s| &s.field_type)
-                .unwrap_or(&inner.base_type);
-            if matches!(last_type, Type::Indirect(_)) {
-                return None;
-            }
-            (inner.base_name, inner.base_type, inner.steps)
-        }
-        _ => return None,
-    };
-
-    let current_type = steps.last().map(|s| &s.field_type).unwrap_or(&base_type);
-    steps.push(compiler.struct_field_lookup(current_type, field)?);
-
-    Some(ResolvedChain {
-        base_name,
-        base_type,
-        steps,
-    })
-}
-
 /// Compiles a field access expression (`receiver.field`). Thin dispatcher:
 /// uses the static-chain path (variable / `self` / nested) when
 /// [`resolve_chain_steps`] succeeds; otherwise falls back to compiling the
@@ -200,8 +161,13 @@ pub fn compile_field_access<'ctx>(
     field: &str,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    if let Some(chain) = resolve_chain_steps(compiler, receiver, field)
-        && let Some(result) = emit_chain_field_access(compiler, &chain, field)
+    if let Some(chain) = resolve_chain_steps(&compiler.lower_ctx(), receiver, field, &|name| {
+        compiler
+            .fn_state
+            .variables
+            .get(name)
+            .map(|(_, ty, _)| ty.clone())
+    }) && let Some(result) = emit_chain_field_access(compiler, &chain, field)
     {
         return result;
     }
@@ -223,7 +189,7 @@ fn lower_value_struct_field(
     field: &str,
 ) -> Result<ResolvedFieldStep, String> {
     if let Some(ref recv_ty) = receiver.resolved_type
-        && let Some(step) = compiler.struct_field_lookup(recv_ty, field)
+        && let Some(step) = lower_struct_field(&compiler.lower_ctx(), recv_ty, field)
     {
         return Ok(step);
     }
@@ -630,7 +596,9 @@ fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
             identifier,
             type_args: ta,
         } if ta.is_empty() => {
-            if let Some((base, type_args)) = try_parse_mangled_name(&identifier.name, c) {
+            if let Some((base, type_args)) =
+                try_parse_mangled_name(&c.lower_ctx(), &identifier.name)
+            {
                 named_generic(&base, type_args, c.type_ctx, c.current_package.as_ref())
             } else {
                 ty.clone()
@@ -891,7 +859,7 @@ fn infer_field_init_type(compiler: &Compiler, expr: &Expr, compiled_type: &Type)
         } => {
             if let ExprKind::Ident { name, .. } = &receiver.as_ref().kind
                 && let Some((_, recv_ty, _)) = compiler.fn_state.variables.get(name)
-                && let Some(step) = compiler.struct_field_lookup(recv_ty, field)
+                && let Some(step) = lower_struct_field(&compiler.lower_ctx(), recv_ty, field)
             {
                 substitute(&step.field_type, &compiler.fn_lower.type_subst)
             } else {
@@ -935,7 +903,7 @@ fn lower_struct_construction(
         );
     }
 
-    lower_concrete_struct(compiler, raw_name, field_inits, resolved_type)
+    lower_concrete_struct(&compiler.lower_ctx(), raw_name, field_inits, resolved_type)
 }
 
 fn lookup_struct_info<'a>(
@@ -957,63 +925,6 @@ fn lookup_struct_info<'a>(
                 .resolve_name(&struct_name)
                 .and_then(|id| compiler.type_ctx.get_type(id))
         })
-}
-
-fn lower_concrete_struct(
-    compiler: &Compiler,
-    raw_name: &str,
-    field_inits: &[FieldInit],
-    resolved_type: Option<&TypeIdentifier>,
-) -> Result<ResolvedStructConstruction, String> {
-    let struct_name = resolve_type_alias_name(raw_name, &compiler.type_ctx.type_aliases);
-
-    // Prefer the type-checker's resolved identifier - it already carries the
-    // right package, so two packages with the same struct name can be told
-    // apart without consulting the shared bare-name index.
-    let lookup_id = resolved_type
-        .filter(|id| id.package != Package::Unresolved)
-        .cloned()
-        .or_else(|| resolve_type_alias_id(raw_name, &compiler.type_ctx.type_aliases))
-        .or_else(|| resolve_name_current(&compiler.lower_ctx(), &struct_name).cloned())
-        .ok_or_else(|| format!("unknown struct type: {struct_name}"))?;
-
-    let struct_fields = compiler
-        .type_ctx
-        .get_type(&lookup_id)
-        .filter(|ti| ti.is_struct())
-        .ok_or_else(|| format!("unknown struct: {struct_name}"))?
-        .fields()
-        .ok_or_else(|| format!("internal: `{struct_name}` is not a struct"))?;
-
-    let mut fields = Vec::with_capacity(field_inits.len());
-    for field_init in field_inits {
-        let (idx, field_type) = struct_fields
-            .iter()
-            .enumerate()
-            .find(|(_, (name, _))| name == &field_init.name)
-            .map(|(i, (_, ty))| (i as u32, ty.clone()))
-            .ok_or_else(|| {
-                format!(
-                    "unknown field `{}` in struct `{}`",
-                    field_init.name, struct_name
-                )
-            })?;
-        fields.push(ResolvedStructField {
-            field_type,
-            index: idx,
-            name: field_init.name.clone(),
-        });
-    }
-
-    Ok(ResolvedStructConstruction {
-        fields,
-        is_generic: false,
-        mangled_name: lookup_id.qualified_name(),
-        result_type: Type::Named {
-            identifier: lookup_id,
-            type_args: vec![],
-        },
-    })
 }
 
 fn lower_generic_struct(
@@ -1224,7 +1135,7 @@ fn resolve_struct_name<'ctx>(
     let mut sn = result.ok_or("cannot determine struct type for method call")?;
 
     if sn.type_args.is_empty()
-        && let Some((base, type_args)) = try_parse_mangled_name(&sn.mangled, c)
+        && let Some((base, type_args)) = try_parse_mangled_name(&c.lower_ctx(), &sn.mangled)
     {
         sn.identifier = resolve_name_current(&c.lower_ctx(), &base).cloned();
         sn.base = base;

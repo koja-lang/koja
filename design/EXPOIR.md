@@ -592,163 +592,177 @@ Apple's primary motivations for SIL, mapped to Expo:
 
 ---
 
-## Timing and implementation strategy
+## Roadmap and current status
 
-ExpoIR is Phase 6 work in the roadmap, but the typed AST foundation (Phase 5)
-is already done. The current crate boundaries (`expo-codegen` depends on
-`expo-ast` + `expo-typecheck`) already support the separation.
+ExpoIR is Phase 6 work in [`ROADMAP.md`](ROADMAP.md), but the typed AST
+foundation that unblocks it has been done since Phase 5, and substantial
+ExpoIR foundation work has been pulled forward during the Phase 4 codegen
+refactor. This section is the status-of-record for that pulled-forward
+work, sister to the broader self-hosting context in
+[`ROADMAP.md`](ROADMAP.md) Phase 6A.
 
-### Incremental refactoring (preferred over big-bang rewrite)
+### Where we are
 
-Rather than building a parallel pipeline from scratch (~9,000-13,000 LOC of
-new code before anything works), the preferred strategy is to refactor
-`expo-codegen` in-place, splitting lowering from emission incrementally.
-Tests pass at every step.
+The compiler does not yet construct or consume a SIL-style IR -- emission
+is still synchronous from the typed AST, with no function-level
+intermediate value materialized between lowering and codegen. But the
+foundation has been substantively built: the `expo-ir` crate exists, a
+decision-type vocabulary is extracted and in active use, and the
+LLVM-free semantic state and helpers have been lifted off `Compiler`
+behind a `LowerCtx<'a>` borrow bundle.
 
-**Phase 1: Typed foundation** (done)
+The work began as a narrow `TypeRegistry` key migration to fix a
+package-qualified type collision and grew into a 6-wave type-system +
+codegen refactor because the entanglement was deeper than the original
+plan assumed. Each wave preserved a green test suite. The result is that
+the seam between "decide what to emit" and "emit it" is now visible in
+code -- ~80 call sites cross the `Compiler::lower_ctx()` gateway, and
+22 `Resolved*` types describe the lowering output in terms a future IR
+will consume.
 
-The original plan was a narrow TypeRegistry key migration, but implementation
-revealed three tightly coupled pieces that needed to move together.
+### Current IR surface
 
-_TypeRegistry migration._ `TypeRegistry.concrete` is now
-`HashMap<TypeIdentifier, StructType>` with `register_concrete()` /
-`get_concrete()` methods. Monomorphized generics and unions remain as
-mangled `String` keys in a separate `monomorphized` map -- these are
-synthesized names like `"List_$Int32$"`, not package-qualified types.
-`get_stdlib()` provides bare-name lookup for intrinsic/stdlib types where
-the caller only knows `"Fd"` or `"Socket"`, not the full identifier.
+What actually lives in `expo-ir` today:
 
-_Wave 3 followup._ `TypeRegistry` was renamed to `LLVMTypeCache` and the
-`Compiler.types` field to `Compiler.llvm_types`, advertising at every call
-site that the surviving cache is purely an LLVM-handle store. The semantic
-half (struct/enum layouts) lives in `expo-ir`'s `TypeLayouts`; Wave 4 will
-split `enum_variant_payloads` along the same seam.
+- **Active lowering helpers** (produced + consumed): `TypeLayouts`,
+  `FnLowerState`, `LowerCtx`, ~37 free functions across 14 modules in
+  `lower::{binary, closures, constants, debug, enums, fields, mangling,
+  methods, naming, patterns, processes, stmt, strings, structs, types}`
+  plus the small `util::parse_int_literal` helper. Reference:
+  [`expo/crates/expo-ir/src/lower/`](../crates/expo-ir/src/lower/).
+- **Active decision-type vocabulary** (produced + consumed): ~30
+  `Resolved*`/`Format*` types across 12 modules in
+  `resolved::{closures, constants, construction, debug, enums, fields, match_expr, methods, ops, patterns, processes, strings}`,
+  plus 4 pure resolver functions (`resolve_binary_op`, `resolve_unary_op`,
+  `resolve_compound_op`, `resolve_string`). Reference:
+  [`expo/crates/expo-ir/src/resolved/`](../crates/expo-ir/src/resolved/).
+- **Transitional identities**: `VariantId` (today
+  `(String, String)`; in Phase 5+ becomes `(EnumId, u8)` with no
+  call-site changes).
 
-_Wave 4 followup._ `enum_variant_payloads` is now split. Variant order
-(= tag value) is owned solely by `TypeLayouts`, exposed via
-`TypeLayouts::variant_index`. Non-generic enums are backfilled into
-`mono_enum_variants` at registration so every enum, generic or not, has
-the same single source of truth. The LLVM-side payload table is rekeyed
-from positional `Vec<(String, Option<StructType>)>` to identity-keyed
-`HashMap<VariantId, Option<StructType>>`, where `VariantId` is a new
-`expo-ir` struct holding `(enum_mangled, variant_name)`. There is no
-positional contract between `TypeLayouts` and `LLVMTypeCache` anymore --
-they are independent stores keyed by name and identity respectively, so
-drift is structurally impossible. The dead `enum_variant_payloads` write
-in `build_union_layout` was removed in the same wave (no reader had ever
-consumed it; the union tag-lookup path derives the tag directly from the
-member list at the use site). `VariantId` is intentionally a transitional
-`(String, String)`; in Phase 5+ it becomes an opaque `(EnumId, u8)` with
-no call-site changes, making it the on-ramp from today's name-keyed
-side-tables to true IR identities.
+The IR _instruction set_ -- function/block/instruction containers, ops
+on operands, terminators, etc. -- is intentionally undefined in code.
+The "Instruction set" section above this one captures the design intent;
+the actual containers will be designed bottom-up during Phase 4c, driven
+by what `Resolved*` consumers need to be stitched together. An earlier
+attempt to define them top-down was deleted because it had no producers
+and had already drifted from the `Resolved*` shapes that emerged from
+real code paths.
 
-_Wave 5 followup._ The semantic half of `FnState` is now extracted into
-`expo-ir::FnLowerState` and lives on `Compiler.fn_lower`. Migrated fields:
-`process_msg_type`, `return_type_hint`, `self_type_name`, `type_subst`,
-plus the TCO ambient flags `current_fn` and `tail_position` together with
-their seven traversal methods (`mark_tail`, `clear_tail`, `save_tail`,
-`restore_tail`, `enter_fn`, `leave_fn`, `is_self_tail_call`). `TailCallCtx`
-is dissolved entirely rather than carved into a parallel `TailCallLower`
-sub-struct: the LLVM half (`loop_header`, `param_allocas`, `set_loop`,
-`restore_loop`) is inlined directly onto the trimmed `FnState`. The
-sub-struct existed solely to make this very split possible, so once the
-split happens it has no remaining cohesion to preserve. Long-term, the
-TCO ambient state is itself transitional -- once `expo-ir` carries
-explicit `IRInstruction::Call { tail }`, the flag and the loop
-scaffolding both disappear (tail-ness becomes a property on the call
-instruction; loop headers and parameter allocas become emit-time data
-derived from the IR's function header). `FnLowerState` is the
-function-scoped sister to the type-scoped `TypeLayouts`: between them,
-all per-type and per-function semantic state for lowering now lives in
-`expo-ir`, with `Compiler` retaining only the LLVM-bound parts.
-`FnState` still owns `variables`, `loop_exit_stack`, and
-`closure_counter` because they're either LLVM-bound
-(`PointerValue`/`BasicBlock`) or fused with emission state; teasing them
-apart waits for a later wave.
+Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
 
-_Wave 6 followup._ With per-type and per-function semantic _state_ now
-in `expo-ir`, Wave 6 lifts the semantic _functions_ that consume it.
-Nine LLVM-free helpers move off `Compiler` entirely (no shims) into
-`expo_ir::lower::{types, naming, closures}`: type/name resolution
-(`resolve_type_expr`, `monomorphize_type`, `resolve_name_current`,
-`find_type_current`, `id_for`, `type_name_from_expr`), symbol naming
-(`method_symbol_prefix`, `current_method_symbol_prefix`), and closure
-metadata lookup (`closure_info_at`). Each takes a small `LowerCtx<'a>`
-borrow bundle (`type_ctx`, current `package`, `fn_lower`,
-`closure_site_path`) constructed via the new `Compiler::lower_ctx()`
-gateway -- the only inherent method on `Compiler` that bridges the
-LLVM-bound driver to the LLVM-free lowering surface. After this wave
-`Compiler` exposes no semantic-decision methods at all: it holds state,
-manages LLVM emission, and hands out a `LowerCtx` on demand. Roughly 80
-call sites across `compiler.rs` and ten codegen modules now call free
-functions with `&self.lower_ctx()` (or batch one bundle for several
-calls). Future waves can grow `LowerCtx` (add `&LLVMTypeCache` for an
-emit-side context, etc.) without disturbing the existing surface.
+### Phase status
 
-_Typed AST._ `Expr` was restructured from a flat enum to
-`struct Expr { kind: ExprKind, span, resolved_type: Option<Type> }` --
-every expression carries its resolved type after type checking.
-`Type`, `Primitive`, `FnParam`, and `TypeIdentifier` were moved from
-`expo-typecheck` to `expo-ast` so they're available across all compiler
-crates. Struct and enum construction AST nodes carry
-`resolved_type: Option<TypeIdentifier>`.
+- **Phase 1 -- Typed foundation: done.** The original `TypeRegistry`
+  migration plus 5 followup waves. Net effect: typed AST throughout
+  codegen, package-qualified type identities, `LLVMTypeCache` /
+  `TypeLayouts` split, `FnState` / `FnLowerState` split, 9 LLVM-free
+  helpers lifted off `Compiler` behind a `LowerCtx<'a>` borrow bundle.
+  `Compiler` now exposes no semantic-decision methods. Remaining minor
+  cleanup: ~35 `TypeContext::find_type(&str)` call sites in codegen --
+  folded into Phase 4 since the touched files overlap.
+- **Phase 2 -- Extract decision types: substantively done.** 22
+  `Resolved*` types live in `expo-ir/src/resolved/`. The canonical
+  example from the original plan -- the `compile_binary` split -- is
+  in place: see `compile_binary` in `expo-codegen/src/ops.rs` consuming
+  `resolve_binary_op` from `expo-ir/src/resolved/ops.rs`. Remaining: the
+  `<'ctx>`-bound functions originally tagged "heavily mixed"
+  (`compile_method_call`, `compile_receive`, `compile_closure_core`,
+  `compile_enum_struct_eq`, parts of `compile_expr` / `compile_statement`)
+  still need their decision/LLVM split -- folded into Phase 4b.
+- **Phase 3 -- Collect into `expo-ir`: done as scoped.** The crate
+  exists and hosts `resolved/`, `lower/`, `TypeLayouts`, `FnLowerState`,
+  `VariantId`. Phase 3 was originally framed as "pull decision types
+  into their own crate"; that part is complete. Defining the IR
+  instruction containers (`IRFunction`, `IRBasicBlock`, `IRInstruction`,
+  etc.) was deliberately left undone -- Phase 4c will design them
+  bottom-up from real consumers rather than top-down from speculation.
+- **Phase 4 -- Move lowering out: ~75% done.** Four pure resolvers
+  moved to `expo-ir` (in `resolved::ops` and `resolved::strings`); the
+  9 Wave 6 helpers and ~28 Wave 7 helpers in `lower::*`. Remaining work
+  is the Phase 4b structural cluster and the Phase 4c IR container
+  design:
+  - **4b (structural)**: ~10 `<'ctx>`-bound resolvers that need a
+    decision/LLVM split before they can move (`resolve_call`,
+    `resolve_method_call`, `resolve_struct_name`, `resolve_static_call`,
+    `resolve_closure_params`, `resolve_spawn_info`,
+    `resolve_tagged_receive`, `resolve_field_ptr`,
+    `resolve_union_member`, `resolve_enumerable_info`,
+    `resolve_payload_info`). These are the genuinely interesting splits
+    -- each one a mini-Phase-2 wave for one cluster.
+  - **4c (the actual handoff)**: design and build the IR instruction
+    containers from the bottom up, driven by what `Resolved*` consumers
+    need. Lowering produces a function-level IR; emission consumes it
+    and walks it. This is where the `Lowerer<'a>` driver becomes real,
+    where `closure_site_path` and `package` move off `Compiler` for
+    good, and where TCO ambient flags collapse into a `tail` field on
+    whatever the call instruction ends up being named.
+- **Phase 5+ -- Opaque IR identities: not started.** `VariantId`
+  becomes `(EnumId, u8)`; struct names become interned IDs; etc. Pure
+  interning work, internal to `expo-ir`, with no call-site changes
+  outside the crate.
 
-_TypedValue threading._ `compile_expr` now returns `TypedValue`, which
-pairs every LLVM value with its Expo `Type`. Downstream codegen reads
-`expo_type` instead of reverse-engineering types from LLVM bit widths or
-struct names. ~75 usages across all codegen files.
+### Wave history
 
-_Remaining._ `TypeContext.find_type(&str)` still has ~35 call sites in
-codegen (heaviest in `structs.rs`, `enums.rs`, `compiler.rs`). These look
-up type metadata (fields, methods, type params) by bare string. Reducing
-them is ongoing -- `resolved_type` on AST nodes provides the
-`TypeIdentifier` at construction sites, but method resolution and drop
-analysis still rely on `find_type`.
+The 6 waves completed so far, condensed (full prose lives in commit
+history):
 
-This phase fixes the package-qualified type collision problem, gives
-codegen reliable type information without string-key lookups, and unblocks
-C FFI without waiting for the full IR.
+- **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
+  to `HashMap<TypeIdentifier, StructType>`; monomorphized generics kept
+  in a separate `monomorphized` map. Fixed the package-qualified type
+  collision and unblocked C FFI without waiting for the full IR.
+- **Wave 2 -- `lower_struct_field` extraction.** First pure-semantic
+  helper lifted into `expo-ir::lower::fields` as a free function. Set
+  the pattern that all subsequent waves followed.
+- **Wave 3 -- `LLVMTypeCache` rename + `TypeLayouts` extraction.**
+  `TypeRegistry` renamed to `LLVMTypeCache` and `Compiler.types` to
+  `Compiler.llvm_types` so every call site advertises that the surviving
+  cache is purely an LLVM-handle store. Semantic struct/enum layouts
+  moved into `expo-ir::TypeLayouts`.
+- **Wave 4 -- `enum_variant_payloads` split + `VariantId`.** Variant
+  ordering (= tag value) owned solely by `TypeLayouts`; LLVM payload
+  table rekeyed from positional `Vec` to identity-keyed
+  `HashMap<VariantId, Option<StructType>>`. Drift between the two
+  stores is now structurally impossible.
+- **Wave 5 -- `FnLowerState` extraction + `TailCallCtx` dissolved.**
+  Semantic per-function fields (`process_msg_type`, `return_type_hint`,
+  `self_type_name`, `type_subst`, TCO ambient flags + 7 traversal
+  methods) moved into `expo-ir::FnLowerState`. `TailCallCtx` dissolved
+  entirely rather than carved into a parallel sub-struct -- its only
+  cohesion was the impending split.
+- **Wave 6 -- 9 helpers lifted + `LowerCtx`.** Nine LLVM-free
+  semantic-decision helpers (type/name resolution, symbol naming,
+  closure metadata lookup) moved off `Compiler` into
+  `expo_ir::lower::{types, naming, closures}` as free functions taking a
+  `&LowerCtx<'_>` borrow bundle. `Compiler::lower_ctx()` is now the
+  single gateway between the LLVM-bound driver and the LLVM-free
+  lowering surface; ~80 call sites updated.
+- **Wave 7 -- Phase 4a sweep.** ~28 pure-semantic `resolve_*`/`lower_*`
+  helpers moved out of `expo-codegen` into ten new `lower::*` modules
+  (`binary`, `constants`, `debug`, `enums`, `methods`, `patterns`,
+  `processes`, `stmt`, `strings`, `structs`, plus additions to existing
+  `closures`/`fields`/`mangling`). `LowerCtx` grew a `&TypeLayouts`
+  field so layout-aware lowering can run as free functions; LLVM-bound
+  state (variable type maps, per-backend function caches) is threaded
+  in via small closures rather than coupling `expo-ir` to a backend.
+  Companion change: ~7 codegen-local `Resolved*`/`Format*` decision
+  types (binary segments, concat kind, format info, ref/receive
+  metadata) moved into `expo-ir::resolved::*` so the lifted helpers can
+  return them. `expo-codegen`'s remaining `resolve_*`/`lower_*`
+  functions are now exclusively the `<'ctx>`-bound cluster slated for
+  Phase 4b.
 
-**Phase 2: Extract decision types** (~1-2 weeks)
+### Next: Wave 8
 
-Many codegen functions are "heavily mixed" -- semantic decisions interleaved
-with LLVM emission. For each, extract the decision into a separate function
-that returns a small enum/struct, then the emission code matches on it.
-
-For example, `compile_binary` (183 lines) interleaves "is this float or
-int?" with `build_float_add` vs `build_int_add`. Split into:
-
-```rust
-enum ResolvedBinaryOp { IntAdd, FloatAdd, IntSub, FloatSub, ... }
-fn resolve_binary_op(op: &str, lhs_ty: &Type) -> ResolvedBinaryOp
-fn emit_binary_op(op: ResolvedBinaryOp, ...) -> BasicValueEnum
-```
-
-These decision types are the seeds of ExpoIR instructions -- the IR grows
-organically from working code rather than being designed speculatively.
-
-Current assessment of the ~12,600 LOC in `expo-codegen`:
-
-- ~1,500 LOC is already pure logic (no LLVM): `resolve_closure_params`,
-  `infer_method_type_args`, `infer_type_from_expr`, drop analysis, etc.
-- ~500 LOC is already pure emission: `compile_literal`,
-  `compile_string_concat`, `emit_drop_list`, layout helpers.
-- ~1,500 LOC is heavily mixed and needs splitting: `compile_expr`,
-  `compile_method_call`, `compile_receive`, `compile_closure_core`,
-  `compile_statement`, `compile_binary`, `compile_enum_struct_eq`.
-- The remaining ~9,000 LOC is moderately mixed and can be split file-by-file.
-
-**Phase 3: Collect into `expo-ir` crate** (~2-3 days)
-
-Once enough decision types exist, pull them into their own crate. Lowering
-and emission stay in `expo-codegen` but the IR types live in `expo-ir`.
-Mostly `git mv` and `use expo_ir::*`.
-
-**Phase 4: Move lowering out** (~2-3 weeks, ongoing)
-
-File by file, move the `resolve_*` / decision functions into `expo-ir` as a
-lowering pass. Emission stays in `expo-codegen`. Eventually `expo-codegen`
-is just "ExpoIR → LLVM" and the lowering lives in `expo-ir`.
+Phase 4b structural cluster: split each `<'ctx>`-bound resolver
+(`resolve_call`, `resolve_method_call`, `resolve_struct_name`,
+`resolve_static_call`, `resolve_spawn_info`, `resolve_field_ptr`,
+`resolve_union_member`, `resolve_payload_info`, `resolve_enumerable_info`,
+`resolve_closure`) along its decision/LLVM seam, then lift the decision
+half into `expo-ir::lower::*`. Also migrate `closure_counter` off
+`FnState` so `resolve_closure` can join the others. Each split is a
+mini-Phase-2 wave; the cluster opens the door to Phase 4c, where the
+IR instruction containers are designed bottom-up from real consumers.
 
 ### Why incremental over big-bang
 

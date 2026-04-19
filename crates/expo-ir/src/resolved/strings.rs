@@ -2,6 +2,13 @@
 
 use expo_ast::ast::StringPart;
 
+/// Which concatenation strategy `<>` should use, decided from the
+/// left-operand's resolved type.
+pub enum ResolvedConcatKind {
+    Binary,
+    String,
+}
+
 /// Whether a string expression is a plain literal or contains interpolation.
 pub enum ResolvedString {
     /// Contains `#{}` interpolation -- must be compiled part-by-part.

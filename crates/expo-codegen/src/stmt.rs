@@ -7,15 +7,15 @@ use expo_ast::ast::{
 };
 use expo_ast::span::Span;
 use expo_typecheck::context::{Coercion, FnParam};
-use expo_typecheck::types::{
-    Primitive, Type, mangle_name, mangle_type, substitute, substitute_preserving,
-};
+use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type, substitute};
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
+use expo_ir::lower::stmt::{
+    resolve_annotation_subst, resolve_coercion, resolve_field_path, resolve_final_annotation_type,
+};
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
-use expo_ir::resolved::fields::ResolvedFieldStep;
 use expo_ir::resolved::ops::{OperandShape, ResolvedCompoundOp, resolve_compound_op};
 
 use crate::compiler::Compiler;
@@ -114,7 +114,7 @@ fn compile_assignment<'ctx>(
 ) -> Result<(), String> {
     let mut saved_subst = None;
     if let Some(type_expression) = type_annotation {
-        let entries = resolve_annotation_subst(compiler, type_expression);
+        let entries = resolve_annotation_subst(&compiler.lower_ctx(), type_expression);
         if !entries.is_empty() {
             saved_subst = Some(compiler.fn_lower.type_subst.clone());
             for (name, resolved_type) in entries {
@@ -133,7 +133,7 @@ fn compile_assignment<'ctx>(
     }
 
     let assigned_type = if let Some(type_expression) = type_annotation {
-        let annotated = resolve_final_annotation_type(compiler, type_expression);
+        let annotated = resolve_final_annotation_type(&compiler.lower_ctx(), type_expression);
         let _ = ensure_types_exist(compiler, &annotated);
         annotated
     } else if compiled_type != Type::Unknown {
@@ -294,53 +294,19 @@ fn apply_compound_op<'ctx>(
     }
 }
 
-/// Resolves a dotted field path to a sequence of field indices and types
-/// by walking the type context. No LLVM emission.
-pub(crate) fn resolve_field_path(
-    compiler: &Compiler,
-    segments: &[String],
-) -> Result<(Type, Vec<ResolvedFieldStep>), String> {
-    let variable_name = &segments[0];
-    let (_, variable_type, _) = compiler
-        .fn_state
-        .variables
-        .get(variable_name)
-        .ok_or_else(|| format!("undefined variable: {variable_name}"))?
-        .clone();
-
-    let mut current_type = variable_type.clone();
-    let mut steps = Vec::with_capacity(segments.len() - 1);
-
-    for field_name in &segments[1..] {
-        if !matches!(&current_type, Type::Named { .. }) {
-            return Err(format!(
-                "cannot access field `{field_name}` on non-struct type"
-            ));
-        }
-
-        let step = compiler
-            .struct_field_lookup(&current_type, field_name)
-            .ok_or_else(|| {
-                format!(
-                    "unknown field `{field_name}` on struct `{}`",
-                    current_type.display()
-                )
-            })?;
-
-        current_type = step.field_type.clone();
-        steps.push(step);
-    }
-
-    Ok((variable_type, steps))
-}
-
 /// Walks a dotted field path (`self.span.start.line`) and returns the LLVM
 /// pointer to the final field plus its Expo type.
 fn resolve_field_ptr<'ctx>(
     compiler: &Compiler<'ctx>,
     segments: &[String],
 ) -> Result<(PointerValue<'ctx>, Type), String> {
-    let (base_type, steps) = resolve_field_path(compiler, segments)?;
+    let (base_type, steps) = resolve_field_path(&compiler.lower_ctx(), segments, |name| {
+        compiler
+            .fn_state
+            .variables
+            .get(name)
+            .map(|(_, ty, _)| ty.clone())
+    })?;
 
     let variable_name = &segments[0];
     let (mut ptr, _, _) = compiler
@@ -499,7 +465,7 @@ pub(crate) fn apply_coercion<'ctx>(
     expr: &Expr,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let span = expr_span(expr);
-    let Some(coercion) = resolve_coercion(compiler, span) else {
+    let Some(coercion) = resolve_coercion(&compiler.lower_ctx(), span) else {
         return Ok(val);
     };
     match coercion {
@@ -512,74 +478,6 @@ pub(crate) fn apply_coercion<'ctx>(
             }
             compile_union_wrap(compiler, val, &source, &target)
         }
-    }
-}
-
-/// Resolves type annotation substitutions needed before compiling the RHS
-/// of an assignment. Returns `(param_name, type_arg)` pairs to insert into
-/// `type_subst` so generic type parameters are available during compilation.
-fn resolve_annotation_subst(
-    compiler: &Compiler,
-    type_annotation: &TypeExpr,
-) -> Vec<(String, Type)> {
-    let annotated = resolve_type_expr(&compiler.lower_ctx(), type_annotation);
-    match &annotated {
-        Type::Named {
-            identifier,
-            type_args,
-        } if !type_args.is_empty() => {
-            let Some(type_params) = compiler
-                .type_ctx
-                .get_type(identifier)
-                .map(|type_info| type_info.type_params.clone())
-            else {
-                return Vec::new();
-            };
-            type_params
-                .iter()
-                .zip(type_args.iter())
-                .map(|(param, arg)| {
-                    let concrete = substitute(arg, &compiler.fn_lower.type_subst);
-                    (param.name.clone(), concrete)
-                })
-                .collect()
-        }
-        Type::Pointer(inner) => {
-            let Some(type_info) = compiler
-                .type_ctx
-                .resolve_name("CPtr")
-                .and_then(|id| compiler.type_ctx.get_type(id))
-            else {
-                return Vec::new();
-            };
-            if type_info.type_params.is_empty() {
-                return Vec::new();
-            }
-            vec![(type_info.type_params[0].name.clone(), *inner.clone())]
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Resolves the final annotated type after the RHS has been compiled,
-/// substituting generic type args with their concrete bindings.
-fn resolve_final_annotation_type(compiler: &Compiler, type_annotation: &TypeExpr) -> Type {
-    let annotated = resolve_type_expr(&compiler.lower_ctx(), type_annotation);
-    match annotated {
-        Type::Named {
-            identifier,
-            type_args,
-        } if !type_args.is_empty() => {
-            let resolved_args: Vec<Type> = type_args
-                .iter()
-                .map(|t| substitute_preserving(t, &compiler.fn_lower.type_subst))
-                .collect();
-            Type::Named {
-                identifier,
-                type_args: resolved_args,
-            }
-        }
-        other => other,
     }
 }
 
@@ -839,11 +737,6 @@ fn resolve_union_member<'ctx>(
         .ok_or_else(|| format!("union type {} not registered", union_mangled))?;
 
     Ok(ResolvedUnionMember { tag, union_type })
-}
-
-/// Looks up a recorded coercion for the given span from the type context.
-fn resolve_coercion(compiler: &Compiler, span: Span) -> Option<Coercion> {
-    compiler.type_ctx.coercions.get(&span).cloned()
 }
 
 /// Returns the LLVM bit width for an integer primitive type.

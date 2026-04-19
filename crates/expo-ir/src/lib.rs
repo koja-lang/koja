@@ -1,24 +1,23 @@
-//! ExpoIR: the intermediate representation between the typed AST and codegen
-//! backends.
+//! ExpoIR: home for the LLVM-free decision types and lowering helpers that
+//! sit between the typed AST and codegen backends.
 //!
-//! Inspired by Swift's SIL rather than Rust's MIR, ExpoIR preserves high-level
-//! semantics (ownership operations, enum switching, struct construction) so
-//! multiple backends can lower independently. The lowering pass reads
-//! `resolved_type` from the typed AST and produces flat, explicit IR;
-//! emission is mechanical: walk IR instructions, emit target-specific code.
+//! Today the crate hosts the `Resolved*` decision-type vocabulary
+//! ([`resolved`]) and the freestanding lowering helpers ([`lower`]) that
+//! produce them, plus shared semantic state ([`FnLowerState`],
+//! [`TypeLayouts`]) and transitional identities ([`identity::VariantId`]).
+//! The full SIL-style instruction containers (function, basic block,
+//! instruction sequence) are intentionally undefined in code -- their shape
+//! will be discovered bottom-up during the lowering/emission split, driven
+//! by what `Resolved*` consumers need to be stitched together. See
+//! `expo/design/EXPOIR.md` for design intent and current wave status.
 
-mod file;
 mod fn_state;
 pub mod identity;
-mod instruction;
 pub mod lower;
 pub mod resolved;
 mod type_layouts;
-mod types;
+pub mod util;
 
-pub use file::{IRBasicBlock, IRFile, IRFunction, IRStruct};
 pub use fn_state::FnLowerState;
 pub use identity::VariantId;
-pub use instruction::{IRInstruction, IRTerminator};
 pub use type_layouts::TypeLayouts;
-pub use types::{IRBuiltinOp, IROperand, IRType, IRVar};

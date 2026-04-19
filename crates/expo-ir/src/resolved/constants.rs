@@ -1,6 +1,6 @@
 //! Resolved types for constant initializers: literals, unit enum variants,
-//! and struct constants. The `resolve_const` function itself stays in codegen
-//! because it depends on `parse_int_literal`.
+//! and struct constants. The accompanying lowering helpers (`resolve_const`,
+//! `resolve_const_enum`) live in [`crate::lower::constants`].
 
 use expo_ast::ast::FieldInit;
 use expo_ast::types::Type;

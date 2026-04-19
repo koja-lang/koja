@@ -8,17 +8,26 @@
 //! borrows of just the semantic state it needs.
 //!
 //! Most lowering functions take a [`LowerCtx`] borrow bundle that bundles
-//! the read-only context they all share (`&TypeContext`, current package,
-//! `&FnLowerState`, current closure-site path). Construct one with
-//! `Compiler::lower_ctx()` (in `expo-codegen`) and pass it by reference.
-//! See [`ctx`] for the bundle and [`types`] / [`naming`] / [`closures`]
-//! for the helpers it serves; field-access lowering predates the bundle
-//! and lives in [`fields`].
+//! the read-only context they all share (`&TypeContext`, `&TypeLayouts`,
+//! current package, `&FnLowerState`, current closure-site path).
+//! Construct one with `Compiler::lower_ctx()` (in `expo-codegen`) and pass
+//! it by reference. See [`ctx`] for the bundle.
 
+pub mod binary;
 pub mod closures;
+pub mod constants;
 pub mod ctx;
+pub mod debug;
+pub mod enums;
 pub mod fields;
+pub mod mangling;
+pub mod methods;
 pub mod naming;
+pub mod patterns;
+pub mod processes;
+pub mod stmt;
+pub mod strings;
+pub mod structs;
 pub mod types;
 
 pub use ctx::LowerCtx;

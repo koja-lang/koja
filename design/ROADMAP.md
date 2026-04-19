@@ -396,6 +396,7 @@ Rewrite the Expo compiler in Expo. The lexer port from Phase 3 A4 (validation) p
 - ExpoIR is a flat, lowered representation -- monomorphized, closures desugared, drops inserted. Simple enough that writing a new backend is a tractable project.
 - Define `CodeEmitter` as an Expo protocol. The LLVM backend is `impl CodeEmitter for LlvmEmitter`. Cranelift, WASM, and C backends implement the same interface.
 - Publish `expo-ir` and the backend protocol as packages so third parties can build custom backends.
+- **Status note**: foundation work has been pulled forward into Phase 4 -- `expo-ir` crate exists with decision types and semantic lowering helpers in active use; the IR instruction containers themselves will be designed bottom-up during the lowering/emission split. See [EXPOIR.md](EXPOIR.md) for current wave status.
 - **Done when**: the LLVM backend works through ExpoIR with no regressions, and a second backend (Cranelift for the REPL) compiles a non-trivial program.
 
 #### Port type checking and codegen

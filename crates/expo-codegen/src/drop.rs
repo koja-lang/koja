@@ -5,6 +5,7 @@
 use inkwell::values::PointerValue;
 
 use expo_ast::identifier::{Package, TypeIdentifier};
+use expo_ir::lower::fields::resolve_indirect_field_indices;
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Primitive, Type, mangle_name};
 
@@ -217,52 +218,11 @@ fn emit_drop<'ctx>(c: &mut Compiler<'ctx>, ptr: PointerValue<'ctx>, ty: &Type) {
     c.call_void(free, &[val.into()], "drop_free");
 }
 
-/// Identifies struct fields that use [`Type::Indirect`] and returns their
-/// indices and types. Checks monomorphized struct info first, then falls
-/// back to the type context via the package-qualified identifier so
-/// cross-package collisions don't return a foreign struct's layout.
-fn resolve_indirect_field_indices(compiler: &Compiler, ty: &Type) -> Vec<(usize, Type)> {
-    let (mono_key, identifier) = match ty {
-        Type::Named {
-            identifier,
-            type_args,
-        } if !type_args.is_empty() => (Some(mangle_name(identifier, type_args)), Some(identifier)),
-        Type::Named { identifier, .. } => (Some(identifier.qualified_name()), Some(identifier)),
-        _ => return Vec::new(),
-    };
-
-    if let Some(key) = mono_key.as_deref()
-        && let Some(fs) = compiler.layouts.struct_layout(key)
-    {
-        return fs
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
-            .map(|(i, (_, fty))| (i, fty.clone()))
-            .collect();
-    }
-
-    if let Some(id) = identifier
-        && id.package != Package::Unresolved
-        && let Some(ti) = compiler.type_ctx.get_type(id)
-        && let Some(fields) = ti.fields()
-    {
-        return fields
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, fty))| matches!(fty, Type::Indirect(_)))
-            .map(|(i, (_, fty))| (i, fty.clone()))
-            .collect();
-    }
-
-    Vec::new()
-}
-
 /// Frees heap pointers for each [`Type::Indirect`] field in a struct.
 /// Handles the first level of indirection; deeper recursive nodes are freed
 /// when they themselves go out of scope or are explicitly dropped.
 fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
-    let indirect_fields = resolve_indirect_field_indices(c, ty);
+    let indirect_fields = resolve_indirect_field_indices(&c.lower_ctx(), ty);
     if indirect_fields.is_empty() {
         return;
     }

@@ -5,22 +5,24 @@
 use std::collections::HashMap;
 use std::mem;
 
-use expo_ast::ast::{Function, ImplMember, Param, Statement, TypeExpr, TypeParam};
+use expo_ast::ast::{Function, Param, Statement};
 use expo_ast::identifier::TypeIdentifier;
-use expo_typecheck::context::{FunctionKind, VariantData};
+use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{
     Primitive, Type, build_substitution, mangle_method_suffix, mangle_name, mangle_type, named,
-    named_generic, substitute,
+    substitute,
 };
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{FunctionValue, PointerValue};
 
-use crate::compiler::{Compiler, EmitResult, resolve_process_envelope_type};
+use crate::compiler::{Compiler, EmitResult};
 use crate::drop::{Ownership, drop_live_variables};
 use crate::expr::compile_expr;
 use crate::hashtable::monomorphize_hashtable_struct;
-use expo_ir::lower::types::{find_type_current, resolve_name_current};
-use expo_ir::resolved::methods::ResolvedMethodSignature;
+use expo_ir::lower::mangling::try_parse_mangled_name;
+use expo_ir::lower::methods::resolve_method_signature;
+use expo_ir::lower::processes::resolve_process_envelope_type;
+use expo_ir::lower::types::resolve_name_current;
 
 use crate::intrinsics::cptr::emit_cptr_method;
 use crate::list::{emit_list_method, monomorphize_list_struct};
@@ -194,7 +196,7 @@ pub(crate) fn compile_method_body<'ctx>(
 
     let saved_process_msg = c.fn_lower.process_msg_type.take();
     if let Some((mangled, _)) = self_type {
-        c.fn_lower.process_msg_type = resolve_process_envelope_type(c, mangled);
+        c.fn_lower.process_msg_type = resolve_process_envelope_type(&c.lower_ctx(), mangled);
         if let Some(env_type) = c.fn_lower.process_msg_type.clone() {
             let _ = ensure_types_exist(c, &env_type);
         }
@@ -479,196 +481,6 @@ pub(crate) fn monomorphize_enum<'ctx>(
     Ok(())
 }
 
-/// Resolves the method signature for a generic impl method by looking up
-/// the AST (specialized or generic path), building type substitutions,
-/// and computing parameter/return types. No LLVM emission.
-///
-/// Returns `None` if the method was already compiled (cached in `functions`).
-fn resolve_method_signature(
-    compiler: &Compiler,
-    base_type: &str,
-    method_name: &str,
-    type_args: &[Type],
-    method_type_args: &[Type],
-) -> Result<Option<ResolvedMethodSignature>, String> {
-    let base_id = resolve_name_current(&compiler.lower_ctx(), base_type)
-        .cloned()
-        .ok_or_else(|| format!("cannot resolve package for generic method base `{base_type}`"))?;
-    let mangled_type = mangle_name(&base_id, type_args);
-    let mangled_fn = if method_type_args.is_empty() {
-        format!("{}_{}", mangled_type, method_name)
-    } else {
-        let mangled_method = mangle_method_suffix(method_name, method_type_args);
-        format!("{}_{}", mangled_type, mangled_method)
-    };
-    if compiler.functions.contains_key(&mangled_fn) {
-        return Ok(None);
-    }
-
-    let spec_id = resolve_name_current(&compiler.lower_ctx(), base_type).cloned();
-    let specialized_match = spec_id.as_ref().and_then(|id| {
-        compiler
-            .type_ctx
-            .specialized_impl_asts
-            .get(id)
-            .and_then(|entries| {
-                entries
-                    .iter()
-                    .find(|(concrete_args, _)| concrete_args == type_args)
-                    .cloned()
-            })
-    });
-
-    let (func_ast, subst, return_type, param_types, is_static) =
-        if let Some((concrete_args, spec_block)) = specialized_match {
-            let mut method_ast = None;
-            for member in &spec_block.members {
-                if let ImplMember::Function(f) = member
-                    && f.name == method_name
-                {
-                    method_ast = Some(f.clone());
-                    break;
-                }
-            }
-            let func_ast = method_ast.ok_or_else(|| {
-                format!("method `{method_name}` not found in specialized impl for `{base_type}`")
-            })?;
-
-            let mut subst = HashMap::new();
-            for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
-                subst.insert(tp.name.clone(), ta.clone());
-            }
-
-            let spec_sig = spec_id
-            .as_ref()
-            .and_then(|id| {
-                compiler
-                    .type_ctx
-                    .specialized_methods
-                    .get(id)
-                    .and_then(|entries| {
-                        entries
-                            .iter()
-                            .find(|(args, _)| *args == concrete_args)
-                            .and_then(|(_, sigs)| sigs.get(method_name))
-                    })
-            })
-            .ok_or_else(|| {
-                format!(
-                    "no signature for method `{method_name}` in specialized impl for `{base_type}`"
-                )
-            })?;
-
-            let ret = substitute(&spec_sig.return_type, &subst);
-            let pts: Vec<Type> = spec_sig
-                .params
-                .iter()
-                .map(|p| substitute(&p.ty, &subst))
-                .collect();
-            let is_static = spec_sig.kind == FunctionKind::Static;
-            (func_ast, subst, ret, pts, is_static)
-        } else {
-            let impl_blocks = compiler
-                .type_ctx
-                .generic_impl_asts
-                .get(base_type)
-                .ok_or_else(|| format!("no generic impl for `{base_type}`"))?
-                .clone();
-
-            let mut method_ast = None;
-            let mut impl_type_params: Vec<TypeParam> = Vec::new();
-            for block in &impl_blocks {
-                if let TypeExpr::Generic { args, .. } = &block.target {
-                    let impl_tps: Vec<TypeParam> = args
-                        .iter()
-                        .filter_map(|a| {
-                            if let TypeExpr::Named { path, span, .. } = a
-                                && path.len() == 1
-                            {
-                                return Some(TypeParam {
-                                    name: path[0].clone(),
-                                    bounds: Vec::new(),
-                                    span: *span,
-                                });
-                            }
-                            None
-                        })
-                        .collect();
-                    for member in &block.members {
-                        if let ImplMember::Function(f) = member
-                            && f.name == method_name
-                        {
-                            method_ast = Some(f.clone());
-                            impl_type_params = impl_tps;
-                            break;
-                        }
-                    }
-                    if method_ast.is_some() {
-                        break;
-                    }
-                }
-            }
-
-            let func_ast = method_ast.ok_or_else(|| {
-                format!("method `{method_name}` not found in impl for `{base_type}`")
-            })?;
-
-            let mut subst = build_substitution(&impl_type_params, type_args);
-            for (tp, ta) in func_ast.type_params.iter().zip(method_type_args.iter()) {
-                subst.insert(tp.name.clone(), ta.clone());
-            }
-
-            let info = find_type_current(&compiler.lower_ctx(), base_type)
-                .map(|ti| (&ti.functions, &ti.type_params));
-
-            let (return_type, param_types, is_static) = if let Some((methods, _)) = info {
-                if let Some(sig) = methods.get(method_name) {
-                    let ret = substitute(&sig.return_type, &subst);
-                    let pts: Vec<Type> = sig
-                        .params
-                        .iter()
-                        .map(|p| substitute(&p.ty, &subst))
-                        .collect();
-                    let is_static = sig.kind == FunctionKind::Static;
-                    (ret, pts, is_static)
-                } else {
-                    return Err(format!(
-                        "no signature for method `{method_name}` on `{base_type}`"
-                    ));
-                }
-            } else {
-                return Err(format!("no type info for `{base_type}`"));
-            };
-            (func_ast, subst, return_type, param_types, is_static)
-        };
-
-    let self_type = if is_static {
-        None
-    } else if base_type == "CPtr" {
-        Some(Type::Pointer(Box::new(
-            type_args.first().cloned().unwrap_or(Type::Unknown),
-        )))
-    } else {
-        Some(named_generic(
-            base_type,
-            type_args.to_vec(),
-            compiler.type_ctx,
-            compiler.current_package.as_ref(),
-        ))
-    };
-
-    Ok(Some(ResolvedMethodSignature {
-        func_ast,
-        is_static,
-        mangled_fn,
-        mangled_type,
-        param_types,
-        return_type,
-        self_type,
-        subst,
-    }))
-}
-
 /// Generates a monomorphized version of a method from a generic impl block.
 /// Finds the method AST via `resolve_method_signature`, then creates the LLVM
 /// function and compiles the body.
@@ -745,8 +557,14 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         }
     }
 
-    let Some(sig) =
-        resolve_method_signature(c, base_type, method_name, type_args, method_type_args)?
+    let Some(sig) = resolve_method_signature(
+        &c.lower_ctx(),
+        base_type,
+        method_name,
+        type_args,
+        method_type_args,
+        |fn_name| c.functions.contains_key(fn_name),
+    )?
     else {
         return Ok(());
     };
@@ -814,7 +632,7 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
             if type_args.is_empty() {
                 if c.llvm_types.get_concrete(identifier).is_none()
                     && !c.llvm_types.contains_monomorphized(name)
-                    && let Some((base, args)) = parse_mangled_name(name, c)
+                    && let Some((base, args)) = try_parse_mangled_name(&c.lower_ctx(), name)
                     && let Some(base_id) = resolve_name_current(&c.lower_ctx(), &base).cloned()
                 {
                     if c.type_ctx.is_enum(&base) {
@@ -866,135 +684,4 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
         _ => {}
     }
     Ok(())
-}
-
-/// Public entry point for parsing a mangled name from call sites outside this
-/// module (e.g. method call dispatch in `structs.rs`).
-pub fn try_parse_mangled_name(mangled: &str, c: &Compiler) -> Option<(String, Vec<Type>)> {
-    parse_mangled_name(mangled, c)
-}
-
-/// Attempts to recover the base name and concrete type args from a mangled
-/// name like `Pair_$Int.String$`. Returns `None` if the name doesn't match
-/// a known generic struct or enum template.
-fn parse_mangled_name(mangled: &str, c: &Compiler) -> Option<(String, Vec<Type>)> {
-    let sep_pos = mangled.find("_$")?;
-    let base = &mangled[..sep_pos];
-    if !c.type_ctx.generic_struct_asts.contains_key(base)
-        && !c.type_ctx.generic_enum_asts.contains_key(base)
-    {
-        return None;
-    }
-    if !mangled.ends_with('$') {
-        return None;
-    }
-    let inner = &mangled[sep_pos + 2..mangled.len() - 1];
-    let parts = split_mangled_args(inner, c);
-    let type_args: Vec<Type> = parts.iter().map(|s| parse_mangled_type(s, c)).collect();
-    Some((base.to_string(), type_args))
-}
-
-/// Splits a mangled args string on `.` at depth 0, respecting nested `_$...$`.
-///
-/// Because user-package type names use `.` as a package-qualifier separator
-/// (`http.Header`) and mangled args use `.` as a delimiter, a naive split
-/// would turn `Option_$http.Header$` into two args `http` and `Header`. We
-/// resolve the ambiguity by preferring package-qualified types: a `.` split
-/// is treated as a package boundary (not an arg delimiter) when the token
-/// before the `.` names a known package and the token after resolves to a
-/// type in that package.
-fn split_mangled_args(s: &str, c: &Compiler) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut depth = 0usize;
-    let mut current = String::new();
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if i + 1 < bytes.len() && bytes[i] == b'_' && bytes[i + 1] == b'$' {
-            depth += 1;
-            current.push('_');
-            current.push('$');
-            i += 2;
-        } else if bytes[i] == b'$' {
-            depth -= 1;
-            current.push('$');
-            i += 1;
-        } else if bytes[i] == b'.' && depth == 0 {
-            let rest = &s[i + 1..];
-            let next_token = next_mangled_token(rest);
-            if is_known_package(&current, c) && is_type_in_package(&current, next_token, c) {
-                current.push('.');
-                i += 1;
-            } else {
-                parts.push(mem::take(&mut current));
-                i += 1;
-            }
-        } else {
-            current.push(bytes[i] as char);
-            i += 1;
-        }
-    }
-    if !current.is_empty() {
-        parts.push(current);
-    }
-    parts
-}
-
-/// Returns the substring up to the next depth-0 `.` or end of string. Used
-/// by [`split_mangled_args`] to peek the token following a candidate split
-/// point so we can decide whether `.` is a package separator or an arg
-/// delimiter.
-fn next_mangled_token(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    let mut depth = 0usize;
-    let mut i = 0;
-    while i < bytes.len() {
-        if i + 1 < bytes.len() && bytes[i] == b'_' && bytes[i + 1] == b'$' {
-            depth += 1;
-            i += 2;
-        } else if bytes[i] == b'$' {
-            depth = depth.saturating_sub(1);
-            i += 1;
-        } else if bytes[i] == b'.' && depth == 0 {
-            return &s[..i];
-        } else {
-            i += 1;
-        }
-    }
-    s
-}
-
-fn is_known_package(name: &str, c: &Compiler) -> bool {
-    c.type_ctx.has_named_package(name)
-}
-
-fn is_type_in_package(pkg: &str, name: &str, c: &Compiler) -> bool {
-    let bare = name.split_once("_$").map(|(b, _)| b).unwrap_or(name);
-    c.type_ctx.has_type_in_named_package(pkg, bare)
-}
-
-fn parse_mangled_type(s: &str, c: &Compiler) -> Type {
-    if s == "unit" {
-        return Type::Unit;
-    }
-    if let Some(p) = Primitive::from_name(s) {
-        return Type::Primitive(p);
-    }
-    if let Some((base, args)) = parse_mangled_name(s, c) {
-        return if let Some(id) = resolve_name_current(&c.lower_ctx(), &base) {
-            Type::Named {
-                identifier: id.clone(),
-                type_args: args,
-            }
-        } else {
-            named_generic(&base, args, c.type_ctx, c.current_package.as_ref())
-        };
-    }
-    if let Some(id) = resolve_name_current(&c.lower_ctx(), s) {
-        return Type::Named {
-            identifier: id.clone(),
-            type_args: vec![],
-        };
-    }
-    named(s)
 }

@@ -31,11 +31,14 @@
 
 use std::collections::HashMap;
 
-use expo_ast::ast::{EnumConstructionData, Expr, FieldInit, TypeParam};
+use expo_ast::ast::{EnumConstructionData, Expr, FieldInit};
 use expo_ir::identity::VariantId;
+use expo_ir::lower::enums::{
+    enum_mangled_name, lower_concrete_enum, resolve_enum_eq, resolve_generic_type_args,
+};
 use expo_ir::lower::types::{id_for, resolve_name_current};
 use expo_ir::resolved::construction::ResolvedEnumConstruction;
-use expo_ir::resolved::enums::{ResolvedEnumEq, ResolvedVariantEq, ResolvedVariantFields};
+use expo_ir::resolved::enums::{ResolvedVariantEq, ResolvedVariantFields};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{
     Package, Type, TypeIdentifier, mangle_name, named_generic, unify, unwrap_indirect,
@@ -155,82 +158,7 @@ fn lower_enum_construction(
         );
     }
 
-    lower_concrete_enum(compiler, enum_name, variant, data, resolved_id)
-}
-
-fn lower_concrete_enum(
-    compiler: &Compiler,
-    enum_name: &str,
-    variant: &str,
-    data: &EnumConstructionData,
-    resolved_id: Option<TypeIdentifier>,
-) -> Result<ResolvedEnumConstruction, String> {
-    let resolved_id = resolved_id.ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
-
-    let key = resolved_id.qualified_name();
-    let tag = compiler
-        .layouts
-        .variant_index(&key, variant)
-        .ok_or_else(|| format!("unknown variant `{variant}` on enum `{resolved_id}`"))?
-        as u64;
-
-    let variant_fields = lower_concrete_variant_fields(compiler, &resolved_id, variant, data)?;
-
-    Ok(ResolvedEnumConstruction {
-        is_generic: false,
-        mangled_name: key,
-        result_type: Type::Named {
-            identifier: resolved_id,
-            type_args: vec![],
-        },
-        tag,
-        variant_fields,
-        variant_name: variant.to_string(),
-    })
-}
-
-fn lower_concrete_variant_fields(
-    compiler: &Compiler,
-    enum_id: &TypeIdentifier,
-    variant: &str,
-    data: &EnumConstructionData,
-) -> Result<ResolvedVariantFields, String> {
-    let variant_data = compiler
-        .type_ctx
-        .get_type(enum_id)
-        .and_then(|ti| ti.variants())
-        .and_then(|vs| vs.iter().find(|v| v.name == variant))
-        .map(|vi| vi.data.clone());
-
-    match data {
-        EnumConstructionData::Unit => Ok(ResolvedVariantFields::Unit),
-        EnumConstructionData::Tuple(_) => {
-            let element_types = match variant_data {
-                Some(VariantData::Tuple(types)) => types,
-                _ => Vec::new(),
-            };
-            Ok(ResolvedVariantFields::Tuple { element_types })
-        }
-        EnumConstructionData::Struct(field_inits) => {
-            let expected = match variant_data {
-                Some(VariantData::Struct(f)) => f,
-                _ => return Err(format!("{enum_id}.{variant} is not a struct variant")),
-            };
-            let mut fields = Vec::with_capacity(field_inits.len());
-            for field_init in field_inits {
-                let (idx, field_type) = expected
-                    .iter()
-                    .enumerate()
-                    .find(|(_, (name, _))| name == &field_init.name)
-                    .map(|(i, (_, ty))| (i as u32, ty.clone()))
-                    .ok_or_else(|| {
-                        format!("unknown field `{}` in {enum_id}.{variant}", field_init.name)
-                    })?;
-                fields.push((field_init.name.clone(), idx, field_type));
-            }
-            Ok(ResolvedVariantFields::Struct { fields })
-        }
-    }
+    lower_concrete_enum(&compiler.lower_ctx(), enum_name, variant, data, resolved_id)
 }
 
 fn lower_generic_enum(
@@ -254,7 +182,12 @@ fn lower_generic_enum(
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{enum_name}`"))?;
 
     let subst = unify_generic_enum_args(data, &variant_info.data, compiled_arg_types, enum_name)?;
-    let type_args = resolve_generic_type_args(compiler, &enum_info.type_params, &subst, enum_name);
+    let type_args = resolve_generic_type_args(
+        &compiler.lower_ctx(),
+        &enum_info.type_params,
+        &subst,
+        enum_name,
+    );
 
     let enum_id = resolved_id.ok_or_else(|| {
         format!("cannot resolve package for generic enum `{enum_name}` during construction")
@@ -331,54 +264,6 @@ fn unify_generic_enum_args(
         }
     }
     Ok(subst)
-}
-
-fn resolve_generic_type_args(
-    compiler: &Compiler,
-    type_params: &[TypeParam],
-    subst: &HashMap<String, Type>,
-    enum_name: &str,
-) -> Vec<Type> {
-    let mut type_args: Vec<Type> = type_params
-        .iter()
-        .map(|tp| {
-            subst
-                .get(&tp.name)
-                .cloned()
-                .or_else(|| compiler.fn_lower.type_subst.get(&tp.name).cloned())
-                .unwrap_or(Type::Unknown)
-        })
-        .collect();
-
-    if !type_args.contains(&Type::Unknown) {
-        return type_args;
-    }
-
-    let Some(hint) = compiler.fn_lower.return_type_hint.as_ref() else {
-        return type_args;
-    };
-
-    let hint_args = match hint {
-        Type::Named {
-            identifier,
-            type_args: ha,
-        } if identifier.name == enum_name && !ha.is_empty() => Some(ha.clone()),
-        Type::Named { identifier, .. } => {
-            crate::generics::try_parse_mangled_name(&identifier.name, compiler)
-                .filter(|(base, _)| base == enum_name)
-                .map(|(_, ha)| ha)
-        }
-        _ => None,
-    };
-
-    if let Some(ha) = hint_args {
-        for (i, ta) in type_args.iter_mut().enumerate() {
-            if *ta == Type::Unknown && i < ha.len() {
-                *ta = ha[i].clone();
-            }
-        }
-    }
-    type_args
 }
 
 // ---------------------------------------------------------------------------
@@ -607,18 +492,6 @@ fn emit_struct_payload<'ctx>(
 // Enum equality
 // ---------------------------------------------------------------------------
 
-/// Resolves the mangled LLVM enum name from an Expo type.
-pub(crate) fn enum_mangled_name(ty: &Type) -> Option<String> {
-    match unwrap_indirect(ty) {
-        Type::Named {
-            identifier,
-            type_args,
-        } if !type_args.is_empty() => Some(mangle_name(identifier, type_args)),
-        Type::Named { identifier, .. } => Some(identifier.qualified_name()),
-        _ => None,
-    }
-}
-
 fn compile_typed_value_eq<'ctx>(
     c: &mut Compiler<'ctx>,
     lhs: BasicValueEnum<'ctx>,
@@ -630,32 +503,6 @@ fn compile_typed_value_eq<'ctx>(
         return compile_enum_struct_eq(c, lhs, rhs, ty, function);
     }
     match_values(c, &lhs, &rhs)
-}
-
-fn resolve_enum_eq(c: &Compiler, ty: &Type) -> Result<ResolvedEnumEq, String> {
-    let mangled = enum_mangled_name(ty)
-        .ok_or_else(|| "compile_enum_struct_eq called with non-enum type".to_string())?;
-
-    let registered = c
-        .layouts
-        .enum_variants(&mangled)
-        .ok_or_else(|| format!("enum variants not found for `{mangled}`"))?;
-
-    let mut variants = Vec::with_capacity(registered.len());
-    for (name, vdata) in registered {
-        let resolved = match vdata {
-            VariantData::Struct(fields) => ResolvedVariantEq::Struct {
-                field_types: fields.iter().map(|(_, t)| t.clone()).collect(),
-            },
-            VariantData::Tuple(types) => ResolvedVariantEq::Tuple {
-                field_types: types.clone(),
-            },
-            VariantData::Unit => ResolvedVariantEq::Unit,
-        };
-        variants.push((name.clone(), resolved));
-    }
-
-    Ok(ResolvedEnumEq { mangled, variants })
 }
 
 /// Branch the current insert block into `merge_bb` and record `(value, predecessor)`
@@ -685,7 +532,7 @@ pub(crate) fn compile_enum_struct_eq<'ctx>(
     ty: &Type,
     function: FunctionValue<'ctx>,
 ) -> Result<IntValue<'ctx>, String> {
-    let resolved = resolve_enum_eq(c, ty)?;
+    let resolved = resolve_enum_eq(&c.lower_ctx(), ty)?;
 
     let enum_type = to_llvm_type(ty, c.context, &c.llvm_types)
         .map(|t| t.into_struct_type())

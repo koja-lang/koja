@@ -3,8 +3,13 @@
 
 use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_ir::identity::VariantId;
+use expo_ir::lower::debug::{
+    format_fn_name, resolve_enum_format_info, resolve_format_kind, resolve_struct_format_info,
+    resolve_type_id,
+};
 use expo_ir::lower::naming::method_symbol_prefix;
-use expo_typecheck::context::{VariantData, VariantInfo};
+use expo_ir::resolved::debug::ResolvedFormatKind;
+use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Primitive, Type, named};
 use inkwell::AddressSpace;
 use inkwell::basic_block::BasicBlock;
@@ -52,26 +57,31 @@ pub fn call_format<'ctx>(
     };
 
     if !compiler.functions.contains_key(&fn_name) {
-        let Some(kind) = resolve_format_kind(compiler, resolved_id.as_ref(), &fn_name, &type_name)
-        else {
+        let Some(kind) = resolve_format_kind(
+            &compiler.lower_ctx(),
+            resolved_id.as_ref(),
+            &fn_name,
+            &type_name,
+            is_primitive_intrinsic,
+        ) else {
             return Err(format!("no format function for type `{type_name}`"));
         };
         match kind {
-            FormatKind::Enum => {
+            ResolvedFormatKind::Enum => {
                 let id = resolved_id
                     .clone()
                     .map(Ok)
-                    .unwrap_or_else(|| resolve_type_id(compiler, &type_name))?;
+                    .unwrap_or_else(|| resolve_type_id(&compiler.lower_ctx(), &type_name))?;
                 synthesize_enum_format(compiler, &id)?;
             }
-            FormatKind::Struct => {
+            ResolvedFormatKind::Struct => {
                 let id = resolved_id
                     .clone()
                     .map(Ok)
-                    .unwrap_or_else(|| resolve_type_id(compiler, &type_name))?;
+                    .unwrap_or_else(|| resolve_type_id(&compiler.lower_ctx(), &type_name))?;
                 synthesize_struct_format(compiler, &id)?;
             }
-            FormatKind::PrimitiveIntrinsic => {
+            ResolvedFormatKind::PrimitiveIntrinsic => {
                 let parameter_type = val.get_type();
                 let pointer_type = compiler.context.ptr_type(AddressSpace::default());
                 let function_type = pointer_type.fn_type(&[parameter_type.into()], false);
@@ -108,7 +118,7 @@ pub fn synthesize_all_formats<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(),
         .collect();
 
     for (id, is_enum) in &types {
-        let fn_name = format_fn_name(compiler, id);
+        let fn_name = format_fn_name(id);
         if compiler.functions.contains_key(&fn_name) {
             continue;
         }
@@ -122,14 +132,6 @@ pub fn synthesize_all_formats<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(),
         }
     }
     Ok(())
-}
-
-/// Name of the synthesized `format` function for a type. Mirrors
-/// `expo_ir::lower::naming::method_symbol_prefix` so definition sites and call sites
-/// converge on the same LLVM symbol (e.g. `debug_format.Color_format`).
-fn format_fn_name(_compiler: &Compiler, id: &TypeIdentifier) -> String {
-    let prefix = method_symbol_prefix(&id.package, &id.name);
-    format!("{prefix}_format")
 }
 
 /// Formats values via `snprintf` into a heap-allocated Expo string
@@ -232,26 +234,6 @@ pub fn snprintf_to_expo_string<'ctx>(
     payload
 }
 
-/// Resolved metadata for synthesizing an enum format function.
-struct ResolvedEnumFormatInfo {
-    function_name: String,
-    variants: Vec<VariantInfo>,
-}
-
-/// Looks up variant metadata from the type context for enum format synthesis.
-fn resolve_enum_format_info(compiler: &Compiler, id: &TypeIdentifier) -> ResolvedEnumFormatInfo {
-    let variants = compiler
-        .type_ctx
-        .get_type(id)
-        .and_then(|type_info| type_info.variants())
-        .cloned()
-        .unwrap_or_default();
-    ResolvedEnumFormatInfo {
-        function_name: format_fn_name(compiler, id),
-        variants,
-    }
-}
-
 /// Synthesizes a `{Enum}_format(self) -> String` function that switch-cases
 /// over the tag and returns a string representation of each variant.
 fn synthesize_enum_format<'ctx>(
@@ -260,7 +242,7 @@ fn synthesize_enum_format<'ctx>(
 ) -> Result<(), String> {
     let qualified = id.qualified_name();
     let enum_name = &id.name;
-    let resolved = resolve_enum_format_info(compiler, id);
+    let resolved = resolve_enum_format_info(&compiler.lower_ctx(), id);
     let synthesis = begin_synthesis(compiler, id, &resolved.function_name)?;
 
     let alloca = compiler
@@ -394,29 +376,6 @@ fn concat_variant_name<'ctx>(
     snprintf_to_expo_string(compiler, &fmt, &[payload_str.into()], "vn")
 }
 
-/// Resolved metadata for synthesizing a struct format function.
-struct ResolvedStructFormatInfo {
-    fields: Vec<(String, Type)>,
-    function_name: String,
-}
-
-/// Looks up field metadata from the type context for struct format synthesis.
-fn resolve_struct_format_info(
-    compiler: &Compiler,
-    id: &TypeIdentifier,
-) -> ResolvedStructFormatInfo {
-    let fields = compiler
-        .type_ctx
-        .get_type(id)
-        .and_then(|type_info| type_info.fields())
-        .cloned()
-        .unwrap_or_default();
-    ResolvedStructFormatInfo {
-        fields,
-        function_name: format_fn_name(compiler, id),
-    }
-}
-
 /// Synthesizes a `{Struct}_format(self) -> String` function that reads each
 /// field, formats it, and returns `StructName{field: value, ...}`.
 fn synthesize_struct_format<'ctx>(
@@ -424,7 +383,7 @@ fn synthesize_struct_format<'ctx>(
     id: &TypeIdentifier,
 ) -> Result<(), String> {
     let struct_name = &id.name;
-    let resolved = resolve_struct_format_info(compiler, id);
+    let resolved = resolve_struct_format_info(&compiler.lower_ctx(), id);
     let synthesis = begin_synthesis(compiler, id, &resolved.function_name)?;
 
     let fields = &resolved.fields;
@@ -537,54 +496,6 @@ fn end_synthesis(compiler: &mut Compiler, saved_block: Option<BasicBlock>) {
     if let Some(block) = saved_block {
         compiler.builder.position_at_end(block);
     }
-}
-
-/// Which formatting strategy to use for a given type.
-enum FormatKind {
-    Enum,
-    PrimitiveIntrinsic,
-    Struct,
-}
-
-/// Determines the formatting strategy for a type by checking the type
-/// context (enum vs struct) and the intrinsics table.
-fn resolve_format_kind(
-    compiler: &Compiler,
-    resolved_id: Option<&TypeIdentifier>,
-    fn_name: &str,
-    type_name: &str,
-) -> Option<FormatKind> {
-    if let Some(id) = resolved_id
-        && let Some(ti) = compiler.type_ctx.get_type(id)
-    {
-        if ti.is_enum() {
-            return Some(FormatKind::Enum);
-        }
-        if ti.is_struct() {
-            return Some(FormatKind::Struct);
-        }
-    } else {
-        if compiler.type_ctx.is_enum(type_name) {
-            return Some(FormatKind::Enum);
-        }
-        if compiler.type_ctx.is_struct(type_name) {
-            return Some(FormatKind::Struct);
-        }
-    }
-    if is_primitive_intrinsic(fn_name) {
-        Some(FormatKind::PrimitiveIntrinsic)
-    } else {
-        None
-    }
-}
-
-/// Resolves a bare type name to its [`TypeIdentifier`] via the type context.
-fn resolve_type_id(compiler: &Compiler, name: &str) -> Result<TypeIdentifier, String> {
-    compiler
-        .type_ctx
-        .resolve_name(name)
-        .cloned()
-        .ok_or_else(|| format!("no type identifier for `{name}`"))
 }
 
 /// Infers an Expo [`Type`] from an LLVM value by inspecting its bit width

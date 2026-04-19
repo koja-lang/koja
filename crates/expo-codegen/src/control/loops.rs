@@ -3,6 +3,7 @@
 
 use crate::drop::Ownership;
 use expo_ast::ast::{Expr, Pattern, Statement};
+use expo_ir::lower::mangling::try_parse_mangled_name;
 use expo_ir::lower::types::resolve_name_current;
 use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute_preserving};
 use inkwell::IntPredicate;
@@ -244,7 +245,7 @@ fn resolve_enumerable_info<'ctx>(
         } if !type_args.is_empty() => (identifier.name.clone(), type_args.clone()),
         Type::Named { identifier, .. } => {
             if let Some((base, type_args)) =
-                crate::generics::try_parse_mangled_name(&identifier.name, c)
+                try_parse_mangled_name(&c.lower_ctx(), &identifier.name)
             {
                 (base, type_args)
             } else {

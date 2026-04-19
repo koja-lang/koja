@@ -11,8 +11,11 @@ use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
-use crate::enums::{compile_enum_struct_eq, enum_mangled_name};
+use crate::enums::compile_enum_struct_eq;
 use crate::expr::compile_expr;
+use expo_ir::lower::enums::enum_mangled_name;
+use expo_ir::lower::strings::resolve_concat_kind;
+use expo_ir::resolved::strings::ResolvedConcatKind;
 
 /// Compiles a binary operation. Uses [`resolve_binary_op`] to decide what to
 /// emit, then mechanically dispatches to the corresponding LLVM builder call.
@@ -232,19 +235,6 @@ fn truncate_to_common_width<'ctx>(
     (l, r)
 }
 
-enum ConcatKind {
-    Binary,
-    String,
-}
-
-fn resolve_concat_kind(compiler: &Compiler, left: &Expr) -> ConcatKind {
-    let operand_type = concat_operand_type(compiler, left);
-    match &operand_type {
-        Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits) => ConcatKind::Binary,
-        _ => ConcatKind::String,
-    }
-}
-
 /// Compiles the `<>` concatenation operator for String, Binary, and Bits.
 fn compile_concat<'ctx>(
     compiler: &mut Compiler<'ctx>,
@@ -252,7 +242,13 @@ fn compile_concat<'ctx>(
     right: &Expr,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let kind = resolve_concat_kind(compiler, left);
+    let kind = resolve_concat_kind(&compiler.lower_ctx(), left, |name| {
+        compiler
+            .fn_state
+            .variables
+            .get(name)
+            .map(|(_, ty, _)| ty.clone())
+    });
     let result_type = concat_operand_type(compiler, left);
 
     let lhs = compile_expr(compiler, left, function)?
@@ -263,8 +259,8 @@ fn compile_concat<'ctx>(
         .value;
 
     let inner = match kind {
-        ConcatKind::Binary => compile_binary_concat(compiler, lhs, rhs),
-        ConcatKind::String => compile_string_concat(compiler, lhs, rhs),
+        ResolvedConcatKind::Binary => compile_binary_concat(compiler, lhs, rhs),
+        ResolvedConcatKind::String => compile_string_concat(compiler, lhs, rhs),
     }?;
     Ok(inner.map(|v| TypedValue::new(v, result_type)))
 }
