@@ -5,14 +5,14 @@ use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type, named};
 use inkwell::context::Context;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 
-use crate::compiler::TypeRegistry;
+use crate::compiler::LLVMTypeCache;
 
 /// Converts an Expo type to an LLVM basic type. Returns `None` for `Unit`
 /// and other types without an LLVM representation.
 pub fn to_llvm_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
-    registry: &TypeRegistry<'ctx>,
+    registry: &LLVMTypeCache<'ctx>,
 ) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
         Type::Indirect(_) | Type::Pointer(_) => {
@@ -55,7 +55,7 @@ pub fn to_llvm_type<'ctx>(
 pub fn to_llvm_metadata_type<'ctx>(
     ty: &Type,
     context: &'ctx Context,
-    registry: &TypeRegistry<'ctx>,
+    registry: &LLVMTypeCache<'ctx>,
 ) -> Option<BasicMetadataTypeEnum<'ctx>> {
     to_llvm_type(ty, context, registry).map(|t| t.into())
 }

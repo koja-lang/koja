@@ -618,6 +618,12 @@ synthesized names like `"List_$Int32$"`, not package-qualified types.
 `get_stdlib()` provides bare-name lookup for intrinsic/stdlib types where
 the caller only knows `"Fd"` or `"Socket"`, not the full identifier.
 
+_Wave 3 followup._ `TypeRegistry` was renamed to `LLVMTypeCache` and the
+`Compiler.types` field to `Compiler.llvm_types`, advertising at every call
+site that the surviving cache is purely an LLVM-handle store. The semantic
+half (struct/enum layouts) lives in `expo-ir`'s `TypeLayouts`; Wave 4 will
+split `enum_variant_payloads` along the same seam.
+
 _Typed AST._ `Expr` was restructured from a flat enum to
 `struct Expr { kind: ExprKind, span, resolved_type: Option<Type> }` --
 every expression carries its resolved type after type checking.

@@ -16,7 +16,7 @@ pub fn monomorphize_list_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
     let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = c.context.i64_type();
     st.set_body(&[ptr_type.into(), i64_type.into(), i64_type.into()], false);
-    c.types.register_monomorphized(mangled.to_string(), st);
+    c.llvm_types.register_monomorphized(mangled.to_string(), st);
     c.layouts.register_struct_layout(
         mangled.to_string(),
         vec![
@@ -36,12 +36,12 @@ pub fn emit_list_method<'ctx>(
     type_args: &[Type],
 ) -> Result<EmitResult, String> {
     let list_struct = c
-        .types
+        .llvm_types
         .get_monomorphized(mangled_type)
         .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
     let elem_ty = &type_args[0];
-    let elem_llvm = to_llvm_type(elem_ty, c.context, &c.types)
+    let elem_llvm = to_llvm_type(elem_ty, c.context, &c.llvm_types)
         .ok_or_else(|| format!("cannot map element type `{}` to LLVM", elem_ty.display()))?;
     let elem_size = crate::compiler::llvm_field_byte_size(elem_llvm) as u64;
 
@@ -196,7 +196,7 @@ pub fn emit_list_method<'ctx>(
             let option_mangled = mangle_name(&TypeIdentifier::std("Option"), &option_type_args);
             ensure_types_exist(c, &named_generic_std("Option", option_type_args))?;
             let option_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
@@ -366,7 +366,7 @@ pub fn emit_list_method<'ctx>(
             ensure_types_exist(c, &named_generic_std("Option", option_type_args.clone()))?;
             let option_mangled = mangle_name(&TypeIdentifier::std("Option"), &option_type_args);
             let option_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
@@ -376,7 +376,7 @@ pub fn emit_list_method<'ctx>(
             ensure_types_exist(c, &named_generic_std("Pair", pair_type_args.clone()))?;
             let pair_mangled = mangle_name(&TypeIdentifier::std("Pair"), &pair_type_args);
             let pair_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(&pair_mangled)
                 .ok_or_else(|| format!("no LLVM type for {pair_mangled}"))?;
 

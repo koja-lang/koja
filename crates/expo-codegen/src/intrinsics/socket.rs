@@ -78,12 +78,12 @@ pub fn emit_socket_intrinsic<'ctx>(
                 }],
             );
             let list_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(&list_type_name)
                 .ok_or_else(|| format!("{list_type_name} struct type not found"))?;
 
             let ip_struct_ty = c
-                .types
+                .llvm_types
                 .get_concrete(&ip_id)
                 .ok_or("IPAddress struct type not found")?;
             let ip_size = crate::compiler::llvm_field_byte_size(ip_struct_ty.into()) as u64;
@@ -237,7 +237,7 @@ pub fn emit_socket_intrinsic<'ctx>(
             c.call_void(free_fn, &[result_ptr.into()], "free_buf");
 
             let ip_struct_ty = c
-                .types
+                .llvm_types
                 .get_concrete(&TypeIdentifier::new("net", "IPAddress"))
                 .ok_or("IPAddress struct type not found")?;
             let ip_val = ip_struct_ty.get_undef();
@@ -248,7 +248,7 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .into_struct_value();
 
             let sa_struct_ty = c
-                .types
+                .llvm_types
                 .get_concrete(&TypeIdentifier::new("net", "SocketAddress"))
                 .ok_or("SocketAddress struct type not found")?;
             let sa_val = sa_struct_ty.get_undef();
@@ -275,7 +275,7 @@ pub fn emit_socket_intrinsic<'ctx>(
                 ],
             );
             let pair_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(&pair_type_name)
                 .ok_or_else(|| format!("{pair_type_name} struct type not found"))?;
             let pair_val = pair_struct.get_undef();

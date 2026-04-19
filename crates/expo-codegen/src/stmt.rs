@@ -162,7 +162,7 @@ fn compile_assignment<'ctx>(
                 } else {
                     let ownership = ownership_for_expr(value, &assigned_type);
                     let alloca_type =
-                        to_llvm_type(&assigned_type, compiler.context, &compiler.types)
+                        to_llvm_type(&assigned_type, compiler.context, &compiler.llvm_types)
                             .unwrap_or(val.get_type());
                     let alloca = compiler.build_entry_alloca(alloca_type, name);
                     compiler.builder.build_store(alloca, val).unwrap();
@@ -181,7 +181,7 @@ fn compile_assignment<'ctx>(
             };
 
             let ownership = ownership_for_expr(value, &assigned_type);
-            let alloca_type = to_llvm_type(&assigned_type, compiler.context, &compiler.types)
+            let alloca_type = to_llvm_type(&assigned_type, compiler.context, &compiler.llvm_types)
                 .unwrap_or(val.get_type());
             let alloca = compiler.build_entry_alloca(alloca_type, name);
             compiler.builder.build_store(alloca, val).unwrap();
@@ -216,7 +216,7 @@ fn compile_compound_assign<'ctx>(
         resolve_field_ptr(compiler, &target.segments)?
     };
 
-    let llvm_type = to_llvm_type(&target_type, compiler.context, &compiler.types)
+    let llvm_type = to_llvm_type(&target_type, compiler.context, &compiler.llvm_types)
         .ok_or("cannot load variable of unsupported type")?;
     let current = compiler.builder.build_load(llvm_type, ptr, "cur").unwrap();
     let rhs = compile_expr(compiler, value, function)?
@@ -351,7 +351,7 @@ fn resolve_field_ptr<'ctx>(
 
     let mut current_type = base_type;
     for (i, step) in steps.iter().enumerate() {
-        let struct_type = to_llvm_type(&current_type, compiler.context, &compiler.types)
+        let struct_type = to_llvm_type(&current_type, compiler.context, &compiler.llvm_types)
             .map(|t| t.into_struct_type())
             .ok_or_else(|| format!("unknown struct type for field path segment {i}"))?;
 
@@ -504,7 +504,7 @@ pub(crate) fn apply_coercion<'ctx>(
     match coercion {
         Coercion::UnionWiden { source, target } => {
             let target_mangled = mangle_type(&target);
-            if let Some(target_llvm) = compiler.types.get_monomorphized(&target_mangled)
+            if let Some(target_llvm) = compiler.llvm_types.get_monomorphized(&target_mangled)
                 && val.get_type() == target_llvm.into()
             {
                 return Ok(val);
@@ -833,7 +833,7 @@ fn resolve_union_member<'ctx>(
         })? as u64;
 
     let union_type = compiler
-        .types
+        .llvm_types
         .get_monomorphized(&union_mangled)
         .ok_or_else(|| format!("union type {} not registered", union_mangled))?;
 

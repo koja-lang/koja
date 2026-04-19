@@ -17,7 +17,7 @@ pub fn monomorphize_ref_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> R
     let i64_type = c.context.i64_type();
     let st = c.context.opaque_struct_type(mangled);
     st.set_body(&[i64_type.into()], false);
-    c.types.register_monomorphized(mangled.to_string(), st);
+    c.llvm_types.register_monomorphized(mangled.to_string(), st);
     c.layouts.register_struct_layout(
         mangled.to_string(),
         vec![("id".to_string(), Type::Primitive(Primitive::I64))],
@@ -32,7 +32,7 @@ pub fn monomorphize_reply_to_struct<'ctx>(
     let i64_type = c.context.i64_type();
     let st = c.context.opaque_struct_type(mangled);
     st.set_body(&[i64_type.into()], false);
-    c.types.register_monomorphized(mangled.to_string(), st);
+    c.llvm_types.register_monomorphized(mangled.to_string(), st);
     c.layouts.register_struct_layout(
         mangled.to_string(),
         vec![("id".to_string(), Type::Primitive(Primitive::I64))],
@@ -158,7 +158,7 @@ pub fn emit_ref_method<'ctx>(
     match method_name {
         "self_ref" => {
             let ref_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
@@ -196,7 +196,7 @@ pub fn emit_ref_method<'ctx>(
         }
         "cast" => {
             let ref_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
@@ -211,13 +211,13 @@ pub fn emit_ref_method<'ctx>(
             let msg_llvm = if is_string {
                 c.context.ptr_type(AddressSpace::default()).into()
             } else {
-                to_llvm_type(msg_type, c.context, &c.types)
+                to_llvm_type(msg_type, c.context, &c.llvm_types)
                     .ok_or_else(|| format!("no LLVM type for message `{msg_type:?}`"))?
             };
 
             let envelope_type = process_envelope_type(msg_type, reply_type);
             ensure_types_exist(c, &envelope_type)?;
-            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.types)
+            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Pair envelope")?
                 .into_struct_type();
 
@@ -246,7 +246,7 @@ pub fn emit_ref_method<'ctx>(
                 vec![named_generic_std("ReplyTo", vec![reply_type.clone()])],
             );
             ensure_types_exist(c, &option_reply_type)?;
-            let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.types)
+            let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
                 .into_struct_type();
 
@@ -300,7 +300,7 @@ pub fn emit_ref_method<'ctx>(
         }
         "call" => {
             let ref_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
@@ -320,7 +320,7 @@ pub fn emit_ref_method<'ctx>(
             } else if is_msg_unit {
                 c.context.i8_type().into()
             } else {
-                to_llvm_type(msg_type, c.context, &c.types)
+                to_llvm_type(msg_type, c.context, &c.llvm_types)
                     .ok_or_else(|| format!("no LLVM type for call message `{msg_type:?}`"))?
             };
 
@@ -333,7 +333,7 @@ pub fn emit_ref_method<'ctx>(
             } else if is_reply_unit {
                 i8_ty.into()
             } else {
-                to_llvm_type(reply_type, c.context, &c.types)
+                to_llvm_type(reply_type, c.context, &c.llvm_types)
                     .ok_or_else(|| format!("no LLVM type for reply `{reply_type:?}`"))?
             };
 
@@ -342,16 +342,16 @@ pub fn emit_ref_method<'ctx>(
             let result_type_args = vec![reply_type.clone(), callerror_type.clone()];
             let result_id = TypeIdentifier::std("Result");
             let result_mangled = mangle_name(&result_id, &result_type_args);
-            if !c.types.contains_monomorphized(&result_mangled) {
+            if !c.llvm_types.contains_monomorphized(&result_mangled) {
                 monomorphize_enum(c, &result_id, &result_type_args)?;
             }
             let result_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(&result_mangled)
                 .ok_or("Result<R, CallError> struct not found")?;
 
             // Ensure CallError enum exists in LLVM.
-            if c.types
+            if c.llvm_types
                 .get_concrete(&TypeIdentifier::std("CallError"))
                 .is_none()
             {
@@ -360,19 +360,19 @@ pub fn emit_ref_method<'ctx>(
 
             let envelope_type = process_envelope_type(msg_type, reply_type);
             ensure_types_exist(c, &envelope_type)?;
-            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.types)
+            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Pair envelope")?
                 .into_struct_type();
 
             let reply_to_type = named_generic_std("ReplyTo", vec![reply_type.clone()]);
             ensure_types_exist(c, &reply_to_type)?;
-            let reply_to_llvm = to_llvm_type(&reply_to_type, c.context, &c.types)
+            let reply_to_llvm = to_llvm_type(&reply_to_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for ReplyTo<R>")?
                 .into_struct_type();
 
             let option_from_type = named_generic_std("Option", vec![reply_to_type]);
             ensure_types_exist(c, &option_from_type)?;
-            let option_from_llvm = to_llvm_type(&option_from_type, c.context, &c.types)
+            let option_from_llvm = to_llvm_type(&option_from_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
                 .into_struct_type();
 
@@ -611,12 +611,12 @@ pub fn emit_ref_method<'ctx>(
         }
         "signal" => {
             let ref_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             // Lifecycle is an enum with unit variants; its LLVM repr is { i8 }.
-            let lifecycle_llvm = to_llvm_type(&named_std("Lifecycle"), c.context, &c.types)
+            let lifecycle_llvm = to_llvm_type(&named_std("Lifecycle"), c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Lifecycle enum")?;
 
             let fn_type = c
@@ -667,7 +667,7 @@ pub fn emit_ref_method<'ctx>(
         }
         "kill" => {
             let ref_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
@@ -702,7 +702,7 @@ pub fn emit_ref_method<'ctx>(
         }
         "alive?" => {
             let ref_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
@@ -759,7 +759,7 @@ pub fn emit_ref_method<'ctx>(
         }
         "send_after" => {
             let ref_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
@@ -774,13 +774,13 @@ pub fn emit_ref_method<'ctx>(
             let msg_llvm = if is_string {
                 c.context.ptr_type(AddressSpace::default()).into()
             } else {
-                to_llvm_type(msg_type, c.context, &c.types)
+                to_llvm_type(msg_type, c.context, &c.llvm_types)
                     .ok_or_else(|| format!("no LLVM type for message `{msg_type:?}`"))?
             };
 
             let envelope_type = process_envelope_type(msg_type, reply_type);
             ensure_types_exist(c, &envelope_type)?;
-            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.types)
+            let envelope_llvm = to_llvm_type(&envelope_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Pair envelope")?
                 .into_struct_type();
 
@@ -811,7 +811,7 @@ pub fn emit_ref_method<'ctx>(
                 vec![named_generic_std("ReplyTo", vec![reply_type.clone()])],
             );
             ensure_types_exist(c, &option_reply_type)?;
-            let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.types)
+            let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
                 .into_struct_type();
 
@@ -881,7 +881,7 @@ pub fn emit_reply_to_method<'ctx>(
     match method_name {
         "send" => {
             let reply_to_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(mangled_type)
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
@@ -893,7 +893,7 @@ pub fn emit_reply_to_method<'ctx>(
             let reply_llvm = if is_string {
                 c.context.ptr_type(AddressSpace::default()).into()
             } else {
-                to_llvm_type(reply_type, c.context, &c.types)
+                to_llvm_type(reply_type, c.context, &c.llvm_types)
                     .ok_or_else(|| format!("no LLVM type for reply `{reply_type:?}`"))?
             };
 

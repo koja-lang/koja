@@ -191,7 +191,7 @@ fn lower_result_ty(compiler: &Compiler<'_>, arms: &[MatchArm]) -> ResolvedMatchT
         let all_members = arm_types.iter().all(|t| {
             matches!(t, Type::Union(_)) || members.iter().any(|m| mangle_type(m) == mangle_type(t))
         });
-        if all_members && compiler.types.contains_monomorphized(&target_mangled) {
+        if all_members && compiler.llvm_types.contains_monomorphized(&target_mangled) {
             return ResolvedMatchType::UnionWrap { target };
         }
     }
@@ -616,7 +616,7 @@ fn lower_struct_fields(
     Ok(out)
 }
 
-/// Resolves the canonical TypeRegistry key for an enum referenced via an
+/// Resolves the canonical LLVMTypeCache key for an enum referenced via an
 /// AST type path (`Color`, `alpha.Status`, generic-args-bearing `Option<T>`
 /// already monomorphized in the subject type, etc.).
 fn resolve_enum_key_from_path(
@@ -658,18 +658,18 @@ fn resolve_enum_key_from_joined(
 ) -> Result<String, String> {
     if let Some(id) = compiler.resolve_name_current(joined) {
         let qualified = id.qualified_name();
-        if compiler.types.get_concrete(id).is_some()
-            || compiler.types.contains_monomorphized(&qualified)
+        if compiler.llvm_types.get_concrete(id).is_some()
+            || compiler.llvm_types.contains_monomorphized(&qualified)
             || compiler.layouts.contains_enum(&qualified)
         {
             return Ok(qualified);
         }
     }
     if compiler
-        .types
+        .llvm_types
         .get_concrete(&TypeIdentifier::from_qualified_name(joined))
         .is_some()
-        || compiler.types.contains_monomorphized(joined)
+        || compiler.llvm_types.contains_monomorphized(joined)
         || compiler.layouts.contains_enum(joined)
     {
         return Ok(joined.to_string());
@@ -680,7 +680,7 @@ fn resolve_enum_key_from_joined(
     ))
 }
 
-/// Resolves the canonical TypeRegistry key for a shorthand constructor
+/// Resolves the canonical LLVMTypeCache key for a shorthand constructor
 /// pattern (`Some(x)`, `Ok(_)`) -- where the variant name is given without
 /// an enum-name qualifier.
 fn resolve_enum_key_from_constructor(
@@ -743,7 +743,7 @@ fn lookup_variant_tag(
     variant: &str,
 ) -> Result<u8, String> {
     compiler
-        .types
+        .llvm_types
         .get_variant_tag(enum_key, variant)
         .ok_or_else(|| format!("unknown variant: {enum_key}.{variant}"))
 }
@@ -804,7 +804,7 @@ fn emit_pattern<'ctx>(
         }
 
         ResolvedPattern::LiteralEq { lit, subject_ty } => {
-            let llvm_ty = to_llvm_type(subject_ty, compiler.context, &compiler.types)
+            let llvm_ty = to_llvm_type(subject_ty, compiler.context, &compiler.llvm_types)
                 .ok_or("cannot load subject for literal comparison")?;
             let subject_val = compiler
                 .builder
@@ -835,7 +835,7 @@ fn emit_pattern<'ctx>(
                 // Align with monomorphized enum payloads: ZST fields use an
                 // i8 placeholder when `to_llvm_type` is `None` (e.g. `()`),
                 // so LLVM layout and pattern loads stay in sync.
-                let inner_llvm_ty = to_llvm_type(inner, compiler.context, &compiler.types)
+                let inner_llvm_ty = to_llvm_type(inner, compiler.context, &compiler.llvm_types)
                     .unwrap_or_else(|| compiler.context.i8_type().into());
                 let field_ptr = compiler
                     .builder
@@ -871,7 +871,7 @@ fn emit_pattern<'ctx>(
                 get_payload_ptr(compiler, subject_ptr, enum_key, variant)?;
             for fp in fields {
                 let inner_ty = unwrap_indirect(&fp.field_type);
-                let inner_llvm_ty = to_llvm_type(inner_ty, compiler.context, &compiler.types)
+                let inner_llvm_ty = to_llvm_type(inner_ty, compiler.context, &compiler.llvm_types)
                     .ok_or_else(|| format!("unsupported field type for `{}`", fp.name))?;
                 let field_ptr = compiler
                     .builder
@@ -918,8 +918,8 @@ fn emit_pattern<'ctx>(
             let result = emit_tag_check(compiler, subject_ptr, union_mangled, *tag)?;
             let (_payload_type, payload_ptr) =
                 get_payload_ptr(compiler, subject_ptr, union_mangled, member_mangled)?;
-            let llvm_ty =
-                to_llvm_type(member_ty, compiler.context, &compiler.types).ok_or_else(|| {
+            let llvm_ty = to_llvm_type(member_ty, compiler.context, &compiler.llvm_types)
+                .ok_or_else(|| {
                     format!("unsupported type in typed binding: {}", member_ty.display())
                 })?;
             let val = compiler
@@ -958,10 +958,10 @@ fn emit_bind<'ctx>(
     subject_ptr: PointerValue<'ctx>,
 ) -> Result<(), String> {
     let llvm_ty = if strict_llvm {
-        to_llvm_type(ty, compiler.context, &compiler.types)
+        to_llvm_type(ty, compiler.context, &compiler.llvm_types)
             .ok_or_else(|| format!("unsupported type in typed binding: {}", ty.display()))?
     } else {
-        to_llvm_type(ty, compiler.context, &compiler.types)
+        to_llvm_type(ty, compiler.context, &compiler.llvm_types)
             .unwrap_or_else(|| compiler.context.i8_type().into())
     };
     let val = compiler
@@ -1030,9 +1030,9 @@ fn lookup_enum_struct_type<'ctx>(
     enum_key: &str,
 ) -> Result<StructType<'ctx>, String> {
     compiler
-        .types
+        .llvm_types
         .get_concrete(&TypeIdentifier::from_qualified_name(enum_key))
-        .or_else(|| compiler.types.get_monomorphized(enum_key))
+        .or_else(|| compiler.llvm_types.get_monomorphized(enum_key))
         .ok_or_else(|| format!("unknown enum: {enum_key}"))
 }
 
@@ -1064,7 +1064,7 @@ fn resolve_payload_info<'ctx>(
     variant: &str,
 ) -> Result<ResolvedPayloadInfo<'ctx>, String> {
     let payload_type = compiler
-        .types
+        .llvm_types
         .get_variant_payload_type(enum_name, variant)
         .ok_or_else(|| format!("no payload type for {enum_name}.{variant}"))?;
     let enum_type = lookup_enum_struct_type(compiler, enum_name)?;

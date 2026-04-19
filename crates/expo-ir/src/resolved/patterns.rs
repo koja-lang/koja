@@ -74,7 +74,7 @@ pub enum ResolvedPattern {
     /// the previously-deferred `GEPIndex` panic at the payload pointer is
     /// unreachable from this arm by construction.
     EnumUnit {
-        /// The TypeRegistry key (package-qualified or mangled) for the enum.
+        /// The LLVMTypeCache key (package-qualified or mangled) for the enum.
         enum_key: String,
         variant: String,
         tag: u8,

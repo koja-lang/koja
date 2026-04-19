@@ -2,26 +2,29 @@
 //! types, used during lowering and emission.
 //!
 //! This is the destination crate for the multi-wave migration of
-//! `expo-codegen`'s `TypeRegistry`. `TypeRegistry` historically conflated
-//! semantic layout data (which fields a struct has, in what order, with what
-//! Expo types) with backend-specific caches (the `inkwell::StructType<'ctx>`
-//! handles). The semantic side belongs in `expo-ir` so future lowering
-//! functions can take `&TypeLayouts` instead of borrowing the whole
-//! `Compiler<'ctx>`.
+//! `expo-codegen`'s historical `TypeRegistry` (now `LLVMTypeCache`).
+//! `TypeRegistry` conflated semantic layout data (which fields a struct has,
+//! in what order, with what Expo types) with backend-specific caches (the
+//! `inkwell::StructType<'ctx>` handles). The semantic side belongs in
+//! `expo-ir` so future lowering functions can take `&TypeLayouts` instead of
+//! borrowing the whole `Compiler<'ctx>`.
 //!
 //! ## Migration waves
 //!
 //! - **Wave 1** — relocated `mono_struct_info` from `TypeRegistry` and folded
 //!   the two field-lookup helpers (`field_index`, `field_type`) onto
 //!   `TypeLayouts` as inherent methods.
-//! - **Wave 2 (current)** — added the `expo-typecheck` dep and relocated
+//! - **Wave 2** — added the `expo-typecheck` dep and relocated
 //!   `mono_enum_variants`. The new methods (`register_enum_variants`,
 //!   `enum_variants`, `contains_enum`) cover every former direct-field
 //!   reader. Companion change: `Compiler::struct_field_lookup` and the two
 //!   `concrete_field_*` helpers move into `crate::lower::fields` as the
 //!   first true lowering functions hosted in `expo-ir`.
-//! - **Wave 3+** — handled in `expo-codegen` (LLVM-only registry rename,
-//!   then the `enum_variant_payloads` split, then `FnState`).
+//! - **Wave 3 (current)** — pure rename in `expo-codegen`: `TypeRegistry` →
+//!   `LLVMTypeCache` and `Compiler.types` → `Compiler.llvm_types`, making the
+//!   surviving registry's LLVM-only role explicit at every call site.
+//! - **Wave 4+** — split `enum_variant_payloads` (mixed semantic / LLVM),
+//!   then carve up `FnState`.
 
 use std::collections::HashMap;
 

@@ -255,7 +255,7 @@ pub fn emit_string_intrinsic<'ctx>(
                 &named_generic_std("Option", vec![Type::Primitive(Primitive::String)]),
             )?;
             let option_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(&option_mangled)
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 

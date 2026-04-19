@@ -86,13 +86,13 @@ pub(crate) fn load_maybe_indirect<'ctx>(
             .unwrap()
             .into_pointer_value();
         let _ = ensure_types_exist(c, inner);
-        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.types)
+        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.llvm_types)
             .expect("indirect inner type must have LLVM representation");
         c.builder
             .build_load(inner_llvm_ty, heap_ptr, &format!("{label}_deref"))
             .unwrap()
     } else {
-        let llvm_ty = to_llvm_type(field_type, c.context, &c.types)
+        let llvm_ty = to_llvm_type(field_type, c.context, &c.llvm_types)
             .unwrap_or_else(|| c.context.i8_type().into());
         c.builder.build_load(llvm_ty, field_ptr, label).unwrap()
     }
@@ -110,7 +110,7 @@ pub(crate) fn store_maybe_indirect<'ctx>(
 ) {
     if let Type::Indirect(inner) = field_type {
         let _ = ensure_types_exist(c, inner);
-        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.types)
+        let inner_llvm_ty = to_llvm_type(inner, c.context, &c.llvm_types)
             .expect("indirect inner type must have LLVM representation");
         let size = llvm_type_size(inner_llvm_ty, c);
         let malloc_fn = *c.functions.get("malloc").expect("malloc not declared");
@@ -264,7 +264,7 @@ fn emit_chain_field_access<'ctx>(
 
     for step in &chain.steps {
         let struct_type =
-            to_llvm_type(&current_type, compiler.context, &compiler.types)?.into_struct_type();
+            to_llvm_type(&current_type, compiler.context, &compiler.llvm_types)?.into_struct_type();
         ptr = compiler
             .builder
             .build_struct_gep(struct_type, ptr, step.field_index, label)
@@ -912,7 +912,7 @@ fn infer_field_init_type(compiler: &Compiler, expr: &Expr, compiled_type: &Type)
 /// generic structs uniformly: for generics, runs `unify` over the supplied
 /// `compiled_field_types` and triggers monomorphization. The returned
 /// `mangled_name` is always the post-monomorphization key suitable for
-/// `compiler.types.get_monomorphized` / `get_concrete`.
+/// `compiler.llvm_types.get_monomorphized` / `get_concrete`.
 fn lower_struct_construction(
     compiler: &mut Compiler,
     raw_name: &str,
@@ -1059,7 +1059,7 @@ fn lower_generic_struct(
         .ok_or_else(|| format!("cannot resolve package for generic struct `{struct_name}`"))?;
     let mangled_name = mangle_name(&struct_id, &type_args);
 
-    if !compiler.types.contains_monomorphized(&mangled_name) {
+    if !compiler.llvm_types.contains_monomorphized(&mangled_name) {
         monomorphize_struct(compiler, &struct_id, &type_args)?;
     }
 
@@ -1164,12 +1164,12 @@ fn lookup_struct_llvm_type<'ctx>(
 ) -> Result<StructType<'ctx>, String> {
     if resolved.is_generic {
         return compiler
-            .types
+            .llvm_types
             .get_monomorphized(&resolved.mangled_name)
             .ok_or_else(|| format!("monomorphized struct `{}` not found", resolved.mangled_name));
     }
     if let Type::Named { identifier, .. } = &resolved.result_type
-        && let Some(t) = compiler.types.get_concrete(identifier)
+        && let Some(t) = compiler.llvm_types.get_concrete(identifier)
     {
         return Ok(t);
     }
@@ -1322,7 +1322,7 @@ fn resolve_static_call<'ctx>(
             format!("cannot resolve package for generic static call on `{type_name}`")
         })?;
         let m = mangle_name(&type_id, &type_args);
-        if !c.types.contains_monomorphized(&m) {
+        if !c.llvm_types.contains_monomorphized(&m) {
             if c.type_ctx.is_struct(type_name) {
                 monomorphize_struct(c, &type_id, &type_args)?;
             } else {

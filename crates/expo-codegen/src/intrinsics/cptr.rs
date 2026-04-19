@@ -51,7 +51,7 @@ fn resolve_pointee_llvm_type<'ctx>(
     let type_name = &after_prefix[..dollar_idx];
 
     let expo_ty = crate::types::primitive_name_to_type(type_name);
-    to_llvm_type(&expo_ty, c.context, &c.types)
+    to_llvm_type(&expo_ty, c.context, &c.llvm_types)
 }
 
 pub fn emit_cptr_intrinsic<'ctx>(
@@ -356,7 +356,7 @@ pub fn emit_cptr_method<'ctx>(
     let void_ty = c.context.void_type();
 
     let inner_ty = type_args.first().ok_or("CPtr needs a type argument")?;
-    let inner_llvm = to_llvm_type(inner_ty, c.context, &c.types);
+    let inner_llvm = to_llvm_type(inner_ty, c.context, &c.llvm_types);
 
     let fn_type = match method_name {
         "null" => ptr_ty.fn_type(&[], false),

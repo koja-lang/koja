@@ -311,7 +311,7 @@ fn synthesize_enum_format<'ctx>(
                 VariantData::Tuple(types) => {
                     if types.len() == 1 && !is_complex_type(&types[0]) {
                         let payload_struct_type = compiler
-                            .types
+                            .llvm_types
                             .get_variant_payload_type(&qualified, &variant_info.name);
 
                         if let Some(payload_type) = payload_struct_type {
@@ -504,7 +504,7 @@ fn begin_synthesis<'ctx>(
     function_name: &str,
 ) -> Result<SynthesisContext<'ctx>, String> {
     let llvm_type = compiler
-        .types
+        .llvm_types
         .get_concrete(id)
         .ok_or_else(|| format!("unknown type: {id}"))?;
 

@@ -125,7 +125,7 @@ fn precompile_generic_tuple_args<'ctx>(
 /// generic enums uniformly: for generics, runs `unify` over the supplied
 /// `compiled_arg_types` and triggers monomorphization. The returned
 /// `mangled_name` is always the post-monomorphization key suitable for
-/// `compiler.types.get_monomorphized` / `get_concrete`.
+/// `compiler.llvm_types.get_monomorphized` / `get_concrete`.
 fn lower_enum_construction(
     compiler: &mut Compiler,
     enum_name: &str,
@@ -167,7 +167,7 @@ fn lower_concrete_enum(
 
     let key = resolved_id.qualified_name();
     let tag = compiler
-        .types
+        .llvm_types
         .get_variant_tag(&key, variant)
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{resolved_id}`"))?
         as u64;
@@ -259,12 +259,12 @@ fn lower_generic_enum(
     })?;
     let mangled_name = mangle_name(&enum_id, &type_args);
 
-    if !compiler.types.contains_monomorphized(&mangled_name) {
+    if !compiler.llvm_types.contains_monomorphized(&mangled_name) {
         monomorphize_enum(compiler, &enum_id, &type_args)?;
     }
 
     let tag = compiler
-        .types
+        .llvm_types
         .get_variant_tag(&mangled_name, variant)
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{mangled_name}`"))?
         as u64;
@@ -432,11 +432,11 @@ fn lookup_enum_llvm_type<'ctx>(
     compiler: &Compiler<'ctx>,
     mangled_name: &str,
 ) -> Result<StructType<'ctx>, String> {
-    if let Some(t) = compiler.types.get_monomorphized(mangled_name) {
+    if let Some(t) = compiler.llvm_types.get_monomorphized(mangled_name) {
         return Ok(t);
     }
     if let Some(id) = compiler.resolve_name_current(mangled_name)
-        && let Some(t) = compiler.types.get_concrete(id)
+        && let Some(t) = compiler.llvm_types.get_concrete(id)
     {
         return Ok(t);
     }
@@ -445,7 +445,7 @@ fn lookup_enum_llvm_type<'ctx>(
         package: Package::Unresolved,
     };
     compiler
-        .types
+        .llvm_types
         .get_concrete(&id)
         .ok_or_else(|| format!("unknown enum type: {mangled_name}"))
 }
@@ -473,7 +473,7 @@ fn emit_variant_payload<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> Result<(), String> {
     let payload_type = compiler
-        .types
+        .llvm_types
         .get_variant_payload_type(&resolved.mangled_name, &resolved.variant_name)
         .ok_or_else(|| {
             format!(
@@ -637,7 +637,7 @@ fn resolve_enum_eq(c: &Compiler, ty: &Type) -> Result<ResolvedEnumEq, String> {
         .ok_or_else(|| "compile_enum_struct_eq called with non-enum type".to_string())?;
 
     let payloads = c
-        .types
+        .llvm_types
         .enum_variant_payloads
         .get(&mangled)
         .ok_or_else(|| format!("enum variant payloads not found for `{mangled}`"))?;
@@ -689,7 +689,7 @@ pub(crate) fn compile_enum_struct_eq<'ctx>(
 ) -> Result<IntValue<'ctx>, String> {
     let resolved = resolve_enum_eq(c, ty)?;
 
-    let enum_type = to_llvm_type(ty, c.context, &c.types)
+    let enum_type = to_llvm_type(ty, c.context, &c.llvm_types)
         .map(|t| t.into_struct_type())
         .ok_or_else(|| format!("unknown enum LLVM type: {}", resolved.mangled))?;
 

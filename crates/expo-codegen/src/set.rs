@@ -20,7 +20,7 @@ pub fn emit_set_method<'ctx>(
     type_args: &[Type],
 ) -> Result<EmitResult, String> {
     let set_struct = c
-        .types
+        .llvm_types
         .get_monomorphized(mangled_type)
         .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
@@ -29,7 +29,7 @@ pub fn emit_set_method<'ctx>(
     }
     let elem_type = &type_args[0];
 
-    let elem_llvm = to_llvm_type(elem_type, c.context, &c.types)
+    let elem_llvm = to_llvm_type(elem_type, c.context, &c.llvm_types)
         .ok_or_else(|| format!("no LLVM type for Set element `{elem_type:?}`"))?;
 
     let elem_size = crate::compiler::llvm_field_byte_size(elem_llvm) as u64;
@@ -770,7 +770,7 @@ pub fn emit_set_method<'ctx>(
             let list_mangled = mangle_name(&list_id, std::slice::from_ref(elem_type));
             monomorphize_struct(c, &list_id, std::slice::from_ref(elem_type))?;
             let list_struct = c
-                .types
+                .llvm_types
                 .get_monomorphized(&list_mangled)
                 .ok_or_else(|| format!("no LLVM type for {list_mangled}"))?;
 

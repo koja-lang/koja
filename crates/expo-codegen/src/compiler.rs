@@ -157,10 +157,14 @@ impl<'ctx> TailCallCtx<'ctx> {
     }
 }
 
-/// LLVM struct types, enum payloads, name tables, and monomorphisation info.
-/// Populated during type registration / monomorphisation and read during body
-/// compilation. Mirrors the read-only `TypeContext` pattern from COMPILER.md.
-pub struct TypeRegistry<'ctx> {
+/// LLVM-only struct type cache: handles for non-generic types, monomorphized
+/// generics/unions, and enum variant payloads. Populated during type
+/// registration / monomorphisation and read during body compilation.
+/// Semantic layout data (field order, variant lists) lives in
+/// [`expo_ir::TypeLayouts`] on `Compiler.layouts`; this struct holds only
+/// `inkwell::StructType<'ctx>` handles and the (Wave-4-pending) variant
+/// payload table that still mixes both concerns.
+pub struct LLVMTypeCache<'ctx> {
     /// Collision-safe map for non-generic types, keyed by package-qualified
     /// `TypeIdentifier`. Used for concrete structs and enums.
     pub concrete: HashMap<TypeIdentifier, StructType<'ctx>>,
@@ -172,7 +176,7 @@ pub struct TypeRegistry<'ctx> {
     pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
 }
 
-impl<'ctx> TypeRegistry<'ctx> {
+impl<'ctx> LLVMTypeCache<'ctx> {
     pub fn new() -> Self {
         Self {
             concrete: HashMap::new(),
@@ -278,11 +282,14 @@ pub struct Compiler<'ctx> {
     /// Cache of generated thunk wrappers for bare function references.
     /// Maps original function name to the thunk `FunctionValue`.
     pub fn_ref_thunks: HashMap<String, FunctionValue<'ctx>>,
-    /// Type registry: LLVM struct types, enum payloads, and monomorphisation data.
-    pub types: TypeRegistry<'ctx>,
-    /// LLVM-free semantic layout tables (lives in `expo-ir`). Currently
-    /// hosts `mono_struct_info`; future migration waves will fold the rest
-    /// of `TypeRegistry`'s semantic-only data here.
+    /// LLVM type cache: handles for non-generic and monomorphized struct
+    /// types, plus enum payload structs. Populated during type registration;
+    /// read during body compilation.
+    pub llvm_types: LLVMTypeCache<'ctx>,
+    /// LLVM-free semantic layout tables (lives in `expo-ir`). Hosts
+    /// monomorphized struct field layouts and enum variant lists. Wave 4
+    /// will further split `LLVMTypeCache::enum_variant_payloads` so the
+    /// semantic half (variant order, has-payload bits) lands here too.
     pub layouts: TypeLayouts,
     /// Per-function ephemeral state (variables, loops, TCO, etc.).
     pub fn_state: FnState<'ctx>,
@@ -354,7 +361,7 @@ fn resolve_const_enum(
     enum_name: &str,
     variant: &str,
 ) -> Option<ResolvedConstEnum> {
-    let tag = compiler.types.get_variant_tag(enum_name, variant)?;
+    let tag = compiler.llvm_types.get_variant_tag(enum_name, variant)?;
     Some(ResolvedConstEnum { tag })
 }
 
@@ -370,7 +377,7 @@ impl<'ctx> Compiler<'ctx> {
         let module = context.create_module("expo_module");
         let builder = context.create_builder();
         let debug = DebugContext::new(&module, filename, directory, release);
-        let types = TypeRegistry::new();
+        let llvm_types = LLVMTypeCache::new();
         Self {
             context,
             module,
@@ -380,7 +387,7 @@ impl<'ctx> Compiler<'ctx> {
             type_ctx,
             generic_fn_asts: HashMap::new(),
             fn_ref_thunks: HashMap::new(),
-            types,
+            llvm_types,
             layouts: TypeLayouts::new(),
             fn_state: FnState::new(),
             closure_site_path: None,
@@ -788,12 +795,12 @@ impl<'ctx> Compiler<'ctx> {
                 .as_ref()
                 .and_then(|pkg| self.type_ctx.resolve_name_scoped(name, pkg));
             if let Some(id) = resolved_id
-                && let Some(st) = self.types.get_concrete(id)
+                && let Some(st) = self.llvm_types.get_concrete(id)
             {
                 param_types.push(st.into());
             } else {
                 let prim_ty = crate::types::primitive_name_to_type(name);
-                if let Some(llvm_ty) = to_llvm_type(&prim_ty, self.context, &self.types) {
+                if let Some(llvm_ty) = to_llvm_type(&prim_ty, self.context, &self.llvm_types) {
                     param_types.push(llvm_ty.into());
                 }
             }
@@ -817,7 +824,7 @@ impl<'ctx> Compiler<'ctx> {
         let fn_type = if func.name == "main" && mangling_prefix.is_none() {
             self.context.i32_type().fn_type(&param_types, false)
         } else {
-            match to_llvm_type(&return_type, self.context, &self.types) {
+            match to_llvm_type(&return_type, self.context, &self.llvm_types) {
                 Some(ret_ty) => ret_ty.fn_type(&param_types, false),
                 None => self.context.void_type().fn_type(&param_types, false),
             }
@@ -849,7 +856,7 @@ impl<'ctx> Compiler<'ctx> {
                         else {
                             continue;
                         };
-                        let Some(enum_type) = self.types.get_concrete(&enum_id) else {
+                        let Some(enum_type) = self.llvm_types.get_concrete(&enum_id) else {
                             continue;
                         };
                         let tag_val = self.context.i8_type().const_int(info.tag as u64, false);
@@ -888,7 +895,7 @@ impl<'ctx> Compiler<'ctx> {
                         else {
                             continue;
                         };
-                        let Some(struct_type) = self.types.get_concrete(&struct_id) else {
+                        let Some(struct_type) = self.llvm_types.get_concrete(&struct_id) else {
                             continue;
                         };
                         match self.build_const_struct(struct_type, &info.field_types, &fields) {
@@ -1319,7 +1326,7 @@ impl<'ctx> Compiler<'ctx> {
         for param in params {
             if let Param::Regular { type_expr, .. } = param {
                 let ty = self.resolve_type_expr(type_expr);
-                if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context, &self.types) {
+                if let Some(llvm_ty) = to_llvm_metadata_type(&ty, self.context, &self.llvm_types) {
                     types.push(llvm_ty);
                 }
             }
@@ -1408,12 +1415,12 @@ impl<'ctx> Compiler<'ctx> {
         let config_type = &process_args[0];
 
         let struct_type = self
-            .types
+            .llvm_types
             .get_concrete(&entry_id)
             .ok_or_else(|| format!("entry type `{type_name}` has no LLVM struct layout"))?;
 
         let config_llvm =
-            to_llvm_type(config_type, self.context, &self.types).ok_or_else(|| {
+            to_llvm_type(config_type, self.context, &self.llvm_types).ok_or_else(|| {
                 format!(
                     "could not resolve LLVM type for config type `{}`",
                     config_type.display()
@@ -1440,7 +1447,7 @@ impl<'ctx> Compiler<'ctx> {
             .ok_or("StopReason_code (ExitStatus impl) not found")?;
 
         let stop_reason_llvm = self
-            .types
+            .llvm_types
             .get_concrete(&TypeIdentifier::std("StopReason"))
             .ok_or("StopReason LLVM type not found")?;
 

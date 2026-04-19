@@ -393,14 +393,14 @@ pub(crate) fn build_ref_value<'ctx>(
     let resolved = resolve_ref_type(msg_type, reply_type);
 
     if !compiler
-        .types
+        .llvm_types
         .contains_monomorphized(&resolved.mangled_name)
     {
         let type_args = vec![resolved.msg_type, resolved.reply_type];
         monomorphize_struct(compiler, &TypeIdentifier::std("Ref"), &type_args)?;
     }
     let ref_struct = compiler
-        .types
+        .llvm_types
         .get_monomorphized(&resolved.mangled_name)
         .ok_or("Ref struct type not found")?;
 

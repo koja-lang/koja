@@ -272,7 +272,8 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
         .get("free")
         .expect("free not declared in builtins");
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
-    let Some(struct_type) = to_llvm_type(ty, c.context, &c.types).map(|t| t.into_struct_type())
+    let Some(struct_type) =
+        to_llvm_type(ty, c.context, &c.llvm_types).map(|t| t.into_struct_type())
     else {
         return;
     };
@@ -297,7 +298,8 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
 
 /// Drops a List value: extracts the data pointer (field 0) and frees it.
 fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
-    let Some(list_struct) = to_llvm_type(ty, c.context, &c.types).map(|t| t.into_struct_type())
+    let Some(list_struct) =
+        to_llvm_type(ty, c.context, &c.llvm_types).map(|t| t.into_struct_type())
     else {
         return;
     };
@@ -321,7 +323,8 @@ fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: 
 
 /// Drops a Map or Set value: frees entries_ptr (field 0) and states_ptr (field 1).
 fn emit_drop_hash_collection<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: &Type) {
-    let Some(coll_struct) = to_llvm_type(ty, c.context, &c.types).map(|t| t.into_struct_type())
+    let Some(coll_struct) =
+        to_llvm_type(ty, c.context, &c.llvm_types).map(|t| t.into_struct_type())
     else {
         return;
     };

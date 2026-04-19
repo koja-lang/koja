@@ -46,8 +46,8 @@ fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ct
     let resolved_id = c.resolve_name_current(name).cloned();
     let is_concrete_type = resolved_id
         .as_ref()
-        .is_some_and(|id| c.types.get_concrete(id).is_some());
-    if is_concrete_type || c.types.contains_monomorphized(name) {
+        .is_some_and(|id| c.llvm_types.get_concrete(id).is_some());
+    if is_concrete_type || c.llvm_types.contains_monomorphized(name) {
         return Ok(ResolvedCall::StructConstructor {
             identifier: resolved_id,
         });
@@ -146,11 +146,11 @@ pub fn invoke_closure_fat_ptr<'ctx>(
 
     let mut llvm_call_params: Vec<BasicMetadataTypeEnum> = vec![ptr_ty.into()];
     for fp in params {
-        if let Some(lt) = to_llvm_type(&fp.ty, c.context, &c.types) {
+        if let Some(lt) = to_llvm_type(&fp.ty, c.context, &c.llvm_types) {
             llvm_call_params.push(lt.into());
         }
     }
-    let fn_type = match to_llvm_type(return_type, c.context, &c.types) {
+    let fn_type = match to_llvm_type(return_type, c.context, &c.llvm_types) {
         Some(ret) => ret.fn_type(&llvm_call_params, false),
         None => c.context.void_type().fn_type(&llvm_call_params, false),
     };
