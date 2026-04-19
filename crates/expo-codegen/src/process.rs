@@ -18,7 +18,7 @@ pub fn monomorphize_ref_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> R
     let st = c.context.opaque_struct_type(mangled);
     st.set_body(&[i64_type.into()], false);
     c.types.register_monomorphized(mangled.to_string(), st);
-    c.types.mono_struct_info.insert(
+    c.layouts.register_struct_layout(
         mangled.to_string(),
         vec![("id".to_string(), Type::Primitive(Primitive::I64))],
     );
@@ -33,7 +33,7 @@ pub fn monomorphize_reply_to_struct<'ctx>(
     let st = c.context.opaque_struct_type(mangled);
     st.set_body(&[i64_type.into()], false);
     c.types.register_monomorphized(mangled.to_string(), st);
-    c.types.mono_struct_info.insert(
+    c.layouts.register_struct_layout(
         mangled.to_string(),
         vec![("id".to_string(), Type::Primitive(Primitive::I64))],
     );

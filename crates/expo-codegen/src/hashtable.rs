@@ -37,7 +37,7 @@ pub fn monomorphize_hashtable_struct<'ctx>(
     compiler
         .types
         .register_monomorphized(mangled.to_string(), struct_type);
-    compiler.types.mono_struct_info.insert(
+    compiler.layouts.register_struct_layout(
         mangled.to_string(),
         vec![
             (

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem;
 use std::path::{Path, PathBuf};
 
+use expo_ir::TypeLayouts;
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstEnum, ResolvedConstStruct};
 use expo_ir::resolved::fields::ResolvedFieldStep;
 
@@ -169,7 +170,6 @@ pub struct TypeRegistry<'ctx> {
     pub monomorphized: HashMap<String, StructType<'ctx>>,
 
     pub enum_variant_payloads: HashMap<String, Vec<(String, Option<StructType<'ctx>>)>>,
-    pub mono_struct_info: HashMap<String, Vec<(String, Type)>>,
     pub mono_enum_variants: HashMap<String, Vec<(String, VariantData)>>,
 }
 
@@ -179,7 +179,6 @@ impl<'ctx> TypeRegistry<'ctx> {
             concrete: HashMap::new(),
             monomorphized: HashMap::new(),
             enum_variant_payloads: HashMap::new(),
-            mono_struct_info: HashMap::new(),
             mono_enum_variants: HashMap::new(),
         }
     }
@@ -283,6 +282,10 @@ pub struct Compiler<'ctx> {
     pub fn_ref_thunks: HashMap<String, FunctionValue<'ctx>>,
     /// Type registry: LLVM struct types, enum payloads, and monomorphisation data.
     pub types: TypeRegistry<'ctx>,
+    /// LLVM-free semantic layout tables (lives in `expo-ir`). Currently
+    /// hosts `mono_struct_info`; future migration waves will fold the rest
+    /// of `TypeRegistry`'s semantic-only data here.
+    pub layouts: TypeLayouts,
     /// Per-function ephemeral state (variables, loops, TCO, etc.).
     pub fn_state: FnState<'ctx>,
     /// Source path of the Expo module currently being defined; matches
@@ -380,6 +383,7 @@ impl<'ctx> Compiler<'ctx> {
             generic_fn_asts: HashMap::new(),
             fn_ref_thunks: HashMap::new(),
             types,
+            layouts: TypeLayouts::new(),
             fn_state: FnState::new(),
             closure_site_path: None,
             debug,
@@ -639,25 +643,19 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     /// Strict lookup for a monomorphized struct's field index by its mangled
-    /// key. The key is exactly what registration stores in `mono_struct_info`:
-    /// either a `Type_$Arg$` generic mangling or a non-generic type's LLVM
-    /// struct name. No fallbacks.
+    /// key. The key is exactly what registration stores via
+    /// [`TypeLayouts::register_struct_layout`]: either a `Type_$Arg$` generic
+    /// mangling or a non-generic type's LLVM struct name. No fallbacks.
+    /// Thin wrapper kept for caller convenience; the logic lives on
+    /// [`TypeLayouts`].
     pub fn get_mono_field_index(&self, mangled: &str, field_name: &str) -> Option<u32> {
-        let fields = self.types.mono_struct_info.get(mangled)?;
-        fields
-            .iter()
-            .position(|(name, _)| name == field_name)
-            .map(|i| i as u32)
+        self.layouts.field_index(mangled, field_name)
     }
 
     /// Strict counterpart of [`Self::get_mono_field_index`] that returns the
     /// field type.
     pub fn get_mono_field_type(&self, mangled: &str, field_name: &str) -> Option<Type> {
-        let fields = self.types.mono_struct_info.get(mangled)?;
-        fields
-            .iter()
-            .find(|(name, _)| name == field_name)
-            .map(|(_, ty)| ty.clone())
+        self.layouts.field_type(mangled, field_name)
     }
 
     /// Look up a struct's field index and type, dispatching on the struct's
@@ -665,7 +663,7 @@ impl<'ctx> Compiler<'ctx> {
     ///   * Non-generic `Type::Named` with a resolved package → strict
     ///     TypeIdentifier-keyed lookup via [`Self::get_concrete_field_index`]
     ///     and [`Self::get_concrete_field_type`].
-    ///   * Generic `Type::Named` → mangled lookup in `mono_struct_info`.
+    ///   * Generic `Type::Named` → mangled lookup via [`TypeLayouts`].
     ///   * `Type::Indirect`/`Type::Pointer` → recursively unwrap.
     ///
     /// Unresolved identifiers return `None`: callers are expected to thread a

@@ -389,7 +389,7 @@ pub(crate) fn monomorphize_struct<'ctx>(
     }
 
     // `to_llvm_type` returns `None` for `Unit` and other ZSTs, but we must keep one
-    // LLVM field per logical field so GEP indices match `mono_struct_info` (e.g.
+    // LLVM field per logical field so GEP indices match `TypeLayouts` (e.g.
     // `Pair<Unit, T>.second` is index 1, not 0 when `first` is Unit).
     let field_llvm_types: Vec<_> = concrete_fields
         .iter()
@@ -403,7 +403,7 @@ pub(crate) fn monomorphize_struct<'ctx>(
         ensure_types_exist(c, ty)?;
     }
 
-    c.types.mono_struct_info.insert(mangled, concrete_fields);
+    c.layouts.register_struct_layout(mangled, concrete_fields);
 
     Ok(())
 }

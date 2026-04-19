@@ -10,8 +10,10 @@
 mod file;
 mod instruction;
 pub mod resolved;
+mod type_layouts;
 mod types;
 
 pub use file::{IRBasicBlock, IRFile, IRFunction, IRStruct};
 pub use instruction::{IRInstruction, IRTerminator};
+pub use type_layouts::TypeLayouts;
 pub use types::{IRBuiltinOp, IROperand, IRType, IRVar};

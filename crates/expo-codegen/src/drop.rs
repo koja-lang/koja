@@ -135,7 +135,7 @@ fn has_indirect_fields(c: &Compiler, ty: &Type) -> bool {
 /// tables; typecheck's bare-name resolution is handled by `by_id` for
 /// non-generics.
 fn has_indirect_fields_by_mono(c: &Compiler, mangled: &str) -> bool {
-    if let Some(fields) = c.types.mono_struct_info.get(mangled) {
+    if let Some(fields) = c.layouts.struct_layout(mangled) {
         return fields
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
@@ -156,7 +156,7 @@ fn has_indirect_fields_by_id(c: &Compiler, id: &TypeIdentifier) -> bool {
         return false;
     }
     let qualified = id.qualified_name();
-    if let Some(fields) = c.types.mono_struct_info.get(&qualified) {
+    if let Some(fields) = c.layouts.struct_layout(&qualified) {
         return fields
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
@@ -232,7 +232,7 @@ fn resolve_indirect_field_indices(compiler: &Compiler, ty: &Type) -> Vec<(usize,
     };
 
     if let Some(key) = mono_key.as_deref()
-        && let Some(fs) = compiler.types.mono_struct_info.get(key)
+        && let Some(fs) = compiler.layouts.struct_layout(key)
     {
         return fs
             .iter()

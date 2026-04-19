@@ -17,7 +17,7 @@ pub fn monomorphize_list_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
     let i64_type = c.context.i64_type();
     st.set_body(&[ptr_type.into(), i64_type.into(), i64_type.into()], false);
     c.types.register_monomorphized(mangled.to_string(), st);
-    c.types.mono_struct_info.insert(
+    c.layouts.register_struct_layout(
         mangled.to_string(),
         vec![
             ("ptr".to_string(), Type::Primitive(Primitive::String)),

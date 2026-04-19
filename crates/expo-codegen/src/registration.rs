@@ -79,7 +79,7 @@ pub(crate) fn register_types(c: &mut Compiler) {
             .collect();
         struct_type.set_body(&field_types, false);
 
-        // Also publish the field layout into `mono_struct_info` under the
+        // Also publish the field layout into `TypeLayouts` under the
         // package-qualified name so `Compiler::get_field_index/type` lookups
         // can be package-scoped without falling back to the bare-name
         // `TypeContext::find_type` path.
@@ -89,9 +89,8 @@ pub(crate) fn register_types(c: &mut Compiler) {
             .iter()
             .map(|(n, t)| (n.clone(), t.clone()))
             .collect();
-        c.types
-            .mono_struct_info
-            .insert(id.qualified_name(), fields_owned);
+        c.layouts
+            .register_struct_layout(id.qualified_name(), fields_owned);
     }
 
     // Pass 3: set enum bodies (skip generic templates)
