@@ -18,6 +18,7 @@ use expo_ast::types::Type;
 
 #[derive(Default)]
 pub struct FnLowerState {
+    pub closure_counter: usize,
     current_fn: Option<String>,
     pub process_msg_type: Option<Type>,
     pub return_type_hint: Option<Type>,

@@ -24,12 +24,11 @@ use crate::control::{
     compile_body_as_value, compile_cond, compile_for, compile_if, compile_loop, compile_match,
     compile_pattern, compile_ternary, compile_unless, compile_while,
 };
-use expo_ir::lower::closures::{closure_info_at, resolve_closure_params};
+use expo_ir::lower::closures::{closure_info_at, resolve_closure};
 use expo_ir::lower::processes::{
     resolve_process_msg_reply, resolve_receive, resolve_spawn_info, resolve_tagged_receive,
 };
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
-use expo_ir::resolved::closures::ResolvedClosure;
 use expo_ir::resolved::strings::{ResolvedString, resolve_string};
 use expo_ir::util::parse_int_literal;
 
@@ -436,29 +435,6 @@ fn compile_string<'ctx>(
     )))
 }
 
-fn resolve_closure(
-    compiler: &mut Compiler,
-    params: &[ClosureParam],
-    return_type: Type,
-    span: Span,
-) -> ResolvedClosure {
-    let parameter_types = resolve_closure_params(&compiler.lower_ctx(), params, span);
-
-    let closure_name = format!("__closure_{}", compiler.fn_state.closure_counter);
-    compiler.fn_state.closure_counter += 1;
-
-    let capture_names = closure_info_at(&compiler.lower_ctx(), span)
-        .map(|ci| ci.captures.iter().map(|cap| cap.name.clone()).collect())
-        .unwrap_or_default();
-
-    ResolvedClosure {
-        capture_names,
-        closure_name,
-        parameter_types,
-        return_type,
-    }
-}
-
 /// Compiles a block closure (`fn (params) -> type ... end`) into an anonymous
 /// LLVM function and returns a fat pointer `{ fn_ptr, env_ptr }`. Every closure
 /// function receives an implicit `env_ptr: ptr` as its first parameter.
@@ -486,7 +462,9 @@ fn compile_closure_core<'ctx>(
     _parent_function: FunctionValue<'ctx>,
     span: Span,
 ) -> ExprResult<'ctx> {
-    let resolved = resolve_closure(compiler, params, ret_type, span);
+    let closure_index = compiler.fn_lower.closure_counter;
+    compiler.fn_lower.closure_counter += 1;
+    let resolved = resolve_closure(&compiler.lower_ctx(), params, ret_type, span, closure_index);
 
     let ptr_ty = compiler.context.ptr_type(AddressSpace::default());
 

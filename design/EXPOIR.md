@@ -625,7 +625,7 @@ will consume.
 What actually lives in `expo-ir` today:
 
 - **Active lowering helpers** (produced + consumed): `TypeLayouts`,
-  `FnLowerState`, `LowerCtx`, ~42 free functions across 16 modules in
+  `FnLowerState`, `LowerCtx`, ~43 free functions across 16 modules in
   `lower::{binary, calls, closures, constants, debug, enums, fields,
   loops, mangling, methods, naming, patterns, processes, stmt, strings,
   structs, types}` plus the small `util::parse_int_literal` helper.
@@ -677,16 +677,21 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
   instruction containers (`IRFunction`, `IRBasicBlock`, `IRInstruction`,
   etc.) was deliberately left undone -- Phase 4c will design them
   bottom-up from real consumers rather than top-down from speculation.
-- **Phase 4 -- Move lowering out: ~75% done.** Four pure resolvers
+- **Phase 4 -- Move lowering out: ~90% done.** Four pure resolvers
   moved to `expo-ir` (in `resolved::ops` and `resolved::strings`); the
-  9 Wave 6 helpers and ~28 Wave 7 helpers in `lower::*`. Remaining work
-  is the Phase 4b structural cluster and the Phase 4c IR container
-  design:
-  - **4b (structural)**: ~5 `<'ctx>`-bound resolvers that still need a
-    decision/LLVM split before they can move (`resolve_method_call`,
-    `resolve_static_call`, `resolve_field_ptr`, `resolve_payload_info`,
-    `resolve_closure`). These are the genuinely interesting splits --
-    each one a mini-Phase-2 wave for one cluster.
+  9 Wave 6 helpers, ~28 Wave 7 helpers, and the Wave 8a-8d structural
+  splits in `lower::*`. Remaining work is the two monomorphization-bound
+  resolvers in Phase 4b and the Phase 4c IR container design:
+  - **4b (structural)**: 2 `<'ctx>`-bound resolvers remain
+    (`resolve_method_call`, `resolve_static_call`), both blocked on
+    monomorphization moving into IR. Lifting them today would require
+    a request-payload handshake (the resolver returns a `MonomorphizeRequest`
+    that the caller acts on before the LLVM lookup), which re-couples
+    emission to a side-channel and was rejected as a band-aid -- the
+    cleaner endpoint is monomorphization itself living in `expo-ir`,
+    so the two resolvers wait for that work. The other three resolvers
+    in this cluster (`resolve_field_ptr`, `resolve_payload_info`,
+    `resolve_closure`) are done; see Wave 8d.
   - **4c (the actual handoff)**: design and build the IR instruction
     containers from the bottom up, driven by what `Resolved*` consumers
     need. Lowering produces a function-level IR; emission consumes it
@@ -701,7 +706,7 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
 
 ### Wave history
 
-The 9 waves completed so far, condensed (full prose lives in commit
+The 10 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -788,18 +793,38 @@ history):
   emission side. New `lower::calls` / `resolved::calls` modules established
   for future call-related splits (`resolve_method_call`,
   `resolve_static_call`). Cluster backlog: six resolvers down to five.
+- **Wave 8d -- closure lift + emission-helper re-classification.**
+  Three of the remaining five Phase 4b items closed out as a batch.
+  `closure_counter` migrated from `expo-codegen`'s `FnState` into
+  `expo_ir::FnLowerState` (it was always pure-semantic state);
+  `resolve_closure` is now `expo_ir::lower::closures::resolve_closure(
+  &LowerCtx, &[ClosureParam], Type, Span, closure_index: usize)`
+  returning the existing `ResolvedClosure`. The caller in
+  `compile_closure_core` reads-and-bumps `compiler.fn_lower.closure_counter`
+  itself and threads the index in, keeping the resolver pure (no
+  `&mut` dependency at the IR seam). The two remaining items in the
+  cluster -- `resolve_field_ptr` and `resolve_payload_info` -- were
+  re-classified rather than lifted: both are emission tail. The
+  former (renamed to `field_ptr` in `expo-codegen::stmt`) just walks
+  the GEP chain for a dotted path; the semantic decision was already
+  lifted in earlier waves as `expo_ir::lower::fields::resolve_field_path`.
+  The latter is pure LLVM cache lookup with no decision content. Doc
+  comments now flag both as emission-only. Cluster backlog: five
+  resolvers down to two; the survivors are blocked on
+  monomorphization-in-IR rather than on a missing seam.
 
-### Next: Wave 8 (continued)
+### Next: monomorphization-in-IR, then Phase 4c
 
-Five `<'ctx>`-bound resolvers remain in the Phase 4b structural cluster:
-`resolve_method_call`, `resolve_static_call`, `resolve_field_ptr`,
-`resolve_payload_info`, `resolve_closure`. Each gets the same treatment
-Wave 8a/8b/8c applied to the earlier ones: split along its decision/LLVM
-seam, lift the decision half into `expo-ir::lower::*`. `resolve_closure`
-additionally requires migrating `closure_counter` off `FnState`. Each
-split is a mini-Phase-2 wave; the cluster opens the door to Phase 4c,
-where the IR instruction containers are designed bottom-up from real
-consumers.
+The two `<'ctx>`-bound resolvers still in the Phase 4b cluster
+(`resolve_method_call`, `resolve_static_call`) interleave a pure
+decision (mangled name + signature substitution) with `&mut Compiler`
+mutation that emits LLVM (`monomorphize_impl_method`,
+`monomorphize_struct`, `monomorphize_enum`). Lifting them with a
+request-payload handshake was considered and rejected as a band-aid;
+the cleaner move is to lift monomorphization itself into IR so both
+resolvers fall out as pure functions. After that, Phase 4b closes and
+Phase 4c (designing the IR instruction containers bottom-up from real
+consumers) can begin.
 
 ### Why incremental over big-bang
 

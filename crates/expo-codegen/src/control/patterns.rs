@@ -660,7 +660,9 @@ struct ResolvedPayloadInfo<'ctx> {
     payload_type: StructType<'ctx>,
 }
 
-/// Looks up the payload and enum LLVM types for a variant from the type registry.
+/// Emission-only LLVM cache lookup; no semantic decision. Pulls the payload
+/// and enum `StructType<'ctx>` for a variant straight from the LLVM type
+/// registry so the surrounding GEP emitter can index into them.
 fn resolve_payload_info<'ctx>(
     compiler: &Compiler<'ctx>,
     enum_name: &str,

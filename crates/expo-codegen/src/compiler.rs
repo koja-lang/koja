@@ -153,7 +153,6 @@ impl<'ctx> LLVMTypeCache<'ctx> {
 /// scaffolding (`loop_header` + `param_allocas`). Pure-semantic per-function
 /// state lives in [`expo_ir::FnLowerState`] on `Compiler.fn_lower`.
 pub struct FnState<'ctx> {
-    pub closure_counter: usize,
     pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
     /// Loop header block for the current function. When a self-recursive
     /// tail call is detected, codegen stores new arguments into the
@@ -167,7 +166,6 @@ pub struct FnState<'ctx> {
 impl<'ctx> FnState<'ctx> {
     pub fn new() -> Self {
         Self {
-            closure_counter: 0,
             loop_exit_stack: Vec::new(),
             loop_header: None,
             param_allocas: Vec::new(),

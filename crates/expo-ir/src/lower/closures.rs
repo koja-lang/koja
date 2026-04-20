@@ -13,6 +13,7 @@ use expo_typecheck::types::{Primitive, Type};
 
 use crate::lower::ctx::LowerCtx;
 use crate::lower::types::resolve_type_expr;
+use crate::resolved::closures::ResolvedClosure;
 
 /// Look up the typecheck-collected [`ClosureInfo`] for the closure at
 /// `span` in the current source module.
@@ -68,4 +69,32 @@ pub fn resolve_closure_params(
             _ => Type::Primitive(Primitive::I32),
         })
         .collect()
+}
+
+/// Resolves a closure literal's metadata: captures (from typecheck info),
+/// parameter types, return type, and the generated internal name. The caller
+/// supplies `closure_index` (typically the current `FnLowerState::closure_counter`,
+/// bumped post-call) so emission can mint a unique `__closure_N` symbol without
+/// the resolver itself mutating shared state.
+pub fn resolve_closure(
+    ctx: &LowerCtx<'_>,
+    params: &[ClosureParam],
+    return_type: Type,
+    span: Span,
+    closure_index: usize,
+) -> ResolvedClosure {
+    let parameter_types = resolve_closure_params(ctx, params, span);
+
+    let closure_name = format!("__closure_{closure_index}");
+
+    let capture_names = closure_info_at(ctx, span)
+        .map(|ci| ci.captures.iter().map(|cap| cap.name.clone()).collect())
+        .unwrap_or_default();
+
+    ResolvedClosure {
+        capture_names,
+        closure_name,
+        parameter_types,
+        return_type,
+    }
 }

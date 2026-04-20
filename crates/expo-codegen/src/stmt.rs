@@ -214,7 +214,7 @@ fn compile_compound_assign<'ctx>(
             .clone();
         (ptr, variable_type)
     } else {
-        resolve_field_ptr(compiler, &target.segments)?
+        field_ptr(compiler, &target.segments)?
     };
 
     let llvm_type = to_llvm_type(&target_type, compiler.context, &compiler.llvm_types)
@@ -294,9 +294,13 @@ fn apply_compound_op<'ctx>(
     }
 }
 
-/// Walks a dotted field path (`self.span.start.line`) and returns the LLVM
-/// pointer to the final field plus its Expo type.
-fn resolve_field_ptr<'ctx>(
+/// Emits the GEP chain for a dotted field path (`self.span.start.line`) and
+/// returns the LLVM pointer to the final field plus its Expo type. This is
+/// emission-only: the semantic decision (resolving each segment to a field
+/// index and type) lives in [`expo_ir::lower::fields::resolve_field_path`];
+/// this helper only walks the resulting steps and emits LLVM `getelementptr`
+/// instructions.
+fn field_ptr<'ctx>(
     compiler: &Compiler<'ctx>,
     segments: &[String],
 ) -> Result<(PointerValue<'ctx>, Type), String> {
@@ -344,7 +348,7 @@ fn compile_field_assignment<'ctx>(
     segments: &[String],
     val: BasicValueEnum<'ctx>,
 ) -> Result<(), String> {
-    let (ptr, field_type) = resolve_field_ptr(compiler, segments)?;
+    let (ptr, field_type) = field_ptr(compiler, segments)?;
     let store_val = coerce_numeric(compiler, val, &field_type);
     compiler.builder.build_store(ptr, store_val).unwrap();
     Ok(())
