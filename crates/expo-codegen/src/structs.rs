@@ -49,12 +49,10 @@ use expo_ir::lower::closures::closure_info_at;
 use expo_ir::lower::fields::{lower_struct_field, resolve_chain_steps};
 use expo_ir::lower::mangling::try_parse_mangled_name;
 use expo_ir::lower::naming::method_symbol_prefix;
-use expo_ir::lower::structs::lower_concrete_struct;
+use expo_ir::lower::structs::{lower_concrete_struct, resolve_struct_name};
 use expo_ir::lower::types::{find_type_current, id_for, resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::construction::ResolvedStructConstruction;
-use expo_ir::resolved::fields::{
-    ResolvedChain, ResolvedFieldStep, ResolvedStructField, ResolvedStructName,
-};
+use expo_ir::resolved::fields::{ResolvedChain, ResolvedFieldStep, ResolvedStructField};
 use expo_typecheck::context::{FnParam, FunctionKind, TypeInfo};
 use expo_typecheck::types::{
     Package, Type, TypeIdentifier, build_substitution, mangle_method_suffix, mangle_name,
@@ -322,7 +320,23 @@ pub fn compile_method_call<'ctx>(
         return Ok(Some(recv_tv));
     }
 
-    let resolved_name = resolve_struct_name(c, receiver, &recv_val, &recv_tv.expo_type)?;
+    let llvm_struct_name = if recv_val.is_struct_value() {
+        recv_val
+            .into_struct_value()
+            .get_type()
+            .get_name()
+            .and_then(|n| n.to_str().ok())
+            .map(str::to_string)
+    } else {
+        None
+    };
+    let resolved_name = resolve_struct_name(
+        &c.lower_ctx(),
+        receiver,
+        &recv_tv.expo_type,
+        |name| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone()),
+        llvm_struct_name.as_deref(),
+    )?;
 
     let has_impl_method = resolved_name
         .identifier
@@ -1098,92 +1112,6 @@ fn compile_field_with_subst<'ctx>(
         compiler.fn_lower.type_subst = saved;
     }
     Ok(val)
-}
-
-fn resolve_struct_name<'ctx>(
-    c: &Compiler<'ctx>,
-    receiver: &Expr,
-    recv_val: &BasicValueEnum<'ctx>,
-    recv_type: &Type,
-) -> Result<ResolvedStructName, String> {
-    let mut result = None;
-
-    if let Some(sn) = struct_name_from_type(recv_type) {
-        result = Some(sn);
-    } else if let ExprKind::Ident { name, .. } = &receiver.kind
-        && let Some((_, ty, _)) = c.fn_state.variables.get(name)
-        && let Some(sn) = struct_name_from_type(ty)
-    {
-        result = Some(sn);
-    } else if recv_val.is_struct_value() {
-        let sv = recv_val.into_struct_value();
-        let st = sv.get_type();
-        if let Some(n) = st.get_name()
-            && let Ok(s) = n.to_str()
-        {
-            let name = s.to_string();
-            let identifier = resolve_name_current(&c.lower_ctx(), &name).cloned();
-            result = Some(ResolvedStructName {
-                base: name.clone(),
-                identifier,
-                mangled: name,
-                type_args: vec![],
-            });
-        }
-    }
-
-    let mut sn = result.ok_or("cannot determine struct type for method call")?;
-
-    if sn.type_args.is_empty()
-        && let Some((base, type_args)) = try_parse_mangled_name(&c.lower_ctx(), &sn.mangled)
-    {
-        sn.identifier = resolve_name_current(&c.lower_ctx(), &base).cloned();
-        sn.base = base;
-        sn.type_args = type_args;
-    }
-
-    Ok(sn)
-}
-
-fn struct_name_from_type(ty: &Type) -> Option<ResolvedStructName> {
-    match ty {
-        Type::Indirect(inner) => struct_name_from_type(inner),
-        Type::Pointer(inner) => {
-            let cptr_id = TypeIdentifier::std("CPtr");
-            let mangled = mangle_name(&cptr_id, &[*inner.clone()]);
-            Some(ResolvedStructName {
-                base: cptr_id.name.clone(),
-                identifier: Some(cptr_id),
-                mangled,
-                type_args: vec![*inner.clone()],
-            })
-        }
-        Type::Named {
-            identifier,
-            type_args,
-        } if !type_args.is_empty() => Some(ResolvedStructName {
-            base: identifier.name.clone(),
-            identifier: Some(identifier.clone()),
-            mangled: mangle_name(identifier, type_args),
-            type_args: type_args.clone(),
-        }),
-        Type::Named { identifier, .. } => Some(ResolvedStructName {
-            base: identifier.name.clone(),
-            identifier: Some(identifier.clone()),
-            mangled: identifier.name.clone(),
-            type_args: vec![],
-        }),
-        Type::Primitive(p) => {
-            let name = p.display().to_string();
-            Some(ResolvedStructName {
-                base: name.clone(),
-                identifier: None,
-                mangled: name,
-                type_args: vec![],
-            })
-        }
-        _ => None,
-    }
 }
 
 struct ResolvedStaticCall<'ctx> {

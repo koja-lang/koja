@@ -625,7 +625,7 @@ will consume.
 What actually lives in `expo-ir` today:
 
 - **Active lowering helpers** (produced + consumed): `TypeLayouts`,
-  `FnLowerState`, `LowerCtx`, ~38 free functions across 15 modules in
+  `FnLowerState`, `LowerCtx`, ~41 free functions across 15 modules in
   `lower::{binary, closures, constants, debug, enums, fields, loops,
   mangling, methods, naming, patterns, processes, stmt, strings,
   structs, types}` plus the small `util::parse_int_literal` helper.
@@ -682,14 +682,11 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
   9 Wave 6 helpers and ~28 Wave 7 helpers in `lower::*`. Remaining work
   is the Phase 4b structural cluster and the Phase 4c IR container
   design:
-  - **4b (structural)**: ~10 `<'ctx>`-bound resolvers that need a
+  - **4b (structural)**: ~6 `<'ctx>`-bound resolvers that still need a
     decision/LLVM split before they can move (`resolve_call`,
-    `resolve_method_call`, `resolve_struct_name`, `resolve_static_call`,
-    `resolve_closure_params`, `resolve_spawn_info`,
-    `resolve_tagged_receive`, `resolve_field_ptr`,
-    `resolve_union_member`, `resolve_enumerable_info`,
-    `resolve_payload_info`). These are the genuinely interesting splits
-    -- each one a mini-Phase-2 wave for one cluster.
+    `resolve_method_call`, `resolve_static_call`, `resolve_field_ptr`,
+    `resolve_payload_info`, `resolve_closure`). These are the genuinely
+    interesting splits -- each one a mini-Phase-2 wave for one cluster.
   - **4c (the actual handoff)**: design and build the IR instruction
     containers from the bottom up, driven by what `Resolved*` consumers
     need. Lowering produces a function-level IR; emission consumes it
@@ -704,7 +701,7 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
 
 ### Wave history
 
-The 6 waves completed so far, condensed (full prose lives in commit
+The 8 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -760,15 +757,29 @@ history):
   in `compile_for` derives `elem_llvm_ty` itself. New `lower::loops` /
   `resolved::loops` modules established for future iteration-protocol
   work. Pattern-setter for the rest of the cluster.
+- **Wave 8b -- three easy resolver lifts.** The next three structurally
+  simple resolvers in the Phase 4b cluster moved as a batch, each one
+  hoisting a single LLVM-bound call up to its caller:
+  `resolve_union_member` is now `expo_ir::lower::stmt::resolve_union_member`
+  returning `resolved::fields::ResolvedUnionMember`; `compile_union_wrap`
+  does the `llvm_types.get_monomorphized` lookup itself.
+  `resolve_spawn_info` is now `expo_ir::lower::processes::resolve_spawn_info`
+  with `ResolvedSpawn` promoted into `resolved::processes`;
+  `compile_spawn` precomputes `mangled_state` via the LLVM-bound
+  `spawn::resolve_mangled_state`. `resolve_struct_name` (and the
+  `struct_name_from_type` helper) is now in
+  `expo_ir::lower::structs::resolve_struct_name`; `compile_method_call`
+  precomputes the LLVM struct name as `Option<&str>` and threads
+  variable-type lookups in via the same closure pattern used by
+  `resolve_field_path`. Cluster backlog: nine resolvers down to six.
 
 ### Next: Wave 8 (continued)
 
-Nine `<'ctx>`-bound resolvers remain in the Phase 4b structural cluster:
-`resolve_call`, `resolve_method_call`, `resolve_struct_name`,
-`resolve_static_call`, `resolve_spawn_info`, `resolve_field_ptr`,
-`resolve_union_member`, `resolve_payload_info`, `resolve_closure`. Each
-gets the same treatment Wave 8a applied to `resolve_enumerable_info`:
-split along its decision/LLVM seam, lift the decision half into
+Six `<'ctx>`-bound resolvers remain in the Phase 4b structural cluster:
+`resolve_call`, `resolve_method_call`, `resolve_static_call`,
+`resolve_field_ptr`, `resolve_payload_info`, `resolve_closure`. Each
+gets the same treatment Wave 8a/8b applied to the easier ones: split
+along its decision/LLVM seam, lift the decision half into
 `expo-ir::lower::*`. `resolve_closure` additionally requires migrating
 `closure_counter` off `FnState`. Each split is a mini-Phase-2 wave; the
 cluster opens the door to Phase 4c, where the IR instruction containers

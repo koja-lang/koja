@@ -25,10 +25,8 @@ use crate::control::{
     compile_pattern, compile_ternary, compile_unless, compile_while,
 };
 use expo_ir::lower::closures::{closure_info_at, resolve_closure_params};
-use expo_ir::lower::mangling::try_parse_mangled_name;
-use expo_ir::lower::naming::method_symbol_prefix;
 use expo_ir::lower::processes::{
-    resolve_process_msg_reply, resolve_receive, resolve_tagged_receive,
+    resolve_process_msg_reply, resolve_receive, resolve_spawn_info, resolve_tagged_receive,
 };
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::closures::ResolvedClosure;
@@ -859,44 +857,6 @@ fn compile_map_literal<'ctx>(
     Ok(Some(TypedValue::new(map_val, resolved.result_type)))
 }
 
-/// Resolved spawn metadata: mangled names and optional generic decomposition.
-struct ResolvedSpawn {
-    generic_args: Option<(String, Vec<Type>)>,
-    mangled_state: String,
-    run_fn_name: String,
-    start_fn_name: String,
-    wrapper_name: String,
-}
-
-/// Computes the mangled names and function identifiers for a spawn expression.
-fn resolve_spawn_info<'ctx>(
-    compiler: &Compiler<'ctx>,
-    type_name: &str,
-    config_value: BasicValueEnum<'ctx>,
-) -> ResolvedSpawn {
-    let mangled_state = spawn::resolve_mangled_state(type_name, config_value);
-    let generic_args = try_parse_mangled_name(&compiler.lower_ctx(), &mangled_state);
-    // Non-generic spawns must use the package-qualified method symbol so we
-    // match the prefix emitted at definition time for user packages (e.g.
-    // `myapp.Counter_start`). Generic monomorphizations keep the mangled
-    // state key unchanged; their method symbols continue to be bare-keyed
-    // until the generics flow is migrated.
-    let method_prefix = if generic_args.is_some() {
-        mangled_state.clone()
-    } else {
-        resolve_name_current(&compiler.lower_ctx(), &mangled_state)
-            .map(|id| method_symbol_prefix(&id.package, &id.name))
-            .unwrap_or_else(|| mangled_state.clone())
-    };
-    ResolvedSpawn {
-        generic_args,
-        run_fn_name: format!("{method_prefix}_run"),
-        start_fn_name: format!("{method_prefix}_start"),
-        wrapper_name: format!("__spawn_{mangled_state}"),
-        mangled_state,
-    }
-}
-
 /// Compiles a `spawn T.start(config)` expression.
 ///
 /// Delegates to [`crate::spawn`] helpers for each phase: AST extraction,
@@ -923,7 +883,8 @@ fn compile_spawn<'ctx>(
         .value;
 
     let serialized = spawn::serialize_config(compiler, config_value)?;
-    let resolved = resolve_spawn_info(compiler, &target.type_name, config_value);
+    let mangled_state = spawn::resolve_mangled_state(&target.type_name, config_value);
+    let resolved = resolve_spawn_info(&compiler.lower_ctx(), mangled_state);
 
     if let Some((base, type_args)) = &resolved.generic_args {
         monomorphize_impl_method(compiler, base, "start", type_args, &[])?;

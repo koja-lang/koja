@@ -33,3 +33,16 @@ pub struct ResolvedTaggedReceive<'a> {
     pub lifecycle_arms: Vec<&'a MatchArm>,
     pub m_has_io_ready: bool,
 }
+
+/// Result of [`crate::lower::processes::resolve_spawn_info`]: the mangled
+/// state name plus the three function symbol names emission needs to
+/// reference (`<prefix>_start`, `<prefix>_run`, and the spawn wrapper).
+/// `generic_args` is `Some((base, type_args))` for monomorphized
+/// processes so emission can request impl-method monomorphization.
+pub struct ResolvedSpawn {
+    pub generic_args: Option<(String, Vec<Type>)>,
+    pub mangled_state: String,
+    pub run_fn_name: String,
+    pub start_fn_name: String,
+    pub wrapper_name: String,
+}

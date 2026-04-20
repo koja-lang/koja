@@ -5,15 +5,16 @@
 //! [`crate::resolved::construction::ResolvedStructConstruction`] to do
 //! GEP/store.
 
-use expo_ast::ast::FieldInit;
+use expo_ast::ast::{Expr, ExprKind, FieldInit};
 use expo_typecheck::types::{
-    Package, Type, TypeIdentifier, resolve_type_alias_id, resolve_type_alias_name,
+    Package, Type, TypeIdentifier, mangle_name, resolve_type_alias_id, resolve_type_alias_name,
 };
 
 use crate::lower::ctx::LowerCtx;
+use crate::lower::mangling::try_parse_mangled_name;
 use crate::lower::types::resolve_name_current;
 use crate::resolved::construction::ResolvedStructConstruction;
-use crate::resolved::fields::ResolvedStructField;
+use crate::resolved::fields::{ResolvedStructField, ResolvedStructName};
 
 /// Lowers a concrete (non-generic) struct construction.
 ///
@@ -72,4 +73,98 @@ pub fn lower_concrete_struct(
             type_args: vec![],
         },
     })
+}
+
+/// Resolves the [`ResolvedStructName`] for a method-call receiver,
+/// trying three sources in order: the receiver's static Expo type, the
+/// type recorded for the receiver variable in the surrounding scope,
+/// and a caller-provided LLVM struct name fallback (the only path
+/// that needs information from emission).
+///
+/// `var_type` looks the receiver name up in the LLVM-bound variables
+/// map -- the same closure pattern that
+/// [`crate::lower::stmt::resolve_field_path`] uses, so emission stays
+/// the only place that touches the per-function `BasicValueEnum`/Type
+/// pairs. `llvm_struct_name` is the receiver value's LLVM struct name
+/// when it is a struct value, precomputed by the caller.
+pub fn resolve_struct_name(
+    ctx: &LowerCtx<'_>,
+    receiver: &Expr,
+    recv_type: &Type,
+    var_type: impl Fn(&str) -> Option<Type>,
+    llvm_struct_name: Option<&str>,
+) -> Result<ResolvedStructName, String> {
+    let mut result = struct_name_from_type(recv_type);
+
+    if result.is_none()
+        && let ExprKind::Ident { name, .. } = &receiver.kind
+        && let Some(ty) = var_type(name)
+    {
+        result = struct_name_from_type(&ty);
+    }
+
+    if result.is_none()
+        && let Some(name) = llvm_struct_name
+    {
+        let identifier = resolve_name_current(ctx, name).cloned();
+        result = Some(ResolvedStructName {
+            base: name.to_string(),
+            identifier,
+            mangled: name.to_string(),
+            type_args: vec![],
+        });
+    }
+
+    let mut sn = result.ok_or("cannot determine struct type for method call")?;
+
+    if sn.type_args.is_empty()
+        && let Some((base, type_args)) = try_parse_mangled_name(ctx, &sn.mangled)
+    {
+        sn.identifier = resolve_name_current(ctx, &base).cloned();
+        sn.base = base;
+        sn.type_args = type_args;
+    }
+
+    Ok(sn)
+}
+
+fn struct_name_from_type(ty: &Type) -> Option<ResolvedStructName> {
+    match ty {
+        Type::Indirect(inner) => struct_name_from_type(inner),
+        Type::Pointer(inner) => {
+            let cptr_id = TypeIdentifier::std("CPtr");
+            let mangled = mangle_name(&cptr_id, &[*inner.clone()]);
+            Some(ResolvedStructName {
+                base: cptr_id.name.clone(),
+                identifier: Some(cptr_id),
+                mangled,
+                type_args: vec![*inner.clone()],
+            })
+        }
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => Some(ResolvedStructName {
+            base: identifier.name.clone(),
+            identifier: Some(identifier.clone()),
+            mangled: mangle_name(identifier, type_args),
+            type_args: type_args.clone(),
+        }),
+        Type::Named { identifier, .. } => Some(ResolvedStructName {
+            base: identifier.name.clone(),
+            identifier: Some(identifier.clone()),
+            mangled: identifier.name.clone(),
+            type_args: vec![],
+        }),
+        Type::Primitive(p) => {
+            let name = p.display().to_string();
+            Some(ResolvedStructName {
+                base: name.clone(),
+                identifier: None,
+                mangled: name,
+                type_args: vec![],
+            })
+        }
+        _ => None,
+    }
 }

@@ -6,12 +6,12 @@
 use expo_ast::ast::TypeExpr;
 use expo_ast::span::Span;
 use expo_typecheck::context::Coercion;
-use expo_typecheck::types::{Type, substitute, substitute_preserving};
+use expo_typecheck::types::{Type, mangle_type, substitute, substitute_preserving};
 
 use crate::lower::ctx::LowerCtx;
 use crate::lower::fields::lower_struct_field;
 use crate::lower::types::resolve_type_expr;
-use crate::resolved::fields::ResolvedFieldStep;
+use crate::resolved::fields::{ResolvedFieldStep, ResolvedUnionMember};
 
 /// Resolves a dotted field path (`segments[0].segments[1]...`) into the
 /// root variable's type plus a sequence of [`ResolvedFieldStep`]s. Each
@@ -125,4 +125,33 @@ pub fn resolve_final_annotation_type(ctx: &LowerCtx<'_>, type_annotation: &TypeE
 /// Looks up a recorded coercion for the given span from the type context.
 pub fn resolve_coercion(ctx: &LowerCtx<'_>, span: Span) -> Option<Coercion> {
     ctx.type_ctx.coercions.get(&span).cloned()
+}
+
+/// Resolves how to wrap `source` into `target_union`: looks up the
+/// source's position within the union's member list (= its
+/// discriminant tag) and returns the union's mangled name so emission
+/// can `get_monomorphized` its LLVM `StructType`.
+pub fn resolve_union_member(
+    source: &Type,
+    target_union: &Type,
+) -> Result<ResolvedUnionMember, String> {
+    let Type::Union(members) = target_union else {
+        return Err("resolve_union_member called with non-union target".to_string());
+    };
+
+    let source_mangled = mangle_type(source);
+    let union_mangled = mangle_type(target_union);
+
+    let tag = members
+        .iter()
+        .position(|m| mangle_type(m) == source_mangled)
+        .ok_or_else(|| {
+            format!(
+                "{} is not a member of union {}",
+                source.display(),
+                target_union.display()
+            )
+        })? as u64;
+
+    Ok(ResolvedUnionMember { tag, union_mangled })
 }

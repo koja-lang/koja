@@ -12,8 +12,11 @@ use expo_typecheck::types::{Primitive, Type, build_substitution, mangle_name, su
 
 use crate::lower::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
+use crate::lower::naming::method_symbol_prefix;
 use crate::lower::types::{resolve_name_current, resolve_type_expr};
-use crate::resolved::processes::{ResolvedReceive, ResolvedRefType, ResolvedTaggedReceive};
+use crate::resolved::processes::{
+    ResolvedReceive, ResolvedRefType, ResolvedSpawn, ResolvedTaggedReceive,
+};
 
 /// Resolves the mailbox message type `Pair<M, Option<ReplyTo<R>>>` for
 /// `receive` when compiling a `Process` impl method. Uses an exact
@@ -180,5 +183,32 @@ pub fn resolve_tagged_receive<'a>(
         io_ready_arms,
         lifecycle_arms,
         m_has_io_ready,
+    }
+}
+
+/// Computes the mangled names and function identifiers for a spawn
+/// expression. Non-generic spawns use the package-qualified method
+/// symbol prefix so call sites match the prefix emitted at definition
+/// time for user packages (e.g. `myapp.Counter_start`); generic
+/// monomorphizations keep the mangled state key as the prefix.
+///
+/// Callers precompute `mangled_state` via the LLVM-bound
+/// `spawn::resolve_mangled_state` helper because it inspects the
+/// runtime config value; everything downstream of that is pure.
+pub fn resolve_spawn_info(ctx: &LowerCtx<'_>, mangled_state: String) -> ResolvedSpawn {
+    let generic_args = try_parse_mangled_name(ctx, &mangled_state);
+    let method_prefix = if generic_args.is_some() {
+        mangled_state.clone()
+    } else {
+        resolve_name_current(ctx, &mangled_state)
+            .map(|id| method_symbol_prefix(&id.package, &id.name))
+            .unwrap_or_else(|| mangled_state.clone())
+    };
+    ResolvedSpawn {
+        generic_args,
+        run_fn_name: format!("{method_prefix}_run"),
+        start_fn_name: format!("{method_prefix}_start"),
+        wrapper_name: format!("__spawn_{mangled_state}"),
+        mangled_state,
     }
 }

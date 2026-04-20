@@ -46,3 +46,16 @@ pub struct ResolvedStructName {
     /// The concrete type arguments (empty for non-generic types).
     pub type_args: Vec<Type>,
 }
+
+/// The decision a union-wrap operation makes about how to box a value
+/// into its surrounding `Type::Union`: the discriminant tag (= the
+/// member's position in the union) and the mangled name of the union
+/// type so emission can look up its LLVM `StructType`.
+pub struct ResolvedUnionMember {
+    /// Discriminant tag = the source type's position within the
+    /// union's member list, computed at lowering time.
+    pub tag: u64,
+    /// Mangled name of the union type, the key into `LLVMTypeCache`'s
+    /// monomorphized table.
+    pub union_mangled: String,
+}

@@ -8,12 +8,12 @@ use expo_ast::ast::{
 use expo_ast::span::Span;
 use expo_typecheck::context::{Coercion, FnParam};
 use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type, substitute};
-use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
 use expo_ir::lower::stmt::{
     resolve_annotation_subst, resolve_coercion, resolve_field_path, resolve_final_annotation_type,
+    resolve_union_member,
 };
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::ops::{OperandShape, ResolvedCompoundOp, resolve_compound_op};
@@ -428,31 +428,35 @@ pub(crate) fn compile_union_wrap<'ctx>(
         return Ok(val);
     }
 
-    let resolved = resolve_union_member(compiler, source, target_union)?;
+    let resolved = resolve_union_member(source, target_union)?;
+    let union_type = compiler
+        .llvm_types
+        .get_monomorphized(&resolved.union_mangled)
+        .ok_or_else(|| format!("union type {} not registered", resolved.union_mangled))?;
 
     let alloca = compiler
         .builder
-        .build_alloca(resolved.union_type, "union_wrap")
+        .build_alloca(union_type, "union_wrap")
         .unwrap();
 
     let tag_ptr = compiler
         .builder
-        .build_struct_gep(resolved.union_type, alloca, 0, "tag_ptr")
+        .build_struct_gep(union_type, alloca, 0, "tag_ptr")
         .unwrap();
     let tag_val = compiler.context.i8_type().const_int(resolved.tag, false);
     compiler.builder.build_store(tag_ptr, tag_val).unwrap();
 
-    if resolved.union_type.count_fields() > 1 {
+    if union_type.count_fields() > 1 {
         let payload_ptr = compiler
             .builder
-            .build_struct_gep(resolved.union_type, alloca, 1, "payload_ptr")
+            .build_struct_gep(union_type, alloca, 1, "payload_ptr")
             .unwrap();
         compiler.builder.build_store(payload_ptr, val).unwrap();
     }
 
     let result = compiler
         .builder
-        .build_load(resolved.union_type, alloca, "union_val")
+        .build_load(union_type, alloca, "union_val")
         .unwrap();
     Ok(result)
 }
@@ -699,44 +703,6 @@ fn convert_list_literal_if_needed<'ctx>(
         .ok_or("from_list returned void")?;
 
     Ok(result)
-}
-
-/// Resolved tag index and LLVM struct type for wrapping a value into a union.
-struct ResolvedUnionMember<'ctx> {
-    tag: u64,
-    union_type: StructType<'ctx>,
-}
-
-/// Finds the tag index and LLVM type for wrapping `source` into `target_union`.
-fn resolve_union_member<'ctx>(
-    compiler: &Compiler<'ctx>,
-    source: &Type,
-    target_union: &Type,
-) -> Result<ResolvedUnionMember<'ctx>, String> {
-    let Type::Union(members) = target_union else {
-        return Err("resolve_union_member called with non-union target".to_string());
-    };
-
-    let source_mangled = mangle_type(source);
-    let union_mangled = mangle_type(target_union);
-
-    let tag = members
-        .iter()
-        .position(|m| mangle_type(m) == source_mangled)
-        .ok_or_else(|| {
-            format!(
-                "{} is not a member of union {}",
-                source.display(),
-                target_union.display()
-            )
-        })? as u64;
-
-    let union_type = compiler
-        .llvm_types
-        .get_monomorphized(&union_mangled)
-        .ok_or_else(|| format!("union type {} not registered", union_mangled))?;
-
-    Ok(ResolvedUnionMember { tag, union_type })
 }
 
 /// Returns the LLVM bit width for an integer primitive type.
