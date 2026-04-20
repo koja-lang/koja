@@ -8,6 +8,7 @@ use expo_ast::span::Span;
 use expo_typecheck::context::Coercion;
 use expo_typecheck::types::{Type, mangle_type, substitute, substitute_preserving};
 
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::fields::lower_struct_field;
 use crate::lower::types::resolve_type_expr;
@@ -153,5 +154,8 @@ pub fn resolve_union_member(
             )
         })? as u64;
 
-    Ok(ResolvedUnionMember { tag, union_mangled })
+    Ok(ResolvedUnionMember {
+        tag,
+        union_mangled: MonomorphizedTypeIdentifier::new(union_mangled),
+    })
 }

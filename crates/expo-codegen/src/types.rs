@@ -6,6 +6,7 @@ use inkwell::context::Context;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 
 use crate::compiler::LLVMTypeCache;
+use expo_ir::identity::MonomorphizedTypeIdentifier;
 
 /// Converts an Expo type to an LLVM basic type. Returns `None` for `Unit`
 /// and other types without an LLVM representation.
@@ -26,16 +27,23 @@ pub fn to_llvm_type<'ctx>(
             if type_args.is_empty() {
                 registry
                     .get_concrete(identifier)
-                    .or_else(|| registry.get_monomorphized(&identifier.name))
+                    .or_else(|| {
+                        registry
+                            .get_monomorphized(&MonomorphizedTypeIdentifier::new(&identifier.name))
+                    })
                     .map(|st| st.into())
             } else {
                 let mangled = mangle_name(identifier, type_args);
-                registry.get_monomorphized(&mangled).map(|st| st.into())
+                registry
+                    .get_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled))
+                    .map(|st| st.into())
             }
         }
         Type::Union(_) => {
             let mangled = mangle_type(ty);
-            registry.get_monomorphized(&mangled).map(|st| st.into())
+            registry
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled))
+                .map(|st| st.into())
         }
         Type::Function { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());

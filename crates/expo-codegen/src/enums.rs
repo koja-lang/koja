@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{EnumConstructionData, Expr, FieldInit};
-use expo_ir::identity::VariantId;
+use expo_ir::identity::{MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::enums::{
     enum_mangled_name, lower_concrete_enum, resolve_enum_eq, resolve_generic_type_args,
 };
@@ -194,19 +194,22 @@ fn lower_generic_enum(
     })?;
     let mangled_name = mangle_name(&enum_id, &type_args);
 
-    if !compiler.llvm_types.contains_monomorphized(&mangled_name) {
+    if !compiler
+        .llvm_types
+        .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled_name))
+    {
         monomorphize_enum(compiler, &enum_id, &type_args)?;
     }
 
     let tag = compiler
         .layouts
-        .variant_index(&mangled_name, variant)
+        .variant_index(&MonomorphizedTypeIdentifier::new(&mangled_name), variant)
         .ok_or_else(|| format!("unknown variant `{variant}` on enum `{mangled_name}`"))?
         as u64;
 
     let element_types = compiler
         .layouts
-        .enum_variants(&mangled_name)
+        .enum_variants(&MonomorphizedTypeIdentifier::new(&mangled_name))
         .and_then(|vs| vs.iter().find(|(n, _)| n == variant))
         .and_then(|(_, vdata)| match vdata {
             VariantData::Tuple(types) => Some(types.clone()),
@@ -233,7 +236,7 @@ fn lower_generic_enum(
 
     Ok(ResolvedEnumConstruction {
         is_generic: true,
-        mangled_name,
+        mangled_name: MonomorphizedTypeIdentifier::new(&mangled_name),
         result_type,
         tag,
         variant_fields,
@@ -307,7 +310,7 @@ fn emit_enum_construction<'ctx>(
 
     let enum_val = compiler
         .builder
-        .build_load(enum_type, alloca, &resolved.mangled_name)
+        .build_load(enum_type, alloca, resolved.mangled_name.as_str())
         .unwrap();
     Ok(Some(TypedValue::new(
         enum_val,
@@ -355,7 +358,7 @@ fn emit_variant_payload<'ctx>(
     payload_ptr: PointerValue<'ctx>,
     function: FunctionValue<'ctx>,
 ) -> Result<(), String> {
-    let id = VariantId::new(&resolved.mangled_name, &resolved.variant_name);
+    let id = VariantIdentifier::new(&resolved.mangled_name, &resolved.variant_name);
     let payload_type = compiler.llvm_types.variant_payload(&id).ok_or_else(|| {
         format!(
             "no payload type for {}.{}",
@@ -615,8 +618,9 @@ pub(crate) fn compile_enum_struct_eq<'ctx>(
         let eq_val = match field_types {
             None => i1_ty.const_int(1, false),
             Some(fields) => {
-                let (payload_type, lp) = get_payload_ptr(c, lhs_ptr, &resolved.mangled, vname)?;
-                let (_pt, rp) = get_payload_ptr(c, rhs_ptr, &resolved.mangled, vname)?;
+                let (payload_type, lp) =
+                    get_payload_ptr(c, lhs_ptr, resolved.mangled.as_str(), vname)?;
+                let (_pt, rp) = get_payload_ptr(c, rhs_ptr, resolved.mangled.as_str(), vname)?;
 
                 let mut acc: Option<IntValue<'ctx>> = None;
                 for (fi, fty) in fields.iter().enumerate() {

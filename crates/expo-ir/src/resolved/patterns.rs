@@ -18,6 +18,8 @@
 use expo_ast::ast::BinarySegment;
 use expo_ast::types::Type;
 
+use crate::identity::MonomorphizedTypeIdentifier;
+
 /// A literal value that can appear inside a pattern, with its raw source
 /// already parsed into the runtime form needed for comparison.
 pub enum ResolvedLiteral {
@@ -99,9 +101,9 @@ pub enum ResolvedPattern {
     /// unwrapped value.
     UnionMember {
         /// Mangled key for the union type (the subject).
-        union_mangled: String,
+        union_mangled: MonomorphizedTypeIdentifier,
         /// Mangled key for the member type being matched.
-        member_mangled: String,
+        member_mangled: MonomorphizedTypeIdentifier,
         /// Discriminant tag for the member within the union, looked up at
         /// lowering time so emission performs no name resolution.
         tag: u8,

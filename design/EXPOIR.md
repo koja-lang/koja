@@ -636,9 +636,14 @@ What actually lives in `expo-ir` today:
   plus 4 pure resolver functions (`resolve_binary_op`, `resolve_unary_op`,
   `resolve_compound_op`, `resolve_string`). Reference:
   [`expo/crates/expo-ir/src/resolved/`](../crates/expo-ir/src/resolved/).
-- **Transitional identities**: `VariantId` (today
-  `(String, String)`; in Phase 5+ becomes `(EnumId, u8)` with no
-  call-site changes).
+- **Transitional identities** (in
+  [`expo-ir::identity`](../crates/expo-ir/src/identity.rs)): `TypeIdentifier`
+  for source-level package-qualified types; `MonomorphizedTypeIdentifier`
+  for canonical type-cache keys (package-qualified for non-generics,
+  mangled `Type_$Arg$` for generic instances); `FunctionIdentifier` for
+  mangled function symbols; `VariantIdentifier` for `(enum, variant)`
+  pairs. All four are newtype wrappers around `String` today; in Phase 5+
+  they become interned `u32`s with no call-site changes.
 
 The IR _instruction set_ -- function/block/instruction containers, ops
 on operands, terminators, etc. -- is intentionally undefined in code.
@@ -699,14 +704,17 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
     where `closure_site_path` and `package` move off `Compiler` for
     good, and where TCO ambient flags collapse into a `tail` field on
     whatever the call instruction ends up being named.
-- **Phase 5+ -- Opaque IR identities: not started.** `VariantId`
-  becomes `(EnumId, u8)`; struct names become interned IDs; etc. Pure
-  interning work, internal to `expo-ir`, with no call-site changes
-  outside the crate.
+- **Phase 5+ -- Opaque IR identities: foundation laid (Wave 9).**
+  `MonomorphizedTypeIdentifier`, `FunctionIdentifier`, and the renamed
+  `VariantIdentifier` now wrap every cache key in
+  `Compiler`/`LLVMTypeCache`/`TypeLayouts` and every `mangled_*` field
+  on `Resolved*`. Today the wrappers are `String` newtypes; the actual
+  interning (to `u32`) happens incrementally in Phase 5+ behind the
+  same call-site signatures.
 
 ### Wave history
 
-The 10 waves completed so far, condensed (full prose lives in commit
+The 11 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -721,11 +729,12 @@ history):
   `Compiler.llvm_types` so every call site advertises that the surviving
   cache is purely an LLVM-handle store. Semantic struct/enum layouts
   moved into `expo-ir::TypeLayouts`.
-- **Wave 4 -- `enum_variant_payloads` split + `VariantId`.** Variant
+- **Wave 4 -- `enum_variant_payloads` split + `VariantIdentifier`.** Variant
   ordering (= tag value) owned solely by `TypeLayouts`; LLVM payload
   table rekeyed from positional `Vec` to identity-keyed
-  `HashMap<VariantId, Option<StructType>>`. Drift between the two
-  stores is now structurally impossible.
+  `HashMap<VariantIdentifier, Option<StructType>>`. Drift between the two
+  stores is now structurally impossible. (Originally introduced as
+  `VariantId`; renamed in Wave 9 for naming uniformity.)
 - **Wave 5 -- `FnLowerState` extraction + `TailCallCtx` dissolved.**
   Semantic per-function fields (`process_msg_type`, `return_type_hint`,
   `self_type_name`, `type_subst`, TCO ambient flags + 7 traversal
@@ -812,8 +821,21 @@ history):
   comments now flag both as emission-only. Cluster backlog: five
   resolvers down to two; the survivors are blocked on
   monomorphization-in-IR rather than on a missing seam.
+- **Wave 9 -- opaque mono identities (registry foundation).**
+  Renamed `VariantId` to `VariantIdentifier` and introduced
+  `MonomorphizedTypeIdentifier` and `FunctionIdentifier` in
+  `expo_ir::identity`, mirroring the `VariantIdentifier` newtype shape
+  (`Clone+Debug+Eq+Hash+PartialEq` around `String` today, opaque
+  interned later). Migrated every cache that keys on a mangled string --
+  `Compiler::functions`, `Compiler::fn_ref_thunks`,
+  `LLVMTypeCache::monomorphized`, `LLVMTypeCache::enum_variant_payloads`,
+  `TypeLayouts::mono_struct_info`, `TypeLayouts::mono_enum_variants` --
+  plus every `mangled_*` field across `resolved::{calls, processes,
+  fields, loops, construction, patterns, methods, enums}`. Pure type-only
+  refactor: 25/25 lang-suite tests pass. Sets up Wave 10's monomorphization
+  registry to use stable typed identifiers from day one.
 
-### Next: monomorphization-in-IR, then Phase 4c
+### Next: monomorphization registry (Wave 10), then Phase 4c
 
 The two `<'ctx>`-bound resolvers still in the Phase 4b cluster
 (`resolve_method_call`, `resolve_static_call`) interleave a pure
@@ -822,9 +844,13 @@ mutation that emits LLVM (`monomorphize_impl_method`,
 `monomorphize_struct`, `monomorphize_enum`). Lifting them with a
 request-payload handshake was considered and rejected as a band-aid;
 the cleaner move is to lift monomorphization itself into IR so both
-resolvers fall out as pure functions. After that, Phase 4b closes and
-Phase 4c (designing the IR instruction containers bottom-up from real
-consumers) can begin.
+resolvers fall out as pure functions. With Wave 9's typed identifiers
+in place, Wave 10 builds the central monomorphization registry in
+`expo-ir`: lowering declares the generic instances it needs (keyed by
+`MonomorphizedTypeIdentifier` / `FunctionIdentifier`); emission later
+walks the registry to actually instantiate them. After that, Phase 4b
+closes and Phase 4c (designing the IR instruction containers bottom-up
+from real consumers) can begin.
 
 ### Why incremental over big-bang
 

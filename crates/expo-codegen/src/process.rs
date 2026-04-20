@@ -12,14 +12,16 @@ use inkwell::types::BasicType;
 use crate::compiler::{Compiler, EmitResult};
 use crate::generics::{ensure_types_exist, monomorphize_enum};
 use crate::types::to_llvm_type;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 pub fn monomorphize_ref_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
     let i64_type = c.context.i64_type();
     let st = c.context.opaque_struct_type(mangled);
     st.set_body(&[i64_type.into()], false);
-    c.llvm_types.register_monomorphized(mangled.to_string(), st);
+    c.llvm_types
+        .register_monomorphized(MonomorphizedTypeIdentifier::new(mangled), st);
     c.layouts.register_struct_layout(
-        mangled.to_string(),
+        MonomorphizedTypeIdentifier::new(mangled),
         vec![("id".to_string(), Type::Primitive(Primitive::I64))],
     );
     Ok(())
@@ -32,9 +34,10 @@ pub fn monomorphize_reply_to_struct<'ctx>(
     let i64_type = c.context.i64_type();
     let st = c.context.opaque_struct_type(mangled);
     st.set_body(&[i64_type.into()], false);
-    c.llvm_types.register_monomorphized(mangled.to_string(), st);
+    c.llvm_types
+        .register_monomorphized(MonomorphizedTypeIdentifier::new(mangled), st);
     c.layouts.register_struct_layout(
-        mangled.to_string(),
+        MonomorphizedTypeIdentifier::new(mangled),
         vec![("id".to_string(), Type::Primitive(Primitive::I64))],
     );
     Ok(())
@@ -56,7 +59,7 @@ fn build_send_body<'ctx>(
 
     let send_fn = *c
         .functions
-        .get("expo_rt_send")
+        .get(&FunctionIdentifier::new("expo_rt_send"))
         .ok_or("expo_rt_send not declared")?;
 
     let i64_ty = c.context.i64_type();
@@ -159,12 +162,13 @@ pub fn emit_ref_method<'ctx>(
         "self_ref" => {
             let ref_struct = c
                 .llvm_types
-                .get_monomorphized(mangled_type)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             let fn_type = ref_struct.fn_type(&[], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -172,7 +176,7 @@ pub fn emit_ref_method<'ctx>(
 
             let self_fn = *c
                 .functions
-                .get("expo_rt_self")
+                .get(&FunctionIdentifier::new("expo_rt_self"))
                 .ok_or("expo_rt_self not declared")?;
             let pid = c
                 .call(self_fn, &[], "current_pid")
@@ -197,7 +201,7 @@ pub fn emit_ref_method<'ctx>(
         "cast" => {
             let ref_struct = c
                 .llvm_types
-                .get_monomorphized(mangled_type)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             let msg_type = type_args
@@ -226,7 +230,8 @@ pub fn emit_ref_method<'ctx>(
                 .void_type()
                 .fn_type(&[ref_struct.into(), msg_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -272,7 +277,7 @@ pub fn emit_ref_method<'ctx>(
 
             let send_fn = *c
                 .functions
-                .get("expo_rt_send")
+                .get(&FunctionIdentifier::new("expo_rt_send"))
                 .ok_or("expo_rt_send not declared")?;
 
             let ptr_ty = c.context.ptr_type(AddressSpace::default());
@@ -301,7 +306,7 @@ pub fn emit_ref_method<'ctx>(
         "call" => {
             let ref_struct = c
                 .llvm_types
-                .get_monomorphized(mangled_type)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             let msg_type = type_args
@@ -342,12 +347,15 @@ pub fn emit_ref_method<'ctx>(
             let result_type_args = vec![reply_type.clone(), callerror_type.clone()];
             let result_id = TypeIdentifier::std("Result");
             let result_mangled = mangle_name(&result_id, &result_type_args);
-            if !c.llvm_types.contains_monomorphized(&result_mangled) {
+            if !c
+                .llvm_types
+                .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&result_mangled))
+            {
                 monomorphize_enum(c, &result_id, &result_type_args)?;
             }
             let result_struct = c
                 .llvm_types
-                .get_monomorphized(&result_mangled)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&result_mangled))
                 .ok_or("Result<R, CallError> struct not found")?;
 
             // Ensure CallError enum exists in LLVM.
@@ -379,7 +387,8 @@ pub fn emit_ref_method<'ctx>(
             let fn_type =
                 result_struct.fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -395,7 +404,7 @@ pub fn emit_ref_method<'ctx>(
 
             let self_fn = *c
                 .functions
-                .get("expo_rt_self")
+                .get(&FunctionIdentifier::new("expo_rt_self"))
                 .ok_or("expo_rt_self not declared")?;
             let caller_pid = c
                 .call(self_fn, &[], "caller_pid")
@@ -451,7 +460,7 @@ pub fn emit_ref_method<'ctx>(
 
             let send_fn = *c
                 .functions
-                .get("expo_rt_send")
+                .get(&FunctionIdentifier::new("expo_rt_send"))
                 .ok_or("expo_rt_send not declared")?;
 
             let alloca = c
@@ -477,7 +486,7 @@ pub fn emit_ref_method<'ctx>(
 
             let receive_timeout_fn = *c
                 .functions
-                .get("expo_rt_receive_timeout")
+                .get(&FunctionIdentifier::new("expo_rt_receive_timeout"))
                 .ok_or("expo_rt_receive_timeout not declared")?;
 
             let raw_ptr = c
@@ -506,7 +515,7 @@ pub fn emit_ref_method<'ctx>(
             c.builder.position_at_end(check_alive_bb);
             let is_alive_fn = *c
                 .functions
-                .get("expo_rt_is_process_alive")
+                .get(&FunctionIdentifier::new("expo_rt_is_process_alive"))
                 .ok_or("expo_rt_is_process_alive not declared")?;
             let alive_result = c
                 .call(is_alive_fn, &[target_pid.into()], "alive")
@@ -612,7 +621,7 @@ pub fn emit_ref_method<'ctx>(
         "signal" => {
             let ref_struct = c
                 .llvm_types
-                .get_monomorphized(mangled_type)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             // Lifecycle is an enum with unit variants; its LLVM repr is { i8 }.
@@ -624,7 +633,8 @@ pub fn emit_ref_method<'ctx>(
                 .void_type()
                 .fn_type(&[ref_struct.into(), lifecycle_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -652,7 +662,7 @@ pub fn emit_ref_method<'ctx>(
 
             let send_lifecycle_fn = *c
                 .functions
-                .get("expo_rt_send_lifecycle")
+                .get(&FunctionIdentifier::new("expo_rt_send_lifecycle"))
                 .ok_or("expo_rt_send_lifecycle not declared")?;
 
             c.call_void(send_lifecycle_fn, &[pid.into(), variant_i64.into()], "");
@@ -668,12 +678,13 @@ pub fn emit_ref_method<'ctx>(
         "kill" => {
             let ref_struct = c
                 .llvm_types
-                .get_monomorphized(mangled_type)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             let fn_type = c.context.void_type().fn_type(&[ref_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -688,7 +699,7 @@ pub fn emit_ref_method<'ctx>(
 
             let kill_fn = *c
                 .functions
-                .get("expo_rt_kill")
+                .get(&FunctionIdentifier::new("expo_rt_kill"))
                 .ok_or("expo_rt_kill not declared")?;
 
             c.call_void(kill_fn, &[pid.into()], "");
@@ -703,13 +714,14 @@ pub fn emit_ref_method<'ctx>(
         "alive?" => {
             let ref_struct = c
                 .llvm_types
-                .get_monomorphized(mangled_type)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             let i8_ty = c.context.i8_type();
             let fn_type = i8_ty.fn_type(&[ref_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -724,7 +736,7 @@ pub fn emit_ref_method<'ctx>(
 
             let is_alive_fn = *c
                 .functions
-                .get("expo_rt_is_process_alive")
+                .get(&FunctionIdentifier::new("expo_rt_is_process_alive"))
                 .ok_or("expo_rt_is_process_alive not declared")?;
 
             let result_i64 = c
@@ -760,7 +772,7 @@ pub fn emit_ref_method<'ctx>(
         "send_after" => {
             let ref_struct = c
                 .llvm_types
-                .get_monomorphized(mangled_type)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             let msg_type = type_args
@@ -790,7 +802,8 @@ pub fn emit_ref_method<'ctx>(
                 .void_type()
                 .fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -837,7 +850,7 @@ pub fn emit_ref_method<'ctx>(
 
             let send_after_fn = *c
                 .functions
-                .get("expo_rt_send_after")
+                .get(&FunctionIdentifier::new("expo_rt_send_after"))
                 .ok_or("expo_rt_send_after not declared")?;
 
             let ptr_ty = c.context.ptr_type(AddressSpace::default());
@@ -882,7 +895,7 @@ pub fn emit_reply_to_method<'ctx>(
         "send" => {
             let reply_to_struct = c
                 .llvm_types
-                .get_monomorphized(mangled_type)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             let reply_type = type_args
@@ -902,7 +915,8 @@ pub fn emit_reply_to_method<'ctx>(
                 .void_type()
                 .fn_type(&[reply_to_struct.into(), reply_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();

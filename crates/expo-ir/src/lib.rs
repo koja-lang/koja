@@ -4,7 +4,7 @@
 //! Today the crate hosts the `Resolved*` decision-type vocabulary
 //! ([`resolved`]) and the freestanding lowering helpers ([`lower`]) that
 //! produce them, plus shared semantic state ([`FnLowerState`],
-//! [`TypeLayouts`]) and transitional identities ([`identity::VariantId`]).
+//! [`TypeLayouts`]) and transitional identities (see [`identity`]).
 //! The full SIL-style instruction containers (function, basic block,
 //! instruction sequence) are intentionally undefined in code -- their shape
 //! will be discovered bottom-up during the lowering/emission split, driven
@@ -19,5 +19,5 @@ mod type_layouts;
 pub mod util;
 
 pub use fn_state::FnLowerState;
-pub use identity::VariantId;
+pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 pub use type_layouts::TypeLayouts;

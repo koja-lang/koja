@@ -12,6 +12,7 @@ use crate::compiler::{Compiler, EmitResult};
 use crate::generics::ensure_types_exist;
 use crate::hashtable;
 use crate::types::to_llvm_type;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 pub fn emit_map_method<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -22,7 +23,7 @@ pub fn emit_map_method<'ctx>(
 ) -> Result<EmitResult, String> {
     let map_struct = c
         .llvm_types
-        .get_monomorphized(mangled_type)
+        .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
         .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
     if type_args.len() < 2 {
@@ -61,7 +62,8 @@ pub fn emit_map_method<'ctx>(
                 false,
             );
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -131,7 +133,7 @@ pub fn emit_map_method<'ctx>(
                     "new_entries_bytes",
                 )
                 .unwrap();
-            let malloc = *c.functions.get("malloc").unwrap();
+            let malloc = *c.functions.get(&FunctionIdentifier::new("malloc")).unwrap();
             let new_entries_ptr = c
                 .call(malloc, &[new_entries_bytes.into()], "new_entries")
                 .unwrap()
@@ -140,7 +142,7 @@ pub fn emit_map_method<'ctx>(
                 .call(malloc, &[new_cap.into()], "new_states")
                 .unwrap()
                 .into_pointer_value();
-            let memset = *c.functions.get("memset").unwrap();
+            let memset = *c.functions.get(&FunctionIdentifier::new("memset")).unwrap();
             c.call_void(
                 memset,
                 &[
@@ -282,7 +284,7 @@ pub fn emit_map_method<'ctx>(
                     .unwrap()
             };
 
-            let memcpy = *c.functions.get("memcpy").unwrap();
+            let memcpy = *c.functions.get(&FunctionIdentifier::new("memcpy")).unwrap();
             c.call_void(
                 memcpy,
                 &[
@@ -307,7 +309,7 @@ pub fn emit_map_method<'ctx>(
 
             // Free old buffers
             c.builder.position_at_end(rehash_done);
-            let free = *c.functions.get("free").unwrap();
+            let free = *c.functions.get(&FunctionIdentifier::new("free")).unwrap();
             c.call_void(free, &[entries_ptr.into()], "free_old_entries");
             c.call_void(free, &[states_ptr.into()], "free_old_states");
             c.builder.build_unconditional_branch(probe_bb).unwrap();
@@ -536,12 +538,13 @@ pub fn emit_map_method<'ctx>(
             ensure_types_exist(c, &named_generic_std("Option", option_type_args.clone()))?;
             let option_struct = c
                 .llvm_types
-                .get_monomorphized(&option_mangled)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&option_mangled))
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
             let fn_type = option_struct.fn_type(&[map_struct.into(), key_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -723,7 +726,8 @@ pub fn emit_map_method<'ctx>(
         "has?" => {
             let fn_type = i1_ty.fn_type(&[map_struct.into(), key_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -859,7 +863,8 @@ pub fn emit_map_method<'ctx>(
         "remove" => {
             let fn_type = map_struct.fn_type(&[map_struct.into(), key_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -1035,7 +1040,8 @@ pub fn emit_map_method<'ctx>(
         "from_map" => {
             let fn_type = map_struct.fn_type(&[map_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();

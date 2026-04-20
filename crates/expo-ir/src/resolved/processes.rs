@@ -7,6 +7,8 @@
 use expo_ast::ast::MatchArm;
 use expo_ast::types::Type;
 
+use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
+
 /// Result of [`crate::lower::processes::resolve_receive`]: the envelope
 /// type the receive should bind, plus whether a timeout arm is present.
 pub struct ResolvedReceive {
@@ -18,7 +20,7 @@ pub struct ResolvedReceive {
 /// resulting Expo type.
 pub struct ResolvedRefType {
     pub expo_type: Type,
-    pub mangled_name: String,
+    pub mangled_name: MonomorphizedTypeIdentifier,
     pub msg_type: Type,
     pub reply_type: Type,
 }
@@ -41,8 +43,8 @@ pub struct ResolvedTaggedReceive<'a> {
 /// processes so emission can request impl-method monomorphization.
 pub struct ResolvedSpawn {
     pub generic_args: Option<(String, Vec<Type>)>,
-    pub mangled_state: String,
-    pub run_fn_name: String,
-    pub start_fn_name: String,
-    pub wrapper_name: String,
+    pub mangled_state: MonomorphizedTypeIdentifier,
+    pub run_fn_name: FunctionIdentifier,
+    pub start_fn_name: FunctionIdentifier,
+    pub wrapper_name: FunctionIdentifier,
 }

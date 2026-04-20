@@ -3,6 +3,7 @@ use inkwell::values::FunctionValue;
 use crate::compiler::Compiler;
 use crate::debug::snprintf_to_expo_string;
 use crate::util::bool_to_string_ptr;
+use expo_ir::identity::FunctionIdentifier;
 
 pub fn emit_debug_format_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -54,7 +55,7 @@ pub fn emit_debug_format_intrinsic<'ctx>(
             let is_bits = i64_ty.const_int(if type_name == "Bits" { 1 } else { 0 }, false);
             let rt_fn = *c
                 .functions
-                .get("expo_format_binary")
+                .get(&FunctionIdentifier::new("expo_format_binary"))
                 .ok_or("expo_format_binary not declared")?;
             let result = c
                 .call(rt_fn, &[self_val.into(), is_bits.into()], "bin_fmt")

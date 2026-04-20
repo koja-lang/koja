@@ -10,6 +10,7 @@ use expo_ast::identifier::TypeIdentifier;
 use expo_ast::types::{named_generic_std, process_envelope_type};
 use expo_typecheck::types::{Primitive, Type, build_substitution, mangle_name, substitute};
 
+use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
 use crate::lower::naming::method_symbol_prefix;
@@ -102,7 +103,8 @@ pub fn resolve_process_msg_reply(
 /// Computes the mangled name and Expo type for a `Ref<M, R>` struct.
 pub fn resolve_ref_type(msg_type: Type, reply_type: Type) -> ResolvedRefType {
     let type_args = vec![msg_type.clone(), reply_type.clone()];
-    let mangled_name = mangle_name(&TypeIdentifier::std("Ref"), &type_args);
+    let mangled_name =
+        MonomorphizedTypeIdentifier::new(mangle_name(&TypeIdentifier::std("Ref"), &type_args));
     let expo_type = named_generic_std("Ref", type_args);
     ResolvedRefType {
         expo_type,
@@ -206,9 +208,9 @@ pub fn resolve_spawn_info(ctx: &LowerCtx<'_>, mangled_state: String) -> Resolved
     };
     ResolvedSpawn {
         generic_args,
-        run_fn_name: format!("{method_prefix}_run"),
-        start_fn_name: format!("{method_prefix}_start"),
-        wrapper_name: format!("__spawn_{mangled_state}"),
-        mangled_state,
+        run_fn_name: FunctionIdentifier::new(format!("{method_prefix}_run")),
+        start_fn_name: FunctionIdentifier::new(format!("{method_prefix}_start")),
+        wrapper_name: FunctionIdentifier::new(format!("__spawn_{mangled_state}")),
+        mangled_state: MonomorphizedTypeIdentifier::new(mangled_state),
     }
 }

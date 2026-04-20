@@ -10,6 +10,7 @@ use expo_typecheck::types::{
     Package, Type, TypeIdentifier, mangle_name, resolve_type_alias_id, resolve_type_alias_name,
 };
 
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
 use crate::lower::types::resolve_name_current;
@@ -67,7 +68,7 @@ pub fn lower_concrete_struct(
     Ok(ResolvedStructConstruction {
         fields,
         is_generic: false,
-        mangled_name: lookup_id.qualified_name(),
+        mangled_name: MonomorphizedTypeIdentifier::new(lookup_id.qualified_name()),
         result_type: Type::Named {
             identifier: lookup_id,
             type_args: vec![],
@@ -92,7 +93,7 @@ pub fn resolve_struct_name(
     receiver: &Expr,
     recv_type: &Type,
     var_type: impl Fn(&str) -> Option<Type>,
-    llvm_struct_name: Option<&str>,
+    llvm_struct_name: Option<&MonomorphizedTypeIdentifier>,
 ) -> Result<ResolvedStructName, String> {
     let mut result = struct_name_from_type(recv_type);
 
@@ -106,11 +107,11 @@ pub fn resolve_struct_name(
     if result.is_none()
         && let Some(name) = llvm_struct_name
     {
-        let identifier = resolve_name_current(ctx, name).cloned();
+        let identifier = resolve_name_current(ctx, name.as_str()).cloned();
         result = Some(ResolvedStructName {
-            base: name.to_string(),
+            base: name.as_str().to_string(),
             identifier,
-            mangled: name.to_string(),
+            mangled: name.clone(),
             type_args: vec![],
         });
     }
@@ -118,7 +119,7 @@ pub fn resolve_struct_name(
     let mut sn = result.ok_or("cannot determine struct type for method call")?;
 
     if sn.type_args.is_empty()
-        && let Some((base, type_args)) = try_parse_mangled_name(ctx, &sn.mangled)
+        && let Some((base, type_args)) = try_parse_mangled_name(ctx, sn.mangled.as_str())
     {
         sn.identifier = resolve_name_current(ctx, &base).cloned();
         sn.base = base;
@@ -133,7 +134,8 @@ fn struct_name_from_type(ty: &Type) -> Option<ResolvedStructName> {
         Type::Indirect(inner) => struct_name_from_type(inner),
         Type::Pointer(inner) => {
             let cptr_id = TypeIdentifier::std("CPtr");
-            let mangled = mangle_name(&cptr_id, &[*inner.clone()]);
+            let mangled =
+                MonomorphizedTypeIdentifier::new(mangle_name(&cptr_id, &[*inner.clone()]));
             Some(ResolvedStructName {
                 base: cptr_id.name.clone(),
                 identifier: Some(cptr_id),
@@ -147,13 +149,13 @@ fn struct_name_from_type(ty: &Type) -> Option<ResolvedStructName> {
         } if !type_args.is_empty() => Some(ResolvedStructName {
             base: identifier.name.clone(),
             identifier: Some(identifier.clone()),
-            mangled: mangle_name(identifier, type_args),
+            mangled: MonomorphizedTypeIdentifier::new(mangle_name(identifier, type_args)),
             type_args: type_args.clone(),
         }),
         Type::Named { identifier, .. } => Some(ResolvedStructName {
             base: identifier.name.clone(),
             identifier: Some(identifier.clone()),
-            mangled: identifier.name.clone(),
+            mangled: MonomorphizedTypeIdentifier::new(identifier.name.clone()),
             type_args: vec![],
         }),
         Type::Primitive(p) => {
@@ -161,7 +163,7 @@ fn struct_name_from_type(ty: &Type) -> Option<ResolvedStructName> {
             Some(ResolvedStructName {
                 base: name.clone(),
                 identifier: None,
-                mangled: name,
+                mangled: MonomorphizedTypeIdentifier::new(name),
                 type_args: vec![],
             })
         }

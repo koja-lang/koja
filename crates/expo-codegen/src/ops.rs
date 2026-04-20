@@ -13,6 +13,7 @@ use inkwell::{FloatPredicate, IntPredicate};
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::enums::compile_enum_struct_eq;
 use crate::expr::compile_expr;
+use expo_ir::identity::FunctionIdentifier;
 use expo_ir::lower::enums::enum_mangled_name;
 use expo_ir::lower::strings::resolve_concat_kind;
 use expo_ir::resolved::strings::ResolvedConcatKind;
@@ -191,7 +192,10 @@ fn emit_string_cmp<'ctx>(
     rhs: BasicValueEnum<'ctx>,
     pred: IntPredicate,
 ) -> ExprResult<'ctx> {
-    let strcmp = *c.functions.get("strcmp").ok_or("strcmp not declared")?;
+    let strcmp = *c
+        .functions
+        .get(&FunctionIdentifier::new("strcmp"))
+        .ok_or("strcmp not declared")?;
     let cmp_result = c
         .call(
             strcmp,
@@ -289,8 +293,14 @@ fn compile_string_concat<'ctx>(
     let l_ptr = lhs.into_pointer_value();
     let r_ptr = rhs.into_pointer_value();
 
-    let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
-    let memcpy = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+    let malloc = *c
+        .functions
+        .get(&FunctionIdentifier::new("malloc"))
+        .ok_or("malloc not declared")?;
+    let memcpy = *c
+        .functions
+        .get(&FunctionIdentifier::new("memcpy"))
+        .ok_or("memcpy not declared")?;
     let neg8 = i64_type.const_int((-8i64) as u64, true);
     let eight = i64_type.const_int(8, false);
     let three = i64_type.const_int(3, false);
@@ -393,8 +403,14 @@ fn compile_binary_concat<'ctx>(
     let l_ptr = lhs.into_pointer_value();
     let r_ptr = rhs.into_pointer_value();
 
-    let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
-    let memcpy = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+    let malloc = *c
+        .functions
+        .get(&FunctionIdentifier::new("malloc"))
+        .ok_or("malloc not declared")?;
+    let memcpy = *c
+        .functions
+        .get(&FunctionIdentifier::new("memcpy"))
+        .ok_or("memcpy not declared")?;
 
     let neg8 = i64_type.const_int((-8i64) as u64, true);
     let eight = i64_type.const_int(8, false);

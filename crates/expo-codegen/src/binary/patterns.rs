@@ -12,28 +12,30 @@ use crate::drop::Ownership;
 use crate::expr::compile_expr;
 
 use super::{is_float_segment, segment_bit_width, string_segment_bit_width};
+use expo_ir::identity::FunctionIdentifier;
 
 /// Compiles a binary pattern (`<<seg1, seg2, ...>>`) into an i1 condition.
 /// Emits a length check against the total fixed prefix, then extracts each
 /// segment by reading bytes and assembling integers with the correct byte order.
 pub(crate) fn compile_binary_pattern<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     segments: &[BinarySegment],
     subject_ptr: PointerValue<'ctx>,
     function: FunctionValue<'ctx>,
 ) -> Result<IntValue<'ctx>, String> {
-    let i8_type = c.context.i8_type();
-    let i64_type = c.context.i64_type();
-    let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
+    let i8_type = compiler.context.i8_type();
+    let i64_type = compiler.context.i64_type();
+    let ptr_type = compiler.context.ptr_type(inkwell::AddressSpace::default());
 
-    let payload_ptr = c
+    let payload_ptr = compiler
         .builder
         .build_load(ptr_type, subject_ptr, "bin_payload")
         .unwrap()
         .into_pointer_value();
 
     let len_ptr = unsafe {
-        c.builder
+        compiler
+            .builder
             .build_gep(
                 i8_type,
                 payload_ptr,
@@ -42,12 +44,12 @@ pub(crate) fn compile_binary_pattern<'ctx>(
             )
             .unwrap()
     };
-    let bit_length = c
+    let bit_length = compiler
         .builder
         .build_load(i64_type, len_ptr, "bin_bit_len")
         .unwrap()
         .into_int_value();
-    let byte_length = c
+    let byte_length = compiler
         .builder
         .build_right_shift(
             bit_length,
@@ -80,7 +82,7 @@ pub(crate) fn compile_binary_pattern<'ctx>(
     } else {
         IntPredicate::EQ
     };
-    let mut result = c
+    let mut result = compiler
         .builder
         .build_int_compare(
             cmp_pred,
@@ -93,7 +95,14 @@ pub(crate) fn compile_binary_pattern<'ctx>(
     let mut byte_offset: u64 = 0;
     for seg in segments {
         if is_greedy_rest(seg) {
-            compile_greedy_rest(c, seg, payload_ptr, byte_length, byte_offset, function)?;
+            compile_greedy_rest(
+                compiler,
+                seg,
+                payload_ptr,
+                byte_length,
+                byte_offset,
+                function,
+            )?;
             continue;
         }
 
@@ -101,12 +110,13 @@ pub(crate) fn compile_binary_pattern<'ctx>(
         let num_bytes = bits / 8;
 
         if string_segment_bit_width(seg).is_some() {
-            let str_ptr = compile_expr(c, &seg.value, function)?
+            let str_ptr = compile_expr(compiler, &seg.value, function)?
                 .ok_or("string segment produced no value")?
                 .value
                 .into_pointer_value();
             let buf_ptr = unsafe {
-                c.builder
+                compiler
+                    .builder
                     .build_in_bounds_gep(
                         i8_type,
                         payload_ptr,
@@ -115,8 +125,11 @@ pub(crate) fn compile_binary_pattern<'ctx>(
                     )
                     .unwrap()
             };
-            let memcmp = *c.functions.get("memcmp").expect("memcmp not declared");
-            let cmp_result = c
+            let memcmp = *compiler
+                .functions
+                .get(&FunctionIdentifier::new("memcmp"))
+                .expect("memcmp not declared");
+            let cmp_result = compiler
                 .call(
                     memcmp,
                     &[
@@ -128,16 +141,19 @@ pub(crate) fn compile_binary_pattern<'ctx>(
                 )
                 .unwrap()
                 .into_int_value();
-            let cmp = c
+            let cmp = compiler
                 .builder
                 .build_int_compare(
                     IntPredicate::EQ,
                     cmp_result,
-                    c.context.i32_type().const_int(0, false),
+                    compiler.context.i32_type().const_int(0, false),
                     "str_pat_eq",
                 )
                 .unwrap();
-            result = c.builder.build_and(result, cmp, "str_seg_and").unwrap();
+            result = compiler
+                .builder
+                .build_and(result, cmp, "str_seg_and")
+                .unwrap();
             byte_offset += num_bytes;
             continue;
         }
@@ -155,15 +171,17 @@ pub(crate) fn compile_binary_pattern<'ctx>(
             continue;
         }
 
-        let extracted = extract_segment_value(c, payload_ptr, byte_offset, num_bytes, is_little);
+        let extracted =
+            extract_segment_value(compiler, payload_ptr, byte_offset, num_bytes, is_little);
 
         if is_literal {
-            let lit_val = compile_expr(c, &seg.value, function)?
+            let lit_val = compile_expr(compiler, &seg.value, function)?
                 .ok_or("literal segment produced no value")?
                 .value
                 .into_int_value();
             let lit_i64 = if lit_val.get_type().get_bit_width() < 64 {
-                c.builder
+                compiler
+                    .builder
                     .build_int_z_extend(lit_val, i64_type, "lit_ext")
                     .unwrap()
             } else {
@@ -174,29 +192,37 @@ pub(crate) fn compile_binary_pattern<'ctx>(
             } else {
                 i64_type.const_int((1u64 << bits) - 1, false)
             };
-            let masked_lit = c.builder.build_and(lit_i64, mask, "lit_mask").unwrap();
-            let masked_ext = c.builder.build_and(extracted, mask, "ext_mask").unwrap();
-            let cmp = c
+            let masked_lit = compiler
+                .builder
+                .build_and(lit_i64, mask, "lit_mask")
+                .unwrap();
+            let masked_ext = compiler
+                .builder
+                .build_and(extracted, mask, "ext_mask")
+                .unwrap();
+            let cmp = compiler
                 .builder
                 .build_int_compare(IntPredicate::EQ, masked_ext, masked_lit, "seg_eq")
                 .unwrap();
-            result = c.builder.build_and(result, cmp, "seg_and").unwrap();
+            result = compiler.builder.build_and(result, cmp, "seg_and").unwrap();
         } else if is_binding && let ExprKind::Ident { name, .. } = &seg.value.kind {
             let binding_ty = binding_type(seg);
             let is_float = is_float_segment(seg);
 
             let bind_val: BasicValueEnum = if is_float {
                 if bits == 32 {
-                    let trunc = c
+                    let trunc = compiler
                         .builder
-                        .build_int_truncate(extracted, c.context.i32_type(), "f32_int")
+                        .build_int_truncate(extracted, compiler.context.i32_type(), "f32_int")
                         .unwrap();
-                    c.builder
-                        .build_bit_cast(trunc, c.context.f32_type(), "f32_val")
+                    compiler
+                        .builder
+                        .build_bit_cast(trunc, compiler.context.f32_type(), "f32_val")
                         .unwrap()
                 } else {
-                    c.builder
-                        .build_bit_cast(extracted, c.context.f64_type(), "f64_val")
+                    compiler
+                        .builder
+                        .build_bit_cast(extracted, compiler.context.f64_type(), "f64_val")
                         .unwrap()
                 }
             } else {
@@ -204,9 +230,10 @@ pub(crate) fn compile_binary_pattern<'ctx>(
             };
 
             let llvm_ty = bind_val.get_type();
-            let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
-            c.builder.build_store(alloca, bind_val).unwrap();
-            c.fn_state
+            let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
+            compiler.builder.build_store(alloca, bind_val).unwrap();
+            compiler
+                .fn_state
                 .variables
                 .insert(name.clone(), (alloca, binding_ty, Ownership::Unowned));
         }
@@ -220,7 +247,7 @@ pub(crate) fn compile_binary_pattern<'ctx>(
 /// Implements greedy rest capture: allocates a new Binary with the remaining
 /// bytes after the fixed prefix, copies them via memcpy, and binds the variable.
 fn compile_greedy_rest<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     seg: &BinarySegment,
     payload_ptr: PointerValue<'ctx>,
     byte_length: IntValue<'ctx>,
@@ -232,10 +259,10 @@ fn compile_greedy_rest<'ctx>(
         _ => return Ok(()),
     };
 
-    let i8_type = c.context.i8_type();
-    let i64_type = c.context.i64_type();
+    let i8_type = compiler.context.i8_type();
+    let i64_type = compiler.context.i64_type();
 
-    let remaining_bytes = c
+    let remaining_bytes = compiler
         .builder
         .build_int_sub(
             byte_length,
@@ -243,32 +270,40 @@ fn compile_greedy_rest<'ctx>(
             "rest_bytes",
         )
         .unwrap();
-    let remaining_bits = c
+    let remaining_bits = compiler
         .builder
         .build_int_mul(remaining_bytes, i64_type.const_int(8, false), "rest_bits")
         .unwrap();
 
     let eight = i64_type.const_int(8, false);
-    let alloc_size = c
+    let alloc_size = compiler
         .builder
         .build_int_add(eight, remaining_bytes, "rest_alloc_sz")
         .unwrap();
-    let malloc = *c.functions.get("malloc").expect("malloc not declared");
-    let base_ptr = c
+    let malloc = *compiler
+        .functions
+        .get(&FunctionIdentifier::new("malloc"))
+        .expect("malloc not declared");
+    let base_ptr = compiler
         .call(malloc, &[alloc_size.into()], "rest_alloc")
         .unwrap()
         .into_pointer_value();
 
-    c.builder.build_store(base_ptr, remaining_bits).unwrap();
+    compiler
+        .builder
+        .build_store(base_ptr, remaining_bits)
+        .unwrap();
 
     let rest_payload = unsafe {
-        c.builder
+        compiler
+            .builder
             .build_in_bounds_gep(i8_type, base_ptr, &[eight], "rest_payload")
             .unwrap()
     };
 
     let src_ptr = unsafe {
-        c.builder
+        compiler
+            .builder
             .build_in_bounds_gep(
                 i8_type,
                 payload_ptr,
@@ -278,16 +313,19 @@ fn compile_greedy_rest<'ctx>(
             .unwrap()
     };
 
-    let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
-    c.call_void(
+    let memcpy = *compiler
+        .functions
+        .get(&FunctionIdentifier::new("memcpy"))
+        .expect("memcpy not declared");
+    compiler.call_void(
         memcpy,
         &[rest_payload.into(), src_ptr.into(), remaining_bytes.into()],
         "rest_cpy",
     );
 
-    let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
-    let alloca = c.builder.build_alloca(ptr_type, &name).unwrap();
-    c.builder.build_store(alloca, rest_payload).unwrap();
+    let ptr_type = compiler.context.ptr_type(inkwell::AddressSpace::default());
+    let alloca = compiler.builder.build_alloca(ptr_type, &name).unwrap();
+    compiler.builder.build_store(alloca, rest_payload).unwrap();
 
     let rest_ty = if let Some(TypeExpr::Named { path, .. }) = &seg.type_ann {
         if path.last().is_some_and(|n| n == "Bits") {
@@ -299,7 +337,8 @@ fn compile_greedy_rest<'ctx>(
         Type::Primitive(Primitive::Binary)
     };
 
-    c.fn_state
+    compiler
+        .fn_state
         .variables
         .insert(name, (alloca, rest_ty, Ownership::Owned));
 
@@ -309,19 +348,20 @@ fn compile_greedy_rest<'ctx>(
 /// Reads `num_bytes` from `payload_ptr` at `byte_offset` and assembles them
 /// into an i64 with the specified byte order. Inverse of construction's packing loop.
 fn extract_segment_value<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     payload_ptr: PointerValue<'ctx>,
     byte_offset: u64,
     num_bytes: u64,
     is_little: bool,
 ) -> IntValue<'ctx> {
-    let i8_type = c.context.i8_type();
-    let i64_type = c.context.i64_type();
+    let i8_type = compiler.context.i8_type();
+    let i64_type = compiler.context.i64_type();
     let mut result = i64_type.const_int(0, false);
 
     for i in 0..num_bytes {
         let ptr = unsafe {
-            c.builder
+            compiler
+                .builder
                 .build_in_bounds_gep(
                     i8_type,
                     payload_ptr,
@@ -330,12 +370,12 @@ fn extract_segment_value<'ctx>(
                 )
                 .unwrap()
         };
-        let byte_val = c
+        let byte_val = compiler
             .builder
             .build_load(i8_type, ptr, "seg_byte")
             .unwrap()
             .into_int_value();
-        let ext = c
+        let ext = compiler
             .builder
             .build_int_z_extend(byte_val, i64_type, "seg_ext")
             .unwrap();
@@ -346,13 +386,17 @@ fn extract_segment_value<'ctx>(
             (num_bytes - 1 - i) * 8
         };
         let shifted = if shift_amount > 0 {
-            c.builder
+            compiler
+                .builder
                 .build_left_shift(ext, i64_type.const_int(shift_amount, false), "seg_shl")
                 .unwrap()
         } else {
             ext
         };
-        result = c.builder.build_or(result, shifted, "seg_or").unwrap();
+        result = compiler
+            .builder
+            .build_or(result, shifted, "seg_or")
+            .unwrap();
     }
 
     result

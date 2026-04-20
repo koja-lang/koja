@@ -24,6 +24,7 @@ use crate::expr::compile_expr;
 use crate::generics::{ensure_types_exist, monomorphize_impl_method};
 use crate::structs::infer_static_method_return_type;
 use crate::types::to_llvm_type;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 /// Compiles a single statement (assignment, return, break, or compound
 /// assignment). Expression statements are compiled for side effects only.
@@ -479,7 +480,9 @@ pub(crate) fn apply_coercion<'ctx>(
     match coercion {
         Coercion::UnionWiden { source, target } => {
             let target_mangled = mangle_type(&target);
-            if let Some(target_llvm) = compiler.llvm_types.get_monomorphized(&target_mangled)
+            if let Some(target_llvm) = compiler
+                .llvm_types
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&target_mangled))
                 && val.get_type() == target_llvm.into()
             {
                 return Ok(val);
@@ -694,12 +697,15 @@ fn convert_list_literal_if_needed<'ctx>(
 
     let target_mangled = mangle_name(&identifier, &type_args);
     let from_list_fn_name = format!("{target_mangled}_from_list");
-    if !compiler.functions.contains_key(&from_list_fn_name) {
+    if !compiler
+        .functions
+        .contains_key(&FunctionIdentifier::new(&from_list_fn_name))
+    {
         monomorphize_impl_method(compiler, &base, "from_list", &type_args, &[])?;
     }
     let from_list_fn = *compiler
         .functions
-        .get(&from_list_fn_name)
+        .get(&FunctionIdentifier::new(&from_list_fn_name))
         .ok_or_else(|| format!("{base} does not implement ListLiteral (no from_list)"))?;
 
     let result = compiler

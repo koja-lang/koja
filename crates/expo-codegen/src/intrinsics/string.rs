@@ -10,6 +10,7 @@ use crate::generics::ensure_types_exist;
 use super::{
     OPTION_NONE_TAG, OPTION_SOME_TAG, STRING_HEADER_BYTES, build_result_err, build_result_ok,
 };
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 pub fn emit_conversion_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -48,7 +49,7 @@ pub fn emit_conversion_intrinsic<'ctx>(
 
             let validate_fn = *c
                 .functions
-                .get("expo_utf8_validate")
+                .get(&FunctionIdentifier::new("expo_utf8_validate"))
                 .ok_or("expo_utf8_validate not declared")?;
             let is_valid = c
                 .call(
@@ -77,8 +78,14 @@ pub fn emit_conversion_intrinsic<'ctx>(
                 .unwrap();
 
             c.builder.position_at_end(valid_bb);
-            let malloc_fn = *c.functions.get("malloc").ok_or("malloc not declared")?;
-            let memcpy_fn = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+            let malloc_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new("malloc"))
+                .ok_or("malloc not declared")?;
+            let memcpy_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new("memcpy"))
+                .ok_or("memcpy not declared")?;
             let alloc_size = c
                 .builder
                 .build_int_add(byte_count, i64_ty.const_int(9, false), "alloc_sz")
@@ -242,7 +249,7 @@ pub fn emit_string_intrinsic<'ctx>(
             let self_ptr = fn_val.get_nth_param(0).unwrap();
             let rt_fn = *c
                 .functions
-                .get("expo_string_length")
+                .get(&FunctionIdentifier::new("expo_string_length"))
                 .ok_or("expo_string_length not declared")?;
             let result = c.call(rt_fn, &[self_ptr.into()], "len").unwrap();
             c.builder.build_return(Some(&result)).unwrap();
@@ -256,14 +263,14 @@ pub fn emit_string_intrinsic<'ctx>(
             )?;
             let option_struct = c
                 .llvm_types
-                .get_monomorphized(&option_mangled)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&option_mangled))
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
             let self_ptr = fn_val.get_nth_param(0).unwrap();
             let index = fn_val.get_nth_param(1).unwrap();
             let rt_fn = *c
                 .functions
-                .get("expo_string_get")
+                .get(&FunctionIdentifier::new("expo_string_get"))
                 .ok_or("expo_string_get not declared")?;
             let raw_ptr = c
                 .call(rt_fn, &[self_ptr.into(), index.into()], "ch")
@@ -360,7 +367,7 @@ pub fn emit_string_intrinsic<'ctx>(
             let stop = c.builder.build_extract_value(range_val, 1, "stop").unwrap();
             let rt_fn = *c
                 .functions
-                .get("expo_string_slice")
+                .get(&FunctionIdentifier::new("expo_string_slice"))
                 .ok_or("expo_string_slice not declared")?;
             let result = c
                 .call(
@@ -402,7 +409,7 @@ pub fn emit_parse_intrinsic<'ctx>(
             let out_alloca = c.builder.build_alloca(i64_ty, "out").unwrap();
             let rt_fn = *c
                 .functions
-                .get("expo_int_parse")
+                .get(&FunctionIdentifier::new("expo_int_parse"))
                 .ok_or("expo_int_parse not declared")?;
             let ok = c
                 .call(rt_fn, &[input_ptr.into(), out_alloca.into()], "ok")
@@ -444,7 +451,7 @@ pub fn emit_parse_intrinsic<'ctx>(
             let out_alloca = c.builder.build_alloca(f64_ty, "out").unwrap();
             let rt_fn = *c
                 .functions
-                .get("expo_float_parse")
+                .get(&FunctionIdentifier::new("expo_float_parse"))
                 .ok_or("expo_float_parse not declared")?;
             let ok = c
                 .call(rt_fn, &[input_ptr.into(), out_alloca.into()], "ok")

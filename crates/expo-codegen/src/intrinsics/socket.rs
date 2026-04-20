@@ -6,6 +6,7 @@ use inkwell::values::FunctionValue;
 use crate::compiler::Compiler;
 
 use super::{STRING_HEADER_BYTES, build_result_err, build_result_ok};
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 pub fn emit_socket_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -31,7 +32,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let rt_fn = *c
                 .functions
-                .get("expo_socket_resolve")
+                .get(&FunctionIdentifier::new("expo_socket_resolve"))
                 .ok_or("expo_socket_resolve not declared")?;
             let result_ptr = c
                 .call(rt_fn, &[hostname_ptr.into()], "resolve_buf")
@@ -79,7 +80,7 @@ pub fn emit_socket_intrinsic<'ctx>(
             );
             let list_struct = c
                 .llvm_types
-                .get_monomorphized(&list_type_name)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&list_type_name))
                 .ok_or_else(|| format!("{list_type_name} struct type not found"))?;
 
             let ip_struct_ty = c
@@ -91,7 +92,10 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .builder
                 .build_int_mul(count, i64_ty.const_int(ip_size, false), "alloc_sz")
                 .unwrap();
-            let malloc_fn = *c.functions.get("malloc").ok_or("malloc not declared")?;
+            let malloc_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new("malloc"))
+                .ok_or("malloc not declared")?;
             let list_buf = c
                 .call(malloc_fn, &[alloc_size.into()], "list_buf")
                 .unwrap()
@@ -108,14 +112,20 @@ pub fn emit_socket_intrinsic<'ctx>(
                     )
                     .unwrap()
             };
-            let memcpy_fn = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+            let memcpy_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new("memcpy"))
+                .ok_or("memcpy not declared")?;
             c.call_void(
                 memcpy_fn,
                 &[list_buf.into(), ptrs_start.into(), alloc_size.into()],
                 "cpy",
             );
 
-            let free_fn = *c.functions.get("free").ok_or("free not declared")?;
+            let free_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new("free"))
+                .ok_or("free not declared")?;
             c.call_void(free_fn, &[result_ptr.into()], "free_buf");
 
             let list_val = list_struct.get_undef();
@@ -142,7 +152,7 @@ pub fn emit_socket_intrinsic<'ctx>(
             c.builder.position_at_end(err_bb);
             let err_fn = *c
                 .functions
-                .get("expo_last_error")
+                .get(&FunctionIdentifier::new("expo_last_error"))
                 .ok_or("expo_last_error not declared")?;
             let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
             let err_result = build_result_err(c, err_msg, result_type);
@@ -170,7 +180,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let rt_fn = *c
                 .functions
-                .get("expo_socket_recv_from")
+                .get(&FunctionIdentifier::new("expo_socket_recv_from"))
                 .ok_or("expo_socket_recv_from not declared")?;
             let result_ptr = c
                 .call(rt_fn, &[fd.into(), count_val.into()], "recv_buf")
@@ -233,7 +243,10 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .build_load(i64_ty, port_field_ptr, "port")
                 .unwrap();
 
-            let free_fn = *c.functions.get("free").ok_or("free not declared")?;
+            let free_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new("free"))
+                .ok_or("free not declared")?;
             c.call_void(free_fn, &[result_ptr.into()], "free_buf");
 
             let ip_struct_ty = c
@@ -276,7 +289,7 @@ pub fn emit_socket_intrinsic<'ctx>(
             );
             let pair_struct = c
                 .llvm_types
-                .get_monomorphized(&pair_type_name)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&pair_type_name))
                 .ok_or_else(|| format!("{pair_type_name} struct type not found"))?;
             let pair_val = pair_struct.get_undef();
             let pair_val = c
@@ -297,7 +310,7 @@ pub fn emit_socket_intrinsic<'ctx>(
             c.builder.position_at_end(err_bb);
             let err_fn = *c
                 .functions
-                .get("expo_last_error")
+                .get(&FunctionIdentifier::new("expo_last_error"))
                 .ok_or("expo_last_error not declared")?;
             let err_msg = c.call(err_fn, &[], "err_msg").unwrap();
             let err_result = build_result_err(c, err_msg, result_type);

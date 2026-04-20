@@ -2,7 +2,7 @@
 //! structs, and provides `call_format` to invoke `{Type}_format` on any value.
 
 use expo_ast::identifier::{Package, TypeIdentifier};
-use expo_ir::identity::VariantId;
+use expo_ir::identity::{FunctionIdentifier, VariantIdentifier};
 use expo_ir::lower::debug::{
     format_fn_name, resolve_enum_format_info, resolve_format_kind, resolve_struct_format_info,
     resolve_type_id,
@@ -56,7 +56,10 @@ pub fn call_format<'ctx>(
         None => format!("{type_name}_format"),
     };
 
-    if !compiler.functions.contains_key(&fn_name) {
+    if !compiler
+        .functions
+        .contains_key(&FunctionIdentifier::new(&fn_name))
+    {
         let Some(kind) = resolve_format_kind(
             &compiler.lower_ctx(),
             resolved_id.as_ref(),
@@ -86,7 +89,9 @@ pub fn call_format<'ctx>(
                 let pointer_type = compiler.context.ptr_type(AddressSpace::default());
                 let function_type = pointer_type.fn_type(&[parameter_type.into()], false);
                 let function_value = compiler.module.add_function(&fn_name, function_type, None);
-                compiler.functions.insert(fn_name.clone(), function_value);
+                compiler
+                    .functions
+                    .insert(FunctionIdentifier::new(fn_name.clone()), function_value);
                 emit_primitive_intrinsic(compiler, &fn_name)?;
             }
         }
@@ -94,7 +99,7 @@ pub fn call_format<'ctx>(
 
     let format_fn = *compiler
         .functions
-        .get(&fn_name)
+        .get(&FunctionIdentifier::new(&fn_name))
         .ok_or_else(|| format!("no format function for type `{type_name}`"))?;
 
     compiler
@@ -119,7 +124,10 @@ pub fn synthesize_all_formats<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(),
 
     for (id, is_enum) in &types {
         let fn_name = format_fn_name(id);
-        if compiler.functions.contains_key(&fn_name) {
+        if compiler
+            .functions
+            .contains_key(&FunctionIdentifier::new(&fn_name))
+        {
             continue;
         }
         if has_unsynthesizable_fields(compiler, id) {
@@ -147,11 +155,11 @@ pub fn snprintf_to_expo_string<'ctx>(
 ) -> PointerValue<'ctx> {
     let snprintf = *compiler
         .functions
-        .get("snprintf")
+        .get(&FunctionIdentifier::new("snprintf"))
         .expect("snprintf not declared");
     let malloc = *compiler
         .functions
-        .get("malloc")
+        .get(&FunctionIdentifier::new("malloc"))
         .expect("malloc not declared");
     let i32_type = compiler.context.i32_type();
     let i64_type = compiler.context.i64_type();
@@ -294,7 +302,7 @@ fn synthesize_enum_format<'ctx>(
                 VariantData::Unit => variant_name_label(compiler, &variant_info.name),
                 VariantData::Tuple(types) => {
                     if types.len() == 1 && !is_complex_type(&types[0]) {
-                        let id = VariantId::new(&qualified, &variant_info.name);
+                        let id = VariantIdentifier::new(&qualified, &variant_info.name);
                         let payload_struct_type = compiler.llvm_types.variant_payload(&id);
 
                         if let Some(payload_type) = payload_struct_type {
@@ -475,7 +483,7 @@ fn begin_synthesis<'ctx>(
         .add_function(function_name, function_type, None);
     compiler
         .functions
-        .insert(function_name.to_string(), function_value);
+        .insert(FunctionIdentifier::new(function_name), function_value);
 
     let saved_block = compiler.builder.get_insert_block();
     let entry = compiler.context.append_basic_block(function_value, "entry");

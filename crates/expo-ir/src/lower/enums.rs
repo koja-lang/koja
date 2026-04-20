@@ -10,6 +10,7 @@ use expo_ast::ast::{EnumConstructionData, TypeParam};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Type, TypeIdentifier, mangle_name, unwrap_indirect};
 
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
 use crate::resolved::construction::ResolvedEnumConstruction;
@@ -43,7 +44,7 @@ pub fn lower_concrete_enum(
 ) -> Result<ResolvedEnumConstruction, String> {
     let resolved_id = resolved_id.ok_or_else(|| format!("unknown enum type: {enum_name}"))?;
 
-    let key = resolved_id.qualified_name();
+    let key = MonomorphizedTypeIdentifier::new(resolved_id.qualified_name());
     let tag = ctx
         .layouts
         .variant_index(&key, variant)
@@ -164,8 +165,10 @@ pub fn resolve_generic_type_args(
 /// Resolves the per-variant equality decision table for an enum-typed value.
 /// Replaces `expo_codegen::enums::resolve_enum_eq`.
 pub fn resolve_enum_eq(ctx: &LowerCtx<'_>, ty: &Type) -> Result<ResolvedEnumEq, String> {
-    let mangled = enum_mangled_name(ty)
-        .ok_or_else(|| "compile_enum_struct_eq called with non-enum type".to_string())?;
+    let mangled = MonomorphizedTypeIdentifier::new(
+        enum_mangled_name(ty)
+            .ok_or_else(|| "compile_enum_struct_eq called with non-enum type".to_string())?,
+    );
 
     let registered = ctx
         .layouts

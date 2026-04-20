@@ -10,6 +10,7 @@ use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Type, mangle_name, mangle_type, named, unwrap_indirect};
 
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
 use crate::lower::types::{
@@ -190,8 +191,8 @@ pub fn lower_pattern(
                     format!("unknown union member: {union_mangled}.{member_mangled}")
                 })?;
                 Ok(ResolvedPattern::UnionMember {
-                    union_mangled,
-                    member_mangled,
+                    union_mangled: MonomorphizedTypeIdentifier::new(union_mangled),
+                    member_mangled: MonomorphizedTypeIdentifier::new(member_mangled),
                     tag,
                     member_ty: resolved,
                     bind_name: name.clone(),
@@ -374,17 +375,19 @@ fn resolve_enum_key_from_joined(
 ) -> Result<String, String> {
     if let Some(id) = resolve_name_current(ctx, joined) {
         let qualified = id.qualified_name();
+        let qualified_id = MonomorphizedTypeIdentifier::new(&qualified);
         if ctx.type_ctx.get_type(id).is_some()
-            || ctx.layouts.contains_monomorphized(&qualified)
-            || ctx.layouts.contains_enum(&qualified)
+            || ctx.layouts.contains_monomorphized(&qualified_id)
+            || ctx.layouts.contains_enum(&qualified_id)
         {
             return Ok(qualified);
         }
     }
     let bare_id = TypeIdentifier::from_qualified_name(joined);
+    let joined_id = MonomorphizedTypeIdentifier::new(joined);
     if ctx.type_ctx.get_type(&bare_id).is_some()
-        || ctx.layouts.contains_monomorphized(joined)
-        || ctx.layouts.contains_enum(joined)
+        || ctx.layouts.contains_monomorphized(&joined_id)
+        || ctx.layouts.contains_enum(&joined_id)
     {
         return Ok(joined.to_string());
     }
@@ -396,7 +399,7 @@ fn resolve_enum_key_from_joined(
 
 fn lookup_variant_tag(ctx: &LowerCtx<'_>, enum_key: &str, variant: &str) -> Result<u8, String> {
     ctx.layouts
-        .variant_index(enum_key, variant)
+        .variant_index(&MonomorphizedTypeIdentifier::new(enum_key), variant)
         .ok_or_else(|| format!("unknown variant: {enum_key}.{variant}"))
 }
 
@@ -449,7 +452,9 @@ fn lookup_variant_data(
     {
         return Ok(vi.data.clone());
     }
-    if let Some(variants) = ctx.layouts.enum_variants(enum_name)
+    if let Some(variants) = ctx
+        .layouts
+        .enum_variants(&MonomorphizedTypeIdentifier::new(enum_name))
         && let Some((_, data)) = variants.iter().find(|(n, _)| n == variant)
     {
         return Ok(data.clone());

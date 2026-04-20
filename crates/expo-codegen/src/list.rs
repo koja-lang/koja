@@ -10,15 +10,17 @@ use expo_typecheck::types::{Primitive, Type, mangle_name};
 use crate::compiler::{Compiler, EmitResult};
 use crate::generics::ensure_types_exist;
 use crate::types::to_llvm_type;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 pub fn monomorphize_list_struct<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
     let st = c.context.opaque_struct_type(mangled);
     let ptr_type = c.context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = c.context.i64_type();
     st.set_body(&[ptr_type.into(), i64_type.into(), i64_type.into()], false);
-    c.llvm_types.register_monomorphized(mangled.to_string(), st);
+    c.llvm_types
+        .register_monomorphized(MonomorphizedTypeIdentifier::new(mangled), st);
     c.layouts.register_struct_layout(
-        mangled.to_string(),
+        MonomorphizedTypeIdentifier::new(mangled),
         vec![
             ("ptr".to_string(), Type::Primitive(Primitive::String)),
             ("length".to_string(), Type::Primitive(Primitive::I64)),
@@ -37,7 +39,7 @@ pub fn emit_list_method<'ctx>(
 ) -> Result<EmitResult, String> {
     let list_struct = c
         .llvm_types
-        .get_monomorphized(mangled_type)
+        .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
         .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
     let elem_ty = &type_args[0];
@@ -53,7 +55,8 @@ pub fn emit_list_method<'ctx>(
         "new" => {
             let fn_type = list_struct.fn_type(&[], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -64,7 +67,10 @@ pub fn emit_list_method<'ctx>(
                 .builder
                 .build_int_mul(initial_cap, i64_ty.const_int(elem_size, false), "alloc_sz")
                 .unwrap();
-            let malloc = *c.functions.get("malloc").expect("malloc not declared");
+            let malloc = *c
+                .functions
+                .get(&FunctionIdentifier::new("malloc"))
+                .expect("malloc not declared");
             let raw_ptr = c.call(malloc, &[alloc_size.into()], "buf").unwrap();
 
             let result = list_struct.get_undef();
@@ -93,7 +99,8 @@ pub fn emit_list_method<'ctx>(
         "append" => {
             let fn_type = list_struct.fn_type(&[list_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let grow_bb = c.context.append_basic_block(fn_val, "grow");
@@ -137,7 +144,10 @@ pub fn emit_list_method<'ctx>(
                 .builder
                 .build_int_mul(new_cap, i64_ty.const_int(elem_size, false), "new_size")
                 .unwrap();
-            let realloc = *c.functions.get("realloc").expect("realloc not declared");
+            let realloc = *c
+                .functions
+                .get(&FunctionIdentifier::new("realloc"))
+                .expect("realloc not declared");
             let new_ptr = c
                 .call(realloc, &[buf_ptr.into(), new_size.into()], "new_buf")
                 .unwrap();
@@ -197,13 +207,14 @@ pub fn emit_list_method<'ctx>(
             ensure_types_exist(c, &named_generic_std("Option", option_type_args))?;
             let option_struct = c
                 .llvm_types
-                .get_monomorphized(&option_mangled)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&option_mangled))
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
             let i8_ty = c.context.i8_type();
             let fn_type = option_struct.fn_type(&[list_struct.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let ok_bb = c.context.append_basic_block(fn_val, "ok");
@@ -298,7 +309,8 @@ pub fn emit_list_method<'ctx>(
         "length" => {
             let fn_type = i64_ty.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -316,7 +328,8 @@ pub fn emit_list_method<'ctx>(
         "from_list" => {
             let fn_type = list_struct.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -333,7 +346,8 @@ pub fn emit_list_method<'ctx>(
         "empty?" => {
             let fn_type = i1_ty.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -367,7 +381,7 @@ pub fn emit_list_method<'ctx>(
             let option_mangled = mangle_name(&TypeIdentifier::std("Option"), &option_type_args);
             let option_struct = c
                 .llvm_types
-                .get_monomorphized(&option_mangled)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&option_mangled))
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
             let list_type = named_generic_std("List", vec![elem_ty.clone()]);
@@ -377,13 +391,14 @@ pub fn emit_list_method<'ctx>(
             let pair_mangled = mangle_name(&TypeIdentifier::std("Pair"), &pair_type_args);
             let pair_struct = c
                 .llvm_types
-                .get_monomorphized(&pair_mangled)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&pair_mangled))
                 .ok_or_else(|| format!("no LLVM type for {pair_mangled}"))?;
 
             let i8_ty = c.context.i8_type();
             let fn_type = pair_struct.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let empty_bb = c.context.append_basic_block(fn_val, "empty");
@@ -542,7 +557,8 @@ pub fn emit_list_method<'ctx>(
                 false,
             );
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let in_bounds_bb = c.context.append_basic_block(fn_val, "in_bounds");
@@ -599,7 +615,8 @@ pub fn emit_list_method<'ctx>(
             let fn_type =
                 list_struct.fn_type(&[list_struct.into(), i64_ty.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let nonempty_bb = c.context.append_basic_block(fn_val, "nonempty");
@@ -674,7 +691,10 @@ pub fn emit_list_method<'ctx>(
                     "alloc_bytes",
                 )
                 .unwrap();
-            let malloc = *c.functions.get("malloc").expect("malloc not declared");
+            let malloc = *c
+                .functions
+                .get(&FunctionIdentifier::new("malloc"))
+                .expect("malloc not declared");
             let new_buf = c.call(malloc, &[alloc_bytes.into()], "new_buf").unwrap();
 
             let src_offset = c
@@ -686,7 +706,10 @@ pub fn emit_list_method<'ctx>(
                     .build_gep(c.context.i8_type(), buf_ptr, &[src_offset], "src_ptr")
                     .unwrap()
             };
-            let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
+            let memcpy = *c
+                .functions
+                .get(&FunctionIdentifier::new("memcpy"))
+                .expect("memcpy not declared");
             c.call_void(
                 memcpy,
                 &[new_buf.into(), src_ptr.into(), alloc_bytes.into()],
@@ -742,7 +765,8 @@ pub fn emit_list_method<'ctx>(
         "concat" => {
             let fn_type = list_struct.fn_type(&[list_struct.into(), list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let grow_bb = c.context.append_basic_block(fn_val, "grow");
@@ -805,7 +829,10 @@ pub fn emit_list_method<'ctx>(
                 .builder
                 .build_int_mul(new_cap, i64_ty.const_int(elem_size, false), "new_size")
                 .unwrap();
-            let realloc = *c.functions.get("realloc").expect("realloc not declared");
+            let realloc = *c
+                .functions
+                .get(&FunctionIdentifier::new("realloc"))
+                .expect("realloc not declared");
             let new_ptr = c
                 .call(realloc, &[self_ptr.into(), new_size.into()], "new_buf")
                 .unwrap();
@@ -834,7 +861,10 @@ pub fn emit_list_method<'ctx>(
                 .builder
                 .build_int_mul(other_len, i64_ty.const_int(elem_size, false), "copy_bytes")
                 .unwrap();
-            let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
+            let memcpy = *c
+                .functions
+                .get(&FunctionIdentifier::new("memcpy"))
+                .expect("memcpy not declared");
             c.call_void(
                 memcpy,
                 &[dst_ptr.into(), other_ptr.into(), copy_bytes.into()],

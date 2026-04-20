@@ -14,6 +14,7 @@ use crate::stmt::compile_statement;
 use crate::types::to_llvm_type;
 
 use super::coerce_to_bool;
+use expo_ir::identity::FunctionIdentifier;
 
 /// Compiles an infinite `loop` block. Only exits via `break`.
 pub fn compile_loop<'ctx>(
@@ -148,11 +149,11 @@ pub fn compile_for<'ctx>(
 
     let length_fn = *compiler
         .functions
-        .get(&length_fn_name)
+        .get(&FunctionIdentifier::new(&length_fn_name))
         .ok_or_else(|| format!("no function `{length_fn_name}`"))?;
     let get_fn = *compiler
         .functions
-        .get(&get_fn_name)
+        .get(&FunctionIdentifier::new(&get_fn_name))
         .ok_or_else(|| format!("no function `{get_fn_name}`"))?;
 
     let i64_ty = compiler.context.i64_type();

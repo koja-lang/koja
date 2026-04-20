@@ -4,6 +4,8 @@
 
 use expo_ast::types::Type;
 
+use crate::identity::MonomorphizedTypeIdentifier;
+
 /// The resolved field structure of an enum variant for construction.
 pub enum ResolvedVariantFields {
     /// Named fields with name, layout index, and type.
@@ -27,7 +29,7 @@ pub enum ResolvedVariantEq {
 /// All the information needed to emit structural equality for an enum type.
 pub struct ResolvedEnumEq {
     /// The mangled enum type name (e.g. `"Option_$Int32$"`).
-    pub mangled: String,
+    pub mangled: MonomorphizedTypeIdentifier,
     /// Each variant's name and its equality-comparison shape.
     pub variants: Vec<(String, ResolvedVariantEq)>,
 }

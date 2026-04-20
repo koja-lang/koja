@@ -42,7 +42,7 @@ use crate::stmt::{apply_coercion, coerce_numeric, compile_statement, compile_uni
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
 use crate::util::printf_format_spec;
-
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 /// Compiles an expression and coerces the result to the expected type.
 /// Use when the target type is known (e.g. function arguments, struct fields).
 pub fn compile_expr_coerced<'ctx>(
@@ -321,7 +321,7 @@ fn compile_string<'ctx>(
 
     let snprintf = *compiler
         .functions
-        .get("snprintf")
+        .get(&FunctionIdentifier::new("snprintf"))
         .ok_or("snprintf not declared")?;
 
     let mut fmt_string = String::new();
@@ -388,7 +388,7 @@ fn compile_string<'ctx>(
 
     let malloc_fn = *compiler
         .functions
-        .get("malloc")
+        .get(&FunctionIdentifier::new("malloc"))
         .ok_or("malloc not declared")?;
     let i64_type = compiler.context.i64_type();
     let i8_type = compiler.context.i8_type();
@@ -604,7 +604,7 @@ fn compile_closure_core<'ctx>(
 
         let malloc = *compiler
             .functions
-            .get("malloc")
+            .get(&FunctionIdentifier::new("malloc"))
             .expect("malloc not declared in builtins");
         let raw_ptr = compiler
             .call(malloc, &[env_size.into()], "env_alloc")
@@ -673,18 +673,21 @@ fn resolve_list_literal(
     let list_id = TypeIdentifier::std("List");
     let mangled_type = mangle_name(&list_id, &type_args);
 
-    if !compiler.llvm_types.contains_monomorphized(&mangled_type) {
+    if !compiler
+        .llvm_types
+        .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled_type))
+    {
         monomorphize_struct(compiler, &list_id, &type_args)?;
     }
     if !compiler
         .functions
-        .contains_key(&format!("{mangled_type}_new"))
+        .contains_key(&FunctionIdentifier::new(format!("{mangled_type}_new")))
     {
         monomorphize_impl_method(compiler, "List", "new", &type_args, &[])?;
     }
     if !compiler
         .functions
-        .contains_key(&format!("{mangled_type}_append"))
+        .contains_key(&FunctionIdentifier::new(format!("{mangled_type}_append")))
     {
         monomorphize_impl_method(compiler, "List", "append", &type_args, &[])?;
     }
@@ -718,11 +721,11 @@ fn compile_list_literal<'ctx>(
     );
     let new_fn = *compiler
         .functions
-        .get(&format!("{mangled_type}_new"))
+        .get(&FunctionIdentifier::new(format!("{mangled_type}_new")))
         .ok_or("List.new not found")?;
     let append_fn = *compiler
         .functions
-        .get(&format!("{mangled_type}_append"))
+        .get(&FunctionIdentifier::new(format!("{mangled_type}_append")))
         .ok_or("List.append not found")?;
 
     let mut list_val = compiler
@@ -754,18 +757,21 @@ fn resolve_map_literal(
     let map_id = TypeIdentifier::std("Map");
     let mangled_type = mangle_name(&map_id, &type_args);
 
-    if !compiler.llvm_types.contains_monomorphized(&mangled_type) {
+    if !compiler
+        .llvm_types
+        .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled_type))
+    {
         monomorphize_struct(compiler, &map_id, &type_args)?;
     }
     if !compiler
         .functions
-        .contains_key(&format!("{mangled_type}_new"))
+        .contains_key(&FunctionIdentifier::new(format!("{mangled_type}_new")))
     {
         monomorphize_impl_method(compiler, "Map", "new", &type_args, &[])?;
     }
     if !compiler
         .functions
-        .contains_key(&format!("{mangled_type}_put"))
+        .contains_key(&FunctionIdentifier::new(format!("{mangled_type}_put")))
     {
         monomorphize_impl_method(compiler, "Map", "put", &type_args, &[])?;
     }
@@ -807,11 +813,11 @@ fn compile_map_literal<'ctx>(
     );
     let new_fn = *compiler
         .functions
-        .get(&format!("{mangled_type}_new"))
+        .get(&FunctionIdentifier::new(format!("{mangled_type}_new")))
         .ok_or("Map.new not found")?;
     let put_fn = *compiler
         .functions
-        .get(&format!("{mangled_type}_put"))
+        .get(&FunctionIdentifier::new(format!("{mangled_type}_put")))
         .ok_or("Map.put not found")?;
 
     let mut map_val = compiler
@@ -871,41 +877,43 @@ fn compile_spawn<'ctx>(
 
     let start_fn = compiler
         .module
-        .get_function(&resolved.start_fn_name)
+        .get_function(resolved.start_fn_name.as_str())
         .ok_or_else(|| format!("undefined start function: {}", resolved.start_fn_name))?;
 
     let run_fn = compiler
         .module
-        .get_function(&resolved.run_fn_name)
+        .get_function(resolved.run_fn_name.as_str())
         .ok_or_else(|| format!("undefined run function: {}", resolved.run_fn_name))?;
 
-    let state_struct_type = resolve_name_current(&compiler.lower_ctx(), &resolved.mangled_state)
-        .and_then(|id| compiler.llvm_types.get_concrete(id))
-        .or_else(|| {
-            compiler
-                .llvm_types
-                .get_monomorphized(&resolved.mangled_state)
-        })
-        .ok_or_else(|| format!("no LLVM struct for `{}`", resolved.mangled_state))?;
+    let state_struct_type =
+        resolve_name_current(&compiler.lower_ctx(), resolved.mangled_state.as_str())
+            .and_then(|id| compiler.llvm_types.get_concrete(id))
+            .or_else(|| {
+                compiler
+                    .llvm_types
+                    .get_monomorphized(&resolved.mangled_state)
+            })
+            .ok_or_else(|| format!("no LLVM struct for `{}`", resolved.mangled_state))?;
 
-    let wrapper = if let Some(existing) = compiler.module.get_function(&resolved.wrapper_name) {
-        existing
-    } else {
-        spawn::build_spawn_wrapper(
-            compiler,
-            &resolved.wrapper_name,
-            serialized.llvm_type,
-            state_struct_type,
-            start_fn,
-            run_fn,
-            None,
-        )?
-    };
+    let wrapper =
+        if let Some(existing) = compiler.module.get_function(resolved.wrapper_name.as_str()) {
+            existing
+        } else {
+            spawn::build_spawn_wrapper(
+                compiler,
+                resolved.wrapper_name.as_str(),
+                serialized.llvm_type,
+                state_struct_type,
+                start_fn,
+                run_fn,
+                None,
+            )?
+        };
 
     let wrapper_ptr = wrapper.as_global_value().as_pointer_value();
     let spawn_fn = *compiler
         .functions
-        .get("expo_rt_spawn")
+        .get(&FunctionIdentifier::new("expo_rt_spawn"))
         .ok_or("expo_rt_spawn not declared")?;
 
     let pid = compiler
@@ -924,7 +932,7 @@ fn compile_spawn<'ctx>(
     let (msg_type, reply_type) = resolve_process_msg_reply(
         &compiler.lower_ctx(),
         &target.type_name,
-        &resolved.mangled_state,
+        resolved.mangled_state.as_str(),
     )?;
 
     spawn::build_ref_value(compiler, pid, msg_type, reply_type).map(Some)
@@ -942,7 +950,7 @@ fn compile_receive<'ctx>(
     let raw_ptr = if let Some(timeout_expr) = after_timeout {
         let receive_timeout_fn = *compiler
             .functions
-            .get("expo_rt_receive_timeout")
+            .get(&FunctionIdentifier::new("expo_rt_receive_timeout"))
             .ok_or("expo_rt_receive_timeout not declared")?;
 
         let timeout_val = compile_expr(compiler, timeout_expr, function)?
@@ -955,7 +963,7 @@ fn compile_receive<'ctx>(
     } else {
         let receive_fn = *compiler
             .functions
-            .get("expo_rt_receive")
+            .get(&FunctionIdentifier::new("expo_rt_receive"))
             .ok_or("expo_rt_receive not declared")?;
 
         compiler

@@ -11,6 +11,7 @@ use inkwell::types::StructType;
 use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 // ---------------------------------------------------------------------------
 // Shared struct layout / method helpers for Map and Set
@@ -36,9 +37,9 @@ pub fn monomorphize_hashtable_struct<'ctx>(
     );
     compiler
         .llvm_types
-        .register_monomorphized(mangled.to_string(), struct_type);
+        .register_monomorphized(MonomorphizedTypeIdentifier::new(mangled), struct_type);
     compiler.layouts.register_struct_layout(
-        mangled.to_string(),
+        MonomorphizedTypeIdentifier::new(mangled),
         vec![
             (
                 "entries_ptr".to_string(),
@@ -66,7 +67,9 @@ pub fn emit_hashtable_new<'ctx>(
 
     let fn_type = collection_struct.fn_type(&[], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler.functions.insert(mangled_fn.to_string(), fn_value);
+    compiler
+        .functions
+        .insert(FunctionIdentifier::new(mangled_fn), fn_value);
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();
@@ -81,7 +84,10 @@ pub fn emit_hashtable_new<'ctx>(
             "entries_bytes",
         )
         .unwrap();
-    let malloc = *compiler.functions.get("malloc").unwrap();
+    let malloc = *compiler
+        .functions
+        .get(&FunctionIdentifier::new("malloc"))
+        .unwrap();
     let entries_ptr = compiler
         .call(malloc, &[entries_bytes.into()], "entries")
         .unwrap()
@@ -90,7 +96,10 @@ pub fn emit_hashtable_new<'ctx>(
         .call(malloc, &[capacity.into()], "states")
         .unwrap()
         .into_pointer_value();
-    let memset = *compiler.functions.get("memset").unwrap();
+    let memset = *compiler
+        .functions
+        .get(&FunctionIdentifier::new("memset"))
+        .unwrap();
     compiler.call_void(
         memset,
         &[
@@ -140,7 +149,9 @@ pub fn emit_hashtable_length<'ctx>(
 
     let fn_type = i64_type.fn_type(&[collection_struct.into()], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler.functions.insert(mangled_fn.to_string(), fn_value);
+    compiler
+        .functions
+        .insert(FunctionIdentifier::new(mangled_fn), fn_value);
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();
@@ -171,7 +182,9 @@ pub fn emit_hashtable_empty<'ctx>(
 
     let fn_type = bool_type.fn_type(&[collection_struct.into()], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler.functions.insert(mangled_fn.to_string(), fn_value);
+    compiler
+        .functions
+        .insert(FunctionIdentifier::new(mangled_fn), fn_value);
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();
@@ -210,7 +223,7 @@ pub fn ensure_hash_fn<'ctx>(
 ) -> Result<FunctionValue<'ctx>, String> {
     let type_name = type_display_name(key_type);
     let fn_name = format!("{type_name}_hash");
-    if let Some(function) = compiler.functions.get(&fn_name) {
+    if let Some(function) = compiler.functions.get(&FunctionIdentifier::new(&fn_name)) {
         return Ok(*function);
     }
     Err(format!(
@@ -224,7 +237,7 @@ pub fn ensure_eq_fn<'ctx>(
 ) -> Result<FunctionValue<'ctx>, String> {
     let type_name = type_display_name(key_type);
     let fn_name = format!("{type_name}_eq");
-    if let Some(function) = compiler.functions.get(&fn_name) {
+    if let Some(function) = compiler.functions.get(&FunctionIdentifier::new(&fn_name)) {
         return Ok(*function);
     }
     Err(format!(

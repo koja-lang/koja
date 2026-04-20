@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use expo_ir::identity::FunctionIdentifier;
 use inkwell::AddressSpace;
 use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
@@ -15,7 +16,7 @@ use inkwell::values::FunctionValue;
 pub(crate) fn declare_builtins<'ctx>(
     context: &'ctx Context,
     module: &LlvmModule<'ctx>,
-    functions: &mut HashMap<String, FunctionValue<'ctx>>,
+    functions: &mut HashMap<FunctionIdentifier, FunctionValue<'ctx>>,
 ) {
     let void = context.void_type();
     let i32 = context.i32_type();
@@ -24,7 +25,7 @@ pub(crate) fn declare_builtins<'ctx>(
 
     let mut decl = |name: &str, ty: FunctionType<'ctx>| {
         let f = module.add_function(name, ty, None);
-        functions.insert(name.to_string(), f);
+        functions.insert(FunctionIdentifier::new(name), f);
     };
 
     // C stdlib

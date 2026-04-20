@@ -6,6 +6,7 @@ use inkwell::values::FunctionValue;
 use super::STRING_HEADER_BYTES;
 use crate::compiler::{Compiler, EmitResult};
 use crate::types::to_llvm_type;
+use expo_ir::identity::FunctionIdentifier;
 
 const CPTR_METHODS: &[&str] = &[
     "null",
@@ -82,14 +83,20 @@ pub fn emit_cptr_intrinsic<'ctx>(
                 .builder
                 .build_int_mul(count, elem_size, "total_bytes")
                 .unwrap();
-            let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
+            let malloc = *c
+                .functions
+                .get(&FunctionIdentifier::new("malloc"))
+                .ok_or("malloc not declared")?;
             let raw = c.call(malloc, &[total.into()], "ptr").unwrap();
             c.builder.build_return(Some(&raw)).unwrap();
         }
 
         "free" => {
             let ptr_val = fn_val.get_nth_param(0).unwrap();
-            let free_fn = *c.functions.get("free").ok_or("free not declared")?;
+            let free_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new("free"))
+                .ok_or("free not declared")?;
             c.call_void(free_fn, &[ptr_val.into()], "");
             c.builder.build_return(None).unwrap();
         }
@@ -144,8 +151,14 @@ pub fn emit_cptr_intrinsic<'ctx>(
             let byte_len = fn_val.get_nth_param(1).unwrap().into_int_value();
             let i8_ty = c.context.i8_type();
             let header_size = i64_ty.const_int(STRING_HEADER_BYTES, false);
-            let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
-            let memcpy = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+            let malloc = *c
+                .functions
+                .get(&FunctionIdentifier::new("malloc"))
+                .ok_or("malloc not declared")?;
+            let memcpy = *c
+                .functions
+                .get(&FunctionIdentifier::new("memcpy"))
+                .ok_or("memcpy not declared")?;
 
             let total = c
                 .builder
@@ -201,8 +214,14 @@ pub fn emit_cstring_intrinsic<'ctx>(
     let i64_ty = c.context.i64_type();
     let i8_ty = c.context.i8_type();
 
-    let malloc = *c.functions.get("malloc").ok_or("malloc not declared")?;
-    let memcpy = *c.functions.get("memcpy").ok_or("memcpy not declared")?;
+    let malloc = *c
+        .functions
+        .get(&FunctionIdentifier::new("malloc"))
+        .ok_or("malloc not declared")?;
+    let memcpy = *c
+        .functions
+        .get(&FunctionIdentifier::new("memcpy"))
+        .ok_or("memcpy not declared")?;
 
     match mangled {
         "String_to_cstring" => {
@@ -346,7 +365,9 @@ pub fn emit_cptr_method<'ctx>(
     if !CPTR_METHODS.contains(&method_name) {
         return Ok(EmitResult::NotIntrinsic);
     }
-    if c.functions.contains_key(mangled_fn) {
+    if c.functions
+        .contains_key(&FunctionIdentifier::new(mangled_fn))
+    {
         return Ok(EmitResult::Emitted);
     }
 
@@ -378,7 +399,8 @@ pub fn emit_cptr_method<'ctx>(
     };
 
     let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-    c.functions.insert(mangled_fn.to_string(), fn_val);
+    c.functions
+        .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
     emit_cptr_intrinsic(c, fn_val, mangled_fn)?;
     Ok(EmitResult::Emitted)

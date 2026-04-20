@@ -14,6 +14,8 @@ use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::FnParam;
 use expo_typecheck::types::Type;
 
+use crate::identity::FunctionIdentifier;
+
 /// Builtin call kinds that lowering distinguishes by name (`panic`,
 /// `print`, `print_<Primitive>`).
 pub enum BuiltinCall {
@@ -42,7 +44,7 @@ pub enum ResolvedCall {
     Direct {
         /// LLVM symbol name lowering chose for the callee (either the
         /// bare `name` or a method-prefix-qualified candidate).
-        mangled_name: String,
+        mangled_name: FunctionIdentifier,
         /// Parameter types from the function signature, in declaration
         /// order.
         param_types: Vec<Type>,

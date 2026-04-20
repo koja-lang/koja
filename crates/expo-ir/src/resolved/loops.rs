@@ -10,6 +10,8 @@
 
 use expo_typecheck::types::Type;
 
+use crate::identity::MonomorphizedTypeIdentifier;
+
 /// Outcome of resolving an `Enumeration` impl for a `for` loop's iterable.
 ///
 /// Carries everything emission needs to dispatch into the impl: the
@@ -26,7 +28,7 @@ pub struct ResolvedEnumerable {
     pub elem_type: Type,
     /// Mangled, monomorphized type name (e.g. `List_$Int32$`). Used as
     /// the symbol prefix for the `length` / `get` function lookups.
-    pub mangled_type: String,
+    pub mangled_type: MonomorphizedTypeIdentifier,
     /// Concrete type arguments applied to the base type, in declaration
     /// order. Empty for non-generic `Enumeration` impls.
     pub type_args: Vec<Type>,

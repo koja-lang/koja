@@ -9,6 +9,7 @@
 use expo_ast::ast::BinaryEndianness;
 use expo_ast::types::Type;
 
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::resolved::enums::ResolvedVariantFields;
 use crate::resolved::fields::ResolvedStructField;
 
@@ -23,7 +24,7 @@ pub struct ResolvedStructConstruction {
     /// monomorphized form like `"List_$Int32$"`).
     pub is_generic: bool,
     /// The mangled LLVM type key (e.g. `"Point"` or `"List_$Int32$"`).
-    pub mangled_name: String,
+    pub mangled_name: MonomorphizedTypeIdentifier,
     /// The resulting Expo type of the construction expression.
     pub result_type: Type,
 }
@@ -58,7 +59,7 @@ pub struct ResolvedEnumConstruction {
     /// monomorphized form like `"Option_$Int32$"`).
     pub is_generic: bool,
     /// The mangled LLVM enum key (e.g. `"Status"` or `"Option_$Int32$"`).
-    pub mangled_name: String,
+    pub mangled_name: MonomorphizedTypeIdentifier,
     /// The resulting Expo type of the construction expression.
     pub result_type: Type,
     /// The tag byte for this variant.

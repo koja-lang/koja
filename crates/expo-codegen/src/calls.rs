@@ -20,6 +20,7 @@ use crate::generics::monomorphize_function;
 use crate::stmt::coerce_numeric;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 /// Invokes a closure fat pointer (fn ptr + env ptr struct) with the given signature.
 pub fn invoke_closure_fat_ptr<'ctx>(
@@ -89,9 +90,13 @@ pub fn compile_call<'ctx>(
         name,
         |id, candidate| {
             id.is_some_and(|i| c.llvm_types.get_concrete(i).is_some())
-                || c.llvm_types.contains_monomorphized(candidate)
+                || c.llvm_types
+                    .contains_monomorphized(&MonomorphizedTypeIdentifier::new(candidate))
         },
-        |candidate| c.functions.contains_key(candidate),
+        |candidate| {
+            c.functions
+                .contains_key(&FunctionIdentifier::new(candidate))
+        },
         |variable_name| {
             c.fn_state
                 .variables
@@ -132,7 +137,7 @@ pub fn compile_call<'ctx>(
         } => {
             let callee = *c
                 .functions
-                .get(&mangled_name)
+                .get(&FunctionIdentifier::new(&mangled_name))
                 .ok_or_else(|| format!("undefined function: {mangled_name}"))?;
             let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
             for (i, arg) in args.iter().enumerate() {
@@ -190,13 +195,16 @@ fn resolve_generic_call<'ctx>(
 
     let mangled_name = mangle_method_suffix(name, &type_args);
 
-    if !compiler.functions.contains_key(&mangled_name) {
+    if !compiler
+        .functions
+        .contains_key(&FunctionIdentifier::new(&mangled_name))
+    {
         monomorphize_function(compiler, name, &type_args)?;
     }
 
     let callee = *compiler
         .functions
-        .get(&mangled_name)
+        .get(&FunctionIdentifier::new(&mangled_name))
         .ok_or_else(|| format!("monomorphized function `{mangled_name}` not found"))?;
 
     let subst_map: HashMap<String, Type> = sig
@@ -296,7 +304,10 @@ fn compile_print<'ctx>(
 
     let str_ptr = call_format(c, tv.value, &tv.expo_type)?;
 
-    let printf = *c.functions.get("printf").ok_or("printf not declared")?;
+    let printf = *c
+        .functions
+        .get(&FunctionIdentifier::new("printf"))
+        .ok_or("printf not declared")?;
     let fmt = c
         .builder
         .build_global_string_ptr("%s\n", "fmt_print")

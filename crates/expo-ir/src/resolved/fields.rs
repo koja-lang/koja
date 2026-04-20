@@ -5,6 +5,8 @@
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::types::Type;
 
+use crate::identity::MonomorphizedTypeIdentifier;
+
 /// One step in a resolved field path: the field index and its Expo type.
 pub struct ResolvedFieldStep {
     /// The zero-based index of this field within its parent struct's layout.
@@ -42,7 +44,7 @@ pub struct ResolvedStructName {
     /// The package-qualified identifier, if known.
     pub identifier: Option<TypeIdentifier>,
     /// The mangled name used for type registry lookup (e.g. `"List_$Int32$"`).
-    pub mangled: String,
+    pub mangled: MonomorphizedTypeIdentifier,
     /// The concrete type arguments (empty for non-generic types).
     pub type_args: Vec<Type>,
 }
@@ -57,5 +59,5 @@ pub struct ResolvedUnionMember {
     pub tag: u64,
     /// Mangled name of the union type, the key into `LLVMTypeCache`'s
     /// monomorphized table.
-    pub union_mangled: String,
+    pub union_mangled: MonomorphizedTypeIdentifier,
 }

@@ -72,6 +72,7 @@ use crate::generics::{
     ensure_types_exist, monomorphize_enum, monomorphize_impl_method, monomorphize_struct,
 };
 use crate::types::to_llvm_type;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 /// Loads a value from `field_ptr`. When `field_type` is [`Type::Indirect`],
 /// loads the heap pointer first, then dereferences it to get the inner value.
@@ -116,7 +117,10 @@ pub(crate) fn store_maybe_indirect<'ctx>(
         let inner_llvm_ty = to_llvm_type(inner, c.context, &c.llvm_types)
             .expect("indirect inner type must have LLVM representation");
         let size = llvm_type_size(inner_llvm_ty, c);
-        let malloc_fn = *c.functions.get("malloc").expect("malloc not declared");
+        let malloc_fn = *c
+            .functions
+            .get(&FunctionIdentifier::new("malloc"))
+            .expect("malloc not declared");
         let heap_ptr = c
             .call(malloc_fn, &[size.into()], &format!("{label}_malloc"))
             .unwrap()
@@ -326,7 +330,7 @@ pub fn compile_method_call<'ctx>(
             .get_type()
             .get_name()
             .and_then(|n| n.to_str().ok())
-            .map(str::to_string)
+            .map(MonomorphizedTypeIdentifier::new)
     } else {
         None
     };
@@ -335,7 +339,7 @@ pub fn compile_method_call<'ctx>(
         receiver,
         &recv_tv.expo_type,
         |name| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone()),
-        llvm_struct_name.as_deref(),
+        llvm_struct_name.as_ref(),
     )?;
 
     let has_impl_method = resolved_name
@@ -347,7 +351,7 @@ pub fn compile_method_call<'ctx>(
         .and_then(|ti| ti.functions.get(method))
         .is_some();
     if !has_impl_method
-        && let Some(field_ty) = c.get_mono_field_type(&resolved_name.mangled, method)
+        && let Some(field_ty) = c.get_mono_field_type(resolved_name.mangled.as_str(), method)
     {
         let inner = unwrap_indirect(&field_ty);
         if let Type::Function {
@@ -373,7 +377,7 @@ pub fn compile_method_call<'ctx>(
 
     let resolved = resolve_method_call(
         c,
-        &resolved_name.mangled,
+        resolved_name.mangled.as_str(),
         &resolved_name.base,
         resolved_name.identifier.as_ref(),
         &resolved_name.type_args,
@@ -480,17 +484,17 @@ fn resolve_method_call<'ctx>(
             let method_suffix = mangle_method_suffix(method, &method_type_args);
             mangled = format!("{}_{}", symbol_prefix, method_suffix);
 
-            if !c.functions.contains_key(&mangled) {
+            if !c.functions.contains_key(&FunctionIdentifier::new(&mangled)) {
                 monomorphize_impl_method(c, base, method, type_args, &method_type_args)?;
             }
-        } else if !c.functions.contains_key(&mangled) {
+        } else if !c.functions.contains_key(&FunctionIdentifier::new(&mangled)) {
             monomorphize_impl_method(c, base, method, type_args, &[])?;
         }
     }
 
     let callee = *c
         .functions
-        .get(&mangled)
+        .get(&FunctionIdentifier::new(&mangled))
         .ok_or_else(|| format!("undefined method `{method}` on `{struct_name}`"))?;
 
     let (param_types, return_type) = if let Some(sig) = c.type_ctx.function_sig(&mangled) {
@@ -981,7 +985,10 @@ fn lower_generic_struct(
         .ok_or_else(|| format!("cannot resolve package for generic struct `{struct_name}`"))?;
     let mangled_name = mangle_name(&struct_id, &type_args);
 
-    if !compiler.llvm_types.contains_monomorphized(&mangled_name) {
+    if !compiler
+        .llvm_types
+        .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled_name))
+    {
         monomorphize_struct(compiler, &struct_id, &type_args)?;
     }
 
@@ -1015,7 +1022,7 @@ fn lower_generic_struct(
     Ok(ResolvedStructConstruction {
         fields,
         is_generic: true,
-        mangled_name,
+        mangled_name: MonomorphizedTypeIdentifier::new(&mangled_name),
         result_type,
     })
 }
@@ -1072,7 +1079,7 @@ fn emit_struct_construction<'ctx>(
 
     let struct_val = compiler
         .builder
-        .build_load(struct_type, alloca, &resolved.mangled_name)
+        .build_load(struct_type, alloca, resolved.mangled_name.as_str())
         .unwrap();
     Ok(Some(TypedValue::new(
         struct_val,
@@ -1158,7 +1165,10 @@ fn resolve_static_call<'ctx>(
             format!("cannot resolve package for generic static call on `{type_name}`")
         })?;
         let m = mangle_name(&type_id, &type_args);
-        if !c.llvm_types.contains_monomorphized(&m) {
+        if !c
+            .llvm_types
+            .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&m))
+        {
             if c.type_ctx.is_struct(type_name) {
                 monomorphize_struct(c, &type_id, &type_args)?;
             } else {
@@ -1182,7 +1192,10 @@ fn resolve_static_call<'ctx>(
 
     let mangled_name = format!("{}_{}", symbol_prefix, method);
 
-    if !c.functions.contains_key(&mangled_name) {
+    if !c
+        .functions
+        .contains_key(&FunctionIdentifier::new(&mangled_name))
+    {
         if !type_args.is_empty() {
             monomorphize_impl_method(c, type_name, method, &type_args, &[])?;
         } else {
@@ -1194,7 +1207,7 @@ fn resolve_static_call<'ctx>(
 
     let callee = *c
         .functions
-        .get(&mangled_name)
+        .get(&FunctionIdentifier::new(&mangled_name))
         .ok_or_else(|| format!("undefined static function `{method}` on `{mangled_type}`"))?;
 
     let (param_types, return_type) = c

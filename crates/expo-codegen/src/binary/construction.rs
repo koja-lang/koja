@@ -9,35 +9,41 @@ use inkwell::values::FunctionValue;
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
+use expo_ir::identity::FunctionIdentifier;
 
 /// Compiles a `<<seg1, seg2, ...>>` binary literal into a heap-allocated,
 /// length-prefixed byte buffer. Returns a pointer to the payload (past the
 /// 8-byte length prefix). Only byte-aligned segments are supported;
 /// sub-byte bit packing is deferred.
 pub(crate) fn compile_binary_literal<'ctx>(
-    c: &mut Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     segments: &[BinarySegment],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let layout = resolve_binary_segments(segments)?;
 
-    let i8_type = c.context.i8_type();
-    let i64_type = c.context.i64_type();
+    let i8_type = compiler.context.i8_type();
+    let i64_type = compiler.context.i64_type();
     let total_bytes = layout.total_bits / 8;
 
     let alloc_size = i64_type.const_int(8 + total_bytes, false);
-    let malloc = *c.functions.get("malloc").expect("malloc not declared");
-    let base_ptr = c
+    let malloc = *compiler
+        .functions
+        .get(&FunctionIdentifier::new("malloc"))
+        .expect("malloc not declared");
+    let base_ptr = compiler
         .call(malloc, &[alloc_size.into()], "bin_alloc")
         .unwrap()
         .into_pointer_value();
 
-    c.builder
+    compiler
+        .builder
         .build_store(base_ptr, i64_type.const_int(layout.total_bits, false))
         .unwrap();
 
     let payload_ptr = unsafe {
-        c.builder
+        compiler
+            .builder
             .build_in_bounds_gep(
                 i8_type,
                 base_ptr,
@@ -53,12 +59,13 @@ pub(crate) fn compile_binary_literal<'ctx>(
 
         match &resolved.kind {
             ResolvedBinarySegmentKind::String => {
-                let str_ptr = compile_expr(c, &seg.value, function)?
+                let str_ptr = compile_expr(compiler, &seg.value, function)?
                     .ok_or("string segment produced no value")?
                     .value
                     .into_pointer_value();
                 let dest = unsafe {
-                    c.builder
+                    compiler
+                        .builder
                         .build_in_bounds_gep(
                             i8_type,
                             payload_ptr,
@@ -67,8 +74,11 @@ pub(crate) fn compile_binary_literal<'ctx>(
                         )
                         .unwrap()
                 };
-                let memcpy = *c.functions.get("memcpy").expect("memcpy not declared");
-                c.call_void(
+                let memcpy = *compiler
+                    .functions
+                    .get(&FunctionIdentifier::new("memcpy"))
+                    .expect("memcpy not declared");
+                compiler.call_void(
                     memcpy,
                     &[
                         dest.into(),
@@ -81,34 +91,36 @@ pub(crate) fn compile_binary_literal<'ctx>(
                 continue;
             }
             ResolvedBinarySegmentKind::Float => {
-                let value = compile_expr(c, &seg.value, function)?
+                let value = compile_expr(compiler, &seg.value, function)?
                     .ok_or("binary segment value produced no value")?
                     .value;
                 let val_i64 = if resolved.bit_width == 32 {
-                    let f32_val = c
+                    let f32_val = compiler
                         .builder
                         .build_float_trunc(
                             value.into_float_value(),
-                            c.context.f32_type(),
+                            compiler.context.f32_type(),
                             "f32_trunc",
                         )
                         .unwrap();
-                    let i32_bits = c
+                    let i32_bits = compiler
                         .builder
-                        .build_bit_cast(f32_val, c.context.i32_type(), "f32_bits")
+                        .build_bit_cast(f32_val, compiler.context.i32_type(), "f32_bits")
                         .unwrap()
                         .into_int_value();
-                    c.builder
+                    compiler
+                        .builder
                         .build_int_z_extend(i32_bits, i64_type, "f32_ext")
                         .unwrap()
                 } else {
-                    c.builder
+                    compiler
+                        .builder
                         .build_bit_cast(value, i64_type, "f64_bits")
                         .unwrap()
                         .into_int_value()
                 };
                 emit_byte_packing(
-                    c,
+                    compiler,
                     val_i64,
                     num_bytes,
                     BinaryEndianness::Big,
@@ -117,23 +129,32 @@ pub(crate) fn compile_binary_literal<'ctx>(
                 );
             }
             ResolvedBinarySegmentKind::Integer { endianness } => {
-                let value = compile_expr(c, &seg.value, function)?
+                let value = compile_expr(compiler, &seg.value, function)?
                     .ok_or("binary segment value produced no value")?
                     .value;
                 let int_val = value.into_int_value();
                 let width = int_val.get_type().get_bit_width();
                 let val_i64 = if width < 64 {
-                    c.builder
+                    compiler
+                        .builder
                         .build_int_z_extend(int_val, i64_type, "seg_ext")
                         .unwrap()
                 } else if width > 64 {
-                    c.builder
+                    compiler
+                        .builder
                         .build_int_truncate(int_val, i64_type, "seg_trunc")
                         .unwrap()
                 } else {
                     int_val
                 };
-                emit_byte_packing(c, val_i64, num_bytes, *endianness, payload_ptr, byte_offset);
+                emit_byte_packing(
+                    compiler,
+                    val_i64,
+                    num_bytes,
+                    *endianness,
+                    payload_ptr,
+                    byte_offset,
+                );
             }
         }
 

@@ -11,7 +11,7 @@ use expo_typecheck::types::{Primitive, Type, mangle_name};
 
 use crate::compiler::Compiler;
 use crate::types::to_llvm_type;
-
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 /// Tracks whether a variable owns its backing memory and is responsible for
 /// freeing it. Used to distinguish heap-allocated strings (interpolated,
 /// received from mailbox) from static/global string pointers.
@@ -55,7 +55,7 @@ pub fn drop_live_variables<'ctx>(c: &mut Compiler<'ctx>, skip: Option<&str>) {
         {
             let free_fn = *c
                 .functions
-                .get("free")
+                .get(&FunctionIdentifier::new("free"))
                 .expect("free not declared in builtins");
             let i8_type = c.context.i8_type();
             let i64_type = c.context.i64_type();
@@ -136,12 +136,18 @@ fn has_indirect_fields(c: &Compiler, ty: &Type) -> bool {
 /// tables; typecheck's bare-name resolution is handled by `by_id` for
 /// non-generics.
 fn has_indirect_fields_by_mono(c: &Compiler, mangled: &str) -> bool {
-    if let Some(fields) = c.layouts.struct_layout(mangled) {
+    if let Some(fields) = c
+        .layouts
+        .struct_layout(&MonomorphizedTypeIdentifier::new(mangled))
+    {
         return fields
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
     }
-    if let Some(variants) = c.layouts.enum_variants(mangled) {
+    if let Some(variants) = c
+        .layouts
+        .enum_variants(&MonomorphizedTypeIdentifier::new(mangled))
+    {
         return variants
             .iter()
             .any(|(_, vdata)| variant_has_indirect(vdata));
@@ -157,7 +163,10 @@ fn has_indirect_fields_by_id(c: &Compiler, id: &TypeIdentifier) -> bool {
         return false;
     }
     let qualified = id.qualified_name();
-    if let Some(fields) = c.layouts.struct_layout(&qualified) {
+    if let Some(fields) = c
+        .layouts
+        .struct_layout(&MonomorphizedTypeIdentifier::new(&qualified))
+    {
         return fields
             .iter()
             .any(|(_, fty)| matches!(fty, Type::Indirect(_)));
@@ -205,7 +214,7 @@ fn emit_drop<'ctx>(c: &mut Compiler<'ctx>, ptr: PointerValue<'ctx>, ty: &Type) {
 
     let free = *c
         .functions
-        .get("free")
+        .get(&FunctionIdentifier::new("free"))
         .expect("free not declared in builtins");
     let val = c
         .builder
@@ -229,7 +238,7 @@ fn emit_drop_indirect_fields<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
 
     let free_fn = *c
         .functions
-        .get("free")
+        .get(&FunctionIdentifier::new("free"))
         .expect("free not declared in builtins");
     let ptr_ty = c.context.ptr_type(inkwell::AddressSpace::default());
     let Some(struct_type) =
@@ -276,7 +285,7 @@ fn emit_drop_list<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>, ty: 
 
     let free = *c
         .functions
-        .get("free")
+        .get(&FunctionIdentifier::new("free"))
         .expect("free not declared in builtins");
     c.call_void(free, &[data_ptr.into()], "drop_list_free");
 }
@@ -305,7 +314,7 @@ fn emit_drop_hash_collection<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<
 
     let free = *c
         .functions
-        .get("free")
+        .get(&FunctionIdentifier::new("free"))
         .expect("free not declared in builtins");
     c.call_void(free, &[entries_ptr.into()], "drop_free_entries");
     c.call_void(free, &[states_ptr.into()], "drop_free_states");
@@ -343,7 +352,7 @@ fn emit_drop_closure<'ctx>(c: &mut Compiler<'ctx>, alloca: PointerValue<'ctx>) {
     c.builder.position_at_end(free_bb);
     let free = *c
         .functions
-        .get("free")
+        .get(&FunctionIdentifier::new("free"))
         .expect("free not declared in builtins");
     c.call_void(free, &[env_ptr.into()], "free_env");
     c.builder.build_unconditional_branch(cont_bb).unwrap();

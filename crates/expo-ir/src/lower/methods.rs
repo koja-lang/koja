@@ -12,6 +12,7 @@ use expo_typecheck::types::{
     Type, build_substitution, mangle_method_suffix, mangle_name, named_generic, substitute,
 };
 
+use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::LowerCtx;
 use crate::lower::types::{find_type_current, resolve_name_current};
 use crate::resolved::methods::ResolvedMethodSignature;
@@ -29,17 +30,17 @@ pub fn resolve_method_signature(
     method_name: &str,
     type_args: &[Type],
     method_type_args: &[Type],
-    is_compiled: impl Fn(&str) -> bool,
+    is_compiled: impl Fn(&FunctionIdentifier) -> bool,
 ) -> Result<Option<ResolvedMethodSignature>, String> {
     let base_id = resolve_name_current(ctx, base_type)
         .cloned()
         .ok_or_else(|| format!("cannot resolve package for generic method base `{base_type}`"))?;
-    let mangled_type = mangle_name(&base_id, type_args);
+    let mangled_type = MonomorphizedTypeIdentifier::new(mangle_name(&base_id, type_args));
     let mangled_fn = if method_type_args.is_empty() {
-        format!("{}_{}", mangled_type, method_name)
+        FunctionIdentifier::new(format!("{mangled_type}_{method_name}"))
     } else {
         let mangled_method = mangle_method_suffix(method_name, method_type_args);
-        format!("{}_{}", mangled_type, mangled_method)
+        FunctionIdentifier::new(format!("{mangled_type}_{mangled_method}"))
     };
     if is_compiled(&mangled_fn) {
         return Ok(None);

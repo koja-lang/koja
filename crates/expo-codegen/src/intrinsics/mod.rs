@@ -21,6 +21,7 @@ use self::format::emit_debug_format_intrinsic;
 use self::hash::{emit_bitwise_intrinsic, emit_eq_intrinsic, emit_hash_intrinsic};
 use self::socket::emit_socket_intrinsic;
 use self::string::{emit_conversion_intrinsic, emit_parse_intrinsic, emit_string_intrinsic};
+use expo_ir::identity::FunctionIdentifier;
 const PRIMITIVE_TYPES: &[&str] = &[
     "Bool", "Int", "Int8", "Int16", "Int32", "String", "UInt8", "UInt16", "UInt32", "UInt64",
 ];
@@ -103,7 +104,7 @@ pub fn is_primitive_intrinsic(mangled: &str) -> bool {
 pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> Result<(), String> {
     let fn_val = *c
         .functions
-        .get(mangled)
+        .get(&FunctionIdentifier::new(mangled))
         .ok_or_else(|| format!("undeclared intrinsic: {mangled}"))?;
     let key = intrinsic_key(mangled);
 

@@ -3,6 +3,7 @@ use inkwell::values::FunctionValue;
 
 use crate::compiler::Compiler;
 use crate::intrinsics::STRING_HEADER_BYTES;
+use expo_ir::identity::FunctionIdentifier;
 
 pub fn emit_hash_intrinsic<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -54,7 +55,10 @@ pub fn emit_eq_intrinsic<'ctx>(
     let other_val = fn_val.get_nth_param(1).unwrap();
 
     let result: inkwell::values::IntValue<'ctx> = if type_name == "String" {
-        let strcmp = *c.functions.get("strcmp").expect("strcmp not declared");
+        let strcmp = *c
+            .functions
+            .get(&FunctionIdentifier::new("strcmp"))
+            .expect("strcmp not declared");
         let cmp_result = c
             .call(
                 strcmp,

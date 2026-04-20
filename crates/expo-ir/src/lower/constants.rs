@@ -4,6 +4,7 @@
 
 use expo_ast::ast::{EnumConstructionData, ExprKind, Literal, StringPart};
 
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::LowerCtx;
 use crate::resolved::constants::{ResolvedConst, ResolvedConstEnum};
 use crate::util::parse_int_literal;
@@ -64,6 +65,8 @@ pub fn resolve_const_enum(
     enum_name: &str,
     variant: &str,
 ) -> Option<ResolvedConstEnum> {
-    let tag = ctx.layouts.variant_index(enum_name, variant)?;
+    let tag = ctx
+        .layouts
+        .variant_index(&MonomorphizedTypeIdentifier::new(enum_name), variant)?;
     Some(ResolvedConstEnum { tag })
 }

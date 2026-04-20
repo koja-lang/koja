@@ -16,6 +16,7 @@ use expo_ast::ast::{Expr, ExprKind};
 use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_ast::types::{Type, mangle_name};
 
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::LowerCtx;
 use crate::resolved::fields::{ResolvedChain, ResolvedFieldStep};
 
@@ -72,7 +73,7 @@ pub fn lower_struct_field(
             identifier,
             type_args,
         } if !type_args.is_empty() => {
-            let mangled = mangle_name(identifier, type_args);
+            let mangled = MonomorphizedTypeIdentifier::new(mangle_name(identifier, type_args));
             let field_index = ctx.layouts.field_index(&mangled, field_name)?;
             let field_type = ctx.layouts.field_type(&mangled, field_name)?;
             Some(ResolvedFieldStep {
@@ -91,8 +92,9 @@ pub fn lower_struct_field(
         // Flattened form: generic Named with empty type_args where
         // `identifier.name` already holds the mangled key.
         Type::Named { identifier, .. } => {
-            let field_index = ctx.layouts.field_index(&identifier.name, field_name)?;
-            let field_type = ctx.layouts.field_type(&identifier.name, field_name)?;
+            let mangled = MonomorphizedTypeIdentifier::new(&identifier.name);
+            let field_index = ctx.layouts.field_index(&mangled, field_name)?;
+            let field_type = ctx.layouts.field_type(&mangled, field_name)?;
             Some(ResolvedFieldStep {
                 field_index,
                 field_type,
@@ -163,12 +165,22 @@ pub fn resolve_indirect_field_indices(ctx: &LowerCtx<'_>, ty: &Type) -> Vec<(usi
         Type::Named {
             identifier,
             type_args,
-        } if !type_args.is_empty() => (Some(mangle_name(identifier, type_args)), Some(identifier)),
-        Type::Named { identifier, .. } => (Some(identifier.qualified_name()), Some(identifier)),
+        } if !type_args.is_empty() => (
+            Some(MonomorphizedTypeIdentifier::new(mangle_name(
+                identifier, type_args,
+            ))),
+            Some(identifier),
+        ),
+        Type::Named { identifier, .. } => (
+            Some(MonomorphizedTypeIdentifier::new(
+                identifier.qualified_name(),
+            )),
+            Some(identifier),
+        ),
         _ => return Vec::new(),
     };
 
-    if let Some(key) = mono_key.as_deref()
+    if let Some(key) = mono_key.as_ref()
         && let Some(fs) = ctx.layouts.struct_layout(key)
     {
         return fs

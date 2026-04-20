@@ -10,6 +10,7 @@
 
 use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute_preserving};
 
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
 use crate::lower::types::resolve_name_current;
@@ -64,7 +65,7 @@ pub fn resolve_enumerable_info(
         other => other.clone(),
     };
 
-    let mangled_type = mangle_name(&base_id, &type_args);
+    let mangled_type = MonomorphizedTypeIdentifier::new(mangle_name(&base_id, &type_args));
 
     Ok(ResolvedEnumerable {
         base,

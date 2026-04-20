@@ -34,6 +34,7 @@ use crate::registration::build_enum_layout;
 use crate::set::emit_set_method;
 use crate::stmt::{apply_coercion, compile_statement};
 use crate::types::to_llvm_type;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 /// Compiles a function body: iterates statements, handles implicit return
 /// of the last expression, and inserts a terminator if missing. When
@@ -244,7 +245,7 @@ pub(crate) fn monomorphize_function<'ctx>(
         .clone();
 
     let mangled = mangle_method_suffix(name, type_args);
-    if c.functions.contains_key(&mangled) {
+    if c.functions.contains_key(&FunctionIdentifier::new(&mangled)) {
         return Ok(());
     }
 
@@ -281,7 +282,8 @@ pub(crate) fn monomorphize_function<'ctx>(
     };
 
     let fn_value = c.module.add_function(&mangled, fn_type, None);
-    c.functions.insert(mangled.clone(), fn_value);
+    c.functions
+        .insert(FunctionIdentifier::new(mangled.clone()), fn_value);
 
     let file = c.debug.file();
     c.debug
@@ -342,7 +344,9 @@ pub(crate) fn monomorphize_struct<'ctx>(
     type_args: &[Type],
 ) -> Result<(), String> {
     let mangled = mangle_name(id, type_args);
-    if c.llvm_types.contains_monomorphized(&mangled) {
+    if c.llvm_types
+        .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled))
+    {
         return Ok(());
     }
 
@@ -379,7 +383,8 @@ pub(crate) fn monomorphize_struct<'ctx>(
         .collect();
 
     let st = c.context.opaque_struct_type(&mangled);
-    c.llvm_types.register_monomorphized(mangled.clone(), st);
+    c.llvm_types
+        .register_monomorphized(MonomorphizedTypeIdentifier::new(mangled.clone()), st);
 
     let mut deferred_indirect = Vec::new();
     for (_, fty) in &concrete_fields {
@@ -405,7 +410,8 @@ pub(crate) fn monomorphize_struct<'ctx>(
         ensure_types_exist(c, ty)?;
     }
 
-    c.layouts.register_struct_layout(mangled, concrete_fields);
+    c.layouts
+        .register_struct_layout(MonomorphizedTypeIdentifier::new(&mangled), concrete_fields);
 
     Ok(())
 }
@@ -419,7 +425,9 @@ pub(crate) fn monomorphize_enum<'ctx>(
     type_args: &[Type],
 ) -> Result<(), String> {
     let mangled = mangle_name(id, type_args);
-    if c.llvm_types.contains_monomorphized(&mangled) {
+    if c.llvm_types
+        .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled))
+    {
         return Ok(());
     }
 
@@ -456,7 +464,7 @@ pub(crate) fn monomorphize_enum<'ctx>(
 
     let enum_type = c.context.opaque_struct_type(&mangled);
     c.llvm_types
-        .register_monomorphized(mangled.clone(), enum_type);
+        .register_monomorphized(MonomorphizedTypeIdentifier::new(mangled.clone()), enum_type);
 
     for (_, vdata) in &concrete_variants {
         match vdata {
@@ -476,7 +484,10 @@ pub(crate) fn monomorphize_enum<'ctx>(
 
     build_enum_layout(c, &mangled, enum_type, &concrete_variants);
 
-    c.layouts.register_enum_variants(mangled, concrete_variants);
+    c.layouts.register_enum_variants(
+        MonomorphizedTypeIdentifier::new(&mangled),
+        concrete_variants,
+    );
 
     Ok(())
 }
@@ -505,7 +516,9 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         let mangled_method = mangle_method_suffix(method_name, method_type_args);
         format!("{}_{}", mangled_type, mangled_method)
     };
-    if c.functions.contains_key(&mangled_fn) {
+    if c.functions
+        .contains_key(&FunctionIdentifier::new(&mangled_fn))
+    {
         return Ok(());
     }
 
@@ -563,7 +576,7 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         method_name,
         type_args,
         method_type_args,
-        |fn_name| c.functions.contains_key(fn_name),
+        |fn_name| c.functions.contains_key(&FunctionIdentifier::new(fn_name)),
     )?
     else {
         return Ok(());
@@ -601,8 +614,11 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         None => c.context.void_type().fn_type(&llvm_param_types, false),
     };
 
-    let fn_value = c.module.add_function(&sig.mangled_fn, fn_type, None);
-    c.functions.insert(sig.mangled_fn.clone(), fn_value);
+    let fn_value = c
+        .module
+        .add_function(sig.mangled_fn.as_str(), fn_type, None);
+    c.functions
+        .insert(FunctionIdentifier::new(sig.mangled_fn.clone()), fn_value);
 
     let self_type = if sig.is_static {
         None
@@ -631,7 +647,9 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
             let name = &identifier.name;
             if type_args.is_empty() {
                 if c.llvm_types.get_concrete(identifier).is_none()
-                    && !c.llvm_types.contains_monomorphized(name)
+                    && !c
+                        .llvm_types
+                        .contains_monomorphized(&MonomorphizedTypeIdentifier::new(name))
                     && let Some((base, args)) = try_parse_mangled_name(&c.lower_ctx(), name)
                     && let Some(base_id) = resolve_name_current(&c.lower_ctx(), &base).cloned()
                 {
@@ -646,7 +664,10 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
                     ensure_types_exist(c, arg)?;
                 }
                 let mangled = mangle_name(identifier, type_args);
-                if !c.llvm_types.contains_monomorphized(&mangled) {
+                if !c
+                    .llvm_types
+                    .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled))
+                {
                     if c.type_ctx.is_enum(name) {
                         monomorphize_enum(c, identifier, type_args)?;
                     } else {
@@ -675,9 +696,15 @@ pub(crate) fn ensure_types_exist<'ctx>(c: &mut Compiler<'ctx>, ty: &Type) -> Res
                 ensure_types_exist(c, m)?;
             }
             let mangled = mangle_type(ty);
-            if !c.llvm_types.contains_monomorphized(&mangled) {
+            if !c
+                .llvm_types
+                .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled))
+            {
                 let opaque = c.context.opaque_struct_type(&mangled);
-                c.llvm_types.register_monomorphized(mangled.clone(), opaque);
+                c.llvm_types.register_monomorphized(
+                    MonomorphizedTypeIdentifier::new(mangled.clone()),
+                    opaque,
+                );
                 // Defer body sizing: at this point member enum/struct bodies
                 // may still be opaque (Pass 1b runs before Pass 2/3 set
                 // bodies), which would size the union to `[i8 tag]` only.

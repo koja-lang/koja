@@ -15,6 +15,7 @@
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::types::{Type, unwrap_indirect};
 
+use crate::identity::FunctionIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::naming::current_method_symbol_prefix;
 use crate::lower::types::resolve_name_current;
@@ -28,7 +29,7 @@ pub fn resolve_call(
     ctx: &LowerCtx<'_>,
     name: &str,
     is_struct_constructor: impl Fn(Option<&TypeIdentifier>, &str) -> bool,
-    function_exists: impl Fn(&str) -> bool,
+    function_exists: impl Fn(&FunctionIdentifier) -> bool,
     variable_type: impl Fn(&str) -> Option<Type>,
     is_generic_function: impl Fn(&str) -> bool,
 ) -> Result<ResolvedCall, String> {
@@ -58,14 +59,15 @@ pub fn resolve_call(
         format!("{prefix}_{name}")
     });
 
-    let chosen_mangled = if function_exists(name) {
-        Some(name.to_string())
-    } else {
-        mangled_candidate
-            .as_deref()
-            .filter(|candidate| function_exists(candidate))
-            .map(str::to_string)
-    };
+    let chosen_mangled: Option<FunctionIdentifier> =
+        if function_exists(&FunctionIdentifier::new(name)) {
+            Some(FunctionIdentifier::new(name))
+        } else {
+            mangled_candidate
+                .as_ref()
+                .map(FunctionIdentifier::new)
+                .filter(|candidate| function_exists(candidate))
+        };
 
     if let Some(mangled_name) = chosen_mangled {
         let signature = ctx.type_ctx.function_sig(name).or_else(|| {

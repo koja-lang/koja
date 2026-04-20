@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use expo_ir::identity::VariantId;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::LowerCtx;
 use expo_ir::lower::constants::{resolve_const, resolve_const_enum};
 use expo_ir::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
@@ -76,9 +76,9 @@ pub type ExprResult<'ctx> = Result<Option<TypedValue<'ctx>>, String>;
 /// Semantic layout data (field order, variant lists) lives in
 /// [`expo_ir::TypeLayouts`] on `Compiler.layouts`; this struct holds only
 /// `inkwell::StructType<'ctx>` handles. The variant payload table is keyed
-/// by an identity ([`VariantId`]) rather than positionally, so there is no
-/// positional contract between this cache and `TypeLayouts` — variant order
-/// (= tag value) is owned solely by `TypeLayouts::variant_index`.
+/// by an identity ([`VariantIdentifier`]) rather than positionally, so there
+/// is no positional contract between this cache and `TypeLayouts` — variant
+/// order (= tag value) is owned solely by `TypeLayouts::variant_index`.
 pub struct LLVMTypeCache<'ctx> {
     /// Collision-safe map for non-generic types, keyed by package-qualified
     /// `TypeIdentifier`. Used for concrete structs and enums.
@@ -88,11 +88,11 @@ pub struct LLVMTypeCache<'ctx> {
     /// variant. `None` records that a variant has been registered but has
     /// no payload (a nullary variant). Lookups go through
     /// [`Self::variant_payload`].
-    pub enum_variant_payloads: HashMap<VariantId, Option<StructType<'ctx>>>,
+    pub enum_variant_payloads: HashMap<VariantIdentifier, Option<StructType<'ctx>>>,
 
     /// Map for monomorphized generic types and unions, keyed by mangled name
-    /// strings (e.g. `"List_$Int32$"`, `"Union_$Int.String$"`).
-    pub monomorphized: HashMap<String, StructType<'ctx>>,
+    /// (e.g. `"List_$Int32$"`, `"Union_$Int.String$"`).
+    pub monomorphized: HashMap<MonomorphizedTypeIdentifier, StructType<'ctx>>,
 
     /// Union opaque structs registered during type collection but whose
     /// payload layout has been deferred until member bodies are set. Drained
@@ -113,8 +113,8 @@ impl<'ctx> LLVMTypeCache<'ctx> {
     }
 
     /// Check whether a monomorphized type is registered.
-    pub fn contains_monomorphized(&self, mangled: &str) -> bool {
-        self.monomorphized.contains_key(mangled)
+    pub fn contains_monomorphized(&self, id: &MonomorphizedTypeIdentifier) -> bool {
+        self.monomorphized.contains_key(id)
     }
 
     /// Look up a non-generic type by its package-qualified identifier.
@@ -125,8 +125,8 @@ impl<'ctx> LLVMTypeCache<'ctx> {
     }
 
     /// Look up a monomorphized generic or union type by its mangled name.
-    pub fn get_monomorphized(&self, mangled: &str) -> Option<StructType<'ctx>> {
-        self.monomorphized.get(mangled).copied()
+    pub fn get_monomorphized(&self, id: &MonomorphizedTypeIdentifier) -> Option<StructType<'ctx>> {
+        self.monomorphized.get(id).copied()
     }
 
     /// Register a non-generic struct or enum type by its package-qualified
@@ -136,14 +136,18 @@ impl<'ctx> LLVMTypeCache<'ctx> {
     }
 
     /// Register a monomorphized generic or union type by its mangled name.
-    pub fn register_monomorphized(&mut self, mangled: String, ty: StructType<'ctx>) {
-        self.monomorphized.insert(mangled, ty);
+    pub fn register_monomorphized(
+        &mut self,
+        id: MonomorphizedTypeIdentifier,
+        ty: StructType<'ctx>,
+    ) {
+        self.monomorphized.insert(id, ty);
     }
 
     /// Returns the LLVM payload struct for an enum variant, if it has one.
     /// Returns `None` both for unknown variants and for nullary variants;
     /// callers that need to distinguish these cases can ask `TypeLayouts`.
-    pub fn variant_payload(&self, id: &VariantId) -> Option<StructType<'ctx>> {
+    pub fn variant_payload(&self, id: &VariantIdentifier) -> Option<StructType<'ctx>> {
         self.enum_variant_payloads.get(id).copied().flatten()
     }
 }
@@ -199,12 +203,12 @@ pub struct Compiler<'ctx> {
     pub module: LlvmModule<'ctx>,
     pub builder: Builder<'ctx>,
     pub constants: HashMap<String, BasicValueEnum<'ctx>>,
-    pub functions: HashMap<String, FunctionValue<'ctx>>,
+    pub functions: HashMap<FunctionIdentifier, FunctionValue<'ctx>>,
     pub type_ctx: &'ctx TypeContext,
     pub generic_fn_asts: HashMap<String, Function>,
     /// Cache of generated thunk wrappers for bare function references.
     /// Maps original function name to the thunk `FunctionValue`.
-    pub fn_ref_thunks: HashMap<String, FunctionValue<'ctx>>,
+    pub fn_ref_thunks: HashMap<FunctionIdentifier, FunctionValue<'ctx>>,
     /// LLVM-free per-function semantic state (lives in `expo-ir`). Hosts
     /// `return_type_hint`, `process_msg_type`, `type_subst`, `self_type_name`,
     /// and the TCO ambient flags (`current_fn`, `tail_position`). Companion
@@ -373,7 +377,8 @@ impl<'ctx> Compiler<'ctx> {
     /// can be used as a closure-compatible fat pointer. The thunk accepts a
     /// leading `env_ptr` (ignored) then forwards remaining args to the real fn.
     pub fn get_or_create_thunk(&mut self, fn_name: &str) -> Result<FunctionValue<'ctx>, String> {
-        if let Some(thunk) = self.fn_ref_thunks.get(fn_name) {
+        let thunk_id = FunctionIdentifier::new(fn_name);
+        if let Some(thunk) = self.fn_ref_thunks.get(&thunk_id) {
             return Ok(*thunk);
         }
 
@@ -422,7 +427,7 @@ impl<'ctx> Compiler<'ctx> {
 
         self.debug.pop_scope(self.context, &self.builder);
 
-        self.fn_ref_thunks.insert(fn_name.to_string(), thunk_fn);
+        self.fn_ref_thunks.insert(thunk_id, thunk_fn);
         Ok(thunk_fn)
     }
 
@@ -491,13 +496,15 @@ impl<'ctx> Compiler<'ctx> {
     /// Thin wrapper kept for caller convenience; the logic lives on
     /// [`TypeLayouts`].
     pub fn get_mono_field_index(&self, mangled: &str, field_name: &str) -> Option<u32> {
-        self.layouts.field_index(mangled, field_name)
+        self.layouts
+            .field_index(&MonomorphizedTypeIdentifier::new(mangled), field_name)
     }
 
     /// Strict counterpart of [`Self::get_mono_field_index`] that returns the
     /// field type.
     pub fn get_mono_field_type(&self, mangled: &str, field_name: &str) -> Option<Type> {
-        self.layouts.field_type(mangled, field_name)
+        self.layouts
+            .field_type(&MonomorphizedTypeIdentifier::new(mangled), field_name)
     }
 
     /// Declares a function at the LLVM level. `mangling_prefix` is the
@@ -743,11 +750,15 @@ impl<'ctx> Compiler<'ctx> {
                 }
             }
             let mangled = format!("{prefix}_{}", func.name);
-            if self.functions.contains_key(&mangled) {
+            if self
+                .functions
+                .contains_key(&FunctionIdentifier::new(&mangled))
+            {
                 continue;
             }
             let fn_value = self.declare_function(func, Some(&prefix), Some(type_name))?;
-            self.functions.insert(mangled, fn_value);
+            self.functions
+                .insert(FunctionIdentifier::new(&mangled), fn_value);
         }
         self.fn_lower.self_type_name = None;
         Ok(())
@@ -808,11 +819,15 @@ impl<'ctx> Compiler<'ctx> {
                         self.generic_fn_asts.insert(func.name.clone(), func.clone());
                         continue;
                     }
-                    if self.functions.contains_key(&func.name) {
+                    if self
+                        .functions
+                        .contains_key(&FunctionIdentifier::new(&func.name))
+                    {
                         continue;
                     }
                     let fn_value = self.declare_function(func, None, None)?;
-                    self.functions.insert(func.name.clone(), fn_value);
+                    self.functions
+                        .insert(FunctionIdentifier::new(&func.name), fn_value);
                 }
                 Item::Struct(s) if !s.type_params.is_empty() => {}
                 Item::Struct(s) => {
@@ -883,7 +898,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let fn_value = *self
             .functions
-            .get(&mangled)
+            .get(&FunctionIdentifier::new(&mangled))
             .ok_or_else(|| format!("undeclared function: {}", mangled))?;
 
         if fn_value.count_basic_blocks() > 0 {
@@ -900,7 +915,7 @@ impl<'ctx> Compiler<'ctx> {
                 .module
                 .add_function("__expo_user_main", user_main_ty, None);
             self.functions
-                .insert("__expo_user_main".to_string(), user_main);
+                .insert(FunctionIdentifier::new("__expo_user_main"), user_main);
 
             let file = self.debug.file();
             self.debug.push_function(
@@ -945,7 +960,7 @@ impl<'ctx> Compiler<'ctx> {
 
             let spawn_fn = *self
                 .functions
-                .get("expo_rt_spawn")
+                .get(&FunctionIdentifier::new("expo_rt_spawn"))
                 .ok_or("expo_rt_spawn not declared")?;
             let user_main_ptr = user_main.as_global_value().as_pointer_value();
             let null_ptr = ptr_ty.const_null();
@@ -958,7 +973,7 @@ impl<'ctx> Compiler<'ctx> {
 
             let main_done = *self
                 .functions
-                .get("expo_rt_main_done")
+                .get(&FunctionIdentifier::new("expo_rt_main_done"))
                 .ok_or("expo_rt_main_done not declared")?;
             self.call_void(main_done, &[], "");
 
@@ -1085,11 +1100,11 @@ impl<'ctx> Compiler<'ctx> {
     pub fn emit_panic(&self, fmt: &str, args: &[BasicValueEnum<'ctx>]) {
         let snprintf = *self
             .functions
-            .get("snprintf")
+            .get(&FunctionIdentifier::new("snprintf"))
             .expect("snprintf not declared");
         let panic_bt = *self
             .functions
-            .get("expo_panic_backtrace")
+            .get(&FunctionIdentifier::new("expo_panic_backtrace"))
             .expect("expo_panic_backtrace not declared");
 
         let i32_ty = self.context.i32_type();
@@ -1255,7 +1270,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let spawn_fn = *self
             .functions
-            .get("expo_rt_spawn")
+            .get(&FunctionIdentifier::new("expo_rt_spawn"))
             .ok_or("expo_rt_spawn not declared")?;
         let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
         self.call_void(
@@ -1270,7 +1285,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let main_done = *self
             .functions
-            .get("expo_rt_main_done")
+            .get(&FunctionIdentifier::new("expo_rt_main_done"))
             .ok_or("expo_rt_main_done not declared")?;
         self.call_void(main_done, &[], "");
 

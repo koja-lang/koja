@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use expo_ast::types::Type;
 use expo_typecheck::context::VariantData;
 
+use crate::identity::MonomorphizedTypeIdentifier;
+
 /// LLVM-free semantic layouts for monomorphized types. Populated during
 /// type registration; consulted during lowering and emission whenever code
 /// needs to know the field order or field/variant types of a generic
@@ -25,13 +27,13 @@ use expo_typecheck::context::VariantData;
 pub struct TypeLayouts {
     /// Per-mangled-key variant list for monomorphized enums. The order is
     /// the variant declaration order (and therefore the tag order).
-    mono_enum_variants: HashMap<String, Vec<(String, VariantData)>>,
+    mono_enum_variants: HashMap<MonomorphizedTypeIdentifier, Vec<(String, VariantData)>>,
     /// Per-mangled-key field layout: `Vec<(field_name, field_type)>` in
     /// declaration (and therefore GEP-index) order. The key matches what
     /// `expo-codegen`'s monomorphization registers (e.g. `"List_$Int32$"`
     /// for generics, the package-qualified name for non-generics that opt
     /// into mono-style lookup).
-    mono_struct_info: HashMap<String, Vec<(String, Type)>>,
+    mono_struct_info: HashMap<MonomorphizedTypeIdentifier, Vec<(String, Type)>>,
 }
 
 impl TypeLayouts {
@@ -40,7 +42,7 @@ impl TypeLayouts {
     }
 
     /// Whether `mangled` is registered as a monomorphized enum.
-    pub fn contains_enum(&self, mangled: &str) -> bool {
+    pub fn contains_enum(&self, mangled: &MonomorphizedTypeIdentifier) -> bool {
         self.mono_enum_variants.contains_key(mangled)
     }
 
@@ -48,19 +50,26 @@ impl TypeLayouts {
     /// Mirrors `LLVMTypeCache::contains_monomorphized` for lowering paths
     /// that need to know "have we seen this generic instantiation?" without
     /// reaching into the LLVM-bound cache.
-    pub fn contains_monomorphized(&self, mangled: &str) -> bool {
+    pub fn contains_monomorphized(&self, mangled: &MonomorphizedTypeIdentifier) -> bool {
         self.mono_enum_variants.contains_key(mangled) || self.mono_struct_info.contains_key(mangled)
     }
 
     /// Borrow the variant list for `mangled`, if registered. Returned in
     /// declaration / tag order.
-    pub fn enum_variants(&self, mangled: &str) -> Option<&[(String, VariantData)]> {
+    pub fn enum_variants(
+        &self,
+        mangled: &MonomorphizedTypeIdentifier,
+    ) -> Option<&[(String, VariantData)]> {
         self.mono_enum_variants.get(mangled).map(Vec::as_slice)
     }
 
     /// Field index for `field_name` in the struct registered under `mangled`.
     /// Returns `None` if either the struct or the field is unknown.
-    pub fn field_index(&self, mangled: &str, field_name: &str) -> Option<u32> {
+    pub fn field_index(
+        &self,
+        mangled: &MonomorphizedTypeIdentifier,
+        field_name: &str,
+    ) -> Option<u32> {
         let fields = self.mono_struct_info.get(mangled)?;
         fields
             .iter()
@@ -69,7 +78,11 @@ impl TypeLayouts {
     }
 
     /// Field type for `field_name` in the struct registered under `mangled`.
-    pub fn field_type(&self, mangled: &str, field_name: &str) -> Option<Type> {
+    pub fn field_type(
+        &self,
+        mangled: &MonomorphizedTypeIdentifier,
+        field_name: &str,
+    ) -> Option<Type> {
         let fields = self.mono_struct_info.get(mangled)?;
         fields
             .iter()
@@ -81,7 +94,7 @@ impl TypeLayouts {
     /// Subsequent inserts overwrite.
     pub fn register_enum_variants(
         &mut self,
-        mangled: String,
+        mangled: MonomorphizedTypeIdentifier,
         variants: Vec<(String, VariantData)>,
     ) {
         self.mono_enum_variants.insert(mangled, variants);
@@ -89,18 +102,29 @@ impl TypeLayouts {
 
     /// Record the field layout for a monomorphized struct under `mangled`.
     /// Subsequent inserts overwrite.
-    pub fn register_struct_layout(&mut self, mangled: String, fields: Vec<(String, Type)>) {
+    pub fn register_struct_layout(
+        &mut self,
+        mangled: MonomorphizedTypeIdentifier,
+        fields: Vec<(String, Type)>,
+    ) {
         self.mono_struct_info.insert(mangled, fields);
     }
 
     /// Borrow the field layout for `mangled`, if registered.
-    pub fn struct_layout(&self, mangled: &str) -> Option<&[(String, Type)]> {
+    pub fn struct_layout(
+        &self,
+        mangled: &MonomorphizedTypeIdentifier,
+    ) -> Option<&[(String, Type)]> {
         self.mono_struct_info.get(mangled).map(Vec::as_slice)
     }
 
     /// 0-based position of `variant` within the enum registered under
     /// `mangled`, equal to the tag value used at codegen.
-    pub fn variant_index(&self, mangled: &str, variant: &str) -> Option<u8> {
+    pub fn variant_index(
+        &self,
+        mangled: &MonomorphizedTypeIdentifier,
+        variant: &str,
+    ) -> Option<u8> {
         let variants = self.mono_enum_variants.get(mangled)?;
         variants
             .iter()

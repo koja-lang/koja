@@ -11,6 +11,7 @@ use crate::compiler::{Compiler, EmitResult};
 use crate::generics::monomorphize_struct;
 use crate::hashtable;
 use crate::types::to_llvm_type;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 pub fn emit_set_method<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -21,7 +22,7 @@ pub fn emit_set_method<'ctx>(
 ) -> Result<EmitResult, String> {
     let set_struct = c
         .llvm_types
-        .get_monomorphized(mangled_type)
+        .get_monomorphized(&MonomorphizedTypeIdentifier::new(mangled_type))
         .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
     if type_args.is_empty() {
@@ -52,7 +53,8 @@ pub fn emit_set_method<'ctx>(
         "insert" => {
             let fn_type = set_struct.fn_type(&[set_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -116,7 +118,7 @@ pub fn emit_set_method<'ctx>(
                 .builder
                 .build_int_mul(new_cap, i64_ty.const_int(elem_size, false), "new_e_bytes")
                 .unwrap();
-            let malloc = *c.functions.get("malloc").unwrap();
+            let malloc = *c.functions.get(&FunctionIdentifier::new("malloc")).unwrap();
             let new_entries_ptr = c
                 .call(malloc, &[new_entries_bytes.into()], "new_entries")
                 .unwrap()
@@ -125,7 +127,7 @@ pub fn emit_set_method<'ctx>(
                 .call(malloc, &[new_cap.into()], "new_states")
                 .unwrap()
                 .into_pointer_value();
-            let memset = *c.functions.get("memset").unwrap();
+            let memset = *c.functions.get(&FunctionIdentifier::new("memset")).unwrap();
             c.call_void(
                 memset,
                 &[
@@ -277,7 +279,7 @@ pub fn emit_set_method<'ctx>(
             c.builder.build_unconditional_branch(rehash_bb).unwrap();
 
             c.builder.position_at_end(rehash_done);
-            let free = *c.functions.get("free").unwrap();
+            let free = *c.functions.get(&FunctionIdentifier::new("free")).unwrap();
             c.call_void(free, &[entries_ptr.into()], "free_old_entries");
             c.call_void(free, &[states_ptr.into()], "free_old_states");
             c.builder.build_unconditional_branch(probe_bb).unwrap();
@@ -465,7 +467,8 @@ pub fn emit_set_method<'ctx>(
         "has?" => {
             let fn_type = i1_ty.fn_type(&[set_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -597,7 +600,8 @@ pub fn emit_set_method<'ctx>(
         "remove" => {
             let fn_type = set_struct.fn_type(&[set_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -771,12 +775,13 @@ pub fn emit_set_method<'ctx>(
             monomorphize_struct(c, &list_id, std::slice::from_ref(elem_type))?;
             let list_struct = c
                 .llvm_types
-                .get_monomorphized(&list_mangled)
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(&list_mangled))
                 .ok_or_else(|| format!("no LLVM type for {list_mangled}"))?;
 
             let fn_type = set_struct.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions.insert(mangled_fn.to_string(), fn_val);
+            c.functions
+                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let loop_bb = c.context.append_basic_block(fn_val, "loop");
@@ -799,7 +804,10 @@ pub fn emit_set_method<'ctx>(
 
             let new_fn_name = format!("{mangled_type}_new");
             let _ = emit_set_method(c, mangled_type, &new_fn_name, "new", type_args)?;
-            let new_fn = *c.functions.get(&new_fn_name).unwrap();
+            let new_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new(&new_fn_name))
+                .unwrap();
             let init_set = c.call(new_fn, &[], "init_set").unwrap().into_struct_value();
 
             let set_alloca = c.builder.build_alloca(set_struct, "set_acc").unwrap();
@@ -834,7 +842,10 @@ pub fn emit_set_method<'ctx>(
 
             let insert_fn_name = format!("{mangled_type}_insert");
             let _ = emit_set_method(c, mangled_type, &insert_fn_name, "insert", type_args)?;
-            let insert_fn = *c.functions.get(&insert_fn_name).unwrap();
+            let insert_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new(&insert_fn_name))
+                .unwrap();
 
             let current_set = c
                 .builder

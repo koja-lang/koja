@@ -32,7 +32,7 @@
 use crate::binary::patterns::compile_binary_pattern;
 use crate::drop::Ownership;
 use expo_ast::ast::{BinarySegment, Expr, MatchArm, Pattern, Statement};
-use expo_ir::identity::VariantId;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::patterns::{lower_match, lower_pattern, resolve_subject_ty};
 use expo_ir::lower::types::monomorphize_type;
 use expo_ir::resolved::match_expr::{ResolvedMatch, ResolvedMatchType};
@@ -147,7 +147,11 @@ fn lower_result_ty(compiler: &Compiler<'_>, arms: &[MatchArm]) -> ResolvedMatchT
         let all_members = arm_types.iter().all(|t| {
             matches!(t, Type::Union(_)) || members.iter().any(|m| mangle_type(m) == mangle_type(t))
         });
-        if all_members && compiler.llvm_types.contains_monomorphized(&target_mangled) {
+        if all_members
+            && compiler
+                .llvm_types
+                .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&target_mangled))
+        {
             return ResolvedMatchType::UnionWrap { target };
         }
     }
@@ -519,8 +523,8 @@ fn emit_pattern<'ctx>(
             member_ty,
             bind_name,
         } => {
-            let result = emit_tag_check(compiler, subject_ptr, union_mangled, *tag)?;
-            let payload_ptr = get_union_payload_ptr(compiler, subject_ptr, union_mangled)?;
+            let result = emit_tag_check(compiler, subject_ptr, union_mangled.as_str(), *tag)?;
+            let payload_ptr = get_union_payload_ptr(compiler, subject_ptr, union_mangled.as_str())?;
             let llvm_ty = to_llvm_type(member_ty, compiler.context, &compiler.llvm_types)
                 .ok_or_else(|| {
                     format!("unsupported type in typed binding: {}", member_ty.display())
@@ -635,7 +639,11 @@ fn lookup_enum_struct_type<'ctx>(
     compiler
         .llvm_types
         .get_concrete(&TypeIdentifier::from_qualified_name(enum_key))
-        .or_else(|| compiler.llvm_types.get_monomorphized(enum_key))
+        .or_else(|| {
+            compiler
+                .llvm_types
+                .get_monomorphized(&MonomorphizedTypeIdentifier::new(enum_key))
+        })
         .ok_or_else(|| format!("unknown enum: {enum_key}"))
 }
 
@@ -668,7 +676,7 @@ fn resolve_payload_info<'ctx>(
     enum_name: &str,
     variant: &str,
 ) -> Result<ResolvedPayloadInfo<'ctx>, String> {
-    let id = VariantId::new(enum_name, variant);
+    let id = VariantIdentifier::new(enum_name, variant);
     let payload_type = compiler
         .llvm_types
         .variant_payload(&id)
@@ -758,7 +766,7 @@ pub(crate) fn match_values<'ctx>(
     } else if subject.is_pointer_value() && lit.is_pointer_value() {
         let strcmp = *compiler
             .functions
-            .get("strcmp")
+            .get(&FunctionIdentifier::new("strcmp"))
             .ok_or("strcmp not declared")?;
         let cmp_result = compiler
             .call(

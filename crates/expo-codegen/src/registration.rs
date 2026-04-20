@@ -2,7 +2,7 @@
 //! into LLVM struct types using a multi-pass approach so cross-referencing
 //! types resolve correctly.
 
-use expo_ir::identity::VariantId;
+use expo_ir::identity::{MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Type, mangle_type};
 use inkwell::types::StructType;
@@ -90,8 +90,10 @@ pub(crate) fn register_types(c: &mut Compiler) {
             .iter()
             .map(|(n, t)| (n.clone(), t.clone()))
             .collect();
-        c.layouts
-            .register_struct_layout(id.qualified_name(), fields_owned);
+        c.layouts.register_struct_layout(
+            MonomorphizedTypeIdentifier::new(id.qualified_name()),
+            fields_owned,
+        );
     }
 
     // Pass 3: set enum bodies (skip generic templates)
@@ -107,8 +109,10 @@ pub(crate) fn register_types(c: &mut Compiler) {
             .map(|v| (v.name.clone(), v.data.clone()))
             .collect();
         build_enum_layout(c, &id.qualified_name(), enum_type, &variants);
-        c.layouts
-            .register_enum_variants(id.qualified_name(), variants);
+        c.layouts.register_enum_variants(
+            MonomorphizedTypeIdentifier::new(id.qualified_name()),
+            variants,
+        );
     }
 
     // Pass 4: register union types (tagged-union layout reusing enum infrastructure)
@@ -141,12 +145,15 @@ pub(crate) fn register_types(c: &mut Compiler) {
             continue;
         };
         let mangled = mangle_type(union_ty);
-        if c.llvm_types.contains_monomorphized(&mangled) {
+        if c.llvm_types
+            .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&mangled))
+        {
             continue;
         }
 
         let opaque = c.context.opaque_struct_type(&mangled);
-        c.llvm_types.register_monomorphized(mangled.clone(), opaque);
+        c.llvm_types
+            .register_monomorphized(MonomorphizedTypeIdentifier::new(mangled.clone()), opaque);
         // Defer until member bodies are known. Pass 4 runs after struct/enum
         // bodies are set, so most members are sized; finalize handles any
         // unions-of-unions in dependency order.
@@ -174,7 +181,8 @@ pub(crate) fn finalize_pending_unions<'ctx>(c: &mut Compiler<'ctx>) {
 
 /// Builds the LLVM tagged-union layout for an enum: creates each variant's
 /// payload struct, inserts it into `enum_variant_payloads` keyed by a
-/// [`VariantId`], and sets the body on the already-registered opaque struct.
+/// [`VariantIdentifier`], and sets the body on the already-registered opaque
+/// struct.
 /// Variant order (the tag value) is owned by `TypeLayouts` — this function
 /// only owns LLVM handles.
 pub(crate) fn build_enum_layout<'ctx>(
@@ -215,7 +223,7 @@ pub(crate) fn build_enum_layout<'ctx>(
                 Some(payload)
             }
         };
-        let id = VariantId::new(name, vname.clone());
+        let id = VariantIdentifier::new(name, vname.clone());
         c.llvm_types
             .enum_variant_payloads
             .insert(id, payload_option);
