@@ -3,9 +3,7 @@
 
 use crate::drop::Ownership;
 use expo_ast::ast::{Expr, Pattern, Statement};
-use expo_ir::lower::mangling::try_parse_mangled_name;
-use expo_ir::lower::types::resolve_name_current;
-use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute_preserving};
+use expo_ir::lower::loops::resolve_enumerable_info;
 use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
 
@@ -116,14 +114,15 @@ pub fn compile_for<'ctx>(
         (iter_alloca, iter_ty.clone(), Ownership::Unowned),
     );
 
-    let (mangled_type, elem_llvm_ty, elem_expo_ty, base, type_args) =
-        resolve_enumerable_info(c, &iter_ty)?;
+    let resolved = resolve_enumerable_info(&c.lower_ctx(), &iter_ty)?;
+    let elem_llvm_ty = to_llvm_type(&resolved.elem_type, c.context, &c.llvm_types)
+        .ok_or("cannot resolve element LLVM type")?;
 
-    monomorphize_impl_method(c, &base, "length", &type_args, &[])?;
-    monomorphize_impl_method(c, &base, "get", &type_args, &[])?;
+    monomorphize_impl_method(c, &resolved.base, "length", &resolved.type_args, &[])?;
+    monomorphize_impl_method(c, &resolved.base, "get", &resolved.type_args, &[])?;
 
-    let length_fn_name = format!("{}_length", mangled_type);
-    let get_fn_name = format!("{}_get", mangled_type);
+    let length_fn_name = format!("{}_length", resolved.mangled_type);
+    let get_fn_name = format!("{}_get", resolved.mangled_type);
 
     let length_fn = *c
         .functions
@@ -191,7 +190,7 @@ pub fn compile_for<'ctx>(
         c.builder.build_store(alloca, elem_val).unwrap();
         c.fn_state.variables.insert(
             name.clone(),
-            (alloca, elem_expo_ty.clone(), Ownership::Unowned),
+            (alloca, resolved.elem_type.clone(), Ownership::Unowned),
         );
     }
 
@@ -221,93 +220,4 @@ pub fn compile_for<'ctx>(
     c.builder.position_at_end(exit_bb);
 
     Ok(None)
-}
-
-/// Resolves the mangled name, element LLVM type, element Expo type, base name,
-/// and type args for any type that implements the `Enumeration` protocol.
-fn resolve_enumerable_info<'ctx>(
-    c: &Compiler<'ctx>,
-    ty: &Type,
-) -> Result<
-    (
-        String,
-        inkwell::types::BasicTypeEnum<'ctx>,
-        Type,
-        String,
-        Vec<Type>,
-    ),
-    String,
-> {
-    let (base, type_args) = match ty {
-        Type::Named {
-            identifier,
-            type_args,
-        } if !type_args.is_empty() => (identifier.name.clone(), type_args.clone()),
-        Type::Named { identifier, .. } => {
-            if let Some((base, type_args)) =
-                try_parse_mangled_name(&c.lower_ctx(), &identifier.name)
-            {
-                (base, type_args)
-            } else {
-                return Err(format!(
-                    "`for` requires an Enumeration type, found `{}`",
-                    ty.display()
-                ));
-            }
-        }
-        Type::Primitive(_) => {
-            let name = crate::intrinsics::type_display_name(ty);
-            (name, Vec::new())
-        }
-        _ => {
-            return Err(format!(
-                "`for` requires an Enumeration type, found `{}`",
-                ty.display()
-            ));
-        }
-    };
-
-    let base_id = resolve_name_current(&c.lower_ctx(), &base)
-        .ok_or_else(|| format!("no type info for `{base}`"))?
-        .clone();
-    let protos = c
-        .type_ctx
-        .protocol_impls
-        .get(&base_id)
-        .ok_or_else(|| format!("`{}` does not implement the Enumeration protocol", base))?;
-
-    if !protos.iter().any(|(p, _)| p == "Enumeration") {
-        return Err(format!(
-            "`{}` does not implement the Enumeration protocol",
-            base
-        ));
-    }
-
-    let ti = c
-        .type_ctx
-        .get_type(&base_id)
-        .ok_or_else(|| format!("no type info for `{base}`"))?;
-    let get_sig = ti
-        .functions
-        .get("get")
-        .ok_or_else(|| format!("`{base}` implements Enumeration but has no `get` method"))?;
-    let option_ty = if ti.type_params.is_empty() {
-        get_sig.return_type.clone()
-    } else {
-        let subst = build_substitution(&ti.type_params, &type_args);
-        substitute_preserving(&get_sig.return_type, &subst)
-    };
-    let elem_expo_ty = match &option_ty {
-        Type::Named {
-            identifier,
-            type_args: ta,
-        } if identifier.name == "Option" && !ta.is_empty() => ta[0].clone(),
-        other => other.clone(),
-    };
-
-    let elem_llvm = to_llvm_type(&elem_expo_ty, c.context, &c.llvm_types)
-        .ok_or("cannot resolve element LLVM type")?;
-    let mangled = mangle_name(&base_id, &type_args);
-
-    Ok((mangled, elem_llvm, elem_expo_ty, base, type_args))
 }

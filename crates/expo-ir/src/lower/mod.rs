@@ -20,6 +20,7 @@ pub mod ctx;
 pub mod debug;
 pub mod enums;
 pub mod fields;
+pub mod loops;
 pub mod mangling;
 pub mod methods;
 pub mod naming;

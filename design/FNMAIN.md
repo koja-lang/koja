@@ -1,5 +1,107 @@
 # Entry Points, Inline Functions, and the `fn main` Problem
 
+> **Revision 2026-04-18 — Package-as-Type Model.** The sections below predate this revision and capture the model it supersedes. They are kept for context. The OTP-flavored runtime (`Process`, `Lifecycle`, `handle_signal`, supervisors, `Ref` operations, error handling) carries forward unchanged. What changes is the namespace and entry-point story.
+
+## Revision 2026-04-18: Package-as-Type Model
+
+### What changes
+
+The original design achieves consistency by **restriction**: no free functions, period; `.expo` for structured modules and `.exps` for scripts; entry-as-`Process`-impl-on-a-type with a casing trick (`entry = "App"` vs `entry = "main"`) to disambiguate.
+
+This revision achieves consistency by **permission**, around one observation: every named container in Expo is type-shaped, and the same `.` member-lookup rule applies recursively. Packages are types too -- degenerate ones with no fields or variants, only members.
+
+That single move dissolves the `.expo` / `.exps` split, the casing trick, the "Free function codegen gap" ([GAPS.md](GAPS.md)), and most of the nested-types / local-types deferrals ([GAPS.md](GAPS.md)).
+
+### The unifying rule
+
+> `X.y` means "look up `y` in `X`'s member table." `X` is a type -- struct, enum, package, or fn body. `y` is whatever member fits -- variant, static fn, instance method, nested type, constant, sub-package.
+
+The resolver already handles the variant-vs-static-fn case (`Color.Red` vs `String.new`). Adding "package" as another shape of type-with-members is one more arm of an existing match, not a new class of problem.
+
+The fractal hierarchy:
+
+```
+package ⊃ {types, fns, constants, sub-packages, impls}
+  type ⊃ {types, fns, fields/variants, impls}
+    fn ⊃ {types, fns, statements}
+```
+
+Recursion bottoms out at primitives. Files have no place in this hierarchy -- they are pure organization.
+
+### Concrete rules
+
+**Packages are PascalCase and comptime-only.** `std` → `Std`, `net` → `Net`, `expo_http` → `Expo.Http`. PascalCase eliminates the lowercase package-vs-fn ambiguity that would otherwise block free functions at file top-level. Packages are erased after typecheck -- no runtime `Package` type, no member tables, no metadata. Anywhere you'd want to pass a package as a value, write a generic with a protocol bound instead.
+
+**Free functions are members of the implicit package.** A `fn keyword?(s: String) -> Bool ... end` at file top-level in package `MyApp` is the same as defining a fn member of the `MyApp` package-type. Codegen treats it identically to an inline fn on any other type. No special "free function" path.
+
+**Files are organization.** Multiple files in the same package contribute to the same package-type's member table. Renaming, splitting, or merging files does not change semantics. There is no implicit "file struct," no per-file `main`, no file-scoped visibility.
+
+**One file extension: `.expo`.** `.exps` is removed. The script case is a single `.expo` file with a `fn main`:
+
+```expo
+# hello.expo
+fn main
+  IO.puts("hi")
+end
+```
+
+`expo run hello.expo` treats the file as a one-file package, looks up `main`, calls it. Top-level statements remain forbidden everywhere -- the existence of `fn main` _is_ the script idiom. This preserves the "no surprises on import" property: qualifying into another package never executes its top-level code, because there is no top-level code to execute.
+
+**One-file packages take their name from the filename.** Running `expo run hello.expo` without an `expo.toml` defines a one-file package `Hello` -- the filename converted to PascalCase (`lexer_demo.expo` → `LexerDemo`). The file's members are accessible internally without qualification (`main`, `keyword?`, `Lexer`); externally they would be `Hello.main`, `Hello.Lexer`, though "external" rarely applies to a script. A one-file package has exactly one file -- additional files belong to a real package defined by `expo.toml`.
+
+**Entry resolution has no casing trick.** The `entry` field in `expo.toml` names a member of the entry package. The compiler resolves it: if it's a fn, the runtime calls it; if it's a type implementing `Process`, the runtime constructs and spawns it.
+
+```toml
+[project]
+entry = "App"        # type implementing Process → spawn
+# or
+entry = "Run"        # fn at package top-level → call
+```
+
+Both names are PascalCase by package-member convention; the kind is read from the declaration, not from the name.
+
+**Dispatch is always protocols + generics.** Packages stay comptime. The "module as value" pattern in Elixir (`apply(MyMod, :run, args)`) exists because Elixir lacks compile-time generic dispatch. Expo has both -- anywhere you'd want to pass a package as a value, you instead write `fn run<T: Runnable>(x: T)` and let the type system dispatch statically.
+
+### Comparison to the prior model
+
+| Prior model (preserved below)                              | This revision                                                        |
+| ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| No free functions, period                                  | Free functions are package members; same machinery as inline fns     |
+| `.expo` vs `.exps`                                         | One extension; scripts are `.expo` files with `fn main`              |
+| `entry = "main"` vs `entry = "App"` casing-as-semantics    | Entry is a named member; compiler resolves kind from the declaration |
+| Files are bags of decls; package is a flat namespace label | Package is a type; files are organization only                       |
+| Nested types / local types in fns deferred                 | Same machinery as package-as-type; falls out without separate design |
+| Module-as-value not addressed                              | Out: dispatch via protocols + generics; packages stay comptime       |
+
+### What carries forward unchanged
+
+- `Process<C, M, R>` as the protocol for long-running services (entry types and spawned children alike)
+- `Lifecycle` enum, `handle_signal` default impl, OS-signal-to-`Lifecycle` mapping
+- `StopReason`, `ExitStatus`, `ExitReason`, supervisor shutdown ordering
+- `Ref.signal` / `Ref.kill` / `Ref.self()`, child-to-parent messaging via union message types
+- Inline functions on `struct` / `enum` bodies (already implemented)
+- Error handling philosophy (types first, panics last, supervision as safety net)
+- The cookbook distribution model ([PACKAGE.md](PACKAGE.md) -- unchanged, it's about distribution, not language)
+
+### Migration notes
+
+- Stdlib package names rename to PascalCase. One-shot mechanical rewrite touching every import.
+- Existing free-function workarounds (wrapping helpers in dummy `impl` blocks) inline back to package level without ceremony.
+- `.exps` never ships; the script case is `fn main`-in-a-`.expo`-file from day one.
+- GAPS entries that close as side effects:
+  - "Free function codegen gap" -- free fns become package members; existing codegen path handles them.
+  - "Nested types deferred" -- the `(package, name)` identity model extends to package-nested types.
+  - "Local types in function bodies" -- fn body is a type-shaped container; nested types reuse the same machinery. The `DefId` overhaul flagged there may no longer be required.
+- GAPS entries unaffected: iteration protocol, generic-impl gaps, `Debug.format` for tuple variants, nested type-aliased unions, closures-capturing-`self`, etc. These are orthogonal to the namespace model.
+
+### Open questions
+
+- **Sub-package syntax.** `Std.IO` -- declared inline inside `Std`'s sources, implied by directory structure (`src/io/...`), or both? Elixir allows both. Pick one.
+- **Visibility at package level.** `priv fn` inside a type body means "private to the type." Inferred meaning at package top-level: "private to the package, not exported." Confirm and write down.
+- **Constant naming.** Verify current convention doesn't collide with PascalCase packages.
+
+---
+
 ## Problem
 
 `fn main` is the only free-floating function in Expo. All other functions must live inside `impl` blocks. This creates a fractal design inconsistency: the first thing every user learns is the one pattern that doesn't generalize. AI agents hit this hard -- they see `fn main` and assume free functions work everywhere, leading to codegen crashes when they try.
@@ -486,6 +588,7 @@ Child: Process<ListenerConfig, ListenerMsg, TcpEvent>
 ```
 
 The type alignment:
+
 - Child's `R = TcpEvent`
 - Parent's `M = AppMsg | TcpEvent`
 - Child calls `owner.cast(TcpEvent.Data(...))` -- `TcpEvent` widens to
@@ -515,6 +618,7 @@ runtime support, no magic mailbox categories.
 ### Implementation notes
 
 `Ref.self()` requires:
+
 - A new intrinsic in codegen that reads `CURRENT_PID` and constructs a
   `Ref` struct (just the integer pid)
 - No runtime changes -- the pid is already available in thread-local
@@ -891,7 +995,7 @@ This interacts with the `handle_signal` design: the supervisor sends
 | Hello world requires `fn main` ceremony           | Hello world: `IO.puts("Hello!")` in a `.exps` script                           |
 | One file extension (`.expo`)                      | Two: `.expo` (structured modules) and `.exps` (scripts)                        |
 | REPL is a separate design question                | REPL is `.exps` semantics, interactive                                         |
-| OS signals handled ad-hoc (`Signal` placeholder)  | `Lifecycle` enum with `handle_signal` default impl on `Process`             |
+| OS signals handled ad-hoc (`Signal` placeholder)  | `Lifecycle` enum with `handle_signal` default impl on `Process`                |
 | Exit codes as reply type (`ExitCode` placeholder) | `StopReason` enum, `ExitStatus` protocol for OS exit code mapping              |
 | No supervision model                              | `ExitReason` for supervisors, `Lifecycle` propagation, fractal dispatch        |
 

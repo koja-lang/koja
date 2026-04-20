@@ -625,14 +625,14 @@ will consume.
 What actually lives in `expo-ir` today:
 
 - **Active lowering helpers** (produced + consumed): `TypeLayouts`,
-  `FnLowerState`, `LowerCtx`, ~37 free functions across 14 modules in
-  `lower::{binary, closures, constants, debug, enums, fields, mangling,
-  methods, naming, patterns, processes, stmt, strings, structs, types}`
-  plus the small `util::parse_int_literal` helper. Reference:
-  [`expo/crates/expo-ir/src/lower/`](../crates/expo-ir/src/lower/).
-- **Active decision-type vocabulary** (produced + consumed): ~30
-  `Resolved*`/`Format*` types across 12 modules in
-  `resolved::{closures, constants, construction, debug, enums, fields, match_expr, methods, ops, patterns, processes, strings}`,
+  `FnLowerState`, `LowerCtx`, ~38 free functions across 15 modules in
+  `lower::{binary, closures, constants, debug, enums, fields, loops,
+  mangling, methods, naming, patterns, processes, stmt, strings,
+  structs, types}` plus the small `util::parse_int_literal` helper.
+  Reference: [`expo/crates/expo-ir/src/lower/`](../crates/expo-ir/src/lower/).
+- **Active decision-type vocabulary** (produced + consumed): ~31
+  `Resolved*`/`Format*` types across 13 modules in
+  `resolved::{closures, constants, construction, debug, enums, fields, loops, match_expr, methods, ops, patterns, processes, strings}`,
   plus 4 pure resolver functions (`resolve_binary_op`, `resolve_unary_op`,
   `resolve_compound_op`, `resolve_string`). Reference:
   [`expo/crates/expo-ir/src/resolved/`](../crates/expo-ir/src/resolved/).
@@ -751,18 +751,28 @@ history):
   return them. `expo-codegen`'s remaining `resolve_*`/`lower_*`
   functions are now exclusively the `<'ctx>`-bound cluster slated for
   Phase 4b.
+- **Wave 8a -- `resolve_enumerable_info` split.** First bite of the
+  Phase 4b structural cluster. The `<'ctx>`-bound resolver in
+  `expo-codegen/src/control/loops.rs` (one caller, one LLVM dependency)
+  was split along its `to_llvm_type(...)` seam: the pure-decision half
+  is now `expo_ir::lower::loops::resolve_enumerable_info(&LowerCtx, &Type)`
+  returning `expo_ir::resolved::loops::ResolvedEnumerable`; the caller
+  in `compile_for` derives `elem_llvm_ty` itself. New `lower::loops` /
+  `resolved::loops` modules established for future iteration-protocol
+  work. Pattern-setter for the rest of the cluster.
 
-### Next: Wave 8
+### Next: Wave 8 (continued)
 
-Phase 4b structural cluster: split each `<'ctx>`-bound resolver
-(`resolve_call`, `resolve_method_call`, `resolve_struct_name`,
+Nine `<'ctx>`-bound resolvers remain in the Phase 4b structural cluster:
+`resolve_call`, `resolve_method_call`, `resolve_struct_name`,
 `resolve_static_call`, `resolve_spawn_info`, `resolve_field_ptr`,
-`resolve_union_member`, `resolve_payload_info`, `resolve_enumerable_info`,
-`resolve_closure`) along its decision/LLVM seam, then lift the decision
-half into `expo-ir::lower::*`. Also migrate `closure_counter` off
-`FnState` so `resolve_closure` can join the others. Each split is a
-mini-Phase-2 wave; the cluster opens the door to Phase 4c, where the
-IR instruction containers are designed bottom-up from real consumers.
+`resolve_union_member`, `resolve_payload_info`, `resolve_closure`. Each
+gets the same treatment Wave 8a applied to `resolve_enumerable_info`:
+split along its decision/LLVM seam, lift the decision half into
+`expo-ir::lower::*`. `resolve_closure` additionally requires migrating
+`closure_counter` off `FnState`. Each split is a mini-Phase-2 wave; the
+cluster opens the door to Phase 4c, where the IR instruction containers
+are designed bottom-up from real consumers.
 
 ### Why incremental over big-bang
 

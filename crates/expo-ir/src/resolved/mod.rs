@@ -8,6 +8,7 @@ pub mod construction;
 pub mod debug;
 pub mod enums;
 pub mod fields;
+pub mod loops;
 pub mod match_expr;
 pub mod methods;
 pub mod ops;
