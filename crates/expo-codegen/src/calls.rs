@@ -5,13 +5,13 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, FieldInit};
 use expo_ast::identifier::TypeIdentifier;
-use expo_ir::lower::naming::current_method_symbol_prefix;
-use expo_ir::lower::types::resolve_name_current;
+use expo_ir::lower::calls::resolve_call;
+use expo_ir::resolved::calls::{BuiltinCall, ResolvedCall};
 use expo_typecheck::context::FnParam;
-use expo_typecheck::types::{Type, mangle_method_suffix, substitute, unify, unwrap_indirect};
+use expo_typecheck::types::{Type, mangle_method_suffix, substitute, unify};
 use inkwell::AddressSpace;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType};
-use inkwell::values::{BasicMetadataValueEnum, FunctionValue, PointerValue, StructValue};
+use inkwell::values::{BasicMetadataValueEnum, FunctionValue, StructValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::debug::call_format;
@@ -20,110 +20,6 @@ use crate::generics::monomorphize_function;
 use crate::stmt::coerce_numeric;
 use crate::structs::compile_struct_construction;
 use crate::types::to_llvm_type;
-
-enum BuiltinCall {
-    Panic,
-    Print,
-}
-
-enum ResolvedCall<'ctx> {
-    Builtin(BuiltinCall),
-    ClosureVariable {
-        params: Vec<FnParam>,
-        return_type: Type,
-        var_ptr: PointerValue<'ctx>,
-    },
-    Direct {
-        callee: FunctionValue<'ctx>,
-        param_types: Vec<Type>,
-        return_type: Type,
-    },
-    Generic,
-    StructConstructor {
-        identifier: Option<TypeIdentifier>,
-    },
-}
-
-fn resolve_call<'ctx>(c: &Compiler<'ctx>, name: &str) -> Result<ResolvedCall<'ctx>, String> {
-    let resolved_id = resolve_name_current(&c.lower_ctx(), name).cloned();
-    let is_concrete_type = resolved_id
-        .as_ref()
-        .is_some_and(|id| c.llvm_types.get_concrete(id).is_some());
-    if is_concrete_type || c.llvm_types.contains_monomorphized(name) {
-        return Ok(ResolvedCall::StructConstructor {
-            identifier: resolved_id,
-        });
-    }
-
-    match name {
-        "panic" => return Ok(ResolvedCall::Builtin(BuiltinCall::Panic)),
-        "print" | "print_Bool" | "print_Float" | "print_Int" | "print_Int32" | "print_String" => {
-            return Ok(ResolvedCall::Builtin(BuiltinCall::Print));
-        }
-        _ => {}
-    }
-
-    // When we're inside a method body, the unqualified call `foo(..)` can also
-    // refer to another method on the same type. Build the candidate LLVM symbol
-    // using the same package-qualifying rule as definition-site mangling so the
-    // lookup succeeds for user packages (e.g. `crypto.HMAC_hmac_raw`) without
-    // breaking stdlib symbols (e.g. `Int_hash`).
-    let mangled_name = c.fn_lower.self_type_name.as_ref().map(|tn| {
-        let prefix = current_method_symbol_prefix(&c.lower_ctx(), tn);
-        format!("{prefix}_{name}")
-    });
-    let callee_opt = c
-        .functions
-        .get(name)
-        .or_else(|| {
-            mangled_name
-                .as_ref()
-                .and_then(|mn| c.functions.get(mn.as_str()))
-        })
-        .copied();
-
-    if let Some(callee) = callee_opt {
-        let sig = c.type_ctx.function_sig(name).or_else(|| {
-            c.fn_lower
-                .self_type_name
-                .as_ref()
-                .and_then(|tn| resolve_name_current(&c.lower_ctx(), tn))
-                .and_then(|id| c.type_ctx.get_type(id))
-                .and_then(|ti| ti.functions.get(name))
-        });
-        let param_types: Vec<Type> = sig
-            .map(|s| s.params.iter().map(|p| p.ty.clone()).collect())
-            .unwrap_or_default();
-        let return_type = sig.map(|s| s.return_type.clone()).unwrap_or(Type::Unknown);
-        return Ok(ResolvedCall::Direct {
-            callee,
-            param_types,
-            return_type,
-        });
-    }
-
-    if let Some((var_ptr, raw_ty, _)) = c.fn_state.variables.get(name).cloned() {
-        let ty = unwrap_indirect(&raw_ty);
-        let Type::Function {
-            params,
-            return_type,
-        } = ty.clone()
-        else {
-            return Err(format!("undefined function: {name}"));
-        };
-        return Ok(ResolvedCall::ClosureVariable {
-            params,
-            return_type: *return_type,
-            var_ptr,
-        });
-    }
-
-    if c.generic_fn_asts.contains_key(name) {
-        return Ok(ResolvedCall::Generic);
-    }
-
-    Err(format!("undefined function: {name}"))
-}
 
 /// Invokes a closure fat pointer (fn ptr + env ptr struct) with the given signature.
 pub fn invoke_closure_fat_ptr<'ctx>(
@@ -188,7 +84,22 @@ pub fn compile_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let resolved = resolve_call(c, name)?;
+    let resolved = resolve_call(
+        &c.lower_ctx(),
+        name,
+        |id, candidate| {
+            id.is_some_and(|i| c.llvm_types.get_concrete(i).is_some())
+                || c.llvm_types.contains_monomorphized(candidate)
+        },
+        |candidate| c.functions.contains_key(candidate),
+        |variable_name| {
+            c.fn_state
+                .variables
+                .get(variable_name)
+                .map(|(_, ty, _)| ty.clone())
+        },
+        |candidate| c.generic_fn_asts.contains_key(candidate),
+    )?;
 
     match resolved {
         ResolvedCall::Builtin(BuiltinCall::Panic) => compile_panic(c, args, function),
@@ -196,8 +107,13 @@ pub fn compile_call<'ctx>(
         ResolvedCall::ClosureVariable {
             params,
             return_type,
-            var_ptr,
         } => {
+            let var_ptr = c
+                .fn_state
+                .variables
+                .get(name)
+                .map(|(ptr, _, _)| *ptr)
+                .ok_or_else(|| format!("undefined function: {name}"))?;
             let ptr_ty = c.context.ptr_type(AddressSpace::default());
             let closure_struct_ty = c
                 .context
@@ -210,10 +126,14 @@ pub fn compile_call<'ctx>(
             invoke_closure_fat_ptr(c, fat_ptr, &params, &return_type, args, function, name)
         }
         ResolvedCall::Direct {
-            callee,
+            mangled_name,
             param_types,
             return_type,
         } => {
+            let callee = *c
+                .functions
+                .get(&mangled_name)
+                .ok_or_else(|| format!("undefined function: {mangled_name}"))?;
             let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
             for (i, arg) in args.iter().enumerate() {
                 let val = if i < param_types.len() {

@@ -2,6 +2,7 @@
 //! backend emission. Each module contains types that the lowering pass
 //! produces and the emission pass consumes.
 
+pub mod calls;
 pub mod closures;
 pub mod constants;
 pub mod construction;

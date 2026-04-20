@@ -14,6 +14,7 @@
 //! it by reference. See [`ctx`] for the bundle.
 
 pub mod binary;
+pub mod calls;
 pub mod closures;
 pub mod constants;
 pub mod ctx;
