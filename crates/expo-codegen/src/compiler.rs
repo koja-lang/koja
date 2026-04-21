@@ -473,11 +473,19 @@ impl<'ctx> Compiler<'ctx> {
             OptimizationLevel::None
         };
 
+        // Tune the produced binary for the build host. LLVM 18's X86 backend
+        // requires a real CPU name (not just "generic") because it constructs
+        // a fresh `X86Subtarget` per function during emission and indexes into
+        // scheduling tables that are only populated for known CPU models;
+        // passing "generic" with empty features SIGSEGVs inside
+        // `X86ReadAdvanceTable` on Linux x86_64.
+        let cpu = TargetMachine::get_host_cpu_name().to_string();
+        let features = TargetMachine::get_host_cpu_features().to_string();
         let machine = target
             .create_target_machine(
                 &triple,
-                "generic",
-                "",
+                &cpu,
+                &features,
                 opt_level,
                 RelocMode::Default,
                 CodeModel::Default,

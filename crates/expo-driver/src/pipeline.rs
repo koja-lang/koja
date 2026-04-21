@@ -622,6 +622,9 @@ fn macos_version() -> &'static str {
 /// Links an object file with the embedded runtime library to produce an executable.
 /// `link_libraries` contains library names from `@link` annotations (passed as `-l` flags).
 fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries: &[String]) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = release;
+
     let tmp_dir = env::temp_dir().join(format!("expo-link-{}", process::id()));
     fs::create_dir_all(&tmp_dir).expect("failed to create temp dir for linking");
 
@@ -649,7 +652,8 @@ fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries
     let mut cmd = process::Command::new("cc");
     cmd.args(&args);
     cmd.stderr(process::Stdio::piped());
-    if cfg!(target_os = "macos") {
+    #[cfg(target_os = "macos")]
+    {
         cmd.env("MACOSX_DEPLOYMENT_TARGET", macos_version());
     }
     let result = cmd.output();
@@ -669,7 +673,8 @@ fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries
             }
 
             if output_result.status.success() {
-                if cfg!(target_os = "macos") && !release {
+                #[cfg(target_os = "macos")]
+                if !release {
                     let _ = process::Command::new("dsymutil")
                         .arg(output)
                         .stderr(process::Stdio::null())
