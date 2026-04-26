@@ -44,20 +44,18 @@
 
 use std::collections::HashMap;
 
-use expo_ast::ast::{Arg, ClosureParam, Expr, ExprKind, FieldInit, PassMode, TypeParam};
-use expo_ir::lower::closures::closure_info_at;
+use expo_ast::ast::{Arg, Expr, ExprKind, FieldInit};
+use expo_ir::lower::LowerCtx;
 use expo_ir::lower::fields::{lower_struct_field, resolve_chain_steps};
-use expo_ir::lower::mangling::try_parse_mangled_name;
-use expo_ir::lower::naming::method_symbol_prefix;
+use expo_ir::lower::inference::infer_static_method_return_type as ir_infer_static_method_return_type;
 use expo_ir::lower::structs::{lower_concrete_struct, resolve_struct_name};
-use expo_ir::lower::types::{find_type_current, id_for, resolve_name_current, resolve_type_expr};
+use expo_ir::lower::types::resolve_name_current;
 use expo_ir::resolved::construction::ResolvedStructConstruction;
 use expo_ir::resolved::fields::{ResolvedChain, ResolvedFieldStep, ResolvedStructField};
-use expo_typecheck::context::{FnParam, FunctionKind, TypeInfo};
+use expo_typecheck::context::TypeInfo;
 use expo_typecheck::types::{
-    Package, Type, TypeIdentifier, build_substitution, mangle_method_suffix, mangle_name,
-    named_generic, resolve_type_alias_id, resolve_type_alias_name, substitute, unify,
-    unwrap_indirect,
+    Package, Type, TypeIdentifier, mangle_name, named_generic, resolve_type_alias_id,
+    resolve_type_alias_name, substitute, unify, unwrap_indirect,
 };
 use inkwell::AddressSpace;
 use inkwell::types::{BasicTypeEnum, StructType};
@@ -444,8 +442,11 @@ pub fn compile_method_call<'ctx>(
     Ok(result.map(|v| TypedValue::new(v, resolved.return_type)))
 }
 
-/// Resolves which method to call: computes the mangled name, triggers
-/// monomorphization if needed, and looks up the param/return types.
+/// Resolves which method to call by delegating to the LLVM-free
+/// resolver in [`expo_ir::lower::methods::resolve_method_call`], then
+/// orchestrating any pending monomorphization and the final
+/// [`FunctionValue`] lookup. The `'ctx`-bound result struct is kept
+/// local since `FunctionValue<'ctx>` cannot live in `expo-ir`.
 fn resolve_method_call<'ctx>(
     c: &mut Compiler<'ctx>,
     struct_name: &str,
@@ -455,315 +456,72 @@ fn resolve_method_call<'ctx>(
     method: &str,
     args: &[Arg],
 ) -> Result<ResolvedMethodCall<'ctx>, String> {
-    let resolved_id = id_for(&c.lower_ctx(), base, type_id);
-    let is_generic = !type_args.is_empty();
-
-    // Pick the symbol prefix in lockstep with definition-site mangling:
-    //   * non-generic types with a resolved package → `{pkg}.{TypeName}` for
-    //     user packages, plain `{TypeName}` for stdlib/primitives;
-    //   * generics continue to use the existing bare-name mangled key until
-    //     registration migrates in a later stage.
-    let symbol_prefix = if is_generic {
-        struct_name.to_string()
-    } else {
-        resolved_id
-            .as_ref()
-            .map(|id| method_symbol_prefix(&id.package, &id.name))
-            .unwrap_or_else(|| struct_name.to_string())
+    let resolved = {
+        let lower_ctx = LowerCtx {
+            closure_site_path: c.closure_site_path.as_deref(),
+            fn_lower: &c.fn_lower,
+            layouts: &c.layouts,
+            package: c.current_package.as_ref(),
+            type_ctx: c.type_ctx,
+        };
+        let var_type = |name: &str| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone());
+        let function_exists = |id: &FunctionIdentifier| c.functions.contains_key(id);
+        expo_ir::lower::methods::resolve_method_call(
+            &lower_ctx,
+            &var_type,
+            &function_exists,
+            struct_name,
+            base,
+            type_id,
+            type_args,
+            method,
+            args,
+        )?
     };
 
-    let mut mangled = format!("{}_{}", symbol_prefix, method);
-    let mut resolved_method_type_args: Vec<Type> = Vec::new();
-
-    if is_generic {
-        let method_type_params = lookup_method_type_params(c, base, method);
-
-        if !method_type_params.is_empty() {
-            let method_type_args = infer_method_type_args(c, base, method, type_args, args)?;
-            resolved_method_type_args = method_type_args.clone();
-            let method_suffix = mangle_method_suffix(method, &method_type_args);
-            mangled = format!("{}_{}", symbol_prefix, method_suffix);
-
-            if !c.functions.contains_key(&FunctionIdentifier::new(&mangled)) {
-                monomorphize_impl_method(c, base, method, type_args, &method_type_args)?;
-            }
-        } else if !c.functions.contains_key(&FunctionIdentifier::new(&mangled)) {
-            monomorphize_impl_method(c, base, method, type_args, &[])?;
-        }
+    if let Some(p) = &resolved.pending_mono
+        && !c.functions.contains_key(&resolved.mangled_name)
+    {
+        monomorphize_impl_method(
+            c,
+            &p.base_type,
+            &p.method,
+            &p.type_args,
+            &p.method_type_args,
+        )?;
     }
 
     let callee = *c
         .functions
-        .get(&FunctionIdentifier::new(&mangled))
+        .get(&resolved.mangled_name)
         .ok_or_else(|| format!("undefined method `{method}` on `{struct_name}`"))?;
-
-    let (param_types, return_type) = if let Some(sig) = c.type_ctx.function_sig(&mangled) {
-        (
-            sig.params.iter().map(|p| p.ty.clone()).collect(),
-            sig.return_type.clone(),
-        )
-    } else if is_generic
-        && let Some(ti) = resolved_id.as_ref().and_then(|id| c.type_ctx.get_type(id))
-        && let Some(sig) = ti.functions.get(method)
-    {
-        let mut subst = build_substitution(&ti.type_params, type_args);
-        let method_tp = &sig.type_params;
-        for (mp, ma) in method_tp.iter().zip(resolved_method_type_args.iter()) {
-            subst.insert(mp.name.clone(), ma.clone());
-        }
-        (
-            sig.params
-                .iter()
-                .map(|p| substitute(&p.ty, &subst))
-                .collect(),
-            substitute(&sig.return_type, &subst),
-        )
-    } else if let Some(ti) = resolved_id.as_ref().and_then(|id| c.type_ctx.get_type(id))
-        && let Some(sig) = ti.functions.get(method)
-    {
-        (
-            sig.params.iter().map(|p| p.ty.clone()).collect(),
-            sig.return_type.clone(),
-        )
-    } else if is_generic
-        && let Some(spec_id) = resolved_id.as_ref()
-        && let Some(entries) = c.type_ctx.specialized_methods.get(spec_id)
-        && let Some((_, sigs)) = entries.iter().find(|(a, _)| *a == type_args)
-        && let Some(sig) = sigs.get(method)
-    {
-        (
-            sig.params.iter().map(|p| p.ty.clone()).collect(),
-            sig.return_type.clone(),
-        )
-    } else {
-        (Vec::new(), Type::Unknown)
-    };
-
-    let is_move = resolved_id
-        .as_ref()
-        .and_then(|id| c.type_ctx.get_type(id))
-        .and_then(|ti| ti.functions.get(method))
-        .is_some_and(|sig| sig.kind == FunctionKind::Instance(PassMode::Move));
 
     Ok(ResolvedMethodCall {
         callee,
-        is_move,
-        mangled_name: mangled,
-        param_types,
-        return_type,
+        is_move: resolved.is_move,
+        mangled_name: resolved.mangled_name.as_str().to_string(),
+        param_types: resolved.param_types,
+        return_type: resolved.return_type,
     })
 }
 
-fn lookup_method_type_params(c: &Compiler, base_type: &str, method: &str) -> Vec<TypeParam> {
-    let methods = find_type_current(&c.lower_ctx(), base_type).map(|ti| &ti.functions);
-    if let Some(methods) = methods
-        && let Some(sig) = methods.get(method)
-    {
-        return sig.type_params.clone();
-    }
-    Vec::new()
-}
-
-fn infer_method_type_args(
-    c: &Compiler,
-    base_type: &str,
-    method: &str,
-    struct_type_args: &[Type],
-    args: &[Arg],
-) -> Result<Vec<Type>, String> {
-    let (methods, type_params) = find_type_current(&c.lower_ctx(), base_type)
-        .map(|ti| (&ti.functions, &ti.type_params))
-        .ok_or_else(|| format!("no type info for `{base_type}`"))?;
-
-    let sig = methods
-        .get(method)
-        .ok_or_else(|| format!("no method `{method}` on `{base_type}`"))?;
-
-    let struct_subst = build_substitution(type_params, struct_type_args);
-    let substituted_params: Vec<_> = sig
-        .params
-        .iter()
-        .map(|p| substitute(&p.ty, &struct_subst))
-        .collect();
-
-    let mut method_subst = HashMap::new();
-    for (i, arg) in args.iter().enumerate() {
-        if i >= substituted_params.len() {
-            break;
-        }
-        let arg_type = expand_mangled_arg_type(c, &infer_arg_expo_type(c, &arg.value));
-        if arg_type != Type::Unknown {
-            unify(&substituted_params[i], &arg_type, &mut method_subst);
-        }
-    }
-
-    Ok(sig
-        .type_params
-        .iter()
-        .map(|tp| method_subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
-        .collect())
-}
-
-/// Expands a mangled monomorphized name (e.g. `Ref_$unit.Int$`) to [`Type::GenericInstance`]
-/// so it can unify with generic method signatures.
-fn expand_mangled_arg_type(c: &Compiler, ty: &Type) -> Type {
-    match ty {
-        Type::Indirect(inner) => Type::Indirect(Box::new(expand_mangled_arg_type(c, inner))),
-        Type::Pointer(inner) => Type::Pointer(Box::new(expand_mangled_arg_type(c, inner))),
-        Type::Named {
-            identifier,
-            type_args: ta,
-        } if ta.is_empty() => {
-            if let Some((base, type_args)) =
-                try_parse_mangled_name(&c.lower_ctx(), &identifier.name)
-            {
-                named_generic(&base, type_args, c.type_ctx, c.current_package.as_ref())
-            } else {
-                ty.clone()
-            }
-        }
-        Type::Function {
-            params,
-            return_type,
-        } => {
-            let expanded_params = params
-                .iter()
-                .map(|fp| FnParam {
-                    ty: expand_mangled_arg_type(c, &fp.ty),
-                    mode: fp.mode,
-                })
-                .collect();
-            let expanded_ret = expand_mangled_arg_type(c, return_type);
-            Type::Function {
-                params: expanded_params,
-                return_type: Box::new(expanded_ret),
-            }
-        }
-        _ => ty.clone(),
-    }
-}
-
-fn infer_static_struct_type_args_from_args(
-    c: &Compiler,
-    type_name: &str,
-    method: &str,
-    args: &[Arg],
-    type_params: &[TypeParam],
-) -> Result<Vec<Type>, String> {
-    if type_params.is_empty() {
-        return Ok(vec![]);
-    }
-    let methods = find_type_current(&c.lower_ctx(), type_name)
-        .map(|ti| &ti.functions)
-        .ok_or_else(|| format!("unknown type `{type_name}`"))?;
-    let sig = methods
-        .get(method)
-        .ok_or_else(|| format!("no method `{method}` on `{type_name}`"))?;
-    let mut subst = HashMap::new();
-    for (i, arg) in args.iter().enumerate() {
-        if i >= sig.params.len() {
-            break;
-        }
-        let arg_ty = expand_mangled_arg_type(c, &infer_arg_expo_type(c, &arg.value));
-        if arg_ty != Type::Unknown && !unify(&sig.params[i].ty, &arg_ty, &mut subst) {
-            return Err(format!(
-                "argument `{}` to `{type_name}.{method}` does not match expected type",
-                sig.params[i].name
-            ));
-        }
-    }
-    type_params
-        .iter()
-        .map(|tp| {
-            subst.get(&tp.name).cloned().ok_or_else(|| {
-                format!(
-                    "cannot infer type parameter `{}` for `{type_name}.{method}`",
-                    tp.name
-                )
-            })
-        })
-        .collect()
-}
-
-/// Infers the return type of a static struct/enum method call (e.g. `Task.async(...)`) for
-/// codegen variable typing when there is no annotation.
+/// Infers the return type of a static struct/enum method call (e.g.
+/// `Task.async(...)`) for codegen variable typing when there is no
+/// annotation. Thin wrapper around the LLVM-free resolver in
+/// [`expo_ir::lower::inference`].
 pub fn infer_static_method_return_type(
     c: &Compiler,
     type_name: &str,
     method: &str,
     args: &[Arg],
 ) -> Option<Type> {
-    let (methods, type_params) =
-        find_type_current(&c.lower_ctx(), type_name).map(|ti| (&ti.functions, &ti.type_params))?;
-    let sig = methods.get(method)?;
-    if type_params.is_empty() {
-        return Some(sig.return_type.clone());
-    }
-    let inferred =
-        infer_static_struct_type_args_from_args(c, type_name, method, args, type_params).ok()?;
-    let subst = build_substitution(type_params, &inferred);
-    Some(substitute(&sig.return_type, &subst))
-}
-
-fn infer_arg_expo_type(c: &Compiler, expr: &Expr) -> Type {
-    match &expr.kind {
-        ExprKind::Ident { name, .. } => c
-            .fn_state
-            .variables
-            .get(name)
-            .map(|(_, ty, _)| ty.clone())
-            .or_else(|| {
-                let sig = c.type_ctx.function_sig(name)?;
-                if sig.type_params.is_empty() {
-                    Some(Type::Function {
-                        params: sig.params.iter().map(FnParam::from).collect(),
-                        return_type: Box::new(sig.return_type.clone()),
-                    })
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(Type::Unknown),
-        ExprKind::Closure {
-            params,
-            return_type,
-            ..
-        } => {
-            let param_types: Vec<Type> = params
-                .iter()
-                .filter_map(|p| {
-                    if let ClosureParam::Name {
-                        type_expr: Some(te),
-                        ..
-                    } = p
-                    {
-                        Some(resolve_type_expr(&c.lower_ctx(), te))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let ret = match return_type {
-                Some(te) => resolve_type_expr(&c.lower_ctx(), te),
-                None => Type::Unit,
-            };
-            Type::Function {
-                params: param_types.into_iter().map(FnParam::borrow).collect(),
-                return_type: Box::new(ret),
-            }
-        }
-        ExprKind::ShortClosure { .. } => closure_info_at(&c.lower_ctx(), expr.span)
-            .map(|ci| Type::Function {
-                params: ci
-                    .param_types
-                    .iter()
-                    .map(|t| FnParam::borrow(t.clone()))
-                    .collect(),
-                return_type: Box::new(ci.return_type.clone().unwrap_or(Type::Unit)),
-            })
-            .unwrap_or(Type::Unknown),
-        _ => Type::Unknown,
-    }
+    ir_infer_static_method_return_type(
+        &c.lower_ctx(),
+        &|name: &str| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone()),
+        type_name,
+        method,
+        args,
+    )
 }
 
 /// Temporarily pushes type-parameter substitutions for a [`GenericInstance`]
@@ -1128,6 +886,12 @@ struct ResolvedStaticCall<'ctx> {
     return_type: Type,
 }
 
+/// Resolves a static method call (`Type.method(args)`) by delegating to
+/// [`expo_ir::lower::calls::resolve_static_call`] for the LLVM-free
+/// decision and then orchestrating type / method monomorphization
+/// before the final [`FunctionValue`] lookup. Type monomorphization is
+/// driven first so the static method's signature can be built against
+/// the concrete LLVM struct.
 fn resolve_static_call<'ctx>(
     c: &mut Compiler<'ctx>,
     type_name: &str,
@@ -1135,114 +899,63 @@ fn resolve_static_call<'ctx>(
     method: &str,
     args: &[Arg],
 ) -> Result<ResolvedStaticCall<'ctx>, String> {
-    let resolved_id = id_for(&c.lower_ctx(), type_name, resolved_type);
-    let type_params: Option<Vec<TypeParam>> = resolved_id
-        .as_ref()
-        .and_then(|id| c.type_ctx.get_type(id))
-        .map(|ti| ti.type_params.clone());
-
-    let mut type_args: Vec<Type> = if let Some(ref tp) = type_params
-        && !tp.is_empty()
-    {
-        tp.iter()
-            .filter_map(|param| c.fn_lower.type_subst.get(&param.name).cloned())
-            .collect()
-    } else {
-        Vec::new()
+    let resolved = {
+        let lower_ctx = LowerCtx {
+            closure_site_path: c.closure_site_path.as_deref(),
+            fn_lower: &c.fn_lower,
+            layouts: &c.layouts,
+            package: c.current_package.as_ref(),
+            type_ctx: c.type_ctx,
+        };
+        let var_type = |name: &str| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone());
+        let function_exists = |id: &FunctionIdentifier| c.functions.contains_key(id);
+        let type_mono_exists =
+            |id: &MonomorphizedTypeIdentifier| c.llvm_types.contains_monomorphized(id);
+        expo_ir::lower::calls::resolve_static_call(
+            &lower_ctx,
+            &var_type,
+            &function_exists,
+            &type_mono_exists,
+            type_name,
+            resolved_type,
+            method,
+            args,
+        )?
     };
 
-    if let Some(ref tp) = type_params
-        && !tp.is_empty()
-        && type_args.len() != tp.len()
-    {
-        type_args = infer_static_struct_type_args_from_args(c, type_name, method, args, tp)?;
-    }
-
-    let mangled_type = if type_args.is_empty() {
-        type_name.to_string()
-    } else {
-        let type_id = resolved_id.clone().ok_or_else(|| {
-            format!("cannot resolve package for generic static call on `{type_name}`")
-        })?;
-        let m = mangle_name(&type_id, &type_args);
-        if !c
-            .llvm_types
-            .contains_monomorphized(&MonomorphizedTypeIdentifier::new(&m))
-        {
-            if c.type_ctx.is_struct(type_name) {
-                monomorphize_struct(c, &type_id, &type_args)?;
+    if let Some(t) = &resolved.pending_type_mono {
+        let mangled = MonomorphizedTypeIdentifier::new(mangle_name(&t.identifier, &t.type_args));
+        if !c.llvm_types.contains_monomorphized(&mangled) {
+            if t.is_enum {
+                monomorphize_enum(c, &t.identifier, &t.type_args)?;
             } else {
-                monomorphize_enum(c, &type_id, &type_args)?;
+                monomorphize_struct(c, &t.identifier, &t.type_args)?;
             }
         }
-        m
-    };
+    }
 
-    // Pick the symbol prefix in lockstep with definition-site mangling:
-    // non-generic user types use `{pkg}.{TypeName}`; stdlib/primitives and
-    // generics keep the existing bare-name prefix until later migration stages.
-    let symbol_prefix = if type_args.is_empty() {
-        resolved_id
-            .as_ref()
-            .map(|id| method_symbol_prefix(&id.package, &id.name))
-            .unwrap_or_else(|| mangled_type.clone())
-    } else {
-        mangled_type.clone()
-    };
-
-    let mangled_name = format!("{}_{}", symbol_prefix, method);
-
-    if !c
-        .functions
-        .contains_key(&FunctionIdentifier::new(&mangled_name))
+    if let Some(p) = &resolved.pending_mono
+        && !c.functions.contains_key(&resolved.mangled_name)
     {
-        if !type_args.is_empty() {
-            monomorphize_impl_method(c, type_name, method, &type_args, &[])?;
-        } else {
-            return Err(format!(
-                "undefined static function `{method}` on `{type_name}`"
-            ));
-        }
+        monomorphize_impl_method(
+            c,
+            &p.base_type,
+            &p.method,
+            &p.type_args,
+            &p.method_type_args,
+        )?;
     }
 
     let callee = *c
         .functions
-        .get(&FunctionIdentifier::new(&mangled_name))
-        .ok_or_else(|| format!("undefined static function `{method}` on `{mangled_type}`"))?;
-
-    let (param_types, return_type) = c
-        .type_ctx
-        .functions
-        .get(&mangled_name)
-        .map(|sig| {
-            let pts: Vec<Type> = sig.params.iter().map(|p| p.ty.clone()).collect();
-            (pts, sig.return_type.clone())
-        })
-        .or_else(|| {
-            let ti = resolved_id
-                .as_ref()
-                .and_then(|id| c.type_ctx.get_type(id))?;
-            let sig = ti.functions.get(method)?;
-            if !type_args.is_empty() {
-                let subst = build_substitution(&ti.type_params, &type_args);
-                let pts = sig
-                    .params
-                    .iter()
-                    .map(|p| substitute(&p.ty, &subst))
-                    .collect();
-                Some((pts, substitute(&sig.return_type, &subst)))
-            } else {
-                let pts = sig.params.iter().map(|p| p.ty.clone()).collect();
-                Some((pts, sig.return_type.clone()))
-            }
-        })
-        .unwrap_or_else(|| (Vec::new(), Type::Unknown));
+        .get(&resolved.mangled_name)
+        .ok_or_else(|| format!("undefined static function `{method}` on `{type_name}`"))?;
 
     Ok(ResolvedStaticCall {
         callee,
-        mangled_name,
-        param_types,
-        return_type,
+        mangled_name: resolved.mangled_name.as_str().to_string(),
+        param_types: resolved.param_types,
+        return_type: resolved.return_type,
     })
 }
 

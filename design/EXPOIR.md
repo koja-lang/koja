@@ -460,7 +460,7 @@ ExpoIR → C FFI → shared types → incremental self-hosting
 
 1. **ExpoIR** fixes the codegen type system (`c.types.structs` string-key
    problem). Types are fully resolved during lowering using `resolved_type`
-   from the typed AST. Backends receive concrete `IrType` values, no string
+   from the typed AST. Backends receive concrete `IRType` values, no string
    lookups.
 
 2. **C FFI** requires stable codegen. Building FFI on the current codegen
@@ -494,16 +494,16 @@ With ExpoIR as the bridge:
 During the Rust bootstrap phase, ExpoIR is a Rust crate (`expo-ir`):
 
 ```rust
-pub struct IrModule {
+pub struct IRProgram {
     pub name: String,
-    pub structs: Vec<IrStruct>,
-    pub functions: Vec<IrFunction>,
+    pub structs: Vec<IRStruct>,
+    pub functions: Vec<IRFunction>,
 }
 
-pub struct IrFunction {
+pub struct IRFunction {
     pub name: String,
-    pub params: Vec<(String, IrType)>,
-    pub return_type: IrType,
+    pub params: Vec<(String, IRType)>,
+    pub return_type: IRType,
     pub blocks: Vec<BasicBlock>,
 }
 
@@ -514,9 +514,9 @@ pub struct BasicBlock {
 }
 
 pub enum Instruction {
-    Struct { dest: Var, ty: IrType, fields: Vec<Operand> },
-    StructExtract { dest: Var, base: Operand, ty: IrType, field: String },
-    Enum { dest: Var, ty: IrType, variant: String, payload: Option<Operand> },
+    Struct { dest: Var, ty: IRType, fields: Vec<Operand> },
+    StructExtract { dest: Var, base: Operand, ty: IRType, field: String },
+    Enum { dest: Var, ty: IRType, variant: String, payload: Option<Operand> },
     PartialApply { dest: Var, func: String, env: Var },
     Apply { dest: Option<Var>, func: String, args: Vec<Operand> },
     Builtin { dest: Var, op: BuiltinOp, args: Vec<Operand> },
@@ -528,13 +528,13 @@ pub enum Instruction {
     CloneValue { dest: Var, source: Var },
     DropValue { value: Var },
 
-    Alloca { dest: Var, ty: IrType },
-    HeapAlloc { dest: Var, ty: IrType },
+    Alloca { dest: Var, ty: IRType },
+    HeapAlloc { dest: Var, ty: IRType },
     Load { dest: Var, ptr: Var },
     Store { ptr: Var, value: Operand },
 
     // Future: shared types
-    SharedAlloc { dest: Var, ty: IrType },
+    SharedAlloc { dest: Var, ty: IRType },
     SharedRetain { value: Var },
     SharedRelease { value: Var },
 }
@@ -556,17 +556,27 @@ pub enum Operand {
     Unit,
 }
 
-pub enum IrType {
+pub enum IRType {
     Named(TypeIdentifier),
     Primitive(Primitive),
-    Function { params: Vec<IrType>, return_type: Box<IrType> },
-    Ref(Box<IrType>),
+    Function { params: Vec<IRType>, return_type: Box<IRType> },
+    Ref(Box<IRType>),
     Unit,
 }
 ```
 
 ~80 lines of type definitions. A codegen backend is a function
-`fn emit(module: &IrModule) -> Result<()>` that walks the structure.
+`fn emit(program: &IRProgram) -> Result<()>` that walks the structure.
+
+This sketch describes the SIL-style instruction-level IR planned for
+Phase 4c. The Wave 10 work landed a complementary
+declaration-level container (`IRProgram` holding `IRStruct` / `IREnum`
+/ `IRFunction`) that owns the monomorphized output of lowering. The
+two are designed to compose: the Phase 4c instruction containers will
+live inside `IRFunction.blocks` once `IRFunction` is extended beyond
+its current AST-wrapped form. Until then, `IRFunction` keeps the
+`expo_ast::ast::Function` body it monomorphized and `expo-codegen`
+walks it directly.
 
 ---
 
@@ -603,13 +613,16 @@ work, sister to the broader self-hosting context in
 
 ### Where we are
 
-The compiler does not yet construct or consume a SIL-style IR -- emission
-is still synchronous from the typed AST, with no function-level
-intermediate value materialized between lowering and codegen. But the
-foundation has been substantively built: the `expo-ir` crate exists, a
-decision-type vocabulary is extracted and in active use, and the
-LLVM-free semantic state and helpers have been lifted off `Compiler`
-behind a `LowerCtx<'a>` borrow bundle.
+The compiler does not yet construct or consume an instruction-level
+SIL-style IR -- function bodies are still walked from the typed AST
+during emission, with no `IRBasicBlock` / `IRInstruction` shape yet.
+But the foundation has been substantively built: the `expo-ir` crate
+exists, a decision-type vocabulary is extracted and in active use,
+the LLVM-free semantic state and helpers have been lifted off
+`Compiler` behind a `LowerCtx<'a>` borrow bundle, and as of Wave 10
+a declaration-level IR (`IRProgram` / `IRStruct` / `IREnum` /
+`IRFunction`) is constructed by the lowering planners and consumed
+by emission for every monomorphized type and function.
 
 The work began as a narrow `TypeRegistry` key migration to fix a
 package-qualified type collision and grew into a 6-wave type-system +
@@ -625,11 +638,16 @@ will consume.
 What actually lives in `expo-ir` today:
 
 - **Active lowering helpers** (produced + consumed): `TypeLayouts`,
-  `FnLowerState`, `LowerCtx`, ~43 free functions across 16 modules in
+  `FnLowerState`, `LowerCtx`, ~50 free functions across 18 modules in
   `lower::{binary, calls, closures, constants, debug, enums, fields,
-  loops, mangling, methods, naming, patterns, processes, stmt, strings,
-  structs, types}` plus the small `util::parse_int_literal` helper.
-  Reference: [`expo/crates/expo-ir/src/lower/`](../crates/expo-ir/src/lower/).
+  inference, loops, mangling, methods, monomorphize, naming, patterns,
+  processes, stmt, strings, structs, types}` plus the small
+  `util::parse_int_literal` helper. Reference:
+  [`expo/crates/expo-ir/src/lower/`](../crates/expo-ir/src/lower/).
+- **Active IR containers** (produced by Wave 10 planners, consumed
+  by `expo-codegen` emitters): `IRProgram` plus `IRStruct` / `IREnum`
+  / `IRFunction` and their `IRStructKind` / `IRFunctionKind` companions
+  in [`expo-ir::program`](../crates/expo-ir/src/program.rs).
 - **Active decision-type vocabulary** (produced + consumed): ~33
   `Resolved*`/`Format*` types across 14 modules in
   `resolved::{calls, closures, constants, construction, debug, enums, fields, loops, match_expr, methods, ops, patterns, processes, strings}`,
@@ -682,21 +700,25 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
   instruction containers (`IRFunction`, `IRBasicBlock`, `IRInstruction`,
   etc.) was deliberately left undone -- Phase 4c will design them
   bottom-up from real consumers rather than top-down from speculation.
-- **Phase 4 -- Move lowering out: ~90% done.** Four pure resolvers
-  moved to `expo-ir` (in `resolved::ops` and `resolved::strings`); the
-  9 Wave 6 helpers, ~28 Wave 7 helpers, and the Wave 8a-8d structural
-  splits in `lower::*`. Remaining work is the two monomorphization-bound
-  resolvers in Phase 4b and the Phase 4c IR container design:
-  - **4b (structural)**: 2 `<'ctx>`-bound resolvers remain
-    (`resolve_method_call`, `resolve_static_call`), both blocked on
-    monomorphization moving into IR. Lifting them today would require
-    a request-payload handshake (the resolver returns a `MonomorphizeRequest`
-    that the caller acts on before the LLVM lookup), which re-couples
-    emission to a side-channel and was rejected as a band-aid -- the
-    cleaner endpoint is monomorphization itself living in `expo-ir`,
-    so the two resolvers wait for that work. The other three resolvers
-    in this cluster (`resolve_field_ptr`, `resolve_payload_info`,
-    `resolve_closure`) are done; see Wave 8d.
+- **Phase 4 -- Move lowering out: substantively done.** Four pure
+  resolvers moved to `expo-ir` (in `resolved::ops` and
+  `resolved::strings`); the 9 Wave 6 helpers, ~28 Wave 7 helpers,
+  the Wave 8a-8d structural splits in `lower::*`, and the Wave 10
+  monomorphization registry + final two `<'ctx>`-bound resolver
+  lifts. Remaining work is the Phase 4c IR container design:
+  - **4b (structural): done.** All five resolvers in the original
+    cluster are lifted. Three (`resolve_field_ptr`,
+    `resolve_payload_info`, `resolve_closure`) closed in Wave 8d; the
+    final two (`resolve_method_call`, `resolve_static_call`) closed
+    in Wave 10 once monomorphization itself lifted into `expo-ir`.
+    The lifted resolvers return `ResolvedMethodCall` /
+    `ResolvedStaticCall` carrying optional `PendingMethodMono` /
+    `PendingTypeMono` payloads, which the caller drains against the
+    existing `monomorphize_*` shims before the LLVM `FunctionValue`
+    lookup. The original "request-payload handshake" rejection still
+    stands for naive lifts; what changed is that the request payloads
+    now describe deferred monomorphization steps inside a real IR
+    pipeline, not a side-channel back into `Compiler`.
   - **4c (the actual handoff)**: design and build the IR instruction
     containers from the bottom up, driven by what `Resolved*` consumers
     need. Lowering produces a function-level IR; emission consumes it
@@ -834,23 +856,53 @@ history):
   fields, loops, construction, patterns, methods, enums}`. Pure type-only
   refactor: 25/25 lang-suite tests pass. Sets up Wave 10's monomorphization
   registry to use stable typed identifiers from day one.
+- **Wave 10 -- monomorphization registry + final Phase 4b lifts.**
+  Introduced declaration-level IR containers in `expo_ir::program`:
+  `IRProgram` (a flat insertion-ordered collection keyed by typed
+  identifiers), `IRStruct`, `IREnum`, `IRFunction`, plus `IRStructKind`
+  / `IRFunctionKind` for stdlib-intrinsic vs. user-source dispatch.
+  Added pure-semantic monomorphization planners in
+  `expo_ir::lower::monomorphize` (`monomorphize_struct`,
+  `monomorphize_enum`, `monomorphize_function`,
+  `monomorphize_impl_method`) that take `&LowerCtx` + `&mut IRProgram`
+  and append `IR*` declarations in dependency order. `Compiler` grew
+  an `ir: IRProgram` field plus a `lower_ctx_and_ir(&mut self)` helper
+  that hands out the disjoint borrows for plan-then-emit; the original
+  `monomorphize_*` functions in `expo-codegen::generics` are now thin
+  shims that drive the IR planner first and then call new
+  `emit_ir_struct` / `emit_ir_enum` / `emit_ir_function` /
+  `emit_ir_impl_method` functions to lower the recorded `IR*` decl to
+  LLVM. Lifted the last two Phase 4b resolvers
+  (`resolve_method_call` -> `expo_ir::lower::methods`,
+  `resolve_static_call` -> `expo_ir::lower::calls`) along with the
+  type-inference helpers they depended on
+  (`infer_arg_expo_type`, `expand_mangled_arg_type`,
+  `lookup_method_type_params`, `infer_method_type_args`,
+  `infer_static_struct_type_args_from_args`,
+  `infer_static_method_return_type`) into a new
+  `expo_ir::lower::inference` module; the resolvers return
+  `ResolvedMethodCall` / `ResolvedStaticCall` with optional
+  `PendingMethodMono` / `PendingTypeMono` payloads that the
+  `expo-codegen` caller drains against the monomorphize shims before
+  the LLVM `FunctionValue` lookup. Renamed the existing forward-looking
+  IR sketch from `IrModule` / `IrFunction` / `IrType` to `IRProgram` /
+  `IRFunction` / `IRType` so the design and the code share one casing
+  convention. 25/25 lang-suite tests pass. Phase 4b closes here; the
+  next handoff is Phase 4c.
 
-### Next: monomorphization registry (Wave 10), then Phase 4c
+### Next: Phase 4c -- IR instruction containers
 
-The two `<'ctx>`-bound resolvers still in the Phase 4b cluster
-(`resolve_method_call`, `resolve_static_call`) interleave a pure
-decision (mangled name + signature substitution) with `&mut Compiler`
-mutation that emits LLVM (`monomorphize_impl_method`,
-`monomorphize_struct`, `monomorphize_enum`). Lifting them with a
-request-payload handshake was considered and rejected as a band-aid;
-the cleaner move is to lift monomorphization itself into IR so both
-resolvers fall out as pure functions. With Wave 9's typed identifiers
-in place, Wave 10 builds the central monomorphization registry in
-`expo-ir`: lowering declares the generic instances it needs (keyed by
-`MonomorphizedTypeIdentifier` / `FunctionIdentifier`); emission later
-walks the registry to actually instantiate them. After that, Phase 4b
-closes and Phase 4c (designing the IR instruction containers bottom-up
-from real consumers) can begin.
+With monomorphization living in `expo-ir` and every Phase 4b resolver
+lifted, the remaining gap is the function-body level. `IRFunction`
+today wraps an `expo_ast::ast::Function` and the substitution that
+specialized it; `expo-codegen` then walks that AST directly during
+emission. Phase 4c designs the instruction-level containers
+(`IRBasicBlock`, `IRInstruction`, terminators, operand model) from
+the bottom up, driven by what the existing `Resolved*` consumers
+need to be stitched together into a function body. When that lands,
+`IRFunction` carries blocks instead of an AST, `expo-codegen` becomes
+a pure consumer of `IRProgram`, and the `Lowerer<'a>` driver from
+the early plan finally has somewhere to live.
 
 ### Why incremental over big-bang
 

@@ -12,14 +12,18 @@
 //! the chosen mangled name (and the variable name from the call site)
 //! to fetch the actual `FunctionValue`/`PointerValue` post-dispatch.
 
+use expo_ast::ast::{Arg, TypeParam};
 use expo_ast::identifier::TypeIdentifier;
-use expo_typecheck::types::{Type, unwrap_indirect};
+use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute, unwrap_indirect};
 
-use crate::identity::FunctionIdentifier;
+use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::ctx::LowerCtx;
-use crate::lower::naming::current_method_symbol_prefix;
-use crate::lower::types::resolve_name_current;
-use crate::resolved::calls::{BuiltinCall, ResolvedCall};
+use crate::lower::inference::infer_static_struct_type_args_from_args;
+use crate::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
+use crate::lower::types::{id_for, resolve_name_current};
+use crate::resolved::calls::{
+    BuiltinCall, PendingMethodMono, PendingTypeMono, ResolvedCall, ResolvedStaticCall,
+};
 
 /// Resolves a bare-name function call to a [`ResolvedCall`]. The four
 /// closures bridge to the LLVM-bound caches that live on the codegen
@@ -111,4 +115,141 @@ pub fn resolve_call(
     }
 
     Err(format!("undefined function: {name}"))
+}
+
+/// Resolves the call target for `Type.method(args)` (a static method
+/// call): chooses the mangled callee symbol, computes the parameter /
+/// return types, and reports any monomorphization the caller must
+/// trigger before looking up the LLVM `FunctionValue`.
+///
+/// Generic static calls thread two side-conditions back to the caller:
+/// 1. `pending_type_mono` — the receiver type itself may not be
+///    monomorphized yet (e.g. `List<Int>.new()` requires `List<Int>`'s
+///    LLVM struct to exist before the static call's signature is built).
+/// 2. `pending_mono` — the static method's mangled symbol may not be
+///    emitted; the caller calls `monomorphize_impl_method` (which
+///    handles stdlib intrinsic dispatch + IR planning + LLVM emission).
+///
+/// `infer_arg_type` is the same closure pattern as `var_type` for
+/// methods: it bridges to `Compiler.fn_state.variables` for argument
+/// type inference of static calls whose type-args must be inferred
+/// from arguments (e.g. `Task.async(f)`).
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_static_call(
+    ctx: &LowerCtx<'_>,
+    var_type: &dyn Fn(&str) -> Option<Type>,
+    function_exists: &dyn Fn(&FunctionIdentifier) -> bool,
+    type_mono_exists: &dyn Fn(&MonomorphizedTypeIdentifier) -> bool,
+    type_name: &str,
+    resolved_type: Option<&TypeIdentifier>,
+    method: &str,
+    args: &[Arg],
+) -> Result<ResolvedStaticCall, String> {
+    let resolved_id = id_for(ctx, type_name, resolved_type);
+    let type_params: Option<Vec<TypeParam>> = resolved_id
+        .as_ref()
+        .and_then(|id| ctx.type_ctx.get_type(id))
+        .map(|ti| ti.type_params.clone());
+
+    let mut type_args: Vec<Type> = if let Some(ref tp) = type_params
+        && !tp.is_empty()
+    {
+        tp.iter()
+            .filter_map(|param| ctx.fn_lower.type_subst.get(&param.name).cloned())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    if let Some(ref tp) = type_params
+        && !tp.is_empty()
+        && type_args.len() != tp.len()
+    {
+        type_args =
+            infer_static_struct_type_args_from_args(ctx, var_type, type_name, method, args, tp)?;
+    }
+
+    let mut pending_type_mono: Option<PendingTypeMono> = None;
+    let mangled_type = if type_args.is_empty() {
+        type_name.to_string()
+    } else {
+        let type_id = resolved_id.clone().ok_or_else(|| {
+            format!("cannot resolve package for generic static call on `{type_name}`")
+        })?;
+        let m = mangle_name(&type_id, &type_args);
+        if !type_mono_exists(&MonomorphizedTypeIdentifier::new(&m)) {
+            pending_type_mono = Some(PendingTypeMono {
+                identifier: type_id,
+                type_args: type_args.clone(),
+                is_enum: ctx.type_ctx.is_enum(type_name),
+            });
+        }
+        m
+    };
+
+    // Pick the symbol prefix in lockstep with definition-site mangling:
+    // non-generic user types use `{pkg}.{TypeName}`; stdlib/primitives and
+    // generics keep the existing bare-name prefix until later migration stages.
+    let symbol_prefix = if type_args.is_empty() {
+        resolved_id
+            .as_ref()
+            .map(|id| method_symbol_prefix(&id.package, &id.name))
+            .unwrap_or_else(|| mangled_type.clone())
+    } else {
+        mangled_type.clone()
+    };
+
+    let mangled_name = format!("{symbol_prefix}_{method}");
+
+    let mut pending_mono: Option<PendingMethodMono> = None;
+    if !function_exists(&FunctionIdentifier::new(&mangled_name)) {
+        if !type_args.is_empty() {
+            pending_mono = Some(PendingMethodMono {
+                base_type: type_name.to_string(),
+                method: method.to_string(),
+                type_args: type_args.clone(),
+                method_type_args: Vec::new(),
+            });
+        } else {
+            return Err(format!(
+                "undefined static function `{method}` on `{type_name}`"
+            ));
+        }
+    }
+
+    let (param_types, return_type) = ctx
+        .type_ctx
+        .functions
+        .get(&mangled_name)
+        .map(|sig| {
+            let pts: Vec<Type> = sig.params.iter().map(|p| p.ty.clone()).collect();
+            (pts, sig.return_type.clone())
+        })
+        .or_else(|| {
+            let ti = resolved_id
+                .as_ref()
+                .and_then(|id| ctx.type_ctx.get_type(id))?;
+            let sig = ti.functions.get(method)?;
+            if !type_args.is_empty() {
+                let subst = build_substitution(&ti.type_params, &type_args);
+                let pts = sig
+                    .params
+                    .iter()
+                    .map(|p| substitute(&p.ty, &subst))
+                    .collect();
+                Some((pts, substitute(&sig.return_type, &subst)))
+            } else {
+                let pts = sig.params.iter().map(|p| p.ty.clone()).collect();
+                Some((pts, sig.return_type.clone()))
+            }
+        })
+        .unwrap_or_else(|| (Vec::new(), Type::Unknown));
+
+    Ok(ResolvedStaticCall {
+        mangled_name: FunctionIdentifier::new(mangled_name),
+        param_types,
+        return_type,
+        pending_type_mono,
+        pending_mono,
+    })
 }

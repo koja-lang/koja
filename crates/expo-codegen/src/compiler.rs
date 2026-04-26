@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem;
 use std::path::{Path, PathBuf};
 
+use expo_ir::IRProgram;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::LowerCtx;
 use expo_ir::lower::constants::{resolve_const, resolve_const_enum};
@@ -223,6 +224,12 @@ pub struct Compiler<'ctx> {
     /// monomorphized struct field layouts and the canonical enum variant
     /// lists; tag values come from [`TypeLayouts::variant_index`].
     pub layouts: TypeLayouts,
+    /// LLVM-free IR-level program: the source of truth for monomorphized
+    /// struct, enum, and function declarations awaiting backend emission.
+    /// Populated by `expo_ir::lower::monomorphize::*` planners (called
+    /// through the `monomorphize_*` shims in `crate::generics`) and
+    /// consumed by the `emit_ir_*` family.
+    pub ir: IRProgram,
     /// Per-function LLVM-bound state: variable allocas, loop-exit stack,
     /// and tail-call loop scaffolding. Semantic per-function state lives
     /// in [`Self::fn_lower`].
@@ -264,6 +271,7 @@ impl<'ctx> Compiler<'ctx> {
             fn_lower: FnLowerState::new(),
             llvm_types,
             layouts: TypeLayouts::new(),
+            ir: IRProgram::new(),
             fn_state: FnState::new(),
             closure_site_path: None,
             debug,
@@ -298,6 +306,26 @@ impl<'ctx> Compiler<'ctx> {
             package: self.current_package.as_ref(),
             type_ctx: self.type_ctx,
         }
+    }
+
+    /// Split-borrow companion to [`Self::lower_ctx`] that hands out a
+    /// `LowerCtx<'_>` alongside a `&mut IRProgram` from disjoint fields
+    /// of `Self`. Use this from monomorphization shims that need to
+    /// drive an `expo_ir::lower::monomorphize::*` planner: the planner
+    /// reads from the bundle and appends decls to the program in a
+    /// single borrow scope. Returning two borrows from one `&mut self`
+    /// call is what lets Rust's borrow checker see the field disjointness;
+    /// hand-rolling the pair at each call site triggers spurious
+    /// conflict errors.
+    pub fn lower_ctx_and_ir(&mut self) -> (LowerCtx<'_>, &mut IRProgram) {
+        let lower_ctx = LowerCtx {
+            closure_site_path: self.closure_site_path.as_deref(),
+            fn_lower: &self.fn_lower,
+            layouts: &self.layouts,
+            package: self.current_package.as_ref(),
+            type_ctx: self.type_ctx,
+        };
+        (lower_ctx, &mut self.ir)
     }
 
     /// Applies `uwtable` and `frame-pointer=all` to every defined function

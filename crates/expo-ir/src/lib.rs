@@ -14,10 +14,12 @@
 mod fn_state;
 pub mod identity;
 pub mod lower;
+pub mod program;
 pub mod resolved;
 mod type_layouts;
 pub mod util;
 
 pub use fn_state::FnLowerState;
 pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
+pub use program::{IREnum, IRFunction, IRFunctionKind, IRProgram, IRStruct, IRStructKind};
 pub use type_layouts::TypeLayouts;
