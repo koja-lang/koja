@@ -1,5 +1,7 @@
 //! Raw libc and platform FFI declarations used by the runtime.
 
+use std::ffi::c_char;
+
 /// IPv4 address family.
 pub const AF_INET: i32 = 2;
 
@@ -101,13 +103,13 @@ unsafe extern "C" {
     pub fn libc_freeaddrinfo(res: *mut Addrinfo);
     #[link_name = "getaddrinfo"]
     pub fn libc_getaddrinfo(
-        node: *const i8,
-        service: *const i8,
+        node: *const c_char,
+        service: *const c_char,
         hints: *const Addrinfo,
         res: *mut *mut Addrinfo,
     ) -> i32;
     #[link_name = "gethostname"]
-    pub fn libc_gethostname(name: *mut i8, len: usize) -> i32;
+    pub fn libc_gethostname(name: *mut c_char, len: usize) -> i32;
     #[link_name = "listen"]
     pub fn libc_listen(fd: i32, backlog: i32) -> i32;
     #[link_name = "read"]

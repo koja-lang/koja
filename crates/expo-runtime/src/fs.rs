@@ -1,6 +1,6 @@
 //! File descriptor and file system runtime functions.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char};
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::fd::IntoRawFd;
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn expo_fd_write(fd: i32, data_ptr: *const u8, data_len: i
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_file_delete(path_ptr: *const u8) -> i64 {
-    let path = unsafe { CStr::from_ptr(path_ptr as *const i8) };
+    let path = unsafe { CStr::from_ptr(path_ptr as *const c_char) };
     let path = match path.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -95,7 +95,7 @@ pub unsafe extern "C" fn expo_file_delete(path_ptr: *const u8) -> i64 {
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_file_exists(path_ptr: *const u8) -> i64 {
-    let path = unsafe { CStr::from_ptr(path_ptr as *const i8) };
+    let path = unsafe { CStr::from_ptr(path_ptr as *const c_char) };
     let path = match path.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn expo_file_exists(path_ptr: *const u8) -> i64 {
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_file_open(path_ptr: *const u8, mode: i64) -> i32 {
-    let path = unsafe { CStr::from_ptr(path_ptr as *const i8) };
+    let path = unsafe { CStr::from_ptr(path_ptr as *const c_char) };
     let path = match path.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -151,7 +151,7 @@ pub unsafe extern "C" fn expo_file_open(path_ptr: *const u8, mode: i64) -> i32 {
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_file_read_all(path_ptr: *const u8) -> *const u8 {
-    let path = unsafe { CStr::from_ptr(path_ptr as *const i8) };
+    let path = unsafe { CStr::from_ptr(path_ptr as *const c_char) };
     let path = match path.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -175,8 +175,8 @@ pub unsafe extern "C" fn expo_file_read_all(path_ptr: *const u8) -> *const u8 {
 /// Both pointers must point to valid NUL-terminated UTF-8 strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_file_rename(src_ptr: *const u8, dst_ptr: *const u8) -> i64 {
-    let src = unsafe { CStr::from_ptr(src_ptr as *const i8) };
-    let dst = unsafe { CStr::from_ptr(dst_ptr as *const i8) };
+    let src = unsafe { CStr::from_ptr(src_ptr as *const c_char) };
+    let dst = unsafe { CStr::from_ptr(dst_ptr as *const c_char) };
     let src = match src.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn expo_file_rename(src_ptr: *const u8, dst_ptr: *const u8
 /// Both pointers must point to valid NUL-terminated UTF-8 strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_file_write_all(path_ptr: *const u8, content_ptr: *const u8) -> i64 {
-    let path = unsafe { CStr::from_ptr(path_ptr as *const i8) };
+    let path = unsafe { CStr::from_ptr(path_ptr as *const c_char) };
     let path = match path.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -214,7 +214,7 @@ pub unsafe extern "C" fn expo_file_write_all(path_ptr: *const u8, content_ptr: *
             return -1;
         }
     };
-    let content = unsafe { CStr::from_ptr(content_ptr as *const i8) };
+    let content = unsafe { CStr::from_ptr(content_ptr as *const c_char) };
     let data = content.to_bytes();
     match fs::write(path, data) {
         Ok(()) => 0,

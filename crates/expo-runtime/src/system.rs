@@ -1,7 +1,7 @@
 //! System information and time runtime functions.
 
 use std::env;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,7 +30,7 @@ pub extern "C" fn expo_cwd() -> *const u8 {
 /// `key_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_get_env(key_ptr: *const u8) -> *const u8 {
-    let key = unsafe { CStr::from_ptr(key_ptr as *const i8) };
+    let key = unsafe { CStr::from_ptr(key_ptr as *const c_char) };
     let key = match key.to_str() {
         Ok(s) => s,
         Err(_) => return ptr::null(),
@@ -48,7 +48,7 @@ pub unsafe extern "C" fn expo_get_env(key_ptr: *const u8) -> *const u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn expo_hostname() -> *const u8 {
     let mut buf = [0u8; 256];
-    let ret = unsafe { libc_gethostname(buf.as_mut_ptr() as *mut i8, buf.len()) };
+    let ret = unsafe { libc_gethostname(buf.as_mut_ptr() as *mut c_char, buf.len()) };
     if ret != 0 {
         let c = CString::new("unknown").unwrap();
         return c.into_raw() as *const u8;
@@ -65,8 +65,8 @@ pub extern "C" fn expo_hostname() -> *const u8 {
 /// Both pointers must point to valid NUL-terminated UTF-8 strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_set_env(key_ptr: *const u8, val_ptr: *const u8) {
-    let key = unsafe { CStr::from_ptr(key_ptr as *const i8) };
-    let val = unsafe { CStr::from_ptr(val_ptr as *const i8) };
+    let key = unsafe { CStr::from_ptr(key_ptr as *const c_char) };
+    let val = unsafe { CStr::from_ptr(val_ptr as *const c_char) };
     if let (Ok(k), Ok(v)) = (key.to_str(), val.to_str()) {
         unsafe { env::set_var(k, v) };
     }

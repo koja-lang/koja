@@ -54,7 +54,7 @@ const COLORS_OFF: Colors = Colors { red: "", reset: "" };
 ///
 /// `msg` must be a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn expo_panic_backtrace(msg: *const i8) {
+pub unsafe extern "C" fn expo_panic_backtrace(msg: *const c_char) {
     let message = if msg.is_null() {
         "unknown panic".to_string()
     } else {

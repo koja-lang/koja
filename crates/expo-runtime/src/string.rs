@@ -1,7 +1,7 @@
 //! String and binary manipulation runtime functions.
 
 use std::alloc;
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char};
 use std::ptr;
 use std::slice;
 use std::str;
@@ -14,7 +14,7 @@ use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_expo_string};
 /// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_float_parse(ptr: *const u8, out: *mut f64) -> i64 {
-    let s = unsafe { CStr::from_ptr(ptr as *const i8) };
+    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
     let s = str::from_utf8(s.to_bytes()).unwrap();
     match s.trim().parse::<f64>() {
         Ok(v) => {
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn expo_format_binary(ptr: *const u8, is_bits: i64) -> *co
 /// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
-    let s = unsafe { CStr::from_ptr(ptr as *const i8) };
+    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
     let s = str::from_utf8(s.to_bytes()).unwrap();
     match s.trim().parse::<i64>() {
         Ok(v) => {
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn expo_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
 /// `ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_string_get(ptr: *const u8, index: i64) -> *const u8 {
-    let s = unsafe { CStr::from_ptr(ptr as *const i8) };
+    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
     let s = str::from_utf8(s.to_bytes()).unwrap();
     let Some(ch) = s.chars().nth(index as usize) else {
         return ptr::null();
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn expo_string_get(ptr: *const u8, index: i64) -> *const u
 /// `ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_string_length(ptr: *const u8) -> i64 {
-    let s = unsafe { CStr::from_ptr(ptr as *const i8) };
+    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
     let s = str::from_utf8(s.to_bytes()).unwrap();
     s.chars().count() as i64
 }
@@ -121,7 +121,7 @@ pub unsafe extern "C" fn expo_string_length(ptr: *const u8) -> i64 {
 /// `ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn expo_string_slice(ptr: *const u8, start: i64, stop: i64) -> *const u8 {
-    let s = unsafe { CStr::from_ptr(ptr as *const i8) };
+    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
     let s = str::from_utf8(s.to_bytes()).unwrap();
     let len = s.chars().count();
 

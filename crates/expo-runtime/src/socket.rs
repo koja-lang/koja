@@ -4,6 +4,7 @@
 //! `EAGAIN`, the calling process suspends via [`io_block`] until the
 //! reactor detects readiness, then retries.
 
+use std::ffi::c_char;
 use std::io;
 use std::mem;
 use std::ptr;
@@ -210,8 +211,14 @@ pub unsafe extern "C" fn expo_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
 pub unsafe extern "C" fn expo_socket_resolve(hostname: *const u8) -> *mut u8 {
     let mut result: *mut Addrinfo = ptr::null_mut();
 
-    let ret =
-        unsafe { libc_getaddrinfo(hostname as *const i8, ptr::null(), ptr::null(), &mut result) };
+    let ret = unsafe {
+        libc_getaddrinfo(
+            hostname as *const c_char,
+            ptr::null(),
+            ptr::null(),
+            &mut result,
+        )
+    };
     if ret != 0 {
         set_last_error(io::Error::other("getaddrinfo failed"));
         return ptr::null_mut();
