@@ -16,8 +16,11 @@ use std::collections::HashMap;
 
 use expo_ast::types::Type;
 
+use crate::blocks::IRBlockId;
+
 #[derive(Default)]
 pub struct FnLowerState {
+    pub block_counter: u32,
     pub closure_counter: usize,
     current_fn: Option<String>,
     pub process_msg_type: Option<Type>,
@@ -30,6 +33,14 @@ pub struct FnLowerState {
 impl FnLowerState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Mint a fresh function-scoped basic block identifier. Counter
+    /// resets per function via `FnLowerState::new` / `Default`.
+    pub fn next_block_id(&mut self) -> IRBlockId {
+        let id = IRBlockId(self.block_counter);
+        self.block_counter += 1;
+        id
     }
 
     /// Clear the tail-position flag.

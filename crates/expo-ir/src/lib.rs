@@ -11,6 +11,7 @@
 //! by what `Resolved*` consumers need to be stitched together. See
 //! `expo/design/EXPOIR.md` for design intent and current wave status.
 
+pub mod blocks;
 mod fn_state;
 pub mod identity;
 pub mod lower;
@@ -19,6 +20,7 @@ pub mod resolved;
 mod type_layouts;
 pub mod util;
 
+pub use blocks::{IRBasicBlock, IRBlockId, IRTerminator};
 pub use fn_state::FnLowerState;
 pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 pub use program::{IREnum, IRFunction, IRFunctionKind, IRProgram, IRStruct, IRStructKind};

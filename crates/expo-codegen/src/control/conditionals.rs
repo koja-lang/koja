@@ -1,14 +1,20 @@
 //! Conditional compilation: if/else, unless, cond, and ternary expressions.
 
+use std::collections::HashMap;
+
 use expo_ast::ast::{CondArm, Expr, Statement};
+use expo_ir::IRBlockId;
+use expo_ir::lower::conditionals::lower_unless;
+use expo_ir::resolved::conditionals::IRUnless;
 use expo_typecheck::types::Type;
+use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
 
-use super::{coerce_to_bool, compile_body_as_value};
+use super::{coerce_to_bool, compile_body_as_value, emit_terminator};
 
 /// Compiles a `cond` expression (multi-arm conditional). Each arm's condition is
 /// tested in order; the first truthy branch executes. Returns a phi value when
@@ -185,40 +191,56 @@ pub fn compile_if<'ctx>(
     Ok(None)
 }
 
-/// Compiles an `unless` guard: `unless cond ... end`. Negates the condition
-/// and delegates to `compile_if` with no else branch.
+/// Compiles an `unless` guard: `unless cond ... end`. Lowers to an
+/// [`IRUnless`] via [`lower_unless`] and walks the result via
+/// [`emit_unless`].
+///
+/// Lowering decides which block runs on truthy vs falsy conditions by
+/// placing the body block on the entry `CondBranch`'s `otherwise`
+/// slot; emission interprets that decision without any per-construct
+/// branch-direction knowledge, so no `build_not(cond)` call is needed.
 pub fn compile_unless<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let cond_val = compile_expr(compiler, condition, function)?
-        .ok_or("unless condition produced no value")?
-        .value;
-    let cond_int = coerce_to_bool(compiler, cond_val, "unless condition")?;
-    let negated = compiler.builder.build_not(cond_int, "unless_neg").unwrap();
+    let ir = lower_unless(&mut compiler.fn_lower, condition, body);
+    emit_unless(compiler, &ir, function)
+}
 
-    let then_bb = compiler.context.append_basic_block(function, "unless_body");
+/// Walks an [`IRUnless`] into LLVM IR.
+///
+/// Allocates LLVM basic blocks for the body and merge `IRBlockId`s,
+/// emits the entry `CondBranch` from the current builder position via
+/// the shared [`emit_terminator`], walks the body's AST statement
+/// stubs, then honors the declared `Branch(merge)` body terminator iff
+/// the body has not already self-terminated. Leaves the builder
+/// positioned at the merge block on exit and always returns `Ok(None)`
+/// (statement-context construct).
+fn emit_unless<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    ir: &IRUnless,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let body_bb = compiler.context.append_basic_block(function, "unless_body");
     let merge_bb = compiler.context.append_basic_block(function, "unless_end");
 
-    compiler
-        .builder
-        .build_conditional_branch(negated, then_bb, merge_bb)
-        .unwrap();
+    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
+    block_map.insert(ir.body_block, body_bb);
+    block_map.insert(ir.merge_block, merge_bb);
 
-    compiler.builder.position_at_end(then_bb);
-    for stmt in body {
+    emit_terminator(compiler, &ir.entry_terminator, &block_map, function)?;
+
+    compiler.builder.position_at_end(body_bb);
+    for stmt in &ir.body_stmts {
         if compiler.current_block_terminated() {
             break;
         }
         compile_statement(compiler, stmt, function)?;
     }
     if !compiler.current_block_terminated() {
-        compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
+        emit_terminator(compiler, &ir.body_terminator, &block_map, function)?;
     }
 
     compiler.builder.position_at_end(merge_bb);

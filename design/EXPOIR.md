@@ -638,19 +638,29 @@ will consume.
 What actually lives in `expo-ir` today:
 
 - **Active lowering helpers** (produced + consumed): `TypeLayouts`,
-  `FnLowerState`, `LowerCtx`, ~50 free functions across 18 modules in
-  `lower::{binary, calls, closures, constants, debug, enums, fields,
-  inference, loops, mangling, methods, monomorphize, naming, patterns,
-  processes, stmt, strings, structs, types}` plus the small
-  `util::parse_int_literal` helper. Reference:
+  `FnLowerState` (now including a per-function `block_counter` +
+  `next_block_id()`, mirroring `closure_counter`), `LowerCtx`, ~51 free
+  functions across 19 modules in
+  `lower::{binary, calls, closures, conditionals, constants, debug, enums, fields, inference, loops, mangling, methods, monomorphize, naming, patterns, processes, stmt, strings, structs, types}`
+  plus the small `util::parse_int_literal` helper. Reference:
   [`expo/crates/expo-ir/src/lower/`](../crates/expo-ir/src/lower/).
-- **Active IR containers** (produced by Wave 10 planners, consumed
-  by `expo-codegen` emitters): `IRProgram` plus `IRStruct` / `IREnum`
-  / `IRFunction` and their `IRStructKind` / `IRFunctionKind` companions
-  in [`expo-ir::program`](../crates/expo-ir/src/program.rs).
+- **Active declaration-level IR containers** (produced by Wave 10
+  planners, consumed by `expo-codegen` emitters): `IRProgram` plus
+  `IRStruct` / `IREnum` / `IRFunction` and their `IRStructKind` /
+  `IRFunctionKind` companions in
+  [`expo-ir::program`](../crates/expo-ir/src/program.rs).
+- **Active instruction-level IR scaffolding** (introduced in Wave 11
+  by the `compile_unless` lift): `IRBlockId`, `IRBasicBlock`, and
+  `IRTerminator` (`Branch` / `CondBranch` / `Unreachable`) in
+  [`expo-ir::blocks`](../crates/expo-ir/src/blocks.rs). The first
+  conditional construct lowered through this scaffold is
+  [`IRUnless`](../crates/expo-ir/src/resolved/conditionals.rs)
+  produced by [`lower_unless`](../crates/expo-ir/src/lower/conditionals.rs).
+  Slice 1 deliberately holds expression and statement bodies as AST
+  stubs; later slices replace them with instruction-level lowerings.
 - **Active decision-type vocabulary** (produced + consumed): ~33
-  `Resolved*`/`Format*` types across 14 modules in
-  `resolved::{calls, closures, constants, construction, debug, enums, fields, loops, match_expr, methods, ops, patterns, processes, strings}`,
+  `Resolved*`/`Format*` types across 15 modules in
+  `resolved::{calls, closures, conditionals, constants, construction, debug, enums, fields, loops, match_expr, methods, ops, patterns, processes, strings}`,
   plus 4 pure resolver functions (`resolve_binary_op`, `resolve_unary_op`,
   `resolve_compound_op`, `resolve_string`). Reference:
   [`expo/crates/expo-ir/src/resolved/`](../crates/expo-ir/src/resolved/).
@@ -663,16 +673,42 @@ What actually lives in `expo-ir` today:
   pairs. All four are newtype wrappers around `String` today; in Phase 5+
   they become interned `u32`s with no call-site changes.
 
-The IR _instruction set_ -- function/block/instruction containers, ops
-on operands, terminators, etc. -- is intentionally undefined in code.
-The "Instruction set" section above this one captures the design intent;
-the actual containers will be designed bottom-up during Phase 4c, driven
-by what `Resolved*` consumers need to be stitched together. An earlier
-attempt to define them top-down was deleted because it had no producers
-and had already drifted from the `Resolved*` shapes that emerged from
-real code paths.
+The full IR _instruction set_ -- operand model, value-producing
+instructions, the per-block instruction sequence -- is still
+intentionally undefined in code. Wave 11 lifted the smallest
+control-flow construct (`unless`) as a discovery vehicle to fix the
+block/terminator vocabulary; the remaining constructs (`if`, `ternary`,
+`cond`, `match`, loops) follow as separate slices, each one extending
+the IR only by what its consumer requires. An earlier attempt to define
+the full instruction set top-down was deleted because it had no
+producers and had already drifted from the `Resolved*` shapes that
+emerged from real code paths.
 
-Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
+#### Architectural invariant: control-flow negation lives in lowering
+
+Slice 1 of Phase 4c committed to a canonicalization rule that every
+later slice (and every backend) inherits: **control-flow negation is
+expressed by branch-target ordering, not by an IR `Not` operator or a
+`negated` flag**. `unless cond ... end` lowers to
+`IRTerminator::CondBranch { cond, then: merge, otherwise: body }` --
+the body block lives on `otherwise`, the merge block lives on `then`,
+and that's the entire structural content of "unless-ness." When the
+`if` slice lands, `if cond ... end` will lower to the same terminator
+shape with the targets swapped (`then: body, otherwise: merge`).
+
+The rationale is twofold. First, every backend implements one
+cond-branch lowering and reuses it across every conditional construct
+in the language; without canonicalization each construct's emission
+encodes its own branch-direction knowledge, and each backend pays a
+peephole-fold cost it does not need to. Second, the negation that
+exists *to flip a branch direction* is conceptually distinct from the
+negation that produces a value (`let x = !cond`); collapsing the
+former into target ordering and leaving the latter as a unary op
+keeps the two concerns visibly separate. Value-context negation is
+unaffected by this invariant -- it remains a unary op handled by
+`compile_unary`.
+
+Crate sizes (approximate): `expo-codegen` ~17k LOC, `expo-ir` ~5.1k LOC.
 
 ### Phase status
 
@@ -703,9 +739,10 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
 - **Phase 4 -- Move lowering out: substantively done.** Four pure
   resolvers moved to `expo-ir` (in `resolved::ops` and
   `resolved::strings`); the 9 Wave 6 helpers, ~28 Wave 7 helpers,
-  the Wave 8a-8d structural splits in `lower::*`, and the Wave 10
-  monomorphization registry + final two `<'ctx>`-bound resolver
-  lifts. Remaining work is the Phase 4c IR container design:
+  the Wave 8a-8d structural splits in `lower::*`, the Wave 10
+  monomorphization registry + final two `<'ctx>`-bound resolver lifts,
+  and Wave 11's first instruction-level scaffold + `unless` lift.
+  Remaining work is the rest of the Phase 4c construct ladder:
   - **4b (structural): done.** All five resolvers in the original
     cluster are lifted. Three (`resolve_field_ptr`,
     `resolve_payload_info`, `resolve_closure`) closed in Wave 8d; the
@@ -719,13 +756,24 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
     stands for naive lifts; what changed is that the request payloads
     now describe deferred monomorphization steps inside a real IR
     pipeline, not a side-channel back into `Compiler`.
-  - **4c (the actual handoff)**: design and build the IR instruction
-    containers from the bottom up, driven by what `Resolved*` consumers
-    need. Lowering produces a function-level IR; emission consumes it
-    and walks it. This is where the `Lowerer<'a>` driver becomes real,
-    where `closure_site_path` and `package` move off `Compiler` for
-    good, and where TCO ambient flags collapse into a `tail` field on
-    whatever the call instruction ends up being named.
+  - **4c (the actual handoff): in progress, slice 1 of N landed.**
+    Wave 11 lifted `compile_unless` as the smallest construct that
+    forces a real block/terminator vocabulary, fixing the IR shape
+    (`IRBlockId`, `IRBasicBlock`, `IRTerminator`,
+    `FnLowerState::block_counter`) plus the canonicalization
+    invariant for control-flow negation. Subsequent slices reuse the
+    vocabulary without further IR commitment beyond filling in
+    expression / instruction-level types: slice 2 lifts `compile_if`
+    (no value, no else) reusing the same `CondBranch` with body on
+    the truthy target; slice 3 introduces `IRPhi` (or value-merging)
+    for `compile_if`/`compile_ternary` with else; slice 4 lifts
+    `compile_cond` (N-arm); slice 5+ tackles `compile_match`,
+    `compile_while`, etc. The ultimate destination is unchanged:
+    lowering produces a function-level IR; emission consumes it and
+    walks it; the `Lowerer<'a>` driver becomes real; `closure_site_path`
+    and `package` move off `Compiler`; and TCO ambient flags collapse
+    into a `tail` field on whatever the call instruction ends up
+    being named.
 - **Phase 5+ -- Opaque IR identities: foundation laid (Wave 9).**
   `MonomorphizedTypeIdentifier`, `FunctionIdentifier`, and the renamed
   `VariantIdentifier` now wrap every cache key in
@@ -736,7 +784,7 @@ Crate sizes (approximate): `expo-codegen` ~33k LOC, `expo-ir` ~1.2k LOC.
 
 ### Wave history
 
-The 11 waves completed so far, condensed (full prose lives in commit
+The 12 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -889,20 +937,75 @@ history):
   `IRFunction` / `IRType` so the design and the code share one casing
   convention. 25/25 lang-suite tests pass. Phase 4b closes here; the
   next handoff is Phase 4c.
+- **Wave 11 -- Phase 4c slice 1: `compile_unless` lift + block /
+  terminator vocabulary.** First instruction-level lowering. Picked
+  the smallest control-flow construct in the codebase (`unless` --
+  no phi, no value crossing blocks, ~38 LOC of LLVM emission) as a
+  discovery vehicle to land the minimum block/terminator vocabulary
+  Phase 4c needs. Introduced `IRBlockId(u32)` (function-scoped, opaque
+  identifier minted by the new `FnLowerState::next_block_id`),
+  `IRBasicBlock { id, label, terminator }`, and `IRTerminator { Branch,
+  CondBranch { cond: Box<Expr>, then, otherwise }, Unreachable }` in
+  a new `expo_ir::blocks` module. Added `IRUnless` in
+  `resolved::conditionals` and the pure-semantic `lower_unless` in
+  `lower::conditionals`. Refactored `compile_unless` in
+  `expo-codegen::control::conditionals` into a thin shim plus an
+  `emit_unless` walker that materializes LLVM blocks from a
+  `HashMap<IRBlockId, BasicBlock<'ctx>>` and dispatches through a
+  new shared `emit_terminator` helper in `control::terminator`. The
+  helper interprets `IRTerminator` uniformly across constructs and
+  is the dispatch point that future conditional-construct lifts
+  (slice 2+) will reuse.
 
-### Next: Phase 4c -- IR instruction containers
+  Architectural commitment: control-flow negation is canonicalized
+  into branch-target ordering. The previous `build_not(cond)` LLVM
+  call is gone; "unless-ness" is encoded entirely by `lower_unless`
+  placing `merge_block` on `then` and `body_block` on `otherwise`.
+  No `Not` operator and no `negated` flag exist anywhere in the IR.
+  Cond-branch emission performs zero per-construct branch-direction
+  knowledge -- the cond AST is coerced to i1 and routed to the
+  terminator's `then` / `otherwise` slots in declared order. This
+  keeps the cond-branch shape uniform across every conditional
+  construct in the language and removes a peephole-fold cost from
+  every backend.
 
-With monomorphization living in `expo-ir` and every Phase 4b resolver
-lifted, the remaining gap is the function-body level. `IRFunction`
-today wraps an `expo_ast::ast::Function` and the substitution that
-specialized it; `expo-codegen` then walks that AST directly during
-emission. Phase 4c designs the instruction-level containers
-(`IRBasicBlock`, `IRInstruction`, terminators, operand model) from
-the bottom up, driven by what the existing `Resolved*` consumers
-need to be stitched together into a function body. When that lands,
-`IRFunction` carries blocks instead of an AST, `expo-codegen` becomes
-a pure consumer of `IRProgram`, and the `Lowerer<'a>` driver from
-the early plan finally has somewhere to live.
+  Slice 1 explicitly defers: the cond AST (still walked by
+  `compile_expr` inside `emit_terminator`) and the body statements
+  (still walked by `compile_statement` inside `emit_unless`) remain
+  AST stubs. These are slice 2's natural targets. The endpoint
+  landed at is "B" from the discovery framing -- terminator-explicit
+  -- because the negation analysis showed slice 2's `emit_if` would
+  otherwise reimplement equivalent cond-branch knowledge. The
+  promotion from the implicit Endpoint A was small (one new enum,
+  three variants) and pays off the moment a second construct lifts.
+  25/25 lang-suite tests pass.
+
+### Next: Phase 4c slicing plan
+
+The block/terminator vocabulary landed in Wave 11 is sized for the
+slice ladder. Each subsequent slice picks the next-smallest construct
+and extends the IR only where its consumer requires:
+
+- **Slice 2 -- `compile_if` (no else).** Reuses
+  `IRTerminator::CondBranch` with body on `then` and merge on
+  `otherwise`. No new IR types expected; validates the canonicalized
+  branch shape across two constructs.
+- **Slice 3 -- `compile_if` with else / `compile_ternary`.** Introduces
+  the value-merging story (`IRPhi` or equivalent), forcing the
+  predecessor-handle question that slice 1 deliberately sidestepped
+  by choosing a phi-free construct.
+- **Slice 4 -- `compile_cond`.** N-arm enumeration; same
+  `CondBranch` shape but a dynamic chain of test blocks. Tests the
+  IR scaffold scaling beyond fixed-N constructs.
+- **Slice 5+ -- `compile_match`, `compile_while`, `compile_loop`.**
+  Pattern bindings (variable-scope save/restore in IR vs. emission),
+  loop headers, break/continue. By the time these lift, the operand
+  model and value-producing instruction set will be filling in from
+  slices 2-4 demand.
+
+When the ladder completes, `IRFunction` carries blocks instead of an
+AST, `expo-codegen` becomes a pure consumer of `IRProgram`, and the
+`Lowerer<'a>` driver from the early plan finally has somewhere to live.
 
 ### Why incremental over big-bang
 
