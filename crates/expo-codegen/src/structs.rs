@@ -696,9 +696,13 @@ fn lookup_struct_info<'a>(
                 .and_then(|id| compiler.type_ctx.get_type(&id))
         })
         .or_else(|| {
-            compiler
-                .type_ctx
-                .resolve_name(&struct_name)
+            // Use the package-aware resolver: `compiler.type_ctx.resolve_name`
+            // depends on `TypeContext.current_package`, which is reset to
+            // `None` after typecheck. Inside an impl method body we still
+            // need to find `MyBox` keyed under `<pkg>.MyBox`, so route
+            // through `resolve_name_current` which honours the codegen-side
+            // package context (`compiler.current_package`).
+            resolve_name_current(&compiler.lower_ctx(), &struct_name)
                 .and_then(|id| compiler.type_ctx.get_type(id))
         })
 }

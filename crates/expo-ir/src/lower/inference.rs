@@ -29,25 +29,29 @@ use crate::lower::types::{find_type_current, resolve_type_expr};
 /// The caller supplies `var_type` to look up local-variable types from
 /// codegen's `Compiler.fn_state.variables` (which carries LLVM allocas
 /// alongside the `Type`); only the `Type` is used here.
+///
+/// Consults `expr.resolved_type` first when populated -- typecheck
+/// records concrete types on literal/operator/call expressions there,
+/// and ignoring it leaves user-defined-generics inference (`MyBox.new(42)`)
+/// stuck on `Type::Unknown` for arguments the kind-specific arms below
+/// don't recognise.
 pub fn infer_arg_expo_type(
     ctx: &LowerCtx<'_>,
     var_type: &dyn Fn(&str) -> Option<Type>,
     expr: &Expr,
 ) -> Type {
-    match &expr.kind {
-        ExprKind::Ident { name, .. } => var_type(name)
-            .or_else(|| {
-                let sig = ctx.type_ctx.function_sig(name)?;
-                if sig.type_params.is_empty() {
-                    Some(Type::Function {
-                        params: sig.params.iter().map(FnParam::from).collect(),
-                        return_type: Box::new(sig.return_type.clone()),
-                    })
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(Type::Unknown),
+    let kind_inferred = match &expr.kind {
+        ExprKind::Ident { name, .. } => var_type(name).or_else(|| {
+            let sig = ctx.type_ctx.function_sig(name)?;
+            if sig.type_params.is_empty() {
+                Some(Type::Function {
+                    params: sig.params.iter().map(FnParam::from).collect(),
+                    return_type: Box::new(sig.return_type.clone()),
+                })
+            } else {
+                None
+            }
+        }),
         ExprKind::Closure {
             params,
             return_type,
@@ -71,23 +75,26 @@ pub fn infer_arg_expo_type(
                 Some(te) => resolve_type_expr(ctx, te),
                 None => Type::Unit,
             };
-            Type::Function {
+            Some(Type::Function {
                 params: param_types.into_iter().map(FnParam::borrow).collect(),
                 return_type: Box::new(ret),
-            }
-        }
-        ExprKind::ShortClosure { .. } => closure_info_at(ctx, expr.span)
-            .map(|ci| Type::Function {
-                params: ci
-                    .param_types
-                    .iter()
-                    .map(|t| FnParam::borrow(t.clone()))
-                    .collect(),
-                return_type: Box::new(ci.return_type.clone().unwrap_or(Type::Unit)),
             })
-            .unwrap_or(Type::Unknown),
-        _ => Type::Unknown,
-    }
+        }
+        ExprKind::ShortClosure { .. } => closure_info_at(ctx, expr.span).map(|ci| Type::Function {
+            params: ci
+                .param_types
+                .iter()
+                .map(|t| FnParam::borrow(t.clone()))
+                .collect(),
+            return_type: Box::new(ci.return_type.clone().unwrap_or(Type::Unit)),
+        }),
+        _ => None,
+    };
+
+    kind_inferred
+        .filter(|t| *t != Type::Unknown)
+        .or_else(|| expr.resolved_type.clone())
+        .unwrap_or(Type::Unknown)
 }
 
 /// Expands a mangled monomorphized name (e.g. `Ref_$unit.Int$`) back to a

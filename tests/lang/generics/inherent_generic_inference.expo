@@ -1,0 +1,36 @@
+struct MyBox<T>
+  value: T
+end
+
+struct MyPair<A, B>
+  first: A
+  second: B
+end
+
+impl MyBox<T>
+  fn new(v: T) -> MyBox<T>
+    MyBox{value: v}
+  end
+
+  fn replace(self, new_value: T) -> MyBox<T>
+    MyBox{value: new_value}
+  end
+
+  fn map_to_pair<U>(self, other: U) -> MyPair<T, U>
+    MyPair{first: self.value, second: other}
+  end
+end
+
+fn main
+  a = MyBox.new(42)
+  print(a.value)
+
+  b: MyBox<Int> = MyBox{value: 1}
+  c = b.replace(99)
+  print(c.value)
+
+  d: MyBox<Int> = MyBox{value: 7}
+  p = d.map_to_pair("hi")
+  print(p.first)
+  print(p.second)
+end

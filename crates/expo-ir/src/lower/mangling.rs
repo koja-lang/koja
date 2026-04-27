@@ -18,11 +18,18 @@ use crate::lower::types::resolve_name_current;
 /// Attempts to recover the base name and concrete type args from a mangled
 /// name like `Pair_$Int.String$`. Returns `None` if the name doesn't match
 /// a known generic struct or enum template.
+///
+/// The returned base is the bare type name (no package prefix). User
+/// packages produce mangled bases like `myapp.MyBox_$Int$`; we strip the
+/// `myapp.` prefix so the result matches `generic_struct_asts` (keyed by
+/// bare name) and so callers can route through `resolve_name_current` to
+/// recover the package-qualified `TypeIdentifier`.
 pub fn try_parse_mangled_name(ctx: &LowerCtx<'_>, mangled: &str) -> Option<(String, Vec<Type>)> {
     let sep_pos = mangled.find("_$")?;
     let base = &mangled[..sep_pos];
-    if !ctx.type_ctx.generic_struct_asts.contains_key(base)
-        && !ctx.type_ctx.generic_enum_asts.contains_key(base)
+    let bare = base.rsplit_once('.').map(|(_, n)| n).unwrap_or(base);
+    if !ctx.type_ctx.generic_struct_asts.contains_key(bare)
+        && !ctx.type_ctx.generic_enum_asts.contains_key(bare)
     {
         return None;
     }
@@ -32,7 +39,7 @@ pub fn try_parse_mangled_name(ctx: &LowerCtx<'_>, mangled: &str) -> Option<(Stri
     let inner = &mangled[sep_pos + 2..mangled.len() - 1];
     let parts = split_mangled_args(ctx, inner);
     let type_args: Vec<Type> = parts.iter().map(|s| parse_mangled_type(ctx, s)).collect();
-    Some((base.to_string(), type_args))
+    Some((bare.to_string(), type_args))
 }
 
 /// Splits a mangled args string on `.` at depth 0, respecting nested

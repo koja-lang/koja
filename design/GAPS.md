@@ -53,11 +53,38 @@ Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
 
 ## Nested enum pattern matching with literal payloads
 
-Matching a nested variant with a literal payload (e.g.,
-`Some(TokenKind.Ident("and"))`) causes a segfault at runtime.
+Matching a `None` (or otherwise non-matching outer variant) against an arm
+whose pattern is `Some(<literal-payload-shape>)` (e.g.,
+`Some(TokenKind.Ident("and"))`) segfaults. The emitter unconditionally
+GEPs into the outer variant's payload memory before the outer tag check
+gates the result, so the recursive literal compare inside the arm
+dereferences uninitialized payload bytes.
 
-**Workaround:** bind the payload and check it in the body:
-`Some(TokenKind.Ident(name)) -> name == "and"`.
+**Verified scope (Apr 2026):** Only triggers when the inner pattern has
+its own payload comparison (literal or nested constructor). Plain
+bindings (`Some(t)`) and unit-payload variants are safe.
+
+**Workarounds (any one is enough):**
+
+- Split the outer variant into its own arm:
+  ```
+  match opt
+    Option.None -> default
+    Option.Some(t) -> match t
+      TokenKind.Ident("and") -> true
+      _ -> false
+    end
+  end
+  ```
+- Bind the payload and check it in the body:
+  `Some(TokenKind.Ident(name)) -> name == "and"`.
+
+**Resolution plan:** Lands as part of the EXPOIR `compile_match` rework
+(decision-tree-style match emission), which by construction will not
+deref payload before the outer tag is decided. A targeted fix on the
+current emission path was attempted and surfaced widespread LLVM
+dominance issues, suggesting structural fragility that the rework will
+naturally clean up.
 
 Surfaced during the self-hosted lexer port (`continues_line?`).
 
@@ -84,136 +111,10 @@ function bodies is currently deferred — the `(package, bare_name)` type
 identity model used everywhere in `expo-typecheck` and `expo-codegen`
 needs a `DefId`-style overhaul before nested decls can be represented
 cleanly, and that's a multi-week refactor on top of an already-fragile
-generic-impl pipeline (see the four "user-defined generic types" entries
-below and the "Cached impl ASTs" entry). Order of operations when this
-becomes a priority: chip away at the inherent-generic-impl gaps first,
-then introduce `DefId`, then local types fall out almost mechanically,
-then free functions can finally be deleted.
-
----
-
-## Static-method type inference on user-defined generic types
-
-Calling a generic static method on a user-defined generic struct/enum fails
-type inference (e.g. `MyBox.new(42)` for `impl MyBox<T> { fn new(v: T) -> MyBox<T> ... }`):
-
-```
-error: cannot infer type parameter `T` for `MyBox.new`
-```
-
-The typechecker does not propagate argument types into static-method calls
-on user generic types, even though it does the equivalent inference for
-free generic functions (`fn make_pair<A, B>(a: A, b: B) -> Pair<A, B>`).
-The same machinery presumably exists; it just isn't wired up for the
-`Type.method(...)` static-call path on user types.
-
-**Workaround:** construct via struct literal (`MyBox{value: 42}`) where
-field types pin the type parameters, or annotate the binding's type and
-let the inner construction propagate (`b: MyBox<Int> = MyBox.new(42)` --
-untested but expected to work via expected-type propagation).
-
-The same pattern works for stdlib types because they go through
-specialized inference paths (or have explicit type-arg syntax in the
-collection `new` helpers).
-
-Surfaced while writing lock-in tests for the codegen `find_type_current`
-fix (April 2026).
-
----
-
-## Generic methods on generic impls cannot infer their own type parameters
-
-A generic method _inside_ a generic impl (e.g.
-`impl MyBox<T> { fn map_to_pair<U>(self, other: U) -> Pair<T, U> ... }`)
-fails at codegen with a mangled-name including `unknown`:
-
-```
-error: no LLVM type for method parameter type `Unknown` in
-       `inherent_generic_impl.MyBox_$Int$_map_to_pair_$unknown$`
-```
-
-The outer type parameters (`T`) are resolved by the receiver type, but the
-method-local parameter (`U`) never gets bound from the call site's
-argument types. Codegen receives `Unknown` for `U` and the method-mangled
-symbol carries `$unknown$` straight through to LLVM type construction.
-
-**Workaround:** lift the helper to a free function or split into a
-non-generic method that takes a pre-built generic value.
-
-Surfaced while writing lock-in tests for the codegen `find_type_current`
-fix (April 2026).
-
----
-
-## Pattern matching on user-defined generic enums
-
-Matching a value of a monomorphized user-defined generic enum fails to
-re-resolve the bare enum name from the mangled type. With:
-
-```
-enum MyEither<A, B>
-  Left(A)
-  Right(B)
-end
-
-l: MyEither<Int, String> = MyEither.Left(7)
-match l
-  MyEither.Left(n) -> ...
-  MyEither.Right(s) -> ...
-end
-```
-
-codegen reports:
-
-```
-error: cannot resolve enum name from pattern `MyEither` for match subject
-       type `<pkg>.MyEither_$Int.String$`
-```
-
-The same pattern works for stdlib generic enums (`Option`, `Result`)
-because their bare names are in the global `name_index`. The pattern
-resolver has a path that strips monomorphization suffixes for stdlib
-types but doesn't account for user-package qualification on top of the
-mangled name.
-
-**Workaround:** none today for user-defined generic enums. Use stdlib
-`Option`/`Result` if their shape fits, or wrap your sum-type in a
-non-generic enum.
-
-Surfaced while writing lock-in tests for the codegen `find_type_current`
-fix (April 2026).
-
----
-
-## Struct construction inside generic impl method bodies
-
-Constructing a generic struct _inside_ a method on its own generic impl
-fails with the bare-name lookup, distinct from the (now-fixed) `find_type`
-path:
-
-```
-impl MyBox<T>
-  fn replace(self, new_value: T) -> MyBox<T>
-    MyBox{value: new_value}   # error: unknown struct type: MyBox
-  end
-end
-```
-
-The struct-construction path in `expo-codegen/src/structs.rs` resolves the
-type identifier via `Compiler::resolve_name_current` correctly, but then
-calls `compiler.types.get_concrete(&lookup_id)`, which has no entry for
-the monomorphized `MyBox<Int>` registered under the user package.
-
-**Workaround:** construct the struct _outside_ the method body and pass
-it in, or reach for a free function.
-
-**Fix sketch:** ensure the monomorphization driver registers concrete
-types under the package-qualified `TypeIdentifier`, or have
-`get_concrete` fall back to the bare-name index the way
-`find_type_current` now does.
-
-Surfaced while writing lock-in tests for the codegen `find_type_current`
-fix (April 2026).
+generic-impl pipeline (see the "Cached impl ASTs" entry below). Order of
+operations when this becomes a priority: introduce `DefId`, then local
+types fall out almost mechanically, then free functions can finally be
+deleted.
 
 ---
 
@@ -243,8 +144,64 @@ prefers the stale clone).
 so there's only one source of truth, or have `synthesize_protocol_defaults`
 type-check its outputs eagerly so the stored AST is authoritative.
 
+**Current state (Apr 2026):** the user-visible symptoms previously
+catalogued as separate "user-defined generic types" gaps (static-method
+type inference, generic methods on generic impls, struct construction
+inside impl method bodies) are now papered over by:
+
+- `infer_arg_expo_type` consulting `expr.resolved_type` as a fallback so
+  literal call-site arguments still drive type-arg inference;
+- `lookup_struct_info` and `try_parse_mangled_name` routing through the
+  package-aware bare-name resolvers so missing `resolved_type` on cached
+  AST nodes inside impl method bodies doesn't block construction.
+
+Those fallbacks keep the call-site/construction surface working for
+v0.10. The underlying cache duplication is still here and will keep
+biting deeper IR splits (`compile_match` in particular) until the cache
+is fixed for real.
+
 Surfaced during Stage 5 of the fix-generic-impl-typecheck plan; that stage
 is paused until this is sorted.
+
+---
+
+## `try_parse_mangled_name` strips package prefix before AST lookup
+
+`expo-ir/src/lower/mangling.rs::try_parse_mangled_name` strips the package
+prefix from the base of a flat-mangled name (e.g. `pkg.MyBox_$Int$` →
+`MyBox`) before looking it up in `generic_struct_asts` /
+`generic_enum_asts`, then re-packages via `resolve_name_current` using the
+current codegen scope. This works because those caches are keyed by bare
+names today, but it introduces a cross-package collision risk: if package
+`a` is being compiled and encounters a substituted mangled name from
+package `b` (e.g. `b.Box_$Int$`) while `a` _also_ defines a generic
+`Box<T>`, `resolve_name_current` will prefer `a.Box` and produce
+`Type::Named { id: a.Box, type_args: [Int] }` for what was originally
+`b.Box<Int>`. Same-package generics (the only shape exercised by current
+tests and stdlib) are always correct.
+
+The flat-mangled form itself is the real culprit. `Type::substitute`
+intentionally collapses fully-monomorphized `Type::Named { id, type_args }`
+into `Type::Named { id: unresolved("pkg.Type_$args$"), type_args: [] }` to
+encode "no further substitution needed", and the
+`try_parse_mangled_name` machinery is the bridge that recovers structure.
+
+**Resolution plan:** the EXPOIR refactor threads structured
+`Type::Named { id, type_args }` end-to-end (no flat-mangled form in IR),
+which deletes both `try_parse_mangled_name` and this collision risk. As a
+smaller pre-EXPOIR fix, swap `substitute()` for `substitute_preserving()`
+in `resolve_method_signature` so the structured form survives the impl
+boundary -- but auditing every `substitute()` consumer for the change has
+broader surface than the current fallback.
+
+If we ever ship cross-package generic reuse before EXPOIR is done, add a
+debug assertion in `try_parse_mangled_name` that warns when the bare-name
+strip produces a different `TypeIdentifier` than the original
+`pkg.Type` would have, so the collision shows up as a clear failure
+rather than a silent miscompilation.
+
+Surfaced as a known follow-up while landing the GAPS 2/3/5 generics fix
+(April 2026).
 
 ---
 
@@ -455,9 +412,7 @@ Bare `Config` resolving to `MyApp.Config` inside `impl MyApp` (the
 can be deferred to a v2 by requiring fully-qualified names initially.
 
 **Cost estimate:** ~1-2 weeks for non-generic nested types; +1-2 more
-weeks for generics (which would also benefit from closing the four
-"user-defined generic types" gaps above first to avoid debugging on two
-axes at once).
+weeks for generics.
 
 **Why deferred:** much cheaper than local-types-in-function-bodies but
 still a sizeable feature; not a 1.0 blocker. Tracked here so the design
