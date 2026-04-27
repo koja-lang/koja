@@ -651,22 +651,30 @@ What actually lives in `expo-ir` today:
   [`expo-ir::program`](../crates/expo-ir/src/program.rs).
 - **Active instruction-level IR scaffolding** (introduced in Wave 11
   by the `compile_unless` lift, extended in Wave 12 with the operand
-  model, extended in Wave 13 with the `compile_if`-no-else lift):
+  model, extended in Wave 13 with the `compile_if`-no-else lift,
+  extended in Wave 14 with the `BinaryOp` / `UnaryOp` instruction
+  vocabulary):
   `IRBlockId`, `IRBasicBlock { id, label, instructions, terminator }`,
   and `IRTerminator` (`Branch` / `CondBranch` / `Unreachable`) in
   [`expo-ir::blocks`](../crates/expo-ir/src/blocks.rs); plus
   `IRValueId`, `IROperand` (`ConstBool` / `ConstFloat` / `ConstInt` /
-  `ConstStr` / `Local` / `Unit`), and `IRInstruction` (single
-  transitional `Stub { dest, expr }` variant) in
+  `ConstStr` / `Local` / `Unit`), and `IRInstruction` (typed
+  `BinaryOp { dest, op, lhs, rhs }` and `UnaryOp { dest, op, operand }`
+  variants plus the transitional `Stub { dest, expr }` bridge) in
   [`expo-ir::values`](../crates/expo-ir/src/values.rs). The shared
   helper [`lower_expr_to_operand`](../crates/expo-ir/src/lower/values.rs)
   is the single seam every construct uses to thread an
   expression-shaped value into the IR: literal `Expr` shapes become
-  inline `IROperand` constants emitting no instructions, every other
-  shape mints a value id and pushes one `IRInstruction::Stub` onto
-  the caller's instruction sequence. Two conditional constructs are
-  lowered through this scaffold today, both Shape 1 (single body, no
-  value merge) with polarity in slot assignment:
+  inline `IROperand` constants, `Group` recurses transparently,
+  `Binary` / `Unary` lower to typed instructions via
+  [`lower::ops`](../crates/expo-ir/src/lower/ops.rs) when their
+  operator and operand shapes are within the IR vocabulary
+  (excluding `Concat` and `EnumStructEqual`, which fall through), and
+  every other shape mints a value id and pushes one
+  `IRInstruction::Stub` onto the caller's instruction sequence. Two
+  conditional constructs are lowered through this scaffold today,
+  both Shape 1 (single body, no value merge) with polarity in slot
+  assignment:
   [`IRUnless`](../crates/expo-ir/src/resolved/conditionals.rs)
   (body on `otherwise`, merge on `then`) produced by
   [`lower_unless`](../crates/expo-ir/src/lower/conditionals.rs), and
@@ -680,10 +688,12 @@ What actually lives in `expo-ir` today:
   `HashMap<IRValueId, BasicValueEnum<'ctx>>` populated by walking the
   block's instructions before dispatching its terminator. The
   walker mechanic that builds that map (`execute_instructions` in
-  `expo-codegen::control::conditionals`) is shared between the two
-  emit walkers as construct-agnostic mechanics. Statement bodies
-  remain AST stubs walked by `compile_statement`; later slices
-  replace them with instruction-level lowerings.
+  [`expo-codegen::control::instructions`](../crates/expo-codegen/src/control/instructions.rs))
+  is shared across construct emit walkers as construct-agnostic
+  mechanics; it dispatches `BinaryOp` / `UnaryOp` against the
+  `Resolved*` op variants and bridges `Stub` through `compile_expr`.
+  Statement bodies remain AST stubs walked by `compile_statement`;
+  later slices replace them with instruction-level lowerings.
 - **Active decision-type vocabulary** (produced + consumed): ~33
   `Resolved*`/`Format*` types across 15 modules in
   `resolved::{calls, closures, conditionals, constants, construction, debug, enums, fields, loops, match_expr, methods, ops, patterns, processes, strings}`,
@@ -703,16 +713,19 @@ The IR _instruction set_ is being filled in incrementally as
 constructs lift. Wave 11 fixed the block/terminator vocabulary; Wave 12
 introduced the operand model (`IRValueId`, `IROperand`,
 `IRInstruction`) plus a single transitional `Stub` instruction
-variant that bridges to AST-level expression emission. Each future
-[`expo_ast::ast::ExprKind`] that learns to lower replaces its `Stub`
-site with a typed `IRInstruction` variant; when the last consumer is
-gone, `Stub` is deleted in one PR. The remaining constructs (`if`,
-`ternary`, `cond`, `match`, loops) and the value-producing
-instruction set both fill in as separate slices, each one extending
-the IR only by what its consumer requires. An earlier attempt to
-define the full instruction set top-down was deleted because it had
-no producers and had already drifted from the `Resolved*` shapes
-that emerged from real code paths.
+variant that bridges to AST-level expression emission; Wave 14
+expanded the instruction vocabulary with typed `BinaryOp` and
+`UnaryOp` variants, retiring `Stub` for `ExprKind::Binary`
+(except `Concat` and `EnumStructEqual`) and `ExprKind::Unary`. Each
+future [`expo_ast::ast::ExprKind`] that learns to lower replaces its
+`Stub` site with a typed `IRInstruction` variant; when the last
+consumer is gone, `Stub` is deleted in one PR. The remaining
+constructs (`if`, `ternary`, `cond`, `match`, loops) and the
+value-producing instruction set both fill in as separate slices,
+each one extending the IR only by what its consumer requires. An
+earlier attempt to define the full instruction set top-down was
+deleted because it had no producers and had already drifted from
+the `Resolved*` shapes that emerged from real code paths.
 
 #### Architectural invariant: control-flow negation lives in lowering
 
@@ -814,7 +827,7 @@ Crate sizes (approximate): `expo-codegen` ~17k LOC, `expo-ir` ~5.1k LOC.
 
 ### Wave history
 
-The 14 waves completed so far, condensed (full prose lives in commit
+The 15 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -1086,10 +1099,49 @@ history):
   `if i >= 3` Stub fallback inside `loop`, `if ran_true` Stub
   fallback on a variable cond). 25/25 lang-suite tests pass; all
   stdlib green.
+- **Wave 14 -- Phase 4c interlude: `IRInstruction` vocabulary
+  expansion (Binary, Unary, Group).** Foundation slice between
+  construct slices 2 and 3. Expanded `IRInstruction` from a single
+  transitional `Stub` variant to three: typed `BinaryOp { dest, op,
+  lhs, rhs }` and `UnaryOp { dest, op, operand }` carrying the
+  existing `ResolvedBinaryOp` / `ResolvedUnaryOp` decision types
+  directly, plus the unchanged `Stub` bridge for kinds that haven't
+  lifted. Lowering performs operator resolution against
+  typecheck-derived operand shapes via a new
+  [`expo_ir::lower::ops`](../crates/expo-ir/src/lower/ops.rs) module
+  (`operand_shape_for_type`, `lower_binary_op_or_stub`,
+  `lower_unary_op_or_stub`); emission becomes pure dispatch on the
+  resolved variant. `Group` recurses transparently in
+  `lower_expr_to_operand` with no instruction emitted. The
+  `execute_instructions` walker was promoted out of
+  `expo-codegen::control::conditionals` into a new shared
+  [`control::instructions`](../crates/expo-codegen/src/control/instructions.rs)
+  module and extended with arms for the two new variants.
+
+  Two slice exclusions stay on `Stub` until they get dedicated
+  instruction variants: `BinOp::Concat` (multi-block memcpy
+  sequences in `compile_concat`), and
+  `ResolvedBinaryOp::EnumStructEqual` (multi-block per-variant
+  equality in `compile_enum_struct_eq`). Lowering filters both at
+  the source.
+
+  Reach this slice is small but real: cond expressions on `IRUnless`
+  and `IRIf` pick up the new vocabulary automatically (e.g.,
+  `unless not x.value`, `if x > 3`). Reach grows as future construct
+  slices route more expressions through `lower_expr_to_operand`.
+  Validation: stdlib `lib/std/test/control_flow_test.expo` cond
+  paths exercise both `BinaryOp` and `UnaryOp` lowering; 25/25
+  lang-suite green; zero clippy warnings.
+
+  This slice is a "shape" investment: it validates the per-variant
+  pattern (typed instruction shape + lowering arm + emission walker
+  arm + retirement marker) for the operator family, so subsequent
+  expansions (calls, field access, struct/enum construction, etc.)
+  can follow the same template.
 
 ### Next: Phase 4c slicing plan
 
-The block/terminator/operand vocabulary landed in Waves 11-13 is
+The block/terminator/operand vocabulary landed in Waves 11-14 is
 sized for the slice ladder. Each remaining slice picks the next
 construct and extends the IR only where its consumer requires:
 

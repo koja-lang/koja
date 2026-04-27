@@ -6,7 +6,7 @@ use expo_ast::ast::{CondArm, Expr, Statement};
 use expo_ir::IRBlockId;
 use expo_ir::lower::conditionals::{lower_if_no_else, lower_unless};
 use expo_ir::resolved::conditionals::{IRIf, IRUnless};
-use expo_ir::values::{IRInstruction, IRValueId};
+use expo_ir::values::IRValueId;
 use expo_typecheck::types::Type;
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};
@@ -15,6 +15,7 @@ use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
 
+use super::instructions::execute_instructions;
 use super::{coerce_to_bool, compile_body_as_value, emit_terminator};
 
 /// Compiles a `cond` expression (multi-arm conditional). Each arm's condition is
@@ -327,34 +328,6 @@ fn emit_if<'ctx>(
 
     compiler.builder.position_at_end(merge_bb);
     Ok(None)
-}
-
-/// Execute a block's instruction sequence into LLVM, building the
-/// value map that subsequent operands (typically the block's
-/// terminator) resolve [`IROperand::Local`] references against.
-///
-/// Today the only instruction variant is
-/// [`IRInstruction::Stub`], which delegates back to
-/// [`compile_expr`] on the carried AST. Each future Expr kind that
-/// learns to lower replaces its `Stub` site with a typed instruction
-/// variant; this dispatch grows correspondingly.
-fn execute_instructions<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    instructions: &[IRInstruction],
-    function: FunctionValue<'ctx>,
-) -> Result<HashMap<IRValueId, BasicValueEnum<'ctx>>, String> {
-    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-    for instruction in instructions {
-        match instruction {
-            IRInstruction::Stub { dest, expr } => {
-                let value = compile_expr(compiler, expr, function)?
-                    .ok_or("instruction stub expression produced no value")?
-                    .value;
-                value_map.insert(*dest, value);
-            }
-        }
-    }
-    Ok(value_map)
 }
 
 /// Compiles a ternary expression (`condition ? then_expr : else_expr`).

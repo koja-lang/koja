@@ -220,7 +220,7 @@ fn emit_string_cmp<'ctx>(
 
 /// Truncates mismatched integer widths to the narrower type. Leaves 1-bit
 /// (bool) operands untouched to avoid truncating i64 to i1.
-fn truncate_to_common_width<'ctx>(
+pub(crate) fn truncate_to_common_width<'ctx>(
     c: &Compiler<'ctx>,
     mut l: IntValue<'ctx>,
     mut r: IntValue<'ctx>,

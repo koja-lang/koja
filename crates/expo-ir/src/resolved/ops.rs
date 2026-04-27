@@ -18,6 +18,7 @@ pub enum OperandShape {
 
 /// The resolved binary operation to emit. Each variant maps to exactly one
 /// backend builder call, with no further decision logic required.
+#[derive(Clone, Debug)]
 pub enum ResolvedBinaryOp {
     BoolAnd,
     BoolOr,
@@ -108,6 +109,7 @@ pub fn resolve_binary_op(op: &BinOp, shape: &OperandShape) -> Result<ResolvedBin
 }
 
 /// The resolved unary operation to emit.
+#[derive(Clone, Debug)]
 pub enum ResolvedUnaryOp {
     FloatNeg,
     IntNeg,

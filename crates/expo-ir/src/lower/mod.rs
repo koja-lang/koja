@@ -28,6 +28,7 @@ pub mod mangling;
 pub mod methods;
 pub mod monomorphize;
 pub mod naming;
+pub mod ops;
 pub mod patterns;
 pub mod processes;
 pub mod stmt;

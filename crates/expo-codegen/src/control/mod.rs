@@ -2,6 +2,7 @@
 //! for loops, and infinite loops with break support.
 
 mod conditionals;
+mod instructions;
 mod loops;
 mod patterns;
 mod terminator;

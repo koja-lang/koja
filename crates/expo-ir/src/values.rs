@@ -10,13 +10,14 @@
 //!   they want to refer to a value. Either a previously-produced
 //!   [`IRValueId`] (via `Local`) or an inline literal constant.
 //!   Literals do not need an instruction to produce them.
-//! - [`IRInstruction`] is the per-block instruction enum. It currently
-//!   carries a single transitional variant, [`IRInstruction::Stub`],
-//!   that bridges to AST-level expression emission while the rest of
-//!   the instruction set fills in. Each future Expr kind that learns to
-//!   lower retires `Stub` for that kind by introducing a typed variant
-//!   and replacing `Stub` at its lowering site. When the last consumer
-//!   is gone, `Stub` is deleted in one PR.
+//! - [`IRInstruction`] is the per-block instruction enum. It carries
+//!   typed variants for each [`expo_ast::ast::ExprKind`] that has
+//!   learned to lower, plus a transitional [`IRInstruction::Stub`]
+//!   that bridges to AST-level expression emission for kinds that
+//!   haven't lifted yet. Each future Expr kind retires `Stub` for
+//!   that kind by introducing a typed variant and replacing `Stub` at
+//!   its lowering site. When the last consumer is gone, `Stub` is
+//!   deleted in one PR.
 //!
 //! ## Why a transitional `Stub` variant
 //!
@@ -35,6 +36,8 @@
 //! clear, greppable retirement marker.
 
 use expo_ast::ast::Expr;
+
+use crate::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 
 /// Function-scoped SSA value identifier. Minted by
 /// [`crate::FnLowerState::next_value_id`]. Per-function counters
@@ -71,17 +74,35 @@ pub enum IROperand {
 
 /// A single instruction in a basic block's instruction sequence.
 ///
-/// Today the only variant is [`IRInstruction::Stub`], a transitional
-/// bridge that defers the actual lowering of an [`Expr`] to the
-/// emission walker (which calls `expo-codegen`'s `compile_expr`).
-/// Each future Expr kind that learns to lower replaces its `Stub`
-/// site with a typed instruction variant; when the last consumer is
-/// gone, `Stub` is deleted.
-///
-/// Variants are alpha-sorted; `Stub` is the only variant today, but
-/// future variants land in alpha order to keep the enum stable.
+/// Variants are alpha-sorted. The transitional [`IRInstruction::Stub`]
+/// variant bridges to AST-level expression emission for kinds that
+/// haven't lifted yet; each future Expr kind that learns to lower
+/// replaces its `Stub` site with a typed instruction variant. When
+/// the last consumer is gone, `Stub` is deleted.
 #[derive(Clone, Debug)]
 pub enum IRInstruction {
+    /// Binary arithmetic, comparison, or logical operation. The
+    /// [`ResolvedBinaryOp`] variant fully encodes both operand kind
+    /// (Int vs Float vs String) and result kind (comparisons -> Bool,
+    /// arithmetic -> operand kind), so emission needs no further
+    /// decision logic.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::Binary`]. Concat
+    /// (multi-block memcpy) and `EnumStructEqual` (multi-block
+    /// per-variant equality) are not handled by this variant -- they
+    /// fall through to [`IRInstruction::Stub`] until they get
+    /// dedicated instruction variants.
+    BinaryOp {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Resolved operation -- maps 1:1 to a single LLVM builder call.
+        op: ResolvedBinaryOp,
+        /// Left-hand operand.
+        lhs: IROperand,
+        /// Right-hand operand.
+        rhs: IROperand,
+    },
     /// **Transitional.** Bridges to AST-level expression emission
     /// while the rest of the instruction set fills in. The emission
     /// walker computes the LLVM value for `expr` via
@@ -102,6 +123,17 @@ pub enum IRInstruction {
         /// otherwise dominate the enum's discriminant size.
         expr: Box<Expr>,
     },
+    /// Unary negation or logical-not. The [`ResolvedUnaryOp`] variant
+    /// encodes both the operand kind (Int vs Float) and which LLVM
+    /// builder call to issue.
+    UnaryOp {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Resolved operation -- maps 1:1 to a single LLVM builder call.
+        op: ResolvedUnaryOp,
+        /// Operand to apply the unary op to.
+        operand: IROperand,
+    },
 }
 
 impl IRInstruction {
@@ -109,7 +141,9 @@ impl IRInstruction {
     /// walkers populating a `HashMap<IRValueId, _>`.
     pub fn dest(&self) -> IRValueId {
         match self {
-            IRInstruction::Stub { dest, .. } => *dest,
+            IRInstruction::BinaryOp { dest, .. }
+            | IRInstruction::Stub { dest, .. }
+            | IRInstruction::UnaryOp { dest, .. } => *dest,
         }
     }
 }
