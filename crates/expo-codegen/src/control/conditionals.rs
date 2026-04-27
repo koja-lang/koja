@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{CondArm, Expr, Statement};
 use expo_ir::IRBlockId;
-use expo_ir::lower::conditionals::lower_unless;
-use expo_ir::resolved::conditionals::IRUnless;
+use expo_ir::lower::conditionals::{lower_if_no_else, lower_unless};
+use expo_ir::resolved::conditionals::{IRIf, IRUnless};
 use expo_ir::values::{IRInstruction, IRValueId};
 use expo_typecheck::types::Type;
 use inkwell::basic_block::BasicBlock;
@@ -128,8 +128,14 @@ pub fn compile_cond<'ctx>(
     Ok(None)
 }
 
-/// Compiles an `if`/`else` expression. Returns a phi value when both branches
-/// produce a value of the same type, otherwise returns `None`.
+/// Compiles an `if` / `else` expression.
+///
+/// Slice 2 split: the no-else form (`if cond ... end`) lowers to an
+/// [`IRIf`] via [`lower_if_no_else`] and walks the result via
+/// [`emit_if`] -- same machinery as `compile_unless`, polarity flipped
+/// in lowering's slot assignment. The else-bearing form is a Shape 2
+/// construct (two body blocks plus a value merge) and stays on the
+/// existing AST-bound implementation below until slice 3.
 pub fn compile_if<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,
@@ -137,6 +143,11 @@ pub fn compile_if<'ctx>(
     else_body: &Option<Vec<Statement>>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
+    let Some(else_stmts) = else_body else {
+        let ir = lower_if_no_else(&mut compiler.fn_lower, condition, then_body);
+        return emit_if(compiler, &ir, function);
+    };
+
     let cond_val = compile_expr(compiler, condition, function)?
         .ok_or("if condition produced no value")?
         .value;
@@ -162,11 +173,7 @@ pub fn compile_if<'ctx>(
     let then_end_bb = compiler.builder.get_insert_block().unwrap();
 
     compiler.builder.position_at_end(else_bb);
-    let else_tv = if let Some(else_stmts) = else_body {
-        compile_body_as_value(compiler, else_stmts, function)?
-    } else {
-        None
-    };
+    let else_tv = compile_body_as_value(compiler, else_stmts, function)?;
     if !compiler.current_block_terminated() {
         compiler
             .builder
@@ -228,6 +235,64 @@ fn emit_unless<'ctx>(
 ) -> ExprResult<'ctx> {
     let body_bb = compiler.context.append_basic_block(function, "unless_body");
     let merge_bb = compiler.context.append_basic_block(function, "unless_end");
+
+    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
+    block_map.insert(ir.body_block, body_bb);
+    block_map.insert(ir.merge_block, merge_bb);
+
+    let value_map = execute_instructions(compiler, &ir.entry_instructions, function)?;
+    emit_terminator(
+        compiler,
+        &ir.entry_terminator,
+        &block_map,
+        &value_map,
+        function,
+    )?;
+
+    compiler.builder.position_at_end(body_bb);
+    for stmt in &ir.body_stmts {
+        if compiler.current_block_terminated() {
+            break;
+        }
+        compile_statement(compiler, stmt, function)?;
+    }
+    if !compiler.current_block_terminated() {
+        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+        emit_terminator(
+            compiler,
+            &ir.body_terminator,
+            &block_map,
+            &body_value_map,
+            function,
+        )?;
+    }
+
+    compiler.builder.position_at_end(merge_bb);
+    Ok(None)
+}
+
+/// Walks an [`IRIf`] (no-else form) into LLVM IR.
+///
+/// Mirror of [`emit_unless`]: same allocation / execute /
+/// dispatch / walk / dispatch / position sequence, with `IRIf`
+/// field accesses and `then` / `ifcont` LLVM block labels in place
+/// of `unless_body` / `unless_end`. The polarity difference between
+/// the two constructs is fully encoded in lowering's slot
+/// assignment on `entry_terminator`; emission is polarity-blind.
+///
+/// The duplication relative to [`emit_unless`] is the cost of the
+/// slice 2 commitment to direct construct names; both walkers
+/// dissolve in slice 5+ when [`expo_ir::IRBasicBlock`] is promoted
+/// to first-class and `body_stmts` retires (statement-level
+/// lowering). The truly construct-agnostic mechanic
+/// ([`execute_instructions`]) is already shared.
+fn emit_if<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    ir: &IRIf,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let body_bb = compiler.context.append_basic_block(function, "then");
+    let merge_bb = compiler.context.append_basic_block(function, "ifcont");
 
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
     block_map.insert(ir.body_block, body_bb);

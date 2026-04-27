@@ -651,9 +651,9 @@ What actually lives in `expo-ir` today:
   [`expo-ir::program`](../crates/expo-ir/src/program.rs).
 - **Active instruction-level IR scaffolding** (introduced in Wave 11
   by the `compile_unless` lift, extended in Wave 12 with the operand
-  model): `IRBlockId`, `IRBasicBlock { id, label, instructions,
-  terminator }`, and `IRTerminator` (`Branch` / `CondBranch` /
-  `Unreachable`) in
+  model, extended in Wave 13 with the `compile_if`-no-else lift):
+  `IRBlockId`, `IRBasicBlock { id, label, instructions, terminator }`,
+  and `IRTerminator` (`Branch` / `CondBranch` / `Unreachable`) in
   [`expo-ir::blocks`](../crates/expo-ir/src/blocks.rs); plus
   `IRValueId`, `IROperand` (`ConstBool` / `ConstFloat` / `ConstInt` /
   `ConstStr` / `Local` / `Unit`), and `IRInstruction` (single
@@ -664,15 +664,25 @@ What actually lives in `expo-ir` today:
   expression-shaped value into the IR: literal `Expr` shapes become
   inline `IROperand` constants emitting no instructions, every other
   shape mints a value id and pushes one `IRInstruction::Stub` onto
-  the caller's instruction sequence. The first conditional construct
-  lowered through this scaffold is
+  the caller's instruction sequence. Two conditional constructs are
+  lowered through this scaffold today, both Shape 1 (single body, no
+  value merge) with polarity in slot assignment:
   [`IRUnless`](../crates/expo-ir/src/resolved/conditionals.rs)
-  produced by [`lower_unless`](../crates/expo-ir/src/lower/conditionals.rs).
-  `IRTerminator::CondBranch::cond` now holds an `IROperand`; emission
+  (body on `otherwise`, merge on `then`) produced by
+  [`lower_unless`](../crates/expo-ir/src/lower/conditionals.rs), and
+  `IRIf` (body on `then`, merge on `otherwise`) produced by
+  `lower_if_no_else` in the same module. The two structs are
+  field-for-field identical; their duplication is the cost of direct
+  construct names and dissolves in slice 5+ when `IRBasicBlock` is
+  promoted to first-class and `body_stmts` retires.
+  `IRTerminator::CondBranch::cond` holds an `IROperand`; emission
   resolves it through a per-block
   `HashMap<IRValueId, BasicValueEnum<'ctx>>` populated by walking the
-  block's instructions before dispatching its terminator. Statement
-  bodies remain AST stubs walked by `compile_statement`; later slices
+  block's instructions before dispatching its terminator. The
+  walker mechanic that builds that map (`execute_instructions` in
+  `expo-codegen::control::conditionals`) is shared between the two
+  emit walkers as construct-agnostic mechanics. Statement bodies
+  remain AST stubs walked by `compile_statement`; later slices
   replace them with instruction-level lowerings.
 - **Active decision-type vocabulary** (produced + consumed): ~33
   `Resolved*`/`Format*` types across 15 modules in
@@ -804,7 +814,7 @@ Crate sizes (approximate): `expo-codegen` ~17k LOC, `expo-ir` ~5.1k LOC.
 
 ### Wave history
 
-The 13 waves completed so far, condensed (full prose lives in commit
+The 14 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -1038,32 +1048,71 @@ history):
   `test_unless` which exercises both the literal fast path
   (`unless true` / `unless false`) and the Stub fallback (`unless
   x > 20`).
+- **Wave 13 -- Phase 4c slice 2: `compile_if` (no-else) lift.**
+  Second conditional construct lifted into the instruction-level
+  scaffold. Added `IRIf` in `expo_ir::resolved::conditionals`,
+  field-for-field identical to `IRUnless`; added `lower_if_no_else`
+  in `expo_ir::lower::conditionals`, mirror of `lower_unless` with
+  body on `then` and merge on `otherwise` (the polarity flip).
+  `compile_if` in `expo-codegen::control::conditionals` became a
+  shim: the `else_body.is_none()` path lowers to `IRIf` and walks
+  the result via a new `emit_if` mirroring `emit_unless`; the
+  `else_body.is_some()` path stays on the existing AST-bound
+  implementation until slice 3. The operand model from Wave 12 was
+  reused unchanged -- `lower_expr_to_operand` is the construct-
+  agnostic seam and was a one-line call from `lower_if_no_else`.
+
+  Architectural commitment: direct construct names over premature
+  unification. `IRUnless` and `IRIf` are deliberately separate
+  structs even though they're field-for-field identical, because
+  the proper SIL-shaped endpoint for ExpoIR is "function = list of
+  free-floating `IRBasicBlock`s with no construct wrappers"
+  (matching LLVM IR / MIR / SIL / Cranelift / GIMPLE precedent),
+  reachable in slice 5+ when `IRBasicBlock` is promoted to first-
+  class and `body_stmts` retires. Renaming `IRUnless` to a polarity-
+  neutral shape name now and then dissolving that name in slice 5+
+  would be churn. The truly construct-agnostic emission mechanic
+  (`execute_instructions`, which walks an `&[IRInstruction]` building
+  a `HashMap<IRValueId, BasicValueEnum<'ctx>>`) is shared between
+  `emit_unless` and `emit_if`; no other emission code is shared
+  between them. The duplication is bounded (~40 LOC × 2 walkers,
+  ~25 LOC × 2 lowerings) and dies in one PR at slice 5+.
+
+  Slice 2 also clarified the slice ladder: `if/else` and ternary
+  share the same Shape 2 (two body blocks plus a value merge), so
+  they fold into a single slice 3 rather than separate slices.
+  Validation: stdlib `lib/std/test/control_flow_test.expo` already
+  exercises three `if`-no-else paths (`if true` literal fast path,
+  `if i >= 3` Stub fallback inside `loop`, `if ran_true` Stub
+  fallback on a variable cond). 25/25 lang-suite tests pass; all
+  stdlib green.
 
 ### Next: Phase 4c slicing plan
 
-The block/terminator vocabulary landed in Wave 11 is sized for the
-slice ladder. Each subsequent slice picks the next-smallest construct
-and extends the IR only where its consumer requires:
+The block/terminator/operand vocabulary landed in Waves 11-13 is
+sized for the slice ladder. Each remaining slice picks the next
+construct and extends the IR only where its consumer requires:
 
-- **Slice 2 -- `compile_if` (no else).** Reuses
-  `IRTerminator::CondBranch` with body on `then` and merge on
-  `otherwise`. Reuses the Wave 12 operand model
-  (`lower_expr_to_operand` + the per-block instruction sequence)
-  unchanged. No new IR types expected; validates the canonicalized
-  branch shape across two constructs and exercises the operand
-  model's claim that the seam is construct-agnostic.
-- **Slice 3 -- `compile_if` with else / `compile_ternary`.** Introduces
-  the value-merging story (`IRPhi` or equivalent), forcing the
-  predecessor-handle question that slice 1 deliberately sidestepped
-  by choosing a phi-free construct.
+- **Slice 3 -- `compile_if` with else + `compile_ternary` (Shape 2:
+  two-body merge).** Folded together because they share the same
+  functional shape: two body blocks plus an optional value merge
+  via phi. Introduces the value-merging story (`IRPhi` or
+  equivalent), forcing the predecessor-handle question that slices
+  1-2 sidestepped by choosing phi-free constructs.
 - **Slice 4 -- `compile_cond`.** N-arm enumeration; same
   `CondBranch` shape but a dynamic chain of test blocks. Tests the
   IR scaffold scaling beyond fixed-N constructs.
-- **Slice 5+ -- `compile_match`, `compile_while`, `compile_loop`.**
-  Pattern bindings (variable-scope save/restore in IR vs. emission),
-  loop headers, break/continue. By the time these lift, the operand
-  model and value-producing instruction set will be filling in from
-  slices 2-4 demand.
+- **Slice 5+ -- `compile_match` + `compile_while` / `compile_loop`
+  + `IRBasicBlock` first-class promotion.** Pattern bindings
+  (variable-scope save/restore in IR vs. emission), loop headers,
+  break/continue. By the time these lift, the operand model and
+  value-producing instruction set are filling in from slices 3-4
+  demand. This is also the natural moment to dissolve the per-
+  construct IR types (`IRUnless`, `IRIf`, the slice 3 phi-bearing
+  type, etc.) into a free-floating `Vec<IRBasicBlock>` on
+  `IRFunction`, matching LLVM IR / MIR / SIL / Cranelift / GIMPLE
+  precedent. Statement lowering retires `body_stmts` in the same
+  step.
 
 When the ladder completes, `IRFunction` carries blocks instead of an
 AST, `expo-codegen` becomes a pure consumer of `IRProgram`, and the
