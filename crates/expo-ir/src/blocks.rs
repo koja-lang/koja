@@ -8,11 +8,13 @@
 //!   emission alike; emission keys a `HashMap<IRBlockId, BasicBlock<'ctx>>`
 //!   off it.
 //! - [`IRTerminator`] names every way a basic block can finish. The
-//!   `CondBranch` variant carries the condition expression as an AST
-//!   stub today; once expression lowering arrives, the stub is replaced
-//!   with an instruction-level value.
-//! - [`IRBasicBlock`] pairs an id, a debug label, and a terminator. It
-//!   is the cell that an instruction sequence will eventually populate.
+//!   `CondBranch` variant carries the condition as an [`IROperand`];
+//!   lowering produces literal operands directly and bridges
+//!   non-literal expressions through [`crate::values::IRInstruction::Stub`].
+//! - [`IRBasicBlock`] pairs an id, a debug label, an instruction
+//!   sequence, and a single terminator. The instruction sequence is
+//!   the destination for lowered expressions; the terminator names
+//!   the block's successor(s) (if any).
 //!
 //! ## Architectural invariant: canonicalized branch-target ordering
 //!
@@ -24,7 +26,7 @@
 //! uniform across every conditional construct in the language so
 //! backends implement one cond-branch lowering and reuse it everywhere.
 
-use expo_ast::ast::Expr;
+use crate::values::{IRInstruction, IROperand};
 
 /// Function-scoped basic block identifier. Minted by
 /// [`crate::FnLowerState::next_block_id`]. Per-function counters reset
@@ -38,15 +40,17 @@ pub struct IRBlockId(pub u32);
 pub enum IRTerminator {
     /// Unconditional jump to `target`.
     Branch(IRBlockId),
-    /// Two-target conditional jump. The `cond` expression is evaluated
-    /// by emission and used as the i1 selector; control transfers to
-    /// `then` when truthy and `otherwise` when falsy.
+    /// Two-target conditional jump. The `cond` operand is coerced to
+    /// an i1 selector by emission; control transfers to `then` when
+    /// truthy and `otherwise` when falsy. Lowering produces literal
+    /// [`IROperand`] variants directly and bridges non-literal
+    /// expressions through [`crate::values::IRInstruction::Stub`]
+    /// instructions on the owning block.
     CondBranch {
-        /// Condition expression. Held as an AST stub until expression
-        /// lowering produces an instruction-level value. Boxed because
-        /// [`Expr`] is large (~280 bytes) and would otherwise dominate
-        /// the enum's discriminant size.
-        cond: Box<Expr>,
+        /// Condition operand. Either a literal constant or a
+        /// reference to a value produced by an earlier instruction
+        /// in the same function.
+        cond: IROperand,
         /// Target taken when `cond` is truthy.
         then: IRBlockId,
         /// Target taken when `cond` is falsy.
@@ -57,13 +61,19 @@ pub enum IRTerminator {
     Unreachable,
 }
 
-/// A basic block: an id, a human-readable debug label, and a single
-/// terminator. The instruction sequence between block entry and the
-/// terminator is currently empty; condition expressions and statement
-/// bodies are walked by `expo-codegen`'s existing emission paths
-/// against AST stubs carried on the surrounding construct.
+/// A basic block: an id, a human-readable debug label, an instruction
+/// sequence, and a single terminator.
+///
+/// Today the type is defined for forward-compat: constructs still
+/// store parallel `IRBlockId` + `Vec<IRInstruction>` + `IRTerminator`
+/// fields directly on their `IR*` value (see
+/// [`crate::resolved::conditionals::IRUnless`]). When a second
+/// construct lifts (slice 2, `compile_if` no else), the duplication
+/// motivates promoting `IRBasicBlock` to first-class: constructs hold
+/// `IRBasicBlock` values and the parallel-field shape goes away.
 pub struct IRBasicBlock {
     pub id: IRBlockId,
+    pub instructions: Vec<IRInstruction>,
     pub label: String,
     pub terminator: IRTerminator,
 }

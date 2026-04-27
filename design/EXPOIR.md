@@ -650,14 +650,30 @@ What actually lives in `expo-ir` today:
   `IRFunctionKind` companions in
   [`expo-ir::program`](../crates/expo-ir/src/program.rs).
 - **Active instruction-level IR scaffolding** (introduced in Wave 11
-  by the `compile_unless` lift): `IRBlockId`, `IRBasicBlock`, and
-  `IRTerminator` (`Branch` / `CondBranch` / `Unreachable`) in
-  [`expo-ir::blocks`](../crates/expo-ir/src/blocks.rs). The first
-  conditional construct lowered through this scaffold is
+  by the `compile_unless` lift, extended in Wave 12 with the operand
+  model): `IRBlockId`, `IRBasicBlock { id, label, instructions,
+  terminator }`, and `IRTerminator` (`Branch` / `CondBranch` /
+  `Unreachable`) in
+  [`expo-ir::blocks`](../crates/expo-ir/src/blocks.rs); plus
+  `IRValueId`, `IROperand` (`ConstBool` / `ConstFloat` / `ConstInt` /
+  `ConstStr` / `Local` / `Unit`), and `IRInstruction` (single
+  transitional `Stub { dest, expr }` variant) in
+  [`expo-ir::values`](../crates/expo-ir/src/values.rs). The shared
+  helper [`lower_expr_to_operand`](../crates/expo-ir/src/lower/values.rs)
+  is the single seam every construct uses to thread an
+  expression-shaped value into the IR: literal `Expr` shapes become
+  inline `IROperand` constants emitting no instructions, every other
+  shape mints a value id and pushes one `IRInstruction::Stub` onto
+  the caller's instruction sequence. The first conditional construct
+  lowered through this scaffold is
   [`IRUnless`](../crates/expo-ir/src/resolved/conditionals.rs)
   produced by [`lower_unless`](../crates/expo-ir/src/lower/conditionals.rs).
-  Slice 1 deliberately holds expression and statement bodies as AST
-  stubs; later slices replace them with instruction-level lowerings.
+  `IRTerminator::CondBranch::cond` now holds an `IROperand`; emission
+  resolves it through a per-block
+  `HashMap<IRValueId, BasicValueEnum<'ctx>>` populated by walking the
+  block's instructions before dispatching its terminator. Statement
+  bodies remain AST stubs walked by `compile_statement`; later slices
+  replace them with instruction-level lowerings.
 - **Active decision-type vocabulary** (produced + consumed): ~33
   `Resolved*`/`Format*` types across 15 modules in
   `resolved::{calls, closures, conditionals, constants, construction, debug, enums, fields, loops, match_expr, methods, ops, patterns, processes, strings}`,
@@ -673,16 +689,20 @@ What actually lives in `expo-ir` today:
   pairs. All four are newtype wrappers around `String` today; in Phase 5+
   they become interned `u32`s with no call-site changes.
 
-The full IR _instruction set_ -- operand model, value-producing
-instructions, the per-block instruction sequence -- is still
-intentionally undefined in code. Wave 11 lifted the smallest
-control-flow construct (`unless`) as a discovery vehicle to fix the
-block/terminator vocabulary; the remaining constructs (`if`, `ternary`,
-`cond`, `match`, loops) follow as separate slices, each one extending
-the IR only by what its consumer requires. An earlier attempt to define
-the full instruction set top-down was deleted because it had no
-producers and had already drifted from the `Resolved*` shapes that
-emerged from real code paths.
+The IR _instruction set_ is being filled in incrementally as
+constructs lift. Wave 11 fixed the block/terminator vocabulary; Wave 12
+introduced the operand model (`IRValueId`, `IROperand`,
+`IRInstruction`) plus a single transitional `Stub` instruction
+variant that bridges to AST-level expression emission. Each future
+[`expo_ast::ast::ExprKind`] that learns to lower replaces its `Stub`
+site with a typed `IRInstruction` variant; when the last consumer is
+gone, `Stub` is deleted in one PR. The remaining constructs (`if`,
+`ternary`, `cond`, `match`, loops) and the value-producing
+instruction set both fill in as separate slices, each one extending
+the IR only by what its consumer requires. An earlier attempt to
+define the full instruction set top-down was deleted because it had
+no producers and had already drifted from the `Resolved*` shapes
+that emerged from real code paths.
 
 #### Architectural invariant: control-flow negation lives in lowering
 
@@ -784,7 +804,7 @@ Crate sizes (approximate): `expo-codegen` ~17k LOC, `expo-ir` ~5.1k LOC.
 
 ### Wave history
 
-The 12 waves completed so far, condensed (full prose lives in commit
+The 13 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -979,6 +999,45 @@ history):
   promotion from the implicit Endpoint A was small (one new enum,
   three variants) and pays off the moment a second construct lifts.
   25/25 lang-suite tests pass.
+- **Wave 12 -- Phase 4c slice 1.5: operand model + literal
+  fast-path.** Foundational pre-work for slice 2 (`compile_if` no
+  else): introduced `IRValueId(u32)` (function-scoped, opaque,
+  minted by a new `FnLowerState::next_value_id` mirroring the
+  `block_counter`), `IROperand` (`ConstBool` / `ConstFloat` /
+  `ConstInt` / `ConstStr` / `Local(IRValueId)` / `Unit`), and
+  `IRInstruction` with a single transitional `Stub { dest, expr }`
+  variant in a new `expo_ir::values` module. Migrated
+  `IRTerminator::CondBranch::cond` from `Box<Expr>` to `IROperand`
+  and added `instructions: Vec<IRInstruction>` to `IRBasicBlock`
+  (forward-compat; the `IRUnless` shape today carries
+  `entry_instructions` directly).
+
+  The single seam between expression-shaped values and the IR is the
+  new construct-agnostic helper
+  `expo_ir::lower::values::lower_expr_to_operand(state,
+  &mut instructions, expr) -> IROperand`: literal expressions return
+  inline operand constants emitting no instructions, every other
+  expression mints a value id and pushes one `IRInstruction::Stub`
+  onto the caller's sequence. Slice 2's `lower_if` will reuse this
+  helper unchanged. Updated `lower_unless` to call it, and updated
+  `emit_unless` / `emit_terminator` to (a) walk a block's
+  `instructions` populating a `HashMap<IRValueId, BasicValueEnum<'ctx>>`,
+  and (b) materialize `IROperand` to LLVM via that map plus inline
+  literal constant materialization on the LLVM context.
+
+  Why the transitional `Stub` variant: the alternative -- block every
+  operand-shaped slot until the entire instruction set is defined --
+  forces a single mega-slice that designs the IR against speculation
+  rather than real consumers. A side table was considered (and
+  rejected) for the bridge: side tables divorce execution order from
+  the instruction stream and require the consumer to consult two
+  stores. A first-class `Stub` variant keeps the stream
+  single-source-of-truth and gives the migration a clear, greppable
+  retirement marker (`IRInstruction::Stub`). All stdlib + lang-suite
+  tests pass, including `lib/std/test/control_flow_test.expo`'s
+  `test_unless` which exercises both the literal fast path
+  (`unless true` / `unless false`) and the Stub fallback (`unless
+  x > 20`).
 
 ### Next: Phase 4c slicing plan
 
@@ -988,8 +1047,11 @@ and extends the IR only where its consumer requires:
 
 - **Slice 2 -- `compile_if` (no else).** Reuses
   `IRTerminator::CondBranch` with body on `then` and merge on
-  `otherwise`. No new IR types expected; validates the canonicalized
-  branch shape across two constructs.
+  `otherwise`. Reuses the Wave 12 operand model
+  (`lower_expr_to_operand` + the per-block instruction sequence)
+  unchanged. No new IR types expected; validates the canonicalized
+  branch shape across two constructs and exercises the operand
+  model's claim that the seam is construct-agnostic.
 - **Slice 3 -- `compile_if` with else / `compile_ternary`.** Introduces
   the value-merging story (`IRPhi` or equivalent), forcing the
   predecessor-handle question that slice 1 deliberately sidestepped

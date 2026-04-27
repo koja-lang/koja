@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use expo_ast::types::Type;
 
 use crate::blocks::IRBlockId;
+use crate::values::IRValueId;
 
 #[derive(Default)]
 pub struct FnLowerState {
@@ -28,6 +29,7 @@ pub struct FnLowerState {
     pub self_type_name: Option<String>,
     tail_position: bool,
     pub type_subst: HashMap<String, Type>,
+    pub value_counter: u32,
 }
 
 impl FnLowerState {
@@ -40,6 +42,15 @@ impl FnLowerState {
     pub fn next_block_id(&mut self) -> IRBlockId {
         let id = IRBlockId(self.block_counter);
         self.block_counter += 1;
+        id
+    }
+
+    /// Mint a fresh function-scoped SSA value identifier. Counter
+    /// resets per function via `FnLowerState::new` / `Default`.
+    /// Mirrors [`Self::next_block_id`].
+    pub fn next_value_id(&mut self) -> IRValueId {
+        let id = IRValueId(self.value_counter);
+        self.value_counter += 1;
         id
     }
 

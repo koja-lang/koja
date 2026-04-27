@@ -6,6 +6,7 @@ use expo_ast::ast::{CondArm, Expr, Statement};
 use expo_ir::IRBlockId;
 use expo_ir::lower::conditionals::lower_unless;
 use expo_ir::resolved::conditionals::IRUnless;
+use expo_ir::values::{IRInstruction, IRValueId};
 use expo_typecheck::types::Type;
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};
@@ -212,9 +213,11 @@ pub fn compile_unless<'ctx>(
 /// Walks an [`IRUnless`] into LLVM IR.
 ///
 /// Allocates LLVM basic blocks for the body and merge `IRBlockId`s,
-/// emits the entry `CondBranch` from the current builder position via
-/// the shared [`emit_terminator`], walks the body's AST statement
-/// stubs, then honors the declared `Branch(merge)` body terminator iff
+/// executes the entry block's instruction sequence (today: zero or
+/// one [`IRInstruction::Stub`] for the cond), then dispatches the
+/// entry `CondBranch` from the current builder position via the
+/// shared [`emit_terminator`]. Walks the body's AST statement stubs
+/// next, then honors the declared `Branch(merge)` body terminator iff
 /// the body has not already self-terminated. Leaves the builder
 /// positioned at the merge block on exit and always returns `Ok(None)`
 /// (statement-context construct).
@@ -230,7 +233,14 @@ fn emit_unless<'ctx>(
     block_map.insert(ir.body_block, body_bb);
     block_map.insert(ir.merge_block, merge_bb);
 
-    emit_terminator(compiler, &ir.entry_terminator, &block_map, function)?;
+    let value_map = execute_instructions(compiler, &ir.entry_instructions, function)?;
+    emit_terminator(
+        compiler,
+        &ir.entry_terminator,
+        &block_map,
+        &value_map,
+        function,
+    )?;
 
     compiler.builder.position_at_end(body_bb);
     for stmt in &ir.body_stmts {
@@ -240,11 +250,46 @@ fn emit_unless<'ctx>(
         compile_statement(compiler, stmt, function)?;
     }
     if !compiler.current_block_terminated() {
-        emit_terminator(compiler, &ir.body_terminator, &block_map, function)?;
+        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+        emit_terminator(
+            compiler,
+            &ir.body_terminator,
+            &block_map,
+            &body_value_map,
+            function,
+        )?;
     }
 
     compiler.builder.position_at_end(merge_bb);
     Ok(None)
+}
+
+/// Execute a block's instruction sequence into LLVM, building the
+/// value map that subsequent operands (typically the block's
+/// terminator) resolve [`IROperand::Local`] references against.
+///
+/// Today the only instruction variant is
+/// [`IRInstruction::Stub`], which delegates back to
+/// [`compile_expr`] on the carried AST. Each future Expr kind that
+/// learns to lower replaces its `Stub` site with a typed instruction
+/// variant; this dispatch grows correspondingly.
+fn execute_instructions<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    instructions: &[IRInstruction],
+    function: FunctionValue<'ctx>,
+) -> Result<HashMap<IRValueId, BasicValueEnum<'ctx>>, String> {
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    for instruction in instructions {
+        match instruction {
+            IRInstruction::Stub { dest, expr } => {
+                let value = compile_expr(compiler, expr, function)?
+                    .ok_or("instruction stub expression produced no value")?
+                    .value;
+                value_map.insert(*dest, value);
+            }
+        }
+    }
+    Ok(value_map)
 }
 
 /// Compiles a ternary expression (`condition ? then_expr : else_expr`).

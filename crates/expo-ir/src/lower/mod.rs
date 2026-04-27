@@ -34,5 +34,6 @@ pub mod stmt;
 pub mod strings;
 pub mod structs;
 pub mod types;
+pub mod values;
 
 pub use ctx::LowerCtx;
