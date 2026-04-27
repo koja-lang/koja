@@ -19,8 +19,7 @@
 use expo_ast::ast::{BinOp, Expr, UnaryOp};
 use expo_ast::types::{Primitive, Type};
 
-use crate::FnLowerState;
-use crate::lower::values::lower_expr_to_operand;
+use crate::Lowerer;
 use crate::resolved::ops::{OperandShape, ResolvedBinaryOp, resolve_binary_op, resolve_unary_op};
 use crate::values::{IRInstruction, IROperand};
 
@@ -51,62 +50,65 @@ fn primitive_shape(prim: Primitive) -> Option<OperandShape> {
     }
 }
 
-/// Lower an [`expo_ast::ast::ExprKind::Binary`] to an
-/// [`IRInstruction::BinaryOp`] when the operator and operand shapes
-/// are within the IR vocabulary. Returns `None` for cases that fall
-/// through to the [`IRInstruction::Stub`] bridge:
-///
-/// - [`BinOp::Concat`] -- runs through `compile_concat`'s multi-block
-///   memcpy sequence; awaits its own dedicated instruction.
-/// - [`ResolvedBinaryOp::EnumStructEqual`] -- multi-block per-variant
-///   equality; awaits its own dedicated instruction.
-/// - Operands whose resolved type doesn't map to a supported shape
-///   (parameters, named types, etc.).
-pub(super) fn lower_binary_op_or_stub(
-    state: &mut FnLowerState,
-    instructions: &mut Vec<IRInstruction>,
-    op: &BinOp,
-    left: &Expr,
-    right: &Expr,
-) -> Option<IROperand> {
-    if matches!(op, BinOp::Concat) {
-        return None;
+impl<'a> Lowerer<'a> {
+    /// Lower an [`expo_ast::ast::ExprKind::Binary`] to an
+    /// [`IRInstruction::BinaryOp`] when the operator and operand
+    /// shapes are within the IR vocabulary. Returns `None` for cases
+    /// that fall through to the [`IRInstruction::Stub`] bridge:
+    ///
+    /// - [`BinOp::Concat`] -- runs through `compile_concat`'s
+    ///   multi-block memcpy sequence; awaits its own dedicated
+    ///   instruction.
+    /// - [`ResolvedBinaryOp::EnumStructEqual`] -- multi-block
+    ///   per-variant equality; awaits its own dedicated instruction.
+    /// - Operands whose resolved type doesn't map to a supported
+    ///   shape (parameters, named types, etc.).
+    pub(super) fn lower_binary_op_or_stub(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        op: &BinOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> Option<IROperand> {
+        if matches!(op, BinOp::Concat) {
+            return None;
+        }
+        let shape = operand_shape_for_type(left.resolved_type.as_ref()?)?;
+        let resolved = resolve_binary_op(op, &shape).ok()?;
+        if matches!(resolved, ResolvedBinaryOp::EnumStructEqual { .. }) {
+            return None;
+        }
+        let lhs = self.lower_expr_to_operand(instructions, left);
+        let rhs = self.lower_expr_to_operand(instructions, right);
+        let dest = self.next_value_id();
+        instructions.push(IRInstruction::BinaryOp {
+            dest,
+            op: resolved,
+            lhs,
+            rhs,
+        });
+        Some(IROperand::Local(dest))
     }
-    let shape = operand_shape_for_type(left.resolved_type.as_ref()?)?;
-    let resolved = resolve_binary_op(op, &shape).ok()?;
-    if matches!(resolved, ResolvedBinaryOp::EnumStructEqual { .. }) {
-        return None;
-    }
-    let lhs = lower_expr_to_operand(state, instructions, left);
-    let rhs = lower_expr_to_operand(state, instructions, right);
-    let dest = state.next_value_id();
-    instructions.push(IRInstruction::BinaryOp {
-        dest,
-        op: resolved,
-        lhs,
-        rhs,
-    });
-    Some(IROperand::Local(dest))
-}
 
-/// Lower an [`expo_ast::ast::ExprKind::Unary`] to an
-/// [`IRInstruction::UnaryOp`]. Returns `None` for operands whose
-/// resolved type doesn't map to a supported shape, falling back to
-/// the [`IRInstruction::Stub`] bridge.
-pub(super) fn lower_unary_op_or_stub(
-    state: &mut FnLowerState,
-    instructions: &mut Vec<IRInstruction>,
-    op: &UnaryOp,
-    operand_expr: &Expr,
-) -> Option<IROperand> {
-    let shape = operand_shape_for_type(operand_expr.resolved_type.as_ref()?)?;
-    let resolved = resolve_unary_op(op, &shape).ok()?;
-    let operand = lower_expr_to_operand(state, instructions, operand_expr);
-    let dest = state.next_value_id();
-    instructions.push(IRInstruction::UnaryOp {
-        dest,
-        op: resolved,
-        operand,
-    });
-    Some(IROperand::Local(dest))
+    /// Lower an [`expo_ast::ast::ExprKind::Unary`] to an
+    /// [`IRInstruction::UnaryOp`]. Returns `None` for operands whose
+    /// resolved type doesn't map to a supported shape, falling back
+    /// to the [`IRInstruction::Stub`] bridge.
+    pub(super) fn lower_unary_op_or_stub(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        op: &UnaryOp,
+        operand_expr: &Expr,
+    ) -> Option<IROperand> {
+        let shape = operand_shape_for_type(operand_expr.resolved_type.as_ref()?)?;
+        let resolved = resolve_unary_op(op, &shape).ok()?;
+        let operand = self.lower_expr_to_operand(instructions, operand_expr);
+        let dest = self.next_value_id();
+        instructions.push(IRInstruction::UnaryOp {
+            dest,
+            op: resolved,
+            operand,
+        });
+        Some(IROperand::Local(dest))
+    }
 }

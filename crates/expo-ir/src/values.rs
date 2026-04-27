@@ -37,6 +37,7 @@
 
 use expo_ast::ast::Expr;
 
+use crate::resolved::fields::ResolvedFieldStep;
 use crate::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 
 /// Function-scoped SSA value identifier. Minted by
@@ -103,6 +104,31 @@ pub enum IRInstruction {
         /// Right-hand operand.
         rhs: IROperand,
     },
+    /// Struct field load. Materializes the receiver as a struct
+    /// value, then projects out one field at the resolved index.
+    /// Multi-hop chains (`obj.a.b.c`) lower to multiple `FieldLoad`
+    /// instructions linked through [`IROperand::Local`].
+    ///
+    /// The static-chain GEP optimization that
+    /// `expo-codegen`'s AST-bound `compile_field_access` performs
+    /// for chains rooted at a named local does not survive this
+    /// shape: `base` is an opaque operand, not a known storage
+    /// pointer, so each hop on a struct-value receiver becomes
+    /// alloca-store-GEP-load. We rely on LLVM's mem2reg / SROA to
+    /// clean up the redundant alloca round-trips. The richer
+    /// optimization comes back at the IR level once the locals
+    /// foundation slice lifts `Ident`.
+    FieldLoad {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Receiver operand. Resolves to a struct value at
+        /// materialization time.
+        base: IROperand,
+        /// Resolved field hop -- index into the struct layout plus
+        /// the field's [`expo_ast::types::Type`]. Embedded directly
+        /// so emission needs no further lookups.
+        step: ResolvedFieldStep,
+    },
     /// **Transitional.** Bridges to AST-level expression emission
     /// while the rest of the instruction set fills in. The emission
     /// walker computes the LLVM value for `expr` via
@@ -142,6 +168,7 @@ impl IRInstruction {
     pub fn dest(&self) -> IRValueId {
         match self {
             IRInstruction::BinaryOp { dest, .. }
+            | IRInstruction::FieldLoad { dest, .. }
             | IRInstruction::Stub { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => *dest,
         }

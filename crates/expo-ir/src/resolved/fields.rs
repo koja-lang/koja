@@ -8,6 +8,7 @@ use expo_ast::types::Type;
 use crate::identity::MonomorphizedTypeIdentifier;
 
 /// One step in a resolved field path: the field index and its Expo type.
+#[derive(Clone, Debug)]
 pub struct ResolvedFieldStep {
     /// The zero-based index of this field within its parent struct's layout.
     pub field_index: u32,

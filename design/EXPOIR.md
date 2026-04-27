@@ -653,36 +653,51 @@ What actually lives in `expo-ir` today:
   by the `compile_unless` lift, extended in Wave 12 with the operand
   model, extended in Wave 13 with the `compile_if`-no-else lift,
   extended in Wave 14 with the `BinaryOp` / `UnaryOp` instruction
-  vocabulary):
+  vocabulary, extended in Wave 15 with the `Lowerer` per-function
+  driver and the `FieldLoad` memory-load archetype):
   `IRBlockId`, `IRBasicBlock { id, label, instructions, terminator }`,
   and `IRTerminator` (`Branch` / `CondBranch` / `Unreachable`) in
   [`expo-ir::blocks`](../crates/expo-ir/src/blocks.rs); plus
   `IRValueId`, `IROperand` (`ConstBool` / `ConstFloat` / `ConstInt` /
   `ConstStr` / `Local` / `Unit`), and `IRInstruction` (typed
-  `BinaryOp { dest, op, lhs, rhs }` and `UnaryOp { dest, op, operand }`
-  variants plus the transitional `Stub { dest, expr }` bridge) in
-  [`expo-ir::values`](../crates/expo-ir/src/values.rs). The shared
-  helper [`lower_expr_to_operand`](../crates/expo-ir/src/lower/values.rs)
+  `BinaryOp { dest, op, lhs, rhs }`,
+  `FieldLoad { dest, base, step }`, and
+  `UnaryOp { dest, op, operand }` variants plus the transitional
+  `Stub { dest, expr }` bridge) in
+  [`expo-ir::values`](../crates/expo-ir/src/values.rs). The
+  per-function lowering driver
+  [`Lowerer<'a>`](../crates/expo-ir/src/lower/lowerer.rs) owns
+  `&mut FnLowerState` plus shared borrows of `&TypeContext`,
+  `&TypeLayouts`, current package, and current closure-site path; it
+  hosts the operand-lowering call surface as inherent methods
+  (`lower_expr_to_operand`, `lower_unless`, `lower_if_no_else`,
+  `lower_binary_op_or_stub`, `lower_unary_op_or_stub`,
+  `lower_field_access_or_stub`) and exposes a `ctx()` accessor that
+  builds an ad-hoc `LowerCtx<'_>` for delegating to free helpers
+  that haven't migrated yet. Constructed by `Compiler::lowerer()` in
+  `expo-codegen`. The shared method `Lowerer::lower_expr_to_operand`
   is the single seam every construct uses to thread an
   expression-shaped value into the IR: literal `Expr` shapes become
   inline `IROperand` constants, `Group` recurses transparently,
   `Binary` / `Unary` lower to typed instructions via
   [`lower::ops`](../crates/expo-ir/src/lower/ops.rs) when their
   operator and operand shapes are within the IR vocabulary
-  (excluding `Concat` and `EnumStructEqual`, which fall through), and
-  every other shape mints a value id and pushes one
-  `IRInstruction::Stub` onto the caller's instruction sequence. Two
-  conditional constructs are lowered through this scaffold today,
-  both Shape 1 (single body, no value merge) with polarity in slot
-  assignment:
+  (excluding `Concat` and `EnumStructEqual`, which fall through),
+  `FieldAccess` lowers to `IRInstruction::FieldLoad` via
+  [`lower::fields`](../crates/expo-ir/src/lower/fields.rs) when the
+  receiver type resolves to a known struct layout, and every other
+  shape mints a value id and pushes one `IRInstruction::Stub` onto
+  the caller's instruction sequence. Two conditional constructs are
+  lowered through this scaffold today, both Shape 1 (single body, no
+  value merge) with polarity in slot assignment:
   [`IRUnless`](../crates/expo-ir/src/resolved/conditionals.rs)
   (body on `otherwise`, merge on `then`) produced by
-  [`lower_unless`](../crates/expo-ir/src/lower/conditionals.rs), and
-  `IRIf` (body on `then`, merge on `otherwise`) produced by
-  `lower_if_no_else` in the same module. The two structs are
-  field-for-field identical; their duplication is the cost of direct
-  construct names and dissolves in slice 5+ when `IRBasicBlock` is
-  promoted to first-class and `body_stmts` retires.
+  `Lowerer::lower_unless`, and `IRIf` (body on `then`, merge on
+  `otherwise`) produced by `Lowerer::lower_if_no_else` in the same
+  module. The two structs are field-for-field identical; their
+  duplication is the cost of direct construct names and dissolves
+  in slice 5+ when `IRBasicBlock` is promoted to first-class and
+  `body_stmts` retires.
   `IRTerminator::CondBranch::cond` holds an `IROperand`; emission
   resolves it through a per-block
   `HashMap<IRValueId, BasicValueEnum<'ctx>>` populated by walking the
@@ -691,7 +706,9 @@ What actually lives in `expo-ir` today:
   [`expo-codegen::control::instructions`](../crates/expo-codegen/src/control/instructions.rs))
   is shared across construct emit walkers as construct-agnostic
   mechanics; it dispatches `BinaryOp` / `UnaryOp` against the
-  `Resolved*` op variants and bridges `Stub` through `compile_expr`.
+  `Resolved*` op variants, dispatches `FieldLoad` through the
+  shared `emit_field_load` helper extracted from
+  `expo-codegen::structs`, and bridges `Stub` through `compile_expr`.
   Statement bodies remain AST stubs walked by `compile_statement`;
   later slices replace them with instruction-level lowerings.
 - **Active decision-type vocabulary** (produced + consumed): ~33
@@ -716,16 +733,19 @@ introduced the operand model (`IRValueId`, `IROperand`,
 variant that bridges to AST-level expression emission; Wave 14
 expanded the instruction vocabulary with typed `BinaryOp` and
 `UnaryOp` variants, retiring `Stub` for `ExprKind::Binary`
-(except `Concat` and `EnumStructEqual`) and `ExprKind::Unary`. Each
-future [`expo_ast::ast::ExprKind`] that learns to lower replaces its
-`Stub` site with a typed `IRInstruction` variant; when the last
-consumer is gone, `Stub` is deleted in one PR. The remaining
-constructs (`if`, `ternary`, `cond`, `match`, loops) and the
-value-producing instruction set both fill in as separate slices,
-each one extending the IR only by what its consumer requires. An
-earlier attempt to define the full instruction set top-down was
-deleted because it had no producers and had already drifted from
-the `Resolved*` shapes that emerged from real code paths.
+(except `Concat` and `EnumStructEqual`) and `ExprKind::Unary`;
+Wave 15 introduced the `Lowerer<'a>` per-function driver and added
+the `FieldLoad` memory-load archetype, retiring `Stub` for
+`ExprKind::FieldAccess` whose receiver type resolves. Each future
+[`expo_ast::ast::ExprKind`] that learns to lower replaces its `Stub`
+site with a typed `IRInstruction` variant; when the last consumer
+is gone, `Stub` is deleted in one PR. The remaining constructs
+(`if`, `ternary`, `cond`, `match`, loops) and the value-producing
+instruction set both fill in as separate slices, each one extending
+the IR only by what its consumer requires. An earlier attempt to
+define the full instruction set top-down was deleted because it had
+no producers and had already drifted from the `Resolved*` shapes
+that emerged from real code paths.
 
 #### Architectural invariant: control-flow negation lives in lowering
 
@@ -827,7 +847,7 @@ Crate sizes (approximate): `expo-codegen` ~17k LOC, `expo-ir` ~5.1k LOC.
 
 ### Wave history
 
-The 15 waves completed so far, condensed (full prose lives in commit
+The 16 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -1138,6 +1158,72 @@ history):
   arm + retirement marker) for the operator family, so subsequent
   expansions (calls, field access, struct/enum construction, etc.)
   can follow the same template.
+- **Wave 15 -- Phase 4c interlude: `Lowerer` driver + `FieldLoad`
+  memory-load archetype.** Combined slice. Introduced
+  [`Lowerer<'a>`](../crates/expo-ir/src/lower/lowerer.rs) as the
+  per-function lowering driver: holds program-level read-only
+  references (`&TypeContext`, `&TypeLayouts`, current package,
+  closure-site path) plus `&mut FnLowerState` for SSA / block id
+  minting, exposes a `ctx()` accessor that builds an ad-hoc
+  `LowerCtx<'_>` for delegating to free helpers that haven't
+  migrated yet. Constructed by a new
+  [`Compiler::lowerer()`](../crates/expo-codegen/src/compiler.rs)
+  splitting borrows from disjoint fields of `&mut self`. The
+  operand-lowering call surface from Waves 12-14
+  (`lower_expr_to_operand`, `lower_unless`, `lower_if_no_else`,
+  `lower_binary_op_or_stub`, `lower_unary_op_or_stub`) migrated
+  from free functions taking `&mut FnLowerState` to inherent
+  methods on `Lowerer`; each helper's prose stays in its
+  semantic-home module (`lower::values`, `lower::conditionals`,
+  `lower::ops`) as an `impl<'a> Lowerer<'a>` block.
+
+  The architectural motivation surfaced when `FieldAccess` lowering
+  needed both `&LowerCtx` (for `lower_struct_field`'s type/layout
+  context) and `&mut FnLowerState` (for `IRValueId` / `IRBlockId`
+  mints). `LowerCtx` borrows `&FnLowerState`, so threading both
+  through a free function is a borrow conflict.  `Lowerer` owns the
+  mutable borrow as the single source of truth and rebuilds an
+  immutable `LowerCtx<'_>` on demand; the borrow conflict dissolves.
+  This is the `Lowerer<'a>` driver the early Phase 4c plan named
+  but had no consumer for.
+
+  Added `IRInstruction::FieldLoad { dest, base, step:
+  ResolvedFieldStep }` carrying the resolved field index and type
+  inline (no further layout lookups at emission time). `Lowerer`
+  gained `lower_field_access_or_stub` in `lower::fields` that
+  dispatches `ExprKind::FieldAccess`: recursively lowers the
+  receiver to an `IROperand`, resolves the field step via
+  `lower_struct_field(&self.ctx(), ...)`, and pushes one
+  `FieldLoad`. Multi-hop chains (`obj.a.b.c`) lower to multiple
+  `FieldLoad` instructions linked through `IROperand::Local`. The
+  emission seam is a new `emit_field_load` helper extracted from
+  `expo-codegen::structs::emit_value_struct_field_access`,
+  alloca-store-GEP-load on the materialized struct value;
+  `execute_instructions` in `control::instructions` gained a
+  `FieldLoad` arm that dispatches to it. The AST-bound
+  `compile_field_access` dispatcher and its existing static-chain
+  GEP fast path (rooted at a named local) remain in place for
+  callers still going through `compile_expr` -- typed instructions
+  routed through `Lowerer` sacrifice that optimization
+  intentionally, relying on LLVM's mem2reg / SROA passes to clean
+  up the redundant alloca round-trips. The richer optimization
+  comes back at the IR level once the locals-foundation slice
+  lifts `Ident` and gives the IR a notion of named storage.
+
+  Reach: `FieldAccess` expressions that reach `lower_expr_to_operand`
+  today are exactly the cond positions on `IRUnless` and `IRIf`
+  (e.g., `unless x.value`, `if x.value`). Reach grows as future
+  construct slices route more expressions through the same seam.
+  Validation: stdlib `lib/std/test/control_flow_test.expo`'s
+  existing `if x.value` cond exercises the new path; 25/25
+  lang-suite green; zero clippy warnings.
+
+  This slice is also a foundational investment: every future op
+  family that needs both type-context and SSA minting (calls,
+  struct/enum construction, indexed access, etc.) will be a
+  `Lowerer` method following the same template, and every future
+  un-migrated free helper is one `self.ctx()` call away from
+  delegation.
 
 ### Next: Phase 4c slicing plan
 

@@ -24,6 +24,7 @@ pub mod enums;
 pub mod fields;
 pub mod inference;
 pub mod loops;
+pub mod lowerer;
 pub mod mangling;
 pub mod methods;
 pub mod monomorphize;
@@ -38,3 +39,4 @@ pub mod types;
 pub mod values;
 
 pub use ctx::LowerCtx;
+pub use lowerer::Lowerer;

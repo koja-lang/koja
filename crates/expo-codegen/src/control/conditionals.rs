@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{CondArm, Expr, Statement};
 use expo_ir::IRBlockId;
-use expo_ir::lower::conditionals::{lower_if_no_else, lower_unless};
 use expo_ir::resolved::conditionals::{IRIf, IRUnless};
 use expo_ir::values::IRValueId;
 use expo_typecheck::types::Type;
@@ -132,11 +131,12 @@ pub fn compile_cond<'ctx>(
 /// Compiles an `if` / `else` expression.
 ///
 /// Slice 2 split: the no-else form (`if cond ... end`) lowers to an
-/// [`IRIf`] via [`lower_if_no_else`] and walks the result via
-/// [`emit_if`] -- same machinery as `compile_unless`, polarity flipped
-/// in lowering's slot assignment. The else-bearing form is a Shape 2
-/// construct (two body blocks plus a value merge) and stays on the
-/// existing AST-bound implementation below until slice 3.
+/// [`IRIf`] via [`expo_ir::Lowerer::lower_if_no_else`] and walks the
+/// result via [`emit_if`] -- same machinery as `compile_unless`,
+/// polarity flipped in lowering's slot assignment. The else-bearing
+/// form is a Shape 2 construct (two body blocks plus a value merge)
+/// and stays on the existing AST-bound implementation below until
+/// slice 3.
 pub fn compile_if<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,
@@ -145,7 +145,7 @@ pub fn compile_if<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let Some(else_stmts) = else_body else {
-        let ir = lower_if_no_else(&mut compiler.fn_lower, condition, then_body);
+        let ir = compiler.lowerer().lower_if_no_else(condition, then_body);
         return emit_if(compiler, &ir, function);
     };
 
@@ -201,8 +201,8 @@ pub fn compile_if<'ctx>(
 }
 
 /// Compiles an `unless` guard: `unless cond ... end`. Lowers to an
-/// [`IRUnless`] via [`lower_unless`] and walks the result via
-/// [`emit_unless`].
+/// [`IRUnless`] via [`expo_ir::Lowerer::lower_unless`] and walks the
+/// result via [`emit_unless`].
 ///
 /// Lowering decides which block runs on truthy vs falsy conditions by
 /// placing the body block on the entry `CondBranch`'s `otherwise`
@@ -214,7 +214,7 @@ pub fn compile_unless<'ctx>(
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let ir = lower_unless(&mut compiler.fn_lower, condition, body);
+    let ir = compiler.lowerer().lower_unless(condition, body);
     emit_unless(compiler, &ir, function)
 }
 

@@ -6,6 +6,7 @@ use std::mem;
 use std::path::{Path, PathBuf};
 
 use expo_ir::IRProgram;
+use expo_ir::Lowerer;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::LowerCtx;
 use expo_ir::lower::constants::{resolve_const, resolve_const_enum};
@@ -326,6 +327,29 @@ impl<'ctx> Compiler<'ctx> {
             type_ctx: self.type_ctx,
         };
         (lower_ctx, &mut self.ir)
+    }
+
+    /// Construct a [`Lowerer<'_>`] borrowing the same program-level
+    /// references [`Self::lower_ctx`] hands out, plus a mutable
+    /// borrow of [`Self::fn_lower`] for SSA / block id minting. Use
+    /// from compile shims (e.g. `compile_unless`, `compile_if`) that
+    /// drive the operand-lowering surface, which lives as inherent
+    /// methods on [`Lowerer`].
+    ///
+    /// Splits borrows from `&mut self` across disjoint fields so the
+    /// returned `Lowerer` carries `&mut self.fn_lower` alongside
+    /// shared borrows of the surrounding context. Coexists with
+    /// [`Self::lower_ctx`] -- helpers in [`expo_ir::lower`] that
+    /// haven't migrated to `Lowerer` methods yet still take
+    /// [`LowerCtx`].
+    pub fn lowerer(&mut self) -> Lowerer<'_> {
+        Lowerer {
+            closure_site_path: self.closure_site_path.as_deref(),
+            fn_state: &mut self.fn_lower,
+            layouts: &self.layouts,
+            package: self.current_package.as_ref(),
+            type_ctx: self.type_ctx,
+        }
     }
 
     /// Applies `uwtable` and `frame-pointer=all` to every defined function

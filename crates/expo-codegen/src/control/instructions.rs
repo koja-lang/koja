@@ -30,6 +30,7 @@ use inkwell::{FloatPredicate, IntPredicate};
 use crate::compiler::Compiler;
 use crate::expr::compile_expr;
 use crate::ops::truncate_to_common_width;
+use crate::structs::emit_field_load;
 
 use super::terminator::materialize_operand;
 
@@ -49,6 +50,16 @@ pub(crate) fn execute_instructions<'ctx>(
                 let l = materialize_operand(compiler, lhs, &value_map)?;
                 let r = materialize_operand(compiler, rhs, &value_map)?;
                 let value = emit_binary_op(compiler, op, l, r)?;
+                (*dest, value)
+            }
+            IRInstruction::FieldLoad { dest, base, step } => {
+                let base_value = materialize_operand(compiler, base, &value_map)?;
+                if !base_value.is_struct_value() {
+                    return Err(
+                        "IRInstruction::FieldLoad: base operand is not a struct value".to_string(),
+                    );
+                }
+                let value = emit_field_load(compiler, base_value.into_struct_value(), step)?;
                 (*dest, value)
             }
             IRInstruction::Stub { dest, expr } => {

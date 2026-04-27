@@ -248,19 +248,17 @@ fn emit_chain_field_access<'ctx>(
     ))))
 }
 
-/// Emits a field access on a value-struct receiver: alloca a scratch slot,
-/// store the receiver into it, GEP the field, and load.
-fn emit_value_struct_field_access<'ctx>(
+/// Emits a field access on a value-struct receiver: alloca a scratch
+/// slot, store the receiver into it, GEP the field, and load. Shared
+/// between the AST-bound dispatcher
+/// [`emit_value_struct_field_access`] and the IR-bound
+/// `IRInstruction::FieldLoad` walker in
+/// [`crate::control::instructions`].
+pub(crate) fn emit_field_load<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    recv_tv: TypedValue<'ctx>,
+    struct_value: inkwell::values::StructValue<'ctx>,
     step: &ResolvedFieldStep,
-    field: &str,
-) -> ExprResult<'ctx> {
-    if !recv_tv.value.is_struct_value() {
-        return Err("field access on non-struct value".to_string());
-    }
-
-    let struct_value = recv_tv.value.into_struct_value();
+) -> Result<BasicValueEnum<'ctx>, String> {
     let struct_llvm_type = struct_value.get_type();
     let tmp_alloca = compiler
         .builder
@@ -271,12 +269,32 @@ fn emit_value_struct_field_access<'ctx>(
         .build_store(tmp_alloca, struct_value)
         .unwrap();
 
+    let label = format!("field_{}", step.field_index);
     let field_ptr = compiler
         .builder
-        .build_struct_gep(struct_llvm_type, tmp_alloca, step.field_index, field)
+        .build_struct_gep(struct_llvm_type, tmp_alloca, step.field_index, &label)
         .unwrap();
 
-    let val = load_maybe_indirect(compiler, field_ptr, &step.field_type, field);
+    Ok(load_maybe_indirect(
+        compiler,
+        field_ptr,
+        &step.field_type,
+        &label,
+    ))
+}
+
+fn emit_value_struct_field_access<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    recv_tv: TypedValue<'ctx>,
+    step: &ResolvedFieldStep,
+    _field: &str,
+) -> ExprResult<'ctx> {
+    if !recv_tv.value.is_struct_value() {
+        return Err("field access on non-struct value".to_string());
+    }
+
+    let struct_value = recv_tv.value.into_struct_value();
+    let val = emit_field_load(compiler, struct_value, step)?;
     Ok(Some(TypedValue::new(
         val,
         unwrap_indirect(&step.field_type).clone(),

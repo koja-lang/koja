@@ -16,9 +16,11 @@ use expo_ast::ast::{Expr, ExprKind};
 use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_ast::types::{Type, mangle_name};
 
+use crate::Lowerer;
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::LowerCtx;
 use crate::resolved::fields::{ResolvedChain, ResolvedFieldStep};
+use crate::values::{IRInstruction, IROperand};
 
 /// Strict lookup for a non-generic struct's field index by
 /// [`TypeIdentifier`]. A `Package::Unresolved` identifier returns `None`
@@ -205,4 +207,33 @@ pub fn resolve_indirect_field_indices(ctx: &LowerCtx<'_>, ty: &Type) -> Vec<(usi
     }
 
     Vec::new()
+}
+
+impl<'a> Lowerer<'a> {
+    /// Lower an [`expo_ast::ast::ExprKind::FieldAccess`] to an
+    /// [`IRInstruction::FieldLoad`] when the receiver's resolved type
+    /// maps to a known struct layout via [`lower_struct_field`].
+    /// Recursively lowers the receiver to an [`IROperand`] (chained
+    /// access lowers to multiple `FieldLoad` instructions linked
+    /// through [`IROperand::Local`]), pushes the typed instruction,
+    /// and returns the destination operand.
+    ///
+    /// Returns `None` to fall back to the [`IRInstruction::Stub`]
+    /// bridge when the receiver has no resolved type or the field
+    /// can't be located in the struct's layout. Stub fallback routes
+    /// through `expo-codegen`'s `compile_field_access`, which still
+    /// owns the static-chain GEP fast path for AST-bound callers.
+    pub(super) fn lower_field_access_or_stub(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        receiver: &Expr,
+        field: &str,
+    ) -> Option<IROperand> {
+        let base_type = receiver.resolved_type.clone()?;
+        let step = lower_struct_field(&self.ctx(), &base_type, field)?;
+        let base = self.lower_expr_to_operand(instructions, receiver);
+        let dest = self.next_value_id();
+        instructions.push(IRInstruction::FieldLoad { dest, base, step });
+        Some(IROperand::Local(dest))
+    }
 }
