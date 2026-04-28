@@ -11,13 +11,16 @@ SIL-style design prose and the full Wave 1-17 narrative live in
 ## 1. Status snapshot
 
 The instruction-level scaffold has landed. `IRProgram` is the canonical
-declaration registry. Ten `Lowerer<'a>` lift methods cover nine typed
-`IRInstruction` variants. Two conditionals (`unless` and `if`-no-else)
-run end-to-end through the full IR pipeline today; three call families
-(`Call`, static call, method call) plus `FieldChain` / `FieldLoad`,
-`LoadLocal` / `LoadConst` / `MakeFnRef`, `BinaryOp`, and `UnaryOp`
-reach typed instructions when consumed via the codegen wrappers'
-lift-then-fallthrough paths.
+declaration registry. Twelve `Lowerer<'a>` lift methods cover ten typed
+`IRInstruction` variants. Four conditionals (`unless`, `if`-no-else,
+`if`/`else`, ternary) run end-to-end through the full IR pipeline
+today; three call families (`Call`, static call, method call) plus
+`FieldChain` / `FieldLoad`, `LoadLocal` / `LoadConst` / `MakeFnRef`,
+`BinaryOp`, and `UnaryOp` reach typed instructions when consumed via
+the codegen wrappers' lift-then-fallthrough paths. The IR-level
+value-merging primitive (`IRInstruction::Phi`) is in place and
+load-bearing for both ternary (pre-staged at lowering) and the
+with-else `if` (synthesized at emit time).
 
 What we do _not_ have yet:
 
@@ -37,8 +40,8 @@ What we do _not_ have yet:
 
 ## 2. Phase summary
 
-Condensed from 20 waves of work. The Wave 1-17 prose lives in
-[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Waves 18-20
+Condensed from 21 waves of work. The Wave 1-17 prose lives in
+[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Waves 18-21
 are summarized inline below.
 
 - **Phase 1 -- Typed foundation (done, Waves 1-5).** `TypeRegistry`
@@ -93,6 +96,23 @@ are summarized inline below.
   on `LowerCtx` / `Lowerer`, so `expo-ir` stays LLVM-free while still
   honoring the precedence `compile_expr` uses today. See the
   `Phase 4e` entry in section 4 for the per-change detail.
+- **Phase 4f Slice 3 -- `if`/`else` + ternary (done, Wave 21).** The
+  with-else `if` and ternary expressions both lift to typed IR walked
+  by `execute_instructions`. New shape-2 IR types `IRIfElse` (arms
+  remain AST `Vec<Statement>` stubs until Phase 4g) and `IRTernary`
+  (arms fully instructionized -- both pre-stage their merge phi).
+  New `IRInstruction::Phi { dest, incomings, ty }` is the canonical
+  IR-level value-merging primitive: pre-staged at lowering for
+  ternary (where both arms are pure expressions and their result
+  operands are known), synthesized at emit time for `if`/`else`
+  (where the actual end blocks of each arm are known only after
+  walking the AST stubs, and the construct may fall through to
+  `Ok(None)` when either arm is statement-only). `execute_instructions`
+  gained an `Option<&block_map>` parameter (Phi needs LLVM block
+  handles to resolve incomings) and a caller-managed `&mut value_map`
+  so multi-call constructs (ternary's entry / then / else / merge
+  chain) can share SSA values across successive invocations. See the
+  `Phase 4f Slice 3` entry in section 4 for the per-change detail.
 
 ---
 
@@ -107,6 +127,8 @@ to plan a slice.
 | --------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `unless`                    | Full IR pipeline            | `Lowerer::lower_unless` -> `IRUnless` -> `emit_unless` + `execute_instructions`                                                      |
 | `if` (no else)              | Full IR pipeline            | `Lowerer::lower_if_no_else` -> `IRIf` -> `emit_if` + `execute_instructions`                                                          |
+| `if`/`else` (with else)     | Full IR pipeline            | `Lowerer::lower_if_else` -> `IRIfElse` -> `emit_if_else` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)        |
+| `ternary`                   | Full IR pipeline            | `Lowerer::lower_ternary` -> `IRTernary` -> `emit_ternary` + `execute_instructions` (merge phi pre-staged in `merge_instructions`)    |
 | `Call` / `static_call`      | Instruction-only            | `Lowerer::lower_call_or_stub` / `lower_static_call_or_stub` -> `IRInstruction::Call`                                                 |
 | `MethodCall`                | Instruction-only            | `Lowerer::lower_method_call_or_stub` -> `IRInstruction::MethodCall`                                                                  |
 | `FieldAccess` (chains)      | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldChain` (rooted at named local; delegates to `emit_chain_field_access`) |
@@ -119,8 +141,6 @@ to plan a slice.
 | Unary op                    | Instruction-only            | `Lowerer::lower_unary_op_or_stub` -> `IRInstruction::UnaryOp`                                                                        |
 | Bool/Int/Float literals     | Inline operand              | `IROperand::ConstBool` / `ConstInt` / `ConstFloat`                                                                                   |
 | `match`                     | Parallel pipeline           | `lower_match` -> `ResolvedMatch` -> `emit_match`; bypasses `execute_instructions`                                                    |
-| `if`/`else` (with else)     | AST -> LLVM                 | Slice 3                                                                                                                              |
-| `ternary`                   | AST -> LLVM                 | Slice 3                                                                                                                              |
 | `cond`                      | AST -> LLVM                 | Slice 4                                                                                                                              |
 | `while` / `loop` / `for`    | AST -> LLVM                 | Slice 6                                                                                                                              |
 | `break` / `return`          | AST -> LLVM                 | Slice 6                                                                                                                              |
@@ -190,7 +210,24 @@ The load-bearing seams every future slice extends:
 - `execute_instructions` in
   [`expo-codegen::control::instructions`](../crates/expo-codegen/src/control/instructions.rs)
   -- the single `IRInstruction` walker; new instruction variants get
-  an arm here.
+  an arm here. Takes an `Option<&block_map>` (required when the
+  instruction sequence may contain `IRInstruction::Phi`) and a
+  caller-managed `&mut value_map` so multi-call constructs (ternary
+  threads entry / then / else / merge through one shared map) can
+  share SSA values across successive invocations.
+- `IRInstruction::Phi` in
+  [`expo-ir::values`](../crates/expo-ir/src/values.rs) -- the
+  canonical IR-level value-merging primitive. `incomings:
+Vec<(IRBlockId, IROperand)>` ties merge-time values to their
+  predecessor blocks; the codegen executor synthesizes
+  `build_phi(llvm_ty, name)` and walks the incomings issuing
+  `add_incoming((value, llvm_block))`. The phi's LLVM type is
+  derived from the first materialized incoming value (always
+  concrete) rather than `to_llvm_type(ty, ...)` (which fails for
+  generic-arg-bearing types like `Result<Unknown, _>` common in
+  stdlib pipelines). Pre-staged at lowering for ternary;
+  synthesized at emit time for `if`/`else` (where statement-bodied
+  arms make pre-staging impossible until Phase 4g).
 - `emit_terminator` in
   [`expo-codegen::control::terminator`](../crates/expo-codegen/src/control/terminator.rs)
   -- the single `IRTerminator` walker.
@@ -393,12 +430,33 @@ instructions its body / condition / arms require -- expression
 vocabulary is no longer a separate phase queueing behind constructs;
 it lifts as part of the slice that needs it.
 
-- **Slice 3 -- `if`/`else` + ternary.** Shape 2: two body blocks
-  plus a value merge. Introduces the value-merging story (`IRPhi` or
-  block arguments). Folded together because they share the same
-  functional shape. **Done when** `compile_if`'s else branch and
-  `compile_ternary` both lift to typed IR walked by
-  `execute_instructions`.
+- **Slice 3 -- `if`/`else` + ternary (Done, Wave 21).** Shape 2: two
+  body blocks plus a value merge. Introduced the value-merging story
+  via `IRInstruction::Phi` (chosen over block arguments to keep the
+  merge primitive close to LLVM's native shape; block-argument
+  refactor is a candidate for Phase 4g if/when the unified block
+  representation makes them ergonomic). New IR types `IRIfElse` and
+  `IRTernary` follow the parallel-field convention of `IRUnless` /
+  `IRIf`. Ternary fully instructionizes both arms at lowering and
+  pre-stages the merge phi in `merge_instructions`; `if`/`else`
+  keeps arms as AST `Vec<Statement>` stubs (until statement-level
+  lowering in Phase 4g) and `emit_if_else` synthesizes the merge
+  phi inline after walking each arm, capturing the actual end
+  blocks (nested control flow can move the builder past
+  `then_block` / `else_block`). The construct gracefully falls
+  through to `Ok(None)` when either arm is statement-only or
+  diverges -- mirroring the legacy `compile_if` behavior. The new
+  `Phi` instruction's LLVM type is derived from the first
+  materialized incoming value rather than the resolved Expo type,
+  because `to_llvm_type` rejects `Type::Named` carrying inferred
+  `Unknown` type args (common in stdlib `Result` pipelines) while
+  the LLVM-side type is always concrete by the time the value lands
+  at the merge. `execute_instructions` gained an
+  `Option<&block_map>` parameter and a caller-managed `&mut
+value_map`. **Outcome.** `compile_if`'s else branch and
+  `compile_ternary` are thin shims over `Lowerer::lower_if_else`
+  and `Lowerer::lower_ternary` plus the new emit walkers; the IR
+  pipeline now covers both shape-2 conditional families end-to-end.
 - **Slice 4 -- `cond`.** N-arm chain of `CondBranch`s. Tests the
   scaffold scaling beyond fixed-N constructs. **Done when**
   `compile_cond` is a thin shim over the unified walker.

@@ -1,6 +1,7 @@
 # Build artifacts
 /target
 /target-check
+**/doc
 **/target/debug
 **/target/release
 *.o

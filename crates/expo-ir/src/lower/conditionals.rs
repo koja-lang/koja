@@ -11,10 +11,12 @@
 //! `then` / `otherwise` slot assignment.
 
 use expo_ast::ast::{Expr, Statement};
+use expo_typecheck::types::Type;
 
 use crate::Lowerer;
 use crate::blocks::IRTerminator;
-use crate::resolved::conditionals::{IRIf, IRUnless};
+use crate::resolved::conditionals::{IRIf, IRIfElse, IRTernary, IRUnless};
+use crate::values::IRInstruction;
 
 impl<'a> Lowerer<'a> {
     /// Lowers an `unless cond ... end` statement.
@@ -113,6 +115,128 @@ impl<'a> Lowerer<'a> {
             entry_instructions,
             entry_terminator,
             merge_block,
+        }
+    }
+
+    /// Lowers an `if cond ... else ... end` expression. Shape 2 --
+    /// two body blocks plus a value merge.
+    ///
+    /// Mints four fresh
+    /// [`IRBlockId`](crate::blocks::IRBlockId)s (`entry`, `then`,
+    /// `else`, `merge`) and pre-allocates an
+    /// [`IRValueId`](crate::values::IRValueId) for the merge phi's
+    /// destination so the emit walker can synthesize the
+    /// [`IRInstruction::Phi`] without minting fresh ids
+    /// mid-emission. `merge_phi_ty` is the construct's resolved
+    /// expression type (drives `to_llvm_type` at emit).
+    ///
+    /// The phi itself is **not** pre-staged: `then_stmts` /
+    /// `else_stmts` still walk through `compile_statement` until
+    /// Phase 4g lifts statement-level lowering, so the per-arm
+    /// trailing-expression value isn't visible from this seam. The
+    /// emit walker constructs the phi at merge time after both arms
+    /// have been compiled (and falls back to `Ok(None)` when either
+    /// arm is statement-only or diverges, mirroring today's
+    /// [`compile_if`](../../../../expo-codegen/src/control/conditionals.rs)
+    /// behavior).
+    pub fn lower_if_else(
+        &mut self,
+        cond: &Expr,
+        then_body: &[Statement],
+        else_body: &[Statement],
+        merge_phi_ty: Type,
+    ) -> IRIfElse {
+        let entry_block = self.next_block_id();
+        let then_block = self.next_block_id();
+        let else_block = self.next_block_id();
+        let merge_block = self.next_block_id();
+        let merge_phi_dest = self.next_value_id();
+
+        let mut entry_instructions = Vec::new();
+        let cond_operand = self.lower_expr_to_operand(&mut entry_instructions, cond);
+
+        IRIfElse {
+            else_block,
+            else_stmts: else_body.to_vec(),
+            else_terminator: IRTerminator::Branch(merge_block),
+            entry_block,
+            entry_instructions,
+            entry_terminator: IRTerminator::CondBranch {
+                cond: cond_operand,
+                then: then_block,
+                otherwise: else_block,
+            },
+            merge_block,
+            merge_phi_dest,
+            merge_phi_ty,
+            then_block,
+            then_stmts: then_body.to_vec(),
+            then_terminator: IRTerminator::Branch(merge_block),
+        }
+    }
+
+    /// Lowers a `cond ? then_expr : else_expr` ternary. Shape 2 with
+    /// the convenient property that both arms are pure expressions,
+    /// so each arm's instruction sequence + result operand are
+    /// known at lowering time -- no AST stubs survive.
+    ///
+    /// Pre-stages a single [`IRInstruction::Phi`] in
+    /// `merge_instructions` whose incomings are
+    /// `[(then_block, then_value), (else_block, else_value)]`.
+    /// Ternary always produces a value (typecheck rejects arms
+    /// whose types don't unify), so the phi is unconditional --
+    /// emission just runs `merge_instructions` through
+    /// `execute_instructions`.
+    pub fn lower_ternary(
+        &mut self,
+        cond: &Expr,
+        then_expr: &Expr,
+        else_expr: &Expr,
+        ty: Type,
+    ) -> IRTernary {
+        let entry_block = self.next_block_id();
+        let then_block = self.next_block_id();
+        let else_block = self.next_block_id();
+        let merge_block = self.next_block_id();
+        let merge_value = self.next_value_id();
+
+        let mut entry_instructions = Vec::new();
+        let cond_operand = self.lower_expr_to_operand(&mut entry_instructions, cond);
+
+        let mut then_instructions = Vec::new();
+        let then_value = self.lower_expr_to_operand(&mut then_instructions, then_expr);
+
+        let mut else_instructions = Vec::new();
+        let else_value = self.lower_expr_to_operand(&mut else_instructions, else_expr);
+
+        let merge_instructions = vec![IRInstruction::Phi {
+            dest: merge_value,
+            incomings: vec![
+                (then_block, then_value.clone()),
+                (else_block, else_value.clone()),
+            ],
+            ty,
+        }];
+
+        IRTernary {
+            else_block,
+            else_instructions,
+            else_terminator: IRTerminator::Branch(merge_block),
+            else_value,
+            entry_block,
+            entry_instructions,
+            entry_terminator: IRTerminator::CondBranch {
+                cond: cond_operand,
+                then: then_block,
+                otherwise: else_block,
+            },
+            merge_block,
+            merge_instructions,
+            merge_value,
+            then_block,
+            then_instructions,
+            then_terminator: IRTerminator::Branch(merge_block),
+            then_value,
         }
     }
 }

@@ -21,13 +21,15 @@
 
 use std::collections::HashMap;
 
+use expo_ir::IRBlockId;
 use expo_ir::identity::FunctionIdentifier;
 use expo_ir::resolved::fields::ResolvedChain;
 use expo_ir::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 use expo_ir::values::{IRInstruction, IROperand, IRValueId};
 use expo_typecheck::types::Type;
 use inkwell::AddressSpace;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
+use inkwell::basic_block::BasicBlock;
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PhiValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::compiler::Compiler;
@@ -62,20 +64,33 @@ pub(crate) fn maybe_typed_value<'ctx>(
 }
 
 /// Walk `instructions` in order, emitting LLVM IR for each and
-/// recording the produced value under the instruction's SSA
-/// destination. Returns the populated value map for the caller to
-/// thread into [`super::emit_terminator`].
+/// recording the produced value into `value_map` under the
+/// instruction's SSA destination. The caller owns the map's
+/// lifetime so multi-block constructs (e.g. ternary's
+/// `then` -> `else` -> `merge` chain) can share SSA values across
+/// successive invocations -- the `IRInstruction::Phi` at the merge
+/// references operands minted inside the arms, and a per-call
+/// fresh map would lose them.
+///
+/// `block_map` is required to walk
+/// [`IRInstruction::Phi`] -- its `add_incoming` calls need the LLVM
+/// [`BasicBlock`] handles for each predecessor [`IRBlockId`].
+/// Constructs that don't emit Phi (`unless`, `if`-no-else, single-block
+/// instruction sequences in `compile_call` / struct construction) pass
+/// `None` and the executor errors out cleanly if a Phi turns up
+/// unexpectedly.
 pub(crate) fn execute_instructions<'ctx>(
     compiler: &mut Compiler<'ctx>,
     instructions: &[IRInstruction],
     function: FunctionValue<'ctx>,
-) -> Result<HashMap<IRValueId, BasicValueEnum<'ctx>>, String> {
-    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    block_map: Option<&HashMap<IRBlockId, BasicBlock<'ctx>>>,
+    value_map: &mut HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<(), String> {
     for instruction in instructions {
         let entry = match instruction {
             IRInstruction::BinaryOp { dest, op, lhs, rhs } => {
-                let l = materialize_operand(compiler, lhs, &value_map)?;
-                let r = materialize_operand(compiler, rhs, &value_map)?;
+                let l = materialize_operand(compiler, lhs, value_map)?;
+                let r = materialize_operand(compiler, rhs, value_map)?;
                 let value = emit_binary_op(compiler, op, l, r)?;
                 Some((*dest, value))
             }
@@ -85,7 +100,7 @@ pub(crate) fn execute_instructions<'ctx>(
                 args,
                 param_types,
                 return_type: _,
-            } => emit_call(compiler, *dest, mangled, args, param_types, &value_map)?,
+            } => emit_call(compiler, *dest, mangled, args, param_types, value_map)?,
             IRInstruction::FieldChain {
                 dest,
                 base_name,
@@ -96,7 +111,7 @@ pub(crate) fn execute_instructions<'ctx>(
                 Some((*dest, value))
             }
             IRInstruction::FieldLoad { dest, base, step } => {
-                let base_value = materialize_operand(compiler, base, &value_map)?;
+                let base_value = materialize_operand(compiler, base, value_map)?;
                 if !base_value.is_struct_value() {
                     return Err(
                         "IRInstruction::FieldLoad: base operand is not a struct value".to_string(),
@@ -141,8 +156,19 @@ pub(crate) fn execute_instructions<'ctx>(
                 *is_move,
                 args,
                 param_types,
-                &value_map,
+                value_map,
             )?,
+            IRInstruction::Phi {
+                dest,
+                incomings,
+                ty,
+            } => {
+                let blocks = block_map.ok_or(
+                    "IRInstruction::Phi: block_map required to resolve incoming predecessors",
+                )?;
+                let value = emit_phi(compiler, incomings, ty, blocks, value_map)?;
+                Some((*dest, value))
+            }
             IRInstruction::Stub { dest, expr } => {
                 let value = compile_expr(compiler, expr, function)?
                     .ok_or("instruction stub expression produced no value")?
@@ -150,7 +176,7 @@ pub(crate) fn execute_instructions<'ctx>(
                 Some((*dest, value))
             }
             IRInstruction::UnaryOp { dest, op, operand } => {
-                let v = materialize_operand(compiler, operand, &value_map)?;
+                let v = materialize_operand(compiler, operand, value_map)?;
                 let value = emit_unary_op(compiler, op, v)?;
                 Some((*dest, value))
             }
@@ -159,7 +185,7 @@ pub(crate) fn execute_instructions<'ctx>(
             value_map.insert(dest, value);
         }
     }
-    Ok(value_map)
+    Ok(())
 }
 
 /// Emit an [`IRInstruction::Call`]: materialize args, coerce against
@@ -306,6 +332,50 @@ fn emit_make_fn_ref<'ctx>(
         .unwrap()
         .into_struct_value();
     Ok(fat_ptr.into())
+}
+
+/// Emit an [`IRInstruction::Phi`]: build an LLVM phi node and
+/// register one incoming per `(IRBlockId, IROperand)` pair. Each
+/// incoming operand is materialized through the same `value_map`
+/// the surrounding executor uses, so values from `then` / `else`
+/// arms threaded as `IROperand::Local` resolve correctly when the
+/// merge block runs after the arms.
+///
+/// The phi's LLVM type is derived from the first materialized
+/// incoming value's runtime type, which is always concrete --
+/// `to_llvm_type(ty, ...)` is consulted only as a fallback (e.g.
+/// for diagnostic logs) because Expo's `Type::Named` carrying
+/// inferred-as-`Unknown` type args (common in stdlib Result
+/// pipelines) fails the structural lookup, while the LLVM-side
+/// type is fully resolved by the time the values land here.
+fn emit_phi<'ctx>(
+    c: &Compiler<'ctx>,
+    incomings: &[(IRBlockId, IROperand)],
+    ty: &Type,
+    block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let mut materialized: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> =
+        Vec::with_capacity(incomings.len());
+    for (block_id, operand) in incomings {
+        let llvm_block = *block_map.get(block_id).ok_or_else(|| {
+            format!("IRInstruction::Phi: incoming block {block_id:?} not in block_map")
+        })?;
+        let value = materialize_operand(c, operand, value_map)?;
+        materialized.push((value, llvm_block));
+    }
+
+    let llvm_ty = materialized
+        .first()
+        .map(|(value, _)| value.get_type())
+        .or_else(|| to_llvm_type(ty, c.context, &c.llvm_types))
+        .ok_or_else(|| format!("IRInstruction::Phi: no incomings and no fallback type ({ty:?})"))?;
+
+    let phi: PhiValue<'ctx> = c.builder.build_phi(llvm_ty, "phi").unwrap();
+    for (value, llvm_block) in &materialized {
+        phi.add_incoming(&[(value, *llvm_block)]);
+    }
+    Ok(phi.as_basic_value())
 }
 
 /// Materialize each operand and coerce it against the matching

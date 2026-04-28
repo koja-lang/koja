@@ -11,9 +11,10 @@
 //! construct emits a `Not` operator or a `negated` flag.
 
 use expo_ast::ast::Statement;
+use expo_typecheck::types::Type;
 
 use crate::blocks::{IRBlockId, IRTerminator};
-use crate::values::IRInstruction;
+use crate::values::{IRInstruction, IROperand, IRValueId};
 
 /// Outcome of lowering an `unless cond ... end` statement.
 ///
@@ -95,4 +96,100 @@ pub struct IRIf {
     pub entry_instructions: Vec<IRInstruction>,
     pub entry_terminator: IRTerminator,
     pub merge_block: IRBlockId,
+}
+
+/// Outcome of lowering an `if cond ... else ... end` expression.
+/// Shape 2 -- two body blocks plus a value merge. Distinct from
+/// [`IRIf`] because the with-else form can flow back as a value:
+/// when both arms produce a `TypedValue` of compatible types,
+/// emission constructs an [`IRInstruction::Phi`] in `merge_block`
+/// whose dest is `merge_phi_dest`. When either arm is
+/// statement-shaped (no trailing expression value, or the arm
+/// diverges via early return / panic), emission drops the phi and
+/// the construct returns `None` -- mirroring today's lenient
+/// behavior in `compile_if`.
+///
+/// Five blocks:
+///
+/// - `entry_block` -- holds `entry_instructions` (the lowered cond)
+///   followed by `entry_terminator`
+///   (`CondBranch { cond, then: then_block, otherwise: else_block }`).
+/// - `then_block` -- runs when `cond` is truthy. Holds the then-arm
+///   statements as an AST stub (`then_stmts`); declared exit is
+///   `then_terminator` = `Branch(merge_block)`.
+/// - `else_block` -- runs when `cond` is falsy. Holds the else-arm
+///   statements as an AST stub (`else_stmts`); declared exit is
+///   `else_terminator` = `Branch(merge_block)`.
+/// - `merge_block` -- landing point. Emission positions there after
+///   walking both arms; if both produced values, an
+///   [`IRInstruction::Phi`] is synthesized at emit time (its
+///   incomings reference the *actual* end blocks of each arm, which
+///   may differ from `then_block` / `else_block` when bodies
+///   contain nested control flow).
+///
+/// `merge_phi_dest` and `merge_phi_ty` are pre-allocated at lowering
+/// time so the emit walker can construct the phi without minting a
+/// fresh value id mid-emission. Pre-allocation also ensures the
+/// dest stays stable if a future slice fans the merge instruction
+/// out for inspection (e.g. ownership analysis in Phase 6).
+///
+/// Dissolves in Phase 4g together with [`IRUnless`] / [`IRIf`] when
+/// `IRBasicBlock` becomes first-class and `then_stmts` / `else_stmts`
+/// retire (statement-level lowering).
+pub struct IRIfElse {
+    pub else_block: IRBlockId,
+    pub else_stmts: Vec<Statement>,
+    pub else_terminator: IRTerminator,
+    pub entry_block: IRBlockId,
+    pub entry_instructions: Vec<IRInstruction>,
+    pub entry_terminator: IRTerminator,
+    pub merge_block: IRBlockId,
+    pub merge_phi_dest: IRValueId,
+    pub merge_phi_ty: Type,
+    pub then_block: IRBlockId,
+    pub then_stmts: Vec<Statement>,
+    pub then_terminator: IRTerminator,
+}
+
+/// Outcome of lowering a `cond ? then_expr : else_expr` ternary.
+/// Shape 2 (same shape as [`IRIfElse`]) but each arm is a single
+/// expression rather than a statement body, so lowering can fully
+/// instructionize both arms -- no AST stubs survive into the IR.
+///
+/// Five blocks (same skeleton as [`IRIfElse`]):
+///
+/// - `entry_block` -- `entry_instructions` + `entry_terminator`
+///   (`CondBranch { cond, then: then_block, otherwise: else_block }`).
+/// - `then_block` -- `then_instructions` produce `then_value`,
+///   followed by `then_terminator` = `Branch(merge_block)`.
+/// - `else_block` -- mirror of then.
+/// - `merge_block` -- always holds exactly one
+///   [`IRInstruction::Phi`] in `merge_instructions` whose dest is
+///   `merge_value` and whose incomings are
+///   `[(then_block, then_value), (else_block, else_value)]`.
+///   Ternary always produces a value (typecheck rejects arms whose
+///   types don't unify), so unlike [`IRIfElse`] the phi is
+///   unconditional.
+///
+/// Distinct from [`IRIfElse`] per invariant 4 ("direct construct
+/// names over premature unification"): structurally the two share
+/// the entry/then/else/merge skeleton but differ on the arm-body
+/// representation (statements vs instructions) and on whether the
+/// merge is conditional. Both dissolve into the same shape in
+/// Phase 4g.
+pub struct IRTernary {
+    pub else_block: IRBlockId,
+    pub else_instructions: Vec<IRInstruction>,
+    pub else_terminator: IRTerminator,
+    pub else_value: IROperand,
+    pub entry_block: IRBlockId,
+    pub entry_instructions: Vec<IRInstruction>,
+    pub entry_terminator: IRTerminator,
+    pub merge_block: IRBlockId,
+    pub merge_instructions: Vec<IRInstruction>,
+    pub merge_value: IRValueId,
+    pub then_block: IRBlockId,
+    pub then_instructions: Vec<IRInstruction>,
+    pub then_terminator: IRTerminator,
+    pub then_value: IROperand,
 }

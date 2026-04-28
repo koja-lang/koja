@@ -148,7 +148,14 @@ pub fn compile_expr<'ctx>(
             then_body,
             else_body,
             ..
-        } => compile_if(compiler, condition, then_body, else_body, function),
+        } => compile_if(
+            compiler,
+            condition,
+            then_body,
+            else_body,
+            expr.resolved_type.as_ref(),
+            function,
+        ),
 
         ExprKind::StructConstruction {
             type_path, fields, ..
@@ -210,7 +217,20 @@ pub fn compile_expr<'ctx>(
             then_expr,
             else_expr,
             ..
-        } => compile_ternary(compiler, condition, then_expr, else_expr, function),
+        } => {
+            let resolved_type = expr
+                .resolved_type
+                .as_ref()
+                .ok_or("ternary expression has no resolved type")?;
+            compile_ternary(
+                compiler,
+                condition,
+                then_expr,
+                else_expr,
+                resolved_type,
+                function,
+            )
+        }
 
         ExprKind::Closure {
             params,

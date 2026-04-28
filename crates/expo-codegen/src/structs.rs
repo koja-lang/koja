@@ -330,7 +330,8 @@ pub fn compile_method_call<'ctx>(
         c.lowerer()
             .lower_method_call_or_stub(&mut instructions, receiver, method, args)
     {
-        let value_map = execute_instructions(c, &instructions, function)?;
+        let mut value_map = HashMap::new();
+        execute_instructions(c, &instructions, function, None, &mut value_map)?;
         return maybe_typed_value(c, &operand, &value_map, return_type);
     }
 
@@ -1012,7 +1013,8 @@ fn compile_static_call<'ctx>(
         method,
         args,
     ) {
-        let value_map = execute_instructions(c, &instructions, function)?;
+        let mut value_map = HashMap::new();
+        execute_instructions(c, &instructions, function, None, &mut value_map)?;
         return maybe_typed_value(c, &operand, &value_map, return_type);
     }
 

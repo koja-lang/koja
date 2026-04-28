@@ -94,7 +94,8 @@ pub fn compile_call<'ctx>(
         c.lowerer()
             .lower_call_or_stub(&mut instructions, name, args)
     {
-        let value_map = execute_instructions(c, &instructions, function)?;
+        let mut value_map = HashMap::new();
+        execute_instructions(c, &instructions, function, None, &mut value_map)?;
         return maybe_typed_value(c, &operand, &value_map, return_type);
     }
 

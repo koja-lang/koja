@@ -38,6 +38,7 @@
 use expo_ast::ast::Expr;
 use expo_typecheck::types::Type;
 
+use crate::blocks::IRBlockId;
 use crate::identity::FunctionIdentifier;
 use crate::resolved::fields::ResolvedFieldStep;
 use crate::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
@@ -292,6 +293,38 @@ pub enum IRInstruction {
         /// Callee's resolved return type.
         return_type: Type,
     },
+    /// SSA value merge at a join point. Each `(block_id, operand)`
+    /// pair contributes one incoming edge; the codegen executor
+    /// materializes `build_phi(llvm_ty, name)` then walks `incomings`
+    /// issuing `add_incoming((value, llvm_block))`. The instruction's
+    /// `dest` becomes the phi's SSA result, consumable downstream
+    /// via [`IROperand::Local`].
+    ///
+    /// Reaches lowering via [`crate::lower::conditionals::Lowerer::lower_ternary`]
+    /// (pre-staged in `IRTernary::merge_instructions` because both
+    /// arms are pure expressions and their values are known at
+    /// lowering time) and via the codegen-side
+    /// `emit_if_else` walker (synthesized at emit time when both
+    /// statement-bodied arms produce a value).
+    ///
+    /// Phi requires the LLVM block context to call `add_incoming`,
+    /// so [`crate::values::IRInstruction::Phi`] only walks correctly
+    /// when [`crate::values::IRInstruction`] flow through
+    /// `execute_instructions` with a populated block map. Conditional
+    /// constructs that don't contain a Phi (`unless`, `if`-no-else)
+    /// keep passing `None` for the block map.
+    Phi {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Predecessor edges: each tuple supplies the value
+        /// contributed when control reaches the join from that
+        /// block. Ordering is irrelevant to LLVM but conventionally
+        /// follows the lowering's branch-target order.
+        incomings: Vec<(IRBlockId, IROperand)>,
+        /// Resolved Expo type of the merged value. Drives the LLVM
+        /// type passed to `build_phi`.
+        ty: Type,
+    },
     /// **Transitional.** Bridges to AST-level expression emission
     /// while the rest of the instruction set fills in. The emission
     /// walker computes the LLVM value for `expr` via
@@ -338,6 +371,7 @@ impl IRInstruction {
             | IRInstruction::LoadLocal { dest, .. }
             | IRInstruction::MakeFnRef { dest, .. }
             | IRInstruction::MethodCall { dest, .. }
+            | IRInstruction::Phi { dest, .. }
             | IRInstruction::Stub { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => *dest,
         }

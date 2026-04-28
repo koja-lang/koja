@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{CondArm, Expr, Statement};
 use expo_ir::IRBlockId;
-use expo_ir::resolved::conditionals::{IRIf, IRUnless};
-use expo_ir::values::IRValueId;
+use expo_ir::resolved::conditionals::{IRIf, IRIfElse, IRTernary, IRUnless};
+use expo_ir::values::{IRInstruction, IRValueId};
 use expo_typecheck::types::Type;
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};
@@ -130,18 +130,30 @@ pub fn compile_cond<'ctx>(
 
 /// Compiles an `if` / `else` expression.
 ///
-/// Slice 2 split: the no-else form (`if cond ... end`) lowers to an
-/// [`IRIf`] via [`expo_ir::Lowerer::lower_if_no_else`] and walks the
-/// result via [`emit_if`] -- same machinery as `compile_unless`,
-/// polarity flipped in lowering's slot assignment. The else-bearing
-/// form is a Shape 2 construct (two body blocks plus a value merge)
-/// and stays on the existing AST-bound implementation below until
-/// slice 3.
+/// Slice 3 split: both forms now route through the IR pipeline.
+///
+/// - No-else form (`if cond ... end`) lowers to an [`IRIf`] via
+///   [`expo_ir::Lowerer::lower_if_no_else`] and walks via
+///   [`emit_if`] -- same machinery as `compile_unless`, polarity
+///   flipped in lowering's slot assignment.
+/// - With-else form (`if cond ... else ... end`) lowers to an
+///   [`IRIfElse`] via [`expo_ir::Lowerer::lower_if_else`] and walks
+///   via [`emit_if_else`]. The merge phi is synthesized at emit
+///   time when both arms produce a value (mirrors the legacy
+///   `Ok(None)` fall-through when either arm is statement-only).
+///
+/// `resolved_type` is the parent [`expo_ast::ast::Expr`]'s
+/// typecheck-resolved type when available; threaded into lowering
+/// for documentation / future-proofing of `IRIfElse::merge_phi_ty`.
+/// The actual phi LLVM type is derived from the then-arm's compiled
+/// value at emit time, so a `None` here doesn't break the value
+/// path.
 pub fn compile_if<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,
     then_body: &[Statement],
     else_body: &Option<Vec<Statement>>,
+    resolved_type: Option<&Type>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let Some(else_stmts) = else_body else {
@@ -149,55 +161,11 @@ pub fn compile_if<'ctx>(
         return emit_if(compiler, &ir, function);
     };
 
-    let cond_val = compile_expr(compiler, condition, function)?
-        .ok_or("if condition produced no value")?
-        .value;
-    let cond_int = coerce_to_bool(compiler, cond_val, "if condition")?;
-
-    let then_bb = compiler.context.append_basic_block(function, "then");
-    let else_bb = compiler.context.append_basic_block(function, "else");
-    let merge_bb = compiler.context.append_basic_block(function, "ifcont");
-
-    compiler
-        .builder
-        .build_conditional_branch(cond_int, then_bb, else_bb)
-        .unwrap();
-
-    compiler.builder.position_at_end(then_bb);
-    let then_tv = compile_body_as_value(compiler, then_body, function)?;
-    if !compiler.current_block_terminated() {
-        compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
-    }
-    let then_end_bb = compiler.builder.get_insert_block().unwrap();
-
-    compiler.builder.position_at_end(else_bb);
-    let else_tv = compile_body_as_value(compiler, else_stmts, function)?;
-    if !compiler.current_block_terminated() {
-        compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
-    }
-    let else_end_bb = compiler.builder.get_insert_block().unwrap();
-
-    compiler.builder.position_at_end(merge_bb);
-
-    if let (Some(then_tv), Some(else_tv)) = (&then_tv, &else_tv)
-        && then_tv.value.get_type() == else_tv.value.get_type()
-    {
-        let phi = compiler
-            .builder
-            .build_phi(then_tv.value.get_type(), "ifval")
-            .unwrap();
-        phi.add_incoming(&[(&then_tv.value, then_end_bb), (&else_tv.value, else_end_bb)]);
-        let result_type = then_tv.expo_type.clone();
-        return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
-    }
-
-    Ok(None)
+    let merge_phi_ty = resolved_type.cloned().unwrap_or(Type::Unknown);
+    let ir = compiler
+        .lowerer()
+        .lower_if_else(condition, then_body, else_stmts, merge_phi_ty);
+    emit_if_else(compiler, &ir, function)
 }
 
 /// Compiles an `unless` guard: `unless cond ... end`. Lowers to an
@@ -241,7 +209,14 @@ fn emit_unless<'ctx>(
     block_map.insert(ir.body_block, body_bb);
     block_map.insert(ir.merge_block, merge_bb);
 
-    let value_map = execute_instructions(compiler, &ir.entry_instructions, function)?;
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    execute_instructions(
+        compiler,
+        &ir.entry_instructions,
+        function,
+        None,
+        &mut value_map,
+    )?;
     emit_terminator(
         compiler,
         &ir.entry_terminator,
@@ -299,7 +274,14 @@ fn emit_if<'ctx>(
     block_map.insert(ir.body_block, body_bb);
     block_map.insert(ir.merge_block, merge_bb);
 
-    let value_map = execute_instructions(compiler, &ir.entry_instructions, function)?;
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    execute_instructions(
+        compiler,
+        &ir.entry_instructions,
+        function,
+        None,
+        &mut value_map,
+    )?;
     emit_terminator(
         compiler,
         &ir.entry_terminator,
@@ -330,64 +312,248 @@ fn emit_if<'ctx>(
     Ok(None)
 }
 
+/// Walks an [`IRIfElse`] (with-else form) into LLVM IR.
+///
+/// Allocates LLVM blocks for the then / else / merge IR ids,
+/// executes the entry instruction sequence (no Phi possible there),
+/// dispatches the canonicalized entry `CondBranch`, then walks each
+/// arm's AST statements via [`compile_body_as_value`] -- which
+/// returns the trailing-expression value when the arm ends in an
+/// expression statement and otherwise leaves the arm
+/// statement-shaped.
+///
+/// The merge phi is synthesized inline (rather than via
+/// [`execute_instructions`]) for two reasons: the actual end blocks
+/// of each arm are known only after walking the AST stubs (nested
+/// control flow can move the builder past `then_bb` / `else_bb`),
+/// and the arms may diverge or be statement-only, in which case the
+/// construct returns `Ok(None)` instead of producing a phi --
+/// matching the legacy `compile_if` semantics. The pre-allocated
+/// `ir.merge_phi_dest` and `ir.merge_phi_ty` carry forward to the
+/// later slice that lifts statement-level lowering, when the phi
+/// can be pre-staged like ternary's.
+fn emit_if_else<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    ir: &IRIfElse,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let then_bb = compiler.context.append_basic_block(function, "then");
+    let else_bb = compiler.context.append_basic_block(function, "else");
+    let merge_bb = compiler.context.append_basic_block(function, "ifcont");
+
+    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
+    block_map.insert(ir.then_block, then_bb);
+    block_map.insert(ir.else_block, else_bb);
+    block_map.insert(ir.merge_block, merge_bb);
+
+    let mut entry_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    execute_instructions(
+        compiler,
+        &ir.entry_instructions,
+        function,
+        None,
+        &mut entry_value_map,
+    )?;
+    emit_terminator(
+        compiler,
+        &ir.entry_terminator,
+        &block_map,
+        &entry_value_map,
+        function,
+    )?;
+
+    compiler.builder.position_at_end(then_bb);
+    let (then_tv, then_end_bb) = walk_arm_value(compiler, &ir.then_stmts, function)?;
+    if !compiler.current_block_terminated() {
+        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+        emit_terminator(
+            compiler,
+            &ir.then_terminator,
+            &block_map,
+            &body_value_map,
+            function,
+        )?;
+    }
+
+    compiler.builder.position_at_end(else_bb);
+    let (else_tv, else_end_bb) = walk_arm_value(compiler, &ir.else_stmts, function)?;
+    if !compiler.current_block_terminated() {
+        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+        emit_terminator(
+            compiler,
+            &ir.else_terminator,
+            &block_map,
+            &body_value_map,
+            function,
+        )?;
+    }
+
+    compiler.builder.position_at_end(merge_bb);
+
+    if let (Some(then_tv), Some(else_tv)) = (&then_tv, &else_tv)
+        && then_tv.value.get_type() == else_tv.value.get_type()
+    {
+        let phi = compiler
+            .builder
+            .build_phi(then_tv.value.get_type(), "ifval")
+            .unwrap();
+        phi.add_incoming(&[(&then_tv.value, then_end_bb), (&else_tv.value, else_end_bb)]);
+        return Ok(Some(TypedValue::new(
+            phi.as_basic_value(),
+            then_tv.expo_type.clone(),
+        )));
+    }
+
+    Ok(None)
+}
+
+/// Walks an [`IRTernary`] into LLVM IR.
+///
+/// Same skeleton as [`emit_if_else`] -- allocate three blocks,
+/// execute entry, dispatch entry terminator, walk both arms,
+/// position at merge -- but each arm executes a pre-instructionized
+/// sequence (no AST stubs survived lowering) and the merge runs
+/// through [`execute_instructions`] with the pre-staged
+/// [`expo_ir::values::IRInstruction::Phi`] in `merge_instructions`.
+/// The block map is updated after each arm so the executor can
+/// resolve the phi's incoming edges to the *actual* end blocks
+/// (nested control flow inside an arm can move the builder past
+/// the arm's nominal block).
+///
+/// Ternary always produces a value (typecheck rejects mismatched
+/// arms), so unlike [`emit_if_else`] there's no `Ok(None)`
+/// fall-through; either both arms diverge (in which case the
+/// builder is parked on a dead merge block and the surrounding
+/// flow handles it) or the phi materializes a `TypedValue`.
+fn emit_ternary<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    ir: &IRTernary,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let then_bb = compiler.context.append_basic_block(function, "tern_then");
+    let else_bb = compiler.context.append_basic_block(function, "tern_else");
+    let merge_bb = compiler.context.append_basic_block(function, "tern_cont");
+
+    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
+    block_map.insert(ir.then_block, then_bb);
+    block_map.insert(ir.else_block, else_bb);
+    block_map.insert(ir.merge_block, merge_bb);
+
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    execute_instructions(
+        compiler,
+        &ir.entry_instructions,
+        function,
+        None,
+        &mut value_map,
+    )?;
+    emit_terminator(
+        compiler,
+        &ir.entry_terminator,
+        &block_map,
+        &value_map,
+        function,
+    )?;
+
+    compiler.builder.position_at_end(then_bb);
+    execute_instructions(
+        compiler,
+        &ir.then_instructions,
+        function,
+        None,
+        &mut value_map,
+    )?;
+    let then_end_bb = compiler.builder.get_insert_block().unwrap();
+    if !compiler.current_block_terminated() {
+        emit_terminator(
+            compiler,
+            &ir.then_terminator,
+            &block_map,
+            &value_map,
+            function,
+        )?;
+    }
+
+    compiler.builder.position_at_end(else_bb);
+    execute_instructions(
+        compiler,
+        &ir.else_instructions,
+        function,
+        None,
+        &mut value_map,
+    )?;
+    let else_end_bb = compiler.builder.get_insert_block().unwrap();
+    if !compiler.current_block_terminated() {
+        emit_terminator(
+            compiler,
+            &ir.else_terminator,
+            &block_map,
+            &value_map,
+            function,
+        )?;
+    }
+
+    compiler.builder.position_at_end(merge_bb);
+    block_map.insert(ir.then_block, then_end_bb);
+    block_map.insert(ir.else_block, else_end_bb);
+    execute_instructions(
+        compiler,
+        &ir.merge_instructions,
+        function,
+        Some(&block_map),
+        &mut value_map,
+    )?;
+
+    let value = value_map.get(&ir.merge_value).copied().ok_or(
+        "IRTernary: merge phi did not register an LLVM value (both arms may have diverged)",
+    )?;
+    let result_type = ir
+        .merge_instructions
+        .iter()
+        .find_map(|i| match i {
+            IRInstruction::Phi { ty, .. } => Some(ty.clone()),
+            _ => None,
+        })
+        .unwrap_or(Type::Unknown);
+    Ok(Some(TypedValue::new(value, result_type)))
+}
+
+/// Walk a body's AST statements with the builder positioned at the
+/// arm's entry block, capturing the trailing-expression value (if
+/// the body ends in an expression statement) and the actual LLVM
+/// block where control sits when the arm finishes. Nested control
+/// flow inside the body can move the builder past the entry block,
+/// so the captured end block may differ from where we started.
+fn walk_arm_value<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    body: &[Statement],
+    function: FunctionValue<'ctx>,
+) -> Result<(Option<TypedValue<'ctx>>, BasicBlock<'ctx>), String> {
+    let tv = compile_body_as_value(compiler, body, function)?;
+    let end_bb = compiler.builder.get_insert_block().unwrap();
+    Ok((tv, end_bb))
+}
+
 /// Compiles a ternary expression (`condition ? then_expr : else_expr`).
-/// Always value-producing when both branches yield the same type.
+///
+/// Lowers to an [`IRTernary`] via
+/// [`expo_ir::Lowerer::lower_ternary`] and walks via
+/// [`emit_ternary`]. Both arms are pure expressions, so lowering
+/// fully instructionizes them and pre-stages the merge
+/// [`expo_ir::values::IRInstruction::Phi`]. Typecheck guarantees
+/// the two arms unify; `resolved_type` carries that resolved type
+/// from the parent [`expo_ast::ast::Expr`].
 pub fn compile_ternary<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,
     then_expr: &Expr,
     else_expr: &Expr,
+    resolved_type: &Type,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let cond_val = compile_expr(compiler, condition, function)?
-        .ok_or("ternary condition produced no value")?
-        .value;
-    let cond_int = coerce_to_bool(compiler, cond_val, "ternary condition")?;
-
-    let then_bb = compiler.context.append_basic_block(function, "tern_then");
-    let else_bb = compiler.context.append_basic_block(function, "tern_else");
-    let merge_bb = compiler.context.append_basic_block(function, "tern_cont");
-
-    compiler
-        .builder
-        .build_conditional_branch(cond_int, then_bb, else_bb)
-        .unwrap();
-
-    compiler.builder.position_at_end(then_bb);
-    let then_tv = compile_expr(compiler, then_expr, function)?;
-    if !compiler.current_block_terminated() {
+    let ir =
         compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
-    }
-    let then_end_bb = compiler.builder.get_insert_block().unwrap();
-
-    compiler.builder.position_at_end(else_bb);
-    let else_tv = compile_expr(compiler, else_expr, function)?;
-    if !compiler.current_block_terminated() {
-        compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
-    }
-    let else_end_bb = compiler.builder.get_insert_block().unwrap();
-
-    compiler.builder.position_at_end(merge_bb);
-
-    if let (Some(ttv), Some(etv)) = (&then_tv, &else_tv)
-        && ttv.value.get_type() == etv.value.get_type()
-    {
-        let phi = compiler
-            .builder
-            .build_phi(ttv.value.get_type(), "ternval")
-            .unwrap();
-        phi.add_incoming(&[(&ttv.value, then_end_bb), (&etv.value, else_end_bb)]);
-        return Ok(Some(TypedValue::new(
-            phi.as_basic_value(),
-            ttv.expo_type.clone(),
-        )));
-    }
-
-    Ok(None)
+            .lowerer()
+            .lower_ternary(condition, then_expr, else_expr, resolved_type.clone());
+    emit_ternary(compiler, &ir, function)
 }
