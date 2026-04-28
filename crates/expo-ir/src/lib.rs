@@ -25,6 +25,8 @@ pub use blocks::{IRBasicBlock, IRBlockId, IRTerminator};
 pub use fn_state::FnLowerState;
 pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 pub use lower::Lowerer;
-pub use program::{IREnum, IRFunction, IRFunctionKind, IRProgram, IRStruct, IRStructKind};
+pub use program::{
+    ExternAbi, ExternAttrs, IREnum, IRFunction, IRFunctionKind, IRProgram, IRStruct, IRStructKind,
+};
 pub use type_layouts::TypeLayouts;
 pub use values::{IRInstruction, IROperand, IRValueId};

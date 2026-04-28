@@ -125,10 +125,12 @@ pub struct IREnum {
 /// A callable symbol declaration.
 ///
 /// `Free` and `Method` carry an Expo AST body emitted by codegen;
-/// `Extern` denotes a signature-only declaration whose body lives
-/// outside the Expo source (stdlib runtime, intrinsics, generated
-/// thunks). Future waves replace the AST bodies on `Free` / `Method`
-/// with explicit IR basic blocks and instructions.
+/// `Extern` denotes a foreign declaration whose body lives outside the
+/// Expo source and must be resolved by the linker; `Intrinsic` and
+/// `Thunk` carry hand-emitted bodies dispatched by the backend;
+/// `MainEntry` tags the transitional `fn main` synthesis pair. Future
+/// waves replace the AST bodies on `Free` / `Method` with explicit IR
+/// basic blocks and instructions.
 #[derive(Clone)]
 pub struct IRFunction {
     pub mangled: FunctionIdentifier,
@@ -137,39 +139,85 @@ pub struct IRFunction {
     pub kind: IRFunctionKind,
 }
 
+/// ABI of a foreign-linked symbol. A single-variant enum today; future
+/// ABIs (`System`, `RustRuntime`, ...) drop in without breaking the
+/// `Extern` shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternAbi {
+    C,
+}
+
+/// Backend-actionable attributes for a foreign-linked symbol. Captures
+/// everything a backend needs to declare and link the symbol without
+/// consulting the LLVM module: the calling convention, an optional
+/// override of the symbol name (`@link "lib:symbol"`), the library to
+/// pass to the linker (`@link "lib"`), and whether the C signature is
+/// variadic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternAttrs {
+    pub abi: ExternAbi,
+    pub is_variadic: bool,
+    pub link_lib: Option<String>,
+    pub link_name: Option<String>,
+}
+
+impl ExternAttrs {
+    /// Default attributes for a hand-declared C ABI symbol with no
+    /// link overrides (e.g. libc / Expo runtime functions registered
+    /// from `builtins.rs`).
+    pub fn c(is_variadic: bool) -> Self {
+        Self {
+            abi: ExternAbi::C,
+            is_variadic,
+            link_lib: None,
+            link_name: None,
+        }
+    }
+}
+
 /// Discriminates the callable symbol categories tracked by
 /// [`IRProgram`]. `Free` and `Method` own the AST body codegen lowers
-/// to LLVM; `Extern`, `Intrinsic`, and `Thunk` carry no AST body
-/// because the implementation is hand-emitted by the backend.
+/// to LLVM; `Extern` is a linker-resolved declaration; `Intrinsic`,
+/// `MainEntry`, and `Thunk` carry no AST body because the
+/// implementation is hand-emitted by the backend.
 #[derive(Clone)]
 pub enum IRFunctionKind {
-    /// Signature-only declaration with no AST body. Covers C stdlib
-    /// FFI (`printf`, `malloc`, ...), Expo runtime FFI (`expo_rt_*`,
-    /// `expo_string_*`, ...), user-source `@extern "C"` declarations,
-    /// and a small set of compiler-synthesized symbols (`__expo_user_main`,
-    /// debug formatting helpers). A future slice splits these axes
-    /// apart and adds backend-actionable attributes (ABI, link name,
-    /// variadic, ...).
-    Extern,
+    /// Foreign-linked symbol with no AST body. Covers C stdlib FFI
+    /// (`printf`, `malloc`, ...), Expo runtime FFI (`expo_rt_*`,
+    /// `expo_string_*`, ...), and user-source `@extern "C"`
+    /// declarations. The carried [`ExternAttrs`] is sufficient for any
+    /// backend to declare and link the symbol without consulting the
+    /// LLVM module.
+    Extern(ExternAttrs),
     /// Free function (top-level, no `self`).
     Free {
         func_ast: Function,
         subst: HashMap<String, Type>,
     },
-    /// Stdlib intrinsic method (e.g. `List.append`, `Map.get`,
-    /// `CPtr.read`). Body is backend-defined; `(base_type, method_name)`
-    /// is the minimum identity a backend needs to dispatch its own
-    /// implementation. Distinct from `Extern` so backends can route
-    /// these through typed intrinsic emitters rather than a generic
-    /// FFI path.
+    /// Compiler-defined method whose body is hand-emitted by the
+    /// backend (no AST). Originally introduced for stdlib types
+    /// (`List.append`, `Map.get`, `CPtr.read`, ...) and now also
+    /// covers compiler-synthesized per-type methods like the
+    /// `inspect` / `format` helpers in `expo-codegen::debug`.
+    /// `(base_type, method_name)` is the minimum identity a backend
+    /// needs to dispatch its own implementation.
     Intrinsic {
         /// Unmangled base type the method belongs to (e.g. `"List"`,
-        /// `"Map"`, `"CPtr"`).
+        /// `"Int"`, or a user struct's bare name).
         base_type: String,
         /// Method name as written in the source (e.g. `"append"`,
-        /// `"get"`).
+        /// `"inspect"`, `"format"`).
         method_name: String,
     },
+    /// Compiler-synthesized entry-point pair for the legacy `fn main`
+    /// convention: the LLVM `main` C entry that calls
+    /// `expo_rt_spawn(__expo_user_main, ...)`, and `__expo_user_main`
+    /// itself which holds the user-written body.
+    ///
+    /// Transitional: `fn main` is slated for retirement and the
+    /// replacement entry-point convention will get its own
+    /// classification at that time.
+    MainEntry,
     /// Impl method (instance or static).
     Method {
         func_ast: Function,

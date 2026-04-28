@@ -646,6 +646,12 @@ fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries
         "-o".to_string(),
         output.to_string(),
     ];
+    // Modern Debian/Ubuntu default `cc` to PIE, which rejects the
+    // absolute (`R_X86_64_32`) relocations LLVM emits under
+    // `RelocMode::Default`. Until codegen is switched to
+    // `RelocMode::PIC`, ask the linker for a non-PIE binary on Linux.
+    #[cfg(target_os = "linux")]
+    args.push("-no-pie".to_string());
     for lib in link_libraries {
         args.push(format!("-l{lib}"));
     }

@@ -69,6 +69,17 @@ Condensed from 18 waves of work. The Wave 1-17 prose lives in
   and `Group`. Wave 18 closed the callable-registry contract -- the
   Wave-16 exceptions are gone (see the `Phase 4c -- Registry closeout`
   entry in section 4 for the per-change detail).
+- **Phase 4d -- Callable classification and Extern attributes (done,
+  Wave 19).** `Extern` becomes a struct variant carrying the standard
+  attribute set (`abi`, `link_name`, `link_lib`, `is_variadic`); a new
+  `MainEntry` variant tags the transitional `fn main` synthesis pair;
+  the `register_extern` catch-all unwinds so non-generic user
+  functions/methods register as `Free`/`Method` (matching the kinds the
+  monomorphize planner has always written), `debug.rs` per-type format
+  emitters register as `Intrinsic`, and the user `@extern "C"`
+  annotation finally flows end-to-end into IR. Closes the unfinished
+  half of commit `60618c0` -- see the `Phase 4d` entry in section 4
+  for the per-change detail.
 
 ---
 
@@ -119,12 +130,22 @@ pipeline.
 
 ### 3b. `IRProgram` callable-registry contract
 
-As of Wave 18, every callable symbol is in `IRProgram` with a typed
-`IRFunctionKind` (`Extern` / `Free` / `Intrinsic` / `Method` /
-`Thunk`). The registry contract holds without exceptions: thunks
-register through `Compiler::register_thunk` and stdlib intrinsic
-methods register through `Compiler::register_intrinsic`, both routed
-through the existing `register_function` dual-write helper.
+As of Wave 19, every callable symbol is in `IRProgram` with a typed
+`IRFunctionKind` (`Extern` / `Free` / `Intrinsic` / `MainEntry` /
+`Method` / `Thunk`) that honestly classifies what it is. Each variant
+has exactly one registration helper on `Compiler` and all six funnel
+through `register_function`'s dual write to `IRProgram` + the
+LLVM-handle map, so the two stores cannot drift.
+
+Wave 19 cleared the `register_extern` overload that lingered after
+commit `60618c0`: every non-generic user free function (top-level
+`fn foo`) registers as `Free`, every non-generic user impl method
+registers as `Method` (matching the kinds the monomorphize planner
+already wrote for generics), every per-type `debug` format emitter
+registers as `Intrinsic`, the LLVM `main` / `__expo_user_main` pair
+registers as `MainEntry`, and `Extern` is reserved for genuinely
+foreign-linked symbols carrying `ExternAttrs` sufficient for any
+backend to declare and link them without consulting the LLVM module.
 
 Four of the six pre-Wave-18 `Compiler.functions.contains_key`
 existence checks (call-time guards in `calls.rs`, `structs.rs`,
@@ -157,10 +178,11 @@ The load-bearing seams every future slice extends:
   [`expo-codegen::control::terminator`](../crates/expo-codegen/src/control/terminator.rs)
   -- the single `IRTerminator` walker.
 - `Compiler::register_function` / `register_extern` /
-  `register_intrinsic` / `register_thunk` in
+  `register_free` / `register_intrinsic` / `register_main_entry` /
+  `register_method` / `register_thunk` in
   [`expo-codegen::compiler`](../crates/expo-codegen/src/compiler.rs) --
   the single declared-callable seam. Each variant of `IRFunctionKind`
-  has exactly one registration helper; the four helpers cannot drift
+  has exactly one registration helper; the six helpers cannot drift
   because they all funnel into `register_function`'s dual write
   (`IRProgram` + LLVM-handle map).
 - `Compiler::lowerer()` in the same file -- the single per-function
@@ -218,49 +240,64 @@ or via the four typed helpers `register_extern` / `register_intrinsic`
 / `register_thunk`), so the dual write to `c.ir` + `c.functions`
 cannot drift.
 
-### Phase 4d -- Extern attributes
+### Phase 4d -- Callable classification and Extern attributes (Done, Wave 19)
 
-Surfaced by the Phase 4c audit dividend: `IRFunctionKind::Extern` is
-a unit variant with no attributes, but post-4c it still smushes
-together at least four distinct categories with no way for backends
-to tell them apart from the IR alone.
+Reframed during planning: the originally scoped "Extern attributes"
+work was inheriting the unfinished half of commit `60618c0` (which
+mechanically replaced `c.functions.insert(...)` with `register_extern`
+without committing to per-site classification). After the audit, the
+phase covers two tightly coupled pieces in one wave -- the variant
+classification fix that made `Free`/`Method` actually live for
+non-generic user code, and the Standard `Extern` attribute set that
+closes the original `printf`-vs-`malloc` indistinguishability bug
+plus the user `@extern "C"` payload drop.
 
-1. **C stdlib FFI** -- `printf`, `malloc`, `memcpy`, `abort`, ... in
-   `builtins.rs`. Real C ABI, some variadic.
-2. **Expo runtime FFI** -- `expo_rt_*`, `expo_string_*`,
-   `expo_socket_*`, ... statically linked against the Rust
-   `expo-runtime` crate.
-3. **User-source `@extern "C"` declarations** -- the parser already
-   extracts the `"C"` payload (`expo-parser/src/decl.rs:471`) but
-   the codegen registration path drops it on the floor.
-4. **Compiler-synthesized declarations that are not actually
-   foreign** -- `__expo_user_main` and the `debug.rs` formatting
-   helpers. Misclassified as `Extern` today because they happen to
-   register without an Expo AST.
+- ~~`IRFunctionKind::Extern` is a unit variant; backends cannot
+  recover the C ABI shape (variadic, link library, link name) from
+  `IRProgram` alone.~~ **Done** -- `Extern` is now a struct variant
+  carrying `ExternAttrs { abi: ExternAbi, is_variadic, link_lib,
+  link_name }`. `ExternAbi` is a single-variant enum (`C`) so future
+  ABIs drop in without a breaking churn. `builtins.rs::decl` reads
+  `is_variadic` straight from the LLVM `FunctionType::is_var_arg`,
+  so the ~40 hand-rolled C/runtime decl call sites stay as
+  `decl(c, name, ty)` lines.
+- ~~User-source `@extern "C"` annotation is parsed but the codegen
+  registration path drops it on the floor.~~ **Done** --
+  `extract_extern_attrs(annotations, is_variadic)` lifts the existing
+  `extract_link_symbol` to return the full attribute bundle from
+  `@extern "C"` and `@link "lib"` / `@link "lib:symbol"`. Both
+  user-FFI registration sites in `compiler.rs` (free fn and method
+  paths) now thread these attrs through `register_extern`.
+- ~~`__expo_user_main` and `debug.rs` formatting helpers are
+  misclassified as `Extern` today because they happen to register
+  without a normal Expo AST.~~ **Done** -- new unit variant
+  `IRFunctionKind::MainEntry` covers both the LLVM `main` C entry
+  (which calls `expo_rt_spawn(__expo_user_main, ...)`) and
+  `__expo_user_main` itself; doc comment notes the variant is
+  transitional pending `fn main` retirement. The `debug.rs`
+  per-primitive (`call_format` PrimitiveIntrinsic fallback) and
+  per-user-type (`begin_synthesis`) format emitters now register as
+  `Intrinsic { base_type, method_name: "format" }`.
+- ~~`Free` and `Method` are only ever written by the monomorphize
+  planner; every non-generic user free fn / method registers as
+  `Extern` via the catch-all path at `compiler.rs:921` /
+  `compiler.rs:989`.~~ **Done** -- new helpers `register_free` and
+  `register_method` mirror the `Free` / `Method` payloads the
+  monomorphize planner uses (with empty `subst`); both call sites
+  now branch on `is_extern_c_decl` and route to the appropriate
+  helper. `Counter.count_down` and `fn main`'s body holder
+  (`__expo_user_main`) are correctly typed in IR.
 
-Concrete bug closed by this phase: `printf` and `malloc` are
-indistinguishable in `IRProgram` today -- the variadic flag lives
-only on the LLVM `FunctionType`, so any second backend reading
-`IRProgram` cannot recover the C ABI shape.
-
-Open questions to resolve at slice-planning time:
-
-- **v1 attribute scope** -- minimal (`is_variadic` only) vs standard
-  (`abi: ExternAbi` + `link_name: Option<String>` + `is_variadic`)
-  vs full (+ `is_nounwind` for libc no-throw functions).
-- **Synthetic classification** -- leave `__expo_user_main` /
-  `debug.rs` helpers as `Extern` with default attrs, or add a
-  separate `IRFunctionKind::Synthetic` variant.
-- **Annotation plumbing** -- thread the parsed `@extern "C"`
-  annotation through the user-source `register_extern` path
-  (`compiler.rs:921` / `:989`) so the `"C"` payload stops getting
-  silently dropped.
-
-**Done when** every `IRFunctionKind::Extern` payload carries enough
-attributes for any backend to link the symbol without consulting the
-LLVM module, the variadic distinction is recoverable from
-`IRProgram` alone, and the user-source `@extern "C"` annotation flows
-end-to-end into the IR.
+**Outcome.** `IRProgram` now honestly classifies every callable.
+`Extern` means precisely "linker resolves this and `ExternAttrs`
+tells you how"; `Free` / `Method` carry an Expo AST regardless of
+whether the function is generic; `Intrinsic` covers any method-keyed
+backend-emitted body (stdlib types and per-user-type derived
+methods alike); `MainEntry` flags the transitional `fn main`
+synthesis pair; `Thunk` covers calling-convention adapters. Six
+typed helpers on `Compiler`, all funneling through
+`register_function`'s dual write, are the single declared-callable
+seam (see section 3c).
 
 ### Phase 4e -- Locals foundation
 
@@ -495,13 +532,19 @@ rule plus the concrete behavior it forbids.
     retires. Forbids: keeping closures alive after their backing
     registry has moved to `expo-ir`.
 
-12. **One-callable-one-`IRFunction`.** Every callable symbol in the
-    program -- user, monomorphized, intrinsic, runtime extern, thunk
-    -- is an `IRFunction` entry with a typed `IRFunctionKind` that
-    names what it is. Forbids: LLVM-only callable side tables. Wave 18
-    closed the original three exceptions (thunks, stdlib intrinsic
-    methods, `resolve_generic_call`'s registry consult); new
-    exceptions would be regressions, not patterns to preserve.
+12. **One-callable-one-`IRFunction`-with-honest-kind.** Every
+    callable symbol in the program -- user, monomorphized,
+    intrinsic, runtime extern, thunk, main-entry pair -- is an
+    `IRFunction` entry with a typed `IRFunctionKind` that *honestly
+    classifies what it is*. Wave 18 closed the original three
+    exceptions (thunks, stdlib intrinsic methods,
+    `resolve_generic_call`'s registry consult). Wave 19 closed the
+    `register_extern` catch-all that misclassified non-generic user
+    free fns / methods, the `__expo_user_main` entry pair, and
+    per-type debug helpers. Forbids: LLVM-only callable side tables;
+    using `register_extern` as a "declare without committing to a
+    kind" shortcut. New misclassification would be a regression,
+    not a pattern to preserve.
 
 ---
 

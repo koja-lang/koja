@@ -3,6 +3,7 @@
 //! Extracted from `compiler.rs` to keep the `Compiler` impl focused on
 //! orchestration rather than enumerating external symbols.
 
+use expo_ir::ExternAttrs;
 use expo_ir::identity::FunctionIdentifier;
 use inkwell::AddressSpace;
 use inkwell::types::FunctionType;
@@ -12,7 +13,10 @@ use crate::compiler::Compiler;
 /// Declares all external C and Expo runtime functions that codegen may call.
 /// Each declaration goes through [`Compiler::register_extern`] so the
 /// callable-symbol registry on [`expo_ir::IRProgram`] sees these symbols
-/// and call resolution can find them.
+/// and call resolution can find them. Attributes are derived from the
+/// LLVM `FunctionType` -- the variadic flag is read back via
+/// [`FunctionType::is_var_arg`], so each call site stays a single
+/// `decl(c, name, ty)` line.
 pub(crate) fn declare_builtins<'ctx>(c: &mut Compiler<'ctx>) {
     let void = c.context.void_type();
     let i32 = c.context.i32_type();
@@ -167,8 +171,14 @@ pub(crate) fn declare_builtins<'ctx>(c: &mut Compiler<'ctx>) {
 }
 
 /// Declares one external function and registers its signature-only
-/// presence on [`expo_ir::IRProgram`] via [`Compiler::register_extern`].
+/// presence on [`expo_ir::IRProgram`] via [`Compiler::register_extern`]
+/// with default C-ABI attributes (no link library / link name override;
+/// libc and the Expo runtime are linked unconditionally).
 fn decl<'ctx>(c: &mut Compiler<'ctx>, name: &str, ty: FunctionType<'ctx>) {
-    let f = c.module.add_function(name, ty, None);
-    c.register_extern(FunctionIdentifier::new(name), f);
+    let function_value = c.module.add_function(name, ty, None);
+    c.register_extern(
+        FunctionIdentifier::new(name),
+        function_value,
+        ExternAttrs::c(ty.is_var_arg()),
+    );
 }

@@ -13,7 +13,9 @@ use expo_ir::lower::naming::{current_method_symbol_prefix, method_symbol_prefix}
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr, type_name_from_expr};
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstStruct};
 use expo_ir::util::parse_int_literal;
-use expo_ir::{FnLowerState, IRFunction, IRFunctionKind, IRProgram, TypeLayouts};
+use expo_ir::{
+    ExternAbi, ExternAttrs, FnLowerState, IRFunction, IRFunctionKind, IRProgram, TypeLayouts,
+};
 
 use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
@@ -36,7 +38,7 @@ use expo_ast::ast::{
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::{Package, Type, package_from_str};
+use expo_typecheck::types::{Package, Type, named_generic, package_from_str};
 use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
@@ -359,10 +361,11 @@ impl<'ctx> Compiler<'ctx> {
     /// `resolve_static_call` must route through this helper so the two
     /// stores cannot drift.
     ///
-    /// `kind` selects the [`IRFunctionKind`] variant: `Free` /
-    /// `Method` for AST-bodied functions, `Extern` for stdlib
-    /// runtime externs, intrinsic methods, generated thunks, and
-    /// hand-emitted entry points.
+    /// Most callers should reach for one of the typed helpers
+    /// ([`Self::register_extern`], [`Self::register_free`],
+    /// [`Self::register_intrinsic`], [`Self::register_main_entry`],
+    /// [`Self::register_method`], [`Self::register_thunk`]) which
+    /// pre-populate the right [`IRFunctionKind`] for their site.
     pub fn register_function(
         &mut self,
         mangled: FunctionIdentifier,
@@ -380,31 +383,58 @@ impl<'ctx> Compiler<'ctx> {
         self.functions.insert(mangled, value);
     }
 
-    /// Convenience wrapper around [`Self::register_function`] for
-    /// signature-only externs (stdlib runtime, the
-    /// `main` / `__expo_user_main` entry pair, debug helpers, and
-    /// user-source `@extern "C"` declarations). Uses placeholder
-    /// `Type::Unknown` for the signature because the Expo-source-level
-    /// types are either nonexistent (pure C ABI) or available through
-    /// other channels; a future slice (Phase 4d) splits `Extern` into
-    /// attributed sub-kinds and populates real signatures.
-    pub fn register_extern(&mut self, mangled: FunctionIdentifier, value: FunctionValue<'ctx>) {
+    /// Convenience wrapper for foreign-linked symbols: C stdlib
+    /// (`printf`, `malloc`, ...), Expo runtime FFI (`expo_rt_*`,
+    /// `expo_string_*`, ...), and user-source `@extern "C"`
+    /// declarations. The carried [`ExternAttrs`] is sufficient for
+    /// any backend to declare and link the symbol without consulting
+    /// the LLVM module. Signature is recorded as `Type::Unknown` for
+    /// now -- the LLVM `FunctionType` is the source of truth and a
+    /// future slice can promote the Expo-source types into IR.
+    pub fn register_extern(
+        &mut self,
+        mangled: FunctionIdentifier,
+        value: FunctionValue<'ctx>,
+        attrs: ExternAttrs,
+    ) {
         self.register_function(
             mangled,
             Vec::new(),
             Type::Unknown,
-            IRFunctionKind::Extern,
+            IRFunctionKind::Extern(attrs),
             value,
         );
     }
 
-    /// Convenience wrapper around [`Self::register_function`] for
-    /// stdlib intrinsic methods (`List.append`, `Map.get`, `CPtr.read`,
-    /// ...). The `(base_type, method_name)` pair is the minimum
-    /// dispatch identity backends need to route a call to their own
-    /// intrinsic emitter, distinct from generic FFI extern handling.
-    /// Signature is recorded as `Type::Unknown` for now -- intrinsic
-    /// emitters carry the real LLVM type in their hand-written body.
+    /// Convenience wrapper for non-generic top-level user functions.
+    /// Mirrors the `Free` registration the monomorphize planner
+    /// performs for generic instantiations, so the IR carries the
+    /// same kind for both populations and a body-walking backend can
+    /// treat them uniformly.
+    pub fn register_free(
+        &mut self,
+        mangled: FunctionIdentifier,
+        value: FunctionValue<'ctx>,
+        func_ast: Function,
+    ) {
+        self.register_function(
+            mangled,
+            Vec::new(),
+            Type::Unknown,
+            IRFunctionKind::Free {
+                func_ast,
+                subst: HashMap::new(),
+            },
+            value,
+        );
+    }
+
+    /// Convenience wrapper for compiler-defined methods whose body is
+    /// hand-emitted by the backend: stdlib intrinsics
+    /// (`List.append`, `Map.get`, `CPtr.read`, ...) and per-type
+    /// debug helpers (`Int.inspect`, `MyStruct.format`, ...). The
+    /// `(base_type, method_name)` pair is the minimum dispatch
+    /// identity backends need to route a call to their own emitter.
     pub fn register_intrinsic(
         &mut self,
         mangled: FunctionIdentifier,
@@ -419,6 +449,50 @@ impl<'ctx> Compiler<'ctx> {
             IRFunctionKind::Intrinsic {
                 base_type: base_type.to_string(),
                 method_name: method_name.to_string(),
+            },
+            value,
+        );
+    }
+
+    /// Convenience wrapper for the compiler-synthesized `fn main`
+    /// entry pair: the LLVM `main` C entry that calls
+    /// `expo_rt_spawn(__expo_user_main, ...)` and `__expo_user_main`
+    /// itself. Transitional helper -- see [`IRFunctionKind::MainEntry`].
+    pub fn register_main_entry(&mut self, mangled: FunctionIdentifier, value: FunctionValue<'ctx>) {
+        self.register_function(
+            mangled,
+            Vec::new(),
+            Type::Unknown,
+            IRFunctionKind::MainEntry,
+            value,
+        );
+    }
+
+    /// Convenience wrapper for non-generic user impl methods.
+    /// Mirrors the `Method` registration the monomorphize planner
+    /// performs for generic instantiations.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_method(
+        &mut self,
+        mangled: FunctionIdentifier,
+        value: FunctionValue<'ctx>,
+        func_ast: Function,
+        base_type: String,
+        mangled_type: MonomorphizedTypeIdentifier,
+        self_type: Option<Type>,
+        is_static: bool,
+    ) {
+        self.register_function(
+            mangled,
+            Vec::new(),
+            Type::Unknown,
+            IRFunctionKind::Method {
+                func_ast,
+                subst: HashMap::new(),
+                base_type,
+                mangled_type,
+                self_type,
+                is_static,
             },
             value,
         );
@@ -712,12 +786,12 @@ impl<'ctx> Compiler<'ctx> {
 
         param_types.extend(self.resolve_param_types(&func.params)?);
 
-        let is_extern_c = func.annotations.iter().any(|a| {
-            a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")
-        });
+        let is_extern_c = is_extern_c_decl(&func.annotations);
 
         let mangled = if is_extern_c {
-            extract_link_symbol(&func.annotations).unwrap_or_else(|| func.name.clone())
+            extract_extern_attrs(&func.annotations, false)
+                .link_name
+                .unwrap_or_else(|| func.name.clone())
         } else {
             match mangling_prefix {
                 Some(prefix) => format!("{}_{}", prefix, func.name),
@@ -910,15 +984,37 @@ impl<'ctx> Compiler<'ctx> {
                     ensure_types_exist(self, &pt)?;
                 }
             }
-            let mangled = format!("{prefix}_{}", func.name);
-            if self
-                .functions
-                .contains_key(&FunctionIdentifier::new(&mangled))
-            {
+            let mangled = FunctionIdentifier::new(format!("{prefix}_{}", func.name));
+            if self.functions.contains_key(&mangled) {
                 continue;
             }
             let fn_value = self.declare_function(func, Some(&prefix), Some(type_name))?;
-            self.register_extern(FunctionIdentifier::new(&mangled), fn_value);
+            if is_extern_c_decl(&func.annotations) {
+                let attrs = extract_extern_attrs(&func.annotations, false);
+                self.register_extern(mangled, fn_value, attrs);
+            } else {
+                let is_static = !matches!(func.params.first(), Some(Param::Self_ { .. }));
+                let self_type = if is_static {
+                    None
+                } else {
+                    Some(named_generic(
+                        type_name,
+                        Vec::new(),
+                        self.type_ctx,
+                        self.current_package.as_ref(),
+                    ))
+                };
+                let mangled_type = MonomorphizedTypeIdentifier::new(prefix.clone());
+                self.register_method(
+                    mangled,
+                    fn_value,
+                    func.clone(),
+                    type_name.to_string(),
+                    mangled_type,
+                    self_type,
+                    is_static,
+                );
+            }
         }
         self.fn_lower.self_type_name = None;
         Ok(())
@@ -979,14 +1075,26 @@ impl<'ctx> Compiler<'ctx> {
                         self.generic_fn_asts.insert(func.name.clone(), func.clone());
                         continue;
                     }
-                    if self
-                        .functions
-                        .contains_key(&FunctionIdentifier::new(&func.name))
-                    {
+                    let mangled = FunctionIdentifier::new(&func.name);
+                    if self.functions.contains_key(&mangled) {
                         continue;
                     }
                     let fn_value = self.declare_function(func, None, None)?;
-                    self.register_extern(FunctionIdentifier::new(&func.name), fn_value);
+                    if is_extern_c_decl(&func.annotations) {
+                        let attrs = extract_extern_attrs(&func.annotations, false);
+                        self.register_extern(mangled, fn_value, attrs);
+                    } else if func.name == "main" {
+                        // The LLVM `main` declared here is the synthetic
+                        // C entry that wraps the user's body. The body
+                        // itself ends up in `__expo_user_main` (see
+                        // `define_function`), which also registers as
+                        // `MainEntry`. Both halves of the entry pair
+                        // share the kind so backends can tag them as
+                        // transitional `fn main` synthesis.
+                        self.register_main_entry(mangled, fn_value);
+                    } else {
+                        self.register_free(mangled, fn_value, func.clone());
+                    }
                 }
                 Item::Struct(s) if !s.type_params.is_empty() => {}
                 Item::Struct(s) => {
@@ -1073,7 +1181,7 @@ impl<'ctx> Compiler<'ctx> {
             let user_main = self
                 .module
                 .add_function("__expo_user_main", user_main_ty, None);
-            self.register_extern(FunctionIdentifier::new("__expo_user_main"), user_main);
+            self.register_main_entry(FunctionIdentifier::new("__expo_user_main"), user_main);
 
             let file = self.debug.file();
             self.debug.push_function(
@@ -1693,15 +1801,53 @@ pub(crate) fn llvm_field_byte_size(ty: inkwell::types::BasicTypeEnum) -> u32 {
     }
 }
 
-/// Extracts the C symbol name from a `@link "lib:symbol"` annotation.
-/// Returns `Some("symbol")` if the colon convention is used, `None` otherwise.
-fn extract_link_symbol(annotations: &[expo_ast::ast::Annotation]) -> Option<String> {
-    annotations.iter().find_map(|a| {
-        if a.name == "link"
-            && let Some(AnnotationValue::String(s)) = &a.value
-        {
-            return s.split_once(':').map(|(_, sym)| sym.to_string());
-        }
-        None
+/// Returns `true` when `annotations` contains an `@extern "C"` marker.
+pub(crate) fn is_extern_c_decl(annotations: &[expo_ast::ast::Annotation]) -> bool {
+    annotations.iter().any(|a| {
+        a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")
     })
+}
+
+/// Builds the [`ExternAttrs`] payload for a user-source `@extern "C"`
+/// declaration from its annotations.
+///
+/// Annotation conventions:
+///
+/// - `@extern "C"` selects the ABI (the only ABI today).
+/// - `@link "lib"` records the linker library; emits `-llib`.
+/// - `@link "lib:symbol"` records both the linker library and an
+///   override of the LLVM symbol name (so the Expo-source name can
+///   differ from the C symbol).
+///
+/// `is_variadic` is taken from the LLVM `FunctionType` because user
+/// `@extern "C"` declarations have no variadic syntax in Expo source
+/// today (the typecheck pass rejects it); pass `false` from those
+/// call sites.
+pub(crate) fn extract_extern_attrs(
+    annotations: &[expo_ast::ast::Annotation],
+    is_variadic: bool,
+) -> ExternAttrs {
+    let mut link_lib = None;
+    let mut link_name = None;
+    for ann in annotations {
+        if ann.name != "link" {
+            continue;
+        }
+        let Some(AnnotationValue::String(payload)) = &ann.value else {
+            continue;
+        };
+        match payload.split_once(':') {
+            Some((lib, sym)) => {
+                link_lib = Some(lib.to_string());
+                link_name = Some(sym.to_string());
+            }
+            None => link_lib = Some(payload.clone()),
+        }
+    }
+    ExternAttrs {
+        abi: ExternAbi::C,
+        is_variadic,
+        link_lib,
+        link_name,
+    }
 }
