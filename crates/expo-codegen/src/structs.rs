@@ -261,10 +261,11 @@ pub(crate) fn emit_field_load<'ctx>(
     step: &ResolvedFieldStep,
 ) -> Result<BasicValueEnum<'ctx>, String> {
     let struct_llvm_type = struct_value.get_type();
-    let tmp_alloca = compiler
-        .builder
-        .build_alloca(struct_llvm_type, "tmp_struct")
-        .unwrap();
+    // Hoist the scratch slot to the entry block: this helper runs on
+    // every field access, including ones inside TCO-converted loops,
+    // and a per-iteration `alloca` would leak stack until the function
+    // returned (a 100k-iter loop is enough to SIGBUS a worker thread).
+    let tmp_alloca = compiler.build_entry_alloca(struct_llvm_type, "tmp_struct");
     compiler
         .builder
         .build_store(tmp_alloca, struct_value)

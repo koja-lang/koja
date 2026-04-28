@@ -66,15 +66,9 @@ Condensed from 18 waves of work. The Wave 1-17 prose lives in
   `Lowerer<'a>` driver; two conditionals plus three call families
   lifted; expression vocabulary covers
   `BinaryOp`/`UnaryOp`/`FieldLoad`/`Call`/`MethodCall` plus literals
-  and `Group`. Wave 18 closed the registry contract: thunks are typed
-  `IRFunctionKind::Thunk { wraps }`, stdlib intrinsic methods are
-  typed `IRFunctionKind::Intrinsic { base_type, method_name }`, and
-  four of the six `Compiler.functions.contains_key` call-time guards
-  moved to `IRProgram::contains_function` (the other two stay on
-  `Compiler.functions` because they ask "has the LLVM body been
-  bound" at the top of `emit_ir_*`, where the planner has already
-  populated `c.ir`; see section 3b). The Wave-16 callable-registry
-  exceptions are gone.
+  and `Group`. Wave 18 closed the callable-registry contract -- the
+  Wave-16 exceptions are gone (see the `Phase 4c -- Registry closeout`
+  entry in section 4 for the per-change detail).
 
 ---
 
@@ -183,6 +177,46 @@ construct lift discovered a foundation slice it needed first, and
 that "interlude" pattern is the signal that construct ordering has
 stopped being the natural organizing principle. Foundations now lead;
 construct lifts ride on top.
+
+### Phase 4c -- Registry closeout (Done, Wave 18)
+
+Resolved the three Wave 16 exceptions so invariant 12 ("every callable
+is in `IRProgram`") holds without caveat. Independent of every other
+remaining phase; cheap; locks down a contract every later phase reads.
+Sequenced first because there was no reason to wait.
+
+- ~~Route `fn_ref_thunks` through `register_function`, or surface them
+  as a typed `IRFunctionKind::Thunk`.~~ **Done** -- new
+  `Compiler::register_thunk` helper routes through `register_function`
+  with `IRFunctionKind::Thunk { wraps }`; `get_or_create_thunk` calls
+  it instead of writing to `fn_ref_thunks` directly. The
+  wraps-keyed `fn_ref_thunks` cache stays on `Compiler` per the
+  two-bucket rule (LLVM-bound state lives in codegen).
+- ~~Route stdlib intrinsic methods through `emit_ir_impl_method`, or
+  add `IRFunctionKind::Intrinsic`.~~ **Done** --
+  `IRFunctionKind::Intrinsic { base_type, method_name }` added,
+  `Compiler::register_intrinsic` helper extracted, and ~21
+  stdlib-intrinsic emitter sites in `list.rs` / `map.rs` / `set.rs` /
+  `process.rs` / `hashtable.rs` / `intrinsics/cptr.rs` migrated. Base
+  types are `List` / `Map` / `Set` / `Ref` / `ReplyTo` / `CPtr`.
+- ~~Migrate `resolve_generic_call` to
+  `IRProgram::contains_function`.~~ **Done (qualified)** -- four of
+  six `Compiler.functions.contains_key` call-time guards
+  (`calls.rs:208`, `structs.rs:514+972`, `generics.rs:340`) migrated
+  to `c.ir.contains_function`. The other two (`generics.rs:528+633`
+  inside `emit_ir_function` / `emit_ir_impl_method`) deliberately
+  stay on `Compiler.functions` because they ask "has the LLVM body
+  been bound yet?", which is a `Compiler.functions` question -- the
+  planner has already populated `c.ir` immediately before
+  `emit_ir_*` is called. This is the planner-vs-emit semantic split
+  documented in section 3b, not an exception to invariant 12.
+
+**Outcome.** `IRProgram` is the canonical typed callable registry
+across `Free` / `Method` / `Extern` / `Intrinsic` / `Thunk`. Every
+registration funnels through `Compiler::register_function` (directly
+or via the four typed helpers `register_extern` / `register_intrinsic`
+/ `register_thunk`), so the dual write to `c.ir` + `c.functions`
+cannot drift.
 
 ### Phase 4d -- Extern attributes
 
