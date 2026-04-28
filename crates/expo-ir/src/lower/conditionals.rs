@@ -10,12 +10,12 @@
 //! at exactly one site per construct: the entry-block terminator's
 //! `then` / `otherwise` slot assignment.
 
-use expo_ast::ast::{Expr, Statement};
+use expo_ast::ast::{CondArm, Expr, Statement};
 use expo_typecheck::types::Type;
 
 use crate::Lowerer;
 use crate::blocks::IRTerminator;
-use crate::resolved::conditionals::{IRIf, IRIfElse, IRTernary, IRUnless};
+use crate::resolved::conditionals::{IRCond, IRCondArm, IRIf, IRIfElse, IRTernary, IRUnless};
 use crate::values::IRInstruction;
 
 impl<'a> Lowerer<'a> {
@@ -237,6 +237,91 @@ impl<'a> Lowerer<'a> {
             then_instructions,
             then_terminator: IRTerminator::Branch(merge_block),
             then_value,
+        }
+    }
+
+    /// Lowers a `cond ... end` expression. N-arm generalization of
+    /// the shape-2 conditional pattern from
+    /// [`Self::lower_if_else`].
+    ///
+    /// Mints fresh
+    /// [`IRBlockId`](crate::blocks::IRBlockId)s for every arm's
+    /// `check_block` and `body_block` (the first arm's check_block
+    /// is treated as the construct's implicit entry by emission;
+    /// see [`IRCondArm`] doc), an optional `else_block`, the shared
+    /// `merge_block`, and pre-allocates an
+    /// [`IRValueId`](crate::values::IRValueId) for the merge phi's
+    /// destination.
+    ///
+    /// Per arm: lowers `arm.condition` into `check_instructions`
+    /// via [`Self::lower_expr_to_operand`] and builds the
+    /// canonicalized branch
+    /// `CondBranch { cond, then: body_block, otherwise: <next> }`,
+    /// where `<next>` resolves to:
+    ///
+    /// - `arms[i+1].check_block` for `i < N-1`
+    /// - `else_block` for the last arm when else is present
+    /// - `merge_block` for the last arm when no else is present
+    ///
+    /// Bodies remain AST `Vec<Statement>` stubs walked by emission
+    /// until Phase 4g lifts statement-level lowering.
+    pub fn lower_cond(
+        &mut self,
+        arms: &[CondArm],
+        else_body: Option<&[Statement]>,
+        merge_phi_ty: Type,
+    ) -> IRCond {
+        debug_assert!(
+            !arms.is_empty(),
+            "lower_cond invoked with no arms; shim must guard the empty-and-no-else case",
+        );
+
+        let merge_block = self.next_block_id();
+        let merge_phi_dest = self.next_value_id();
+
+        let check_blocks: Vec<_> = (0..arms.len()).map(|_| self.next_block_id()).collect();
+        let body_blocks: Vec<_> = (0..arms.len()).map(|_| self.next_block_id()).collect();
+        let else_block = else_body.map(|_| self.next_block_id());
+
+        let lowered_arms: Vec<IRCondArm> = arms
+            .iter()
+            .enumerate()
+            .map(|(i, arm)| {
+                let mut check_instructions = Vec::new();
+                let cond_operand =
+                    self.lower_expr_to_operand(&mut check_instructions, &arm.condition);
+
+                let next_block = if i + 1 < arms.len() {
+                    check_blocks[i + 1]
+                } else if let Some(eb) = else_block {
+                    eb
+                } else {
+                    merge_block
+                };
+
+                IRCondArm {
+                    body_block: body_blocks[i],
+                    body_stmts: arm.body.clone(),
+                    body_terminator: IRTerminator::Branch(merge_block),
+                    check_block: check_blocks[i],
+                    check_instructions,
+                    check_terminator: IRTerminator::CondBranch {
+                        cond: cond_operand,
+                        then: body_blocks[i],
+                        otherwise: next_block,
+                    },
+                }
+            })
+            .collect();
+
+        IRCond {
+            arms: lowered_arms,
+            else_block,
+            else_stmts: else_body.map(<[Statement]>::to_vec),
+            else_terminator: else_block.map(|_| IRTerminator::Branch(merge_block)),
+            merge_block,
+            merge_phi_dest,
+            merge_phi_ty,
         }
     }
 }

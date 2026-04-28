@@ -4,128 +4,50 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{CondArm, Expr, Statement};
 use expo_ir::IRBlockId;
-use expo_ir::resolved::conditionals::{IRIf, IRIfElse, IRTernary, IRUnless};
+use expo_ir::resolved::conditionals::{IRCond, IRIf, IRIfElse, IRTernary, IRUnless};
 use expo_ir::values::{IRInstruction, IRValueId};
 use expo_typecheck::types::Type;
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
-use crate::expr::compile_expr;
 use crate::stmt::compile_statement;
 
 use super::instructions::execute_instructions;
-use super::{coerce_to_bool, compile_body_as_value, emit_terminator};
+use super::{compile_body_as_value, emit_terminator};
 
-/// Compiles a `cond` expression (multi-arm conditional). Each arm's condition is
-/// tested in order; the first truthy branch executes. Returns a phi value when
-/// all arms (including `else`) produce a value of the same type.
+/// Compiles a `cond` expression (multi-arm conditional).
+///
+/// Lowers to an [`IRCond`] via [`expo_ir::Lowerer::lower_cond`] and
+/// walks via [`emit_cond`]. N-arm generalization of the shape-2
+/// conditional pattern from
+/// [`compile_if`]'s with-else branch: arm bodies remain AST stubs
+/// (until Phase 4g), the merge phi is synthesized inline at emit
+/// time when every arm + else (when present) produces a matching
+/// value. The empty-and-no-else case short-circuits at the shim
+/// before lowering, matching legacy behavior.
+///
+/// `resolved_type` is the parent [`expo_ast::ast::Expr`]'s
+/// typecheck-resolved type when available; threaded into lowering
+/// for `IRCond::merge_phi_ty`. The actual phi LLVM type is derived
+/// from the first arm's compiled value at emit time, so a `None`
+/// here doesn't break the value path.
 pub fn compile_cond<'ctx>(
     compiler: &mut Compiler<'ctx>,
     arms: &[CondArm],
     else_body: &Option<Vec<Statement>>,
+    resolved_type: Option<&Type>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     if arms.is_empty() && else_body.is_none() {
         return Ok(None);
     }
 
-    let merge_bb = compiler.context.append_basic_block(function, "cond_end");
-    let fallthrough_bb = compiler.context.append_basic_block(function, "cond_none");
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-        Vec::new();
-    let mut branch_expo_type: Option<Type> = None;
-
-    for (i, arm) in arms.iter().enumerate() {
-        let cond_val = compile_expr(compiler, &arm.condition, function)?
-            .ok_or("cond arm produced no value")?
-            .value;
-        let cond_int = coerce_to_bool(compiler, cond_val, "cond arm condition")?;
-
-        let body_bb = compiler
-            .context
-            .append_basic_block(function, &format!("cond_body_{i}"));
-        let next_bb = if i + 1 < arms.len() {
-            compiler
-                .context
-                .append_basic_block(function, &format!("cond_check_{}", i + 1))
-        } else {
-            fallthrough_bb
-        };
-
-        compiler
-            .builder
-            .build_conditional_branch(cond_int, body_bb, next_bb)
-            .unwrap();
-
-        compiler.builder.position_at_end(body_bb);
-        let arm_tv = compile_body_as_value(compiler, &arm.body, function)?;
-        if !compiler.current_block_terminated() {
-            compiler
-                .builder
-                .build_unconditional_branch(merge_bb)
-                .unwrap();
-        }
-        let arm_end_bb = compiler.builder.get_insert_block().unwrap();
-        if let Some(tv) = arm_tv {
-            if branch_expo_type.is_none() {
-                branch_expo_type = Some(tv.expo_type.clone());
-            }
-            incoming.push((tv.value, arm_end_bb));
-        }
-
-        if next_bb != merge_bb && next_bb != fallthrough_bb {
-            compiler.builder.position_at_end(next_bb);
-        }
-    }
-
-    compiler.builder.position_at_end(fallthrough_bb);
-    if let Some(body) = else_body {
-        let else_tv = compile_body_as_value(compiler, body, function)?;
-        if !compiler.current_block_terminated() {
-            compiler
-                .builder
-                .build_unconditional_branch(merge_bb)
-                .unwrap();
-        }
-        let else_end_bb = compiler.builder.get_insert_block().unwrap();
-        if let Some(tv) = else_tv {
-            if branch_expo_type.is_none() {
-                branch_expo_type = Some(tv.expo_type.clone());
-            }
-            incoming.push((tv.value, else_end_bb));
-        }
-    } else {
-        compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
-    }
-
-    compiler.builder.position_at_end(merge_bb);
-
-    let expected_sources = arms.len() + if else_body.is_some() { 1 } else { 0 };
-    if !incoming.is_empty() && incoming.len() == expected_sources {
-        let first_ty = incoming[0].0.get_type();
-        if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
-            let phi = compiler.builder.build_phi(first_ty, "condval").unwrap();
-            for (v, bb) in &incoming {
-                phi.add_incoming(&[(v, *bb)]);
-            }
-            let result_type = branch_expo_type.unwrap_or(Type::Unknown);
-            return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
-        }
-    }
-
-    if !incoming.is_empty() && incoming.len() != expected_sources {
-        return Err(format!(
-            "cond arms have inconsistent types: {} of {} arms produce a value",
-            incoming.len(),
-            expected_sources
-        ));
-    }
-
-    Ok(None)
+    let merge_phi_ty = resolved_type.cloned().unwrap_or(Type::Unknown);
+    let ir = compiler
+        .lowerer()
+        .lower_cond(arms, else_body.as_deref(), merge_phi_ty);
+    emit_cond(compiler, &ir, function)
 }
 
 /// Compiles an `if` / `else` expression.
@@ -402,6 +324,164 @@ fn emit_if_else<'ctx>(
             phi.as_basic_value(),
             then_tv.expo_type.clone(),
         )));
+    }
+
+    Ok(None)
+}
+
+/// Walks an [`IRCond`] into LLVM IR. N-arm generalization of
+/// [`emit_if_else`].
+///
+/// Allocates LLVM blocks for `arms[1..N].check_block` (skipping
+/// `arms[0]`'s, which is the construct's implicit entry and runs at
+/// the call-site builder position), every `arms[*].body_block`,
+/// the optional `else_block`, and `merge_block`. For each arm:
+/// position the builder at the arm's check, execute
+/// `check_instructions`, dispatch the canonicalized
+/// `check_terminator`; then position at the body, walk the AST
+/// statements via [`compile_body_as_value`] to capture the
+/// trailing-expression value (when present) and the actual end
+/// block (which may differ from `body_block` when the body
+/// contains nested control flow), and emit `body_terminator` if
+/// the arm has not self-terminated.
+///
+/// Like [`emit_if_else`], the merge phi is synthesized inline
+/// (rather than via [`execute_instructions`]) because the actual
+/// end blocks are known only after walking the AST stubs and arms
+/// may diverge or be statement-only. Unlike [`emit_if_else`], the
+/// value-merge contract is *all-or-nothing* (matches legacy
+/// `compile_cond` semantics): every arm + else (when present) must
+/// produce a matching-LLVM-typed value, or the construct returns
+/// `Ok(None)` (when no arms produced) or `Err` (when some-but-not-
+/// all produced). Typecheck normally catches the partial-production
+/// case at the source level, so the `Err` arm is defensive.
+fn emit_cond<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    ir: &IRCond,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let merge_bb = compiler.context.append_basic_block(function, "cond_end");
+
+    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
+    block_map.insert(ir.merge_block, merge_bb);
+
+    let body_bbs: Vec<BasicBlock<'ctx>> = ir
+        .arms
+        .iter()
+        .enumerate()
+        .map(|(i, arm)| {
+            let bb = compiler
+                .context
+                .append_basic_block(function, &format!("cond_body_{i}"));
+            block_map.insert(arm.body_block, bb);
+            bb
+        })
+        .collect();
+
+    for (i, arm) in ir.arms.iter().enumerate().skip(1) {
+        let bb = compiler
+            .context
+            .append_basic_block(function, &format!("cond_check_{i}"));
+        block_map.insert(arm.check_block, bb);
+    }
+
+    let else_bb = ir.else_block.map(|else_block_id| {
+        let bb = compiler.context.append_basic_block(function, "cond_else");
+        block_map.insert(else_block_id, bb);
+        bb
+    });
+
+    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+    let mut branch_expo_type: Option<Type> = None;
+
+    for (i, arm) in ir.arms.iter().enumerate() {
+        if i > 0 {
+            let check_bb = block_map[&arm.check_block];
+            compiler.builder.position_at_end(check_bb);
+        }
+
+        let mut check_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+        execute_instructions(
+            compiler,
+            &arm.check_instructions,
+            function,
+            None,
+            &mut check_value_map,
+        )?;
+        emit_terminator(
+            compiler,
+            &arm.check_terminator,
+            &block_map,
+            &check_value_map,
+            function,
+        )?;
+
+        compiler.builder.position_at_end(body_bbs[i]);
+        let (arm_tv, arm_end_bb) = walk_arm_value(compiler, &arm.body_stmts, function)?;
+        if !compiler.current_block_terminated() {
+            let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+            emit_terminator(
+                compiler,
+                &arm.body_terminator,
+                &block_map,
+                &body_value_map,
+                function,
+            )?;
+        }
+        if let Some(tv) = arm_tv {
+            if branch_expo_type.is_none() {
+                branch_expo_type = Some(tv.expo_type.clone());
+            }
+            incoming.push((tv.value, arm_end_bb));
+        }
+    }
+
+    if let (Some(else_bb), Some(else_stmts), Some(else_terminator)) = (
+        else_bb,
+        ir.else_stmts.as_deref(),
+        ir.else_terminator.as_ref(),
+    ) {
+        compiler.builder.position_at_end(else_bb);
+        let (else_tv, else_end_bb) = walk_arm_value(compiler, else_stmts, function)?;
+        if !compiler.current_block_terminated() {
+            let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+            emit_terminator(
+                compiler,
+                else_terminator,
+                &block_map,
+                &body_value_map,
+                function,
+            )?;
+        }
+        if let Some(tv) = else_tv {
+            if branch_expo_type.is_none() {
+                branch_expo_type = Some(tv.expo_type.clone());
+            }
+            incoming.push((tv.value, else_end_bb));
+        }
+    }
+
+    compiler.builder.position_at_end(merge_bb);
+
+    let expected_sources = ir.arms.len() + usize::from(ir.else_block.is_some());
+    if !incoming.is_empty() && incoming.len() == expected_sources {
+        let first_ty = incoming[0].0.get_type();
+        if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
+            let phi = compiler.builder.build_phi(first_ty, "condval").unwrap();
+            for (value, bb) in &incoming {
+                phi.add_incoming(&[(value, *bb)]);
+            }
+            let result_type = branch_expo_type.unwrap_or(Type::Unknown);
+            return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
+        }
+    }
+
+    if !incoming.is_empty() && incoming.len() != expected_sources {
+        return Err(format!(
+            "cond arms have inconsistent types: {} of {} arms produce a value",
+            incoming.len(),
+            expected_sources
+        ));
     }
 
     Ok(None)

@@ -11,16 +11,17 @@ SIL-style design prose and the full Wave 1-17 narrative live in
 ## 1. Status snapshot
 
 The instruction-level scaffold has landed. `IRProgram` is the canonical
-declaration registry. Twelve `Lowerer<'a>` lift methods cover ten typed
-`IRInstruction` variants. Four conditionals (`unless`, `if`-no-else,
-`if`/`else`, ternary) run end-to-end through the full IR pipeline
-today; three call families (`Call`, static call, method call) plus
-`FieldChain` / `FieldLoad`, `LoadLocal` / `LoadConst` / `MakeFnRef`,
-`BinaryOp`, and `UnaryOp` reach typed instructions when consumed via
-the codegen wrappers' lift-then-fallthrough paths. The IR-level
-value-merging primitive (`IRInstruction::Phi`) is in place and
-load-bearing for both ternary (pre-staged at lowering) and the
-with-else `if` (synthesized at emit time).
+declaration registry. Thirteen `Lowerer<'a>` lift methods cover ten
+typed `IRInstruction` variants. Five conditionals (`unless`,
+`if`-no-else, `if`/`else`, ternary, `cond`) run end-to-end through the
+full IR pipeline today; three call families (`Call`, static call,
+method call) plus `FieldChain` / `FieldLoad`, `LoadLocal` /
+`LoadConst` / `MakeFnRef`, `BinaryOp`, and `UnaryOp` reach typed
+instructions when consumed via the codegen wrappers'
+lift-then-fallthrough paths. The IR-level value-merging primitive
+(`IRInstruction::Phi`) is in place and load-bearing for ternary
+(pre-staged at lowering), `if`/`else`, and `cond` (both synthesized at
+emit time when arm-body trailing-expression values surface).
 
 What we do _not_ have yet:
 
@@ -40,8 +41,8 @@ What we do _not_ have yet:
 
 ## 2. Phase summary
 
-Condensed from 21 waves of work. The Wave 1-17 prose lives in
-[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Waves 18-21
+Condensed from 22 waves of work. The Wave 1-17 prose lives in
+[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Waves 18-22
 are summarized inline below.
 
 - **Phase 1 -- Typed foundation (done, Waves 1-5).** `TypeRegistry`
@@ -113,6 +114,23 @@ are summarized inline below.
   so multi-call constructs (ternary's entry / then / else / merge
   chain) can share SSA values across successive invocations. See the
   `Phase 4f Slice 3` entry in section 4 for the per-change detail.
+- **Phase 4f Slice 4 -- `cond` (done, Wave 22).** The `cond ... end`
+  expression lifts to typed IR walked by `execute_instructions`. New
+  IR types `IRCondArm` (per-arm check + body slot pair) and `IRCond`
+  (N arms plus optional else and a single merge block) generalize
+  the shape-2 conditional pattern from `IRIfElse` to N arms. The
+  arm chain is encoded directly on each arm's `check_terminator`
+  `otherwise` slot pointing at the next arm's `check_block` -- no
+  per-arm "next-check" registry needed; the legacy
+  `compile_cond`'s `fallthrough_bb` artifact is eliminated since the
+  no-else case sends the last arm's `otherwise` straight to merge.
+  The merge phi is synthesized inline at emit time (mirroring
+  `emit_if_else` -- arms are AST stubs so per-arm trailing-expression
+  values aren't visible until Phase 4g), with the all-or-nothing
+  value-merge contract preserved from legacy semantics. `IRInstruction::Phi`
+  is reused unchanged -- a third construct adopts the merge primitive
+  with no modification, validating it as the right shape. See the
+  `Phase 4f Slice 4` entry in section 4 for the per-change detail.
 
 ---
 
@@ -141,7 +159,7 @@ to plan a slice.
 | Unary op                    | Instruction-only            | `Lowerer::lower_unary_op_or_stub` -> `IRInstruction::UnaryOp`                                                                        |
 | Bool/Int/Float literals     | Inline operand              | `IROperand::ConstBool` / `ConstInt` / `ConstFloat`                                                                                   |
 | `match`                     | Parallel pipeline           | `lower_match` -> `ResolvedMatch` -> `emit_match`; bypasses `execute_instructions`                                                    |
-| `cond`                      | AST -> LLVM                 | Slice 4                                                                                                                              |
+| `cond`                      | Full IR pipeline            | `Lowerer::lower_cond` -> `IRCond` -> `emit_cond` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)                |
 | `while` / `loop` / `for`    | AST -> LLVM                 | Slice 6                                                                                                                              |
 | `break` / `return`          | AST -> LLVM                 | Slice 6                                                                                                                              |
 | `assignment` / compound     | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                        |
@@ -457,9 +475,29 @@ value_map`. **Outcome.** `compile_if`'s else branch and
   `compile_ternary` are thin shims over `Lowerer::lower_if_else`
   and `Lowerer::lower_ternary` plus the new emit walkers; the IR
   pipeline now covers both shape-2 conditional families end-to-end.
-- **Slice 4 -- `cond`.** N-arm chain of `CondBranch`s. Tests the
-  scaffold scaling beyond fixed-N constructs. **Done when**
-  `compile_cond` is a thin shim over the unified walker.
+- **Slice 4 -- `cond` (Done, Wave 22).** N-arm chain of `CondBranch`s.
+  Tested the scaffold scaling beyond fixed-N constructs without any
+  new IR primitive: `IRCondArm` + `IRCond` generalize `IRIfElse`'s
+  shape-2 pattern by encoding the arm chain on each arm's
+  `check_terminator` `otherwise` slot pointing at the next arm's
+  `check_block`. The legacy `compile_cond`'s `fallthrough_bb`
+  artifact is eliminated -- the no-else case sends the last arm's
+  `otherwise` straight to merge. Like `IRIfElse`, arm bodies remain
+  AST `Vec<Statement>` stubs (until Phase 4g) and the merge phi is
+  synthesized inline at emit time; the all-or-nothing value-merge
+  contract from legacy `compile_cond` is preserved (every arm + else
+  must produce a matching-LLVM-typed value, or the construct returns
+  `Ok(None)` for no-production / `Err` for partial-production --
+  the latter is defensive since typecheck enforces consistency at
+  the source level via `expo-typecheck::expr::infer_expr`).
+  `IRInstruction::Phi` is reused unchanged. Known semantic wart
+  preserved as-is: divergent arms (early `return` / `panic`) mixed
+  with value-producing arms hit the partial-production error path
+  because the divergent arm doesn't push to the incoming list while
+  still counting toward `expected_sources`. Out-of-scope for this
+  slice; addressable later. **Outcome.** `compile_cond` is a thin
+  shim over `Lowerer::lower_cond` + `emit_cond`; the IR pipeline now
+  covers the third value-producing conditional family.
 - **Slice 5 -- `match` unification.** Existing `lower_match` /
   `emit_match` parallel pipeline converges onto `IRBasicBlock` +
   `execute_instructions`. Pattern bindings become explicit IR (scope

@@ -198,7 +198,13 @@ pub fn compile_expr<'ctx>(
 
         ExprKind::Cond {
             arms, else_body, ..
-        } => compile_cond(compiler, arms, else_body, function),
+        } => compile_cond(
+            compiler,
+            arms,
+            else_body,
+            expr.resolved_type.as_ref(),
+            function,
+        ),
 
         ExprKind::EnumConstruction {
             type_path,
