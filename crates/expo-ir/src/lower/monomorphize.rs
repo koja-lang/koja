@@ -184,11 +184,9 @@ pub fn monomorphize_function(
 
     program.insert_function(IRFunction {
         mangled: mangled.clone(),
-        func_ast,
         param_types,
         return_type,
-        subst,
-        kind: IRFunctionKind::Free,
+        kind: IRFunctionKind::Free { func_ast, subst },
     });
 
     Ok(Some(mangled))
@@ -196,13 +194,9 @@ pub fn monomorphize_function(
 
 /// Plans a monomorphized impl method: defers to
 /// [`resolve_method_signature`] for the AST/types/substitutions then
-/// appends an [`IRFunction`] (kind = `Method`) to `program`.
-///
-/// Returns `Ok(None)` both when the method was already in the program
-/// and when `resolve_method_signature` reports it as already compiled
-/// per the caller-supplied `is_compiled` predicate. The latter preserves
-/// the original codegen behavior of treating the LLVM cache as a
-/// short-circuit gate.
+/// appends an [`IRFunction`] (kind = `Method`) to `program`. Idempotent
+/// against [`IRProgram::contains_function`]: returns `Ok(None)` if the
+/// method is already in the program.
 pub fn monomorphize_impl_method(
     ctx: &LowerCtx<'_>,
     program: &mut IRProgram,
@@ -210,19 +204,8 @@ pub fn monomorphize_impl_method(
     method_name: &str,
     type_args: &[Type],
     method_type_args: &[Type],
-    is_compiled: impl Fn(&FunctionIdentifier) -> bool,
 ) -> Result<Option<FunctionIdentifier>, String> {
-    let Some(sig) = resolve_method_signature(
-        ctx,
-        base_type,
-        method_name,
-        type_args,
-        method_type_args,
-        is_compiled,
-    )?
-    else {
-        return Ok(None);
-    };
+    let sig = resolve_method_signature(ctx, base_type, method_name, type_args, method_type_args)?;
 
     if program.contains_function(&sig.mangled_fn) {
         return Ok(None);
@@ -231,11 +214,11 @@ pub fn monomorphize_impl_method(
     let mangled = sig.mangled_fn.clone();
     program.insert_function(IRFunction {
         mangled: sig.mangled_fn,
-        func_ast: sig.func_ast,
         param_types: sig.param_types,
         return_type: sig.return_type,
-        subst: sig.subst,
         kind: IRFunctionKind::Method {
+            func_ast: sig.func_ast,
+            subst: sig.subst,
             base_type: base_type.to_string(),
             mangled_type: sig.mangled_type,
             self_type: sig.self_type,

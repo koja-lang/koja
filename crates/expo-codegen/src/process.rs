@@ -167,8 +167,7 @@ pub fn emit_ref_method<'ctx>(
 
             let fn_type = ref_struct.fn_type(&[], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -230,8 +229,7 @@ pub fn emit_ref_method<'ctx>(
                 .void_type()
                 .fn_type(&[ref_struct.into(), msg_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -387,8 +385,7 @@ pub fn emit_ref_method<'ctx>(
             let fn_type =
                 result_struct.fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -633,8 +630,7 @@ pub fn emit_ref_method<'ctx>(
                 .void_type()
                 .fn_type(&[ref_struct.into(), lifecycle_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -683,8 +679,7 @@ pub fn emit_ref_method<'ctx>(
 
             let fn_type = c.context.void_type().fn_type(&[ref_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -720,8 +715,7 @@ pub fn emit_ref_method<'ctx>(
             let i8_ty = c.context.i8_type();
             let fn_type = i8_ty.fn_type(&[ref_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -802,8 +796,7 @@ pub fn emit_ref_method<'ctx>(
                 .void_type()
                 .fn_type(&[ref_struct.into(), msg_llvm.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -915,8 +908,7 @@ pub fn emit_reply_to_method<'ctx>(
                 .void_type()
                 .fn_type(&[reply_to_struct.into(), reply_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();

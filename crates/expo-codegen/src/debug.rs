@@ -89,9 +89,7 @@ pub fn call_format<'ctx>(
                 let pointer_type = compiler.context.ptr_type(AddressSpace::default());
                 let function_type = pointer_type.fn_type(&[parameter_type.into()], false);
                 let function_value = compiler.module.add_function(&fn_name, function_type, None);
-                compiler
-                    .functions
-                    .insert(FunctionIdentifier::new(fn_name.clone()), function_value);
+                compiler.register_extern(FunctionIdentifier::new(fn_name.clone()), function_value);
                 emit_primitive_intrinsic(compiler, &fn_name)?;
             }
         }
@@ -481,9 +479,7 @@ fn begin_synthesis<'ctx>(
     let function_value = compiler
         .module
         .add_function(function_name, function_type, None);
-    compiler
-        .functions
-        .insert(FunctionIdentifier::new(function_name), function_value);
+    compiler.register_extern(FunctionIdentifier::new(function_name), function_value);
 
     let saved_block = compiler.builder.get_insert_block();
     let entry = compiler.context.append_basic_block(function_value, "entry");

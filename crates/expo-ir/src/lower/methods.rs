@@ -18,6 +18,7 @@ use crate::lower::LowerCtx;
 use crate::lower::inference::{infer_method_type_args, lookup_method_type_params};
 use crate::lower::naming::method_symbol_prefix;
 use crate::lower::types::{find_type_current, id_for, resolve_name_current};
+use crate::program::IRProgram;
 use crate::resolved::calls::{PendingMethodMono, ResolvedMethodCall};
 use crate::resolved::methods::ResolvedMethodSignature;
 
@@ -25,17 +26,16 @@ use crate::resolved::methods::ResolvedMethodSignature;
 /// the AST (specialized or generic path), building type substitutions,
 /// and computing parameter / return types. No LLVM emission.
 ///
-/// Returns `None` if the method has already been compiled, as reported by
-/// `is_compiled` (which lets callers consult their own per-backend
-/// function cache without coupling this helper to LLVM).
+/// Always returns the resolved signature on success; idempotency against
+/// the program-level callable registry is the caller's responsibility
+/// (see [`crate::lower::monomorphize::monomorphize_impl_method`]).
 pub fn resolve_method_signature(
     ctx: &LowerCtx<'_>,
     base_type: &str,
     method_name: &str,
     type_args: &[Type],
     method_type_args: &[Type],
-    is_compiled: impl Fn(&FunctionIdentifier) -> bool,
-) -> Result<Option<ResolvedMethodSignature>, String> {
+) -> Result<ResolvedMethodSignature, String> {
     let base_id = resolve_name_current(ctx, base_type)
         .cloned()
         .ok_or_else(|| format!("cannot resolve package for generic method base `{base_type}`"))?;
@@ -46,9 +46,6 @@ pub fn resolve_method_signature(
         let mangled_method = mangle_method_suffix(method_name, method_type_args);
         FunctionIdentifier::new(format!("{mangled_type}_{mangled_method}"))
     };
-    if is_compiled(&mangled_fn) {
-        return Ok(None);
-    }
 
     let spec_id = resolve_name_current(ctx, base_type).cloned();
     let specialized_match = spec_id.as_ref().and_then(|id| {
@@ -199,7 +196,7 @@ pub fn resolve_method_signature(
         ))
     };
 
-    Ok(Some(ResolvedMethodSignature {
+    Ok(ResolvedMethodSignature {
         func_ast,
         is_static,
         mangled_fn,
@@ -208,7 +205,7 @@ pub fn resolve_method_signature(
         return_type,
         self_type,
         subst,
-    }))
+    })
 }
 
 /// Resolves the call target for `receiver.method(args)`: chooses the
@@ -222,16 +219,15 @@ pub fn resolve_method_signature(
 /// stdlib intrinsic dispatch + IR planning + LLVM emission) before
 /// looking up the `FunctionValue`.
 ///
-/// Closures bridge to LLVM-bound caches in the codegen `Compiler`:
-/// - `var_type` reads `Compiler.fn_state.variables` to get a local's
-///   type for argument-driven type-arg inference;
-/// - `function_exists` checks `Compiler.functions` to short-circuit
-///   monomorphization when the symbol is already emitted.
+/// `var_type` is a closure bridge to `Compiler.fn_state.variables` for
+/// argument-driven type-arg inference; idempotency for monomorphization
+/// is keyed on `program.contains_function(...)`, the canonical
+/// callable-symbol registry on [`IRProgram`].
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_method_call(
     ctx: &LowerCtx<'_>,
+    program: &IRProgram,
     var_type: &dyn Fn(&str) -> Option<Type>,
-    function_exists: &dyn Fn(&FunctionIdentifier) -> bool,
     struct_name: &str,
     base: &str,
     type_id: Option<&TypeIdentifier>,
@@ -270,7 +266,7 @@ pub fn resolve_method_call(
             let method_suffix = mangle_method_suffix(method, &method_type_args);
             mangled = format!("{symbol_prefix}_{method_suffix}");
 
-            if !function_exists(&FunctionIdentifier::new(&mangled)) {
+            if !program.contains_function(&FunctionIdentifier::new(&mangled)) {
                 pending_mono = Some(PendingMethodMono {
                     base_type: base.to_string(),
                     method: method.to_string(),
@@ -278,7 +274,7 @@ pub fn resolve_method_call(
                     method_type_args,
                 });
             }
-        } else if !function_exists(&FunctionIdentifier::new(&mangled)) {
+        } else if !program.contains_function(&FunctionIdentifier::new(&mangled)) {
             pending_mono = Some(PendingMethodMono {
                 base_type: base.to_string(),
                 method: method.to_string(),

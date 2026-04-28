@@ -648,7 +648,22 @@ What actually lives in `expo-ir` today:
   planners, consumed by `expo-codegen` emitters): `IRProgram` plus
   `IRStruct` / `IREnum` / `IRFunction` and their `IRStructKind` /
   `IRFunctionKind` companions in
-  [`expo-ir::program`](../crates/expo-ir/src/program.rs).
+  [`expo-ir::program`](../crates/expo-ir/src/program.rs). As of Wave
+  16 `IRFunction` is the canonical registry for **every** callable
+  symbol in a program -- user-defined, monomorphized generic, stdlib
+  intrinsic, and runtime extern. The `IRFunctionKind` discriminator
+  has three variants: `Extern` (signature-only declarations: stdlib
+  C functions, generated runtime helpers, builtins, the main /
+  `__expo_user_main` entry pair), `Free { func_ast, subst }` (free
+  functions with AST bodies, monomorphized), and `Method { func_ast,
+  subst, base_type, mangled_type, self_type, is_static }` (method
+  bodies). `Compiler.functions` in `expo-codegen` is reduced to a
+  pure `FunctionIdentifier -> FunctionValue<'ctx>` LLVM-handle map;
+  semantic existence questions ("is this symbol callable?") read
+  `IRProgram::contains_function`. Every codegen site that adds an
+  LLVM function routes through `Compiler::register_function` (or its
+  `register_extern` convenience wrapper) so the two halves of the
+  dual write cannot drift.
 - **Active instruction-level IR scaffolding** (introduced in Wave 11
   by the `compile_unless` lift, extended in Wave 12 with the operand
   model, extended in Wave 13 with the `compile_if`-no-else lift,
@@ -773,6 +788,35 @@ unaffected by this invariant -- it remains a unary op handled by
 
 Crate sizes (approximate): `expo-codegen` ~17k LOC, `expo-ir` ~5.1k LOC.
 
+#### Migration discipline: two buckets
+
+Every piece migrated into `expo-ir` must answer "where does this live
+once `IRProgram` is the canonical store?" with one of two buckets:
+
+1. **IR data + its query methods.** IR nodes (`IRFunction`, `IRStruct`,
+   `IRBasicBlock`, `IRInstruction`, etc.), their structural fields, and
+   the methods that read them (`IRProgram::contains_function`, future
+   `IRProgram::methods_on(type)`, etc.). Per-program metadata that is
+   conceptually IR but lives as a sibling today (`TypeLayouts`) counts
+   here too -- it is transitionally separate but folds into IR nodes
+   long-term (e.g., layout fields move onto `IRStruct`).
+2. **Lowering scratch state.** Transient per-function constructions used
+   during AST -> IR walking that have no analogue in the finished IR
+   (`FnLowerState` counters, `current_fn`, `tail_position`,
+   `type_subst`). Dies with the per-function `Lowerer`.
+
+Anything that doesn't fit one of these is "Compiler context" and stays
+in codegen. The litmus test for any future migration: **is this
+IR-shaped, or is it per-fn scratch state?** If neither, it stays in
+codegen.
+
+Derived "registry" or "index" pieces (e.g., a separate
+`FunctionRegistry`) are not their own bucket -- once `IRProgram` exists,
+lookups belong as methods on `IRProgram` itself, collapsing into bucket
+1. This rules out quietly rebuilding the `Compiler` struct inside
+`expo-ir`, which the partial migration has been at risk of doing each
+time a query needs to consult cached state.
+
 ### Phase status
 
 - **Phase 1 -- Typed foundation: done.** The original `TypeRegistry`
@@ -847,7 +891,7 @@ Crate sizes (approximate): `expo-codegen` ~17k LOC, `expo-ir` ~5.1k LOC.
 
 ### Wave history
 
-The 16 waves completed so far, condensed (full prose lives in commit
+The 17 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -1224,6 +1268,55 @@ history):
   `Lowerer` method following the same template, and every future
   un-migrated free helper is one `self.ctx()` call away from
   delegation.
+- **Wave 16 -- Function registration migration: `IRProgram` becomes
+  the callable-symbol registry.** Foundation slice for the upcoming
+  `Call` / `MethodCall` instruction lift. `IRFunction` was refactored
+  to make `IRFunctionKind` the discriminator that owns the body data:
+  `Extern` (no AST body), `Free { func_ast, subst }`, and `Method
+  { func_ast, subst, base_type, mangled_type, self_type, is_static }`.
+  Every callable symbol in the program is now an `IRFunction` entry --
+  stdlib externs, generated runtime helpers, intrinsic methods on
+  built-in types (List / Map / Set / process / hashtable / debug /
+  cptr), the main / `__expo_user_main` entry pair, and user-defined
+  free + impl functions all flow through one path. A new
+  `Compiler::register_function(mangled, param_types, return_type,
+  kind, value)` helper (with a `register_extern` convenience for the
+  signature-only case) inserts into `Compiler.ir` and
+  `Compiler.functions` in lockstep; ~40 ad-hoc `c.functions.insert`
+  sites across `builtins.rs`, `compiler.rs`, `list.rs`, `map.rs`,
+  `set.rs`, `process.rs`, `hashtable.rs`, `intrinsics/cptr.rs`, and
+  `debug.rs` were migrated to call it. `Compiler.functions` is now a
+  pure `FunctionIdentifier -> FunctionValue<'ctx>` LLVM-handle map
+  with no semantic content of its own.
+
+  The `function_exists: impl Fn(&FunctionIdentifier) -> bool` closure
+  that `resolve_call`, `resolve_method_call`, and `resolve_static_call`
+  threaded into `expo-ir` is gone. Each resolver now takes
+  `program: &IRProgram` as an explicit positional parameter (kept
+  off `LowerCtx` -- `LowerCtx` carries ambient semantic state, the
+  IR is an output container that callers thread directly) and reads
+  symbol existence through `IRProgram::contains_function`. The
+  remaining closures (`is_struct_constructor`, `variable_type`,
+  `is_generic_function`, `type_mono_exists`) stay until their
+  respective registries land. Companion cleanup: `resolve_method_signature`
+  shed its `is_compiled` parameter and `Result<Option<_>, _>` return
+  type (idempotency now lives one layer up at the
+  `IRProgram::contains_function` check inside
+  `monomorphize_impl_method`).
+
+  Architectural commitment formalized: the **two-bucket migration
+  discipline** (see "Migration discipline: two buckets" above)
+  governs every future migration into `expo-ir`. The litmus test --
+  "is this IR-shaped, or is it per-fn scratch state?" -- exists
+  specifically to prevent rebuilding `Compiler` inside `expo-ir` one
+  index at a time, which the partial migration was at risk of doing.
+  Wave 16 is the first slice that lands a piece (function registration)
+  by validating it against this rule rather than by inventing a new
+  side-table-on-`expo-ir` registry.
+
+  Validation: `just lint` (zero warnings), `cargo test --workspace
+  --lib` green, `just test-stdlib` green; user runs `just doit` for
+  the full release CI lap as the slice's completion criterion.
 
 ### Next: Phase 4c slicing plan
 

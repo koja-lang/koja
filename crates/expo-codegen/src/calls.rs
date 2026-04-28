@@ -87,15 +87,12 @@ pub fn compile_call<'ctx>(
 ) -> ExprResult<'ctx> {
     let resolved = resolve_call(
         &c.lower_ctx(),
+        &c.ir,
         name,
         |id, candidate| {
             id.is_some_and(|i| c.llvm_types.get_concrete(i).is_some())
                 || c.llvm_types
                     .contains_monomorphized(&MonomorphizedTypeIdentifier::new(candidate))
-        },
-        |candidate| {
-            c.functions
-                .contains_key(&FunctionIdentifier::new(candidate))
         },
         |variable_name| {
             c.fn_state

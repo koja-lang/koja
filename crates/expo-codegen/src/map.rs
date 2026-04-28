@@ -62,8 +62,7 @@ pub fn emit_map_method<'ctx>(
                 false,
             );
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -543,8 +542,7 @@ pub fn emit_map_method<'ctx>(
 
             let fn_type = option_struct.fn_type(&[map_struct.into(), key_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -726,8 +724,7 @@ pub fn emit_map_method<'ctx>(
         "has?" => {
             let fn_type = i1_ty.fn_type(&[map_struct.into(), key_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -863,8 +860,7 @@ pub fn emit_map_method<'ctx>(
         "remove" => {
             let fn_type = map_struct.fn_type(&[map_struct.into(), key_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -1040,8 +1036,7 @@ pub fn emit_map_method<'ctx>(
         "from_map" => {
             let fn_type = map_struct.fn_type(&[map_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.functions
-                .insert(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();

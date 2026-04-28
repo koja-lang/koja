@@ -404,7 +404,6 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
             method_name,
             type_args,
             method_type_args,
-            |_| false,
         )?
     };
     let Some(new_id) = new_id else {
@@ -514,12 +513,17 @@ pub(crate) fn emit_ir_enum<'ctx>(c: &mut Compiler<'ctx>, decl: &IREnum) -> Resul
 /// Emits an LLVM free function from a planned [`IRFunction`]
 /// (kind = `Free`): declares the function with the resolved
 /// signature, binds parameter allocas, and compiles the body under
-/// `decl.subst`.
+/// the kind's `subst`.
 pub(crate) fn emit_ir_function<'ctx>(
     c: &mut Compiler<'ctx>,
     decl: &IRFunction,
 ) -> Result<(), String> {
-    debug_assert!(matches!(decl.kind, IRFunctionKind::Free));
+    let IRFunctionKind::Free { func_ast, subst } = &decl.kind else {
+        return Err(format!(
+            "emit_ir_function called with non-free IRFunction `{}`",
+            decl.mangled
+        ));
+    };
 
     if c.functions.contains_key(&decl.mangled) {
         return Ok(());
@@ -544,9 +548,10 @@ pub(crate) fn emit_ir_function<'ctx>(
 
     let mangled_str = decl.mangled.as_str();
     let fn_value = c.module.add_function(mangled_str, fn_type, None);
+    // `decl` is already in `c.ir` (the planner inserted it before emission),
+    // so this is a pure LLVM-handle binding, not a `register_function` site.
     c.functions.insert(decl.mangled.clone(), fn_value);
 
-    let func_ast = &decl.func_ast;
     let file = c.debug.file();
     c.debug.push_function(
         fn_value,
@@ -559,7 +564,7 @@ pub(crate) fn emit_ir_function<'ctx>(
     let entry = c.context.append_basic_block(fn_value, "entry");
     let saved_vars = mem::take(&mut c.fn_state.variables);
     let saved_block = c.builder.get_insert_block();
-    let saved_subst = mem::replace(&mut c.fn_lower.type_subst, decl.subst.clone());
+    let saved_subst = mem::replace(&mut c.fn_lower.type_subst, subst.clone());
 
     c.builder.position_at_end(entry);
     c.debug.set_location(
@@ -611,6 +616,8 @@ pub(crate) fn emit_ir_impl_method<'ctx>(
     decl: &IRFunction,
 ) -> Result<(), String> {
     let IRFunctionKind::Method {
+        func_ast,
+        subst,
         base_type,
         mangled_type,
         self_type,
@@ -660,6 +667,8 @@ pub(crate) fn emit_ir_impl_method<'ctx>(
     };
 
     let fn_value = c.module.add_function(decl.mangled.as_str(), fn_type, None);
+    // Pure LLVM-handle binding (the planner already inserted `decl` into
+    // `c.ir`); not a `register_function` call site.
     c.functions.insert(decl.mangled.clone(), fn_value);
 
     let body_self_type = if *is_static {
@@ -670,11 +679,11 @@ pub(crate) fn emit_ir_impl_method<'ctx>(
     compile_method_body(
         c,
         fn_value,
-        &decl.func_ast,
+        func_ast,
         body_self_type,
         &decl.param_types,
         &decl.return_type,
-        decl.subst.clone(),
+        subst.clone(),
     )
 }
 

@@ -67,9 +67,7 @@ pub fn emit_hashtable_new<'ctx>(
 
     let fn_type = collection_struct.fn_type(&[], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler
-        .functions
-        .insert(FunctionIdentifier::new(mangled_fn), fn_value);
+    compiler.register_extern(FunctionIdentifier::new(mangled_fn), fn_value);
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();
@@ -149,9 +147,7 @@ pub fn emit_hashtable_length<'ctx>(
 
     let fn_type = i64_type.fn_type(&[collection_struct.into()], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler
-        .functions
-        .insert(FunctionIdentifier::new(mangled_fn), fn_value);
+    compiler.register_extern(FunctionIdentifier::new(mangled_fn), fn_value);
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();
@@ -182,9 +178,7 @@ pub fn emit_hashtable_empty<'ctx>(
 
     let fn_type = bool_type.fn_type(&[collection_struct.into()], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler
-        .functions
-        .insert(FunctionIdentifier::new(mangled_fn), fn_value);
+    compiler.register_extern(FunctionIdentifier::new(mangled_fn), fn_value);
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();

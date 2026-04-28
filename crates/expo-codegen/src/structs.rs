@@ -483,11 +483,10 @@ fn resolve_method_call<'ctx>(
             type_ctx: c.type_ctx,
         };
         let var_type = |name: &str| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone());
-        let function_exists = |id: &FunctionIdentifier| c.functions.contains_key(id);
         expo_ir::lower::methods::resolve_method_call(
             &lower_ctx,
+            &c.ir,
             &var_type,
-            &function_exists,
             struct_name,
             base,
             type_id,
@@ -930,13 +929,12 @@ fn resolve_static_call<'ctx>(
             type_ctx: c.type_ctx,
         };
         let var_type = |name: &str| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone());
-        let function_exists = |id: &FunctionIdentifier| c.functions.contains_key(id);
         let type_mono_exists =
             |id: &MonomorphizedTypeIdentifier| c.llvm_types.contains_monomorphized(id);
         expo_ir::lower::calls::resolve_static_call(
             &lower_ctx,
+            &c.ir,
             &var_type,
-            &function_exists,
             &type_mono_exists,
             type_name,
             resolved_type,

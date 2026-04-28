@@ -122,28 +122,42 @@ pub struct IREnum {
     pub variants: Vec<(String, VariantData)>,
 }
 
-/// A monomorphized function or method declaration.
+/// A callable symbol declaration.
 ///
-/// The body is held as raw AST in this slice; future waves replace
-/// `func_ast` with explicit IR basic blocks and instructions.
+/// `Free` and `Method` carry an Expo AST body emitted by codegen;
+/// `Extern` denotes a signature-only declaration whose body lives
+/// outside the Expo source (stdlib runtime, intrinsics, generated
+/// thunks). Future waves replace the AST bodies on `Free` / `Method`
+/// with explicit IR basic blocks and instructions.
 #[derive(Clone)]
 pub struct IRFunction {
     pub mangled: FunctionIdentifier,
-    pub func_ast: Function,
     pub param_types: Vec<Type>,
     pub return_type: Type,
-    pub subst: HashMap<String, Type>,
     pub kind: IRFunctionKind,
 }
 
-/// Distinguishes free functions from impl methods. Methods carry the
-/// extra context the backend needs to emit a `self`-bearing signature.
+/// Discriminates the three callable symbol categories tracked by
+/// [`IRProgram`]. `Free` and `Method` own the AST body codegen lowers
+/// to LLVM; `Extern` carries no body because the implementation is
+/// hand-emitted (stdlib runtime, intrinsics, thunks, the `main`
+/// entry, etc.).
 #[derive(Clone)]
 pub enum IRFunctionKind {
+    /// Signature-only declaration with no AST body. Covers stdlib
+    /// runtime externs, intrinsic methods on `List` / `Map` / `Set` /
+    /// `Ref` / `ReplyTo` / `CPtr`, generated thunks, and the
+    /// `main` / `__expo_user_main` entry pair.
+    Extern,
     /// Free function (top-level, no `self`).
-    Free,
+    Free {
+        func_ast: Function,
+        subst: HashMap<String, Type>,
+    },
     /// Impl method (instance or static).
     Method {
+        func_ast: Function,
+        subst: HashMap<String, Type>,
         /// Unmangled base type (e.g. `"List"`, `"MyStruct"`).
         base_type: String,
         /// Mangled `self`-type identifier (e.g. `"List_$Int32$"`).

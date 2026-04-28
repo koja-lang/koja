@@ -5,12 +5,14 @@
 //! defined symbol, indirect call through a closure-typed variable, or
 //! generic that needs monomorphization. Mangled-symbol selection
 //! (package-qualifying user methods, leaving stdlib symbols bare) and
-//! signature lookup happen here. The four `impl Fn(...)` parameters
-//! are the seam where the LLVM-bound caches in `expo-codegen`
-//! (`functions`, `fn_state.variables`, `llvm_types`, `generic_fn_asts`)
-//! are queried without coupling `expo-ir` to a backend; emission uses
-//! the chosen mangled name (and the variable name from the call site)
-//! to fetch the actual `FunctionValue`/`PointerValue` post-dispatch.
+//! signature lookup happen here. Callable-symbol existence is queried
+//! through `program.contains_function(...)` on [`IRProgram`] (the
+//! canonical registry); the remaining `impl Fn(...)` parameters bridge
+//! to LLVM-bound caches in `expo-codegen` (`fn_state.variables`,
+//! `llvm_types`, `generic_fn_asts`) without coupling `expo-ir` to a
+//! backend. Emission uses the chosen mangled name (and the variable
+//! name from the call site) to fetch the actual
+//! `FunctionValue`/`PointerValue` post-dispatch.
 
 use expo_ast::ast::{Arg, TypeParam};
 use expo_ast::identifier::TypeIdentifier;
@@ -21,19 +23,22 @@ use crate::lower::ctx::LowerCtx;
 use crate::lower::inference::infer_static_struct_type_args_from_args;
 use crate::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
 use crate::lower::types::{id_for, resolve_name_current};
+use crate::program::IRProgram;
 use crate::resolved::calls::{
     BuiltinCall, PendingMethodMono, PendingTypeMono, ResolvedCall, ResolvedStaticCall,
 };
 
-/// Resolves a bare-name function call to a [`ResolvedCall`]. The four
-/// closures bridge to the LLVM-bound caches that live on the codegen
-/// `Compiler` (function symbols, local variables, type cache, generic
-/// AST cache); each is consulted at most twice.
+/// Resolves a bare-name function call to a [`ResolvedCall`].
+///
+/// Callable-symbol existence reads from `program.contains_function`;
+/// the remaining closures bridge to LLVM-bound caches that live on
+/// the codegen `Compiler` (struct-constructor type cache, local
+/// variables, generic AST cache); each is consulted at most twice.
 pub fn resolve_call(
     ctx: &LowerCtx<'_>,
+    program: &IRProgram,
     name: &str,
     is_struct_constructor: impl Fn(Option<&TypeIdentifier>, &str) -> bool,
-    function_exists: impl Fn(&FunctionIdentifier) -> bool,
     variable_type: impl Fn(&str) -> Option<Type>,
     is_generic_function: impl Fn(&str) -> bool,
 ) -> Result<ResolvedCall, String> {
@@ -64,13 +69,13 @@ pub fn resolve_call(
     });
 
     let chosen_mangled: Option<FunctionIdentifier> =
-        if function_exists(&FunctionIdentifier::new(name)) {
+        if program.contains_function(&FunctionIdentifier::new(name)) {
             Some(FunctionIdentifier::new(name))
         } else {
             mangled_candidate
                 .as_ref()
                 .map(FunctionIdentifier::new)
-                .filter(|candidate| function_exists(candidate))
+                .filter(|candidate| program.contains_function(candidate))
         };
 
     if let Some(mangled_name) = chosen_mangled {
@@ -137,8 +142,8 @@ pub fn resolve_call(
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_static_call(
     ctx: &LowerCtx<'_>,
+    program: &IRProgram,
     var_type: &dyn Fn(&str) -> Option<Type>,
-    function_exists: &dyn Fn(&FunctionIdentifier) -> bool,
     type_mono_exists: &dyn Fn(&MonomorphizedTypeIdentifier) -> bool,
     type_name: &str,
     resolved_type: Option<&TypeIdentifier>,
@@ -202,7 +207,7 @@ pub fn resolve_static_call(
     let mangled_name = format!("{symbol_prefix}_{method}");
 
     let mut pending_mono: Option<PendingMethodMono> = None;
-    if !function_exists(&FunctionIdentifier::new(&mangled_name)) {
+    if !program.contains_function(&FunctionIdentifier::new(&mangled_name)) {
         if !type_args.is_empty() {
             pending_mono = Some(PendingMethodMono {
                 base_type: type_name.to_string(),

@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use expo_ir::IRProgram;
 use expo_ir::Lowerer;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::LowerCtx;
@@ -14,7 +13,7 @@ use expo_ir::lower::naming::{current_method_symbol_prefix, method_symbol_prefix}
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr, type_name_from_expr};
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstStruct};
 use expo_ir::util::parse_int_literal;
-use expo_ir::{FnLowerState, TypeLayouts};
+use expo_ir::{FnLowerState, IRFunction, IRFunctionKind, IRProgram, TypeLayouts};
 
 use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
@@ -350,6 +349,52 @@ impl<'ctx> Compiler<'ctx> {
             package: self.current_package.as_ref(),
             type_ctx: self.type_ctx,
         }
+    }
+
+    /// Registers a callable symbol in lockstep across [`Self::ir`]
+    /// (the canonical semantic registry) and [`Self::functions`] (the
+    /// LLVM-handle map). Every site that adds a symbol the language
+    /// can resolve through `resolve_call` / `resolve_method_call` /
+    /// `resolve_static_call` must route through this helper so the two
+    /// stores cannot drift.
+    ///
+    /// `kind` selects the [`IRFunctionKind`] variant: `Free` /
+    /// `Method` for AST-bodied functions, `Extern` for stdlib
+    /// runtime externs, intrinsic methods, generated thunks, and
+    /// hand-emitted entry points.
+    pub fn register_function(
+        &mut self,
+        mangled: FunctionIdentifier,
+        param_types: Vec<Type>,
+        return_type: Type,
+        kind: IRFunctionKind,
+        value: FunctionValue<'ctx>,
+    ) {
+        self.ir.insert_function(IRFunction {
+            mangled: mangled.clone(),
+            param_types,
+            return_type,
+            kind,
+        });
+        self.functions.insert(mangled, value);
+    }
+
+    /// Convenience wrapper around [`Self::register_function`] for
+    /// signature-only externs (stdlib runtime, intrinsic methods,
+    /// generated thunks, the `main` / `__expo_user_main` entry pair).
+    /// Uses placeholder `Type::Unknown` for the signature because the
+    /// Expo-source-level types are either nonexistent (pure C ABI) or
+    /// available through other channels (`TypeContext` for intrinsic
+    /// methods); future slices can populate accurate signatures
+    /// without changing call sites.
+    pub fn register_extern(&mut self, mangled: FunctionIdentifier, value: FunctionValue<'ctx>) {
+        self.register_function(
+            mangled,
+            Vec::new(),
+            Type::Unknown,
+            IRFunctionKind::Extern,
+            value,
+        );
     }
 
     /// Applies `uwtable` and `frame-pointer=all` to every defined function
@@ -817,8 +862,7 @@ impl<'ctx> Compiler<'ctx> {
                 continue;
             }
             let fn_value = self.declare_function(func, Some(&prefix), Some(type_name))?;
-            self.functions
-                .insert(FunctionIdentifier::new(&mangled), fn_value);
+            self.register_extern(FunctionIdentifier::new(&mangled), fn_value);
         }
         self.fn_lower.self_type_name = None;
         Ok(())
@@ -886,8 +930,7 @@ impl<'ctx> Compiler<'ctx> {
                         continue;
                     }
                     let fn_value = self.declare_function(func, None, None)?;
-                    self.functions
-                        .insert(FunctionIdentifier::new(&func.name), fn_value);
+                    self.register_extern(FunctionIdentifier::new(&func.name), fn_value);
                 }
                 Item::Struct(s) if !s.type_params.is_empty() => {}
                 Item::Struct(s) => {
@@ -974,8 +1017,7 @@ impl<'ctx> Compiler<'ctx> {
             let user_main = self
                 .module
                 .add_function("__expo_user_main", user_main_ty, None);
-            self.functions
-                .insert(FunctionIdentifier::new("__expo_user_main"), user_main);
+            self.register_extern(FunctionIdentifier::new("__expo_user_main"), user_main);
 
             let file = self.debug.file();
             self.debug.push_function(
@@ -1425,7 +1467,7 @@ fn run_codegen<'ctx>(
     global.set_constant(true);
 
     register_types(&mut compiler);
-    crate::builtins::declare_builtins(compiler.context, &compiler.module, &mut compiler.functions);
+    crate::builtins::declare_builtins(&mut compiler);
 
     for module in modules {
         if let Some(path) = &module.path {
