@@ -99,7 +99,7 @@ See [GAPS.md](GAPS.md) for known compiler limitations and workarounds.
 - **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `archive/20260323-CONCURRENCY.md` (processes, native runtime, supervision)
 - **Project config format** -- `expo.toml` (TOML-based, replacing `project.expo`)
 - **Module system redesign** -- documented in `archive/20260403-IMPORT.md` (files as transparent, types as namespaces, no intra-project imports, qualified package access, `import` keyword removed)
-- **ExpoIR design** -- documented in [EXPOIR.md](EXPOIR.md) (SIL-style intermediate representation, ownership instructions, shared type ARC, incremental self-hosting strategy)
+- **ExpoIR design** -- live roadmap in [EXPOIR-ROADMAP.md](EXPOIR-ROADMAP.md); original SIL-style design and Wave 1-17 history in [archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md)
 
 ### Tooling (pulled forward)
 
@@ -396,7 +396,7 @@ Rewrite the Expo compiler in Expo. The lexer port from Phase 3 A4 (validation) p
 - ExpoIR is a flat, lowered representation -- monomorphized, closures desugared, drops inserted. Simple enough that writing a new backend is a tractable project.
 - Define `CodeEmitter` as an Expo protocol. The LLVM backend is `impl CodeEmitter for LlvmEmitter`. Cranelift, WASM, and C backends implement the same interface.
 - Publish `expo-ir` and the backend protocol as packages so third parties can build custom backends.
-- **Status note**: foundation work has been pulled forward into Phase 4 -- `expo-ir` crate exists with decision types and semantic lowering helpers in active use; the IR instruction containers themselves will be designed bottom-up during the lowering/emission split. See [EXPOIR.md](EXPOIR.md) for current wave status.
+- **Status note**: foundation work has been pulled forward into Phase 4 -- `expo-ir` crate exists with decision types and semantic lowering helpers in active use; the IR instruction containers themselves will be designed bottom-up during the lowering/emission split. See [EXPOIR-ROADMAP.md](EXPOIR-ROADMAP.md) for current state and remaining slices ([archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md) preserves the Wave 1-17 narrative).
 - **Done when**: the LLVM backend works through ExpoIR with no regressions, and a second backend (Cranelift for the REPL) compiles a non-trivial program.
 
 #### Port type checking and codegen
@@ -556,7 +556,7 @@ Exploration of treating modules as `TypeKind::Module` in the unified registry. N
 
 ### ExpoIR and codegen backend protocol
 
-See [EXPOIR.md](EXPOIR.md) for the full design (SIL-style IR, instruction set, ownership operations, shared type ARC, data structures, incremental self-hosting strategy).
+See [EXPOIR-ROADMAP.md](EXPOIR-ROADMAP.md) for the live roadmap (current phase status, remaining slices, design invariants); [archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md) preserves the original SIL-style design (instruction set, ownership operations, shared type ARC, data structures, incremental self-hosting strategy).
 
 - **Planned**: introduce an intermediate representation (`expo-ir`) between the type checker and codegen. The IR is a lowered, flat representation -- no generics (already monomorphized), no closures (already desugared to structs + function pointers), no high-level control flow (already lowered to branches). Just functions, calls, loads, stores, branches.
 - **Motivation**: the current `expo-codegen` crate mixes two concerns -- lowering (closure desugaring, monomorphization, drop insertion) and emission (inkwell LLVM calls). Separating them creates a clean interface for multiple codegen backends.

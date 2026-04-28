@@ -9,7 +9,7 @@
 //!
 //! Lifted from `expo-codegen` in Wave 10 to break the residual
 //! `<'ctx>`-coupling of method/static call resolution. See
-//! `expo/design/EXPOIR.md`.
+//! `expo/design/archive/20260427-EXPOIR.md` for the Wave 10 narrative.
 
 use std::collections::HashMap;
 

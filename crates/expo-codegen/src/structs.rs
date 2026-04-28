@@ -21,8 +21,8 @@
 //! [`compile_struct_construction`] is the public entry point and a thin
 //! shim. For generics it pre-compiles the field initializers so lower can
 //! drive `unify` over their resolved types before triggering monomorphization
-//! -- see the design note in `expo/design/EXPOIR.md` for why the boundary
-//! relaxes here vs. patterns.
+//! -- see the design note in `expo/design/EXPOIR-ROADMAP.md` for why the
+//! boundary relaxes here vs. patterns.
 //!
 //! ## Field access
 //!
