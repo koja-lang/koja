@@ -381,13 +381,13 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     /// Convenience wrapper around [`Self::register_function`] for
-    /// signature-only externs (stdlib runtime, intrinsic methods,
-    /// generated thunks, the `main` / `__expo_user_main` entry pair).
-    /// Uses placeholder `Type::Unknown` for the signature because the
-    /// Expo-source-level types are either nonexistent (pure C ABI) or
-    /// available through other channels (`TypeContext` for intrinsic
-    /// methods); future slices can populate accurate signatures
-    /// without changing call sites.
+    /// signature-only externs (stdlib runtime, the
+    /// `main` / `__expo_user_main` entry pair, debug helpers, and
+    /// user-source `@extern "C"` declarations). Uses placeholder
+    /// `Type::Unknown` for the signature because the Expo-source-level
+    /// types are either nonexistent (pure C ABI) or available through
+    /// other channels; a future slice (Phase 4d) splits `Extern` into
+    /// attributed sub-kinds and populates real signatures.
     pub fn register_extern(&mut self, mangled: FunctionIdentifier, value: FunctionValue<'ctx>) {
         self.register_function(
             mangled,
@@ -396,6 +396,61 @@ impl<'ctx> Compiler<'ctx> {
             IRFunctionKind::Extern,
             value,
         );
+    }
+
+    /// Convenience wrapper around [`Self::register_function`] for
+    /// stdlib intrinsic methods (`List.append`, `Map.get`, `CPtr.read`,
+    /// ...). The `(base_type, method_name)` pair is the minimum
+    /// dispatch identity backends need to route a call to their own
+    /// intrinsic emitter, distinct from generic FFI extern handling.
+    /// Signature is recorded as `Type::Unknown` for now -- intrinsic
+    /// emitters carry the real LLVM type in their hand-written body.
+    pub fn register_intrinsic(
+        &mut self,
+        mangled: FunctionIdentifier,
+        value: FunctionValue<'ctx>,
+        base_type: &str,
+        method_name: &str,
+    ) {
+        self.register_function(
+            mangled,
+            Vec::new(),
+            Type::Unknown,
+            IRFunctionKind::Intrinsic {
+                base_type: base_type.to_string(),
+                method_name: method_name.to_string(),
+            },
+            value,
+        );
+    }
+
+    /// Registers a generated forwarding thunk in lockstep across
+    /// [`Self::ir`] (canonical symbol registry, kind `Thunk { wraps }`
+    /// so backends see what the synthetic body adapts), [`Self::functions`]
+    /// (LLVM-handle map, keyed by the thunk's own mangled name), and
+    /// [`Self::fn_ref_thunks`] (wraps-keyed cache for O(1)
+    /// "do we have a thunk for X?" lookups in
+    /// [`Self::get_or_create_thunk`]).
+    ///
+    /// Like [`Self::register_extern`], the IR signature is recorded as
+    /// `Type::Unknown` for now -- the wrapped function carries the real
+    /// types and the thunk is purely a calling-convention adapter.
+    pub fn register_thunk(
+        &mut self,
+        wraps: FunctionIdentifier,
+        thunk_mangled: FunctionIdentifier,
+        thunk_value: FunctionValue<'ctx>,
+    ) {
+        self.register_function(
+            thunk_mangled,
+            Vec::new(),
+            Type::Unknown,
+            IRFunctionKind::Thunk {
+                wraps: wraps.clone(),
+            },
+            thunk_value,
+        );
+        self.fn_ref_thunks.insert(wraps, thunk_value);
     }
 
     /// Applies `uwtable` and `frame-pointer=all` to every defined function
@@ -475,8 +530,8 @@ impl<'ctx> Compiler<'ctx> {
     /// can be used as a closure-compatible fat pointer. The thunk accepts a
     /// leading `env_ptr` (ignored) then forwards remaining args to the real fn.
     pub fn get_or_create_thunk(&mut self, fn_name: &str) -> Result<FunctionValue<'ctx>, String> {
-        let thunk_id = FunctionIdentifier::new(fn_name);
-        if let Some(thunk) = self.fn_ref_thunks.get(&thunk_id) {
+        let wraps = FunctionIdentifier::new(fn_name);
+        if let Some(thunk) = self.fn_ref_thunks.get(&wraps) {
             return Ok(*thunk);
         }
 
@@ -525,7 +580,7 @@ impl<'ctx> Compiler<'ctx> {
 
         self.debug.pop_scope(self.context, &self.builder);
 
-        self.fn_ref_thunks.insert(thunk_id, thunk_fn);
+        self.register_thunk(wraps, FunctionIdentifier::new(&thunk_name), thunk_fn);
         Ok(thunk_fn)
     }
 

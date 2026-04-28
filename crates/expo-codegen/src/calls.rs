@@ -206,8 +206,8 @@ fn resolve_generic_call<'ctx>(
     let mangled_name = mangle_method_suffix(name, &type_args);
 
     if !compiler
-        .functions
-        .contains_key(&FunctionIdentifier::new(&mangled_name))
+        .ir
+        .contains_function(&FunctionIdentifier::new(&mangled_name))
     {
         monomorphize_function(compiler, name, &type_args)?;
     }

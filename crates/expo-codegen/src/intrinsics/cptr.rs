@@ -399,7 +399,12 @@ pub fn emit_cptr_method<'ctx>(
     };
 
     let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-    c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+    c.register_intrinsic(
+        FunctionIdentifier::new(mangled_fn),
+        fn_val,
+        "CPtr",
+        method_name,
+    );
 
     emit_cptr_intrinsic(c, fn_val, mangled_fn)?;
     Ok(EmitResult::Emitted)

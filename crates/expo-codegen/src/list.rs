@@ -55,7 +55,12 @@ pub fn emit_list_method<'ctx>(
         "new" => {
             let fn_type = list_struct.fn_type(&[], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -98,7 +103,12 @@ pub fn emit_list_method<'ctx>(
         "append" => {
             let fn_type = list_struct.fn_type(&[list_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let grow_bb = c.context.append_basic_block(fn_val, "grow");
@@ -211,7 +221,12 @@ pub fn emit_list_method<'ctx>(
             let i8_ty = c.context.i8_type();
             let fn_type = option_struct.fn_type(&[list_struct.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let ok_bb = c.context.append_basic_block(fn_val, "ok");
@@ -306,7 +321,12 @@ pub fn emit_list_method<'ctx>(
         "length" => {
             let fn_type = i64_ty.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -324,7 +344,12 @@ pub fn emit_list_method<'ctx>(
         "from_list" => {
             let fn_type = list_struct.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -341,7 +366,12 @@ pub fn emit_list_method<'ctx>(
         "empty?" => {
             let fn_type = i1_ty.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -391,7 +421,12 @@ pub fn emit_list_method<'ctx>(
             let i8_ty = c.context.i8_type();
             let fn_type = pair_struct.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let empty_bb = c.context.append_basic_block(fn_val, "empty");
@@ -550,7 +585,12 @@ pub fn emit_list_method<'ctx>(
                 false,
             );
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let in_bounds_bb = c.context.append_basic_block(fn_val, "in_bounds");
@@ -607,7 +647,12 @@ pub fn emit_list_method<'ctx>(
             let fn_type =
                 list_struct.fn_type(&[list_struct.into(), i64_ty.into(), i64_ty.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let nonempty_bb = c.context.append_basic_block(fn_val, "nonempty");
@@ -756,7 +801,12 @@ pub fn emit_list_method<'ctx>(
         "concat" => {
             let fn_type = list_struct.fn_type(&[list_struct.into(), list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "List",
+                method_name,
+            );
 
             let entry = c.context.append_basic_block(fn_val, "entry");
             let grow_bb = c.context.append_basic_block(fn_val, "grow");

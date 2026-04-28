@@ -55,10 +55,13 @@ pub fn monomorphize_hashtable_struct<'ctx>(
 
 /// Emits `fn new() -> CollectionStruct` for a hash-table-backed collection.
 /// Allocates entries buffer (`capacity * entry_size` bytes) and states buffer
-/// (`capacity` bytes, zeroed), returns the 4-field struct.
+/// (`capacity` bytes, zeroed), returns the 4-field struct. `base_type` names
+/// the owning collection (`"Map"` or `"Set"`) for the IR registry's
+/// `IRFunctionKind::Intrinsic` payload.
 pub fn emit_hashtable_new<'ctx>(
     compiler: &mut Compiler<'ctx>,
     mangled_fn: &str,
+    base_type: &str,
     collection_struct: StructType<'ctx>,
     entry_size: u64,
 ) -> Result<(), String> {
@@ -67,7 +70,12 @@ pub fn emit_hashtable_new<'ctx>(
 
     let fn_type = collection_struct.fn_type(&[], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler.register_extern(FunctionIdentifier::new(mangled_fn), fn_value);
+    compiler.register_intrinsic(
+        FunctionIdentifier::new(mangled_fn),
+        fn_value,
+        base_type,
+        "new",
+    );
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();
@@ -138,16 +146,24 @@ pub fn emit_hashtable_new<'ctx>(
 }
 
 /// Emits `fn length(self) -> Int` for a hash-table-backed collection.
+/// `base_type` names the owning collection (`"Map"` or `"Set"`) for the IR
+/// registry's `IRFunctionKind::Intrinsic` payload.
 pub fn emit_hashtable_length<'ctx>(
     compiler: &mut Compiler<'ctx>,
     mangled_fn: &str,
+    base_type: &str,
     collection_struct: StructType<'ctx>,
 ) -> Result<(), String> {
     let i64_type = compiler.context.i64_type();
 
     let fn_type = i64_type.fn_type(&[collection_struct.into()], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler.register_extern(FunctionIdentifier::new(mangled_fn), fn_value);
+    compiler.register_intrinsic(
+        FunctionIdentifier::new(mangled_fn),
+        fn_value,
+        base_type,
+        "length",
+    );
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();
@@ -167,10 +183,13 @@ pub fn emit_hashtable_length<'ctx>(
 }
 
 /// Emits `fn empty?(self) -> Bool` for a hash-table-backed collection.
-/// Returns true when field 2 (length) is zero.
+/// Returns true when field 2 (length) is zero. `base_type` names the
+/// owning collection (`"Map"` or `"Set"`) for the IR registry's
+/// `IRFunctionKind::Intrinsic` payload.
 pub fn emit_hashtable_empty<'ctx>(
     compiler: &mut Compiler<'ctx>,
     mangled_fn: &str,
+    base_type: &str,
     collection_struct: StructType<'ctx>,
 ) -> Result<(), String> {
     let i64_type = compiler.context.i64_type();
@@ -178,7 +197,12 @@ pub fn emit_hashtable_empty<'ctx>(
 
     let fn_type = bool_type.fn_type(&[collection_struct.into()], false);
     let fn_value = compiler.module.add_function(mangled_fn, fn_type, None);
-    compiler.register_extern(FunctionIdentifier::new(mangled_fn), fn_value);
+    compiler.register_intrinsic(
+        FunctionIdentifier::new(mangled_fn),
+        fn_value,
+        base_type,
+        "empty?",
+    );
 
     let entry = compiler.context.append_basic_block(fn_value, "entry");
     let saved_block = compiler.builder.get_insert_block();

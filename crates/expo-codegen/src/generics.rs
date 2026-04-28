@@ -337,8 +337,8 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         let mangled_method = mangle_method_suffix(method_name, method_type_args);
         format!("{}_{}", mangled_type, mangled_method)
     };
-    if c.functions
-        .contains_key(&FunctionIdentifier::new(&mangled_fn))
+    if c.ir
+        .contains_function(&FunctionIdentifier::new(&mangled_fn))
     {
         return Ok(());
     }
@@ -525,6 +525,10 @@ pub(crate) fn emit_ir_function<'ctx>(
         ));
     };
 
+    // `decl` is already in `c.ir` (the planner inserted it before
+    // calling us). The right "already emitted?" question is whether
+    // the LLVM handle has been bound -- that's `c.functions`, populated
+    // by the `c.functions.insert(...)` at the bottom of this function.
     if c.functions.contains_key(&decl.mangled) {
         return Ok(());
     }
@@ -630,6 +634,10 @@ pub(crate) fn emit_ir_impl_method<'ctx>(
         ));
     };
 
+    // `decl` is already in `c.ir` (the planner inserted it before
+    // calling us). The right "already emitted?" question is whether
+    // the LLVM handle has been bound -- that's `c.functions`, populated
+    // by the `c.functions.insert(...)` at the bottom of this function.
     if c.functions.contains_key(&decl.mangled) {
         return Ok(());
     }

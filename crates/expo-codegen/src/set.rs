@@ -46,14 +46,19 @@ pub fn emit_set_method<'ctx>(
 
     match method_name {
         "new" => {
-            hashtable::emit_hashtable_new(c, mangled_fn, set_struct, elem_size)?;
+            hashtable::emit_hashtable_new(c, mangled_fn, "Set", set_struct, elem_size)?;
             return Ok(EmitResult::Emitted);
         }
 
         "insert" => {
             let fn_type = set_struct.fn_type(&[set_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "Set",
+                method_name,
+            );
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -466,7 +471,12 @@ pub fn emit_set_method<'ctx>(
         "has?" => {
             let fn_type = i1_ty.fn_type(&[set_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "Set",
+                method_name,
+            );
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -598,7 +608,12 @@ pub fn emit_set_method<'ctx>(
         "remove" => {
             let fn_type = set_struct.fn_type(&[set_struct.into(), elem_llvm.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "Set",
+                method_name,
+            );
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let saved_block = c.builder.get_insert_block();
@@ -757,12 +772,12 @@ pub fn emit_set_method<'ctx>(
         }
 
         "length" => {
-            hashtable::emit_hashtable_length(c, mangled_fn, set_struct)?;
+            hashtable::emit_hashtable_length(c, mangled_fn, "Set", set_struct)?;
             return Ok(EmitResult::Emitted);
         }
 
         "empty?" => {
-            hashtable::emit_hashtable_empty(c, mangled_fn, set_struct)?;
+            hashtable::emit_hashtable_empty(c, mangled_fn, "Set", set_struct)?;
             return Ok(EmitResult::Emitted);
         }
 
@@ -777,7 +792,12 @@ pub fn emit_set_method<'ctx>(
 
             let fn_type = set_struct.fn_type(&[list_struct.into()], false);
             let fn_val = c.module.add_function(mangled_fn, fn_type, None);
-            c.register_extern(FunctionIdentifier::new(mangled_fn), fn_val);
+            c.register_intrinsic(
+                FunctionIdentifier::new(mangled_fn),
+                fn_val,
+                "Set",
+                method_name,
+            );
 
             let entry_bb = c.context.append_basic_block(fn_val, "entry");
             let loop_bb = c.context.append_basic_block(fn_val, "loop");

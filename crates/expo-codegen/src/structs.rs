@@ -511,7 +511,7 @@ fn resolve_method_call<'ctx>(
     };
 
     if let Some(p) = &resolved.pending_mono
-        && !c.functions.contains_key(&resolved.mangled_name)
+        && !c.ir.contains_function(&resolved.mangled_name)
     {
         monomorphize_impl_method(
             c,
@@ -969,7 +969,7 @@ fn resolve_static_call<'ctx>(
     }
 
     if let Some(p) = &resolved.pending_mono
-        && !c.functions.contains_key(&resolved.mangled_name)
+        && !c.ir.contains_function(&resolved.mangled_name)
     {
         monomorphize_impl_method(
             c,

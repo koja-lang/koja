@@ -36,8 +36,9 @@ What we do _not_ have yet:
 
 ## 2. Phase summary
 
-Condensed from 17 waves of work. Full prose lives in
-[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md).
+Condensed from 18 waves of work. The Wave 1-17 prose lives in
+[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Wave 18
+(registry closeout) is summarized inline below.
 
 - **Phase 1 -- Typed foundation (done, Waves 1-5).** `TypeRegistry`
   renamed to `LLVMTypeCache`; semantic struct/enum layouts split into
@@ -60,13 +61,20 @@ Condensed from 17 waves of work. Full prose lives in
   monomorphization-in-IR (Wave 10: `monomorphize_struct`/`enum`/
   `function`/`impl_method` planners write `IRProgram`). Companion Wave
   9 introduced opaque mono identities.
-- **Phase 4c -- Instruction-level scaffold (in progress, Waves 11-17).**
-  Block / terminator / operand vocabulary; `Lowerer<'a>` driver;
-  `IRProgram` as canonical callable registry (with three live
-  exceptions, called out in section 3b); two conditionals plus three
-  call families lifted; expression vocabulary covers
+- **Phase 4c -- Instruction-level scaffold + registry closeout (done,
+  Waves 11-18).** Block / terminator / operand vocabulary;
+  `Lowerer<'a>` driver; two conditionals plus three call families
+  lifted; expression vocabulary covers
   `BinaryOp`/`UnaryOp`/`FieldLoad`/`Call`/`MethodCall` plus literals
-  and `Group`.
+  and `Group`. Wave 18 closed the registry contract: thunks are typed
+  `IRFunctionKind::Thunk { wraps }`, stdlib intrinsic methods are
+  typed `IRFunctionKind::Intrinsic { base_type, method_name }`, and
+  four of the six `Compiler.functions.contains_key` call-time guards
+  moved to `IRProgram::contains_function` (the other two stay on
+  `Compiler.functions` because they ask "has the LLVM body been
+  bound" at the top of `emit_ir_*`, where the planner has already
+  populated `c.ir`; see section 3b). The Wave-16 callable-registry
+  exceptions are gone.
 
 ---
 
@@ -93,42 +101,51 @@ to plan a slice.
 | `cond`                      | AST -> LLVM                 | Slice 4                                                                              |
 | `while` / `loop` / `for`    | AST -> LLVM                 | Slice 6                                                                              |
 | `break` / `return`          | AST -> LLVM                 | Slice 6                                                                              |
-| `Ident` (locals)            | AST -> LLVM                 | Phase 4d (locals foundation -- restores static-chain GEP optimization)               |
-| `assignment` / compound     | AST -> LLVM                 | Phase 4f (statement lowering)                                                        |
-| `field_assignment`          | AST -> LLVM                 | Phase 4f (statement lowering)                                                        |
-| Binary pattern              | AST -> LLVM                 | Phase 4e Slice 5 (folds into match unification)                                      |
-| Struct construction         | AST -> LLVM                 | Phase 4g                                                                             |
-| Enum construction           | AST -> LLVM                 | Phase 4g                                                                             |
-| Closure construction        | AST -> LLVM                 | Phase 4g (`partial_apply` shape)                                                     |
-| String literal              | AST -> LLVM                 | Phase 4g                                                                             |
-| String interpolation/concat | AST -> LLVM                 | Phase 4g (`compile_concat`, `compile_string_concat`, `compile_binary_concat`)        |
-| `EnumStructEqual`           | AST -> LLVM                 | Phase 4g (multi-block per-variant equality)                                          |
-| `spawn` / `receive`         | AST -> LLVM (decision lift) | Phase 4g (process resolvers exist; instruction lift pending)                         |
-| `print*` / `panic`          | AST -> LLVM                 | Phase 4g (builtin-call instruction lift)                                             |
-| Generic-fn / struct ctor    | AST -> LLVM                 | Phase 4g (call-lift fallthrough cases)                                               |
-| `union_wrap`                | AST -> LLVM (decision lift) | Phase 4g                                                                             |
+| `Ident` (locals)            | AST -> LLVM                 | Phase 4e (locals foundation -- restores static-chain GEP optimization)               |
+| `assignment` / compound     | AST -> LLVM                 | Phase 4g (statement lowering)                                                        |
+| `field_assignment`          | AST -> LLVM                 | Phase 4g (statement lowering)                                                        |
+| Binary pattern              | AST -> LLVM                 | Phase 4f Slice 5 (folds into match unification)                                      |
+| Struct construction         | AST -> LLVM                 | Phase 4h                                                                             |
+| Enum construction           | AST -> LLVM                 | Phase 4h                                                                             |
+| Closure construction        | AST -> LLVM                 | Phase 4h (`partial_apply` shape)                                                     |
+| String literal              | AST -> LLVM                 | Phase 4h                                                                             |
+| String interpolation/concat | AST -> LLVM                 | Phase 4h (`compile_concat`, `compile_string_concat`, `compile_binary_concat`)        |
+| `EnumStructEqual`           | AST -> LLVM                 | Phase 4h (multi-block per-variant equality)                                          |
+| `spawn` / `receive`         | AST -> LLVM (decision lift) | Phase 4h (process resolvers exist; instruction lift pending)                         |
+| `print*` / `panic`          | AST -> LLVM                 | Phase 4h (builtin-call instruction lift)                                             |
+| Generic-fn / struct ctor    | AST -> LLVM                 | Phase 4h (call-lift fallthrough cases)                                               |
+| `union_wrap`                | AST -> LLVM (decision lift) | Phase 4h                                                                             |
 
 The `Stub` bridge does not even reach most of the AST -> LLVM rows
 because they're entered through `compile_statement` / `compile_expr`
-directly, not through `Lowerer::lower_expr_to_operand`. Phase 4f
+directly, not through `Lowerer::lower_expr_to_operand`. Phase 4g
 (function bodies in IR) is the moment statements stop walking AST
 and most of these constructs first become reachable from the IR
 pipeline.
 
-### 3b. `IRProgram` callable-registry exceptions
+### 3b. `IRProgram` callable-registry contract
 
-Wave 16 isn't fully closed -- three callable-symbol paths still
-bypass the `IRProgram::insert_function` seam:
+As of Wave 18, every callable symbol is in `IRProgram` with a typed
+`IRFunctionKind` (`Extern` / `Free` / `Intrinsic` / `Method` /
+`Thunk`). The registry contract holds without exceptions: thunks
+register through `Compiler::register_thunk` and stdlib intrinsic
+methods register through `Compiler::register_intrinsic`, both routed
+through the existing `register_function` dual-write helper.
 
-- `Compiler::get_or_create_thunk` writes to `fn_ref_thunks` only, not
-  `IRProgram`. Synthetic thunks are LLVM-only today.
-- `monomorphize_impl_method` short-circuits via `EmitResult::Emitted`
-  for stdlib intrinsic methods, bypassing `emit_ir_impl_method`.
-- `resolve_generic_call` still consults `Compiler.functions.contains_key`,
-  not `IRProgram::contains_function`.
-
-Resolving these is Phase 4c (sequenced first because it is independent
-of every other remaining phase).
+Four of the six pre-Wave-18 `Compiler.functions.contains_key`
+existence checks (call-time guards in `calls.rs`, `structs.rs`,
+`generics.rs::monomorphize_impl_method`) migrated to
+`IRProgram::contains_function`. The other two stay on
+`Compiler.functions.contains_key` deliberately: they sit at the top
+of `emit_ir_function` / `emit_ir_impl_method` and ask "has this
+decl's LLVM body been bound yet?", which is a `Compiler.functions`
+question because the planner pre-populates `c.ir` immediately
+before `emit_ir_*` is called. This is the one place
+`Compiler.functions` and `IRProgram.functions` deliberately
+disagree -- `IRProgram` is "decls planned"; `Compiler.functions`
+is "LLVM bodies bound". New exceptions to one-callable-one-
+`IRFunction` would be regressions, not patterns to preserve (see
+invariant 12).
 
 ### 3c. Single-site landmarks
 
@@ -145,9 +162,13 @@ The load-bearing seams every future slice extends:
 - `emit_terminator` in
   [`expo-codegen::control::terminator`](../crates/expo-codegen/src/control/terminator.rs)
   -- the single `IRTerminator` walker.
-- `Compiler::register_function` / `register_extern` in
+- `Compiler::register_function` / `register_extern` /
+  `register_intrinsic` / `register_thunk` in
   [`expo-codegen::compiler`](../crates/expo-codegen/src/compiler.rs) --
-  the single declared-callable seam (when not bypassed; see 3b).
+  the single declared-callable seam. Each variant of `IRFunctionKind`
+  has exactly one registration helper; the four helpers cannot drift
+  because they all funnel into `register_function`'s dual write
+  (`IRProgram` + LLVM-handle map).
 - `Compiler::lowerer()` in the same file -- the single per-function
   `Lowerer<'a>` constructor.
 
@@ -163,24 +184,51 @@ that "interlude" pattern is the signal that construct ordering has
 stopped being the natural organizing principle. Foundations now lead;
 construct lifts ride on top.
 
-### Phase 4c -- Registry closeout
+### Phase 4d -- Extern attributes
 
-Resolve the three Wave 16 exceptions so invariant 12 ("every callable
-is in `IRProgram`") holds without caveat. Independent of every other
-remaining phase; cheap; locks down a contract every later phase
-reads. Sequenced first because there is no reason to wait.
+Surfaced by the Phase 4c audit dividend: `IRFunctionKind::Extern` is
+a unit variant with no attributes, but post-4c it still smushes
+together at least four distinct categories with no way for backends
+to tell them apart from the IR alone.
 
-- Route `fn_ref_thunks` through `register_function`, or surface them
-  as a typed `IRFunctionKind::Thunk`.
-- Route stdlib intrinsic methods through `emit_ir_impl_method`, or
-  add `IRFunctionKind::Intrinsic`.
-- Migrate `resolve_generic_call` to `IRProgram::contains_function`.
+1. **C stdlib FFI** -- `printf`, `malloc`, `memcpy`, `abort`, ... in
+   `builtins.rs`. Real C ABI, some variadic.
+2. **Expo runtime FFI** -- `expo_rt_*`, `expo_string_*`,
+   `expo_socket_*`, ... statically linked against the Rust
+   `expo-runtime` crate.
+3. **User-source `@extern "C"` declarations** -- the parser already
+   extracts the `"C"` payload (`expo-parser/src/decl.rs:471`) but
+   the codegen registration path drops it on the floor.
+4. **Compiler-synthesized declarations that are not actually
+   foreign** -- `__expo_user_main` and the `debug.rs` formatting
+   helpers. Misclassified as `Extern` today because they happen to
+   register without an Expo AST.
 
-**Done when** `Compiler.functions` and `IRProgram.functions` carry
-identical key sets and no codegen site reads `functions.contains_key`
-for an existence check.
+Concrete bug closed by this phase: `printf` and `malloc` are
+indistinguishable in `IRProgram` today -- the variadic flag lives
+only on the LLVM `FunctionType`, so any second backend reading
+`IRProgram` cannot recover the C ABI shape.
 
-### Phase 4d -- Locals foundation
+Open questions to resolve at slice-planning time:
+
+- **v1 attribute scope** -- minimal (`is_variadic` only) vs standard
+  (`abi: ExternAbi` + `link_name: Option<String>` + `is_variadic`)
+  vs full (+ `is_nounwind` for libc no-throw functions).
+- **Synthetic classification** -- leave `__expo_user_main` /
+  `debug.rs` helpers as `Extern` with default attrs, or add a
+  separate `IRFunctionKind::Synthetic` variant.
+- **Annotation plumbing** -- thread the parsed `@extern "C"`
+  annotation through the user-source `register_extern` path
+  (`compiler.rs:921` / `:989`) so the `"C"` payload stops getting
+  silently dropped.
+
+**Done when** every `IRFunctionKind::Extern` payload carries enough
+attributes for any backend to link the symbol without consulting the
+LLVM module, the variadic distinction is recoverable from
+`IRProgram` alone, and the user-source `@extern "C"` annotation flows
+end-to-end into the IR.
+
+### Phase 4e -- Locals foundation
 
 Lift `ExprKind::Ident` from `Stub` to a typed operand path that
 recognizes named locals without minting a `Stub`. High-leverage
@@ -201,10 +249,10 @@ alloca-store-GEP-load round-trips.
 **Done when** `Ident`-rooted expressions stop minting `Stub` and the
 static-chain GEP optimization is back at the IR level.
 
-### Phase 4e -- Construct lifts
+### Phase 4f -- Construct lifts
 
 The reframed construct ladder, free to lift any expression
-vocabulary the construct actually reaches because Phase 4d is in
+vocabulary the construct actually reaches because Phase 4e is in
 place. Each slice is one construct family plus whatever expression
 instructions its body / condition / arms require -- expression
 vocabulary is no longer a separate phase queueing behind constructs;
@@ -232,7 +280,7 @@ it lifts as part of the slice that needs it.
   **Done when** loops carry no ambient state and `tail_position()`
   is deleted.
 
-### Phase 4f -- Function bodies in IR
+### Phase 4g -- Function bodies in IR
 
 The structural cut. `IRFunction` stops carrying
 `expo_ast::ast::Function` bodies and starts carrying
@@ -257,10 +305,10 @@ where `IRFunction` carries both an AST body and a `Vec<IRBasicBlock>`.
 **Done when** `expo-codegen` performs no AST traversal, `IRFunction`
 holds no AST, and per-construct emit walkers are deleted.
 
-### Phase 4g -- Stub retirement
+### Phase 4h -- Stub retirement
 
 Lift the still-`Stub`-producing Expr kinds in dependency order, then
-delete the `Stub` variant. After Phase 4f every expression is
+delete the `Stub` variant. After Phase 4g every expression is
 reached through `lower_expr_to_operand` (because `compile_statement`
 no longer walks AST), so the residual `Stub` kinds are exactly the
 Expr kinds not yet lifted. Order chosen so each lift's vocabulary is
@@ -363,7 +411,7 @@ rule plus the concrete behavior it forbids.
 
 4. **Direct construct names over premature unification.** `IRUnless`
    and `IRIf` stay separate field-for-field-identical structs until
-   Phase 4f dissolves both into a free-floating `Vec<IRBasicBlock>`
+   Phase 4g dissolves both into a free-floating `Vec<IRBasicBlock>`
    on `IRFunction`. Forbids: introducing a polarity-neutral
    `IRConditional` shape now and then renaming it later.
    Renaming-then-deleting is more churn than the bounded duplication.
@@ -396,7 +444,7 @@ rule plus the concrete behavior it forbids.
    `IRInstruction`; `emit_terminator` walks `IRTerminator`. New
    instruction variants extend the existing walker; new constructs do
    not get their own walker except as transitional shims that retire
-   at Phase 4f. Forbids: per-construct emission code that
+   at Phase 4g. Forbids: per-construct emission code that
    re-implements walker mechanics.
 
 10. **`LowerCtx` is ambient semantic state; `IRProgram` is an output
@@ -415,9 +463,11 @@ rule plus the concrete behavior it forbids.
 
 12. **One-callable-one-`IRFunction`.** Every callable symbol in the
     program -- user, monomorphized, intrinsic, runtime extern, thunk
-    -- is an `IRFunction` entry. Forbids: LLVM-only callable side
-    tables. Today's three exceptions (Phase 4c) are bugs to close, not
-    patterns to preserve.
+    -- is an `IRFunction` entry with a typed `IRFunctionKind` that
+    names what it is. Forbids: LLVM-only callable side tables. Wave 18
+    closed the original three exceptions (thunks, stdlib intrinsic
+    methods, `resolve_generic_call`'s registry consult); new
+    exceptions would be regressions, not patterns to preserve.
 
 ---
 
