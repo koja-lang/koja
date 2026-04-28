@@ -27,7 +27,7 @@ use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::Package;
 
 use crate::blocks::IRBlockId;
-use crate::lower::ctx::LowerCtx;
+use crate::lower::ctx::{LocalBindings, LowerCtx};
 use crate::program::IRProgram;
 use crate::values::IRValueId;
 use crate::{FnLowerState, TypeLayouts};
@@ -46,6 +46,11 @@ pub struct Lowerer<'a> {
     pub closure_site_path: Option<&'a Path>,
     pub fn_state: &'a mut FnLowerState,
     pub layouts: &'a TypeLayouts,
+    /// Local bindings in scope at the current lowering site. Mirrors
+    /// the field on [`LowerCtx`]; propagated through [`Self::ctx`] so
+    /// free functions in [`crate::lower`] can resolve `Ident`-shaped
+    /// receivers against the same binding store.
+    pub locals: &'a dyn LocalBindings,
     pub package: Option<&'a Package>,
     pub program: &'a IRProgram,
     pub type_ctx: &'a TypeContext,
@@ -63,6 +68,7 @@ impl<'a> Lowerer<'a> {
             closure_site_path: self.closure_site_path,
             fn_lower: &*self.fn_state,
             layouts: self.layouts,
+            locals: self.locals,
             package: self.package,
             type_ctx: self.type_ctx,
         }

@@ -22,9 +22,11 @@
 use std::collections::HashMap;
 
 use expo_ir::identity::FunctionIdentifier;
+use expo_ir::resolved::fields::ResolvedChain;
 use expo_ir::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 use expo_ir::values::{IRInstruction, IROperand, IRValueId};
 use expo_typecheck::types::Type;
+use inkwell::AddressSpace;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
@@ -33,7 +35,8 @@ use crate::drop::Ownership;
 use crate::expr::compile_expr;
 use crate::ops::truncate_to_common_width;
 use crate::stmt::coerce_numeric;
-use crate::structs::emit_field_load;
+use crate::structs::{emit_chain_field_access, emit_field_load};
+use crate::types::to_llvm_type;
 
 use super::terminator::materialize_operand;
 
@@ -83,6 +86,15 @@ pub(crate) fn execute_instructions<'ctx>(
                 param_types,
                 return_type: _,
             } => emit_call(compiler, *dest, mangled, args, param_types, &value_map)?,
+            IRInstruction::FieldChain {
+                dest,
+                base_name,
+                base_type,
+                steps,
+            } => {
+                let value = emit_field_chain(compiler, base_name, base_type, steps)?;
+                Some((*dest, value))
+            }
             IRInstruction::FieldLoad { dest, base, step } => {
                 let base_value = materialize_operand(compiler, base, &value_map)?;
                 if !base_value.is_struct_value() {
@@ -91,6 +103,24 @@ pub(crate) fn execute_instructions<'ctx>(
                     );
                 }
                 let value = emit_field_load(compiler, base_value.into_struct_value(), step)?;
+                Some((*dest, value))
+            }
+            IRInstruction::LoadConst { dest, name, ty: _ } => {
+                let value = *compiler.constants.get(name).ok_or_else(|| {
+                    format!("IRInstruction::LoadConst: unregistered constant `{name}`")
+                })?;
+                Some((*dest, value))
+            }
+            IRInstruction::LoadLocal { dest, name, ty } => {
+                let value = emit_load_local(compiler, name, ty)?;
+                Some((*dest, value))
+            }
+            IRInstruction::MakeFnRef {
+                dest,
+                name,
+                fn_type: _,
+            } => {
+                let value = emit_make_fn_ref(compiler, name)?;
                 Some((*dest, value))
             }
             IRInstruction::MethodCall {
@@ -201,6 +231,81 @@ fn emit_method_call<'ctx>(
     }
 
     Ok(result.map(|v| (dest, v)))
+}
+
+/// Emit an [`IRInstruction::FieldChain`]: rebuild a [`ResolvedChain`]
+/// from the instruction's fields and dispatch to
+/// [`emit_chain_field_access`], which walks the binding's storage
+/// pointer with one GEP chain plus a final load. Restores the
+/// static-chain GEP optimization at the IR level for chains rooted
+/// at a named local (`a.b.c`, `self.origin.x`).
+fn emit_field_chain<'ctx>(
+    c: &mut Compiler<'ctx>,
+    base_name: &str,
+    base_type: &Type,
+    steps: &[expo_ir::resolved::fields::ResolvedFieldStep],
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let chain = ResolvedChain {
+        base_name: base_name.to_string(),
+        base_type: base_type.clone(),
+        steps: steps.to_vec(),
+    };
+    let label = format!("chain_{base_name}");
+    let result = emit_chain_field_access(c, &chain, &label).ok_or_else(|| {
+        format!(
+            "IRInstruction::FieldChain: cannot resolve LLVM type for chain rooted at `{base_name}`"
+        )
+    })?;
+    let typed = result?.ok_or("IRInstruction::FieldChain: chain produced no value")?;
+    Ok(typed.value)
+}
+
+/// Emit an [`IRInstruction::LoadLocal`]: look up the binding's
+/// storage pointer in `Compiler.fn_state.variables` and emit a load
+/// of `ty`'s LLVM representation. Mirrors the local-binding branch
+/// of `compile_expr`'s `Ident` arm.
+fn emit_load_local<'ctx>(
+    c: &Compiler<'ctx>,
+    name: &str,
+    ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let (ptr, _, _) = c.fn_state.variables.get(name).ok_or_else(|| {
+        format!("IRInstruction::LoadLocal: binding `{name}` not in fn_state.variables")
+    })?;
+    let llvm_ty = to_llvm_type(ty, c.context, &c.llvm_types).ok_or_else(|| {
+        format!("IRInstruction::LoadLocal: unsupported type for binding `{name}`: {ty:?}")
+    })?;
+    Ok(c.builder.build_load(llvm_ty, *ptr, name).unwrap())
+}
+
+/// Emit an [`IRInstruction::MakeFnRef`]: build (or reuse) a thunk
+/// for the named top-level function and pair it with a null
+/// environment pointer to produce a closure-compatible fat pointer.
+/// Mirrors the function-as-value branch of `compile_expr`'s `Ident`
+/// arm.
+fn emit_make_fn_ref<'ctx>(
+    c: &mut Compiler<'ctx>,
+    name: &str,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let thunk = c.get_or_create_thunk(name)?;
+    let ptr_ty = c.context.ptr_type(AddressSpace::default());
+    let closure_struct_ty = c
+        .context
+        .struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
+    let thunk_ptr = thunk.as_global_value().as_pointer_value();
+    let null_env = ptr_ty.const_null();
+    let mut fat_ptr = closure_struct_ty.get_undef();
+    fat_ptr = c
+        .builder
+        .build_insert_value(fat_ptr, thunk_ptr, 0, "insert_fn")
+        .unwrap()
+        .into_struct_value();
+    fat_ptr = c
+        .builder
+        .build_insert_value(fat_ptr, null_env, 1, "insert_env")
+        .unwrap()
+        .into_struct_value();
+    Ok(fat_ptr.into())
 }
 
 /// Materialize each operand and coerce it against the matching

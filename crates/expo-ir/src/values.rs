@@ -136,20 +136,46 @@ pub enum IRInstruction {
         /// the materialization seam.
         return_type: Type,
     },
+    /// Static GEP chain on a field-access path rooted at a named
+    /// local (`a.b.c`, `self.origin.x`). Carries the chain's base
+    /// binding name, its resolved type, and the sequence of
+    /// per-hop field steps. The codegen executor delegates to
+    /// `expo-codegen`'s `emit_chain_field_access`, which walks the
+    /// alloca with a single GEP chain and one final load -- no
+    /// per-hop scratch allocas.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::FieldAccess`] when
+    /// [`crate::lower::fields::resolve_chain_steps`] succeeds.
+    /// Receivers that don't resolve to a named-local-rooted chain
+    /// (e.g. `make_pair().left`) lower to [`IRInstruction::FieldLoad`]
+    /// instead.
+    FieldChain {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Name of the chain's root binding (e.g. `"self"`, `"point"`).
+        /// Resolves to a storage pointer in the codegen-side variables
+        /// map at emission time.
+        base_name: String,
+        /// Resolved type of the root binding. The first GEP step uses
+        /// this type to locate its struct layout.
+        base_type: Type,
+        /// Each successive field hop in the chain. The codegen walker
+        /// GEPs through them in order on the root pointer, then issues
+        /// one final `load` (or `load_maybe_indirect` for indirect
+        /// fields) on the resulting pointer.
+        steps: Vec<ResolvedFieldStep>,
+    },
     /// Struct field load. Materializes the receiver as a struct
     /// value, then projects out one field at the resolved index.
-    /// Multi-hop chains (`obj.a.b.c`) lower to multiple `FieldLoad`
-    /// instructions linked through [`IROperand::Local`].
+    /// Used when the receiver does **not** root at a named local --
+    /// e.g. `make_pair().left`, where the receiver is a call result.
+    /// Named-local-rooted chains lower to [`IRInstruction::FieldChain`]
+    /// instead, restoring the static-chain GEP optimization.
     ///
-    /// The static-chain GEP optimization that
-    /// `expo-codegen`'s AST-bound `compile_field_access` performs
-    /// for chains rooted at a named local does not survive this
-    /// shape: `base` is an opaque operand, not a known storage
-    /// pointer, so each hop on a struct-value receiver becomes
-    /// alloca-store-GEP-load. We rely on LLVM's mem2reg / SROA to
-    /// clean up the redundant alloca round-trips. The richer
-    /// optimization comes back at the IR level once the locals
-    /// foundation slice lifts `Ident`.
+    /// For non-chain receivers, `base` is an opaque struct value and
+    /// emission necessarily round-trips through an entry-block scratch
+    /// alloca (one per hop). LLVM's mem2reg / SROA cleans these up.
     FieldLoad {
         /// SSA destination this instruction produces.
         dest: IRValueId,
@@ -160,6 +186,66 @@ pub enum IRInstruction {
         /// the field's [`expo_ast::types::Type`]. Embedded directly
         /// so emission needs no further lookups.
         step: ResolvedFieldStep,
+    },
+    /// Load a module-level `const` value into an SSA slot. The
+    /// codegen executor reads the precomputed [`inkwell::values::BasicValueEnum`]
+    /// out of `Compiler.constants` and binds it to `dest`.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::Ident`] when the
+    /// name is registered in
+    /// [`expo_typecheck::context::TypeContext::constants`].
+    LoadConst {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Source-level constant name (the registry key in
+        /// `Compiler.constants` and `type_ctx.constants`).
+        name: String,
+        /// Declared type of the constant. Carried so backends that
+        /// don't reach into `type_ctx` still have full type info.
+        ty: Type,
+    },
+    /// Load a named local binding into an SSA slot. The codegen
+    /// executor looks up the binding's storage pointer in
+    /// `Compiler.fn_state.variables` and emits the appropriate
+    /// `build_load` for the binding's type.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::Ident`] (when the
+    /// name resolves to an in-scope binding) or
+    /// [`expo_ast::ast::ExprKind::Self_`] (always, with `name = "self"`).
+    LoadLocal {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Source-level binding name (the key into
+        /// `Compiler.fn_state.variables`).
+        name: String,
+        /// Resolved Expo type of the binding. Drives the load's LLVM
+        /// type at emission.
+        ty: Type,
+    },
+    /// Build a closure-compatible fat-pointer (`{ fn_ptr, env_ptr }`)
+    /// for a top-level function reference, so the function name can
+    /// flow through any code path that expects a callable value
+    /// (closure-typed parameters, `Ident`-as-value, etc.). The
+    /// codegen executor calls `Compiler::get_or_create_thunk` and
+    /// pairs the thunk with a null environment pointer.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::Ident`] when the
+    /// name resolves to a function in
+    /// [`expo_typecheck::context::TypeContext::functions`] but not to
+    /// a local binding or a constant.
+    MakeFnRef {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Source-level function name (the registry key in
+        /// `Compiler.module.get_function` and `type_ctx.functions`).
+        name: String,
+        /// Resolved [`Type::Function`] for the reference. Carried so
+        /// backends that don't reach into `type_ctx` still have full
+        /// type info.
+        fn_type: Type,
     },
     /// Instance method call (`receiver.method(args)`). The receiver
     /// is materialized first and passed as the implicit `self`
@@ -246,7 +332,11 @@ impl IRInstruction {
         match self {
             IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
+            | IRInstruction::FieldChain { dest, .. }
             | IRInstruction::FieldLoad { dest, .. }
+            | IRInstruction::LoadConst { dest, .. }
+            | IRInstruction::LoadLocal { dest, .. }
+            | IRInstruction::MakeFnRef { dest, .. }
             | IRInstruction::MethodCall { dest, .. }
             | IRInstruction::Stub { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => *dest,

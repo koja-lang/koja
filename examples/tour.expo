@@ -21,7 +21,7 @@ fn area(s: Shape) -> Int32
   end
 end
 
-fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
+fn apply(x: Int32, f: fn (Int32) -> Int32) -> Int32
   f(x)
 end
 

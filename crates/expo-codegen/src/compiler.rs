@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use expo_ir::Lowerer;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
-use expo_ir::lower::LowerCtx;
 use expo_ir::lower::constants::{resolve_const, resolve_const_enum};
 use expo_ir::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr, type_name_from_expr};
+use expo_ir::lower::{LocalBindings, LowerCtx};
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstStruct};
 use expo_ir::util::parse_int_literal;
 use expo_ir::{
@@ -170,6 +170,12 @@ pub struct FnState<'ctx> {
     pub variables: BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>,
 }
 
+impl<'ctx> LocalBindings for FnState<'ctx> {
+    fn type_of(&self, name: &str) -> Option<Type> {
+        self.variables.get(name).map(|(_, ty, _)| ty.clone())
+    }
+}
+
 impl<'ctx> FnState<'ctx> {
     pub fn new() -> Self {
         Self {
@@ -305,6 +311,7 @@ impl<'ctx> Compiler<'ctx> {
             closure_site_path: self.closure_site_path.as_deref(),
             fn_lower: &self.fn_lower,
             layouts: &self.layouts,
+            locals: &self.fn_state,
             package: self.current_package.as_ref(),
             type_ctx: self.type_ctx,
         }
@@ -324,6 +331,7 @@ impl<'ctx> Compiler<'ctx> {
             closure_site_path: self.closure_site_path.as_deref(),
             fn_lower: &self.fn_lower,
             layouts: &self.layouts,
+            locals: &self.fn_state,
             package: self.current_package.as_ref(),
             type_ctx: self.type_ctx,
         };
@@ -348,6 +356,7 @@ impl<'ctx> Compiler<'ctx> {
             closure_site_path: self.closure_site_path.as_deref(),
             fn_state: &mut self.fn_lower,
             layouts: &self.layouts,
+            locals: &self.fn_state,
             package: self.current_package.as_ref(),
             program: &self.ir,
             type_ctx: self.type_ctx,

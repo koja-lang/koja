@@ -8,6 +8,7 @@ end
 
 fn main
   i = 0
+
   while i < 10
     print(fib(i))
     i += 1

@@ -14,14 +14,20 @@
 //!   [`crate::lower::calls`] when the callee resolves to a
 //!   registered direct symbol; builtins / closures / generics /
 //!   struct constructors fall through to Stub.
-//! - FieldAccess -- typed [`IRInstruction::FieldLoad`] via
-//!   [`crate::lower::fields`] when the receiver type resolves to a
-//!   known struct layout.
+//! - FieldAccess -- typed [`IRInstruction::FieldChain`] when
+//!   [`crate::lower::fields::resolve_chain_steps`] succeeds (chains
+//!   rooted at a named local), else [`IRInstruction::FieldLoad`].
+//! - Ident -- typed [`IRInstruction::LoadLocal`] /
+//!   [`IRInstruction::LoadConst`] / [`IRInstruction::MakeFnRef`]
+//!   based on the same precedence `compile_expr` uses (locals first,
+//!   then module constants, then function-as-value).
 //! - MethodCall -- typed [`IRInstruction::MethodCall`] via
 //!   [`crate::lower::methods`] when the receiver has a static type
 //!   and the resolved callee is registered; tail-recursive,
 //!   pending-monomorphization, and field-as-closure paths fall
 //!   through to Stub.
+//! - Self_ -- typed [`IRInstruction::LoadLocal`] for the implicit
+//!   `"self"` binding bound by impl-method entry.
 //! - Anything else -- mint a fresh [`crate::values::IRValueId`], push
 //!   an [`IRInstruction::Stub`] onto the caller-supplied instruction
 //!   sequence, and return [`IROperand::Local`] referencing the new id.
@@ -32,6 +38,8 @@
 //! [`IRInstruction::Stub`] site by adding a branch above.
 
 use expo_ast::ast::{Expr, ExprKind};
+use expo_typecheck::context::FnParam;
+use expo_typecheck::types::Type;
 
 use crate::Lowerer;
 use crate::lower::constants::resolve_const;
@@ -84,6 +92,11 @@ impl<'a> Lowerer<'a> {
             ExprKind::Group { expr: inner } => {
                 return self.lower_expr_to_operand(instructions, inner);
             }
+            ExprKind::Ident { name } => {
+                if let Some(operand) = self.lower_ident_or_stub(instructions, name) {
+                    return operand;
+                }
+            }
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -92,6 +105,11 @@ impl<'a> Lowerer<'a> {
                 if let Some((operand, _)) =
                     self.lower_method_call_or_stub(instructions, receiver, method, args)
                 {
+                    return operand;
+                }
+            }
+            ExprKind::Self_ => {
+                if let Some(operand) = self.lower_local_load_or_stub(instructions, "self") {
                     return operand;
                 }
             }
@@ -109,6 +127,80 @@ impl<'a> Lowerer<'a> {
             expr: Box::new(expr.clone()),
         });
         IROperand::Local(dest)
+    }
+
+    /// Lower an [`expo_ast::ast::ExprKind::Ident`] to a typed
+    /// instruction matching `compile_expr`'s precedence: in-scope
+    /// local binding -> module constant -> function-as-value
+    /// (closure-compatible fat pointer). Returns `None` when the
+    /// name resolves to none of the three (well-typed code never
+    /// reaches that branch, but defensively keep the Stub bridge).
+    fn lower_ident_or_stub(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        name: &str,
+    ) -> Option<IROperand> {
+        let (local_ty, const_ty, fn_type) = {
+            let ctx = self.ctx();
+            let local_ty = ctx.locals.type_of(name);
+            let const_ty = ctx.type_ctx.constants.get(name).cloned();
+            let fn_type = ctx.type_ctx.functions.get(name).map(|sig| Type::Function {
+                params: sig.params.iter().map(FnParam::from).collect(),
+                return_type: Box::new(sig.return_type.clone()),
+            });
+            (local_ty, const_ty, fn_type)
+        };
+
+        if let Some(ty) = local_ty {
+            let dest = self.next_value_id();
+            instructions.push(IRInstruction::LoadLocal {
+                dest,
+                name: name.to_string(),
+                ty,
+            });
+            return Some(IROperand::Local(dest));
+        }
+
+        if let Some(ty) = const_ty {
+            let dest = self.next_value_id();
+            instructions.push(IRInstruction::LoadConst {
+                dest,
+                name: name.to_string(),
+                ty,
+            });
+            return Some(IROperand::Local(dest));
+        }
+
+        if let Some(fn_type) = fn_type {
+            let dest = self.next_value_id();
+            instructions.push(IRInstruction::MakeFnRef {
+                dest,
+                name: name.to_string(),
+                fn_type,
+            });
+            return Some(IROperand::Local(dest));
+        }
+
+        None
+    }
+
+    /// Lower a known-local binding to an [`IRInstruction::LoadLocal`].
+    /// Used for [`expo_ast::ast::ExprKind::Self_`] (always with
+    /// `name = "self"`); shares the local-resolution path with
+    /// [`Self::lower_ident_or_stub`].
+    fn lower_local_load_or_stub(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        name: &str,
+    ) -> Option<IROperand> {
+        let ty = self.ctx().locals.type_of(name)?;
+        let dest = self.next_value_id();
+        instructions.push(IRInstruction::LoadLocal {
+            dest,
+            name: name.to_string(),
+            ty,
+        });
+        Some(IROperand::Local(dest))
     }
 }
 

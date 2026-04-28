@@ -38,5 +38,5 @@ pub mod structs;
 pub mod types;
 pub mod values;
 
-pub use ctx::LowerCtx;
+pub use ctx::{LocalBindings, LowerCtx};
 pub use lowerer::Lowerer;

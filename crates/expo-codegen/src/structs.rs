@@ -224,7 +224,7 @@ fn lower_value_struct_field(
 /// Emits a static GEP chain for a [`ResolvedChain`] and loads the final
 /// field. Returns `None` when an intermediate struct type lacks an LLVM
 /// representation, so the shim can retry via the dynamic path.
-fn emit_chain_field_access<'ctx>(
+pub(crate) fn emit_chain_field_access<'ctx>(
     compiler: &mut Compiler<'ctx>,
     chain: &ResolvedChain,
     label: &str,
@@ -494,6 +494,7 @@ fn resolve_method_call<'ctx>(
             closure_site_path: c.closure_site_path.as_deref(),
             fn_lower: &c.fn_lower,
             layouts: &c.layouts,
+            locals: &c.fn_state,
             package: c.current_package.as_ref(),
             type_ctx: c.type_ctx,
         };
@@ -940,6 +941,7 @@ fn resolve_static_call<'ctx>(
             closure_site_path: c.closure_site_path.as_deref(),
             fn_lower: &c.fn_lower,
             layouts: &c.layouts,
+            locals: &c.fn_state,
             package: c.current_package.as_ref(),
             type_ctx: c.type_ctx,
         };

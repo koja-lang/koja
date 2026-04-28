@@ -210,19 +210,21 @@ pub fn resolve_indirect_field_indices(ctx: &LowerCtx<'_>, ty: &Type) -> Vec<(usi
 }
 
 impl<'a> Lowerer<'a> {
-    /// Lower an [`expo_ast::ast::ExprKind::FieldAccess`] to an
-    /// [`IRInstruction::FieldLoad`] when the receiver's resolved type
-    /// maps to a known struct layout via [`lower_struct_field`].
-    /// Recursively lowers the receiver to an [`IROperand`] (chained
-    /// access lowers to multiple `FieldLoad` instructions linked
-    /// through [`IROperand::Local`]), pushes the typed instruction,
-    /// and returns the destination operand.
+    /// Lower an [`expo_ast::ast::ExprKind::FieldAccess`] to a typed
+    /// instruction. Tries the static-chain path first
+    /// ([`resolve_chain_steps`] -- works for chains rooted at a named
+    /// local or `self`), emitting a single [`IRInstruction::FieldChain`]
+    /// that delegates to `expo-codegen`'s `emit_chain_field_access`
+    /// (one GEP chain through the binding's alloca, no per-hop
+    /// scratch). Falls back to single-hop [`IRInstruction::FieldLoad`]
+    /// for receivers that don't root at a binding (e.g. call results).
     ///
     /// Returns `None` to fall back to the [`IRInstruction::Stub`]
     /// bridge when the receiver has no resolved type or the field
     /// can't be located in the struct's layout. Stub fallback routes
-    /// through `expo-codegen`'s `compile_field_access`, which still
-    /// owns the static-chain GEP fast path for AST-bound callers.
+    /// through `expo-codegen`'s `compile_field_access`, which retains
+    /// its own static-chain fast path for any AST-bound callers that
+    /// haven't lifted yet.
     pub(super) fn lower_field_access_or_stub(
         &mut self,
         instructions: &mut Vec<IRInstruction>,
@@ -230,6 +232,23 @@ impl<'a> Lowerer<'a> {
         field: &str,
     ) -> Option<IROperand> {
         let base_type = receiver.resolved_type.clone()?;
+
+        let chain = {
+            let ctx = self.ctx();
+            resolve_chain_steps(&ctx, receiver, field, &|name| ctx.locals.type_of(name))
+        };
+
+        if let Some(chain) = chain {
+            let dest = self.next_value_id();
+            instructions.push(IRInstruction::FieldChain {
+                dest,
+                base_name: chain.base_name,
+                base_type: chain.base_type,
+                steps: chain.steps,
+            });
+            return Some(IROperand::Local(dest));
+        }
+
         let step = lower_struct_field(&self.ctx(), &base_type, field)?;
         let base = self.lower_expr_to_operand(instructions, receiver);
         let dest = self.next_value_id();

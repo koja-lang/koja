@@ -11,12 +11,13 @@ SIL-style design prose and the full Wave 1-17 narrative live in
 ## 1. Status snapshot
 
 The instruction-level scaffold has landed. `IRProgram` is the canonical
-declaration registry. Eight `Lowerer<'a>` lift methods cover six typed
+declaration registry. Ten `Lowerer<'a>` lift methods cover nine typed
 `IRInstruction` variants. Two conditionals (`unless` and `if`-no-else)
 run end-to-end through the full IR pipeline today; three call families
-(`Call`, static call, method call) plus `FieldLoad`, `BinaryOp`, and
-`UnaryOp` reach typed instructions when consumed via the codegen
-wrappers' lift-then-fallthrough paths.
+(`Call`, static call, method call) plus `FieldChain` / `FieldLoad`,
+`LoadLocal` / `LoadConst` / `MakeFnRef`, `BinaryOp`, and `UnaryOp`
+reach typed instructions when consumed via the codegen wrappers'
+lift-then-fallthrough paths.
 
 What we do _not_ have yet:
 
@@ -29,16 +30,16 @@ What we do _not_ have yet:
 - `match` is partially lifted via a parallel pipeline
   (`lower_match` -> `ResolvedMatch` -> `emit_match`) that bypasses
   `execute_instructions`.
-- ~14 constructs still go AST -> LLVM with no IR touchpoint at all
+- ~13 constructs still go AST -> LLVM with no IR touchpoint at all
   (the full list is in section 3a).
 
 ---
 
 ## 2. Phase summary
 
-Condensed from 18 waves of work. The Wave 1-17 prose lives in
-[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Wave 18
-(registry closeout) is summarized inline below.
+Condensed from 20 waves of work. The Wave 1-17 prose lives in
+[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Waves 18-20
+are summarized inline below.
 
 - **Phase 1 -- Typed foundation (done, Waves 1-5).** `TypeRegistry`
   renamed to `LLVMTypeCache`; semantic struct/enum layouts split into
@@ -80,6 +81,18 @@ Condensed from 18 waves of work. The Wave 1-17 prose lives in
   annotation finally flows end-to-end into IR. Closes the unfinished
   half of commit `60618c0` -- see the `Phase 4d` entry in section 4
   for the per-change detail.
+- **Phase 4e -- Locals foundation (done, Wave 20).** `ExprKind::Ident`
+  and `ExprKind::Self_` lift out of `Stub` into discriminated typed
+  instructions (`LoadLocal` for in-scope bindings, `LoadConst` for
+  module constants, `MakeFnRef` for top-level function-as-value); a
+  new `FieldChain` instruction restores the static-chain GEP
+  optimization for chains rooted at a named local (`a.b.c`,
+  `self.origin.x`) by delegating to the existing
+  `emit_chain_field_access` helper. The IR-side classifier reaches
+  the codegen-side variables map through a new `LocalBindings` trait
+  on `LowerCtx` / `Lowerer`, so `expo-ir` stays LLVM-free while still
+  honoring the precedence `compile_expr` uses today. See the
+  `Phase 4e` entry in section 4 for the per-change detail.
 
 ---
 
@@ -90,36 +103,40 @@ to plan a slice.
 
 ### 3a. Lift status by construct
 
-| Construct                   | Status                      | Notes                                                                                |
-| --------------------------- | --------------------------- | ------------------------------------------------------------------------------------ |
-| `unless`                    | Full IR pipeline            | `Lowerer::lower_unless` -> `IRUnless` -> `emit_unless` + `execute_instructions`      |
-| `if` (no else)              | Full IR pipeline            | `Lowerer::lower_if_no_else` -> `IRIf` -> `emit_if` + `execute_instructions`          |
-| `Call` / `static_call`      | Instruction-only            | `Lowerer::lower_call_or_stub` / `lower_static_call_or_stub` -> `IRInstruction::Call` |
-| `MethodCall`                | Instruction-only            | `Lowerer::lower_method_call_or_stub` -> `IRInstruction::MethodCall`                  |
-| `FieldAccess`               | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldLoad`                  |
-| Binary op (most)            | Instruction-only            | `Lowerer::lower_binary_op_or_stub` -> `IRInstruction::BinaryOp`                      |
-| Unary op                    | Instruction-only            | `Lowerer::lower_unary_op_or_stub` -> `IRInstruction::UnaryOp`                        |
-| Bool/Int/Float literals     | Inline operand              | `IROperand::ConstBool` / `ConstInt` / `ConstFloat`                                   |
-| `match`                     | Parallel pipeline           | `lower_match` -> `ResolvedMatch` -> `emit_match`; bypasses `execute_instructions`    |
-| `if`/`else` (with else)     | AST -> LLVM                 | Slice 3                                                                              |
-| `ternary`                   | AST -> LLVM                 | Slice 3                                                                              |
-| `cond`                      | AST -> LLVM                 | Slice 4                                                                              |
-| `while` / `loop` / `for`    | AST -> LLVM                 | Slice 6                                                                              |
-| `break` / `return`          | AST -> LLVM                 | Slice 6                                                                              |
-| `Ident` (locals)            | AST -> LLVM                 | Phase 4e (locals foundation -- restores static-chain GEP optimization)               |
-| `assignment` / compound     | AST -> LLVM                 | Phase 4g (statement lowering)                                                        |
-| `field_assignment`          | AST -> LLVM                 | Phase 4g (statement lowering)                                                        |
-| Binary pattern              | AST -> LLVM                 | Phase 4f Slice 5 (folds into match unification)                                      |
-| Struct construction         | AST -> LLVM                 | Phase 4h                                                                             |
-| Enum construction           | AST -> LLVM                 | Phase 4h                                                                             |
-| Closure construction        | AST -> LLVM                 | Phase 4h (`partial_apply` shape)                                                     |
-| String literal              | AST -> LLVM                 | Phase 4h                                                                             |
-| String interpolation/concat | AST -> LLVM                 | Phase 4h (`compile_concat`, `compile_string_concat`, `compile_binary_concat`)        |
-| `EnumStructEqual`           | AST -> LLVM                 | Phase 4h (multi-block per-variant equality)                                          |
-| `spawn` / `receive`         | AST -> LLVM (decision lift) | Phase 4h (process resolvers exist; instruction lift pending)                         |
-| `print*` / `panic`          | AST -> LLVM                 | Phase 4h (builtin-call instruction lift)                                             |
-| Generic-fn / struct ctor    | AST -> LLVM                 | Phase 4h (call-lift fallthrough cases)                                               |
-| `union_wrap`                | AST -> LLVM (decision lift) | Phase 4h                                                                             |
+| Construct                   | Status                      | Notes                                                                                                                                |
+| --------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `unless`                    | Full IR pipeline            | `Lowerer::lower_unless` -> `IRUnless` -> `emit_unless` + `execute_instructions`                                                      |
+| `if` (no else)              | Full IR pipeline            | `Lowerer::lower_if_no_else` -> `IRIf` -> `emit_if` + `execute_instructions`                                                          |
+| `Call` / `static_call`      | Instruction-only            | `Lowerer::lower_call_or_stub` / `lower_static_call_or_stub` -> `IRInstruction::Call`                                                 |
+| `MethodCall`                | Instruction-only            | `Lowerer::lower_method_call_or_stub` -> `IRInstruction::MethodCall`                                                                  |
+| `FieldAccess` (chains)      | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldChain` (rooted at named local; delegates to `emit_chain_field_access`) |
+| `FieldAccess` (value recv)  | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldLoad` (fallback for non-binding receivers)                             |
+| `Ident` (locals)            | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::LoadLocal`                                                                         |
+| `Ident` (constants)         | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::LoadConst`                                                                         |
+| `Ident` (function-as-value) | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::MakeFnRef`                                                                         |
+| `Self_`                     | Instruction-only            | `Lowerer::lower_local_load_or_stub` -> `IRInstruction::LoadLocal { name: "self" }`                                                   |
+| Binary op (most)            | Instruction-only            | `Lowerer::lower_binary_op_or_stub` -> `IRInstruction::BinaryOp`                                                                      |
+| Unary op                    | Instruction-only            | `Lowerer::lower_unary_op_or_stub` -> `IRInstruction::UnaryOp`                                                                        |
+| Bool/Int/Float literals     | Inline operand              | `IROperand::ConstBool` / `ConstInt` / `ConstFloat`                                                                                   |
+| `match`                     | Parallel pipeline           | `lower_match` -> `ResolvedMatch` -> `emit_match`; bypasses `execute_instructions`                                                    |
+| `if`/`else` (with else)     | AST -> LLVM                 | Slice 3                                                                                                                              |
+| `ternary`                   | AST -> LLVM                 | Slice 3                                                                                                                              |
+| `cond`                      | AST -> LLVM                 | Slice 4                                                                                                                              |
+| `while` / `loop` / `for`    | AST -> LLVM                 | Slice 6                                                                                                                              |
+| `break` / `return`          | AST -> LLVM                 | Slice 6                                                                                                                              |
+| `assignment` / compound     | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                        |
+| `field_assignment`          | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                        |
+| Binary pattern              | AST -> LLVM                 | Phase 4f Slice 5 (folds into match unification)                                                                                      |
+| Struct construction         | AST -> LLVM                 | Phase 4h                                                                                                                             |
+| Enum construction           | AST -> LLVM                 | Phase 4h                                                                                                                             |
+| Closure construction        | AST -> LLVM                 | Phase 4h (`partial_apply` shape)                                                                                                     |
+| String literal              | AST -> LLVM                 | Phase 4h                                                                                                                             |
+| String interpolation/concat | AST -> LLVM                 | Phase 4h (`compile_concat`, `compile_string_concat`, `compile_binary_concat`)                                                        |
+| `EnumStructEqual`           | AST -> LLVM                 | Phase 4h (multi-block per-variant equality)                                                                                          |
+| `spawn` / `receive`         | AST -> LLVM (decision lift) | Phase 4h (process resolvers exist; instruction lift pending)                                                                         |
+| `print*` / `panic`          | AST -> LLVM                 | Phase 4h (builtin-call instruction lift)                                                                                             |
+| Generic-fn / struct ctor    | AST -> LLVM                 | Phase 4h (call-lift fallthrough cases)                                                                                               |
+| `union_wrap`                | AST -> LLVM (decision lift) | Phase 4h                                                                                                                             |
 
 The `Stub` bridge does not even reach most of the AST -> LLVM rows
 because they're entered through `compile_statement` / `compile_expr`
@@ -187,6 +204,15 @@ The load-bearing seams every future slice extends:
   (`IRProgram` + LLVM-handle map).
 - `Compiler::lowerer()` in the same file -- the single per-function
   `Lowerer<'a>` constructor.
+- [`expo-ir::lower::LocalBindings`](../crates/expo-ir/src/lower/ctx.rs)
+  trait -- the single seam through which IR lowering asks "is this
+  name an in-scope local binding, and if so, what's its type?".
+  Implemented by `expo-codegen::compiler::FnState` (forwarding to
+  `fn_state.variables`); installed on `LowerCtx.locals` /
+  `Lowerer.locals` by every `Compiler::lower_ctx*` /
+  `Compiler::lowerer` constructor. Keeps `expo-ir` LLVM-free without
+  forcing a parallel binding mirror -- the codegen-side variables map
+  remains the source of truth.
 
 ---
 
@@ -256,7 +282,7 @@ plus the user `@extern "C"` payload drop.
   recover the C ABI shape (variadic, link library, link name) from
   `IRProgram` alone.~~ **Done** -- `Extern` is now a struct variant
   carrying `ExternAttrs { abi: ExternAbi, is_variadic, link_lib,
-  link_name }`. `ExternAbi` is a single-variant enum (`C`) so future
+link_name }`. `ExternAbi` is a single-variant enum (`C`) so future
   ABIs drop in without a breaking churn. `builtins.rs::decl` reads
   `is_variadic` straight from the LLVM `FunctionType::is_var_arg`,
   so the ~40 hand-rolled C/runtime decl call sites stay as
@@ -299,26 +325,64 @@ typed helpers on `Compiler`, all funneling through
 `register_function`'s dual write, are the single declared-callable
 seam (see section 3c).
 
-### Phase 4e -- Locals foundation
+### Phase 4e -- Locals foundation (Done, Wave 20)
 
-Lift `ExprKind::Ident` from `Stub` to a typed operand path that
-recognizes named locals without minting a `Stub`. High-leverage
-precondition for every later construct lift: today every typed-IR
-chain breaks at the first `Ident` reference. Trace `if x.value > 5`:
-the binary lift recurses to field-access lift, which recurses to the
-receiver `Ident(x)` and falls through to `Stub`; the chain becomes
-`BinaryOp(FieldLoad(Stub(...)), ConstInt(5))` instead of fully typed.
-Lifting `Ident` retroactively widens typed-IR coverage on slices 1-2
-and brings every later construct slice up to nearly-end-to-end typed
-IR on day one.
+Lifted `ExprKind::Ident` and `ExprKind::Self_` out of `Stub` into
+discriminated typed instructions matching the three populations
+`compile_expr`'s `Ident` arm has always handled (locals, module
+constants, function-as-value), and restored the static-chain GEP
+optimization at the IR level via a new `FieldChain` instruction.
+High-leverage precondition for every later construct lift: typed-IR
+chains used to break at the first `Ident` reference (`if x.value > 5`
+became `BinaryOp(FieldLoad(Stub(...)), ConstInt(5))` instead of fully
+typed). Lifting `Ident` retroactively widens typed-IR coverage on
+slices 1-2 and brings every later construct slice up to
+nearly-end-to-end typed IR on day one.
 
-Also restores the static-chain GEP optimization that `FieldLoad`
-currently sacrifices: with `Ident` known to lowering, multi-hop
-field access on a named local can lower as one GEP chain instead of
-alloca-store-GEP-load round-trips.
+- ~~`ExprKind::Ident` and `ExprKind::Self_` mint `Stub` for every
+  local-binding read.~~ **Done** -- new `LoadLocal` /
+  `LoadConst` / `MakeFnRef` IR variants cover the three populations
+  with discriminated dispatch; new `Lowerer::lower_ident_or_stub` and
+  `Lowerer::lower_local_load_or_stub` arms classify by querying
+  locals first, then `type_ctx.constants`, then `type_ctx.functions`
+  (matching `compile_expr`'s precedence). Unresolved `Ident`s still
+  fall through to `Stub` defensively.
+- ~~Multi-hop field access on a named local
+  (`self.origin.x`, `point.span.start`) re-allocates a scratch struct
+  per hop because `FieldLoad` only sees opaque struct-value
+  receivers.~~ **Done** -- new `IRInstruction::FieldChain` carries
+  `base_name` + `base_type` + `Vec<ResolvedFieldStep>` and delegates
+  to `expo-codegen::structs::emit_chain_field_access` (already
+  existed but had no IR consumer). `Lowerer::lower_field_access_or_stub`
+  now tries `resolve_chain_steps` first; on success it emits one
+  `FieldChain` (one GEP chain through the binding's alloca, one final
+  `load_maybe_indirect`); on failure it falls back to the recursive
+  `FieldLoad` path. Verified on `tests/lang/cross_ref/src/shape.expo`
+  -- `self.origin.x` lowers to two chained GEPs through `self`'s
+  alloca with one final load, no `tmp_struct` scratch alloca.
+- ~~`expo-ir` cannot reach into codegen's
+  `Compiler.fn_state.variables` to know which `Ident` names are
+  in-scope locals; mirroring the map across every codegen mutation
+  site (closures, match arms, generic monomorphization,
+  save-and-restore patterns) would be invasive and easy to drift.~~
+  **Done** -- new `LocalBindings` trait in
+  [`expo-ir::lower::ctx`](../crates/expo-ir/src/lower/ctx.rs)
+  provides a single `type_of(&str) -> Option<Type>` query. Codegen's
+  `FnState` implements it (forwarding to `variables.get(name).map(|(_, ty, _)| ty.clone())`);
+  every `Compiler::lower_ctx*` / `Compiler::lowerer` constructor
+  installs `&self.fn_state` as the `LowerCtx.locals` /
+  `Lowerer.locals` field. The codegen-side map stays the single
+  source of truth -- no parallel mirror, no per-mutation-site
+  bookkeeping.
 
-**Done when** `Ident`-rooted expressions stop minting `Stub` and the
-static-chain GEP optimization is back at the IR level.
+**Outcome.** `Ident` and `Self_` no longer mint `Stub`. Static-chain
+GEP optimization is back at the IR level. The IR's expression
+vocabulary now covers nine typed instruction variants
+(`BinaryOp`, `Call`, `FieldChain`, `FieldLoad`, `LoadConst`,
+`LoadLocal`, `MakeFnRef`, `MethodCall`, `UnaryOp`) plus inline
+literals -- enough that nearly every operand-shaped expression a
+later construct lift will see threads typed end-to-end through the
+IR.
 
 ### Phase 4f -- Construct lifts
 
@@ -520,11 +584,14 @@ rule plus the concrete behavior it forbids.
 
 10. **`LowerCtx` is ambient semantic state; `IRProgram` is an output
     container.** `LowerCtx` carries `&TypeContext`, `&TypeLayouts`,
-    `current_package`, `closure_site_path`, `&FnLowerState`.
+    `current_package`, `closure_site_path`, `&FnLowerState`, and the
+    `&dyn LocalBindings` query oracle for in-scope local bindings.
     `IRProgram` flows through resolvers as an explicit positional
     parameter, not on `LowerCtx`. Forbids: stuffing the IR output
-    container into the ambient context bundle. Closures into LLVM-side
-    state stay short, one-shot, and at the codegen call site.
+    container into the ambient context bundle. The `LocalBindings`
+    seam exists by necessity (variable storage is LLVM-bound and
+    cannot move into `expo-ir`); ad-hoc closures into other LLVM-side
+    state still stay short, one-shot, and at the codegen call site.
 
 11. **Mangling, identities, and registries live in `expo-ir`.** Once a
     registry exists in `IRProgram`, the matching `function_exists` /
@@ -535,8 +602,8 @@ rule plus the concrete behavior it forbids.
 12. **One-callable-one-`IRFunction`-with-honest-kind.** Every
     callable symbol in the program -- user, monomorphized,
     intrinsic, runtime extern, thunk, main-entry pair -- is an
-    `IRFunction` entry with a typed `IRFunctionKind` that *honestly
-    classifies what it is*. Wave 18 closed the original three
+    `IRFunction` entry with a typed `IRFunctionKind` that _honestly
+    classifies what it is_. Wave 18 closed the original three
     exceptions (thunks, stdlib intrinsic methods,
     `resolve_generic_call`'s registry consult). Wave 19 closed the
     `register_extern` catch-all that misclassified non-generic user
