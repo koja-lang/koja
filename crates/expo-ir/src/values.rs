@@ -36,7 +36,9 @@
 //! clear, greppable retirement marker.
 
 use expo_ast::ast::Expr;
+use expo_typecheck::types::Type;
 
+use crate::identity::FunctionIdentifier;
 use crate::resolved::fields::ResolvedFieldStep;
 use crate::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 
@@ -104,6 +106,36 @@ pub enum IRInstruction {
         /// Right-hand operand.
         rhs: IROperand,
     },
+    /// Direct or static-method function call. Encodes the resolved
+    /// mangled symbol, the lowered argument operands, and the
+    /// resolved parameter / return types so emission can materialize
+    /// each argument, coerce it to the matching parameter type, and
+    /// emit the LLVM call without further resolution work.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::Call`], or via the
+    /// codegen wrappers (`compile_call`, `compile_static_call`) that
+    /// attempt the lift before their legacy emission paths.
+    /// Builtin (`panic` / `print*`), closure-variable, generic, and
+    /// struct-constructor calls fall through to [`IRInstruction::Stub`]
+    /// because they require codegen-side state the IR-level lift does
+    /// not see.
+    Call {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Resolved callee symbol, registered in
+        /// [`crate::program::IRProgram`].
+        mangled: FunctionIdentifier,
+        /// Lowered argument operands, parallel to `param_types`.
+        args: Vec<IROperand>,
+        /// Resolved parameter types -- the emission walker coerces
+        /// each materialized argument to the matching entry.
+        param_types: Vec<Type>,
+        /// Callee's resolved return type. Carried alongside the
+        /// destination so wrappers can re-attach a typed value at
+        /// the materialization seam.
+        return_type: Type,
+    },
     /// Struct field load. Materializes the receiver as a struct
     /// value, then projects out one field at the resolved index.
     /// Multi-hop chains (`obj.a.b.c`) lower to multiple `FieldLoad`
@@ -128,6 +160,51 @@ pub enum IRInstruction {
         /// the field's [`expo_ast::types::Type`]. Embedded directly
         /// so emission needs no further lookups.
         step: ResolvedFieldStep,
+    },
+    /// Instance method call (`receiver.method(args)`). The receiver
+    /// is materialized first and passed as the implicit `self`
+    /// argument; subsequent operands are coerced against
+    /// `param_types[1..]`. `is_move` and `receiver_name` carry the
+    /// existing ownership-tracking contract: when the resolved method
+    /// consumes its receiver by-move and the receiver expression is
+    /// a named local, the emission walker marks that variable
+    /// `Ownership::Unowned` after the call.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::MethodCall`], or via
+    /// `compile_method_call`'s lift attempt. Self-tail-recursive
+    /// calls (TCO), generic methods needing inference,
+    /// pending-monomorphization, and the field-typed-as-function
+    /// closure invocation path all fall through to
+    /// [`IRInstruction::Stub`].
+    MethodCall {
+        /// SSA destination this instruction produces.
+        dest: IRValueId,
+        /// Resolved callee symbol, registered in
+        /// [`crate::program::IRProgram`].
+        mangled: FunctionIdentifier,
+        /// Receiver operand, materialized as the implicit `self`.
+        receiver: IROperand,
+        /// Receiver variable name when the receiver expression is a
+        /// simple [`expo_ast::ast::ExprKind::Ident`] or
+        /// [`expo_ast::ast::ExprKind::Self_`]. `None` for
+        /// non-named receivers (chained calls, expression results).
+        /// Used together with `is_move` to update the receiver's
+        /// ownership in the per-function variables map.
+        receiver_name: Option<String>,
+        /// Whether the resolved method consumes the receiver
+        /// by-move ([`expo_typecheck::context::PassMode::Move`]).
+        is_move: bool,
+        /// Lowered argument operands (excluding the receiver),
+        /// parallel to `param_types[1..]`.
+        args: Vec<IROperand>,
+        /// Resolved parameter types. `param_types[0]` is the
+        /// receiver type (no coercion applied -- receiver type is
+        /// concrete after resolution); `param_types[1..]` cover the
+        /// non-self arguments.
+        param_types: Vec<Type>,
+        /// Callee's resolved return type.
+        return_type: Type,
     },
     /// **Transitional.** Bridges to AST-level expression emission
     /// while the rest of the instruction set fills in. The emission
@@ -168,7 +245,9 @@ impl IRInstruction {
     pub fn dest(&self) -> IRValueId {
         match self {
             IRInstruction::BinaryOp { dest, .. }
+            | IRInstruction::Call { dest, .. }
             | IRInstruction::FieldLoad { dest, .. }
+            | IRInstruction::MethodCall { dest, .. }
             | IRInstruction::Stub { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => *dest,
         }

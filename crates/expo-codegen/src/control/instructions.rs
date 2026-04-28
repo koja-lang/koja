@@ -23,16 +23,40 @@ use std::collections::HashMap;
 
 use expo_ir::identity::FunctionIdentifier;
 use expo_ir::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
-use expo_ir::values::{IRInstruction, IRValueId};
-use inkwell::values::{BasicValueEnum, FunctionValue};
+use expo_ir::values::{IRInstruction, IROperand, IRValueId};
+use expo_typecheck::types::Type;
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::compiler::Compiler;
+use crate::drop::Ownership;
 use crate::expr::compile_expr;
 use crate::ops::truncate_to_common_width;
+use crate::stmt::coerce_numeric;
 use crate::structs::emit_field_load;
 
 use super::terminator::materialize_operand;
+
+/// Lift the lift-helper output `(operand, return_type)` to a
+/// [`crate::compiler::TypedValue`], handling void-returning callees
+/// gracefully. Returns `None` when the operand's destination wasn't
+/// inserted into the value map (the call's result was void), matching
+/// the legacy `compile_call` / `compile_method_call` behavior of
+/// returning `Ok(None)` for `Type::Unit` returns.
+pub(crate) fn maybe_typed_value<'ctx>(
+    compiler: &Compiler<'ctx>,
+    operand: &IROperand,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+    return_type: Type,
+) -> Result<Option<crate::compiler::TypedValue<'ctx>>, String> {
+    if let IROperand::Local(id) = operand
+        && !value_map.contains_key(id)
+    {
+        return Ok(None);
+    }
+    let value = super::terminator::materialize_operand(compiler, operand, value_map)?;
+    Ok(Some(crate::compiler::TypedValue::new(value, return_type)))
+}
 
 /// Walk `instructions` in order, emitting LLVM IR for each and
 /// recording the produced value under the instruction's SSA
@@ -45,13 +69,20 @@ pub(crate) fn execute_instructions<'ctx>(
 ) -> Result<HashMap<IRValueId, BasicValueEnum<'ctx>>, String> {
     let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
     for instruction in instructions {
-        let (dest, value) = match instruction {
+        let entry = match instruction {
             IRInstruction::BinaryOp { dest, op, lhs, rhs } => {
                 let l = materialize_operand(compiler, lhs, &value_map)?;
                 let r = materialize_operand(compiler, rhs, &value_map)?;
                 let value = emit_binary_op(compiler, op, l, r)?;
-                (*dest, value)
+                Some((*dest, value))
             }
+            IRInstruction::Call {
+                dest,
+                mangled,
+                args,
+                param_types,
+                return_type: _,
+            } => emit_call(compiler, *dest, mangled, args, param_types, &value_map)?,
             IRInstruction::FieldLoad { dest, base, step } => {
                 let base_value = materialize_operand(compiler, base, &value_map)?;
                 if !base_value.is_struct_value() {
@@ -60,23 +91,138 @@ pub(crate) fn execute_instructions<'ctx>(
                     );
                 }
                 let value = emit_field_load(compiler, base_value.into_struct_value(), step)?;
-                (*dest, value)
+                Some((*dest, value))
             }
+            IRInstruction::MethodCall {
+                dest,
+                mangled,
+                receiver,
+                receiver_name,
+                is_move,
+                args,
+                param_types,
+                return_type: _,
+            } => emit_method_call(
+                compiler,
+                *dest,
+                mangled,
+                receiver,
+                receiver_name.as_deref(),
+                *is_move,
+                args,
+                param_types,
+                &value_map,
+            )?,
             IRInstruction::Stub { dest, expr } => {
                 let value = compile_expr(compiler, expr, function)?
                     .ok_or("instruction stub expression produced no value")?
                     .value;
-                (*dest, value)
+                Some((*dest, value))
             }
             IRInstruction::UnaryOp { dest, op, operand } => {
                 let v = materialize_operand(compiler, operand, &value_map)?;
                 let value = emit_unary_op(compiler, op, v)?;
-                (*dest, value)
+                Some((*dest, value))
             }
         };
-        value_map.insert(dest, value);
+        if let Some((dest, value)) = entry {
+            value_map.insert(dest, value);
+        }
     }
     Ok(value_map)
+}
+
+/// Emit an [`IRInstruction::Call`]: materialize args, coerce against
+/// the resolved parameter types, look up the LLVM `FunctionValue` in
+/// `c.functions` (Wave 16 invariant guarantees presence for any
+/// mangled symbol registered in [`expo_ir::program::IRProgram`]), and
+/// build the LLVM call. Returns `None` for void-returning callees so
+/// the caller skips the value-map insert; non-void returns produce
+/// `Some((dest, value))`.
+fn emit_call<'ctx>(
+    c: &mut Compiler<'ctx>,
+    dest: IRValueId,
+    mangled: &FunctionIdentifier,
+    args: &[IROperand],
+    param_types: &[Type],
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<Option<(IRValueId, BasicValueEnum<'ctx>)>, String> {
+    let callee = *c
+        .functions
+        .get(mangled)
+        .ok_or_else(|| format!("IRInstruction::Call: unregistered callee `{mangled}`"))?;
+
+    let llvm_args = build_call_args(c, args, param_types, value_map)?;
+    let result = c.call(callee, &llvm_args, &format!("{mangled}_ret"));
+    Ok(result.map(|v| (dest, v)))
+}
+
+/// Emit an [`IRInstruction::MethodCall`]: materialize the receiver as
+/// the implicit `self` argument (no coercion -- receiver type is
+/// concrete after resolution), materialize and coerce the remaining
+/// args against `param_types[1..]`, build the LLVM call, then mirror
+/// the legacy `compile_method_call` ownership update by marking the
+/// receiver variable [`Ownership::Unowned`] when `is_move` and
+/// `receiver_name` is set.
+#[allow(clippy::too_many_arguments)]
+fn emit_method_call<'ctx>(
+    c: &mut Compiler<'ctx>,
+    dest: IRValueId,
+    mangled: &FunctionIdentifier,
+    receiver: &IROperand,
+    receiver_name: Option<&str>,
+    is_move: bool,
+    args: &[IROperand],
+    param_types: &[Type],
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<Option<(IRValueId, BasicValueEnum<'ctx>)>, String> {
+    let callee = *c
+        .functions
+        .get(mangled)
+        .ok_or_else(|| format!("IRInstruction::MethodCall: unregistered callee `{mangled}`"))?;
+
+    let recv_value = materialize_operand(c, receiver, value_map)?;
+    let mut llvm_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len() + 1);
+    llvm_args.push(recv_value.into());
+    // `param_types` for MethodCall excludes the implicit `self`
+    // receiver (see `ResolvedMethodCall::param_types`), so the args
+    // line up at index 0.
+    let coerced = build_call_args(c, args, param_types, value_map)?;
+    llvm_args.extend(coerced);
+
+    let result = c.call(callee, &llvm_args, &format!("{mangled}_ret"));
+
+    if is_move
+        && let Some(name) = receiver_name
+        && let Some((ptr, ty, _)) = c.fn_state.variables.get(name)
+    {
+        let entry = (*ptr, ty.clone(), Ownership::Unowned);
+        c.fn_state.variables.insert(name.to_string(), entry);
+    }
+
+    Ok(result.map(|v| (dest, v)))
+}
+
+/// Materialize each operand and coerce it against the matching
+/// `param_types[i]`. Out-of-range arguments (variadic tail) pass
+/// through without coercion. Mirrors the per-argument coercion loop in
+/// the legacy `compile_call` / `compile_method_call` paths.
+fn build_call_args<'ctx>(
+    c: &mut Compiler<'ctx>,
+    args: &[IROperand],
+    param_types: &[Type],
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<Vec<BasicMetadataValueEnum<'ctx>>, String> {
+    let mut out = Vec::with_capacity(args.len());
+    for (i, operand) in args.iter().enumerate() {
+        let value = materialize_operand(c, operand, value_map)?;
+        let coerced = match param_types.get(i) {
+            Some(target) => coerce_numeric(c, value, target),
+            None => value,
+        };
+        out.push(coerced.into());
+    }
+    Ok(out)
 }
 
 /// Map a [`ResolvedBinaryOp`] to its LLVM builder call. Mirrors the

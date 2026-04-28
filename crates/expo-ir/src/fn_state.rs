@@ -96,4 +96,11 @@ impl FnLowerState {
     pub fn save_tail(&mut self) -> bool {
         std::mem::replace(&mut self.tail_position, false)
     }
+
+    /// Read the current tail-position flag without clearing it. Used by
+    /// the IR call-lift helpers to defer to Stub when a self-tail-recursive
+    /// rewrite needs to happen on the legacy emission path.
+    pub fn tail_position(&self) -> bool {
+        self.tail_position
+    }
 }

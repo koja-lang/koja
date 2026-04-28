@@ -65,6 +65,7 @@ use inkwell::values::{
 
 use crate::calls::invoke_closure_fat_ptr;
 use crate::compiler::{Compiler, ExprResult, TypedValue};
+use crate::control::{execute_instructions, maybe_typed_value};
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::{
     ensure_types_exist, monomorphize_enum, monomorphize_impl_method, monomorphize_struct,
@@ -319,6 +320,19 @@ pub fn compile_method_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
+    // Lift attempt runs before `save_tail` so the lift helper still
+    // observes the surrounding tail flag and defers to the legacy path
+    // for self-tail-recursive method calls (which need the
+    // `loop_header` jump rewrite).
+    let mut instructions = Vec::new();
+    if let Some((operand, return_type)) =
+        c.lowerer()
+            .lower_method_call_or_stub(&mut instructions, receiver, method, args)
+    {
+        let value_map = execute_instructions(c, &instructions, function)?;
+        return maybe_typed_value(c, &operand, &value_map, return_type);
+    }
+
     let was_tail = c.fn_lower.save_tail();
 
     if let ExprKind::Ident { name, .. } = &receiver.kind {
@@ -987,6 +1001,18 @@ fn compile_static_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
+    let mut instructions = Vec::new();
+    if let Some((operand, return_type)) = c.lowerer().lower_static_call_or_stub(
+        &mut instructions,
+        type_name,
+        resolved_type,
+        method,
+        args,
+    ) {
+        let value_map = execute_instructions(c, &instructions, function)?;
+        return maybe_typed_value(c, &operand, &value_map, return_type);
+    }
+
     let resolved = resolve_static_call(c, type_name, resolved_type, method, args)?;
 
     let mut llvm_args: Vec<BasicMetadataValueEnum> = Vec::new();

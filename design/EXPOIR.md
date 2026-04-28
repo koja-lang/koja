@@ -669,25 +669,33 @@ What actually lives in `expo-ir` today:
   model, extended in Wave 13 with the `compile_if`-no-else lift,
   extended in Wave 14 with the `BinaryOp` / `UnaryOp` instruction
   vocabulary, extended in Wave 15 with the `Lowerer` per-function
-  driver and the `FieldLoad` memory-load archetype):
+  driver and the `FieldLoad` memory-load archetype, extended in Wave
+  17 with the `Call` / `MethodCall` direct-dispatch variants):
   `IRBlockId`, `IRBasicBlock { id, label, instructions, terminator }`,
   and `IRTerminator` (`Branch` / `CondBranch` / `Unreachable`) in
   [`expo-ir::blocks`](../crates/expo-ir/src/blocks.rs); plus
   `IRValueId`, `IROperand` (`ConstBool` / `ConstFloat` / `ConstInt` /
   `ConstStr` / `Local` / `Unit`), and `IRInstruction` (typed
   `BinaryOp { dest, op, lhs, rhs }`,
-  `FieldLoad { dest, base, step }`, and
+  `Call { dest, mangled, args, param_types, return_type }`,
+  `FieldLoad { dest, base, step }`,
+  `MethodCall { dest, mangled, receiver, receiver_name, is_move,
+  args, param_types, return_type }`, and
   `UnaryOp { dest, op, operand }` variants plus the transitional
   `Stub { dest, expr }` bridge) in
   [`expo-ir::values`](../crates/expo-ir/src/values.rs). The
   per-function lowering driver
   [`Lowerer<'a>`](../crates/expo-ir/src/lower/lowerer.rs) owns
   `&mut FnLowerState` plus shared borrows of `&TypeContext`,
-  `&TypeLayouts`, current package, and current closure-site path; it
-  hosts the operand-lowering call surface as inherent methods
+  `&TypeLayouts`, current package, current closure-site path, and
+  `&IRProgram` (added in Wave 17 so the lift helpers can resolve
+  callable symbols against the canonical registry); it hosts the
+  operand-lowering call surface as inherent methods
   (`lower_expr_to_operand`, `lower_unless`, `lower_if_no_else`,
   `lower_binary_op_or_stub`, `lower_unary_op_or_stub`,
-  `lower_field_access_or_stub`) and exposes a `ctx()` accessor that
+  `lower_field_access_or_stub`, `lower_call_or_stub`,
+  `lower_method_call_or_stub`, `lower_static_call_or_stub`) and
+  exposes a `ctx()` accessor that
   builds an ad-hoc `LowerCtx<'_>` for delegating to free helpers
   that haven't migrated yet. Constructed by `Compiler::lowerer()` in
   `expo-codegen`. The shared method `Lowerer::lower_expr_to_operand`
@@ -700,8 +708,17 @@ What actually lives in `expo-ir` today:
   (excluding `Concat` and `EnumStructEqual`, which fall through),
   `FieldAccess` lowers to `IRInstruction::FieldLoad` via
   [`lower::fields`](../crates/expo-ir/src/lower/fields.rs) when the
-  receiver type resolves to a known struct layout, and every other
-  shape mints a value id and pushes one `IRInstruction::Stub` onto
+  receiver type resolves to a known struct layout, `Call` /
+  `MethodCall` lower to typed `IRInstruction::Call` /
+  `IRInstruction::MethodCall` via
+  [`lower::calls`](../crates/expo-ir/src/lower/calls.rs) and
+  [`lower::methods`](../crates/expo-ir/src/lower/methods.rs) when
+  the callee resolves to a registered direct symbol with no recorded
+  argument coercions and no self-tail-recursive TCO in flight
+  (Builtin / Closure / Generic / StructConstructor cases, pending
+  monomorphization, union-widened args, and tail calls fall through),
+  and every other shape mints a value id and pushes one
+  `IRInstruction::Stub` onto
   the caller's instruction sequence. Two conditional constructs are
   lowered through this scaffold today, both Shape 1 (single body, no
   value merge) with polarity in slot assignment:
@@ -891,7 +908,7 @@ time a query needs to consult cached state.
 
 ### Wave history
 
-The 17 waves completed so far, condensed (full prose lives in commit
+The 18 waves completed so far, condensed (full prose lives in commit
 history):
 
 - **Wave 1 -- TypeRegistry migration.** `TypeRegistry.concrete` rekeyed
@@ -1317,6 +1334,51 @@ history):
   Validation: `just lint` (zero warnings), `cargo test --workspace
   --lib` green, `just test-stdlib` green; user runs `just doit` for
   the full release CI lap as the slice's completion criterion.
+- **Wave 17 -- Call lift: `Call` / `MethodCall` instruction
+  vocabulary.** First slice consuming the `IRProgram` registry that
+  Wave 16 made canonical. Three call families lift to typed IR:
+  `ExprKind::Call` whose `resolve_call` returns `ResolvedCall::Direct`
+  for a registered mangled target lifts to `IRInstruction::Call`;
+  `Type.method()` static calls (no `pending_type_mono` / `pending_mono`
+  drain pending) lift to the same `Call` shape (mangled + args, no
+  receiver); `ExprKind::MethodCall` lifts to `IRInstruction::MethodCall`,
+  which carries a `receiver` operand plus `receiver_name: Option<String>`
+  and `is_move: bool` so the emission walker can replicate the
+  `Ownership::Unowned` write on `Compiler.fn_state.variables` that
+  the legacy `compile_method_call` does after a moving call. Both
+  variants carry `param_types: Vec<Type>` so the emission walker can
+  run `coerce_numeric` per arg without re-resolving. The `Lowerer`
+  gained a `pub program: &'a IRProgram` field and three new methods
+  -- `lower_call_or_stub`, `lower_method_call_or_stub`,
+  `lower_static_call_or_stub` -- each returning
+  `Option<(IROperand, Type)>` so the lift seam stays a tuple
+  (matching the `lower_binary_op_or_stub` precedent of `Option<IROperand>`
+  rather than introducing a one-off named type). Lowering recurses
+  on receiver + args via `lower_expr_to_operand`. Defer-to-Stub
+  conditions encoded in the helpers: any call whose AST has a
+  recorded coercion at an arg span (today: union widening, which
+  the IR doesn't model yet) bails so the legacy `compile_expr_coerced`
+  path applies the wrap; method calls in tail position whose mangled
+  callee matches the current function bail so the legacy path can
+  rewrite to a `loop_header` jump (TCO modeling stays deferred until
+  statement / function lowering exists, per the Wave 16 carry-over).
+  `FnLowerState` gained a `pub fn tail_position(&self) -> bool`
+  read accessor for that check. The codegen wrappers
+  `compile_call`, `compile_method_call`, and `compile_static_call`
+  each grew a try-lift-then-fallthrough block at entry that runs
+  the lift helper, executes the resulting instruction sequence
+  through `execute_instructions`, and routes the destination operand
+  through a new `maybe_typed_value` helper (shared in
+  `crate::control`) which returns `Ok(None)` for `Type::Unit`
+  callees -- mirroring the legacy void-return convention without
+  requiring `materialize_operand` on a missing entry.
+  `compile_method_call` runs its lift attempt **before** `save_tail`
+  so the lift helper still observes the surrounding tail flag and
+  defers correctly for self-tail-recursive method calls.
+
+  Validation: `just lint` (zero warnings), `cargo test --workspace`
+  green, `just test-stdlib` green; user runs `just doit` for the
+  full release CI lap.
 
 ### Next: Phase 4c slicing plan
 

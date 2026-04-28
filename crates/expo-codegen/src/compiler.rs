@@ -347,6 +347,7 @@ impl<'ctx> Compiler<'ctx> {
             fn_state: &mut self.fn_lower,
             layouts: &self.layouts,
             package: self.current_package.as_ref(),
+            program: &self.ir,
             type_ctx: self.type_ctx,
         }
     }

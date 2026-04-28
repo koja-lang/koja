@@ -14,19 +14,22 @@
 //! name from the call site) to fetch the actual
 //! `FunctionValue`/`PointerValue` post-dispatch.
 
-use expo_ast::ast::{Arg, TypeParam};
+use expo_ast::ast::{Arg, Expr, ExprKind, TypeParam};
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute, unwrap_indirect};
 
+use crate::Lowerer;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::ctx::LowerCtx;
 use crate::lower::inference::infer_static_struct_type_args_from_args;
 use crate::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
+use crate::lower::stmt::resolve_coercion;
 use crate::lower::types::{id_for, resolve_name_current};
 use crate::program::IRProgram;
 use crate::resolved::calls::{
     BuiltinCall, PendingMethodMono, PendingTypeMono, ResolvedCall, ResolvedStaticCall,
 };
+use crate::values::{IRInstruction, IROperand};
 
 /// Resolves a bare-name function call to a [`ResolvedCall`].
 ///
@@ -257,4 +260,166 @@ pub fn resolve_static_call(
         pending_type_mono,
         pending_mono,
     })
+}
+
+impl<'a> Lowerer<'a> {
+    /// Attempt to lift a bare-name call (`ExprKind::Call` whose callee
+    /// is an `Ident`) to an [`IRInstruction::Call`]. Returns the
+    /// produced operand and the callee's resolved return type, or
+    /// `None` when the call falls through to [`IRInstruction::Stub`].
+    ///
+    /// The lift only fires for [`ResolvedCall::Direct`] whose mangled
+    /// target is registered in [`IRProgram`]. Builtin (`panic` /
+    /// `print*`), closure-variable, generic, and struct-constructor
+    /// calls all defer to Stub:
+    ///
+    /// - Builtins emit through their own LLVM-bound paths
+    ///   (`compile_panic` / `compile_print`) that the IR vocabulary
+    ///   does not yet model.
+    /// - Closure-variable calls require the receiver-side
+    ///   `fn_state.variables` map, which is codegen-bound.
+    /// - Generic calls require monomorphization-driver state in
+    ///   `expo-codegen`'s `generic_fn_asts`.
+    /// - Struct constructors are guarded explicitly via
+    ///   `program.contains_struct` / `contains_enum` so a
+    ///   collision between a struct name and a function symbol
+    ///   does not silently mis-lift.
+    pub fn lower_call_or_stub(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        name: &str,
+        args: &[Arg],
+    ) -> Option<(IROperand, Type)> {
+        if self
+            .program
+            .contains_struct(&MonomorphizedTypeIdentifier::new(name))
+            || self
+                .program
+                .contains_enum(&MonomorphizedTypeIdentifier::new(name))
+        {
+            return None;
+        }
+        if args_need_coercion(self, args) {
+            return None;
+        }
+
+        let resolved = resolve_call(
+            &self.ctx(),
+            self.program,
+            name,
+            |_, _| false,
+            |_| None,
+            |_| false,
+        )
+        .ok()?;
+
+        let ResolvedCall::Direct {
+            mangled_name,
+            param_types,
+            return_type,
+        } = resolved
+        else {
+            return None;
+        };
+
+        let lowered_args: Vec<IROperand> = args
+            .iter()
+            .map(|arg| self.lower_expr_to_operand(instructions, &arg.value))
+            .collect();
+
+        let dest = self.next_value_id();
+        instructions.push(IRInstruction::Call {
+            dest,
+            mangled: mangled_name,
+            args: lowered_args,
+            param_types,
+            return_type: return_type.clone(),
+        });
+        Some((IROperand::Local(dest), return_type))
+    }
+
+    /// Attempt to lift a `Type.method(args)` static call to an
+    /// [`IRInstruction::Call`] (shape-identical to a bare-name
+    /// `Direct` call -- no receiver). Returns the produced operand
+    /// and the resolved return type, or `None` for cases that defer
+    /// to [`IRInstruction::Stub`].
+    ///
+    /// Bails when [`resolve_static_call`] reports
+    /// `pending_type_mono` or `pending_mono`: the receiver type or
+    /// the method itself isn't yet emitted, and draining the
+    /// monomorphization queue requires LLVM-bound work in
+    /// `expo-codegen`. The caller's legacy path runs that drain and
+    /// re-attempts after the symbol is registered.
+    pub fn lower_static_call_or_stub(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        type_name: &str,
+        resolved_type: Option<&TypeIdentifier>,
+        method: &str,
+        args: &[Arg],
+    ) -> Option<(IROperand, Type)> {
+        if args_need_coercion(self, args) {
+            return None;
+        }
+        let resolved = resolve_static_call(
+            &self.ctx(),
+            self.program,
+            &|_| None,
+            &|_| false,
+            type_name,
+            resolved_type,
+            method,
+            args,
+        )
+        .ok()?;
+
+        if resolved.pending_type_mono.is_some() || resolved.pending_mono.is_some() {
+            return None;
+        }
+        if !self.program.contains_function(&resolved.mangled_name) {
+            return None;
+        }
+
+        let lowered_args: Vec<IROperand> = args
+            .iter()
+            .map(|arg| self.lower_expr_to_operand(instructions, &arg.value))
+            .collect();
+
+        let dest = self.next_value_id();
+        let return_type = resolved.return_type.clone();
+        instructions.push(IRInstruction::Call {
+            dest,
+            mangled: resolved.mangled_name,
+            args: lowered_args,
+            param_types: resolved.param_types,
+            return_type: resolved.return_type,
+        });
+        Some((IROperand::Local(dest), return_type))
+    }
+}
+
+/// Extract the simple variable name a method-call receiver resolves
+/// to, when present. Used by the [`Lowerer`] method-call lift to fill
+/// [`IRInstruction::MethodCall::receiver_name`] for the
+/// move-ownership update at emission time. Returns `None` for
+/// non-named receivers (chained calls, expression results), which
+/// also disables the `is_move` ownership write.
+pub fn receiver_variable_name(receiver: &Expr) -> Option<String> {
+    match &receiver.kind {
+        ExprKind::Ident { name, .. } => Some(name.clone()),
+        ExprKind::Self_ => Some("self".to_string()),
+        _ => None,
+    }
+}
+
+/// Returns `true` if any call argument has a recorded coercion
+/// (today: union widening) at its source span. The IR `Call` /
+/// `MethodCall` lift skips the typed arg-time `apply_coercion` step
+/// the legacy `compile_expr_coerced` performs, so calls with coerced
+/// args must defer to [`crate::values::IRInstruction::Stub`] until
+/// the IR vocabulary models coercions explicitly.
+pub(crate) fn args_need_coercion(lowerer: &Lowerer<'_>, args: &[Arg]) -> bool {
+    let ctx = lowerer.ctx();
+    args.iter()
+        .any(|arg| resolve_coercion(&ctx, arg.value.span).is_some())
 }

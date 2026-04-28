@@ -6,21 +6,27 @@
 
 use std::collections::HashMap;
 
-use expo_ast::ast::{Arg, ImplMember, TypeExpr, TypeParam};
+use expo_ast::ast::{Arg, Expr, ExprKind, ImplMember, TypeExpr, TypeParam};
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::{FunctionKind, PassMode};
 use expo_typecheck::types::{
-    Type, build_substitution, mangle_method_suffix, mangle_name, named_generic, substitute,
+    Type, build_substitution, mangle_method_suffix, mangle_name, named_generic,
+    resolve_type_alias_id, resolve_type_alias_name, substitute,
 };
 
+use crate::Lowerer;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::LowerCtx;
+use crate::lower::calls::{args_need_coercion, receiver_variable_name};
 use crate::lower::inference::{infer_method_type_args, lookup_method_type_params};
 use crate::lower::naming::method_symbol_prefix;
+use crate::lower::stmt::resolve_coercion;
+use crate::lower::structs::resolve_struct_name;
 use crate::lower::types::{find_type_current, id_for, resolve_name_current};
 use crate::program::IRProgram;
 use crate::resolved::calls::{PendingMethodMono, ResolvedMethodCall};
 use crate::resolved::methods::ResolvedMethodSignature;
+use crate::values::{IRInstruction, IROperand};
 
 /// Resolves the method signature for a generic impl method by looking up
 /// the AST (specialized or generic path), building type substitutions,
@@ -342,4 +348,142 @@ pub fn resolve_method_call(
         is_move,
         pending_mono,
     })
+}
+
+impl<'a> Lowerer<'a> {
+    /// Attempt to lift a `receiver.method(args)` call to an
+    /// [`IRInstruction::MethodCall`]. Returns the produced operand
+    /// and the resolved return type, or `None` for cases that defer
+    /// to [`IRInstruction::Stub`].
+    ///
+    /// Defers to Stub when:
+    ///
+    /// - The receiver is an [`ExprKind::Ident`] resolving to a known
+    ///   type -- that's a static call, handled by the wrapper's
+    ///   legacy path (the static-call lift helper requires the same
+    ///   resolved-type lookup the codegen wrapper already performs).
+    /// - The receiver expression has no resolved type (the lift
+    ///   needs the receiver's static Expo type to compute the
+    ///   mangled callee symbol; without it, defer to Stub).
+    /// - The method is `clone` with no args (the legacy path
+    ///   short-circuits this to a value passthrough that bypasses
+    ///   the call).
+    /// - The receiver type resolves to a field-typed-as-function
+    ///   closure invocation (the legacy path drops into
+    ///   [`crate::lower::values::lower_expr_to_operand`]'s closure
+    ///   emission via `compile_field_access`).
+    /// - The resolved call is self-tail-recursive (TCO continues to
+    ///   live in the codegen wrapper -- the lift would lose the
+    ///   loop-jump rewrite).
+    /// - [`resolve_method_call`] returns `pending_mono`: the method's
+    ///   monomorphization driver lives in `expo-codegen` and must
+    ///   register the symbol before the lift is safe.
+    /// - The resolved mangled symbol isn't yet registered in
+    ///   [`IRProgram`] (consistency check against `pending_mono`).
+    pub fn lower_method_call_or_stub(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        receiver: &Expr,
+        method: &str,
+        args: &[Arg],
+    ) -> Option<(IROperand, Type)> {
+        if method == "clone" && args.is_empty() {
+            return None;
+        }
+        if args_need_coercion(self, args) {
+            return None;
+        }
+        // Receiver coercion would be applied at materialization time;
+        // bail conservatively when the receiver has any recorded
+        // coercion so the legacy `compile_method_call` path handles it.
+        if resolve_coercion(&self.ctx(), receiver.span).is_some() {
+            return None;
+        }
+
+        if let ExprKind::Ident { name, .. } = &receiver.kind {
+            let alias_name = resolve_type_alias_name(name, &self.type_ctx.type_aliases);
+            let resolved_id = resolve_type_alias_id(name, &self.type_ctx.type_aliases)
+                .or_else(|| resolve_name_current(&self.ctx(), &alias_name).cloned());
+            if let Some(ref id) = resolved_id
+                && self.type_ctx.get_type(id).is_some()
+            {
+                return self.lower_static_call_or_stub(
+                    instructions,
+                    &alias_name,
+                    Some(id),
+                    method,
+                    args,
+                );
+            }
+        }
+
+        let recv_type = receiver.resolved_type.as_ref()?;
+
+        let resolved_name =
+            resolve_struct_name(&self.ctx(), receiver, recv_type, |_| None, None).ok()?;
+
+        let has_impl_method = resolved_name
+            .identifier
+            .as_ref()
+            .filter(|id| id.package != expo_typecheck::types::Package::Unresolved)
+            .or_else(|| resolve_name_current(&self.ctx(), &resolved_name.base))
+            .and_then(|id| self.type_ctx.get_type(id))
+            .and_then(|ti| ti.functions.get(method))
+            .is_some();
+        if !has_impl_method {
+            return None;
+        }
+
+        let resolved = resolve_method_call(
+            &self.ctx(),
+            self.program,
+            &|_| None,
+            resolved_name.mangled.as_str(),
+            &resolved_name.base,
+            resolved_name.identifier.as_ref(),
+            &resolved_name.type_args,
+            method,
+            args,
+        )
+        .ok()?;
+
+        if resolved.pending_mono.is_some() {
+            return None;
+        }
+        if !self.program.contains_function(&resolved.mangled_name) {
+            return None;
+        }
+        // Defer to Stub whenever the call is in tail position so the
+        // legacy `compile_method_call` path keeps owning the
+        // self-tail-recursive jump rewrite (`loop_header` branch +
+        // `param_allocas` store). The wrapper-level lift attempt runs
+        // before its own `save_tail`, so `tail_position()` here still
+        // reflects the surrounding tail status.
+        if self.fn_state.is_self_tail_call(
+            resolved.mangled_name.as_str(),
+            self.fn_state.tail_position(),
+        ) {
+            return None;
+        }
+
+        let receiver_operand = self.lower_expr_to_operand(instructions, receiver);
+        let lowered_args: Vec<IROperand> = args
+            .iter()
+            .map(|arg| self.lower_expr_to_operand(instructions, &arg.value))
+            .collect();
+
+        let dest = self.next_value_id();
+        let return_type = resolved.return_type.clone();
+        instructions.push(IRInstruction::MethodCall {
+            dest,
+            mangled: resolved.mangled_name,
+            receiver: receiver_operand,
+            receiver_name: receiver_variable_name(receiver),
+            is_move: resolved.is_move,
+            args: lowered_args,
+            param_types: resolved.param_types,
+            return_type: resolved.return_type,
+        });
+        Some((IROperand::Local(dest), return_type))
+    }
 }

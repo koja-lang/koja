@@ -10,9 +10,18 @@
 //! - Binary / Unary -- typed [`IRInstruction::BinaryOp`] /
 //!   [`IRInstruction::UnaryOp`] via [`crate::lower::ops`] when the
 //!   operator and operand shapes are within the IR vocabulary.
+//! - Call -- typed [`IRInstruction::Call`] via
+//!   [`crate::lower::calls`] when the callee resolves to a
+//!   registered direct symbol; builtins / closures / generics /
+//!   struct constructors fall through to Stub.
 //! - FieldAccess -- typed [`IRInstruction::FieldLoad`] via
 //!   [`crate::lower::fields`] when the receiver type resolves to a
 //!   known struct layout.
+//! - MethodCall -- typed [`IRInstruction::MethodCall`] via
+//!   [`crate::lower::methods`] when the receiver has a static type
+//!   and the resolved callee is registered; tail-recursive,
+//!   pending-monomorphization, and field-as-closure paths fall
+//!   through to Stub.
 //! - Anything else -- mint a fresh [`crate::values::IRValueId`], push
 //!   an [`IRInstruction::Stub`] onto the caller-supplied instruction
 //!   sequence, and return [`IROperand::Local`] referencing the new id.
@@ -58,6 +67,13 @@ impl<'a> Lowerer<'a> {
                     return operand;
                 }
             }
+            ExprKind::Call { callee, args } => {
+                if let ExprKind::Ident { name } = &callee.kind
+                    && let Some((operand, _)) = self.lower_call_or_stub(instructions, name, args)
+                {
+                    return operand;
+                }
+            }
             ExprKind::FieldAccess { receiver, field } => {
                 if let Some(operand) =
                     self.lower_field_access_or_stub(instructions, receiver, field)
@@ -67,6 +83,17 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Group { expr: inner } => {
                 return self.lower_expr_to_operand(instructions, inner);
+            }
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                if let Some((operand, _)) =
+                    self.lower_method_call_or_stub(instructions, receiver, method, args)
+                {
+                    return operand;
+                }
             }
             ExprKind::Unary { op, operand } => {
                 if let Some(o) = self.lower_unary_op_or_stub(instructions, op, operand) {

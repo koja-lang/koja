@@ -14,6 +14,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use inkwell::values::{BasicMetadataValueEnum, FunctionValue, StructValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
+use crate::control::{execute_instructions, maybe_typed_value};
 use crate::debug::call_format;
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::monomorphize_function;
@@ -85,6 +86,18 @@ pub fn compile_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
+    // Try the IR lift first; falls through to the legacy ResolvedCall
+    // dispatch below for Builtin / Closure / Generic / StructConstructor
+    // cases the lift helper deliberately defers to Stub.
+    let mut instructions = Vec::new();
+    if let Some((operand, return_type)) =
+        c.lowerer()
+            .lower_call_or_stub(&mut instructions, name, args)
+    {
+        let value_map = execute_instructions(c, &instructions, function)?;
+        return maybe_typed_value(c, &operand, &value_map, return_type);
+    }
+
     let resolved = resolve_call(
         &c.lower_ctx(),
         &c.ir,

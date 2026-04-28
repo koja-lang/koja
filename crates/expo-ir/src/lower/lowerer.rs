@@ -28,17 +28,26 @@ use expo_typecheck::types::Package;
 
 use crate::blocks::IRBlockId;
 use crate::lower::ctx::LowerCtx;
+use crate::program::IRProgram;
 use crate::values::IRValueId;
 use crate::{FnLowerState, TypeLayouts};
 
 /// Per-function lowering object. Holds program-level read-only
 /// references plus `&mut FnLowerState` for SSA / block id minting.
 /// Constructed by `expo-codegen`'s `Compiler::lowerer()`.
+///
+/// `program` is the canonical callable-symbol registry from
+/// [`IRProgram`]; lift helpers consult `program.contains_function`
+/// to decide whether a call's mangled target is registered (and
+/// therefore safe to lift to a typed [`crate::values::IRInstruction::Call`]
+/// / [`crate::values::IRInstruction::MethodCall`]) versus deferring
+/// to [`crate::values::IRInstruction::Stub`].
 pub struct Lowerer<'a> {
     pub closure_site_path: Option<&'a Path>,
     pub fn_state: &'a mut FnLowerState,
     pub layouts: &'a TypeLayouts,
     pub package: Option<&'a Package>,
+    pub program: &'a IRProgram,
     pub type_ctx: &'a TypeContext,
 }
 
