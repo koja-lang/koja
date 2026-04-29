@@ -21,8 +21,8 @@
 use expo_ast::ast::Statement;
 use expo_ast::types::Type;
 
-use crate::blocks::{IRBlockId, IRTerminator};
-use crate::values::{IRInstruction, IRValueId};
+use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
+use crate::values::IRValueId;
 
 /// The result-type strategy for a match expression: how arm values are
 /// combined into the final phi.
@@ -34,76 +34,91 @@ pub enum ResolvedMatchType {
     UnionWrap { target: Type },
 }
 
-/// One arm of an [`IRMatch`]: a check (pattern + binding-setup +
-/// guard, all in one instruction stream producing the cond-branch
-/// operand) and a body (statement list with a declared exit
-/// terminator). Mirrors the shape of
-/// [`crate::resolved::conditionals::IRCondArm`].
+/// One arm of an [`IRMatch`]: a per-arm check sub-CFG (pattern tests,
+/// binding setup, guard) followed by a body block. Mirrors the shape
+/// of [`crate::resolved::conditionals::IRCondArm`] but generalized: an
+/// arm's check is an arbitrary sub-CFG rather than a single block.
 ///
-/// Slice 5b retired the synthetic-bridge from 5a:
+/// ## Per-arm check sub-CFG (`check_blocks`)
 ///
-/// - `check_instructions` is a self-contained instruction stream that
-///   produces the arm's i1. It contains, in source order:
-///   pattern-test primitives ([`IRInstruction::PatternTagEq`] /
-///   [`IRInstruction::PatternLiteralEq`] /
-///   [`IRInstruction::PatternProjectVariantField`] /
-///   [`IRInstruction::PatternUnionPayloadPtr`] /
-///   [`IRInstruction::PatternBinaryMatch`]), pattern bindings
-///   ([`IRInstruction::PatternBindFromPtr`], which register entries
-///   into `Compiler.fn_state.variables`), AND/OR fusion via
-///   [`IRInstruction::BinaryOp`] (`BoolAnd` / `BoolOr`), and the
-///   guard's lowered operand stream when a guard is present.
-///   `check_terminator.cond` is the [`IROperand`] produced by this
-///   stream.
+/// `check_blocks[0]` is the arm entry -- the target of the previous
+/// arm's failure edge (or the match prologue's branch into the
+/// dispatch chain for arm 0).
 ///
-/// Why bindings live in `check_instructions` and not the body block:
-/// Expo guards reference pattern bindings (`Some(v) when v > 0`),
-/// and guards evaluate before the cond branch. The codegen walker
-/// wraps each arm in a `Compiler.fn_state.variables` clone/restore
-/// so the bindings scope to the arm rather than leaking to
-/// subsequent arms. The 5b lift moved binding *setup* into IR
-/// (visible as [`IRInstruction::PatternBindFromPtr`]); the per-arm
-/// *scoping* stays in codegen because the variables map carries
-/// LLVM-typed allocas not exposed at the IR surface.
+/// Today's flat case (patterns that don't deref payloads -- `Wildcard`,
+/// `Bind`, `LiteralEq`, `EnumUnit`, `PatternBinaryMatch`, plus
+/// `UnionMember` whose payload-bind always succeeds without further
+/// gating) is `check_blocks.len() == 1`: a single block whose
+/// instructions test the pattern + guard, followed by a `CondBranch`
+/// to `body_block` on success or to the next arm's entry / the match's
+/// `fallthrough_block` on failure.
 ///
-/// The arm's two blocks:
+/// Constructor patterns (`EnumStruct`, `EnumTuple`, and any pattern
+/// containing them recursively) produce `check_blocks.len() >= 2`.
+/// Each tag-discriminated test gets its own block so that the
+/// payload-projection instructions only execute on the success branch
+/// of the enclosing tag check. This is what fixes the GAPS
+/// "Nested enum pattern matching with literal payloads" entry: the
+/// payload-load that used to deref uninitialized memory when the outer
+/// tag didn't match now lives in a successor block that's only entered
+/// when that tag check succeeds.
 ///
-/// - `check_block` -- holds `check_instructions` followed by
-///   `check_terminator` (`CondBranch { cond: <pattern+guard operand>,
-///   then: body_block, otherwise: <next> }`, where `<next>` is the
-///   next arm's `check_block` for non-final arms or the surrounding
-///   match's `fallthrough_block` for the last arm).
-/// - `body_block` -- runs when the cond branch fires. Holds
-///   `body_stmts` (AST stub); declared exit is `body_terminator` =
-///   `Branch(merge_block)`. Emission honors the terminator only when
-///   the body has not already self-terminated (e.g. via early `return`
-///   / `panic`).
+/// ### Sub-CFG invariants
 ///
-/// Unlike [`crate::resolved::conditionals::IRCondArm`], the first arm
-/// here does **not** double as the construct's implicit entry: every
-/// arm (including arm 0) gets a fresh LLVM `check_block`. The implicit
-/// entry runs the subject expression and the alloca that stores it,
-/// then branches into `arms[0].check_block`.
+/// - Every block in `check_blocks` belongs to this arm. No other
+///   arm's check refers into them.
+/// - Every block's terminator targets either (a) another block in
+///   `check_blocks`, (b) the arm's own `body_block`, (c) the next
+///   arm's `check_blocks[0]`, or (d) the match's `fallthrough_block`.
+///   The sub-CFG never escapes the match.
+/// - Failure edges from interior blocks point directly at the next
+///   arm's entry / `fallthrough_block`. There is no per-arm "fail"
+///   collector block.
+///
+/// ## Pattern bindings
+///
+/// `check_blocks` carries [`crate::values::IRInstruction::PatternBindFromPtr`]
+/// instructions in the same blocks where the binding becomes
+/// well-defined: payload-bound bindings live in the payload block,
+/// not the entry, so a binding never registers when its enclosing tag
+/// check failed. Guards reference these bindings; the guard's lowered
+/// operand stream lives in whatever block becomes the "open" block at
+/// the end of pattern lowering and is `BoolAnd`-fused with the
+/// pattern's final i1 there.
+///
+/// The codegen walker wraps each arm (every block in `check_blocks`
+/// plus the body) in a `Compiler.fn_state.variables` clone/restore so
+/// per-arm bindings scope to the arm rather than leaking forward.
+/// The clone/restore stays in codegen because the variables map
+/// carries LLVM-typed allocas that aren't part of the IR surface.
+///
+/// ## Body
+///
+/// `body_block` runs when the final cond-branch in `check_blocks`
+/// fires. Holds `body_stmts` (AST stub); declared exit is
+/// `body_terminator` = `Branch(merge_block)`. Emission honors the
+/// terminator only when the body has not already self-terminated
+/// (e.g. via early `return` / `panic`).
 pub struct IRMatchArm {
     pub body_block: IRBlockId,
     pub body_stmts: Vec<Statement>,
     pub body_terminator: IRTerminator,
-    pub check_block: IRBlockId,
-    pub check_instructions: Vec<IRInstruction>,
-    pub check_terminator: IRTerminator,
+    pub check_blocks: Vec<IRBasicBlock>,
 }
 
 /// Outcome of lowering a `match` expression. N-arm structure mirroring
-/// [`crate::resolved::conditionals::IRCond`]: arms chain via each arm's
-/// `check_terminator` `otherwise` slot pointing at the next arm's
-/// `check_block`, with the tail arm's `otherwise` pointing at
-/// `fallthrough_block` (the all-patterns-failed landing pad).
+/// [`crate::resolved::conditionals::IRCond`]: arms chain via the
+/// failure edges in each arm's `check_blocks` sub-CFG pointing at the
+/// next arm's `check_blocks[0]`, with the tail arm's failure edges
+/// pointing at `fallthrough_block` (the all-patterns-failed landing
+/// pad).
 ///
 /// Blocks:
 ///
-/// - `arms[*].check_block` -- one fresh LLVM block per arm. The walker
-///   branches into `arms[0].check_block` from the subject-evaluation
-///   prologue.
+/// - `arms[*].check_blocks` -- per-arm sub-CFG (entry block plus any
+///   payload-gated successors required by the pattern). The walker
+///   branches into `arms[0].check_blocks[0].id` from the
+///   subject-evaluation prologue.
 /// - `arms[*].body_block` -- one fresh LLVM block per arm.
 /// - `fallthrough_block` -- runs when no arm's pattern matched. Always
 ///   present (matches legacy `emit_match`'s `fallthrough_bb`); the phi
@@ -132,8 +147,8 @@ pub struct IRMatchArm {
 ///
 /// `subject_value` is the SSA slot the emit walker stuffs the match
 /// subject's pointer (a freshly-allocated stack slot for the subject
-/// value) into before running per-arm `check_instructions`. Each arm's
-/// pattern primitives reference it via [`IROperand::Local`]
+/// value) into before running per-arm pattern checks. Each arm's
+/// pattern primitives reference it via [`crate::values::IROperand::Local`]
 /// (`subject_ptr` parameter). Slice 5b retired the prior approach of
 /// passing the subject pointer in via an out-of-band `PointerValue`
 /// argument to the walker.

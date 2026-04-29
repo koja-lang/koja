@@ -350,6 +350,41 @@ are summarized inline below.
   `StoreField`) and one new terminator (`Return`) that Slice 2
   (per-construct body lift) and Slice 3 (function-body lift)
   build on directly.
+- **Sidebar -- Pattern-CFG gating for nested-enum-literal payloads
+  (done, Wave 27).** Resolves the GAPS "Nested enum pattern matching
+  with literal payloads" segfault that the Slice 5b match rework had
+  predicted but not actually delivered. The 5b lift translated the
+  flat `BoolAnd`-fused pattern stream verbatim into IR; payload
+  projections (`PatternProjectVariantField`,
+  `PatternUnionPayloadPtr`) still ran unconditionally, so a `None`
+  matched against an arm shaped `Some(<literal-payload>)` dereffed
+  uninitialized payload memory and segfaulted. Pattern lowering
+  becomes a CFG builder: `IRMatchArm.{check_block,
+  check_instructions, check_terminator}` collapse into a single
+  `check_blocks: Vec<IRBasicBlock>`; today's flat case is
+  `len() == 1` and constructor patterns produce `len() >= 2` -- the
+  outer tag check terminates the open block with `CondBranch(tag,
+  payload_block, failure_target)`, payload projections move into
+  the fresh `payload_block`, and the same `failure_target` (the
+  next arm's entry / `fallthrough_block`) threads through every
+  nested gate. The new
+  `Lowerer::lower_pattern_into_arm(resolved, subject_ptr,
+  failure_target, blocks)` is the per-arm imperative driver; flat
+  patterns (`LiteralEq`, `EnumUnit`, `PatternBinaryMatch`) keep
+  emitting into the open block and returning their i1, while
+  constructor + `Or` patterns gate via control flow and return
+  `IROperand::ConstBool(true)`. Inter-field gating
+  (`gate_intermediate_field`) avoids running later field
+  projections when an earlier element's literal compare already
+  failed. The codegen walker simplifies to `for blk in
+  &arm.check_blocks { position; execute_instructions; emit_terminator
+  }`. The single-pattern path (`compile_pattern` for `receive` /
+  `expr matches Pattern`) keeps the legacy flat
+  `LoweredPattern { instructions, check_result }` shape and
+  retains the same payload-deref vulnerability for those surfaces;
+  lifting them to the gated CFG builder is tracked separately.
+  Regression locked in via
+  [tests/lang/types/nested_enum_pattern_literal.expo](../tests/lang/types/nested_enum_pattern_literal.expo).
 
 ---
 
@@ -377,7 +412,7 @@ to plan a slice.
 | Binary op (most)            | Instruction-only            | `Lowerer::lower_binary_op_or_stub` -> `IRInstruction::BinaryOp`                                                                                                                                                                                                                                                                                                                              |
 | Unary op                    | Instruction-only            | `Lowerer::lower_unary_op_or_stub` -> `IRInstruction::UnaryOp`                                                                                                                                                                                                                                                                                                                                |
 | Bool/Int/Float literals     | Inline operand              | `IROperand::ConstBool` / `ConstInt` / `ConstFloat`                                                                                                                                                                                                                                                                                                                                           |
-| `match` (full pipeline)     | Full IR pipeline            | `Lowerer::lower_match_expr` -> `IRMatch` -> `emit_match_unified` (per-arm cond-branches via `emit_terminator`; merge phi synthesized inline). Pattern testing + binding fully lifted to `PatternTagEq` / `PatternLiteralEq` / `PatternProjectVariantField` / `PatternUnionPayloadPtr` / `PatternBindFromPtr` / `PatternBinaryMatch` instructions; guards lifted via `lower_expr_to_operand`. |
+| `match` (full pipeline)     | Full IR pipeline            | `Lowerer::lower_match_expr` -> `IRMatch` -> `emit_match_unified` (per-arm cond-branches via `emit_terminator`; merge phi synthesized inline). Pattern testing + binding fully lifted to `PatternTagEq` / `PatternLiteralEq` / `PatternProjectVariantField` / `PatternUnionPayloadPtr` / `PatternBindFromPtr` / `PatternBinaryMatch` instructions; guards lifted via `lower_expr_to_operand`. Per-arm checks are CFG sub-graphs (`IRMatchArm.check_blocks: Vec<IRBasicBlock>`) with constructor patterns gated by `CondBranch(tag, payload_block, failure_target)` so payload-load primitives never execute when the enclosing tag check failed (Wave 27). |
 | `cond`                      | Full IR pipeline            | `Lowerer::lower_cond` -> `IRCond` -> `emit_cond` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)                                                                                                                                                                                                                                                                        |
 | `while`                     | Full IR pipeline            | `Lowerer::lower_while` -> `IRWhile` -> `emit_while_unified` (header `IRInstruction`s + `CondBranch` terminator + body back-edge `Branch`; body remains AST stub until Phase 4g)                                                                                                                                                                                                              |
 | `loop`                      | Full IR pipeline            | `Lowerer::lower_loop` -> `IRLoop` -> `emit_loop_unified` (single body block + `Branch` back-edge; body remains AST stub until Phase 4g)                                                                                                                                                                                                                                                      |
@@ -499,6 +534,26 @@ Vec<(IRBlockId, IROperand)>` ties merge-time values to their
   today by the `compile_statement` shim and slated to drive the
   per-construct body lift in Slice 2 and the function-body lift in
   Slice 3.
+- `Lowerer::lower_pattern_into_arm` in
+  [`expo-ir::lower::patterns`](../crates/expo-ir/src/lower/patterns.rs)
+  -- the per-arm pattern CFG builder. Imperatively writes blocks
+  into the arm's `check_blocks: Vec<IRBasicBlock>` buffer, gating
+  every constructor pattern (`EnumStruct` / `EnumTuple` /
+  `UnionMember`) with `CondBranch(tag, payload_block,
+  failure_target)` so payload-load primitives never run when the
+  enclosing tag check failed. Threads `failure_target` (the next
+  arm's entry / `fallthrough_block`) unchanged into nested
+  recursion, including inter-field gating (`gate_intermediate_field`)
+  and `Or`-pattern alternatives (`lower_or_into_arm`). Returns
+  `IROperand::ConstBool(true)` whenever control-flow gating
+  encoded the success/failure decision; flat patterns
+  (`LiteralEq`, `EnumUnit`, `PatternBinaryMatch`) keep returning
+  their data-flow i1. Distinct from the legacy flat
+  `Lowerer::lower_pattern_to_instructions` /
+  `lower_resolved_pattern` shape that `compile_pattern` (the
+  `receive` / `expr matches Pattern` entry point) still uses;
+  lifting the single-pattern path to the gated CFG builder is the
+  remaining followup tracked separately.
 - [`expo-ir::FnLowerState.loop_exit`](../crates/expo-ir/src/fn_state.rs)
   paired with
   [`FnState.loop_exit_blocks`](../crates/expo-codegen/src/compiler.rs)
@@ -827,6 +882,16 @@ x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
     what gets tested, what gets bound, and how results fuse --
     the only codegen-side concession is per-arm variable scoping
     around LLVM-typed allocas.
+
+    The flat-stream shape preserved by this slice (a single
+    `Vec<IRInstruction>` per arm with `BoolAnd` fusion across all
+    sub-checks) carried over the legacy `emit_pattern`'s
+    payload-deref-before-tag-gate hazard verbatim. Wave 27 splits
+    the per-arm check into a CFG (`IRMatchArm.check_blocks:
+    Vec<IRBasicBlock>`) so constructor patterns gate via
+    `CondBranch(tag, payload_block, failure_target)` and payload
+    loads only run on the success edge. See the Wave 27 sidebar
+    entry in section 2 for the full follow-up.
 - **Slice 6 -- loops + tail-flag retirement (Done, Wave 25).**
   `while`, `loop`, and `for` lift onto the `Lowerer::lower_*` +
   `emit_*_unified` pipeline (parallel to Slices 3-5): three new

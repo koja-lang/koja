@@ -51,45 +51,6 @@ Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
 
 ---
 
-## Nested enum pattern matching with literal payloads
-
-Matching a `None` (or otherwise non-matching outer variant) against an arm
-whose pattern is `Some(<literal-payload-shape>)` (e.g.,
-`Some(TokenKind.Ident("and"))`) segfaults. The emitter unconditionally
-GEPs into the outer variant's payload memory before the outer tag check
-gates the result, so the recursive literal compare inside the arm
-dereferences uninitialized payload bytes.
-
-**Verified scope (Apr 2026):** Only triggers when the inner pattern has
-its own payload comparison (literal or nested constructor). Plain
-bindings (`Some(t)`) and unit-payload variants are safe.
-
-**Workarounds (any one is enough):**
-
-- Split the outer variant into its own arm:
-  ```
-  match opt
-    Option.None -> default
-    Option.Some(t) -> match t
-      TokenKind.Ident("and") -> true
-      _ -> false
-    end
-  end
-  ```
-- Bind the payload and check it in the body:
-  `Some(TokenKind.Ident(name)) -> name == "and"`.
-
-**Resolution plan:** Lands as part of the EXPOIR `compile_match` rework
-(decision-tree-style match emission), which by construction will not
-deref payload before the outer tag is decided. A targeted fix on the
-current emission path was attempted and surfaced widespread LLVM
-dominance issues, suggesting structural fragility that the rework will
-naturally clean up.
-
-Surfaced during the self-hosted lexer port (`continues_line?`).
-
----
-
 ## Free function codegen gap
 
 Free functions (outside `impl` blocks) pass `expo check` but crash at

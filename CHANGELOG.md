@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-process setups no longer trigger LLVM union type mismatches when two process types coexist. `Step<T>` is a normal generic enum instantiation, avoiding the ad-hoc union codegen path.
 - Process initialization (socket binding, timer setup) now runs in the child process context, fixing `EINVAL` errors from resources created in the parent before spawn.
 - `move self` methods returning `()` on non-Copy structs no longer produce a false "use of moved value" error. The ownership checker's discarded-return-value warning logic was re-inferring the receiver after it had already been marked as moved, triggering a spurious error.
+- `match` arms with nested constructor patterns containing literal payloads (e.g. `Some(TokenKind.Ident("and"))`) no longer segfault when the subject's outer tag doesn't match.
 
 ## [0.9.0] - 2026-04-06
 

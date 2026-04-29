@@ -220,20 +220,21 @@ enum ArmEmission<'ctx> {
 /// strategy-applying merge-phi assembly that mirrors legacy semantics
 /// exactly.
 ///
-/// Allocates LLVM blocks for every `arm.check_block`, every
-/// `arm.body_block`, the all-patterns-failed `fallthrough_block`, and
-/// the shared `merge_block`. Branches into `arms[0].check_block` from
-/// the call-site builder position (which holds the subject alloca). A
-/// single `value_map` is threaded across all arms with `subject_alloca`
-/// pre-registered under `ir.subject_value`, so every per-arm check
-/// stream's pattern primitives resolve their `subject_ptr` operand
-/// against the same storage.
+/// Allocates LLVM blocks for every block in every `arm.check_blocks`
+/// sub-CFG, every `arm.body_block`, the all-patterns-failed
+/// `fallthrough_block`, and the shared `merge_block`. Branches into
+/// `arms[0].check_blocks[0].id` from the call-site builder position
+/// (which holds the subject alloca). A single `value_map` is threaded
+/// across all arms with `subject_alloca` pre-registered under
+/// `ir.subject_value`, so every per-arm check stream's pattern
+/// primitives resolve their `subject_ptr` operand against the same
+/// storage.
 ///
-/// For each arm: position at `check_block`, run [`emit_match_arm_check`]
-/// (executes `check_instructions` against the shared `value_map`,
-/// dispatches `check_terminator`); position at `body_block`, run
-/// [`emit_match_arm_body`] (executes `bind_instructions` to register
-/// bindings, walks `body_stmts` via [`compile_body_as_value`]).
+/// For each arm: walk every block in `check_blocks` in order via
+/// [`emit_match_arm_check`] (each block has its instruction stream
+/// executed and its terminator emitted), then position at `body_block`
+/// and run [`emit_match_arm_body`] (walks `body_stmts` via
+/// [`compile_body_as_value`]).
 ///
 /// After every arm: hand the value-producing arms to
 /// [`assemble_match_phi`], which applies the lowered result strategy
@@ -250,7 +251,7 @@ fn emit_match_unified<'ctx>(
     let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
     value_map.insert(ir.subject_value, subject_alloca.into());
 
-    let first_check_bb = block_map[&ir.arms[0].check_block];
+    let first_check_bb = block_map[&ir.arms[0].check_blocks[0].id];
     compiler
         .builder
         .build_unconditional_branch(first_check_bb)
@@ -259,9 +260,10 @@ fn emit_match_unified<'ctx>(
     let mut pending: Vec<(TypedValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
     let mut any_no_value = false;
     for ir_arm in &ir.arms {
-        // Wrap each arm (check + body) in a `fn_state.variables`
-        // clone/restore so per-arm pattern bindings (registered by
-        // `PatternBindFromPtr` in `check_instructions`) and any
+        // Wrap each arm (check sub-CFG + body) in a
+        // `fn_state.variables` clone/restore so per-arm pattern
+        // bindings (registered by `PatternBindFromPtr` instructions
+        // emitted somewhere inside `check_blocks`) and any
         // `let`-bindings inside the body don't leak into subsequent
         // arms or shadow outer-scope variables past the arm. Slice 5b
         // lifted the binding *setup* into IR; per-arm *scoping* still
@@ -292,7 +294,10 @@ fn emit_match_unified<'ctx>(
 
 /// Allocate LLVM basic blocks for every [`IRBlockId`] referenced by an
 /// [`IRMatch`] and return the map. Block labels mirror the legacy
-/// `emit_match` naming so `.ll` output stays diff-friendly.
+/// `emit_match` naming for the per-arm entry blocks (`match_test_{i}`)
+/// so `.ll` output stays diff-friendly for flat patterns; auxiliary
+/// gate / payload blocks emitted by the gated pattern lowering land
+/// under `match_test_{i}_aux_{n}`.
 fn build_match_block_map<'ctx>(
     compiler: &Compiler<'ctx>,
     ir: &IRMatch,
@@ -300,13 +305,15 @@ fn build_match_block_map<'ctx>(
 ) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
     for (i, arm) in ir.arms.iter().enumerate() {
-        let label = if i == 0 {
-            "match_test_0".to_string()
-        } else {
-            format!("match_test_{i}")
-        };
-        let bb = compiler.context.append_basic_block(function, &label);
-        block_map.insert(arm.check_block, bb);
+        for (n, blk) in arm.check_blocks.iter().enumerate() {
+            let label = if n == 0 {
+                format!("match_test_{i}")
+            } else {
+                format!("match_test_{i}_aux_{n}")
+            };
+            let bb = compiler.context.append_basic_block(function, &label);
+            block_map.insert(blk.id, bb);
+        }
     }
     for (i, arm) in ir.arms.iter().enumerate() {
         let bb = compiler
@@ -321,11 +328,15 @@ fn build_match_block_map<'ctx>(
     block_map
 }
 
-/// Walks one arm's check block. Runs `check_instructions` (pattern
-/// primitives + `BoolAnd`/`BoolOr` fusion + lifted guard operand
-/// stream) against the shared `value_map`, then dispatches
-/// `check_terminator` (`CondBranch { cond: <pattern+guard operand>,
-/// then: body_block, otherwise: <next_check or fallthrough> }`).
+/// Walks one arm's check sub-CFG. For each block in `check_blocks`:
+/// position the LLVM builder at the corresponding LLVM basic block,
+/// execute the IR instruction stream against the shared `value_map`,
+/// then emit the block's terminator. Successive blocks in a sub-CFG
+/// are reached only through their predecessor's terminator (the
+/// gating `CondBranch` / `Branch`), so positioning each LLVM block
+/// before walking its instructions is correct -- LLVM treats the
+/// sequence as independent blocks tied together by the emitted
+/// terminator edges.
 fn emit_match_arm_check<'ctx>(
     compiler: &mut Compiler<'ctx>,
     ir_arm: &IRMatchArm,
@@ -333,22 +344,18 @@ fn emit_match_arm_check<'ctx>(
     value_map: &mut HashMap<IRValueId, BasicValueEnum<'ctx>>,
     function: FunctionValue<'ctx>,
 ) -> Result<(), String> {
-    let check_bb = block_map[&ir_arm.check_block];
-    compiler.builder.position_at_end(check_bb);
-    execute_instructions(
-        compiler,
-        &ir_arm.check_instructions,
-        function,
-        Some(block_map),
-        value_map,
-    )?;
-    emit_terminator(
-        compiler,
-        &ir_arm.check_terminator,
-        block_map,
-        value_map,
-        function,
-    )
+    for blk in &ir_arm.check_blocks {
+        compiler.builder.position_at_end(block_map[&blk.id]);
+        execute_instructions(
+            compiler,
+            &blk.instructions,
+            function,
+            Some(block_map),
+            value_map,
+        )?;
+        emit_terminator(compiler, &blk.terminator, block_map, value_map, function)?;
+    }
+    Ok(())
 }
 
 /// Walks one arm's body block: walks the AST stub body via

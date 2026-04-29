@@ -11,7 +11,7 @@ use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Type, mangle_name, mangle_type, named, unwrap_indirect};
 
 use crate::Lowerer;
-use crate::blocks::{IRBlockId, IRTerminator};
+use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
@@ -457,10 +457,11 @@ struct MatchBlockIds {
     subject_value: IRValueId,
 }
 
-/// Outcome of lowering a single AST [`Pattern`] into an instruction
-/// stream. Slice 5b's central data structure: replaces the codegen-side
-/// `emit_pattern` walker with a fully IR-encoded representation that
-/// emission walks through the standard `execute_instructions` machinery.
+/// Outcome of lowering a single AST [`Pattern`] into a flat
+/// instruction stream + final i1 operand. The single-pattern entry
+/// point ([`Lowerer::lower_pattern_to_instructions`], used by
+/// [`compile_pattern`] for `receive` arms and `expr matches Pattern`)
+/// produces this shape.
 ///
 /// `instructions` is a single ordered stream containing both the
 /// pattern-test primitives ([`IRInstruction::PatternTagEq`] /
@@ -472,23 +473,18 @@ struct MatchBlockIds {
 /// in source order. AND/OR fusion of i1 results uses
 /// [`IRInstruction::BinaryOp`] (`BoolAnd` / `BoolOr`).
 ///
-/// Why one stream and not "tests in check, binds in body": Expo's
-/// match guards (`Some(v) when v > 0`) reference pattern bindings
-/// from the same arm. The guard is evaluated in the arm's check
-/// block, before the cond branch fires, so the bindings must already
-/// be live in `Compiler.fn_state.variables` at guard-evaluation
-/// time. Binds therefore run unconditionally in the check block; the
-/// codegen emitter wraps each arm (check + body) in a
-/// `Compiler.fn_state.variables` clone/restore so the bindings
-/// scope to the arm rather than leaking forward to subsequent arms.
-/// The 5b lift moved the binding *setup* into IR (visible as
-/// [`IRInstruction::PatternBindFromPtr`]); the per-arm *scoping*
-/// stays in codegen because the variables map carries LLVM-typed
-/// allocas that aren't part of the IR surface.
-///
 /// `check_result` is the [`IROperand`] consumers of the lowered
-/// pattern reference for the cond branch (`match` arms) or the
-/// returned `IntValue` (`compile_pattern` for `receive` arms).
+/// pattern reference for the resulting `IntValue`
+/// ([`compile_pattern`] for `receive` arms and `matches`).
+///
+/// **Match arms do not use this shape.** They route through
+/// [`Lowerer::lower_pattern_into_arm`] (the gated CFG builder) so
+/// payload-projection instructions only execute on the success branch
+/// of their enclosing tag check. Keeping the flat shape for the
+/// single-pattern path is intentional for now: `receive` and `matches`
+/// don't yet have a CFG-style emission surface, so they continue to
+/// emit the pattern as a single linear stream at the current builder
+/// position. Lifting them to the gated shape is a separate follow-up.
 pub struct LoweredPattern {
     pub check_result: IROperand,
     pub instructions: Vec<IRInstruction>,
@@ -498,22 +494,22 @@ impl<'a> Lowerer<'a> {
     /// Lowers a `match` expression into an [`IRMatch`].
     ///
     /// Pattern resolution flows through [`lower_pattern`] (per arm) and
-    /// then [`Self::lower_pattern_to_instructions`] to produce each
-    /// arm's `check_instructions` + `bind_instructions` streams.
-    /// `result_ty` is the typecheck-derived Direct vs UnionWrap
-    /// strategy, computed up-front by the codegen shim and threaded in.
+    /// then [`Self::lower_pattern_into_arm`] (the gated CFG builder) to
+    /// produce each arm's `check_blocks` sub-CFG. `result_ty` is the
+    /// typecheck-derived Direct vs UnionWrap strategy, computed up-front
+    /// by the codegen shim and threaded in.
     ///
     /// Guards lift to operand-emitting instructions appended to the
-    /// arm's `check_instructions`; the result operand is `BoolAnd`-ed
-    /// with the pattern's i1 to produce the final cond. No codegen-side
-    /// guard handling remains.
+    /// final block of the arm's check sub-CFG; the result operand is
+    /// `BoolAnd`-fused with the pattern's final i1 to produce the cond
+    /// for the body branch. No codegen-side guard handling remains.
     ///
-    /// The arm chain: `arms[i].check_terminator.otherwise` points at
-    /// `arms[i+1].check_block` for `i < N-1`, and at `fallthrough_block`
-    /// for the last arm. `fallthrough_block` is the all-patterns-failed
-    /// landing pad (matches legacy semantics); the inline-synthesized
-    /// merge phi registers an `undef` incoming from it when
-    /// value-producing.
+    /// The arm chain: failure edges from any block in
+    /// `arms[i].check_blocks` target `arms[i+1].check_blocks[0].id` for
+    /// `i < N-1`, and `fallthrough_block` for the last arm.
+    /// `fallthrough_block` is the all-patterns-failed landing pad
+    /// (matches legacy semantics); the inline-synthesized merge phi
+    /// registers an `undef` incoming from it when value-producing.
     pub fn lower_match_expr(
         &mut self,
         subject_ty: Type,
@@ -581,10 +577,20 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Builds a single [`IRMatchArm`]. Lowers the arm's pattern via
-    /// [`Self::lower_pattern_to_instructions`], appends the guard's
-    /// lowered operand stream + a `BoolAnd` fusion when present, and
-    /// wires the canonicalized cond-branch (`then = body_block`,
-    /// `otherwise = next_arm.check_block` or `fallthrough_block`).
+    /// [`Self::lower_pattern_into_arm`] (which writes one or more
+    /// blocks into the arm's check sub-CFG, gating payload accesses
+    /// behind the enclosing tag check by emitting `CondBranch`
+    /// terminators on failure paths), appends the guard's lowered
+    /// operand stream + a `BoolAnd` fusion when present, and writes
+    /// the final block's terminator as
+    /// `CondBranch(<final i1>, body_block, failure_target)`.
+    ///
+    /// `failure_target` is the next arm's entry (`arms[idx+1]
+    /// .check_blocks[0].id`) for non-final arms or `fallthrough_block`
+    /// for the last arm. The same `failure_target` is threaded through
+    /// every nested gating point inside the pattern, so any payload
+    /// projection that would have dereferenced uninitialized memory
+    /// when its enclosing tag check failed is unreachable instead.
     fn build_match_arm(
         &mut self,
         arm: &MatchArm,
@@ -593,45 +599,247 @@ impl<'a> Lowerer<'a> {
         ids: &MatchBlockIds,
         idx: usize,
     ) -> Result<IRMatchArm, String> {
-        let mut lowered =
-            self.lower_pattern_to_instructions(&arm.pattern, subject_ty, subject_ptr.clone())?;
-        let mut check_result = lowered.check_result;
-        if let Some(guard) = &arm.guard {
-            let guard_operand = self.lower_expr_to_operand(&mut lowered.instructions, guard);
-            check_result = self.fuse_check_results(
-                check_result,
-                guard_operand,
-                &mut lowered.instructions,
-                ResolvedBinaryOp::BoolAnd,
-            );
-        }
-        let next_block = if idx + 1 < ids.arm_check_blocks.len() {
+        let entry_id = ids.arm_check_blocks[idx];
+        let body_block = ids.arm_body_blocks[idx];
+        let failure_target = if idx + 1 < ids.arm_check_blocks.len() {
             ids.arm_check_blocks[idx + 1]
         } else {
             ids.fallthrough_block
         };
+
+        let mut blocks = vec![placeholder_block(
+            entry_id,
+            format!("match_test_{idx}_entry"),
+        )];
+
+        let resolved = lower_pattern(&self.ctx(), &arm.pattern, subject_ty)?;
+        let mut check_result =
+            self.lower_pattern_into_arm(&resolved, subject_ptr, failure_target, &mut blocks)?;
+
+        if let Some(guard) = &arm.guard {
+            let guard_operand =
+                self.lower_expr_to_operand(&mut blocks.last_mut().unwrap().instructions, guard);
+            check_result = self.fuse_check_results(
+                check_result,
+                guard_operand,
+                &mut blocks.last_mut().unwrap().instructions,
+                ResolvedBinaryOp::BoolAnd,
+            );
+        }
+
+        blocks.last_mut().unwrap().terminator = match check_result {
+            IROperand::ConstBool(true) => IRTerminator::Branch(body_block),
+            IROperand::ConstBool(false) => IRTerminator::Branch(failure_target),
+            cond => IRTerminator::CondBranch {
+                cond,
+                then: body_block,
+                otherwise: failure_target,
+            },
+        };
+
         Ok(IRMatchArm {
-            body_block: ids.arm_body_blocks[idx],
+            body_block,
             body_stmts: arm.body.clone(),
             body_terminator: IRTerminator::Branch(ids.merge_block),
-            check_block: ids.arm_check_blocks[idx],
-            check_instructions: lowered.instructions,
-            check_terminator: IRTerminator::CondBranch {
-                cond: check_result,
-                then: ids.arm_body_blocks[idx],
-                otherwise: next_block,
-            },
+            check_blocks: blocks,
         })
     }
 
-    /// Recursive heart of the pattern lift. Walks a [`ResolvedPattern`]
-    /// in source order, threading `subject_ptr` (a pointer-typed
-    /// [`IROperand`]) into every primitive's `subject_ptr` slot. Emits
-    /// pattern-test instructions into `check`, binding setup
-    /// instructions into `bind`, and returns the [`IROperand`]
-    /// representing the final i1 (a [`IROperand::Local`] for
-    /// non-trivial patterns; [`IROperand::ConstBool(true)`] for
-    /// `AlwaysMatch` / `Bind` patterns, which always succeed).
+    /// Gated CFG builder for pattern lowering. Mirrors
+    /// [`Self::lower_resolved_pattern`] but threads a `failure_target`
+    /// IRBlockId through every constructor pattern so payload-bearing
+    /// primitives (`PatternProjectVariantField`, `PatternUnionPayloadPtr`)
+    /// land in successor blocks that are only entered when the
+    /// enclosing tag check passed.
+    ///
+    /// Contract:
+    ///
+    /// - The "open block" is `blocks.last_mut().unwrap()`. Pattern
+    ///   instructions are pushed into its `instructions`. When a
+    ///   constructor pattern needs to gate, the open block is
+    ///   terminated with a `CondBranch` and a fresh open block is
+    ///   pushed onto `blocks`.
+    /// - The returned [`IROperand`] is the i1 the *current open block
+    ///   at exit* should test for the pattern's overall success. For
+    ///   patterns that encoded their success/failure entirely via
+    ///   control flow (constructors, `Or`), the return is
+    ///   `IROperand::ConstBool(true)` -- reaching the end of the
+    ///   sub-CFG is itself the success signal. For flat patterns
+    ///   (`LiteralEq`, `EnumUnit`, `PatternBinaryMatch`), the return
+    ///   is the i1 they emitted (typically `IROperand::Local`).
+    ///
+    /// `failure_target` is forwarded unchanged into nested constructor
+    /// gating, so a deeply-nested pattern like
+    /// `Some(TokenKind.Ident("and"))` produces three CondBranches
+    /// (outer Some? inner Ident? literal "and"?), each branching
+    /// directly to the same `failure_target` on miss. There is no
+    /// per-arm "fail collector" block.
+    fn lower_pattern_into_arm(
+        &mut self,
+        resolved: &ResolvedPattern,
+        subject_ptr: &IROperand,
+        failure_target: IRBlockId,
+        blocks: &mut Vec<IRBasicBlock>,
+    ) -> Result<IROperand, String> {
+        match resolved {
+            ResolvedPattern::AlwaysMatch => Ok(IROperand::ConstBool(true)),
+            ResolvedPattern::Bind {
+                name,
+                ty,
+                strict_llvm,
+            } => {
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .instructions
+                    .push(IRInstruction::PatternBindFromPtr {
+                        name: name.clone(),
+                        ty: ty.clone(),
+                        source_ptr: subject_ptr.clone(),
+                        strict_llvm: *strict_llvm,
+                    });
+                Ok(IROperand::ConstBool(true))
+            }
+            ResolvedPattern::Binary { segments } => {
+                let dest = self.next_value_id();
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .instructions
+                    .push(IRInstruction::PatternBinaryMatch {
+                        dest,
+                        subject_ptr: subject_ptr.clone(),
+                        segments: segments.clone(),
+                    });
+                Ok(IROperand::Local(dest))
+            }
+            ResolvedPattern::EnumStruct {
+                enum_key,
+                variant,
+                tag,
+                fields,
+            } => {
+                let header = ConstructorHeader {
+                    enum_key,
+                    variant,
+                    tag: *tag,
+                };
+                self.lower_enum_struct_into_arm(header, fields, subject_ptr, failure_target, blocks)
+            }
+            ResolvedPattern::EnumTuple {
+                enum_key,
+                variant,
+                tag,
+                elements,
+            } => {
+                let header = ConstructorHeader {
+                    enum_key,
+                    variant,
+                    tag: *tag,
+                };
+                self.lower_enum_tuple_into_arm(
+                    header,
+                    elements,
+                    subject_ptr,
+                    failure_target,
+                    blocks,
+                )
+            }
+            ResolvedPattern::EnumUnit { enum_key, tag, .. } => {
+                let dest = self.next_value_id();
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .instructions
+                    .push(IRInstruction::PatternTagEq {
+                        dest,
+                        subject_ptr: subject_ptr.clone(),
+                        enum_key: enum_key.clone(),
+                        tag: *tag,
+                    });
+                Ok(IROperand::Local(dest))
+            }
+            ResolvedPattern::LiteralEq { lit, subject_ty } => {
+                let dest = self.next_value_id();
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .instructions
+                    .push(IRInstruction::PatternLiteralEq {
+                        dest,
+                        subject_ptr: subject_ptr.clone(),
+                        subject_ty: subject_ty.clone(),
+                        lit: lit.clone(),
+                    });
+                Ok(IROperand::Local(dest))
+            }
+            ResolvedPattern::Or(subs) => {
+                self.lower_or_into_arm(subs, subject_ptr, failure_target, blocks)
+            }
+            ResolvedPattern::UnionMember {
+                union_mangled,
+                tag,
+                member_ty,
+                bind_name,
+                ..
+            } => {
+                let tag_dest = self.next_value_id();
+                blocks
+                    .last_mut()
+                    .unwrap()
+                    .instructions
+                    .push(IRInstruction::PatternTagEq {
+                        dest: tag_dest,
+                        subject_ptr: subject_ptr.clone(),
+                        enum_key: union_mangled.as_str().to_string(),
+                        tag: *tag,
+                    });
+                let payload_block = self.next_block_id();
+                blocks.last_mut().unwrap().terminator = IRTerminator::CondBranch {
+                    cond: IROperand::Local(tag_dest),
+                    then: payload_block,
+                    otherwise: failure_target,
+                };
+                blocks.push(placeholder_block(
+                    payload_block,
+                    "match_union_payload".to_string(),
+                ));
+                let payload_dest = self.next_value_id();
+                blocks.last_mut().unwrap().instructions.extend([
+                    IRInstruction::PatternUnionPayloadPtr {
+                        dest: payload_dest,
+                        subject_ptr: subject_ptr.clone(),
+                        union_mangled: union_mangled.as_str().to_string(),
+                    },
+                    IRInstruction::PatternBindFromPtr {
+                        name: bind_name.clone(),
+                        ty: member_ty.clone(),
+                        source_ptr: IROperand::Local(payload_dest),
+                        strict_llvm: false,
+                    },
+                ]);
+                Ok(IROperand::ConstBool(true))
+            }
+        }
+    }
+
+    /// Recursive heart of the (legacy) flat pattern lift. Used by
+    /// [`Self::lower_pattern_to_instructions`] for the single-pattern
+    /// entry point ([`compile_pattern`] in codegen, which serves
+    /// `receive` arms and `expr matches Pattern`). Walks a
+    /// [`ResolvedPattern`] in source order, threading `subject_ptr`
+    /// (a pointer-typed [`IROperand`]) into every primitive's
+    /// `subject_ptr` slot. Emits pattern-test instructions into `out`
+    /// and returns the [`IROperand`] representing the final i1.
+    ///
+    /// Note: this flat shape unconditionally emits payload-projection
+    /// instructions even when the enclosing tag check is false. The
+    /// match-arm path uses the gated CFG builder
+    /// [`Self::lower_pattern_into_arm`] instead, which is what fixes
+    /// the GAPS literal-payload-deref segfault for `match`. The same
+    /// fix has not been applied to `compile_pattern` yet -- a
+    /// follow-up (lifting `receive` / `matches` to the same gated
+    /// shape) is tracked separately.
     fn lower_resolved_pattern(
         &mut self,
         resolved: &ResolvedPattern,
@@ -826,6 +1034,252 @@ impl<'a> Lowerer<'a> {
         Ok(result)
     }
 
+    /// Lower a [`ResolvedPattern::EnumTuple`] into the arm's check
+    /// sub-CFG with payload-gating. Emits `PatternTagEq` into the open
+    /// block, terminates it with `CondBranch(tag, payload_block,
+    /// failure_target)`, opens the payload block, and projects each
+    /// element field there. Sub-patterns recurse via
+    /// [`Self::lower_pattern_into_arm`] (gating further if they
+    /// themselves are constructors). Between elements, a non-trivial
+    /// sub-result triggers another gate so the next field's projection
+    /// doesn't execute when the prior element's check failed.
+    fn lower_enum_tuple_into_arm(
+        &mut self,
+        header: ConstructorHeader<'_>,
+        elements: &[(Type, ResolvedPattern)],
+        subject_ptr: &IROperand,
+        failure_target: IRBlockId,
+        blocks: &mut Vec<IRBasicBlock>,
+    ) -> Result<IROperand, String> {
+        self.gate_tag_check(
+            header.enum_key,
+            header.tag,
+            subject_ptr,
+            failure_target,
+            blocks,
+        );
+        for (i, (field_ty, sub)) in elements.iter().enumerate() {
+            let field_ptr_dest = self.next_value_id();
+            blocks.last_mut().unwrap().instructions.push(
+                IRInstruction::PatternProjectVariantField {
+                    dest: field_ptr_dest,
+                    subject_ptr: subject_ptr.clone(),
+                    enum_key: header.enum_key.to_string(),
+                    variant: header.variant.to_string(),
+                    field_index: i as u32,
+                    field_ty: field_ty.clone(),
+                    name_hint: format!("tp{i}"),
+                },
+            );
+            let sub_result = self.lower_pattern_into_arm(
+                sub,
+                &IROperand::Local(field_ptr_dest),
+                failure_target,
+                blocks,
+            )?;
+            let is_last = i + 1 == elements.len();
+            if is_last {
+                return Ok(sub_result);
+            }
+            if let Some(short_circuit) =
+                self.gate_intermediate_field(sub_result, failure_target, blocks)
+            {
+                return Ok(short_circuit);
+            }
+        }
+        Ok(IROperand::ConstBool(true))
+    }
+
+    /// Lower a [`ResolvedPattern::EnumStruct`] into the arm's check
+    /// sub-CFG with payload-gating. Same shape as
+    /// [`Self::lower_enum_tuple_into_arm`] but with named fields:
+    /// fields with a sub-pattern recurse, fields without get a direct
+    /// `PatternBindFromPtr` (so the binding only registers in the
+    /// payload block, never speculatively).
+    fn lower_enum_struct_into_arm(
+        &mut self,
+        header: ConstructorHeader<'_>,
+        fields: &[ResolvedFieldPattern],
+        subject_ptr: &IROperand,
+        failure_target: IRBlockId,
+        blocks: &mut Vec<IRBasicBlock>,
+    ) -> Result<IROperand, String> {
+        self.gate_tag_check(
+            header.enum_key,
+            header.tag,
+            subject_ptr,
+            failure_target,
+            blocks,
+        );
+        for (i, fp) in fields.iter().enumerate() {
+            let field_ptr_dest = self.next_value_id();
+            blocks.last_mut().unwrap().instructions.push(
+                IRInstruction::PatternProjectVariantField {
+                    dest: field_ptr_dest,
+                    subject_ptr: subject_ptr.clone(),
+                    enum_key: header.enum_key.to_string(),
+                    variant: header.variant.to_string(),
+                    field_index: fp.field_index,
+                    field_ty: fp.field_type.clone(),
+                    name_hint: fp.name.clone(),
+                },
+            );
+            let sub_result =
+                if let Some(sub) = &fp.sub {
+                    self.lower_pattern_into_arm(
+                        sub,
+                        &IROperand::Local(field_ptr_dest),
+                        failure_target,
+                        blocks,
+                    )?
+                } else {
+                    blocks.last_mut().unwrap().instructions.push(
+                        IRInstruction::PatternBindFromPtr {
+                            name: fp.name.clone(),
+                            ty: unwrap_indirect(&fp.field_type).clone(),
+                            source_ptr: IROperand::Local(field_ptr_dest),
+                            strict_llvm: false,
+                        },
+                    );
+                    IROperand::ConstBool(true)
+                };
+            let is_last = i + 1 == fields.len();
+            if is_last {
+                return Ok(sub_result);
+            }
+            if let Some(short_circuit) =
+                self.gate_intermediate_field(sub_result, failure_target, blocks)
+            {
+                return Ok(short_circuit);
+            }
+        }
+        Ok(IROperand::ConstBool(true))
+    }
+
+    /// Lower a [`ResolvedPattern::Or`] into the arm's check sub-CFG.
+    /// Each sub-pattern lowers with `failure_target = next_sub_entry`
+    /// (or the outer `failure_target` for the last sub) so that a
+    /// failed sub-pattern naturally tries the next alternative. Each
+    /// sub's "success" terminator branches to a shared `or_success`
+    /// block; subsequent recursion continues from that block. With all
+    /// subs flat-true (the unusual case), the resulting sub-CFG is
+    /// just `Branch(or_success)`.
+    fn lower_or_into_arm(
+        &mut self,
+        subs: &[ResolvedPattern],
+        subject_ptr: &IROperand,
+        failure_target: IRBlockId,
+        blocks: &mut Vec<IRBasicBlock>,
+    ) -> Result<IROperand, String> {
+        if subs.is_empty() {
+            return Ok(IROperand::ConstBool(false));
+        }
+        let or_success = self.next_block_id();
+        let sub_entry_ids: Vec<IRBlockId> = std::iter::once(blocks.last().unwrap().id)
+            .chain((1..subs.len()).map(|_| self.next_block_id()))
+            .collect();
+        for (i, sub) in subs.iter().enumerate() {
+            if i > 0 {
+                blocks.push(placeholder_block(
+                    sub_entry_ids[i],
+                    format!("match_or_alt_{i}"),
+                ));
+            }
+            let next_failure = if i + 1 < subs.len() {
+                sub_entry_ids[i + 1]
+            } else {
+                failure_target
+            };
+            let sub_result = self.lower_pattern_into_arm(sub, subject_ptr, next_failure, blocks)?;
+            blocks.last_mut().unwrap().terminator = match sub_result {
+                IROperand::ConstBool(true) => IRTerminator::Branch(or_success),
+                IROperand::ConstBool(false) => IRTerminator::Branch(next_failure),
+                cond => IRTerminator::CondBranch {
+                    cond,
+                    then: or_success,
+                    otherwise: next_failure,
+                },
+            };
+        }
+        blocks.push(placeholder_block(
+            or_success,
+            "match_or_success".to_string(),
+        ));
+        Ok(IROperand::ConstBool(true))
+    }
+
+    /// Emit the outer tag-check + gate for a constructor pattern.
+    /// Pushes a `PatternTagEq` into the open block, terminates it with
+    /// `CondBranch(tag, payload_block, failure_target)`, and opens a
+    /// fresh payload block on `blocks`. Subsequent field projections
+    /// land in the payload block.
+    fn gate_tag_check(
+        &mut self,
+        enum_key: &str,
+        tag: u8,
+        subject_ptr: &IROperand,
+        failure_target: IRBlockId,
+        blocks: &mut Vec<IRBasicBlock>,
+    ) {
+        let tag_dest = self.next_value_id();
+        blocks
+            .last_mut()
+            .unwrap()
+            .instructions
+            .push(IRInstruction::PatternTagEq {
+                dest: tag_dest,
+                subject_ptr: subject_ptr.clone(),
+                enum_key: enum_key.to_string(),
+                tag,
+            });
+        let payload_block = self.next_block_id();
+        blocks.last_mut().unwrap().terminator = IRTerminator::CondBranch {
+            cond: IROperand::Local(tag_dest),
+            then: payload_block,
+            otherwise: failure_target,
+        };
+        blocks.push(placeholder_block(
+            payload_block,
+            "match_payload".to_string(),
+        ));
+    }
+
+    /// Inter-field gating helper for tuple/struct constructor patterns.
+    /// Returns `Some(short_circuit_result)` when the sub-pattern's
+    /// result is a compile-time false (the entire constructor fails;
+    /// caller should bail), `None` when the open block continues
+    /// without a gate (sub-result is trivially true), and `None` plus
+    /// a fresh open block when a runtime check is required (the open
+    /// block is terminated with `CondBranch(sub_result, next_field,
+    /// failure_target)`).
+    fn gate_intermediate_field(
+        &mut self,
+        sub_result: IROperand,
+        failure_target: IRBlockId,
+        blocks: &mut Vec<IRBasicBlock>,
+    ) -> Option<IROperand> {
+        match sub_result {
+            IROperand::ConstBool(true) => None,
+            IROperand::ConstBool(false) => {
+                blocks.last_mut().unwrap().terminator = IRTerminator::Branch(failure_target);
+                Some(IROperand::ConstBool(false))
+            }
+            cond => {
+                let next_field_block = self.next_block_id();
+                blocks.last_mut().unwrap().terminator = IRTerminator::CondBranch {
+                    cond,
+                    then: next_field_block,
+                    otherwise: failure_target,
+                };
+                blocks.push(placeholder_block(
+                    next_field_block,
+                    "match_field_continue".to_string(),
+                ));
+                None
+            }
+        }
+    }
+
     /// Fuse two i1 [`IROperand`]s with the given boolean op, emitting a
     /// [`IRInstruction::BinaryOp`] only when neither operand is a
     /// constant short-circuit. The constant-folding (e.g. `BoolAnd(true,
@@ -857,5 +1311,31 @@ impl<'a> Lowerer<'a> {
         let dest = self.next_value_id();
         check.push(IRInstruction::BinaryOp { dest, op, lhs, rhs });
         IROperand::Local(dest)
+    }
+}
+
+/// Borrowed view of a constructor pattern's enum/variant/tag triple,
+/// shared between `lower_enum_tuple_into_arm` and
+/// `lower_enum_struct_into_arm` so each helper stays under the
+/// argument-count lint.
+struct ConstructorHeader<'a> {
+    enum_key: &'a str,
+    variant: &'a str,
+    tag: u8,
+}
+
+/// Construct a fresh [`IRBasicBlock`] with the given id and label, an
+/// empty instruction list, and a placeholder `Branch` terminator that
+/// the gating helpers in [`Lowerer`] overwrite as soon as they know
+/// the real successor. Using `Branch(id)` (a self-branch) as the
+/// placeholder keeps the IR well-formed if a builder bug ever leaves
+/// it unwritten, surfacing the issue as an LLVM-side infinite loop
+/// rather than an enum-variant mismatch.
+fn placeholder_block(id: IRBlockId, label: String) -> IRBasicBlock {
+    IRBasicBlock {
+        id,
+        instructions: Vec::new(),
+        label,
+        terminator: IRTerminator::Branch(id),
     }
 }
