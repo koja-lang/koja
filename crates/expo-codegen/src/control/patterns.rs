@@ -1,43 +1,31 @@
-//! Pattern matching compilation: `match` expressions and pattern-to-boolean
-//! lowering for all pattern variants (bindings, literals, enum variants, typed
-//! bindings, constructors).
+//! Pattern matching compilation: `match` expression walker and the public
+//! `compile_pattern` entry point used by `receive` arms and the
+//! `ExprKind::PatternMatch` (`is`) operator.
 //!
-//! The pattern pipeline is split into two phases:
+//! Both paths route through [`expo_ir::Lowerer::lower_pattern_to_instructions`],
+//! which produces a [`expo_ir::lower::patterns::LoweredPattern`] -- a pair
+//! of instruction streams (`check_instructions` for the i1, `bind_instructions`
+//! for binding setup) plus the [`expo_ir::values::IROperand`] referencing
+//! the i1. Emission walks the streams through the standard
+//! [`super::instructions::execute_instructions`] machinery; the LLVM
+//! builder calls live in `instructions.rs` (one arm per pattern primitive).
 //!
-//! - [`lower_pattern`] consumes the AST `Pattern` plus the subject's `Type`
-//!   and produces an [`expo_ir::resolved::patterns::ResolvedPattern`]. All
-//!   package-aware enum-key resolution (`alpha.Status` vs bare `Status`),
-//!   variant tag lookup, payload-shape lookup, and field-index resolution
-//!   happens here. This is the only side that touches `compiler.types`,
-//!   `compiler.type_ctx`, or any string-keyed resolution helper.
-//!
-//! - [`emit_pattern`] consumes the `ResolvedPattern` and emits LLVM IR. It
-//!   only performs deterministic `Type` -> `BasicTypeEnum` translations and
-//!   builder calls; it never resolves a name.
-//!
-//! [`compile_pattern`] is the public entry point and a thin
-//! `lower(...)?.then(emit(...))` shim, kept for callers in `expr.rs`,
-//! `compile_match`, and the binary-pattern code path.
-//!
-//! ### Why the GEPIndex panic is unreachable here
-//!
-//! The deferred panic at `build_struct_gep` for the payload pointer was
-//! produced by code that asked for the payload of a unit variant. After this
-//! split, [`ResolvedPattern::EnumUnit`](expo_ir::resolved::patterns::ResolvedPattern::EnumUnit)
-//! carries no payload information, and the emission match arm for it does
-//! not call [`get_payload_ptr`]. A unit variant cannot be lowered into any
-//! shape that triggers a payload GEP -- the bug becomes structurally
-//! impossible.
+//! Slice 5b retired the codegen-side `emit_pattern` walker (and its
+//! tag-check / bind / literal-eq / binary-pattern helpers); pattern
+//! testing is now fully encoded as IR. The `fn_state.variables`
+//! clone/restore around match arm bodies retired in lockstep -- bindings
+//! emit only when the body block runs, never speculatively.
 
-use crate::binary::patterns::compile_binary_pattern;
-use crate::drop::Ownership;
-use expo_ast::ast::{BinarySegment, Expr, MatchArm, Pattern, Statement};
+use std::collections::HashMap;
+
+use expo_ast::ast::{Expr, MatchArm, Pattern, Statement};
+use expo_ir::IRBlockId;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
-use expo_ir::lower::patterns::{lower_match, lower_pattern, resolve_subject_ty};
+use expo_ir::lower::patterns::resolve_subject_ty;
 use expo_ir::lower::types::monomorphize_type;
-use expo_ir::resolved::match_expr::{ResolvedMatch, ResolvedMatchType};
-use expo_ir::resolved::patterns::{ResolvedLiteral, ResolvedPattern};
-use expo_typecheck::types::{Type, TypeIdentifier, mangle_type, unwrap_indirect};
+use expo_ir::resolved::match_expr::{IRMatch, IRMatchArm, ResolvedMatchType};
+use expo_ir::values::{IROperand, IRValueId};
+use expo_typecheck::types::{Type, TypeIdentifier, mangle_type};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -46,19 +34,23 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
-use crate::structs::load_maybe_indirect;
-use crate::types::to_llvm_type;
+use crate::stmt::compile_union_wrap;
 
 use super::compile_body_as_value;
+use super::instructions::execute_instructions;
+use super::terminator::{emit_terminator, materialize_operand};
 
 /// Compiles a `match` expression. Patterns are tested sequentially; the first
 /// matching arm executes. Bindings introduced by patterns are scoped to their
 /// arm. Returns a phi value when all arms produce a value of the same type.
 ///
 /// Today's ordering is: emit the subject first (so its post-emit Expo type is
-/// available), then [`lower_match`] resolves all arm patterns and the
-/// result-type strategy from typecheck info, then [`emit_match`] emits the
-/// per-arm scaffolding and final phi.
+/// available), then [`expo_ir::Lowerer::lower_match_expr`] resolves all arm
+/// patterns into per-arm `check_instructions` + `bind_instructions` streams,
+/// picks the result-type strategy from typecheck info, and mints the per-arm
+/// IR block ids. [`emit_match_unified`] then walks the resulting [`IRMatch`]
+/// through the same `execute_instructions` + `emit_terminator` machinery the
+/// conditional walkers use.
 ///
 /// ### Why pre-emit (and not pure lower-then-emit)
 ///
@@ -75,11 +67,12 @@ use super::compile_body_as_value;
 ///
 /// ### Behavior change vs the pre-IR implementation
 ///
-/// The "Direct vs UnionWrap" strategy is a typecheck decision (taken in
-/// [`lower_match`]). If LLVM phi types disagree with that decision at
-/// emission time, [`emit_match`] returns an error rather than silently
-/// returning `Ok(None)`. This surfaces typecheck/codegen disagreements
-/// instead of swallowing them.
+/// The "Direct vs UnionWrap" strategy is a typecheck decision (taken by
+/// [`lower_result_ty`] from arm-body `resolved_type` plus the surrounding
+/// function's union return-type hint). If LLVM phi types disagree with that
+/// decision at emission time, [`emit_match_unified`] returns an error rather
+/// than silently returning `Ok(None)`. This surfaces typecheck/codegen
+/// disagreements instead of swallowing them.
 pub fn compile_match<'ctx>(
     compiler: &mut Compiler<'ctx>,
     subject: &Expr,
@@ -101,17 +94,28 @@ pub fn compile_match<'ctx>(
         },
     );
     let result_ty = lower_result_ty(compiler, arms);
-    let resolved = lower_match(&compiler.lower_ctx(), &subject_ty, arms, result_ty)?;
-    emit_match(compiler, &resolved, subject_tv.value, arms, function)
+    let subject_alloca = compiler
+        .builder
+        .build_alloca(subject_tv.value.get_type(), "match_subject")
+        .unwrap();
+    compiler
+        .builder
+        .build_store(subject_alloca, subject_tv.value)
+        .unwrap();
+    let ir = compiler
+        .lowerer()
+        .lower_match_expr(subject_ty, arms, result_ty)?;
+    emit_match_unified(compiler, &ir, subject_alloca, function)
 }
 
 // ---------------------------------------------------------------------------
-// Lowering: AST Match + resolved subject type -> ResolvedMatch.
+// Result-type strategy: AST arms -> ResolvedMatchType.
 //
 // Reads typecheck-supplied `resolved_type` from each arm's last expression,
 // applying the surrounding function's monomorphization substitution. Decides
 // the result-type strategy from typecheck data alone; no LLVM emission
-// happens here.
+// happens here. Stays in codegen because it consults
+// `LLVMTypeCache::contains_monomorphized` for the union-wrap shortcut.
 // ---------------------------------------------------------------------------
 
 /// Decides the result-type strategy for a match expression from arm-body
@@ -175,119 +179,309 @@ fn arm_value_type(arm: &MatchArm, compiler: &Compiler<'_>) -> Option<Type> {
 }
 
 // ---------------------------------------------------------------------------
-// Emission: ResolvedMatch + AST arms -> LLVM IR.
+// Emission: IRMatch -> LLVM IR.
 //
-// Mechanically scaffolds blocks, evaluates the subject, emits each pattern
-// (via `emit_pattern`) plus its guard, compiles the arm body, and assembles
-// the result phi using the lowered strategy. No strategy decision happens
-// here; if the LLVM phi types disagree with `result_ty`, emission errors.
+// Slice 5b made the per-arm checks self-contained `IRInstruction` streams
+// dispatched through `execute_instructions`. Pattern primitives
+// (`PatternTagEq` / `PatternLiteralEq` / `PatternProjectVariantField` /
+// `PatternUnionPayloadPtr` / `PatternBindFromPtr` / `PatternBinaryMatch`)
+// each have an arm in the executor that performs the LLVM builder calls.
+// The arm body block runs `bind_instructions` (binding setup) before
+// walking `body_stmts`; bindings exist only when the cond branch fires.
 // ---------------------------------------------------------------------------
 
-fn emit_match<'ctx>(
+/// Outcome of walking a single match arm's body.
+enum ArmEmission<'ctx> {
+    /// Body ran to completion without a trailing-expression value. The
+    /// body's `Branch(merge)` terminator has already been dispatched.
+    /// Drives the legacy "partial production" decision: if any arm
+    /// reaches this state and another arm produced a value, the merge
+    /// phi is dropped silently.
+    NoValue,
+    /// Body self-terminated (early `return` / `panic`). No body
+    /// terminator dispatched because the block already has one. Does
+    /// not contribute an incoming to the merge phi and does not block
+    /// phi construction either -- the legacy contract is that
+    /// terminated arms are invisible to the value-merge decision.
+    Terminated,
+    /// Body produced a value at the captured end block. The body
+    /// terminator is deferred to [`collect_match_incoming`], which
+    /// applies the lowered result strategy (UnionWrap if needed) and
+    /// branches to merge.
+    Value {
+        end_bb: BasicBlock<'ctx>,
+        tv: TypedValue<'ctx>,
+    },
+}
+
+/// Walks an [`IRMatch`] into LLVM IR. N-arm generalization of
+/// [`super::conditionals::emit_cond`] with native pattern + guard
+/// instruction streams driving the per-arm cond branch and a
+/// strategy-applying merge-phi assembly that mirrors legacy semantics
+/// exactly.
+///
+/// Allocates LLVM blocks for every `arm.check_block`, every
+/// `arm.body_block`, the all-patterns-failed `fallthrough_block`, and
+/// the shared `merge_block`. Branches into `arms[0].check_block` from
+/// the call-site builder position (which holds the subject alloca). A
+/// single `value_map` is threaded across all arms with `subject_alloca`
+/// pre-registered under `ir.subject_value`, so every per-arm check
+/// stream's pattern primitives resolve their `subject_ptr` operand
+/// against the same storage.
+///
+/// For each arm: position at `check_block`, run [`emit_match_arm_check`]
+/// (executes `check_instructions` against the shared `value_map`,
+/// dispatches `check_terminator`); position at `body_block`, run
+/// [`emit_match_arm_body`] (executes `bind_instructions` to register
+/// bindings, walks `body_stmts` via [`compile_body_as_value`]).
+///
+/// After every arm: hand the value-producing arms to
+/// [`assemble_match_phi`], which applies the lowered result strategy
+/// (Direct vs UnionWrap), branches each value-producing arm to merge,
+/// terminates the fallthrough block, and synthesizes the final phi at
+/// `merge_block`.
+fn emit_match_unified<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    resolved: &ResolvedMatch,
-    subject_val: BasicValueEnum<'ctx>,
-    arms: &[MatchArm],
+    ir: &IRMatch,
+    subject_alloca: PointerValue<'ctx>,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let subject_alloca = compiler
-        .builder
-        .build_alloca(subject_val.get_type(), "match_subject")
-        .unwrap();
+    let block_map = build_match_block_map(compiler, ir, function);
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    value_map.insert(ir.subject_value, subject_alloca.into());
+
+    let first_check_bb = block_map[&ir.arms[0].check_block];
     compiler
         .builder
-        .build_store(subject_alloca, subject_val)
+        .build_unconditional_branch(first_check_bb)
         .unwrap();
 
-    let merge_bb = compiler.context.append_basic_block(function, "match_end");
-    let fallthrough_bb = compiler.context.append_basic_block(function, "match_none");
-
-    let mut pending_arms: Vec<(BasicValueEnum<'ctx>, Type, BasicBlock<'ctx>)> = Vec::new();
-    let mut needs_branch: Vec<BasicBlock<'ctx>> = Vec::new();
-
-    for (i, (arm, resolved_pattern)) in arms.iter().zip(resolved.patterns.iter()).enumerate() {
-        let body_bb = compiler
-            .context
-            .append_basic_block(function, &format!("match_body_{i}"));
-        let next_bb = if i + 1 < arms.len() {
-            compiler
-                .context
-                .append_basic_block(function, &format!("match_test_{}", i + 1))
-        } else {
-            fallthrough_bb
-        };
-
+    let mut pending: Vec<(TypedValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+    let mut any_no_value = false;
+    for ir_arm in &ir.arms {
+        // Wrap each arm (check + body) in a `fn_state.variables`
+        // clone/restore so per-arm pattern bindings (registered by
+        // `PatternBindFromPtr` in `check_instructions`) and any
+        // `let`-bindings inside the body don't leak into subsequent
+        // arms or shadow outer-scope variables past the arm. Slice 5b
+        // lifted the binding *setup* into IR; per-arm *scoping* still
+        // lives here because the variables map carries LLVM-typed
+        // allocas that are not part of the IR surface.
         let saved_vars = compiler.fn_state.variables.clone();
-
-        let condition = emit_pattern(compiler, resolved_pattern, subject_alloca, function)?;
-
-        let final_cond = if let Some(guard) = &arm.guard {
-            let guard_val = compile_expr(compiler, guard, function)?
-                .ok_or("match guard produced no value")?
-                .value;
-            compiler
-                .builder
-                .build_and(condition, guard_val.into_int_value(), "guard_and")
-                .unwrap()
-        } else {
-            condition
-        };
-
-        compiler
-            .builder
-            .build_conditional_branch(final_cond, body_bb, next_bb)
-            .unwrap();
-
-        compiler.builder.position_at_end(body_bb);
-        let arm_tv = compile_body_as_value(compiler, &arm.body, function)?;
-        let arm_terminated = compiler.current_block_terminated();
-        let arm_end_bb = compiler.builder.get_insert_block().unwrap();
-        if !arm_terminated {
-            if let Some(tv) = arm_tv {
-                pending_arms.push((tv.value, tv.expo_type, arm_end_bb));
-            } else {
-                needs_branch.push(arm_end_bb);
-            }
-        }
-
+        emit_match_arm_check(compiler, ir_arm, &block_map, &mut value_map, function)?;
+        let outcome = emit_match_arm_body(compiler, ir_arm, &block_map, &mut value_map, function)?;
         compiler.fn_state.variables = saved_vars;
-        compiler.builder.position_at_end(next_bb);
+        match outcome {
+            ArmEmission::NoValue => any_no_value = true,
+            ArmEmission::Terminated => {}
+            ArmEmission::Value { tv, end_bb } => pending.push((tv, end_bb)),
+        }
     }
 
-    // Structural Void: zero arms produced a value (all terminated or all
-    // ended in non-Expr statements). Emission has nothing to phi.
-    if pending_arms.is_empty() {
-        for bb in &needs_branch {
-            compiler.builder.position_at_end(*bb);
-            compiler
-                .builder
-                .build_unconditional_branch(merge_bb)
-                .unwrap();
-        }
-        compiler.builder.position_at_end(fallthrough_bb);
-        compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
+    let fallthrough_bb = block_map[&ir.fallthrough_block];
+    let merge_bb = block_map[&ir.merge_block];
+    assemble_match_phi(
+        compiler,
+        ir,
+        pending,
+        any_no_value,
+        fallthrough_bb,
+        merge_bb,
+    )
+}
+
+/// Allocate LLVM basic blocks for every [`IRBlockId`] referenced by an
+/// [`IRMatch`] and return the map. Block labels mirror the legacy
+/// `emit_match` naming so `.ll` output stays diff-friendly.
+fn build_match_block_map<'ctx>(
+    compiler: &Compiler<'ctx>,
+    ir: &IRMatch,
+    function: FunctionValue<'ctx>,
+) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
+    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
+    for (i, arm) in ir.arms.iter().enumerate() {
+        let label = if i == 0 {
+            "match_test_0".to_string()
+        } else {
+            format!("match_test_{i}")
+        };
+        let bb = compiler.context.append_basic_block(function, &label);
+        block_map.insert(arm.check_block, bb);
+    }
+    for (i, arm) in ir.arms.iter().enumerate() {
+        let bb = compiler
+            .context
+            .append_basic_block(function, &format!("match_body_{i}"));
+        block_map.insert(arm.body_block, bb);
+    }
+    let fallthrough_bb = compiler.context.append_basic_block(function, "match_none");
+    block_map.insert(ir.fallthrough_block, fallthrough_bb);
+    let merge_bb = compiler.context.append_basic_block(function, "match_end");
+    block_map.insert(ir.merge_block, merge_bb);
+    block_map
+}
+
+/// Walks one arm's check block. Runs `check_instructions` (pattern
+/// primitives + `BoolAnd`/`BoolOr` fusion + lifted guard operand
+/// stream) against the shared `value_map`, then dispatches
+/// `check_terminator` (`CondBranch { cond: <pattern+guard operand>,
+/// then: body_block, otherwise: <next_check or fallthrough> }`).
+fn emit_match_arm_check<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    ir_arm: &IRMatchArm,
+    block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
+    value_map: &mut HashMap<IRValueId, BasicValueEnum<'ctx>>,
+    function: FunctionValue<'ctx>,
+) -> Result<(), String> {
+    let check_bb = block_map[&ir_arm.check_block];
+    compiler.builder.position_at_end(check_bb);
+    execute_instructions(
+        compiler,
+        &ir_arm.check_instructions,
+        function,
+        Some(block_map),
+        value_map,
+    )?;
+    emit_terminator(
+        compiler,
+        &ir_arm.check_terminator,
+        block_map,
+        value_map,
+        function,
+    )
+}
+
+/// Walks one arm's body block: walks the AST stub body via
+/// [`compile_body_as_value`]. Pattern bindings already exist in
+/// `Compiler.fn_state.variables` (registered by `PatternBindFromPtr`
+/// instructions during [`emit_match_arm_check`]); their per-arm
+/// scoping is enforced by the surrounding [`emit_match_unified`] loop.
+/// Returns the captured trailing-expression value (when present) and
+/// the actual end block (which may differ from `body_block` when the
+/// body contains nested control flow).
+fn emit_match_arm_body<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    ir_arm: &IRMatchArm,
+    block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
+    value_map: &mut HashMap<IRValueId, BasicValueEnum<'ctx>>,
+    function: FunctionValue<'ctx>,
+) -> Result<ArmEmission<'ctx>, String> {
+    let body_bb = block_map[&ir_arm.body_block];
+    compiler.builder.position_at_end(body_bb);
+    let arm_tv = compile_body_as_value(compiler, &ir_arm.body_stmts, function)?;
+    let terminated = compiler.current_block_terminated();
+    let end_bb = compiler.builder.get_insert_block().unwrap();
+
+    if terminated {
+        return Ok(ArmEmission::Terminated);
+    }
+    if let Some(tv) = arm_tv {
+        return Ok(ArmEmission::Value { end_bb, tv });
+    }
+
+    emit_terminator(
+        compiler,
+        &ir_arm.body_terminator,
+        block_map,
+        value_map,
+        function,
+    )?;
+    Ok(ArmEmission::NoValue)
+}
+
+/// Assembles the final merge phi for an [`IRMatch`]. Applies the lowered
+/// result strategy (Direct vs UnionWrap) to each value-producing arm,
+/// branches each to merge, terminates the fallthrough block, then
+/// constructs the phi at `merge_block` with one incoming per
+/// value-producing arm plus an `undef` from the fallthrough.
+///
+/// Mirrors the legacy `emit_match` semantics exactly:
+/// - zero value-producing arms => `Ok(None)` (structural void).
+/// - some-but-not-all => `Ok(None)` (no unified phi shape).
+/// - all produced with matching LLVM types => `Ok(Some(TypedValue))`.
+/// - all produced but LLVM types disagree under the strategy => `Err`.
+fn assemble_match_phi<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    ir: &IRMatch,
+    pending: Vec<(TypedValue<'ctx>, BasicBlock<'ctx>)>,
+    any_no_value: bool,
+    fallthrough_bb: BasicBlock<'ctx>,
+    merge_bb: BasicBlock<'ctx>,
+) -> ExprResult<'ctx> {
+    compiler.builder.position_at_end(fallthrough_bb);
+    compiler
+        .builder
+        .build_unconditional_branch(merge_bb)
+        .unwrap();
+
+    if pending.is_empty() {
         compiler.builder.position_at_end(merge_bb);
         return Ok(None);
     }
 
-    // Apply the lowered strategy to each value-producing arm and branch to
-    // merge. UnionWrap may fail if the lowered union member resolution is
-    // wrong -- the `?` surfaces that as an emission error.
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
-    for (val, ty, bb) in &pending_arms {
+    if any_no_value {
+        // Some arms produced a value while others ran to completion
+        // without one -- no unified phi shape, drop the value silently
+        // (matches legacy `emit_match` partial-production behavior).
+        // Self-terminated arms (early `return` / `panic`) are
+        // intentionally invisible to this decision.
+        compiler.builder.position_at_end(merge_bb);
+        return Ok(None);
+    }
+
+    let incoming = collect_match_incoming(compiler, &ir.result_ty, &pending, merge_bb)?;
+    compiler.builder.position_at_end(merge_bb);
+
+    let first_ty = incoming[0].0.get_type();
+    if !incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
+        return Err(format!(
+            "match arms produced incompatible LLVM types under lowered strategy `{}`",
+            describe_match_strategy(&ir.result_ty),
+        ));
+    }
+    let undef = first_ty.const_zero();
+    let phi = compiler.builder.build_phi(first_ty, "matchval").unwrap();
+    for (value, bb) in &incoming {
+        phi.add_incoming(&[(value, *bb)]);
+    }
+    phi.add_incoming(&[(&undef, fallthrough_bb)]);
+
+    let result_type = match &ir.result_ty {
+        ResolvedMatchType::UnionWrap { target } => target.clone(),
+        ResolvedMatchType::Direct { ty } if !matches!(ty, Type::Unknown) => ty.clone(),
+        // Fallback: lowering had no typecheck-derived result type (e.g.
+        // an arm body whose `resolved_type` didn't propagate into the
+        // cached impl-AST clone). Trust the post-emit Expo type of the
+        // first value-producing arm instead. Once the AST-clone story
+        // is fixed this branch can go away.
+        ResolvedMatchType::Direct { .. } => pending[0].0.expo_type.clone(),
+    };
+    Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)))
+}
+
+/// Apply the lowered result strategy to each value-producing arm and
+/// emit its `Branch(merge)` terminator. Returns one `(value, end_bb)`
+/// per arm in iteration order. UnionWrap arms whose value already has
+/// the union shape pass through unwrapped; Direct arms always pass
+/// through untouched.
+fn collect_match_incoming<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    result_ty: &ResolvedMatchType,
+    pending: &[(TypedValue<'ctx>, BasicBlock<'ctx>)],
+    merge_bb: BasicBlock<'ctx>,
+) -> Result<Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)>, String> {
+    let mut incoming = Vec::with_capacity(pending.len());
+    for (tv, bb) in pending {
         compiler.builder.position_at_end(*bb);
-        let final_val = match &resolved.result_ty {
+        let final_val = match result_ty {
             ResolvedMatchType::UnionWrap { target } => {
-                if matches!(ty, Type::Union(_)) {
-                    *val
+                if matches!(tv.expo_type, Type::Union(_)) {
+                    tv.value
                 } else {
-                    crate::stmt::compile_union_wrap(compiler, *val, ty, target)?
+                    compile_union_wrap(compiler, tv.value, &tv.expo_type, target)?
                 }
             }
-            ResolvedMatchType::Direct { .. } => *val,
+            ResolvedMatchType::Direct { .. } => tv.value,
         };
         compiler
             .builder
@@ -296,55 +490,7 @@ fn emit_match<'ctx>(
         let end_bb = compiler.builder.get_insert_block().unwrap();
         incoming.push((final_val, end_bb));
     }
-
-    for bb in &needs_branch {
-        compiler.builder.position_at_end(*bb);
-        compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
-    }
-    compiler.builder.position_at_end(fallthrough_bb);
-    compiler
-        .builder
-        .build_unconditional_branch(merge_bb)
-        .unwrap();
-
-    compiler.builder.position_at_end(merge_bb);
-
-    // If any reachable arm produced no value while others did, we have no
-    // unified phi shape -- this is a structural emission outcome (not a
-    // strategy disagreement), so return Ok(None) the same as today.
-    if !needs_branch.is_empty() {
-        return Ok(None);
-    }
-
-    let first_ty = incoming[0].0.get_type();
-    if !incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
-        return Err(format!(
-            "match arms produced incompatible LLVM types under lowered strategy `{}`",
-            describe_match_strategy(&resolved.result_ty),
-        ));
-    }
-
-    let undef = first_ty.const_zero();
-    let phi = compiler.builder.build_phi(first_ty, "matchval").unwrap();
-    for (v, bb) in &incoming {
-        phi.add_incoming(&[(v, *bb)]);
-    }
-    phi.add_incoming(&[(&undef, fallthrough_bb)]);
-
-    let result_type = match &resolved.result_ty {
-        ResolvedMatchType::UnionWrap { target } => target.clone(),
-        ResolvedMatchType::Direct { ty } if !matches!(ty, Type::Unknown) => ty.clone(),
-        // Fallback: lowering had no typecheck-derived result type (e.g. an
-        // arm body whose `resolved_type` didn't propagate into the cached
-        // impl-AST clone). Trust the post-emit Expo type of the first
-        // value-producing arm instead. Once the AST-clone story is fixed
-        // this branch can go away.
-        ResolvedMatchType::Direct { .. } => pending_arms[0].1.clone(),
-    };
-    Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)))
+    Ok(incoming)
 }
 
 fn describe_match_strategy(strategy: &ResolvedMatchType) -> String {
@@ -354,12 +500,17 @@ fn describe_match_strategy(strategy: &ResolvedMatchType) -> String {
     }
 }
 
-/// Compiles a match pattern into a boolean condition. Bindings introduced by
-/// the pattern are inserted into the compiler's variable scope.
+/// Compiles a single pattern test against a subject pointer. Emits the
+/// pattern's instruction stream (tests + binding setup, in source
+/// order) at the current builder position and returns the resulting
+/// i1. Pattern bindings are registered into
+/// `Compiler.fn_state.variables` as a side effect; callers wrap their
+/// arm dispatch in a `fn_state.variables` clone/restore to scope them.
 ///
-/// This is a thin shim over [`lower_pattern`] + [`emit_pattern`]. Lowering
-/// performs all name resolution and shape lookups; emission performs only
-/// LLVM builder calls.
+/// Routes through [`expo_ir::Lowerer::lower_pattern_to_instructions`]
+/// to produce the same instruction stream that `match` arms use, so
+/// both paths share the codegen-side pattern primitives in
+/// [`super::instructions::execute_instructions`].
 pub(crate) fn compile_pattern<'ctx>(
     compiler: &mut Compiler<'ctx>,
     pattern: &Pattern,
@@ -367,272 +518,32 @@ pub(crate) fn compile_pattern<'ctx>(
     subject_type: &Type,
     function: FunctionValue<'ctx>,
 ) -> Result<IntValue<'ctx>, String> {
-    let resolved = lower_pattern(&compiler.lower_ctx(), pattern, subject_type)?;
-    emit_pattern(compiler, &resolved, subject_ptr, function)
+    let subject_id = compiler.lowerer().next_value_id();
+    let lowered = compiler.lowerer().lower_pattern_to_instructions(
+        pattern,
+        subject_type,
+        IROperand::Local(subject_id),
+    )?;
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    value_map.insert(subject_id, subject_ptr.into());
+    execute_instructions(
+        compiler,
+        &lowered.instructions,
+        function,
+        None,
+        &mut value_map,
+    )?;
+    let result = materialize_operand(compiler, &lowered.check_result, &value_map)?;
+    Ok(result.into_int_value())
 }
 
 // ---------------------------------------------------------------------------
-// Pattern lowering lives in `expo_ir::lower::patterns`. The helpers
-// (`lower_pattern`, `lower_tuple_elements`, `resolve_enum_key_*`,
-// `lookup_variant_tag`, `union_member_tag`, `get_*_variant_*`,
-// `lookup_variant_data`) now run as freestanding `&LowerCtx`-bound
-// functions; codegen reaches them via `compile_pattern` / `compile_match`
-// above.
+// Shared helpers used by codegen-side pattern primitives in
+// `instructions.rs` plus other codegen modules (`enums.rs` consumes
+// `get_payload_ptr` and `match_values` for enum equality compilation).
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Emission: ResolvedPattern -> LLVM IR.
-//
-// Functions in this region only call `compiler.builder`,
-// `compiler.context`, and `compiler.fn_state.variables`. Type-registry
-// touches are limited to deterministic `Type` -> `BasicTypeEnum`
-// translations (`to_llvm_type`, `lookup_enum_struct_type`,
-// `get_variant_payload_type`) for keys that lowering already validated.
-// They never perform name resolution or fallback chains.
-// ---------------------------------------------------------------------------
-
-fn emit_pattern<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    resolved: &ResolvedPattern,
-    subject_ptr: PointerValue<'ctx>,
-    function: FunctionValue<'ctx>,
-) -> Result<IntValue<'ctx>, String> {
-    let true_val = compiler.context.bool_type().const_int(1, false);
-
-    match resolved {
-        ResolvedPattern::AlwaysMatch => Ok(true_val),
-
-        ResolvedPattern::Bind {
-            name,
-            ty,
-            strict_llvm,
-        } => {
-            emit_bind(compiler, name, ty, *strict_llvm, subject_ptr)?;
-            Ok(true_val)
-        }
-
-        ResolvedPattern::LiteralEq { lit, subject_ty } => {
-            let llvm_ty = to_llvm_type(subject_ty, compiler.context, &compiler.llvm_types)
-                .ok_or("cannot load subject for literal comparison")?;
-            let subject_val = compiler
-                .builder
-                .build_load(llvm_ty, subject_ptr, "lit_subj")
-                .unwrap();
-            let lit_val = emit_literal_const(compiler, lit);
-            match_values(compiler, &subject_val, &lit_val)
-        }
-
-        ResolvedPattern::EnumUnit { enum_key, tag, .. } => {
-            // Note: a unit variant has no payload. There is no path from this
-            // arm to `get_payload_ptr`; the previously-deferred GEPIndex panic
-            // (payload GEP at index 1 on a tag-only enum) is unreachable here.
-            emit_tag_check(compiler, subject_ptr, enum_key, *tag)
-        }
-
-        ResolvedPattern::EnumTuple {
-            enum_key,
-            variant,
-            tag,
-            elements,
-        } => {
-            let mut result = emit_tag_check(compiler, subject_ptr, enum_key, *tag)?;
-            let (payload_type, payload_ptr) =
-                get_payload_ptr(compiler, subject_ptr, enum_key, variant)?;
-            for (i, (field_ty, sub)) in elements.iter().enumerate() {
-                let inner = unwrap_indirect(field_ty);
-                // Align with monomorphized enum payloads: ZST fields use an
-                // i8 placeholder when `to_llvm_type` is `None` (e.g. `()`),
-                // so LLVM layout and pattern loads stay in sync.
-                let inner_llvm_ty = to_llvm_type(inner, compiler.context, &compiler.llvm_types)
-                    .unwrap_or_else(|| compiler.context.i8_type().into());
-                let field_ptr = compiler
-                    .builder
-                    .build_struct_gep(payload_type, payload_ptr, i as u32, &format!("tp{i}"))
-                    .unwrap();
-                let field_val =
-                    load_maybe_indirect(compiler, field_ptr, field_ty, &format!("tp{i}_val"));
-                let field_alloca = compiler
-                    .builder
-                    .build_alloca(inner_llvm_ty, &format!("tp{i}_tmp"))
-                    .unwrap();
-                compiler
-                    .builder
-                    .build_store(field_alloca, field_val)
-                    .unwrap();
-                let sub_result = emit_pattern(compiler, sub, field_alloca, function)?;
-                result = compiler
-                    .builder
-                    .build_and(result, sub_result, &format!("tp{i}_and"))
-                    .unwrap();
-            }
-            Ok(result)
-        }
-
-        ResolvedPattern::EnumStruct {
-            enum_key,
-            variant,
-            tag,
-            fields,
-        } => {
-            let mut result = emit_tag_check(compiler, subject_ptr, enum_key, *tag)?;
-            let (payload_type, payload_ptr) =
-                get_payload_ptr(compiler, subject_ptr, enum_key, variant)?;
-            for fp in fields {
-                let inner_ty = unwrap_indirect(&fp.field_type);
-                let inner_llvm_ty = to_llvm_type(inner_ty, compiler.context, &compiler.llvm_types)
-                    .ok_or_else(|| format!("unsupported field type for `{}`", fp.name))?;
-                let field_ptr = compiler
-                    .builder
-                    .build_struct_gep(payload_type, payload_ptr, fp.field_index, &fp.name)
-                    .unwrap();
-                let field_val = load_maybe_indirect(
-                    compiler,
-                    field_ptr,
-                    &fp.field_type,
-                    &format!("{}_val", fp.name),
-                );
-                let field_alloca = compiler
-                    .builder
-                    .build_alloca(inner_llvm_ty, &format!("{}_tmp", fp.name))
-                    .unwrap();
-                compiler
-                    .builder
-                    .build_store(field_alloca, field_val)
-                    .unwrap();
-
-                if let Some(sub) = &fp.sub {
-                    let sub_result = emit_pattern(compiler, sub, field_alloca, function)?;
-                    result = compiler
-                        .builder
-                        .build_and(result, sub_result, &format!("{}_and", fp.name))
-                        .unwrap();
-                } else {
-                    compiler.fn_state.variables.insert(
-                        fp.name.clone(),
-                        (field_alloca, inner_ty.clone(), Ownership::Unowned),
-                    );
-                }
-            }
-            Ok(result)
-        }
-
-        ResolvedPattern::UnionMember {
-            union_mangled,
-            member_mangled: _,
-            tag,
-            member_ty,
-            bind_name,
-        } => {
-            let result = emit_tag_check(compiler, subject_ptr, union_mangled.as_str(), *tag)?;
-            let payload_ptr = get_union_payload_ptr(compiler, subject_ptr, union_mangled.as_str())?;
-            let llvm_ty = to_llvm_type(member_ty, compiler.context, &compiler.llvm_types)
-                .ok_or_else(|| {
-                    format!("unsupported type in typed binding: {}", member_ty.display())
-                })?;
-            let val = compiler
-                .builder
-                .build_load(llvm_ty, payload_ptr, bind_name)
-                .unwrap();
-            let alloca = compiler.builder.build_alloca(llvm_ty, bind_name).unwrap();
-            compiler.builder.build_store(alloca, val).unwrap();
-            compiler.fn_state.variables.insert(
-                bind_name.clone(),
-                (alloca, member_ty.clone(), Ownership::Unowned),
-            );
-            Ok(result)
-        }
-
-        ResolvedPattern::Or(subs) => {
-            let mut result = compiler.context.bool_type().const_int(0, false);
-            for sub in subs {
-                let cond = emit_pattern(compiler, sub, subject_ptr, function)?;
-                result = compiler.builder.build_or(result, cond, "or_pat").unwrap();
-            }
-            Ok(result)
-        }
-
-        ResolvedPattern::Binary { segments } => {
-            emit_binary_pattern(compiler, segments, subject_ptr, function)
-        }
-    }
-}
-
-fn emit_bind<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    name: &str,
-    ty: &Type,
-    strict_llvm: bool,
-    subject_ptr: PointerValue<'ctx>,
-) -> Result<(), String> {
-    let llvm_ty = if strict_llvm {
-        to_llvm_type(ty, compiler.context, &compiler.llvm_types)
-            .ok_or_else(|| format!("unsupported type in typed binding: {}", ty.display()))?
-    } else {
-        to_llvm_type(ty, compiler.context, &compiler.llvm_types)
-            .unwrap_or_else(|| compiler.context.i8_type().into())
-    };
-    let val = compiler
-        .builder
-        .build_load(llvm_ty, subject_ptr, name)
-        .unwrap();
-    let alloca = compiler.builder.build_alloca(llvm_ty, name).unwrap();
-    compiler.builder.build_store(alloca, val).unwrap();
-    compiler
-        .fn_state
-        .variables
-        .insert(name.to_string(), (alloca, ty.clone(), Ownership::Unowned));
-    Ok(())
-}
-
-fn emit_literal_const<'ctx>(
-    compiler: &Compiler<'ctx>,
-    lit: &ResolvedLiteral,
-) -> BasicValueEnum<'ctx> {
-    match lit {
-        ResolvedLiteral::Int(v) => compiler
-            .context
-            .i64_type()
-            .const_int(*v as u64, true)
-            .into(),
-        ResolvedLiteral::Float(v) => compiler.context.f64_type().const_float(*v).into(),
-        ResolvedLiteral::Bool(b) => compiler
-            .context
-            .bool_type()
-            .const_int(if *b { 1 } else { 0 }, false)
-            .into(),
-        ResolvedLiteral::String(s) => compiler
-            .builder
-            .build_global_string_ptr(s, "str_pat")
-            .unwrap()
-            .as_pointer_value()
-            .into(),
-    }
-}
-
-fn emit_tag_check<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    subject_ptr: PointerValue<'ctx>,
-    enum_key: &str,
-    tag: u8,
-) -> Result<IntValue<'ctx>, String> {
-    let enum_type = lookup_enum_struct_type(compiler, enum_key)?;
-    let tag_ptr = compiler
-        .builder
-        .build_struct_gep(enum_type, subject_ptr, 0, "tag_ptr")
-        .unwrap();
-    let tag_val = compiler
-        .builder
-        .build_load(compiler.context.i8_type(), tag_ptr, "tag")
-        .unwrap()
-        .into_int_value();
-    let expected = compiler.context.i8_type().const_int(tag as u64, false);
-    Ok(compiler
-        .builder
-        .build_int_compare(IntPredicate::EQ, tag_val, expected, "tag_eq")
-        .unwrap())
-}
-
-fn lookup_enum_struct_type<'ctx>(
+pub(crate) fn lookup_enum_struct_type<'ctx>(
     compiler: &Compiler<'ctx>,
     enum_key: &str,
 ) -> Result<StructType<'ctx>, String> {
@@ -647,31 +558,16 @@ fn lookup_enum_struct_type<'ctx>(
         .ok_or_else(|| format!("unknown enum: {enum_key}"))
 }
 
-fn emit_binary_pattern<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    segments: &[BinarySegment],
-    subject_ptr: PointerValue<'ctx>,
-    function: FunctionValue<'ctx>,
-) -> Result<IntValue<'ctx>, String> {
-    compile_binary_pattern(compiler, segments, subject_ptr, function)
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers used by both lowering and emission, plus by other codegen
-// modules (`enums.rs` consumes `get_payload_ptr` and `match_values` for enum
-// equality compilation).
-// ---------------------------------------------------------------------------
-
 /// Resolved payload metadata for an enum variant.
-struct ResolvedPayloadInfo<'ctx> {
-    enum_type: StructType<'ctx>,
-    payload_type: StructType<'ctx>,
+pub(crate) struct ResolvedPayloadInfo<'ctx> {
+    pub enum_type: StructType<'ctx>,
+    pub payload_type: StructType<'ctx>,
 }
 
 /// Emission-only LLVM cache lookup; no semantic decision. Pulls the payload
 /// and enum `StructType<'ctx>` for a variant straight from the LLVM type
 /// registry so the surrounding GEP emitter can index into them.
-fn resolve_payload_info<'ctx>(
+pub(crate) fn resolve_payload_info<'ctx>(
     compiler: &Compiler<'ctx>,
     enum_name: &str,
     variant: &str,
@@ -700,29 +596,6 @@ pub(crate) fn get_payload_ptr<'ctx>(
         .build_struct_gep(resolved.enum_type, subject_ptr, 1, "payload_ptr")
         .unwrap();
     Ok((resolved.payload_type, payload_ptr))
-}
-
-/// Union counterpart to [`get_payload_ptr`]. Returns just the GEP into the
-/// union's payload field; the caller already knows the member's LLVM type
-/// from the static `Type::Union(members)` and decodes it via `to_llvm_type`,
-/// so there is no per-member payload struct to look up.
-fn get_union_payload_ptr<'ctx>(
-    compiler: &Compiler<'ctx>,
-    subject_ptr: PointerValue<'ctx>,
-    union_mangled: &str,
-) -> Result<PointerValue<'ctx>, String> {
-    let union_type = lookup_enum_struct_type(compiler, union_mangled)?;
-    let payload_ptr = compiler
-        .builder
-        .build_struct_gep(union_type, subject_ptr, 1, "payload_ptr")
-        .map_err(|_| {
-            format!(
-                "union `{union_mangled}` has no payload field at index 1; \
-                 its body was sized to tag-only, likely because member \
-                 bodies were not yet defined when the union was laid out"
-            )
-        })?;
-    Ok(payload_ptr)
 }
 
 pub(crate) fn match_values<'ctx>(

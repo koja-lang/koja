@@ -35,13 +35,14 @@
 //! keeps the stream single-source-of-truth and gives the migration a
 //! clear, greppable retirement marker.
 
-use expo_ast::ast::Expr;
+use expo_ast::ast::{BinarySegment, Expr};
 use expo_typecheck::types::Type;
 
 use crate::blocks::IRBlockId;
 use crate::identity::FunctionIdentifier;
 use crate::resolved::fields::ResolvedFieldStep;
 use crate::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
+use crate::resolved::patterns::ResolvedLiteral;
 
 /// Function-scoped SSA value identifier. Minted by
 /// [`crate::FnLowerState::next_value_id`]. Per-function counters
@@ -293,6 +294,134 @@ pub enum IRInstruction {
         /// Callee's resolved return type.
         return_type: Type,
     },
+    /// Compile a binary-pattern match (multi-segment match against
+    /// raw bytes) at the IR seam. Wraps `compile_binary_pattern`'s
+    /// existing logic without further decomposition because binary
+    /// patterns themselves are a multi-block algorithm with their own
+    /// internal control flow. Produces `i1`.
+    ///
+    /// Reaches lowering via [`crate::lower::patterns::Lowerer::lower_pattern_to_instructions`]
+    /// dispatching on `Pattern::Binary`. Subject pointer is supplied
+    /// via `subject_ptr` (an [`IROperand::Local`] referencing the
+    /// match's subject alloca or a recursively-projected field
+    /// alloca).
+    PatternBinaryMatch {
+        /// SSA destination this instruction produces (the pattern's `i1`).
+        dest: IRValueId,
+        /// Pointer-typed operand referencing the subject's storage.
+        subject_ptr: IROperand,
+        /// AST binary-pattern segment list, threaded straight through
+        /// to `compile_binary_pattern`.
+        segments: Vec<BinarySegment>,
+    },
+    /// Bind a name to a value loaded through `source_ptr`. Side-effect
+    /// only: emits `load` + `alloca` + `store` and inserts the binding
+    /// into `Compiler.fn_state.variables` so subsequent
+    /// [`IRInstruction::LoadLocal`] / [`IRInstruction::FieldChain`] calls
+    /// can resolve it. Produces no SSA value (`dest` is absent).
+    ///
+    /// Slice 5b places these in `IRMatchArm.bind_instructions`, which
+    /// the emitter runs at the top of the body block (after the cond
+    /// branch fires) so bindings exist only when their pattern matched.
+    /// The legacy `fn_state.variables` clone/restore around arm bodies
+    /// retires as a result.
+    PatternBindFromPtr {
+        /// Source-level binding name.
+        name: String,
+        /// Resolved Expo type of the binding.
+        ty: Type,
+        /// Pointer-typed operand referencing the source storage
+        /// ([`crate::lower::patterns::Lowerer::lower_pattern_to_instructions`]
+        /// produces this either as the match's subject pointer, a
+        /// projected variant-field alloca, or a union payload pointer).
+        source_ptr: IROperand,
+        /// Mirrors `ResolvedPattern::Bind { strict_llvm }`: when `true`,
+        /// the codegen executor errors on unsupported types instead of
+        /// falling back to `i8`. `TypedBinding` patterns set this; plain
+        /// `Binding` patterns and field projections do not.
+        strict_llvm: bool,
+    },
+    /// Compare a value loaded from `subject_ptr` (typed as
+    /// `subject_ty`) to a literal constant. Produces `i1`.
+    ///
+    /// Reaches lowering via [`crate::lower::patterns::Lowerer::lower_pattern_to_instructions`]
+    /// dispatching on `ResolvedPattern::LiteralEq`.
+    PatternLiteralEq {
+        /// SSA destination this instruction produces (the pattern's `i1`).
+        dest: IRValueId,
+        /// Pointer-typed operand referencing the subject's storage.
+        subject_ptr: IROperand,
+        /// Resolved Expo type of the subject (drives the load's LLVM type).
+        subject_ty: Type,
+        /// Literal to compare against (Bool / Int / Float / String).
+        lit: ResolvedLiteral,
+    },
+    /// Project a single payload field out of an enum variant: GEP to
+    /// the variant's payload, GEP to the field at `field_index`,
+    /// `load_maybe_indirect` it, alloca, store. Produces a
+    /// pointer-typed value: the new alloca, used as the subject
+    /// pointer for a recursive sub-pattern test or as the source
+    /// pointer for a [`IRInstruction::PatternBindFromPtr`].
+    ///
+    /// Reaches lowering via [`crate::lower::patterns::Lowerer::lower_pattern_to_instructions`]
+    /// when walking the per-element/field structure of a
+    /// `ResolvedPattern::EnumTuple` or `ResolvedPattern::EnumStruct`.
+    /// The redundant payload GEP per field (rather than computing
+    /// `payload_ptr` once and projecting many fields off of it) is
+    /// intentional simplicity -- LLVM SROA / mem2reg coalesce them.
+    PatternProjectVariantField {
+        /// SSA destination this instruction produces (a pointer to the
+        /// freshly-allocated field-value alloca).
+        dest: IRValueId,
+        /// Pointer-typed operand referencing the enum subject's storage.
+        subject_ptr: IROperand,
+        /// Resolved enum cache key (e.g. `"std.Option_$Int$"`).
+        enum_key: String,
+        /// Variant name (e.g. `"Some"`).
+        variant: String,
+        /// Index of the field within the variant's payload struct.
+        field_index: u32,
+        /// Resolved field type (drives `load_maybe_indirect` + alloca shape).
+        field_ty: Type,
+        /// Label hint for the emitted alloca / load.
+        name_hint: String,
+    },
+    /// Tag-equality check on an enum or union subject: load the i8 at
+    /// the subject's tag slot (struct index 0) and compare against
+    /// `tag`. Produces `i1`.
+    ///
+    /// Reaches lowering via [`crate::lower::patterns::Lowerer::lower_pattern_to_instructions`]
+    /// for every `ResolvedPattern::EnumUnit` / `EnumTuple` / `EnumStruct`
+    /// / `UnionMember`. `enum_key` is either an enum cache key or a
+    /// union mangled name -- both expose the same tag-at-index-0
+    /// LLVM struct shape.
+    PatternTagEq {
+        /// SSA destination this instruction produces (the pattern's `i1`).
+        dest: IRValueId,
+        /// Pointer-typed operand referencing the enum/union subject's storage.
+        subject_ptr: IROperand,
+        /// Enum cache key or union mangled name -- both look up the
+        /// same `lookup_enum_struct_type` registry slot.
+        enum_key: String,
+        /// Expected tag value.
+        tag: u8,
+    },
+    /// GEP into a union's payload field (struct index 1). Produces a
+    /// pointer-typed value: the storage of the union's payload, used
+    /// as the source pointer for a [`IRInstruction::PatternBindFromPtr`]
+    /// in a `ResolvedPattern::UnionMember`. The caller knows the
+    /// member's LLVM type from the static `Type::Union(members)`, so
+    /// no per-member payload struct lookup is needed (mirrors the
+    /// legacy `get_union_payload_ptr`).
+    PatternUnionPayloadPtr {
+        /// SSA destination this instruction produces (a pointer to the
+        /// union's payload field).
+        dest: IRValueId,
+        /// Pointer-typed operand referencing the union subject's storage.
+        subject_ptr: IROperand,
+        /// Union mangled name (e.g. `"String_or_Int"`).
+        union_mangled: String,
+    },
     /// SSA value merge at a join point. Each `(block_id, operand)`
     /// pair contributes one incoming edge; the codegen executor
     /// materializes `build_phi(llvm_ty, name)` then walks `incomings`
@@ -359,9 +488,10 @@ pub enum IRInstruction {
 }
 
 impl IRInstruction {
-    /// SSA destination this instruction writes. Useful for emission
-    /// walkers populating a `HashMap<IRValueId, _>`.
-    pub fn dest(&self) -> IRValueId {
+    /// SSA destination this instruction writes, or `None` for purely
+    /// side-effecting instructions ([`IRInstruction::PatternBindFromPtr`]).
+    /// Useful for emission walkers populating a `HashMap<IRValueId, _>`.
+    pub fn dest(&self) -> Option<IRValueId> {
         match self {
             IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
@@ -371,9 +501,15 @@ impl IRInstruction {
             | IRInstruction::LoadLocal { dest, .. }
             | IRInstruction::MakeFnRef { dest, .. }
             | IRInstruction::MethodCall { dest, .. }
+            | IRInstruction::PatternBinaryMatch { dest, .. }
+            | IRInstruction::PatternLiteralEq { dest, .. }
+            | IRInstruction::PatternProjectVariantField { dest, .. }
+            | IRInstruction::PatternTagEq { dest, .. }
+            | IRInstruction::PatternUnionPayloadPtr { dest, .. }
             | IRInstruction::Phi { dest, .. }
             | IRInstruction::Stub { dest, .. }
-            | IRInstruction::UnaryOp { dest, .. } => *dest,
+            | IRInstruction::UnaryOp { dest, .. } => Some(*dest),
+            IRInstruction::PatternBindFromPtr { .. } => None,
         }
     }
 }

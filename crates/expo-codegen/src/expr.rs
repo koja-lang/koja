@@ -1091,8 +1091,14 @@ fn compile_receive_arms<'ctx>(
             arm_context.fallthrough_block
         };
 
+        // Snapshots and restores `fn_state.variables` around pattern
+        // binding registration + body walk so per-arm bindings (and
+        // any `let`-bindings inside the body) don't leak into
+        // subsequent arms or shadow outer-scope variables past the
+        // arm. Slice 5b lifted binding *setup* into IR instructions
+        // (visible inside `compile_pattern`); per-arm *scoping*
+        // remains here.
         let saved_vars = compiler.fn_state.variables.clone();
-
         let condition = compile_pattern(
             compiler,
             &arm.pattern,
@@ -1131,8 +1137,8 @@ fn compile_receive_arms<'ctx>(
         if let Some(typed_value) = arm_typed_value {
             incoming.push((typed_value.value, arm_end_block));
         }
-
         compiler.fn_state.variables = saved_vars;
+
         compiler.builder.position_at_end(next_block);
     }
 

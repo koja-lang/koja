@@ -11,17 +11,19 @@ SIL-style design prose and the full Wave 1-17 narrative live in
 ## 1. Status snapshot
 
 The instruction-level scaffold has landed. `IRProgram` is the canonical
-declaration registry. Thirteen `Lowerer<'a>` lift methods cover ten
-typed `IRInstruction` variants. Five conditionals (`unless`,
-`if`-no-else, `if`/`else`, ternary, `cond`) run end-to-end through the
-full IR pipeline today; three call families (`Call`, static call,
-method call) plus `FieldChain` / `FieldLoad`, `LoadLocal` /
-`LoadConst` / `MakeFnRef`, `BinaryOp`, and `UnaryOp` reach typed
-instructions when consumed via the codegen wrappers'
+declaration registry. Fourteen `Lowerer<'a>` lift methods cover sixteen
+typed `IRInstruction` variants. Six constructs (`unless`, `if`-no-else,
+`if`/`else`, ternary, `cond`, `match`) run end-to-end through the full
+IR pipeline today; three call families (`Call`, static call, method
+call) plus `FieldChain` / `FieldLoad`, `LoadLocal` / `LoadConst` /
+`MakeFnRef`, `BinaryOp`, `UnaryOp`, and the six pattern primitives
+(`PatternTagEq`, `PatternLiteralEq`, `PatternProjectVariantField`,
+`PatternUnionPayloadPtr`, `PatternBindFromPtr`, `PatternBinaryMatch`)
+reach typed instructions when consumed via the codegen wrappers'
 lift-then-fallthrough paths. The IR-level value-merging primitive
 (`IRInstruction::Phi`) is in place and load-bearing for ternary
-(pre-staged at lowering), `if`/`else`, and `cond` (both synthesized at
-emit time when arm-body trailing-expression values surface).
+(pre-staged at lowering), `if`/`else`, `cond`, and `match` (synthesized
+at emit time when arm-body trailing-expression values surface).
 
 What we do _not_ have yet:
 
@@ -31,18 +33,15 @@ What we do _not_ have yet:
 - `compile_statement` and `compile_function_body` walk AST end-to-end.
 - The `IRInstruction::Stub` bridge is alive (single producer:
   `Lowerer::lower_expr_to_operand`).
-- `match` is partially lifted via a parallel pipeline
-  (`lower_match` -> `ResolvedMatch` -> `emit_match`) that bypasses
-  `execute_instructions`.
-- ~13 constructs still go AST -> LLVM with no IR touchpoint at all
+- ~12 constructs still go AST -> LLVM with no IR touchpoint at all
   (the full list is in section 3a).
 
 ---
 
 ## 2. Phase summary
 
-Condensed from 22 waves of work. The Wave 1-17 prose lives in
-[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Waves 18-22
+Condensed from 24 waves of work. The Wave 1-17 prose lives in
+[`archive/20260427-EXPOIR.md`](archive/20260427-EXPOIR.md); Waves 18-24
 are summarized inline below.
 
 - **Phase 1 -- Typed foundation (done, Waves 1-5).** `TypeRegistry`
@@ -131,6 +130,82 @@ are summarized inline below.
   is reused unchanged -- a third construct adopts the merge primitive
   with no modification, validating it as the right shape. See the
   `Phase 4f Slice 4` entry in section 4 for the per-change detail.
+- **Phase 4f Slice 5a -- `match` outer scaffold lift (done, Wave 23).**
+  The `match` expression's outer scaffold (per-arm cond-branch chain,
+  merge phi assembly) converges onto `execute_instructions` +
+  `emit_terminator`. New IR types `IRMatch` and `IRMatchArm` mirror
+  the `IRCond` shape-2 generalization with two transitional bridges:
+  (1) `check_instructions` is empty in 5a and pattern testing remains
+  a codegen-side `emit_pattern` call whose i1 result is plumbed into
+  the arm's `check_terminator` via the synthetic
+  `pattern_result_value` `IRValueId` slot, and (2) pattern bindings
+  still flow through a `fn_state.variables` clone/restore around the
+  body walk. New `Lowerer::lower_match_expr` wraps the existing free
+  `lower_match` (preserved for testing). New `emit_match_unified`
+  walker is decomposed into `build_match_block_map`,
+  `emit_match_arm_check`, `emit_match_arm_body`, `assemble_match_phi`,
+  and `collect_match_incoming` to honor `build.mdc`'s ≤40-LOC
+  function budget. The legacy 163-LOC `emit_match` is deleted.
+  Three-variant `ArmEmission` (`Value` / `NoValue` / `Terminated`)
+  preserves the legacy `pending_arms` vs `needs_branch` vs
+  "self-terminated arms are invisible to the value-merge decision"
+  contract verbatim. LLVM IR output is byte-for-byte identical
+  (same block labels `match_test_*` / `match_body_*` / `match_none`
+  / `match_end`, same phi shape with `undef` incoming from
+  `match_none`). Both bridges retire in Slice 5b. See the
+  `Phase 4f Slice 5` entry in section 4 for the split rationale and
+  per-change detail.
+- **Phase 4f Slice 5b -- pattern testing + binding lift (done, Wave 24).**
+  Both transitional bridges from 5a retire. Six new
+  `IRInstruction` variants encode pattern testing as native IR:
+  `PatternTagEq` (enum/union tag equality), `PatternLiteralEq`
+  (literal compare), `PatternProjectVariantField` (variant-field
+  GEP + load + alloca + store, returns the new alloca's pointer),
+  `PatternUnionPayloadPtr` (union payload GEP), `PatternBindFromPtr`
+  (load + alloca + store + register into `fn_state.variables`,
+  side-effect only with no SSA dest), and `PatternBinaryMatch`
+  (wraps `compile_binary_pattern` -- multi-block algorithm kept
+  whole at the IR seam). New `IRInstruction::dest()` returns
+  `Option<IRValueId>` to accommodate the no-dest `PatternBindFromPtr`.
+  AND/OR fusion of i1 results reuses existing
+  `IRInstruction::BinaryOp { op: BoolAnd | BoolOr }` with
+  constant-folding shortcuts (`BoolAnd(true, x) -> x`, etc.) so
+  arms like `Some(v) -> ...` (whose `Bind` returns
+  `ConstBool(true)`) emit no spurious AND. New
+  `Lowerer::lower_pattern_to_instructions` returns a
+  `LoweredPattern { instructions, check_result }` -- a single
+  ordered stream containing test ops, binds, and any AND/OR
+  fusion, plus the [`IROperand`] referencing the final i1.
+  Guards lift to `lower_expr_to_operand`-emitted instructions
+  appended to the arm's check stream and `BoolAnd`-fused with the
+  pattern's i1; no codegen-side guard handling remains.
+  `IRMatchArm.guard` and `IRMatchArm.pattern_result_value` retire;
+  `IRMatch.patterns` retires. `IRMatch.subject_value` is added so
+  pattern primitives reference the subject pointer through
+  [`IROperand::Local`] / a single shared `value_map`. The
+  codegen-side `emit_pattern`, `emit_bind`, `emit_tag_check`,
+  `emit_literal_const`, `emit_binary_pattern` shim, and
+  `get_union_payload_ptr` helpers are deleted (~250 LOC). Six new
+  executor arms in `control/instructions.rs` perform the LLVM
+  builder calls (`emit_pattern_tag_eq`,
+  `emit_pattern_literal_eq`, `emit_pattern_project_variant_field`,
+  `emit_pattern_union_payload_ptr`, `emit_pattern_bind_from_ptr`,
+  `emit_pattern_binary_match`), with shared
+  `materialize_ptr_operand` helper for the common pointer-operand
+  diagnostic. `compile_pattern` (the public entry from
+  `compile_receive_arms`) routes through the same
+  `lower_pattern_to_instructions` + `execute_instructions` path,
+  so receive arms and match arms share one pattern-emission
+  pipeline. Bindings stay in the check block (not the body) so
+  guards can reference them; per-arm scoping is enforced by a
+  `fn_state.variables` clone/restore wrapping each arm's check +
+  body in `emit_match_unified` (and similarly in
+  `compile_receive_arms`). The 5b lift moved binding _setup_ into
+  IR; _scoping_ stays in codegen because the variables map
+  carries LLVM-typed allocas not exposed at the IR surface. Dead
+  `lower_match` free function and `ResolvedMatch` struct are
+  deleted. See the `Phase 4f Slice 5` entry in section 4 for
+  per-change detail.
 
 ---
 
@@ -141,40 +216,40 @@ to plan a slice.
 
 ### 3a. Lift status by construct
 
-| Construct                   | Status                      | Notes                                                                                                                                |
-| --------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `unless`                    | Full IR pipeline            | `Lowerer::lower_unless` -> `IRUnless` -> `emit_unless` + `execute_instructions`                                                      |
-| `if` (no else)              | Full IR pipeline            | `Lowerer::lower_if_no_else` -> `IRIf` -> `emit_if` + `execute_instructions`                                                          |
-| `if`/`else` (with else)     | Full IR pipeline            | `Lowerer::lower_if_else` -> `IRIfElse` -> `emit_if_else` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)        |
-| `ternary`                   | Full IR pipeline            | `Lowerer::lower_ternary` -> `IRTernary` -> `emit_ternary` + `execute_instructions` (merge phi pre-staged in `merge_instructions`)    |
-| `Call` / `static_call`      | Instruction-only            | `Lowerer::lower_call_or_stub` / `lower_static_call_or_stub` -> `IRInstruction::Call`                                                 |
-| `MethodCall`                | Instruction-only            | `Lowerer::lower_method_call_or_stub` -> `IRInstruction::MethodCall`                                                                  |
-| `FieldAccess` (chains)      | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldChain` (rooted at named local; delegates to `emit_chain_field_access`) |
-| `FieldAccess` (value recv)  | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldLoad` (fallback for non-binding receivers)                             |
-| `Ident` (locals)            | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::LoadLocal`                                                                         |
-| `Ident` (constants)         | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::LoadConst`                                                                         |
-| `Ident` (function-as-value) | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::MakeFnRef`                                                                         |
-| `Self_`                     | Instruction-only            | `Lowerer::lower_local_load_or_stub` -> `IRInstruction::LoadLocal { name: "self" }`                                                   |
-| Binary op (most)            | Instruction-only            | `Lowerer::lower_binary_op_or_stub` -> `IRInstruction::BinaryOp`                                                                      |
-| Unary op                    | Instruction-only            | `Lowerer::lower_unary_op_or_stub` -> `IRInstruction::UnaryOp`                                                                        |
-| Bool/Int/Float literals     | Inline operand              | `IROperand::ConstBool` / `ConstInt` / `ConstFloat`                                                                                   |
-| `match`                     | Parallel pipeline           | `lower_match` -> `ResolvedMatch` -> `emit_match`; bypasses `execute_instructions`                                                    |
-| `cond`                      | Full IR pipeline            | `Lowerer::lower_cond` -> `IRCond` -> `emit_cond` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)                |
-| `while` / `loop` / `for`    | AST -> LLVM                 | Slice 6                                                                                                                              |
-| `break` / `return`          | AST -> LLVM                 | Slice 6                                                                                                                              |
-| `assignment` / compound     | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                        |
-| `field_assignment`          | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                        |
-| Binary pattern              | AST -> LLVM                 | Phase 4f Slice 5 (folds into match unification)                                                                                      |
-| Struct construction         | AST -> LLVM                 | Phase 4h                                                                                                                             |
-| Enum construction           | AST -> LLVM                 | Phase 4h                                                                                                                             |
-| Closure construction        | AST -> LLVM                 | Phase 4h (`partial_apply` shape)                                                                                                     |
-| String literal              | AST -> LLVM                 | Phase 4h                                                                                                                             |
-| String interpolation/concat | AST -> LLVM                 | Phase 4h (`compile_concat`, `compile_string_concat`, `compile_binary_concat`)                                                        |
-| `EnumStructEqual`           | AST -> LLVM                 | Phase 4h (multi-block per-variant equality)                                                                                          |
-| `spawn` / `receive`         | AST -> LLVM (decision lift) | Phase 4h (process resolvers exist; instruction lift pending)                                                                         |
-| `print*` / `panic`          | AST -> LLVM                 | Phase 4h (builtin-call instruction lift)                                                                                             |
-| Generic-fn / struct ctor    | AST -> LLVM                 | Phase 4h (call-lift fallthrough cases)                                                                                               |
-| `union_wrap`                | AST -> LLVM (decision lift) | Phase 4h                                                                                                                             |
+| Construct                   | Status                      | Notes                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unless`                    | Full IR pipeline            | `Lowerer::lower_unless` -> `IRUnless` -> `emit_unless` + `execute_instructions`                                                                                                                                                                                                                                                                                                              |
+| `if` (no else)              | Full IR pipeline            | `Lowerer::lower_if_no_else` -> `IRIf` -> `emit_if` + `execute_instructions`                                                                                                                                                                                                                                                                                                                  |
+| `if`/`else` (with else)     | Full IR pipeline            | `Lowerer::lower_if_else` -> `IRIfElse` -> `emit_if_else` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)                                                                                                                                                                                                                                                                |
+| `ternary`                   | Full IR pipeline            | `Lowerer::lower_ternary` -> `IRTernary` -> `emit_ternary` + `execute_instructions` (merge phi pre-staged in `merge_instructions`)                                                                                                                                                                                                                                                            |
+| `Call` / `static_call`      | Instruction-only            | `Lowerer::lower_call_or_stub` / `lower_static_call_or_stub` -> `IRInstruction::Call`                                                                                                                                                                                                                                                                                                         |
+| `MethodCall`                | Instruction-only            | `Lowerer::lower_method_call_or_stub` -> `IRInstruction::MethodCall`                                                                                                                                                                                                                                                                                                                          |
+| `FieldAccess` (chains)      | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldChain` (rooted at named local; delegates to `emit_chain_field_access`)                                                                                                                                                                                                                                                         |
+| `FieldAccess` (value recv)  | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldLoad` (fallback for non-binding receivers)                                                                                                                                                                                                                                                                                     |
+| `Ident` (locals)            | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::LoadLocal`                                                                                                                                                                                                                                                                                                                                 |
+| `Ident` (constants)         | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::LoadConst`                                                                                                                                                                                                                                                                                                                                 |
+| `Ident` (function-as-value) | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::MakeFnRef`                                                                                                                                                                                                                                                                                                                                 |
+| `Self_`                     | Instruction-only            | `Lowerer::lower_local_load_or_stub` -> `IRInstruction::LoadLocal { name: "self" }`                                                                                                                                                                                                                                                                                                           |
+| Binary op (most)            | Instruction-only            | `Lowerer::lower_binary_op_or_stub` -> `IRInstruction::BinaryOp`                                                                                                                                                                                                                                                                                                                              |
+| Unary op                    | Instruction-only            | `Lowerer::lower_unary_op_or_stub` -> `IRInstruction::UnaryOp`                                                                                                                                                                                                                                                                                                                                |
+| Bool/Int/Float literals     | Inline operand              | `IROperand::ConstBool` / `ConstInt` / `ConstFloat`                                                                                                                                                                                                                                                                                                                                           |
+| `match` (full pipeline)     | Full IR pipeline            | `Lowerer::lower_match_expr` -> `IRMatch` -> `emit_match_unified` (per-arm cond-branches via `emit_terminator`; merge phi synthesized inline). Pattern testing + binding fully lifted to `PatternTagEq` / `PatternLiteralEq` / `PatternProjectVariantField` / `PatternUnionPayloadPtr` / `PatternBindFromPtr` / `PatternBinaryMatch` instructions; guards lifted via `lower_expr_to_operand`. |
+| `cond`                      | Full IR pipeline            | `Lowerer::lower_cond` -> `IRCond` -> `emit_cond` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)                                                                                                                                                                                                                                                                        |
+| `while` / `loop` / `for`    | AST -> LLVM                 | Slice 6                                                                                                                                                                                                                                                                                                                                                                                      |
+| `break` / `return`          | AST -> LLVM                 | Slice 6                                                                                                                                                                                                                                                                                                                                                                                      |
+| `assignment` / compound     | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                                                                                                                                                                                                                                                                                |
+| `field_assignment`          | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                                                                                                                                                                                                                                                                                |
+| Binary pattern              | Instruction-only            | `PatternBinaryMatch` wraps `compile_binary_pattern` whole at IR seam (multi-block algorithm; no further decomposition planned)                                                                                                                                                                                                                                                               |
+| Struct construction         | AST -> LLVM                 | Phase 4h                                                                                                                                                                                                                                                                                                                                                                                     |
+| Enum construction           | AST -> LLVM                 | Phase 4h                                                                                                                                                                                                                                                                                                                                                                                     |
+| Closure construction        | AST -> LLVM                 | Phase 4h (`partial_apply` shape)                                                                                                                                                                                                                                                                                                                                                             |
+| String literal              | AST -> LLVM                 | Phase 4h                                                                                                                                                                                                                                                                                                                                                                                     |
+| String interpolation/concat | AST -> LLVM                 | Phase 4h (`compile_concat`, `compile_string_concat`, `compile_binary_concat`)                                                                                                                                                                                                                                                                                                                |
+| `EnumStructEqual`           | AST -> LLVM                 | Phase 4h (multi-block per-variant equality)                                                                                                                                                                                                                                                                                                                                                  |
+| `spawn` / `receive`         | AST -> LLVM (decision lift) | Phase 4h (process resolvers exist; instruction lift pending)                                                                                                                                                                                                                                                                                                                                 |
+| `print*` / `panic`          | AST -> LLVM                 | Phase 4h (builtin-call instruction lift)                                                                                                                                                                                                                                                                                                                                                     |
+| Generic-fn / struct ctor    | AST -> LLVM                 | Phase 4h (call-lift fallthrough cases)                                                                                                                                                                                                                                                                                                                                                       |
+| `union_wrap`                | AST -> LLVM (decision lift) | Phase 4h                                                                                                                                                                                                                                                                                                                                                                                     |
 
 The `Stub` bridge does not even reach most of the AST -> LLVM rows
 because they're entered through `compile_statement` / `compile_expr`
@@ -498,11 +573,94 @@ value_map`. **Outcome.** `compile_if`'s else branch and
   slice; addressable later. **Outcome.** `compile_cond` is a thin
   shim over `Lowerer::lower_cond` + `emit_cond`; the IR pipeline now
   covers the third value-producing conditional family.
-- **Slice 5 -- `match` unification.** Existing `lower_match` /
-  `emit_match` parallel pipeline converges onto `IRBasicBlock` +
-  `execute_instructions`. Pattern bindings become explicit IR (scope
-  save/restore lives in lowering, not emission). **Done when**
-  `emit_match` is deleted in favor of the unified walker.
+- **Slice 5 -- `match` unification.** Split into two waves to keep
+  the cumulative LOC reviewable and isolate the two distinct risk
+  surfaces (outer scaffold convergence vs. pattern-test lift).
+  - **Slice 5a -- outer scaffold lift (Done, Wave 23).** Existing
+    `lower_match` / `emit_match` parallel pipeline converges onto
+    `execute_instructions` + `emit_terminator`. New `IRMatch` /
+    `IRMatchArm` resolved types describe the per-arm cond-branch
+    chain with the same shape as `IRCond` (`check_block` ->
+    `body_block` per arm, `otherwise` slot chained to the next
+    arm's `check_block`). New `Lowerer::lower_match_expr` wraps the
+    existing free `lower_match` (preserved for testing) with id
+    minting. New `emit_match_unified` walker (broken into
+    `build_match_block_map` / `emit_match_arm_check` /
+    `emit_match_arm_body` / `assemble_match_phi` /
+    `collect_match_incoming` for `build.mdc` ≤40-LOC compliance)
+    drives the per-arm cond-branches through the shared
+    `emit_terminator`. Pattern testing remains a codegen-side
+    `emit_pattern` call in slice 5a -- its i1 result is bridged
+    into each arm's `check_terminator` via the synthetic
+    `pattern_result_value` slot that the walker stuffs into the
+    arm's value map after `emit_pattern` returns. Pattern binding
+    scope (`fn_state.variables` clone/restore) also remains in the
+    walker -- both bridges retire in slice 5b. Three-variant
+    `ArmEmission` enum (`Value` / `NoValue` / `Terminated`) tracks
+    the legacy `pending_arms` vs `needs_branch` vs "self-terminated
+    is invisible to the value-merge decision" contract verbatim.
+    LLVM IR output is byte-for-byte identical to the legacy
+    `emit_match` (same block labels, same phi shape with `undef`
+    incoming from `match_none`). **Outcome.** `compile_match` is a
+    thin shim over `Lowerer::lower_match_expr` +
+    `emit_match_unified`; the legacy 163-LOC `emit_match` is
+    deleted. The outer scaffold is now construct-agnostic from
+    emission's perspective.
+  - **Slice 5b -- pattern testing + binding lift (Done, Wave 24).**
+    Six new `IRInstruction` variants encode pattern testing as
+    native IR: `PatternTagEq`, `PatternLiteralEq`,
+    `PatternProjectVariantField` (variant-field GEP + load + alloca
+    - store, returns the new alloca's pointer for sub-pattern
+      recursion or binding), `PatternUnionPayloadPtr`,
+      `PatternBindFromPtr` (load + alloca + store + register into
+      `fn_state.variables`, no SSA dest), and `PatternBinaryMatch`
+      (wraps the multi-block `compile_binary_pattern` whole at the
+      IR seam). `IRInstruction::dest()` returns `Option<IRValueId>`
+      to accommodate the no-dest `PatternBindFromPtr`. AND/OR fusion
+      of i1 results reuses `IRInstruction::BinaryOp { op: BoolAnd
+| BoolOr }` with constant-folding shortcuts (`BoolAnd(true,
+x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
+      emit no spurious AND. New
+      `Lowerer::lower_pattern_to_instructions` returns a
+      `LoweredPattern { instructions, check_result }` -- a single
+      ordered stream containing test ops, binds, and AND/OR fusion,
+      plus the [`IROperand`] referencing the final i1. Guards lift
+      via `lower_expr_to_operand` appended to the arm's check stream
+      and `BoolAnd`-fused with the pattern's i1 -- no codegen-side
+      guard handling remains. `IRMatchArm.guard`,
+      `IRMatchArm.pattern_result_value`, and `IRMatch.patterns`
+      retire; `IRMatch.subject_value` is added so pattern
+      primitives reference the subject pointer through
+      [`IROperand::Local`] / a single shared `value_map` threaded
+      across all arms. The codegen-side `emit_pattern`, `emit_bind`,
+      `emit_tag_check`, `emit_literal_const`, `emit_binary_pattern`
+      shim, and `get_union_payload_ptr` helpers are deleted (~250
+      LOC). Six executor arms in `control/instructions.rs` perform
+      the LLVM builder calls (`emit_pattern_tag_eq`,
+      `emit_pattern_literal_eq`,
+      `emit_pattern_project_variant_field`,
+      `emit_pattern_union_payload_ptr`,
+      `emit_pattern_bind_from_ptr`, `emit_pattern_binary_match`),
+      sharing `materialize_ptr_operand` for the pointer-operand
+      diagnostic. `compile_pattern` (the public entry from
+      `compile_receive_arms`) routes through the same
+      `lower_pattern_to_instructions` + `execute_instructions` path,
+      so receive arms and match arms share one pattern-emission
+      pipeline. Bindings stay in the check block (not the body) so
+      Expo guards (`Some(v) when v > 0`) can reference them; per-arm
+      scoping is enforced by a `fn_state.variables` clone/restore
+      wrapping each arm's check + body in `emit_match_unified` and
+      `compile_receive_arms`. The 5b lift moved binding _setup_
+      into IR; _scoping_ stays in codegen because the variables map
+      carries LLVM-typed allocas not exposed at the IR surface. Dead
+      `lower_match` free function and `ResolvedMatch` struct are
+      deleted. **Outcome.** `emit_pattern` and the 5a synthetic
+      bridges are gone; `match` and `receive` arms drive a single
+      IR-encoded pattern-emission pipeline through the shared
+      `execute_instructions` walker. The IR surface now describes
+      what gets tested, what gets bound, and how results fuse --
+      the only codegen-side concession is per-arm variable scoping
+      around LLVM-typed allocas.
 - **Slice 6 -- loops (`while`, `loop`, `for`, `break`, `return`).**
   Loop headers become `IRBasicBlock`s with explicit back-edges;
   `break` and `return` become explicit terminators. The

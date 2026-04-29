@@ -22,6 +22,7 @@ use crate::identity::MonomorphizedTypeIdentifier;
 
 /// A literal value that can appear inside a pattern, with its raw source
 /// already parsed into the runtime form needed for comparison.
+#[derive(Clone, Debug)]
 pub enum ResolvedLiteral {
     Bool(bool),
     Float(f64),

@@ -21,23 +21,27 @@
 
 use std::collections::HashMap;
 
+use expo_ast::ast::BinarySegment;
 use expo_ir::IRBlockId;
 use expo_ir::identity::FunctionIdentifier;
 use expo_ir::resolved::fields::ResolvedChain;
 use expo_ir::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
+use expo_ir::resolved::patterns::ResolvedLiteral;
 use expo_ir::values::{IRInstruction, IROperand, IRValueId};
 use expo_typecheck::types::Type;
 use inkwell::AddressSpace;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PhiValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PhiValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
+use crate::binary::patterns::compile_binary_pattern;
 use crate::compiler::Compiler;
+use crate::control::patterns::{lookup_enum_struct_type, match_values, resolve_payload_info};
 use crate::drop::Ownership;
 use crate::expr::compile_expr;
 use crate::ops::truncate_to_common_width;
 use crate::stmt::coerce_numeric;
-use crate::structs::{emit_chain_field_access, emit_field_load};
+use crate::structs::{emit_chain_field_access, emit_field_load, load_maybe_indirect};
 use crate::types::to_llvm_type;
 
 use super::terminator::materialize_operand;
@@ -158,6 +162,89 @@ pub(crate) fn execute_instructions<'ctx>(
                 param_types,
                 value_map,
             )?,
+            IRInstruction::PatternBinaryMatch {
+                dest,
+                subject_ptr,
+                segments,
+            } => {
+                let value = emit_pattern_binary_match(
+                    compiler,
+                    subject_ptr,
+                    segments,
+                    function,
+                    value_map,
+                )?;
+                Some((*dest, value.into()))
+            }
+            IRInstruction::PatternBindFromPtr {
+                name,
+                ty,
+                source_ptr,
+                strict_llvm,
+            } => {
+                emit_pattern_bind_from_ptr(
+                    compiler,
+                    name,
+                    ty,
+                    source_ptr,
+                    *strict_llvm,
+                    value_map,
+                )?;
+                None
+            }
+            IRInstruction::PatternLiteralEq {
+                dest,
+                subject_ptr,
+                subject_ty,
+                lit,
+            } => {
+                let value =
+                    emit_pattern_literal_eq(compiler, subject_ptr, subject_ty, lit, value_map)?;
+                Some((*dest, value.into()))
+            }
+            IRInstruction::PatternProjectVariantField {
+                dest,
+                subject_ptr,
+                enum_key,
+                variant,
+                field_index,
+                field_ty,
+                name_hint,
+            } => {
+                let value = emit_pattern_project_variant_field(
+                    compiler,
+                    subject_ptr,
+                    enum_key,
+                    variant,
+                    *field_index,
+                    field_ty,
+                    name_hint,
+                    value_map,
+                )?;
+                Some((*dest, value.into()))
+            }
+            IRInstruction::PatternTagEq {
+                dest,
+                subject_ptr,
+                enum_key,
+                tag,
+            } => {
+                let value = emit_pattern_tag_eq(compiler, subject_ptr, enum_key, *tag, value_map)?;
+                Some((*dest, value.into()))
+            }
+            IRInstruction::PatternUnionPayloadPtr {
+                dest,
+                subject_ptr,
+                union_mangled,
+            } => {
+                let value = emit_pattern_union_payload_ptr(
+                    compiler,
+                    subject_ptr,
+                    union_mangled,
+                    value_map,
+                )?;
+                Some((*dest, value.into()))
+            }
             IRInstruction::Phi {
                 dest,
                 incomings,
@@ -576,4 +663,203 @@ fn emit_string_cmp<'ctx>(
         .build_int_compare(pred, cmp_result, zero, "str_cmp")
         .unwrap()
         .into())
+}
+
+/// Materialize an [`IROperand`] expected to resolve to a pointer value.
+/// Used by every pattern primitive that consumes a subject / source
+/// pointer; centralizes the diagnostic for the common error of feeding
+/// a non-pointer operand into a pattern slot.
+fn materialize_ptr_operand<'ctx>(
+    c: &Compiler<'ctx>,
+    operand: &IROperand,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+    instruction: &str,
+) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+    let value = materialize_operand(c, operand, value_map)?;
+    if !value.is_pointer_value() {
+        return Err(format!("{instruction}: expected pointer operand"));
+    }
+    Ok(value.into_pointer_value())
+}
+
+/// Emit an [`IRInstruction::PatternTagEq`]: GEP the subject's tag slot
+/// (struct index 0), load the i8 tag, and compare against `tag`.
+/// Mirrors the legacy `emit_tag_check` body; `enum_key` is either an
+/// enum cache key or a union mangled name (both expose the same
+/// `lookup_enum_struct_type` registry slot).
+fn emit_pattern_tag_eq<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject_ptr: &IROperand,
+    enum_key: &str,
+    tag: u8,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<IntValue<'ctx>, String> {
+    let subject = materialize_ptr_operand(c, subject_ptr, value_map, "PatternTagEq")?;
+    let enum_type = lookup_enum_struct_type(c, enum_key)?;
+    let tag_ptr = c
+        .builder
+        .build_struct_gep(enum_type, subject, 0, "tag_ptr")
+        .unwrap();
+    let tag_val = c
+        .builder
+        .build_load(c.context.i8_type(), tag_ptr, "tag")
+        .unwrap()
+        .into_int_value();
+    let expected = c.context.i8_type().const_int(u64::from(tag), false);
+    Ok(c.builder
+        .build_int_compare(IntPredicate::EQ, tag_val, expected, "tag_eq")
+        .unwrap())
+}
+
+/// Emit an [`IRInstruction::PatternLiteralEq`]: load the subject as
+/// `subject_ty`, materialize the literal as an LLVM constant, and
+/// dispatch into `match_values` (which handles the int width / float /
+/// string-via-strcmp comparison details).
+fn emit_pattern_literal_eq<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject_ptr: &IROperand,
+    subject_ty: &Type,
+    lit: &ResolvedLiteral,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<IntValue<'ctx>, String> {
+    let subject = materialize_ptr_operand(c, subject_ptr, value_map, "PatternLiteralEq")?;
+    let llvm_ty = to_llvm_type(subject_ty, c.context, &c.llvm_types)
+        .ok_or("PatternLiteralEq: cannot load subject for literal comparison")?;
+    let subject_val = c.builder.build_load(llvm_ty, subject, "lit_subj").unwrap();
+    let lit_val = materialize_pattern_literal(c, lit);
+    match_values(c, &subject_val, &lit_val)
+}
+
+/// Materialize a [`ResolvedLiteral`] to a backend constant for use in
+/// [`IRInstruction::PatternLiteralEq`]. String literals become global
+/// `i8*` pointers; numeric / bool literals become inline constants.
+fn materialize_pattern_literal<'ctx>(
+    c: &Compiler<'ctx>,
+    lit: &ResolvedLiteral,
+) -> BasicValueEnum<'ctx> {
+    match lit {
+        ResolvedLiteral::Bool(b) => c.context.bool_type().const_int(u64::from(*b), false).into(),
+        ResolvedLiteral::Float(v) => c.context.f64_type().const_float(*v).into(),
+        ResolvedLiteral::Int(v) => c.context.i64_type().const_int(*v as u64, true).into(),
+        ResolvedLiteral::String(s) => c
+            .builder
+            .build_global_string_ptr(s, "str_pat")
+            .unwrap()
+            .as_pointer_value()
+            .into(),
+    }
+}
+
+/// Emit an [`IRInstruction::PatternProjectVariantField`]: GEP into the
+/// variant's payload (struct index 1 of the enum), GEP into the field
+/// at `field_index`, `load_maybe_indirect` the field value, then
+/// alloca + store to give the result a stable pointer (the new alloca
+/// is returned). Used as the subject pointer for a recursive
+/// sub-pattern or as the source pointer for a
+/// [`IRInstruction::PatternBindFromPtr`].
+#[allow(clippy::too_many_arguments)]
+fn emit_pattern_project_variant_field<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject_ptr: &IROperand,
+    enum_key: &str,
+    variant: &str,
+    field_index: u32,
+    field_ty: &Type,
+    name_hint: &str,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+    let subject = materialize_ptr_operand(c, subject_ptr, value_map, "PatternProjectVariantField")?;
+    let info = resolve_payload_info(c, enum_key, variant)?;
+    let payload_ptr = c
+        .builder
+        .build_struct_gep(info.enum_type, subject, 1, "payload_ptr")
+        .unwrap();
+    let field_ptr = c
+        .builder
+        .build_struct_gep(
+            info.payload_type,
+            payload_ptr,
+            field_index,
+            &format!("{name_hint}_ptr"),
+        )
+        .unwrap();
+    let field_val = load_maybe_indirect(c, field_ptr, field_ty, &format!("{name_hint}_val"));
+    // ZST fields use an i8 placeholder when `to_llvm_type` is `None`
+    // (e.g. `()`), so the alloca shape stays in sync with the
+    // monomorphized enum payload layout.
+    let inner = expo_typecheck::types::unwrap_indirect(field_ty);
+    let inner_llvm_ty =
+        to_llvm_type(inner, c.context, &c.llvm_types).unwrap_or_else(|| c.context.i8_type().into());
+    let alloca = c
+        .builder
+        .build_alloca(inner_llvm_ty, &format!("{name_hint}_tmp"))
+        .unwrap();
+    c.builder.build_store(alloca, field_val).unwrap();
+    Ok(alloca)
+}
+
+/// Emit an [`IRInstruction::PatternUnionPayloadPtr`]: GEP into the
+/// union's payload field (struct index 1). Mirrors the legacy
+/// `get_union_payload_ptr`; the diagnostic on layout failure points to
+/// the underlying "union body sized to tag-only" condition.
+fn emit_pattern_union_payload_ptr<'ctx>(
+    c: &Compiler<'ctx>,
+    subject_ptr: &IROperand,
+    union_mangled: &str,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+    let subject = materialize_ptr_operand(c, subject_ptr, value_map, "PatternUnionPayloadPtr")?;
+    let union_type = lookup_enum_struct_type(c, union_mangled)?;
+    c.builder
+        .build_struct_gep(union_type, subject, 1, "payload_ptr")
+        .map_err(|_| {
+            format!(
+                "union `{union_mangled}` has no payload field at index 1; \
+                 its body was sized to tag-only, likely because member \
+                 bodies were not yet defined when the union was laid out"
+            )
+        })
+}
+
+/// Emit an [`IRInstruction::PatternBindFromPtr`]: load the bound value
+/// from `source_ptr` as `ty`, alloca + store, register the binding in
+/// `Compiler.fn_state.variables`. Side effect only -- no SSA value is
+/// produced. Mirrors the legacy `emit_bind`.
+fn emit_pattern_bind_from_ptr<'ctx>(
+    c: &mut Compiler<'ctx>,
+    name: &str,
+    ty: &Type,
+    source_ptr: &IROperand,
+    strict_llvm: bool,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<(), String> {
+    let source = materialize_ptr_operand(c, source_ptr, value_map, "PatternBindFromPtr")?;
+    let llvm_ty = if strict_llvm {
+        to_llvm_type(ty, c.context, &c.llvm_types)
+            .ok_or_else(|| format!("PatternBindFromPtr: unsupported type for `{name}`: {ty:?}"))?
+    } else {
+        to_llvm_type(ty, c.context, &c.llvm_types).unwrap_or_else(|| c.context.i8_type().into())
+    };
+    let val = c.builder.build_load(llvm_ty, source, name).unwrap();
+    let alloca = c.builder.build_alloca(llvm_ty, name).unwrap();
+    c.builder.build_store(alloca, val).unwrap();
+    c.fn_state
+        .variables
+        .insert(name.to_string(), (alloca, ty.clone(), Ownership::Unowned));
+    Ok(())
+}
+
+/// Emit an [`IRInstruction::PatternBinaryMatch`]: thin wrapper around
+/// `compile_binary_pattern` (which is multi-block and has its own
+/// internal control flow, so it stays as a single instruction at the
+/// IR seam rather than being decomposed).
+fn emit_pattern_binary_match<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject_ptr: &IROperand,
+    segments: &[BinarySegment],
+    function: FunctionValue<'ctx>,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<IntValue<'ctx>, String> {
+    let subject = materialize_ptr_operand(c, subject_ptr, value_map, "PatternBinaryMatch")?;
+    compile_binary_pattern(c, segments, subject, function)
 }
