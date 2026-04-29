@@ -40,6 +40,7 @@ use expo_typecheck::types::Type;
 
 use crate::blocks::IRBlockId;
 use crate::identity::FunctionIdentifier;
+use crate::ownership::Ownership;
 use crate::resolved::fields::ResolvedFieldStep;
 use crate::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 use crate::resolved::patterns::ResolvedLiteral;
@@ -474,6 +475,64 @@ pub enum IRInstruction {
         /// type passed to `build_phi`.
         ty: Type,
     },
+    /// Multi-segment field assignment (`a.b.c = v`). The codegen
+    /// executor walks the GEP chain rooted at `base_name`'s storage
+    /// pointer using `base_type` + `steps` (mirrors
+    /// [`IRInstruction::FieldChain`]'s shape), then coerces the
+    /// materialized `value` to `ty` and stores it into the resulting
+    /// pointer. Side-effect only -- no SSA value is produced.
+    ///
+    /// Reaches lowering via [`crate::lower::statements`]'s
+    /// [`expo_ast::ast::Statement::Assignment`] arm when the assign
+    /// target is a multi-segment [`expo_ast::ast::LValue`]. Single-
+    /// segment assigns lower to [`IRInstruction::StoreLocal`] instead.
+    StoreField {
+        /// Name of the chain's root binding.
+        base_name: String,
+        /// Resolved type of the root binding -- the first GEP step's
+        /// struct layout source.
+        base_type: Type,
+        /// Successive field hops -- the executor GEPs through them in
+        /// order on the root pointer to reach the final field slot.
+        steps: Vec<ResolvedFieldStep>,
+        /// Right-hand-side operand to materialize and store.
+        value: IROperand,
+        /// Resolved Expo type of the final field slot. Drives the
+        /// numeric coercion applied to `value` before the store.
+        ty: Type,
+    },
+    /// Single-segment local assignment / let-binding. When `is_decl`
+    /// is `true` the executor allocates a fresh entry-block alloca,
+    /// stores the materialized `value` (coerced to `ty`), and inserts
+    /// the binding into `Compiler.fn_state.variables` with the
+    /// supplied `ownership`. When `is_decl` is `false` the executor
+    /// looks the binding up, coerces `value` to the binding's type,
+    /// and stores into the existing slot. Side-effect only -- no
+    /// SSA value is produced.
+    ///
+    /// Reaches lowering via [`crate::lower::statements`]'s
+    /// [`expo_ast::ast::Statement::Assignment`] arm for single-
+    /// segment [`expo_ast::ast::LValue`] / [`expo_ast::ast::Pattern`]
+    /// targets. Multi-segment targets lower to
+    /// [`IRInstruction::StoreField`] instead.
+    StoreLocal {
+        /// Source-level binding name.
+        name: String,
+        /// Right-hand-side operand to materialize and store.
+        value: IROperand,
+        /// Resolved Expo type of the binding. Drives the alloca's
+        /// LLVM type when `is_decl`, and the coercion target either
+        /// way.
+        ty: Type,
+        /// `true` for a fresh let-binding (alloca + insert), `false`
+        /// for reassignment to an existing in-scope binding.
+        is_decl: bool,
+        /// Ownership classification for a freshly-bound value
+        /// (`is_decl == true`). Computed at lowering time via
+        /// [`crate::lower::ownership::ownership_for_expr`]. Ignored
+        /// when `is_decl` is `false`.
+        ownership: Option<Ownership>,
+    },
     /// **Transitional.** Bridges to AST-level expression emission
     /// while the rest of the instruction set fills in. The emission
     /// walker computes the LLVM value for `expr` via
@@ -505,6 +564,30 @@ pub enum IRInstruction {
         /// Operand to apply the unary op to.
         operand: IROperand,
     },
+    /// Box a value of type `source_ty` into the surrounding tagged
+    /// union `target_union`. Emission allocates a union-typed alloca,
+    /// writes the discriminant tag (looked up via
+    /// [`crate::lower::stmt::resolve_union_member`]) and the payload,
+    /// and loads the union value back into `dest`.
+    ///
+    /// Reaches lowering via [`crate::lower::statements`] when an
+    /// assignment / return value's span carries a
+    /// [`expo_typecheck::context::Coercion::UnionWiden`] entry.
+    /// Mirrors the legacy `apply_coercion` path for `UnionWiden`;
+    /// other coercion variants do not exist today.
+    UnionWrap {
+        /// SSA destination this instruction produces (the boxed
+        /// union value).
+        dest: IRValueId,
+        /// Operand carrying the source value to wrap.
+        value: IROperand,
+        /// Source type before wrapping (the union member type).
+        source_ty: Type,
+        /// Target union type. Drives the
+        /// [`crate::lower::stmt::resolve_union_member`] lookup at
+        /// emit time.
+        target_union: Type,
+    },
 }
 
 impl IRInstruction {
@@ -528,8 +611,11 @@ impl IRInstruction {
             | IRInstruction::PatternUnionPayloadPtr { dest, .. }
             | IRInstruction::Phi { dest, .. }
             | IRInstruction::Stub { dest, .. }
-            | IRInstruction::UnaryOp { dest, .. } => Some(*dest),
-            IRInstruction::PatternBindFromPtr { .. } => None,
+            | IRInstruction::UnaryOp { dest, .. }
+            | IRInstruction::UnionWrap { dest, .. } => Some(*dest),
+            IRInstruction::PatternBindFromPtr { .. }
+            | IRInstruction::StoreField { .. }
+            | IRInstruction::StoreLocal { .. } => None,
         }
     }
 }

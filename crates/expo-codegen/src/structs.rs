@@ -47,7 +47,6 @@ use std::collections::HashMap;
 use expo_ast::ast::{Arg, Expr, ExprKind, FieldInit};
 use expo_ir::lower::LowerCtx;
 use expo_ir::lower::fields::{lower_struct_field, resolve_chain_steps};
-use expo_ir::lower::inference::infer_static_method_return_type as ir_infer_static_method_return_type;
 use expo_ir::lower::structs::{lower_concrete_struct, resolve_struct_name};
 use expo_ir::lower::types::resolve_name_current;
 use expo_ir::resolved::construction::ResolvedStructConstruction;
@@ -541,25 +540,6 @@ fn resolve_method_call<'ctx>(
         param_types: resolved.param_types,
         return_type: resolved.return_type,
     })
-}
-
-/// Infers the return type of a static struct/enum method call (e.g.
-/// `Task.async(...)`) for codegen variable typing when there is no
-/// annotation. Thin wrapper around the LLVM-free resolver in
-/// [`expo_ir::lower::inference`].
-pub fn infer_static_method_return_type(
-    c: &Compiler,
-    type_name: &str,
-    method: &str,
-    args: &[Arg],
-) -> Option<Type> {
-    ir_infer_static_method_return_type(
-        &c.lower_ctx(),
-        &|name: &str| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone()),
-        type_name,
-        method,
-        args,
-    )
 }
 
 /// Temporarily pushes type-parameter substitutions for a [`GenericInstance`]

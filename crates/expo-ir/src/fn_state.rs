@@ -24,6 +24,14 @@ pub struct FnLowerState {
     pub block_counter: u32,
     pub closure_counter: usize,
     current_fn: Option<String>,
+    /// Stack of enclosing-loop exit block ids. The lowering site for
+    /// [`expo_ast::ast::Statement::Break`] reads `loop_exit.last()` to
+    /// emit an [`crate::IRTerminator::Branch`] to the innermost loop's
+    /// exit. Pushed by each loop emit walker (`emit_loop_unified` /
+    /// `emit_while_unified` / `emit_for_unified`) before walking the
+    /// body and popped after, mirroring the LLVM-bound exit-block
+    /// stack on `expo-codegen`'s `FnState`.
+    pub loop_exit: Vec<IRBlockId>,
     pub process_msg_type: Option<Type>,
     pub return_type_hint: Option<Type>,
     pub self_type_name: Option<String>,
@@ -70,5 +78,25 @@ impl FnLowerState {
     /// Restore the previous function name when leaving a method body.
     pub fn leave_fn(&mut self, saved: Option<String>) {
         self.current_fn = saved;
+    }
+
+    /// Push an enclosing-loop exit block id. Called by each loop emit
+    /// walker before walking the body so [`expo_ast::ast::Statement::Break`]
+    /// lowering can resolve the innermost loop's exit.
+    pub fn push_loop_exit(&mut self, exit: IRBlockId) {
+        self.loop_exit.push(exit);
+    }
+
+    /// Pop the innermost enclosing-loop exit block id. Called after
+    /// the loop body walks complete.
+    pub fn pop_loop_exit(&mut self) -> Option<IRBlockId> {
+        self.loop_exit.pop()
+    }
+
+    /// Innermost enclosing-loop exit block id, or `None` outside any
+    /// loop. Read by [`expo_ast::ast::Statement::Break`] lowering to
+    /// emit a [`crate::IRTerminator::Branch`] target.
+    pub fn current_loop_exit(&self) -> Option<IRBlockId> {
+        self.loop_exit.last().copied()
     }
 }

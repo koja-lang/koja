@@ -14,7 +14,8 @@ use expo_ir::lower::{LocalBindings, LowerCtx};
 use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstStruct};
 use expo_ir::util::parse_int_literal;
 use expo_ir::{
-    ExternAbi, ExternAttrs, FnLowerState, IRFunction, IRFunctionKind, IRProgram, TypeLayouts,
+    ExternAbi, ExternAttrs, FnLowerState, IRBlockId, IRFunction, IRFunctionKind, IRProgram,
+    TypeLayouts,
 };
 
 use crate::debug::synthesize_all_formats;
@@ -160,7 +161,15 @@ impl<'ctx> LLVMTypeCache<'ctx> {
 /// scaffolding (`loop_header` + `param_allocas`). Pure-semantic per-function
 /// state lives in [`expo_ir::FnLowerState`] on `Compiler.fn_lower`.
 pub struct FnState<'ctx> {
-    pub loop_exit_stack: Vec<BasicBlock<'ctx>>,
+    /// Stack of enclosing-loop exits paired with their LLVM block
+    /// handles. Companion to [`expo_ir::FnLowerState::loop_exit`]
+    /// (semantic side: just the [`expo_ir::IRBlockId`]) -- this side
+    /// carries the matched [`BasicBlock`] handle so the
+    /// [`crate::stmt::compile_statement`] shim can resolve a lowered
+    /// [`expo_ir::IRTerminator::Branch`] back to an LLVM successor.
+    /// Maintained in lockstep with `fn_lower.loop_exit` by each loop
+    /// emit walker.
+    pub loop_exit_blocks: Vec<(IRBlockId, BasicBlock<'ctx>)>,
     /// Loop header block for the current function. When a self-recursive
     /// tail call is detected, codegen stores new arguments into the
     /// parameter allocas and branches here instead of emitting a call.
@@ -179,7 +188,7 @@ impl<'ctx> LocalBindings for FnState<'ctx> {
 impl<'ctx> FnState<'ctx> {
     pub fn new() -> Self {
         Self {
-            loop_exit_stack: Vec::new(),
+            loop_exit_blocks: Vec::new(),
             loop_header: None,
             param_allocas: Vec::new(),
             variables: BTreeMap::new(),

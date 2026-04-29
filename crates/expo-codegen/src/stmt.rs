@@ -1,33 +1,72 @@
-//! Statement compilation: let bindings, assignments, compound assignments,
-//! return, break, and expression statements.
+//! Statement compilation seam.
+//!
+//! [`compile_statement`] is the codegen-side dispatcher for one
+//! [`Statement`]. As of Phase 4g Slice 1 it is a thin shim that
+//! lowers the statement into IR instructions + an optional
+//! [`expo_ir::blocks::IRTerminator`] via [`expo_ir::Lowerer`] and
+//! walks the result through the shared
+//! [`crate::control::execute_instructions`] +
+//! [`crate::control::emit_terminator`] dispatcher used by every
+//! conditional construct's `emit_*` walker.
+//!
+//! ### Transitional fork: list-literal assignments
+//!
+//! Assignments whose RHS is an [`ExprKind::List`] literal still
+//! route to [`compile_assignment`], the legacy AST-driven path.
+//! The reason is the `from_list` protocol coercion (e.g.
+//! `Set<Int> = [1, 2, 3]`): firing it from the LLVM-free Lowerer
+//! would either require lowering to call back into codegen for
+//! on-demand monomorphization of `target.from_list` (the opposite
+//! of Phase 4g's "codegen consumes a closed `IRProgram`" goal) or
+//! would require the executor to mangle and look up symbols by
+//! string -- a code smell explicitly called out as the wrong
+//! direction. The proper fix is the pre-codegen elaboration pass
+//! arriving with the function-body lift in Slice 3; until then,
+//! list-literal assignments stay on the legacy path. See
+//! `expo_ir::lower::statements`'s module-level deferral note for
+//! the architectural detail.
+//!
+//! Destructuring patterns also fall back to legacy because the
+//! Lowerer rejects them today.
 
-use expo_ast::ast::{
-    AssignTarget, BinOp, ClosureParam, CompoundOp, Expr, ExprKind, LValue, Literal, Pattern,
-    Statement, StringPart, TypeExpr,
-};
+use expo_ast::ast::{AssignTarget, Expr, ExprKind, Pattern, Statement, TypeExpr};
 use expo_ast::span::Span;
-use expo_typecheck::context::{Coercion, FnParam};
-use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type, substitute};
+use expo_typecheck::context::Coercion;
+use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
+use expo_ir::IRBlockId;
+use expo_ir::lower::inference::infer_type_from_expr as ir_infer_type_from_expr;
+use expo_ir::lower::ownership::ownership_for_expr;
 use expo_ir::lower::stmt::{
     resolve_annotation_subst, resolve_coercion, resolve_field_path, resolve_final_annotation_type,
     resolve_union_member,
 };
-use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
-use expo_ir::resolved::ops::{OperandShape, ResolvedCompoundOp, resolve_compound_op};
+use expo_ir::values::IRValueId;
 
 use crate::compiler::Compiler;
-use crate::drop::{Ownership, drop_live_variables};
+use crate::control::{emit_terminator, execute_instructions};
 use crate::expr::compile_expr;
 use crate::generics::{ensure_types_exist, monomorphize_impl_method};
-use crate::structs::infer_static_method_return_type;
 use crate::types::to_llvm_type;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
-/// Compiles a single statement (assignment, return, break, or compound
-/// assignment). Expression statements are compiled for side effects only.
+/// Compile one [`Statement`] by lowering it to IR and walking the
+/// instructions + optional terminator through the shared
+/// [`execute_instructions`] / [`emit_terminator`] dispatcher.
+///
+/// Two AST shapes still take the legacy `compile_assignment` path:
+///
+/// 1. `Statement::Assignment` whose RHS is an [`ExprKind::List`]
+///    literal -- protocol-driven `from_list` coercion (e.g.
+///    `Set<Int> = [1, 2, 3]`) is deferred to Slice 3 (see the
+///    module-level note above and
+///    `expo_ir::lower::statements`'s deferred-coercion section).
+/// 2. `Statement::Assignment` against a destructuring
+///    [`Pattern`] -- the Lowerer rejects them today; the legacy
+///    path also rejects them, so this fork just preserves the
+///    pre-existing diagnostic surface.
 pub fn compile_statement<'ctx>(
     compiler: &mut Compiler<'ctx>,
     stmt: &Statement,
@@ -41,66 +80,134 @@ pub fn compile_statement<'ctx>(
         span.start.column,
     );
 
-    match stmt {
-        Statement::Expr(expr) => {
-            compile_expr(compiler, expr, function)?;
-            Ok(None)
-        }
-
-        Statement::Assignment {
+    if needs_legacy_assignment_path(stmt) {
+        let Statement::Assignment {
             target,
             type_annotation,
             value,
             ..
-        } => {
-            compile_assignment(compiler, target, type_annotation, value, function)?;
-            Ok(None)
-        }
-
-        Statement::Return { value, .. } => {
-            if let Some(expr) = value {
-                let val =
-                    crate::expr::compile_tail_expr(compiler, expr, function)?.map(|tv| tv.value);
-                if !compiler.current_block_terminated() {
-                    let skip = match &expr.kind {
-                        ExprKind::Ident { name, .. } => Some(name.as_str()),
-                        _ => None,
-                    };
-                    drop_live_variables(compiler, skip);
-                    if let Some(value) = val {
-                        let value = apply_coercion(compiler, value, expr)?;
-                        compiler.builder.build_return(Some(&value)).unwrap();
-                    } else {
-                        compiler.builder.build_return(None).unwrap();
-                    }
-                }
-            } else {
-                drop_live_variables(compiler, None);
-                compiler.builder.build_return(None).unwrap();
-            }
-            Ok(None)
-        }
-
-        Statement::Break { .. } => {
-            let exit_block = compiler
-                .fn_state
-                .loop_exit_stack
-                .last()
-                .ok_or("break outside of loop")?;
-            compiler
-                .builder
-                .build_unconditional_branch(*exit_block)
-                .unwrap();
-            Ok(None)
-        }
-
-        Statement::CompoundAssign {
-            target, op, value, ..
-        } => {
-            compile_compound_assign(compiler, target, op, value, function)?;
-            Ok(None)
-        }
+        } = stmt
+        else {
+            unreachable!("needs_legacy_assignment_path gated on Statement::Assignment");
+        };
+        compile_assignment(compiler, target, type_annotation, value, function)?;
+        return Ok(None);
     }
+
+    // Push annotation-derived `type_subst` entries (e.g. `T = Int` for
+    // `list: List<Int> = ...`) before lowering AND executing the
+    // statement. The IR Lowerer emits transitional
+    // [`expo_ir::values::IRInstruction::Stub`] for expressions it
+    // hasn't lifted yet; that Stub's deferred `compile_expr`
+    // (resolving `List.new()` against the type-arg substitution
+    // table) runs at execution time, so the subst entries must
+    // outlive the lowering call.
+    let saved_subst = push_assignment_annotation_subst(compiler, stmt);
+    let result = lower_and_execute(compiler, stmt, function);
+    if let Some(saved) = saved_subst {
+        compiler.fn_lower.type_subst = saved;
+    }
+    result
+}
+
+/// Drive one statement through the new IR pipeline:
+/// [`expo_ir::Lowerer::lower_statement`] -> [`execute_instructions`]
+/// -> [`emit_terminator`]. Statements never reference cross-block
+/// SSA so `value_map` starts empty; the only IR block ids a
+/// statement-level terminator references today are loop-exit ids
+/// emitted by [`Statement::Break`], so the shim seeds `block_map`
+/// from [`crate::compiler::FnState::loop_exit_blocks`] -- the LLVM-
+/// bound twin of [`expo_ir::FnLowerState::loop_exit`] maintained by
+/// the loop emit walkers' `enter_loop` / `leave_loop` helpers.
+fn lower_and_execute<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    stmt: &Statement,
+    function: FunctionValue<'ctx>,
+) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+    let (instructions, terminator) = compiler.lowerer().lower_statement(stmt)?;
+    let block_map: HashMap<IRBlockId, inkwell::basic_block::BasicBlock<'ctx>> = compiler
+        .fn_state
+        .loop_exit_blocks
+        .iter()
+        .map(|(id, bb)| (*id, *bb))
+        .collect();
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    execute_instructions(
+        compiler,
+        &instructions,
+        function,
+        Some(&block_map),
+        &mut value_map,
+    )?;
+    if let Some(term) = terminator {
+        emit_terminator(compiler, &term, &block_map, &value_map, function)?;
+    }
+    Ok(None)
+}
+
+/// Mirror of legacy `compile_assignment`'s annotation-subst push.
+/// Returns the pre-push snapshot so the shim can restore it after the
+/// IR pipeline runs. Returns `None` for non-assignment statements,
+/// missing annotations, and annotations that resolve to no entries.
+fn push_assignment_annotation_subst<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    stmt: &Statement,
+) -> Option<HashMap<String, Type>> {
+    let Statement::Assignment {
+        type_annotation: Some(te),
+        ..
+    } = stmt
+    else {
+        return None;
+    };
+    let entries = resolve_annotation_subst(&compiler.lower_ctx(), te);
+    if entries.is_empty() {
+        return None;
+    }
+    let saved = compiler.fn_lower.type_subst.clone();
+    for (name, ty) in entries {
+        compiler.fn_lower.type_subst.insert(name, ty);
+    }
+    Some(saved)
+}
+
+/// Decide whether `stmt` requires the legacy `compile_assignment`
+/// path. Three AST shapes route there today (Slice 1):
+///
+/// 1. `Statement::Assignment` whose RHS is an [`ExprKind::List`]
+///    literal -- protocol-driven `from_list` coercion is deferred to
+///    Slice 3 (see [`compile_statement`]'s doc-comment).
+/// 2. `Statement::Assignment` against a destructuring [`Pattern`] --
+///    the Lowerer rejects them today; the legacy path also rejects
+///    them, so this fork preserves the pre-existing diagnostic.
+/// 3. `Statement::Assignment` without a type annotation --
+///    [`compile_expr`] computes the actual evaluated value type at
+///    codegen time (e.g. `addrs = match Socket.resolve(...) ...`
+///    settles `addrs` to `List<TCPAddr>`); the IR Lowerer can only
+///    consult the typecheck-time `expr.resolved_type`, which is
+///    `None` / `Type::Unknown` for many compound RHS shapes.
+///    Annotated assignments are safe -- the annotation pins the
+///    binding's type independent of RHS inference.
+fn needs_legacy_assignment_path(stmt: &Statement) -> bool {
+    let Statement::Assignment {
+        target,
+        value,
+        type_annotation,
+        ..
+    } = stmt
+    else {
+        return false;
+    };
+    if matches!(value.kind, ExprKind::List { .. }) {
+        return true;
+    }
+    if matches!(
+        target,
+        AssignTarget::Pattern(p) if !matches!(p, Pattern::Binding { .. })
+    ) {
+        return true;
+    }
+    type_annotation.is_none()
 }
 
 /// Compiles a let binding or reassignment, handling type annotations,
@@ -139,7 +246,7 @@ fn compile_assignment<'ctx>(
     } else if compiled_type != Type::Unknown {
         compiled_type
     } else {
-        infer_type_from_expr(compiler, value).unwrap_or(Type::Unknown)
+        infer_type_from_expr_codegen(compiler, value).unwrap_or(Type::Unknown)
     };
 
     let raw_val = if matches!(&value.kind, ExprKind::List { .. }) {
@@ -193,105 +300,6 @@ fn compile_assignment<'ctx>(
         }
     }
     Ok(())
-}
-
-/// Compiles `target += value` (and other compound assignment operators) by
-/// loading the current value, applying the operation, and storing the result.
-fn compile_compound_assign<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    target: &LValue,
-    op: &CompoundOp,
-    value: &Expr,
-    function: FunctionValue<'ctx>,
-) -> Result<(), String> {
-    let (ptr, target_type) = if target.segments.len() == 1 {
-        let name = &target.segments[0];
-        let (ptr, variable_type, _) = compiler
-            .fn_state
-            .variables
-            .get(name)
-            .ok_or_else(|| format!("undefined variable: {name}"))?
-            .clone();
-        (ptr, variable_type)
-    } else {
-        field_ptr(compiler, &target.segments)?
-    };
-
-    let llvm_type = to_llvm_type(&target_type, compiler.context, &compiler.llvm_types)
-        .ok_or("cannot load variable of unsupported type")?;
-    let current = compiler.builder.build_load(llvm_type, ptr, "cur").unwrap();
-    let rhs = compile_expr(compiler, value, function)?
-        .ok_or("compound assignment value produced no value")?
-        .value;
-    let rhs = coerce_numeric(compiler, rhs, &target_type);
-
-    let shape = if current.is_float_value() && rhs.is_float_value() {
-        OperandShape::Float
-    } else if current.is_int_value() && rhs.is_int_value() {
-        OperandShape::Integer {
-            bit_width: current.into_int_value().get_type().get_bit_width(),
-        }
-    } else {
-        return Err("compound assignment requires matching numeric types".to_string());
-    };
-
-    let resolved = resolve_compound_op(op, &shape)?;
-    let result = apply_compound_op(compiler, &resolved, current, rhs);
-    compiler.builder.build_store(ptr, result).unwrap();
-
-    Ok(())
-}
-
-/// Applies a resolved compound operation (e.g. `IntAdd`, `FloatMul`) to two
-/// LLVM values and returns the result.
-fn apply_compound_op<'ctx>(
-    compiler: &Compiler<'ctx>,
-    resolved: &ResolvedCompoundOp,
-    lhs: BasicValueEnum<'ctx>,
-    rhs: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    match resolved {
-        ResolvedCompoundOp::FloatAdd => compiler
-            .builder
-            .build_float_add(lhs.into_float_value(), rhs.into_float_value(), "cfadd")
-            .unwrap()
-            .into(),
-        ResolvedCompoundOp::FloatDiv => compiler
-            .builder
-            .build_float_div(lhs.into_float_value(), rhs.into_float_value(), "cfdiv")
-            .unwrap()
-            .into(),
-        ResolvedCompoundOp::FloatMul => compiler
-            .builder
-            .build_float_mul(lhs.into_float_value(), rhs.into_float_value(), "cfmul")
-            .unwrap()
-            .into(),
-        ResolvedCompoundOp::FloatSub => compiler
-            .builder
-            .build_float_sub(lhs.into_float_value(), rhs.into_float_value(), "cfsub")
-            .unwrap()
-            .into(),
-        ResolvedCompoundOp::IntAdd => compiler
-            .builder
-            .build_int_add(lhs.into_int_value(), rhs.into_int_value(), "cadd")
-            .unwrap()
-            .into(),
-        ResolvedCompoundOp::IntDiv => compiler
-            .builder
-            .build_int_signed_div(lhs.into_int_value(), rhs.into_int_value(), "cdiv")
-            .unwrap()
-            .into(),
-        ResolvedCompoundOp::IntMul => compiler
-            .builder
-            .build_int_mul(lhs.into_int_value(), rhs.into_int_value(), "cmul")
-            .unwrap()
-            .into(),
-        ResolvedCompoundOp::IntSub => compiler
-            .builder
-            .build_int_sub(lhs.into_int_value(), rhs.into_int_value(), "csub")
-            .unwrap()
-            .into(),
-    }
 }
 
 /// Emits the GEP chain for a dotted field path (`self.span.start.line`) and
@@ -491,188 +499,18 @@ pub(crate) fn apply_coercion<'ctx>(
     }
 }
 
-/// Attempts to derive the Expo type directly from the expression AST. Returns
-/// `Some(Type::Function{..})` for closures so the variable is stored with the
-/// correct callable type rather than being misidentified as a string pointer.
-fn infer_type_from_expr(compiler: &Compiler, expr: &Expr) -> Option<Type> {
-    if let ExprKind::MethodCall {
-        receiver,
-        method,
-        args,
-        ..
-    } = &expr.kind
-    {
-        if let ExprKind::Ident {
-            name: type_name, ..
-        } = &receiver.kind
-        {
-            let is_type_name = resolve_name_current(&compiler.lower_ctx(), type_name).is_some();
-            if is_type_name {
-                return infer_static_method_return_type(compiler, type_name, method, args);
-            }
-
-            if let Some((_, receiver_type, _)) = compiler.fn_state.variables.get(type_name)
-                && matches!(receiver_type, Type::Primitive(_))
-            {
-                let ret = infer_instance_method_return_type(compiler, receiver_type, method);
-                if ret.is_some() {
-                    return ret;
-                }
-            }
-        }
-
-        let receiver_type = infer_receiver_type(compiler, receiver);
-        if let Some(ref resolved_type) = receiver_type
-            && matches!(resolved_type, Type::Primitive(_))
-        {
-            let ret = infer_instance_method_return_type(compiler, resolved_type, method);
-            if ret.is_some() {
-                return ret;
-            }
-        }
-    }
-    if let ExprKind::Closure {
-        params,
-        return_type,
-        ..
-    } = &expr.kind
-    {
-        let param_types: Vec<Type> = params
-            .iter()
-            .map(|closure_param| match closure_param {
-                ClosureParam::Name {
-                    type_expr: Some(type_expression),
-                    ..
-                } => resolve_type_expr(&compiler.lower_ctx(), type_expression),
-                _ => Type::Primitive(Primitive::I32),
-            })
-            .collect();
-        let ret = match return_type {
-            Some(type_expression) => resolve_type_expr(&compiler.lower_ctx(), type_expression),
-            None => Type::Unit,
-        };
-        return Some(Type::Function {
-            params: param_types.into_iter().map(FnParam::borrow).collect(),
-            return_type: Box::new(ret),
-        });
-    }
-    if let ExprKind::Ident { name, .. } = &expr.kind
-        && let Some(sig) = compiler.type_ctx.function_sig(name)
-        && sig.type_params.is_empty()
-    {
-        return Some(Type::Function {
-            params: sig.params.iter().map(FnParam::from).collect(),
-            return_type: Box::new(sig.return_type.clone()),
-        });
-    }
-    if let ExprKind::Call { callee, .. } = &expr.kind
-        && let ExprKind::Ident { name, .. } = &callee.kind
-        && let Some(sig) = compiler.type_ctx.function_sig(name)
-        && sig.type_params.is_empty()
-    {
-        return Some(sig.return_type.clone());
-    }
-    if matches!(&expr.kind, ExprKind::Receive { .. }) {
-        return compiler.fn_lower.process_msg_type.clone();
-    }
-    if let ExprKind::Binary {
-        op: BinOp::Concat,
-        left,
-        ..
-    } = &expr.kind
-    {
-        return infer_type_from_expr(compiler, left).or_else(|| {
-            if let ExprKind::Ident { name, .. } = &left.kind {
-                compiler
-                    .fn_state
-                    .variables
-                    .get(name)
-                    .map(|(_, variable_type, _)| variable_type.clone())
-            } else if matches!(&left.kind, ExprKind::BinaryLiteral { .. }) {
-                Some(Type::Primitive(Primitive::Binary))
-            } else {
-                None
-            }
-        });
-    }
-    None
-}
-
-/// Looks up the return type of an instance method on a given receiver type.
-fn infer_instance_method_return_type(
-    compiler: &Compiler,
-    receiver_type: &Type,
-    method: &str,
-) -> Option<Type> {
-    match receiver_type {
-        Type::Primitive(primitive) => compiler
-            .type_ctx
-            .find_type(primitive.display())
-            .and_then(|type_info| type_info.functions.get(method))
-            .map(|sig| sig.return_type.clone()),
-        Type::Named {
-            identifier,
-            type_args,
-        } => {
-            if type_args.is_empty() {
-                compiler
-                    .type_ctx
-                    .get_type(identifier)
-                    .and_then(|type_info| type_info.functions.get(method))
-                    .map(|sig| sig.return_type.clone())
-            } else {
-                let (methods, type_params) = compiler
-                    .type_ctx
-                    .get_type(identifier)
-                    .map(|type_info| (&type_info.functions, &type_info.type_params))?;
-                let sig = methods.get(method)?;
-                let subst: HashMap<String, Type> = type_params
-                    .iter()
-                    .zip(type_args.iter())
-                    .map(|(type_param, type_arg)| (type_param.name.clone(), type_arg.clone()))
-                    .collect();
-                Some(substitute(&sig.return_type, &subst))
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Infers the Expo type of a receiver expression without compiling it.
-fn infer_receiver_type(compiler: &Compiler, expr: &Expr) -> Option<Type> {
-    match &expr.kind {
-        ExprKind::String { .. } => Some(Type::Primitive(Primitive::String)),
-        ExprKind::Literal { value, .. } => match value {
-            Literal::Int(_) => Some(Type::Primitive(Primitive::I64)),
-            Literal::Float(_) => Some(Type::Primitive(Primitive::F64)),
-            Literal::Bool(_) => Some(Type::Primitive(Primitive::Bool)),
-            Literal::String(_) => Some(Type::Primitive(Primitive::String)),
-            Literal::Unit => Some(Type::Unit),
-        },
-        ExprKind::Ident { name, .. } => compiler
-            .fn_state
-            .variables
-            .get(name)
-            .map(|(_, variable_type, _)| variable_type.clone()),
-        ExprKind::MethodCall {
-            receiver, method, ..
-        } => {
-            let receiver_type = infer_receiver_type(compiler, receiver)?;
-            infer_instance_method_return_type(compiler, &receiver_type, method)
-        }
-        ExprKind::Call { callee, .. } => {
-            if let ExprKind::Ident { name, .. } = &callee.kind {
-                compiler
-                    .type_ctx
-                    .functions
-                    .get(name)
-                    .map(|sig| sig.return_type.clone())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+/// Codegen-side wrapper around [`expo_ir::lower::inference::infer_type_from_expr`]
+/// that bridges the IR helper to the LLVM-bound `Compiler.fn_state.variables`
+/// map via a closure. The IR module is the canonical owner of the inference
+/// logic (it lives in [`crate::lowerer`]); this wrapper exists only because
+/// the legacy [`compile_assignment`] path still needs it during the Slice 1
+/// transition.
+fn infer_type_from_expr_codegen(c: &Compiler, expr: &Expr) -> Option<Type> {
+    ir_infer_type_from_expr(
+        &c.lower_ctx(),
+        &|name: &str| c.fn_state.variables.get(name).map(|(_, ty, _)| ty.clone()),
+        expr,
+    )
 }
 
 /// When a list literal `[a, b, c]` is assigned to a non-List type that
@@ -739,51 +577,4 @@ fn statement_span(stmt: &Statement) -> Span {
 /// Extracts the source span from an expression.
 fn expr_span(expr: &Expr) -> Span {
     expr.span
-}
-
-/// Determines ownership semantics for an assigned value based on its
-/// expression kind and type (e.g. string literals are unowned, constructed
-/// values are owned).
-fn ownership_for_expr(expr: &Expr, assigned_type: &Type) -> Ownership {
-    if is_concat_expr(expr) {
-        return Ownership::Owned;
-    }
-    if matches!(
-        assigned_type,
-        Type::Primitive(Primitive::Binary) | Type::Primitive(Primitive::Bits)
-    ) {
-        return match &expr.kind {
-            ExprKind::BinaryLiteral { .. } => Ownership::Owned,
-            ExprKind::Receive { .. } => Ownership::Owned,
-            _ => Ownership::Unowned,
-        };
-    }
-    if !matches!(assigned_type, Type::Primitive(Primitive::String)) {
-        return Ownership::Owned;
-    }
-    match &expr.kind {
-        ExprKind::String { parts, .. } => {
-            let has_interpolation = parts
-                .iter()
-                .any(|part| matches!(part, StringPart::Interpolation { .. }));
-            if has_interpolation {
-                Ownership::Owned
-            } else {
-                Ownership::Unowned
-            }
-        }
-        ExprKind::Receive { .. } => Ownership::Owned,
-        _ => Ownership::Unowned,
-    }
-}
-
-/// Returns `true` if the expression is a binary concat operation (`<>`).
-fn is_concat_expr(expr: &Expr) -> bool {
-    matches!(
-        &expr.kind,
-        ExprKind::Binary {
-            op: BinOp::Concat,
-            ..
-        }
-    )
 }

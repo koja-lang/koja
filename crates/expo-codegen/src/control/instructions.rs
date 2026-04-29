@@ -24,14 +24,16 @@ use std::collections::HashMap;
 use expo_ast::ast::BinarySegment;
 use expo_ir::IRBlockId;
 use expo_ir::identity::FunctionIdentifier;
-use expo_ir::resolved::fields::ResolvedChain;
+use expo_ir::resolved::fields::{ResolvedChain, ResolvedFieldStep};
 use expo_ir::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 use expo_ir::resolved::patterns::ResolvedLiteral;
 use expo_ir::values::{IRInstruction, IROperand, IRValueId};
 use expo_typecheck::types::Type;
 use inkwell::AddressSpace;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PhiValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PhiValue, PointerValue,
+};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::binary::patterns::compile_binary_pattern;
@@ -40,7 +42,7 @@ use crate::control::patterns::{lookup_enum_struct_type, match_values, resolve_pa
 use crate::drop::Ownership;
 use crate::expr::compile_expr;
 use crate::ops::truncate_to_common_width;
-use crate::stmt::coerce_numeric;
+use crate::stmt::{coerce_numeric, compile_union_wrap};
 use crate::structs::{emit_chain_field_access, emit_field_load, load_maybe_indirect};
 use crate::types::to_llvm_type;
 
@@ -259,16 +261,53 @@ pub(crate) fn execute_instructions<'ctx>(
                 let value = emit_phi(compiler, incomings, ty, blocks, value_map)?;
                 Some((*dest, value))
             }
+            IRInstruction::StoreField {
+                base_name,
+                base_type,
+                steps,
+                value,
+                ty,
+            } => {
+                let val = materialize_operand(compiler, value, value_map)?;
+                emit_store_field(compiler, base_name, base_type, steps, val, ty)?;
+                None
+            }
+            IRInstruction::StoreLocal {
+                name,
+                value,
+                ty,
+                is_decl,
+                ownership,
+            } => {
+                let val = materialize_operand(compiler, value, value_map)?;
+                emit_store_local(compiler, name, val, ty, *is_decl, *ownership)?;
+                None
+            }
             IRInstruction::Stub { dest, expr } => {
-                let value = compile_expr(compiler, expr, function)?
-                    .ok_or("instruction stub expression produced no value")?
-                    .value;
-                Some((*dest, value))
+                // Statement-context Stubs (e.g. lowered from
+                // [`expo_ast::ast::Statement::Expr`]) discard their
+                // result; void-returning calls like `print(...)` make
+                // `compile_expr` return `Ok(None)` and that is fine --
+                // we just skip the value_map insert. If a downstream
+                // instruction references this `dest`, the lookup
+                // failure in `materialize_operand` becomes the
+                // informative diagnostic.
+                compile_expr(compiler, expr, function)?.map(|tv| (*dest, tv.value))
             }
             IRInstruction::UnaryOp { dest, op, operand } => {
                 let v = materialize_operand(compiler, operand, value_map)?;
                 let value = emit_unary_op(compiler, op, v)?;
                 Some((*dest, value))
+            }
+            IRInstruction::UnionWrap {
+                dest,
+                value,
+                source_ty,
+                target_union,
+            } => {
+                let val = materialize_operand(compiler, value, value_map)?;
+                let wrapped = compile_union_wrap(compiler, val, source_ty, target_union)?;
+                Some((*dest, wrapped))
             }
         };
         if let Some((dest, value)) = entry {
@@ -900,4 +939,100 @@ fn emit_pattern_binary_match<'ctx>(
 ) -> Result<IntValue<'ctx>, String> {
     let subject = materialize_ptr_operand(c, subject_ptr, value_map, "PatternBinaryMatch")?;
     compile_binary_pattern(c, segments, subject, function)
+}
+
+/// Walk the resolved field chain attached to [`IRInstruction::StoreField`],
+/// GEPing through `base_name`'s pointer along each [`ResolvedFieldStep`]
+/// to produce the final field's pointer. Returns the pointer plus the
+/// resolved field type for downstream store-coercion. The lowering-side
+/// resolver (`expo_ir::lower::stmt::resolve_field_path`) has already
+/// validated the chain; this helper is pure GEP emission and replaces
+/// the legacy `field_ptr` in `stmt.rs`.
+fn walk_field_chain<'ctx>(
+    c: &Compiler<'ctx>,
+    base_name: &str,
+    base_type: &Type,
+    steps: &[ResolvedFieldStep],
+) -> Result<(PointerValue<'ctx>, Type), String> {
+    let (mut ptr, _, _) = c
+        .fn_state
+        .variables
+        .get(base_name)
+        .cloned()
+        .ok_or_else(|| format!("StoreField: undefined variable `{base_name}`"))?;
+
+    let mut current_type = base_type.clone();
+    for (i, step) in steps.iter().enumerate() {
+        let struct_type = to_llvm_type(&current_type, c.context, &c.llvm_types)
+            .map(|t| t.into_struct_type())
+            .ok_or_else(|| format!("StoreField: unknown struct type at segment {i}"))?;
+        ptr = c
+            .builder
+            .build_struct_gep(
+                struct_type,
+                ptr,
+                step.field_index,
+                &format!("{base_name}_field{i}"),
+            )
+            .unwrap();
+        current_type = step.field_type.clone();
+    }
+    Ok((ptr, current_type))
+}
+
+/// Emit an [`IRInstruction::StoreField`]: walk the resolved field chain
+/// to the final slot, coerce `val` to the slot's resolved type, and
+/// emit the store. Mirrors the legacy `compile_field_assignment` body.
+fn emit_store_field<'ctx>(
+    c: &mut Compiler<'ctx>,
+    base_name: &str,
+    base_type: &Type,
+    steps: &[ResolvedFieldStep],
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<(), String> {
+    let (ptr, _) = walk_field_chain(c, base_name, base_type, steps)?;
+    let store_val = coerce_numeric(c, val, ty);
+    c.builder.build_store(ptr, store_val).unwrap();
+    Ok(())
+}
+
+/// Emit an [`IRInstruction::StoreLocal`]: for fresh let-bindings
+/// (`is_decl == true`), allocate an entry-block alloca sized to `ty`
+/// and register the binding in `fn_state.variables` with the lowered
+/// `ownership`. For reassignments, look up the existing alloca and
+/// store after coercing to the existing variable's type. Mirrors the
+/// legacy `compile_assignment` single-segment branch -- list-literal
+/// `from_list` coercion and `apply_coercion` (union widening) are
+/// pre-applied at lowering as [`IRInstruction::UnionWrap`] or routed
+/// through the [`crate::compile_statement`] shim's legacy fallback.
+fn emit_store_local<'ctx>(
+    c: &mut Compiler<'ctx>,
+    name: &str,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+    is_decl: bool,
+    ownership: Option<Ownership>,
+) -> Result<(), String> {
+    if is_decl {
+        let alloca_type = to_llvm_type(ty, c.context, &c.llvm_types).unwrap_or(val.get_type());
+        let alloca = c.build_entry_alloca(alloca_type, name);
+        let store_val = coerce_numeric(c, val, ty);
+        c.builder.build_store(alloca, store_val).unwrap();
+        c.fn_state.variables.insert(
+            name.to_string(),
+            (alloca, ty.clone(), ownership.unwrap_or(Ownership::Owned)),
+        );
+        return Ok(());
+    }
+
+    let (ptr, var_ty, _) = c
+        .fn_state
+        .variables
+        .get(name)
+        .cloned()
+        .ok_or_else(|| format!("StoreLocal: undefined variable `{name}`"))?;
+    let store_val = coerce_numeric(c, val, &var_ty);
+    c.builder.build_store(ptr, store_val).unwrap();
+    Ok(())
 }

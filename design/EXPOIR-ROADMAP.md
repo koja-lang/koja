@@ -11,28 +11,38 @@ SIL-style design prose and the full Wave 1-17 narrative live in
 ## 1. Status snapshot
 
 The instruction-level scaffold has landed. `IRProgram` is the canonical
-declaration registry. Fourteen `Lowerer<'a>` lift methods cover sixteen
+declaration registry. Fifteen `Lowerer<'a>` lift methods (adding
+`lower_statement` / `lower_statements` in Slice 1) cover nineteen
 typed `IRInstruction` variants. Six constructs (`unless`, `if`-no-else,
 `if`/`else`, ternary, `cond`, `match`) run end-to-end through the full
 IR pipeline today; three call families (`Call`, static call, method
 call) plus `FieldChain` / `FieldLoad`, `LoadLocal` / `LoadConst` /
-`MakeFnRef`, `BinaryOp`, `UnaryOp`, and the six pattern primitives
+`MakeFnRef`, `BinaryOp`, `UnaryOp`, the six pattern primitives
 (`PatternTagEq`, `PatternLiteralEq`, `PatternProjectVariantField`,
-`PatternUnionPayloadPtr`, `PatternBindFromPtr`, `PatternBinaryMatch`)
-reach typed instructions when consumed via the codegen wrappers'
-lift-then-fallthrough paths. The IR-level value-merging primitive
-(`IRInstruction::Phi`) is in place and load-bearing for ternary
-(pre-staged at lowering), `if`/`else`, `cond`, and `match` (synthesized
-at emit time when arm-body trailing-expression values surface).
+`PatternUnionPayloadPtr`, `PatternBindFromPtr`, `PatternBinaryMatch`),
+and the three statement primitives from Slice 1 (`StoreLocal`,
+`StoreField`, `UnionWrap`) reach typed instructions when consumed via
+the codegen wrappers' lift-then-fallthrough paths. The IR-level
+value-merging primitive (`IRInstruction::Phi`) is in place and
+load-bearing for ternary (pre-staged at lowering), `if`/`else`,
+`cond`, and `match` (synthesized at emit time when arm-body
+trailing-expression values surface). `IRTerminator::Return` joins
+`Branch` / `CondBranch` / `Unreachable` so `Statement::Return`
+finishes a basic block in IR rather than emitting a codegen-side
+`build_return`.
 
 What we do _not_ have yet:
 
 - `IRBasicBlock` is owned per-construct (`IRUnless`, `IRIf`) instead of
   free-floating on `IRFunction`.
 - `IRFunction` still carries `expo_ast::ast::Function` AST bodies.
-- `compile_statement` and `compile_function_body` walk AST end-to-end.
+- `compile_function_body` and `compile_method_body` walk AST
+  end-to-end (`compile_statement` is now a thin shim that drives the
+  IR pipeline; see Phase 4g Slice 1).
 - The `IRInstruction::Stub` bridge is alive (single producer:
-  `Lowerer::lower_expr_to_operand`).
+  `Lowerer::lower_expr_to_operand`); now tolerates void-returning
+  expressions so statement-context discards (`print(...)`) round-trip
+  through the IR path.
 - ~12 constructs still go AST -> LLVM with no IR touchpoint at all
   (the full list is in section 3a).
 
@@ -259,6 +269,87 @@ are summarized inline below.
   and tail-call optimization is honest IR data: the `tail`
   field on the call instruction names what previously took an
   ambient walk-state flag and three accessor pairs to express.
+- **Phase 4g Slice 1 -- statement vocabulary in IR (done, Wave 26).**
+  `Statement::Expr`, `Statement::Assignment` (annotated, single-segment
+  or multi-segment lvalue, non-list non-destructure RHS),
+  `Statement::CompoundAssign`, `Statement::Return`, and
+  `Statement::Break` lift onto the
+  `Lowerer::lower_statement` + `execute_instructions` +
+  `emit_terminator` pipeline. Three new `IRInstruction` variants land:
+  `StoreLocal { name, value, ty, is_decl, ownership }` covers
+  alloca+store for fresh let-bindings (with `Ownership` -- itself
+  moved into `expo-ir` -- pre-classified at lowering time) and
+  reassignments to existing slots; `StoreField { base_name,
+  base_type, steps, value, ty }` walks the `ResolvedFieldStep`
+  chain shared with `IRInstruction::FieldChain` to assign multi-
+  segment lvalues; `UnionWrap { dest, value, source_ty,
+  target_union }` lifts the recorded `Coercion::UnionWiden` so the
+  store's right-hand operand is union-wrapped at the IR level
+  rather than at the codegen seam. New
+  `IRTerminator::Return { value: Option<IROperand>, drop_skip: Option<String> }`
+  replaces the codegen-side `build_return` pair; the executor
+  performs the `drop_live_variables` walk before emitting the LLVM
+  return and short-circuits to a no-op when the block was already
+  terminated by a TCO back-edge. `IRInstruction::dest()` returns
+  `None` for `StoreField` / `StoreLocal` / `PatternBindFromPtr` and
+  `Some(*dest)` for `UnionWrap`. The legacy ambient
+  `loop_exit_stack: Vec<BasicBlock>` on `FnState` retires in favor
+  of paired stacks: `FnLowerState.loop_exit: Vec<IRBlockId>`
+  (semantic, used by Slice 1's `lower_break_stmt` to mint the
+  `Branch(exit_id)` terminator) and
+  `FnState.loop_exit_blocks: Vec<(IRBlockId, BasicBlock<'ctx>)>`
+  (LLVM-bound, seeded into the shim's `block_map` so `Break`
+  terminators resolve). Loop emit walkers' new `enter_loop` /
+  `leave_loop` helpers push / pop both stacks in lockstep.
+  Pure-semantic helpers (`ownership_for_expr`, `infer_type_from_expr`
+  and its supporting `infer_static_method_return_type` /
+  `infer_instance_method_return_type` / `infer_receiver_type`) move
+  from `expo-codegen::stmt` into
+  `expo-ir::lower::{ownership, inference}`; codegen retains a thin
+  `infer_type_from_expr_codegen` wrapper that bridges
+  `Compiler.fn_state.variables` to the IR helper through the
+  existing `LocalBindings`-style closure pattern.
+  `compile_statement` is now a thin shim: it pushes annotation-
+  derived `type_subst` entries (so `IRInstruction::Stub`'s
+  deferred `compile_expr` sees `T = Int` for
+  `list: List<Int> = List.new()`-style sites), seeds `block_map`
+  from `loop_exit_blocks`, then dispatches via `lower_statement`
+  -> `execute_instructions` -> `emit_terminator`. Three
+  transitional AST shapes still fork to a slimmed legacy
+  `compile_assignment`: (1) RHS is `ExprKind::List` literal --
+  the protocol-driven `from_list` coercion (e.g.
+  `Set<Int> = [1, 2, 3]`) is deferred to Slice 3 because the
+  on-demand `monomorphize_impl_method` it triggers is LLVM-bound
+  and the alternatives (mangled-symbol string lookup in the
+  executor; a `Monomorphizer` callback into codegen during
+  lowering) both push against Phase 4g's end-state of "codegen
+  consumes a closed `IRProgram`"; (2) destructuring `Pattern`
+  targets, which the Lowerer rejects today (preserving the
+  existing diagnostic surface); (3) unannotated assignments,
+  where the legacy `compile_expr` computes the actual evaluated
+  type at codegen time (`addrs = match Socket.resolve(...) ...`
+  settling to `List<TCPAddr>`) but the IR Lowerer can only
+  consult `expr.resolved_type` (often `None` / `Type::Unknown`
+  for compound RHS shapes). All three retire when the
+  elaboration pass arrives in Slice 3. The legacy
+  `compile_compound_assign` / `apply_compound_op` /
+  `compile_field_assignment` / `field_ptr` / local `infer_*` /
+  `ownership_for_expr` helpers are deleted (~250 LOC);
+  `apply_coercion` survives only because the legacy list-literal
+  fork still calls it. New executor arms (`emit_store_local`,
+  `emit_store_field`, `walk_field_chain`) and the new `Return`
+  terminator arm round out the codegen side. The `Stub` arm is
+  relaxed to tolerate `compile_expr` returning `Ok(None)` for
+  void-returning calls (statement-context discards like
+  `print(...)`); a downstream reference to the absent `dest`
+  becomes a clear `materialize_operand` lookup miss rather than
+  a strict `ok_or` panic. **Outcome.** Five of six `Statement`
+  variants flow through the IR pipeline; `Statement::Assignment`'s
+  three unsupported shapes are tagged for Slice 3 retirement.
+  The IR surface gained two structural primitives (`StoreLocal` /
+  `StoreField`) and one new terminator (`Return`) that Slice 2
+  (per-construct body lift) and Slice 3 (function-body lift)
+  build on directly.
 
 ---
 
@@ -291,9 +382,11 @@ to plan a slice.
 | `while`                     | Full IR pipeline            | `Lowerer::lower_while` -> `IRWhile` -> `emit_while_unified` (header `IRInstruction`s + `CondBranch` terminator + body back-edge `Branch`; body remains AST stub until Phase 4g)                                                                                                                                                                                                              |
 | `loop`                      | Full IR pipeline            | `Lowerer::lower_loop` -> `IRLoop` -> `emit_loop_unified` (single body block + `Branch` back-edge; body remains AST stub until Phase 4g)                                                                                                                                                                                                                                                      |
 | `for`                       | Full IR pipeline            | `Lowerer::lower_for` -> `IRFor` -> `emit_for_unified` (header / body / exit blocks + idx/iterable allocas in shared `value_map`; iterator-protocol desugar -- `length()` / `get()` / `Option` unwrap / pattern bind -- kept whole at the IR seam, broken into ≤40-LOC helpers)                                                                                                               |
-| `break` / `return`          | AST -> LLVM                 | Phase 4g (statement lowering); loops expose `exit_block` so AST `break` still resolves through `loop_exit_stack`                                                                                                                                                                                                                                                                             |
-| `assignment` / compound     | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                                                                                                                                                                                                                                                                                |
-| `field_assignment`          | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                                                                                                                                                                                                                                                                                |
+| `break` / `return`          | Full IR pipeline            | `Statement::Break` -> `IRTerminator::Branch(loop_exit_id)` (resolved via `FnLowerState.loop_exit` at lowering, paired `FnState.loop_exit_blocks` at emit); `Statement::Return` -> `IRTerminator::Return { value, drop_skip }` with executor-side `drop_live_variables` walk and TCO short-circuit                                                                                            |
+| `assignment` (annotated)    | Full IR pipeline            | `Lowerer::lower_assignment_stmt` -> `IRInstruction::StoreLocal` / `StoreField` (preceded by optional `IRInstruction::UnionWrap` for recorded `Coercion::UnionWiden`); `compile_statement` shim pushes annotation-derived `type_subst` around lowering + execution so deferred `Stub` evaluation sees the entries                                                                            |
+| `assignment` (other shapes) | Legacy fork                 | Three transitional shapes route through legacy `compile_assignment`: `ExprKind::List` RHS (protocol `from_list` coercion -- Slice 3), destructuring `Pattern` target (Lowerer rejects), and unannotated RHS (codegen-time inference required for compound shapes like `match` / `cond` value)                                                                                                |
+| `compound_assign`           | Full IR pipeline            | `Lowerer::lower_compound_assign_stmt` -> load-current + `IRInstruction::BinaryOp` + `StoreLocal` / `StoreField` (single ordered instruction stream, no extra terminator)                                                                                                                                                                                                                    |
+| `field_assignment`          | Full IR pipeline            | Multi-segment lvalue assignments lower to `IRInstruction::StoreField` (executor walks the resolved chain via the new `walk_field_chain` helper that ports the legacy `field_ptr`)                                                                                                                                                                                                           |
 | Binary pattern              | Instruction-only            | `PatternBinaryMatch` wraps `compile_binary_pattern` whole at IR seam (multi-block algorithm; no further decomposition planned)                                                                                                                                                                                                                                                               |
 | Struct construction         | AST -> LLVM                 | Phase 4h                                                                                                                                                                                                                                                                                                                                                                                     |
 | Enum construction           | AST -> LLVM                 | Phase 4h                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -398,6 +491,25 @@ Vec<(IRBlockId, IROperand)>` ties merge-time values to their
   `Compiler::lowerer` constructor. Keeps `expo-ir` LLVM-free without
   forcing a parallel binding mirror -- the codegen-side variables map
   remains the source of truth.
+- `Lowerer::lower_statement` / `lower_statements` in
+  [`expo-ir::lower::statements`](../crates/expo-ir/src/lower/statements.rs)
+  -- the single statement-lowering seam introduced by Phase 4g
+  Slice 1. Returns `(Vec<IRInstruction>, Option<IRTerminator>)`;
+  the terminator is `Some` only for `Return` / `Break`. Driven
+  today by the `compile_statement` shim and slated to drive the
+  per-construct body lift in Slice 2 and the function-body lift in
+  Slice 3.
+- [`expo-ir::FnLowerState.loop_exit`](../crates/expo-ir/src/fn_state.rs)
+  paired with
+  [`FnState.loop_exit_blocks`](../crates/expo-codegen/src/compiler.rs)
+  -- the dual stack the loop emit walkers maintain via `enter_loop` /
+  `leave_loop`. The IR-side `Vec<IRBlockId>` lets `Lowerer::lower_break_stmt`
+  resolve the target block id at lowering time; the LLVM-bound
+  `Vec<(IRBlockId, BasicBlock<'ctx>)>` twin lets the
+  `compile_statement` shim seed `block_map` so the `Branch(exit_id)`
+  terminator resolves at emit time. Slice 2 retires the codegen
+  twin once loop bodies are block-shaped (back-edge / break
+  terminators pre-resolve at lowering).
 
 ---
 
@@ -764,26 +876,312 @@ x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
 
 The structural cut. `IRFunction` stops carrying
 `expo_ast::ast::Function` bodies and starts carrying
-`Vec<IRBasicBlock>`. `compile_statement`, `compile_function_body`,
-and `compile_method_body` lift to IR. Per-construct IR types
-(`IRUnless`, `IRIf`, the Slice-3 merge type) dissolve into the
-unified block representation; per-construct emit walkers
-(`emit_unless`, `emit_if`, etc.) retire in favor of one block
-walker. `closure_site_path` and `current_package` move off
-`Compiler` onto IR or lowering state. The two production
-`unreachable!()` sites (`closures.rs:53`, `expr.rs:301`) disappear
-as their ad-hoc fallback shapes become unreachable through the
-typed instruction set. `Compiler` becomes a pure consumer of
-`IRProgram`.
+`Vec<IRBasicBlock>`; `compile_statement`, `compile_function_body`,
+and `compile_method_body` lift to IR; the nine per-construct IR
+types (`IRUnless`, `IRIf`, `IRIfElse`, `IRTernary`, `IRCond`,
+`IRMatch`, `IRWhile`, `IRLoop`, `IRFor`) dissolve into free-floating
+basic blocks on `IRFunction`; per-construct emit walkers
+(`emit_unless`, `emit_if`, `emit_if_else`, `emit_cond`,
+`emit_ternary`, `emit_match_unified`, `emit_while_unified`,
+`emit_loop_unified`, `emit_for_unified`) retire in favor of one
+block walker. `Compiler` becomes a pure consumer of `IRProgram`
+with no per-module ambient state.
 
 This is the architectural moment the original SIL-style design
 called for and the moment "the lowering / emission split" finally
-lands. Slice 7 of the original construct ladder is folded in here
+lands. Slice 7 of the original construct ladder is folded in
 because it is the same structural change: there is no half-state
 where `IRFunction` carries both an AST body and a `Vec<IRBasicBlock>`.
+The dissolution of the nine per-construct types follows mature
+compiler precedent (Swift SIL, Rust MIR, GCC GIMPLE, LLVM IR all
+keep high-level _operations_ as instructions while dissolving
+high-level _control flow_ to CFG); the SIL-style operations that
+matter at the IR level have already been lifted to instructions
+(`PatternTagEq`, `PatternProjectVariantField`,
+`PatternUnionPayloadPtr`, `PatternBinaryMatch`, `Phi`), so the
+wrapper types carry no construct-identity that a backend or
+optimizer needs typed access to.
 
-**Done when** `expo-codegen` performs no AST traversal, `IRFunction`
-holds no AST, and per-construct emit walkers are deleted.
+Sequenced as four slices to keep cumulative LOC reviewable and
+isolate distinct risk surfaces (statement vocabulary vs body lift
+vs structural cut vs ambient-state retirement).
+
+- **Slice 1 -- Statement vocabulary in IR (Done, Wave 26).**
+  Five `Statement` variants flow through the new
+  `Lowerer::lower_statement` / `lower_statements` ->
+  `execute_instructions` -> `emit_terminator` pipeline:
+  `Statement::Expr` (lowered via `lower_expr_to_operand`,
+  discarding the operand and tolerating void-returning
+  `compile_expr` results in the relaxed `Stub` arm),
+  `Statement::CompoundAssign` (load-binop-store reusing
+  `IRInstruction::BinaryOp` plus the new `StoreLocal` /
+  `StoreField`), `Statement::Return` (new
+  `IRTerminator::Return { value: Option<IROperand>, drop_skip: Option<String> }`
+  with executor-side `drop_live_variables` walk and TCO short-
+  circuit), `Statement::Break` (bare `IRTerminator::Branch(exit_id)`
+  resolved through `FnLowerState.loop_exit` at lowering and
+  `FnState.loop_exit_blocks` at emit), and most
+  `Statement::Assignment` shapes -- specifically annotated single-
+  or multi-segment lvalues with non-list non-destructure RHS,
+  emitting `IRInstruction::StoreLocal { name, value, ty, is_decl, ownership }`
+  / `StoreField { base_name, base_type, steps, value, ty }`
+  preceded by an optional `IRInstruction::UnionWrap { dest, value, source_ty, target_union }`
+  for recorded `Coercion::UnionWiden`. `Ownership` itself moves
+  from `expo-codegen::drop` into `expo-ir::ownership` so the
+  enum is reachable from the LLVM-free Lowerer.
+  `loop_exit_stack: Vec<BasicBlock>` retires from `FnState` in
+  favor of paired stacks: `FnLowerState.loop_exit: Vec<IRBlockId>`
+  (semantic) and `FnState.loop_exit_blocks: Vec<(IRBlockId, BasicBlock<'ctx>)>`
+  (LLVM-bound, retained as the shim's `block_map` seed until
+  Slice 2 makes back-edge / break terminators block-pre-resolved
+  at lowering). Loop emit walkers' new `enter_loop` /
+  `leave_loop` helpers push / pop both stacks in lockstep. The
+  pure-semantic helpers `ownership_for_expr` and
+  `infer_type_from_expr` (with its supporting
+  `infer_static_method_return_type` /
+  `infer_instance_method_return_type` /
+  `infer_receiver_type`) move from `expo-codegen::stmt` into
+  `expo-ir::lower::{ownership, inference}`; codegen retains a
+  thin `infer_type_from_expr_codegen` wrapper that bridges
+  `Compiler.fn_state.variables` to the IR helper through the
+  existing `LocalBindings`-style closure pattern.
+  `compile_statement` becomes a thin shim that pushes annotation-
+  derived `type_subst` entries before lowering / executing the
+  statement (so `IRInstruction::Stub`'s deferred `compile_expr`
+  call sees `T = Int` for `list: List<Int> = List.new()`-style
+  sites), seeds the executor's `block_map` from
+  `loop_exit_blocks`, and dispatches via `lower_statement` ->
+  `execute_instructions` -> `emit_terminator`.
+  **Three transitional AST shapes still fork to a slimmed legacy
+  `compile_assignment`** and retire when the elaboration pass
+  arrives in Slice 3:
+  1. RHS is `ExprKind::List` literal -- the protocol-driven
+     `from_list` coercion (e.g. `Set<Int> = [1, 2, 3]`) is
+     deferred because the on-demand `monomorphize_impl_method` it
+     triggers is LLVM-bound. The two architectural alternatives
+     considered (mangled-symbol string lookup in the executor;
+     a `Monomorphizer` callback into codegen during lowering)
+     both push against Phase 4g's end-state of "codegen
+     consumes a closed `IRProgram`"; the right fix is a
+     pre-codegen elaboration pass that pre-monomorphizes the
+     `from_list` impl into `IRProgram` so the Lowerer can emit a
+     canonical `IRInstruction::MethodCall`. Lands alongside the
+     function-body lift in Slice 3.
+  2. Destructuring `Pattern` target -- the Lowerer rejects them
+     today (the legacy path also rejects them); the fork
+     preserves the pre-existing diagnostic surface until
+     destructuring patterns get proper IR support.
+  3. Unannotated assignment -- the legacy `compile_expr`
+     computes the actual evaluated type at codegen time
+     (e.g. `addrs = match Socket.resolve(...) ...` settling to
+     `List<TCPAddr>`) but the IR Lowerer can only consult
+     `expr.resolved_type`, which is `None` / `Type::Unknown`
+     for many compound RHS shapes. Annotated assignments are
+     safe -- the annotation pins the binding's type
+     independent of RHS inference. Slice 3's elaboration pass
+     gives lowering the same codegen-time type the legacy
+     path computes, retiring this fork too.
+  Codegen-side helpers deleted: `compile_compound_assign` /
+  `apply_compound_op` / `compile_field_assignment` / `field_ptr`
+  plus the local `infer_*` / `ownership_for_expr` /
+  `is_concat_expr` duplicates and the
+  `structs::infer_static_method_return_type` wrapper (~250 LOC
+  net). New executor arms (`emit_store_local`, `emit_store_field`,
+  `walk_field_chain`) and the new `Return` terminator arm round
+  out the codegen side. `IRInstruction::dest()` returns `None`
+  for `StoreField` / `StoreLocal` / `PatternBindFromPtr` and
+  `Some(*dest)` for `UnionWrap`. The `Stub` arm now tolerates
+  `compile_expr` returning `Ok(None)` (statement-context discards
+  like `print(...)`); a downstream reference to the absent
+  `dest` becomes a clear `materialize_operand` lookup miss
+  rather than a strict `ok_or` panic.
+  Per-binding `Drop` instructions (the original Slice 1 plan's
+  `IRInstruction::DropLiveVariables` synthetic) **moved out of
+  this slice** -- the `drop_live_variables` walk lives in the
+  `Return` terminator's executor arm today, and the per-binding
+  drop lift is Phase 6 (ownership) work where it belongs.
+  **Outcome.** Five of six `Statement` variants flow through the
+  IR pipeline; the three transitional `Assignment` forks are
+  scoped for Slice 3 retirement. The IR surface gains two
+  structural primitives (`StoreLocal` / `StoreField`), one
+  coercion primitive (`UnionWrap`), and one terminator
+  (`Return`) that Slice 2 (per-construct body lift) and Slice 3
+  (function-body lift) build on directly. Validation: 25/25
+  lang tests, 246/246 stdlib tests, zero clippy warnings.
+
+- **Slice 2 -- Per-construct body block lift.** Each per-construct
+  IR type's `body_stmts: Vec<Statement>` (and `IRCond.else_stmts`,
+  `IRMatchArm.body_stmts`) becomes an IR-level basic block
+  populated by `lower_statements` from Slice 1.
+  `compile_body_as_value` retires; per-construct emit walkers stop
+  calling `compile_statement` and walk the lowered block(s) via
+  `execute_instructions` + `emit_terminator`. The mechanical shape
+  is one-for-one across the eight constructs that still carry AST
+  stubs (`IRUnless`, `IRIf`, `IRIfElse`, `IRCond` arm + else
+  bodies, `IRMatch` arm bodies, `IRWhile`, `IRLoop`, `IRFor`):
+  each construct's struct keeps its block ids and terminators;
+  the `body_stmts` field becomes `body_block: IRBlockId` plus an
+  `IRBasicBlock` materialized into a per-construct `body_blocks:
+Vec<IRBasicBlock>` (or held as a flat `Vec<IRBasicBlock>`
+  tied to the construct's id range). `IRFor` continues to carry
+  its `iterable: Expr` and `binding_pattern: Pattern` whole at
+  the IR seam through this slice (per the `PatternBinaryMatch`
+  precedent from Wave 24); the iterator-protocol desugar still
+  runs at emit time. The slice eliminates the inline merge-phi
+  synthesis from `emit_if_else`, `emit_cond`, and
+  `emit_match_unified` -- with arm bodies now real instruction
+  streams, lowering captures the trailing-expression operand for
+  each arm and pre-stages `IRInstruction::Phi` in the merge
+  block exactly as `IRTernary` does today,   generalizing the one
+  canonical pre-staging idiom from Wave 21 to every
+  value-producing conditional. The `FnState.loop_exit_blocks`
+  twin retires (the `FnLowerState.loop_exit` semantic stack from
+  Slice 1 stays) -- with loop bodies now block-shaped, the
+  back-edge `Branch(header)` and break `Branch(exit)` terminators
+  are both pre-resolved at lowering time, so the codegen-side
+  `(IRBlockId, BasicBlock)` pairing the `compile_statement` shim
+  uses to seed `block_map` is no longer needed. The slice is
+  large but mechanical; if cumulative diff exceeds review budget
+  it splits into 2a (conditionals: `unless`, `if`, `if_else`,
+  `cond`, `match`) and 2b (loops: `while`, `loop`, `for`);
+  default to one wave. **Done when** no per-construct IR type
+  carries `Vec<Statement>`; `compile_body_as_value` is deleted;
+  merge-phi synthesis happens exclusively at lowering for every
+  conditional construct; `FnState.loop_exit_blocks` is deleted.
+
+- **Slice 3 -- `IRFunction` carries `Vec<IRBasicBlock>`;
+  per-construct types and walkers dissolve.** The structural cut.
+  `IRFunctionKind::Free { func_ast, ... }` and
+  `IRFunctionKind::Method { func_ast, ... }` swap their
+  `expo_ast::ast::Function` body for `blocks: Vec<IRBasicBlock>`.
+  The planners (`monomorphize_function`,
+  `monomorphize_impl_method` in
+  [`expo-ir/src/lower/monomorphize.rs`](../crates/expo-ir/src/lower/monomorphize.rs))
+  lower the AST body to blocks at planning time using the
+  `lower_statements` seam from Slice 1; `func_ast` retires from
+  both kinds (param names and span info migrate to a small
+  per-function metadata struct so debug emission keeps its source
+  positions). `emit_ir_function` and `emit_ir_impl_method` in
+  [`expo-codegen/src/generics.rs`](../crates/expo-codegen/src/generics.rs)
+  walk `IRFunction.blocks` instead of calling
+  `compile_function_body` / `compile_method_body`. The LLVM-bound
+  responsibilities those two helpers carry today -- entry block
+  creation, param alloca setup, debug `push_function`,
+  `type_subst` save/restore, the `tco_loop` block scaffolding --
+  survive in `emit_ir_*` directly (or extract a thin
+  `setup_function_frame` helper); `compile_function_body` and
+  `compile_method_body` retire entirely (the unused `_is_main`
+  parameter retires with them). With function bodies now
+  block-of-blocks, the nine per-construct IR wrappers
+  (`IRUnless`, `IRIf`, `IRIfElse`, `IRTernary`, `IRCond`,
+  `IRMatch`, `IRWhile`, `IRLoop`, `IRFor`) collapse into
+  free-floating `IRBasicBlock`s linked by their existing
+  `IRTerminator`s -- there's no functional reason to keep the
+  wrapper structs once the bodies they were wrapping are
+  themselves blocks, and mature compiler precedent (Swift SIL,
+  Rust MIR, GCC GIMPLE, LLVM IR) confirms control-flow shape
+  lives at the CFG level rather than the type-tag level.
+  Lowering produces blocks directly into the function's
+  `Vec<IRBasicBlock>`; per-construct emit walkers retire in
+  favor of one block walker that, per block, calls
+  `execute_instructions` then `emit_terminator`. `IRFor`'s
+  iterator-protocol desugar (`length()` / `get()` / `Option`
+  unwrap / pattern bind) migrates from emit-time to
+  planning-time -- the `build_for_loop_setup` /
+  `resolve_for_impl_methods` / `build_for_header_check` /
+  `build_for_element_load` / `bind_for_pattern` /
+  `emit_for_back_edge` helpers move from
+  [`expo-codegen::control::loops`](../crates/expo-codegen/src/control/loops.rs)
+  into the IR-side for-lowering, generating the multi-block
+  protocol expansion as part of the function's block list (the
+  AST `iterable: Expr` and `binding_pattern: Pattern` are
+  consumed during planning; the for loop becomes plain blocks).
+  `PatternBinaryMatch` continues unchanged -- it's already an
+  `IRInstruction` and lives inside whatever check block contains
+  it.   Implicit-return semantics (today: trailing `Statement::Expr`
+  in `compile_function_body`) become an `IRTerminator::Return`
+  synthesized by lowering when the function body's tail block
+  ends in an expression statement; tail-call status
+  (`Lowerer::lower_tail_expr_to_operand`, in place from Wave 25)
+  gets called for the last operand-shaped expression before the
+  synthesized return. Invariant 9 ("one walker per IR shape")
+  finally holds without transitional shims.
+  This slice also lands the **pre-codegen elaboration pass**
+  that retires the three transitional `compile_assignment` forks
+  Slice 1 left in place. The pass runs after monomorphization
+  planning but before any LLVM body is bound: it walks each
+  function's lowered blocks and pre-resolves the protocol-driven
+  coercions (today: list-literal `from_list`; future:
+  `FromBinaryLiteral` / `FromFloatLiteral` / similar) into
+  canonical `IRInstruction::MethodCall` sites with the impl
+  method already registered in `IRProgram`. With elaboration in
+  place, lowering can also use compile-time inference (the same
+  unification typecheck records on `expr.resolved_type`) to type
+  the LHS of unannotated assignments, so the third fork
+  (unannotated RHS) retires too. The destructuring `Pattern`
+  fork retires when destructuring patterns get IR support
+  alongside the other pattern-shape lifts. With the elaboration
+  pass landed, the `compile_statement` shim deletes entirely:
+  every `Statement::Assignment` shape lowers to
+  `StoreLocal` / `StoreField`, and the legacy `compile_assignment`
+  / `apply_coercion` / `convert_list_literal_if_needed` helpers
+  retire. **Done when** `IRFunctionKind::{Free,Method}` carry
+  `Vec<IRBasicBlock>`; `compile_function_body`,
+  `compile_method_body`, `compile_statement`, and
+  `compile_assignment` are deleted; the nine
+  `IR{Unless,If,IfElse,Ternary,Cond,Match,While,Loop,For}` types
+  are deleted; the nine per-construct emit walkers are replaced
+  by one block walker; the elaboration pass pre-resolves
+  protocol coercions into `IRProgram`; `expo-codegen` performs
+  no AST traversal except inside `IRInstruction::Stub` (whose
+  retirement is Phase 4h).
+
+- **Slice 4 -- Compiler trim (no `IRPackage`, no `IRFile`).**
+  Retires `Compiler.current_package` because every IR element
+  already carries its package via `TypeIdentifier` /
+  `FunctionIdentifier`
+  ([`expo-ast/src/identifier.rs`](../crates/expo-ast/src/identifier.rs))
+  -- by Slice 3 emission walks `IRProgram.function_order` and
+  reads each callable's package off its identifier; no ambient
+  field on `Compiler` is needed once the data is properly
+  tagged. `with_package` deletes; the `LowerCtx.package` /
+  `Lowerer.package` fields stay (lowering still needs the
+  scope-aware name resolution invariant) but get populated from
+  the planner's per-package loop rather than from `Compiler`.
+  The `closure_id` reform lands in this slice as the natural
+  companion: parser mints a monotonic `ClosureId` per closure
+  literal and bakes it into `Expr::Closure { closure_id, ... }`
+  and `Expr::ShortClosure { closure_id, ... }`;
+  `TypeContext.closure_info` re-keys from
+  `(Option<PathBuf>, Span)` to `ClosureId`;
+  `closure_info_at(ctx, span)` becomes
+  `closure_info_at(ctx, closure_id)`;
+  `Compiler.closure_site_path`, `LowerCtx.closure_site_path`,
+  and `Lowerer.closure_site_path` fields delete along with the
+  `define_functions` save/restore at
+  [`compiler.rs:1295-1298`](../crates/expo-codegen/src/compiler.rs).
+  The two production `unreachable!()` sites are addressed:
+  [`expo-ir/src/lower/closures.rs:53`](../crates/expo-ir/src/lower/closures.rs)
+  (the "all annotated" closure-params case) becomes a typed
+  `LoweredClosureParam` enum that makes the case structurally
+  absent;
+  [`expo-codegen/src/expr.rs:369-370`](../crates/expo-codegen/src/expr.rs)
+  (`Literal::String` in `compile_literal`) is documented for
+  retirement when string literals lift in Phase 4h, not deleted
+  in this slice. The decision to keep `IRProgram` flat (no
+  `IRPackage` container) follows from the package-via-identifier
+  discovery: per-package iteration is a cheap filter on flat
+  registries (`program.functions.values().filter(|f|
+f.mangled.package() == pkg)`); per-file metadata isn't needed
+  at the IR level (files are pure organization in Expo, debug
+  info flows through `DebugContext`, imports/aliases through
+  `TypeContext`). `Compiler` becomes a pure consumer of
+  `IRProgram` with no per-module ambient state. **Done when**
+  `Compiler.current_package`, `Compiler.closure_site_path`,
+  `LowerCtx.closure_site_path`, `Lowerer.closure_site_path`, and
+  the `with_package` / save-restore plumbing are all deleted;
+  `TypeContext.closure_info` keys by `ClosureId`; the
+  `closures.rs:53` unreachable retires.
 
 ### Phase 4h -- Stub retirement
 
@@ -797,7 +1195,11 @@ in place before its dependents.
 1. Struct construction.
 2. Enum construction.
 3. Indexed access.
-4. Closure construction (`partial_apply` shape).
+4. Closure construction (`partial_apply` shape; consumes the
+   `ClosureId`-keyed `TypeContext.closure_info` from Phase 4g
+   Slice 4 and pre-resolves each closure's `ClosureInfo` directly
+   onto its `partial_apply` instruction, so codegen never queries
+   `closure_info` at emit time).
 5. String literal + string interpolation / `Concat`.
 6. `EnumStructEqual` (multi-block per-variant equality).
 7. `compile_spawn` / `compile_receive` (decision lifts already exist;

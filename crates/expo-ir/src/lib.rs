@@ -15,6 +15,7 @@ pub mod blocks;
 mod fn_state;
 pub mod identity;
 pub mod lower;
+pub mod ownership;
 pub mod program;
 pub mod resolved;
 mod type_layouts;
@@ -25,6 +26,7 @@ pub use blocks::{IRBasicBlock, IRBlockId, IRTerminator};
 pub use fn_state::FnLowerState;
 pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 pub use lower::Lowerer;
+pub use ownership::Ownership;
 pub use program::{
     ExternAbi, ExternAttrs, IREnum, IRFunction, IRFunctionKind, IRProgram, IRStruct, IRStructKind,
 };

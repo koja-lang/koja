@@ -56,6 +56,27 @@ pub enum IRTerminator {
         /// Target taken when `cond` is falsy.
         otherwise: IRBlockId,
     },
+    /// Function return. `value` is `None` for `return;` (or void-
+    /// returning functions); `Some(operand)` carries the materialized
+    /// return value. Emission drops live variables (excluding the
+    /// optional `drop_skip` binding -- typically the returned ident,
+    /// whose ownership transfers to the caller) before issuing the
+    /// LLVM `ret`.
+    ///
+    /// Reaches lowering via [`crate::lower::statements`]'s
+    /// [`expo_ast::ast::Statement::Return`] arm. The `drop_skip`
+    /// field mirrors the legacy `compile_statement` skip rule: when
+    /// the return expression is a bare [`expo_ast::ast::ExprKind::Ident`]
+    /// the bound variable's storage is being handed off to the caller
+    /// and must not be freed locally.
+    Return {
+        /// Optional return value operand.
+        value: Option<IROperand>,
+        /// Optional binding name to exclude from the pre-return drop
+        /// pass. Set when the return expression is an ident referring
+        /// to a movable local.
+        drop_skip: Option<String>,
+    },
     /// Block always diverges (e.g. via a `panic` call). Backends emit
     /// LLVM's `unreachable` or the equivalent.
     Unreachable,

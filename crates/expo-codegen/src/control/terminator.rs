@@ -28,6 +28,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::Compiler;
+use crate::drop::drop_live_variables;
 
 use super::coerce_to_bool;
 
@@ -78,6 +79,26 @@ pub(crate) fn emit_terminator<'ctx>(
                 .builder
                 .build_conditional_branch(cond_int, then_bb, else_bb)
                 .unwrap();
+            Ok(())
+        }
+        IRTerminator::Return { value, drop_skip } => {
+            // Tail-call self-recursion (see `emit_method_call` /
+            // `emit_tail_call_back_edge`) terminates the block during
+            // instruction emission with an unconditional branch back
+            // to the function's `tco_loop` header. When that happens
+            // the explicit `return` carried on the terminator is a
+            // no-op -- the block is already wired into the loop, and
+            // a second terminator would yield invalid LLVM.
+            if compiler.current_block_terminated() {
+                return Ok(());
+            }
+            drop_live_variables(compiler, drop_skip.as_deref());
+            if let Some(operand) = value {
+                let val = materialize_operand(compiler, operand, value_map)?;
+                compiler.builder.build_return(Some(&val)).unwrap();
+            } else {
+                compiler.builder.build_return(None).unwrap();
+            }
             Ok(())
         }
         IRTerminator::Unreachable => {

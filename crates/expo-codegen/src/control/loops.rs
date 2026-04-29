@@ -15,9 +15,14 @@
 //! - Bodies remain AST `Vec<Statement>` stubs walked via
 //!   [`super::compile_body_as_value`] (statement-level lowering is
 //!   Phase 4g territory).
-//! - `break` continues to use the codegen-side `loop_exit_stack`
-//!   (push/pop bracketing the body walk in each emit walker) until
-//!   Phase 4g lifts it into the IR.
+//! - `break` lowers to an [`expo_ir::IRTerminator::Branch`] targeting
+//!   the loop's `exit_block` id; the [`enter_loop`] / [`leave_loop`]
+//!   helpers maintain the paired
+//!   [`expo_ir::FnLowerState::loop_exit`] (semantic) and
+//!   [`crate::compiler::FnState::loop_exit_blocks`] (LLVM-bound)
+//!   stacks so the lowering site reads the id and the
+//!   [`compile_statement`] shim resolves the id back to a
+//!   [`BasicBlock`] for terminator emission.
 //!
 //! `for` keeps the iterator-protocol desugaring at the codegen seam
 //! (`length()` / `get()` / `Option` unwrap / pattern bind) because the
@@ -110,7 +115,7 @@ fn emit_loop_unified<'ctx>(
         .unwrap();
 
     compiler.builder.position_at_end(body_bb);
-    compiler.fn_state.loop_exit_stack.push(exit_bb);
+    enter_loop(compiler, ir.exit_block, exit_bb);
     walk_loop_body(compiler, &ir.body_stmts, function)?;
     if !compiler.current_block_terminated() {
         let value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
@@ -122,7 +127,7 @@ fn emit_loop_unified<'ctx>(
             function,
         )?;
     }
-    compiler.fn_state.loop_exit_stack.pop();
+    leave_loop(compiler);
 
     compiler.builder.position_at_end(exit_bb);
     Ok(None)
@@ -134,7 +139,10 @@ fn emit_loop_unified<'ctx>(
 /// [`execute_instructions`] and dispatches `header_terminator`
 /// (`CondBranch { cond, then: body, otherwise: exit }`) via
 /// [`emit_terminator`]. The body walks as in [`emit_loop_unified`]
-/// with `exit_block` pushed onto `loop_exit_stack` for AST `break`.
+/// with the loop exit pushed onto both
+/// [`expo_ir::FnLowerState::loop_exit`] (semantic, for IR-level
+/// `break` lowering) and `FnState::loop_exit_blocks` (LLVM-bound,
+/// for the [`compile_statement`] shim's terminator block_map).
 fn emit_while_unified<'ctx>(
     compiler: &mut Compiler<'ctx>,
     ir: &IRWhile,
@@ -168,7 +176,7 @@ fn emit_while_unified<'ctx>(
     )?;
 
     compiler.builder.position_at_end(body_bb);
-    compiler.fn_state.loop_exit_stack.push(exit_bb);
+    enter_loop(compiler, ir.exit_block, exit_bb);
     walk_loop_body(compiler, &ir.body_stmts, function)?;
     if !compiler.current_block_terminated() {
         let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
@@ -180,7 +188,7 @@ fn emit_while_unified<'ctx>(
             function,
         )?;
     }
-    compiler.fn_state.loop_exit_stack.pop();
+    leave_loop(compiler);
 
     compiler.builder.position_at_end(exit_bb);
     Ok(None)
@@ -218,9 +226,9 @@ fn emit_for_unified<'ctx>(
         .unwrap();
 
     compiler.builder.position_at_end(body_bb);
-    compiler.fn_state.loop_exit_stack.push(exit_bb);
+    enter_loop(compiler, ir.exit_block, exit_bb);
     emit_for_iteration(compiler, ir, &setup, header_bb, function)?;
-    compiler.fn_state.loop_exit_stack.pop();
+    leave_loop(compiler);
     compiler.fn_state.variables.remove("__for_iter");
 
     compiler.builder.position_at_end(exit_bb);
@@ -498,6 +506,27 @@ fn bind_for_pattern<'ctx>(
             (alloca, setup.elem_type.clone(), Ownership::Unowned),
         );
     }
+}
+
+/// Push the loop's exit block id onto both the semantic
+/// [`expo_ir::FnLowerState::loop_exit`] stack (read by
+/// [`expo_ast::ast::Statement::Break`] lowering) and the LLVM-bound
+/// [`crate::compiler::FnState::loop_exit_blocks`] stack (read by the
+/// [`compile_statement`] shim when assembling the terminator block
+/// map). The two stacks stay paired through bracketed
+/// [`enter_loop`] / [`leave_loop`] calls.
+fn enter_loop<'ctx>(compiler: &mut Compiler<'ctx>, exit_id: IRBlockId, exit_bb: BasicBlock<'ctx>) {
+    compiler.fn_lower.push_loop_exit(exit_id);
+    compiler.fn_state.loop_exit_blocks.push((exit_id, exit_bb));
+}
+
+/// Pop the innermost loop frame from both
+/// [`expo_ir::FnLowerState::loop_exit`] and
+/// [`crate::compiler::FnState::loop_exit_blocks`]. Companion to
+/// [`enter_loop`].
+fn leave_loop(compiler: &mut Compiler<'_>) {
+    compiler.fn_state.loop_exit_blocks.pop();
+    compiler.fn_lower.pop_loop_exit();
 }
 
 /// Per-iteration back edge: increment the index and branch back to

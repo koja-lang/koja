@@ -12,14 +12,12 @@ use expo_typecheck::types::{Primitive, Type, mangle_name};
 use crate::compiler::Compiler;
 use crate::types::to_llvm_type;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
-/// Tracks whether a variable owns its backing memory and is responsible for
-/// freeing it. Used to distinguish heap-allocated strings (interpolated,
-/// received from mailbox) from static/global string pointers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ownership {
-    Owned,
-    Unowned,
-}
+
+/// Re-export of [`expo_ir::Ownership`] -- the source of truth lives in
+/// `expo-ir` so lowering sites for [`expo_ir::IRInstruction::StoreLocal`]
+/// can stamp ownership at IR-build time. `expo-codegen`'s drop pass
+/// reads it back here when freeing live variables.
+pub use expo_ir::Ownership;
 
 /// Emits drop calls for all live move-type variables in reverse declaration
 /// order. Called before function returns and at scope exits. When `skip` is
