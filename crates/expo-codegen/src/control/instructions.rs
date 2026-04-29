@@ -104,6 +104,7 @@ pub(crate) fn execute_instructions<'ctx>(
                 args,
                 param_types,
                 return_type: _,
+                tail: _,
             } => emit_call(compiler, *dest, mangled, args, param_types, value_map)?,
             IRInstruction::FieldChain {
                 dest,
@@ -151,6 +152,7 @@ pub(crate) fn execute_instructions<'ctx>(
                 args,
                 param_types,
                 return_type: _,
+                tail,
             } => emit_method_call(
                 compiler,
                 *dest,
@@ -160,6 +162,7 @@ pub(crate) fn execute_instructions<'ctx>(
                 *is_move,
                 args,
                 param_types,
+                *tail,
                 value_map,
             )?,
             IRInstruction::PatternBinaryMatch {
@@ -307,6 +310,14 @@ fn emit_call<'ctx>(
 /// the legacy `compile_method_call` ownership update by marking the
 /// receiver variable [`Ownership::Unowned`] when `is_move` and
 /// `receiver_name` is set.
+///
+/// When `tail` is set and the call is self-recursive (callee mangled
+/// name matches `FnLowerState::current_fn`), the call is rewritten as
+/// a tail-call branch back to the function's `tco_loop` block: live
+/// variables (excluding `self`) are dropped, args are stored into
+/// `param_allocas`, and an unconditional branch terminates the block.
+/// No LLVM call is emitted and no SSA value is produced. Replaces the
+/// legacy ambient `FnLowerState::tail_position` flag (Slice 6 Wave 25).
 #[allow(clippy::too_many_arguments)]
 fn emit_method_call<'ctx>(
     c: &mut Compiler<'ctx>,
@@ -317,6 +328,7 @@ fn emit_method_call<'ctx>(
     is_move: bool,
     args: &[IROperand],
     param_types: &[Type],
+    tail: bool,
     value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
 ) -> Result<Option<(IRValueId, BasicValueEnum<'ctx>)>, String> {
     let callee = *c
@@ -333,6 +345,14 @@ fn emit_method_call<'ctx>(
     let coerced = build_call_args(c, args, param_types, value_map)?;
     llvm_args.extend(coerced);
 
+    if tail
+        && c.fn_lower.is_self_call(mangled.as_str())
+        && let Some(loop_header) = c.fn_state.loop_header
+    {
+        emit_tail_call_back_edge(c, &llvm_args, loop_header);
+        return Ok(None);
+    }
+
     let result = c.call(callee, &llvm_args, &format!("{mangled}_ret"));
 
     if is_move
@@ -344,6 +364,24 @@ fn emit_method_call<'ctx>(
     }
 
     Ok(result.map(|v| (dest, v)))
+}
+
+/// TCO rewrite: drop live variables (skipping `self`, which is being
+/// re-bound by the new call), store the new arg/receiver values into
+/// the function's `param_allocas`, and branch back to `tco_loop`. The
+/// surrounding block is terminated; no LLVM call is emitted and no
+/// SSA value flows out.
+fn emit_tail_call_back_edge<'ctx>(
+    c: &mut Compiler<'ctx>,
+    llvm_args: &[BasicMetadataValueEnum<'ctx>],
+    loop_header: BasicBlock<'ctx>,
+) {
+    crate::drop::drop_live_variables(c, Some("self"));
+    for (arg, alloca) in llvm_args.iter().zip(c.fn_state.param_allocas.iter()) {
+        let val: BasicValueEnum<'ctx> = (*arg).try_into().unwrap();
+        c.builder.build_store(*alloca, val).unwrap();
+    }
+    c.builder.build_unconditional_branch(loop_header).unwrap();
 }
 
 /// Emit an [`IRInstruction::FieldChain`]: rebuild a [`ResolvedChain`]

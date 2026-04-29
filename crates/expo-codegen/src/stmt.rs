@@ -59,9 +59,8 @@ pub fn compile_statement<'ctx>(
 
         Statement::Return { value, .. } => {
             if let Some(expr) = value {
-                compiler.fn_lower.mark_tail();
-                let val = compile_expr(compiler, expr, function)?.map(|tv| tv.value);
-                compiler.fn_lower.clear_tail();
+                let val =
+                    crate::expr::compile_tail_expr(compiler, expr, function)?.map(|tv| tv.value);
                 if !compiler.current_block_terminated() {
                     let skip = match &expr.kind {
                         ExprKind::Ident { name, .. } => Some(name.as_str()),

@@ -386,6 +386,7 @@ impl<'a> Lowerer<'a> {
         receiver: &Expr,
         method: &str,
         args: &[Arg],
+        tail: bool,
     ) -> Option<(IROperand, Type)> {
         if method == "clone" && args.is_empty() {
             return None;
@@ -413,6 +414,7 @@ impl<'a> Lowerer<'a> {
                     Some(id),
                     method,
                     args,
+                    tail,
                 );
             }
         }
@@ -453,18 +455,6 @@ impl<'a> Lowerer<'a> {
         if !self.program.contains_function(&resolved.mangled_name) {
             return None;
         }
-        // Defer to Stub whenever the call is in tail position so the
-        // legacy `compile_method_call` path keeps owning the
-        // self-tail-recursive jump rewrite (`loop_header` branch +
-        // `param_allocas` store). The wrapper-level lift attempt runs
-        // before its own `save_tail`, so `tail_position()` here still
-        // reflects the surrounding tail status.
-        if self.fn_state.is_self_tail_call(
-            resolved.mangled_name.as_str(),
-            self.fn_state.tail_position(),
-        ) {
-            return None;
-        }
 
         let receiver_operand = self.lower_expr_to_operand(instructions, receiver);
         let lowered_args: Vec<IROperand> = args
@@ -483,6 +473,7 @@ impl<'a> Lowerer<'a> {
             args: lowered_args,
             param_types: resolved.param_types,
             return_type: resolved.return_type,
+            tail,
         });
         Some((IROperand::Local(dest), return_type))
     }

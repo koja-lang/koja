@@ -92,7 +92,7 @@ pub fn compile_call<'ctx>(
     let mut instructions = Vec::new();
     if let Some((operand, return_type)) =
         c.lowerer()
-            .lower_call_or_stub(&mut instructions, name, args)
+            .lower_call_or_stub(&mut instructions, name, args, false)
     {
         let mut value_map = HashMap::new();
         execute_instructions(c, &instructions, function, None, &mut value_map)?;

@@ -1,4 +1,28 @@
-//! Lowering for `for` loops over `Enumeration`-implementing types.
+//! Lowering for loop constructs (`while`, `loop`, `for`) plus the
+//! `Enumeration` impl-dispatch resolver `for` loops use at emission.
+//!
+//! ## Construct lifts (Slice 6)
+//!
+//! [`Lowerer::lower_while`] / [`Lowerer::lower_loop`] /
+//! [`Lowerer::lower_for`] mirror
+//! [`Lowerer::lower_if_no_else`](crate::Lowerer::lower_if_no_else) /
+//! [`Lowerer::lower_unless`](crate::Lowerer::lower_unless): mint
+//! fresh per-construct [`IRBlockId`](crate::blocks::IRBlockId)s,
+//! lower the cond expression (where present) into the header's
+//! instruction sequence via
+//! [`Lowerer::lower_expr_to_operand`](crate::Lowerer::lower_expr_to_operand),
+//! and record the canonicalized branch on the resulting
+//! `IR*` value. Bodies remain AST `Vec<Statement>` stubs walked by
+//! emission until Phase 4g (statement-level lowering).
+//!
+//! `for` keeps the iterable + binding pattern as AST stubs because
+//! the iterator-protocol desugaring (`length()` + `get()` + `Option`
+//! unwrap + pattern bind) lives at the codegen seam where the LLVM
+//! type registry is reachable; the lowerer only mints the block ids
+//! and the value-map slots the emit walker stuffs the iterable /
+//! index allocas into.
+//!
+//! ## `Enumeration` dispatch (`for` loops)
 //!
 //! `for item in iterable` desugars at emission time to an indexed `while`
 //! loop calling `iterable.length()` and `iterable.get(idx)`. To pick the
@@ -8,13 +32,100 @@
 //! that against the type registry; emission then derives the LLVM
 //! element type with one `to_llvm_type(...)` call.
 
+use expo_ast::ast::{Expr, Pattern, Statement};
 use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute_preserving};
 
+use crate::Lowerer;
+use crate::blocks::IRTerminator;
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
 use crate::lower::types::resolve_name_current;
-use crate::resolved::loops::ResolvedEnumerable;
+use crate::resolved::loops::{IRFor, IRLoop, IRWhile, ResolvedEnumerable};
+
+impl<'a> Lowerer<'a> {
+    /// Lowers a `loop ... end` (infinite loop). Mints `body_block` /
+    /// `exit_block`; body terminator unconditionally branches back to
+    /// `body_block`. The exit block exists so AST `break` statements
+    /// can branch to it via the surrounding emit walker's
+    /// `loop_exit_stack` (until Phase 4g lifts `break` into IR).
+    pub fn lower_loop(&mut self, body: &[Statement]) -> IRLoop {
+        let body_block = self.next_block_id();
+        let exit_block = self.next_block_id();
+        IRLoop {
+            body_block,
+            body_stmts: body.to_vec(),
+            body_terminator: IRTerminator::Branch(body_block),
+            exit_block,
+        }
+    }
+
+    /// Lowers a `while cond ... end`. Mints `header_block` /
+    /// `body_block` / `exit_block`; lowers `cond` into
+    /// `header_instructions` via
+    /// [`Self::lower_expr_to_operand`](crate::Lowerer::lower_expr_to_operand).
+    /// Header terminator is the canonicalized `CondBranch { cond,
+    /// then: body_block, otherwise: exit_block }`; body terminator
+    /// branches back to the header (re-evaluating the cond each
+    /// iteration).
+    pub fn lower_while(&mut self, cond: &Expr, body: &[Statement]) -> IRWhile {
+        let header_block = self.next_block_id();
+        let body_block = self.next_block_id();
+        let exit_block = self.next_block_id();
+        let mut header_instructions = Vec::new();
+        let cond_operand = self.lower_expr_to_operand(&mut header_instructions, cond);
+        IRWhile {
+            body_block,
+            body_stmts: body.to_vec(),
+            body_terminator: IRTerminator::Branch(header_block),
+            exit_block,
+            header_block,
+            header_instructions,
+            header_terminator: IRTerminator::CondBranch {
+                cond: cond_operand,
+                then: body_block,
+                otherwise: exit_block,
+            },
+        }
+    }
+
+    /// Lowers a `for binding in iterable ... end`. Mints
+    /// `header_block` / `body_block` / `exit_block` and pre-allocates
+    /// `iterable_value` / `idx_value` slots in the function-scoped
+    /// value map (the emit walker stuffs the iterable's stack-stored
+    /// alloca pointer and the index alloca pointer into them so
+    /// future IR instructions can reference them via
+    /// [`IROperand::Local`](crate::values::IROperand::Local)).
+    ///
+    /// The iterable expression and the binding pattern stay AST-stubbed
+    /// because the iterator-protocol desugaring (calls `length()` and
+    /// `get()`, unwraps the `Option`, then binds via the pattern)
+    /// lives at the codegen seam where the LLVM type registry is
+    /// reachable. Same precedent as
+    /// [`crate::values::IRInstruction::PatternBinaryMatch`] from Slice 5b.
+    pub fn lower_for(
+        &mut self,
+        iterable: &Expr,
+        binding_pattern: &Pattern,
+        body: &[Statement],
+    ) -> IRFor {
+        let body_block = self.next_block_id();
+        let exit_block = self.next_block_id();
+        let header_block = self.next_block_id();
+        let idx_value = self.next_value_id();
+        let iterable_value = self.next_value_id();
+        IRFor {
+            binding_pattern: binding_pattern.clone(),
+            body_block,
+            body_stmts: body.to_vec(),
+            exit_block,
+            header_block,
+            idx_value,
+            iterable: iterable.clone(),
+            iterable_value,
+        }
+    }
+}
 
 /// Resolves the `Enumeration` impl to dispatch through for `for item in
 /// iterable`. Validates that `ty`'s base implements `Enumeration`,

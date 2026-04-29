@@ -65,6 +65,41 @@ impl<'a> Lowerer<'a> {
         instructions: &mut Vec<IRInstruction>,
         expr: &Expr,
     ) -> IROperand {
+        self.lower_expr_to_operand_with_tail(instructions, expr, false)
+    }
+
+    /// Lower `expr` to an [`IROperand`] in *tail context*: if `expr`
+    /// is (transparently through `Group`) a direct
+    /// [`ExprKind::Call`] / [`ExprKind::MethodCall`], the emitted
+    /// [`IRInstruction::Call`] / [`IRInstruction::MethodCall`] gets
+    /// `tail = true`. Every other expression kind defers to the
+    /// non-tail [`Self::lower_expr_to_operand`].
+    ///
+    /// Replaces the legacy ambient `FnLowerState::tail_position` flag
+    /// (Slice 6 Wave 25). Tail context is now first-class IR data
+    /// rather than a per-function global; only the immediately-emitted
+    /// call carries it. Subexpressions of the call (its receiver and
+    /// arguments) are non-tail by definition (they evaluate before
+    /// the call returns), so they always go through the non-tail
+    /// path.
+    ///
+    /// Use from the codegen seam at the two source sites that mark
+    /// tail position: [`Statement::Return`] and the
+    /// last-statement-implicit-return in `compile_function_body`.
+    pub fn lower_tail_expr_to_operand(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        expr: &Expr,
+    ) -> IROperand {
+        self.lower_expr_to_operand_with_tail(instructions, expr, true)
+    }
+
+    fn lower_expr_to_operand_with_tail(
+        &mut self,
+        instructions: &mut Vec<IRInstruction>,
+        expr: &Expr,
+        tail: bool,
+    ) -> IROperand {
         if let Some(operand) = resolve_const(&expr.kind).and_then(operand_from_const) {
             return operand;
         }
@@ -77,7 +112,8 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Ident { name } = &callee.kind
-                    && let Some((operand, _)) = self.lower_call_or_stub(instructions, name, args)
+                    && let Some((operand, _)) =
+                        self.lower_call_or_stub(instructions, name, args, tail)
                 {
                     return operand;
                 }
@@ -90,7 +126,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Group { expr: inner } => {
-                return self.lower_expr_to_operand(instructions, inner);
+                return self.lower_expr_to_operand_with_tail(instructions, inner, tail);
             }
             ExprKind::Ident { name } => {
                 if let Some(operand) = self.lower_ident_or_stub(instructions, name) {
@@ -103,7 +139,7 @@ impl<'a> Lowerer<'a> {
                 args,
             } => {
                 if let Some((operand, _)) =
-                    self.lower_method_call_or_stub(instructions, receiver, method, args)
+                    self.lower_method_call_or_stub(instructions, receiver, method, args, tail)
                 {
                     return operand;
                 }

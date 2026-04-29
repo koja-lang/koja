@@ -41,9 +41,7 @@ pub(crate) fn compile_body_as_value<'ctx>(
             val = compile_expr(compiler, expr, function)?;
             continue;
         }
-        let was_tail = compiler.fn_lower.save_tail();
         compile_statement(compiler, stmt, function)?;
-        compiler.fn_lower.restore_tail(was_tail);
     }
     Ok(val)
 }

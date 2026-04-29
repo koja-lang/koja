@@ -289,6 +289,7 @@ impl<'a> Lowerer<'a> {
         instructions: &mut Vec<IRInstruction>,
         name: &str,
         args: &[Arg],
+        tail: bool,
     ) -> Option<(IROperand, Type)> {
         if self
             .program
@@ -334,6 +335,7 @@ impl<'a> Lowerer<'a> {
             args: lowered_args,
             param_types,
             return_type: return_type.clone(),
+            tail,
         });
         Some((IROperand::Local(dest), return_type))
     }
@@ -357,6 +359,7 @@ impl<'a> Lowerer<'a> {
         resolved_type: Option<&TypeIdentifier>,
         method: &str,
         args: &[Arg],
+        tail: bool,
     ) -> Option<(IROperand, Type)> {
         if args_need_coercion(self, args) {
             return None;
@@ -393,6 +396,7 @@ impl<'a> Lowerer<'a> {
             args: lowered_args,
             param_types: resolved.param_types,
             return_type: resolved.return_type,
+            tail,
         });
         Some((IROperand::Local(dest), return_type))
     }

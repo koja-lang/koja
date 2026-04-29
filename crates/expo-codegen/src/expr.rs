@@ -43,6 +43,49 @@ use crate::structs::{compile_field_access, compile_method_call, compile_struct_c
 use crate::types::to_llvm_type;
 use crate::util::printf_format_spec;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
+/// Compiles `expr` in *tail position*: when `expr` is (transparently
+/// through `Group`) a direct method call, the IR lift produces an
+/// [`expo_ir::values::IRInstruction::MethodCall`] with `tail = true`,
+/// which the codegen executor dispatches into the TCO back-edge
+/// when the call is also self-recursive. Every other expression
+/// shape falls through to the standard [`compile_expr`].
+///
+/// Replaces the legacy ambient `FnLowerState::tail_position` flag
+/// (Slice 6 Wave 25). The two source-level callers are
+/// [`crate::stmt::compile_statement`]'s `Statement::Return` arm and
+/// [`crate::generics::compile_function_body`]'s
+/// last-statement-implicit-return; both wrapped tight `mark_tail` /
+/// `clear_tail` brackets around their `compile_expr` call before the
+/// retirement.
+pub fn compile_tail_expr<'ctx>(
+    compiler: &mut Compiler<'ctx>,
+    expr: &Expr,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
+    let inner = unwrap_group(expr);
+    if let ExprKind::MethodCall {
+        receiver,
+        method,
+        args,
+    } = &inner.kind
+    {
+        return crate::structs::compile_method_call_with_tail(
+            compiler, receiver, method, args, true, function,
+        );
+    }
+    compile_expr(compiler, expr, function)
+}
+
+/// Strip transparent `Group` wrappers off an expression so tail-context
+/// dispatch can see the underlying call shape.
+fn unwrap_group(expr: &Expr) -> &Expr {
+    let mut current = expr;
+    while let ExprKind::Group { expr: inner } = &current.kind {
+        current = inner;
+    }
+    current
+}
+
 /// Compiles an expression and coerces the result to the expected type.
 /// Use when the target type is known (e.g. function arguments, struct fields).
 pub fn compile_expr_coerced<'ctx>(

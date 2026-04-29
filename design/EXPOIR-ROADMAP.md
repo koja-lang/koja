@@ -206,6 +206,59 @@ are summarized inline below.
   `lower_match` free function and `ResolvedMatch` struct are
   deleted. See the `Phase 4f Slice 5` entry in section 4 for
   per-change detail.
+- **Phase 4f Slice 6 -- loops + tail-flag retirement (done, Wave 25).**
+  `while`, `loop`, and `for` converge onto the
+  `Lowerer::lower_*` + `emit_*_unified` + `execute_instructions` +
+  `emit_terminator` pipeline. Three new IR types --
+  [`IRWhile`], [`IRLoop`], [`IRFor`] -- mirror the `IRCond`
+  shape-2 generalization: each carries the IR-minted block ids
+  for `header` / `body` / `exit`, the `header_instructions`
+  (condition lift for `while`), the `header_terminator`
+  (`CondBranch { cond, body, exit }`), and the
+  `body_terminator` (`Branch(header)` back-edge). `for` keeps the
+  iterable AST + binding `Pattern` inline (same precedent as
+  `PatternBinaryMatch`) so the multi-block iterator-protocol
+  desugar -- `length()` / `get()` / `Option` unwrap / pattern
+  bind -- stays whole at the IR seam, broken into ≤40-LOC
+  helpers (`build_for_loop_setup`, `resolve_for_impl_methods`,
+  `build_for_header_check`, `build_for_element_load`,
+  `bind_for_pattern`, `emit_for_back_edge`). Loop bodies remain
+  AST `Vec<Statement>` stubs until Phase 4g; loops expose
+  `exit_block` so `Statement::Break` continues to resolve through
+  the unchanged `loop_exit_stack`. `compile_while` /
+  `compile_loop` / `compile_for` collapse to five-line shims
+  (`lowerer().lower_*(...)` + `emit_*_unified`); the legacy
+  233-LOC `loops.rs` body is deleted.
+  In parallel, the ambient `FnLowerState::tail_position` flag
+  retires. `IRInstruction::Call` and `IRInstruction::MethodCall`
+  gain a `tail: bool` field, populated by a new
+  `Lowerer::lower_tail_expr_to_operand` helper threaded through
+  the immediately-emitted call instruction (transparent through
+  `ExprKind::Group`). Two source-level callers --
+  `Statement::Return` in `crates/expo-codegen/src/stmt.rs` and
+  the last-statement-implicit-return in
+  `compile_function_body` -- swap their `mark_tail` /
+  `clear_tail` brackets for a `compile_tail_expr` call that
+  routes through the explicit IR-level lowering.
+  `compile_body_as_value`'s `save_tail` / `restore_tail`
+  save/restore loop is deleted because per-statement tail
+  status is now passed explicitly only at the trailing
+  expression. The TCO rewrite logic (drop live variables, store
+  args into `param_allocas`, branch to `tco_loop`) moves from
+  `crates/expo-codegen/src/structs.rs` into a new
+  `emit_tail_call_back_edge` helper in
+  `crates/expo-codegen/src/control/instructions.rs`'s
+  `emit_method_call`, gated on the IR instruction's `tail`
+  field plus `FnLowerState::is_self_call`. The
+  `tail_position`, `mark_tail`, `clear_tail`, `save_tail`,
+  `restore_tail`, and `is_self_tail_call(was_tail)` accessors
+  are deleted; only `current_fn` / `is_self_call` survive on
+  `FnLowerState` for self-recursion detection. **Outcome.**
+  Loops are now indistinguishable from conditionals at the IR
+  surface (block ids + terminators + a body block of stubs)
+  and tail-call optimization is honest IR data: the `tail`
+  field on the call instruction names what previously took an
+  ambient walk-state flag and three accessor pairs to express.
 
 ---
 
@@ -222,8 +275,8 @@ to plan a slice.
 | `if` (no else)              | Full IR pipeline            | `Lowerer::lower_if_no_else` -> `IRIf` -> `emit_if` + `execute_instructions`                                                                                                                                                                                                                                                                                                                  |
 | `if`/`else` (with else)     | Full IR pipeline            | `Lowerer::lower_if_else` -> `IRIfElse` -> `emit_if_else` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)                                                                                                                                                                                                                                                                |
 | `ternary`                   | Full IR pipeline            | `Lowerer::lower_ternary` -> `IRTernary` -> `emit_ternary` + `execute_instructions` (merge phi pre-staged in `merge_instructions`)                                                                                                                                                                                                                                                            |
-| `Call` / `static_call`      | Instruction-only            | `Lowerer::lower_call_or_stub` / `lower_static_call_or_stub` -> `IRInstruction::Call`                                                                                                                                                                                                                                                                                                         |
-| `MethodCall`                | Instruction-only            | `Lowerer::lower_method_call_or_stub` -> `IRInstruction::MethodCall`                                                                                                                                                                                                                                                                                                                          |
+| `Call` / `static_call`      | Instruction-only            | `Lowerer::lower_call_or_stub(..., tail)` / `lower_static_call_or_stub(..., tail)` -> `IRInstruction::Call { tail, .. }` (tail flag carried for symmetry with `MethodCall`; only `MethodCall` currently triggers a TCO back-edge)                                                                                                                                                             |
+| `MethodCall`                | Instruction-only            | `Lowerer::lower_method_call_or_stub(..., tail)` -> `IRInstruction::MethodCall { tail, .. }`. The `tail` field is set via `Lowerer::lower_tail_expr_to_operand` from `Statement::Return` and the last-statement-implicit-return; the codegen executor rewrites self-recursive `tail = true` calls to a `tco_loop` back-edge.                                                                  |
 | `FieldAccess` (chains)      | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldChain` (rooted at named local; delegates to `emit_chain_field_access`)                                                                                                                                                                                                                                                         |
 | `FieldAccess` (value recv)  | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldLoad` (fallback for non-binding receivers)                                                                                                                                                                                                                                                                                     |
 | `Ident` (locals)            | Instruction-only            | `Lowerer::lower_ident_or_stub` -> `IRInstruction::LoadLocal`                                                                                                                                                                                                                                                                                                                                 |
@@ -235,8 +288,10 @@ to plan a slice.
 | Bool/Int/Float literals     | Inline operand              | `IROperand::ConstBool` / `ConstInt` / `ConstFloat`                                                                                                                                                                                                                                                                                                                                           |
 | `match` (full pipeline)     | Full IR pipeline            | `Lowerer::lower_match_expr` -> `IRMatch` -> `emit_match_unified` (per-arm cond-branches via `emit_terminator`; merge phi synthesized inline). Pattern testing + binding fully lifted to `PatternTagEq` / `PatternLiteralEq` / `PatternProjectVariantField` / `PatternUnionPayloadPtr` / `PatternBindFromPtr` / `PatternBinaryMatch` instructions; guards lifted via `lower_expr_to_operand`. |
 | `cond`                      | Full IR pipeline            | `Lowerer::lower_cond` -> `IRCond` -> `emit_cond` (merge phi synthesized inline; arms remain AST stubs until Phase 4g)                                                                                                                                                                                                                                                                        |
-| `while` / `loop` / `for`    | AST -> LLVM                 | Slice 6                                                                                                                                                                                                                                                                                                                                                                                      |
-| `break` / `return`          | AST -> LLVM                 | Slice 6                                                                                                                                                                                                                                                                                                                                                                                      |
+| `while`                     | Full IR pipeline            | `Lowerer::lower_while` -> `IRWhile` -> `emit_while_unified` (header `IRInstruction`s + `CondBranch` terminator + body back-edge `Branch`; body remains AST stub until Phase 4g)                                                                                                                                                                                                              |
+| `loop`                      | Full IR pipeline            | `Lowerer::lower_loop` -> `IRLoop` -> `emit_loop_unified` (single body block + `Branch` back-edge; body remains AST stub until Phase 4g)                                                                                                                                                                                                                                                      |
+| `for`                       | Full IR pipeline            | `Lowerer::lower_for` -> `IRFor` -> `emit_for_unified` (header / body / exit blocks + idx/iterable allocas in shared `value_map`; iterator-protocol desugar -- `length()` / `get()` / `Option` unwrap / pattern bind -- kept whole at the IR seam, broken into ≤40-LOC helpers)                                                                                                               |
+| `break` / `return`          | AST -> LLVM                 | Phase 4g (statement lowering); loops expose `exit_block` so AST `break` still resolves through `loop_exit_stack`                                                                                                                                                                                                                                                                             |
 | `assignment` / compound     | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                                                                                                                                                                                                                                                                                |
 | `field_assignment`          | AST -> LLVM                 | Phase 4g (statement lowering)                                                                                                                                                                                                                                                                                                                                                                |
 | Binary pattern              | Instruction-only            | `PatternBinaryMatch` wraps `compile_binary_pattern` whole at IR seam (multi-block algorithm; no further decomposition planned)                                                                                                                                                                                                                                                               |
@@ -609,65 +664,101 @@ value_map`. **Outcome.** `compile_if`'s else branch and
   - **Slice 5b -- pattern testing + binding lift (Done, Wave 24).**
     Six new `IRInstruction` variants encode pattern testing as
     native IR: `PatternTagEq`, `PatternLiteralEq`,
-    `PatternProjectVariantField` (variant-field GEP + load + alloca
-    - store, returns the new alloca's pointer for sub-pattern
-      recursion or binding), `PatternUnionPayloadPtr`,
-      `PatternBindFromPtr` (load + alloca + store + register into
-      `fn_state.variables`, no SSA dest), and `PatternBinaryMatch`
-      (wraps the multi-block `compile_binary_pattern` whole at the
-      IR seam). `IRInstruction::dest()` returns `Option<IRValueId>`
-      to accommodate the no-dest `PatternBindFromPtr`. AND/OR fusion
-      of i1 results reuses `IRInstruction::BinaryOp { op: BoolAnd
+    `PatternProjectVariantField` (variant-field GEP + load + alloca - store, returns the new alloca's pointer for sub-pattern
+    recursion or binding), `PatternUnionPayloadPtr`,
+    `PatternBindFromPtr` (load + alloca + store + register into
+    `fn_state.variables`, no SSA dest), and `PatternBinaryMatch`
+    (wraps the multi-block `compile_binary_pattern` whole at the
+    IR seam). `IRInstruction::dest()` returns `Option<IRValueId>`
+    to accommodate the no-dest `PatternBindFromPtr`. AND/OR fusion
+    of i1 results reuses `IRInstruction::BinaryOp { op: BoolAnd
 | BoolOr }` with constant-folding shortcuts (`BoolAnd(true,
 x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
-      emit no spurious AND. New
-      `Lowerer::lower_pattern_to_instructions` returns a
-      `LoweredPattern { instructions, check_result }` -- a single
-      ordered stream containing test ops, binds, and AND/OR fusion,
-      plus the [`IROperand`] referencing the final i1. Guards lift
-      via `lower_expr_to_operand` appended to the arm's check stream
-      and `BoolAnd`-fused with the pattern's i1 -- no codegen-side
-      guard handling remains. `IRMatchArm.guard`,
-      `IRMatchArm.pattern_result_value`, and `IRMatch.patterns`
-      retire; `IRMatch.subject_value` is added so pattern
-      primitives reference the subject pointer through
-      [`IROperand::Local`] / a single shared `value_map` threaded
-      across all arms. The codegen-side `emit_pattern`, `emit_bind`,
-      `emit_tag_check`, `emit_literal_const`, `emit_binary_pattern`
-      shim, and `get_union_payload_ptr` helpers are deleted (~250
-      LOC). Six executor arms in `control/instructions.rs` perform
-      the LLVM builder calls (`emit_pattern_tag_eq`,
-      `emit_pattern_literal_eq`,
-      `emit_pattern_project_variant_field`,
-      `emit_pattern_union_payload_ptr`,
-      `emit_pattern_bind_from_ptr`, `emit_pattern_binary_match`),
-      sharing `materialize_ptr_operand` for the pointer-operand
-      diagnostic. `compile_pattern` (the public entry from
-      `compile_receive_arms`) routes through the same
-      `lower_pattern_to_instructions` + `execute_instructions` path,
-      so receive arms and match arms share one pattern-emission
-      pipeline. Bindings stay in the check block (not the body) so
-      Expo guards (`Some(v) when v > 0`) can reference them; per-arm
-      scoping is enforced by a `fn_state.variables` clone/restore
-      wrapping each arm's check + body in `emit_match_unified` and
-      `compile_receive_arms`. The 5b lift moved binding _setup_
-      into IR; _scoping_ stays in codegen because the variables map
-      carries LLVM-typed allocas not exposed at the IR surface. Dead
-      `lower_match` free function and `ResolvedMatch` struct are
-      deleted. **Outcome.** `emit_pattern` and the 5a synthetic
-      bridges are gone; `match` and `receive` arms drive a single
-      IR-encoded pattern-emission pipeline through the shared
-      `execute_instructions` walker. The IR surface now describes
-      what gets tested, what gets bound, and how results fuse --
-      the only codegen-side concession is per-arm variable scoping
-      around LLVM-typed allocas.
-- **Slice 6 -- loops (`while`, `loop`, `for`, `break`, `return`).**
-  Loop headers become `IRBasicBlock`s with explicit back-edges;
-  `break` and `return` become explicit terminators. The
-  `tail_position` ambient flag on `FnLowerState` becomes a
-  `tail: bool` field on `IRInstruction::Call` / `MethodCall`.
-  **Done when** loops carry no ambient state and `tail_position()`
-  is deleted.
+    emit no spurious AND. New
+    `Lowerer::lower_pattern_to_instructions` returns a
+    `LoweredPattern { instructions, check_result }` -- a single
+    ordered stream containing test ops, binds, and AND/OR fusion,
+    plus the [`IROperand`] referencing the final i1. Guards lift
+    via `lower_expr_to_operand` appended to the arm's check stream
+    and `BoolAnd`-fused with the pattern's i1 -- no codegen-side
+    guard handling remains. `IRMatchArm.guard`,
+    `IRMatchArm.pattern_result_value`, and `IRMatch.patterns`
+    retire; `IRMatch.subject_value` is added so pattern
+    primitives reference the subject pointer through
+    [`IROperand::Local`] / a single shared `value_map` threaded
+    across all arms. The codegen-side `emit_pattern`, `emit_bind`,
+    `emit_tag_check`, `emit_literal_const`, `emit_binary_pattern`
+    shim, and `get_union_payload_ptr` helpers are deleted (~250
+    LOC). Six executor arms in `control/instructions.rs` perform
+    the LLVM builder calls (`emit_pattern_tag_eq`,
+    `emit_pattern_literal_eq`,
+    `emit_pattern_project_variant_field`,
+    `emit_pattern_union_payload_ptr`,
+    `emit_pattern_bind_from_ptr`, `emit_pattern_binary_match`),
+    sharing `materialize_ptr_operand` for the pointer-operand
+    diagnostic. `compile_pattern` (the public entry from
+    `compile_receive_arms`) routes through the same
+    `lower_pattern_to_instructions` + `execute_instructions` path,
+    so receive arms and match arms share one pattern-emission
+    pipeline. Bindings stay in the check block (not the body) so
+    Expo guards (`Some(v) when v > 0`) can reference them; per-arm
+    scoping is enforced by a `fn_state.variables` clone/restore
+    wrapping each arm's check + body in `emit_match_unified` and
+    `compile_receive_arms`. The 5b lift moved binding _setup_
+    into IR; _scoping_ stays in codegen because the variables map
+    carries LLVM-typed allocas not exposed at the IR surface. Dead
+    `lower_match` free function and `ResolvedMatch` struct are
+    deleted. **Outcome.** `emit_pattern` and the 5a synthetic
+    bridges are gone; `match` and `receive` arms drive a single
+    IR-encoded pattern-emission pipeline through the shared
+    `execute_instructions` walker. The IR surface now describes
+    what gets tested, what gets bound, and how results fuse --
+    the only codegen-side concession is per-arm variable scoping
+    around LLVM-typed allocas.
+- **Slice 6 -- loops + tail-flag retirement (Done, Wave 25).**
+  `while`, `loop`, and `for` lift onto the `Lowerer::lower_*` +
+  `emit_*_unified` pipeline (parallel to Slices 3-5): three new
+  IR types -- `IRWhile`, `IRLoop`, `IRFor` -- carry IR-minted
+  `header_block` / `body_block` / `exit_block` ids, the
+  `header_instructions` lift, `header_terminator`
+  (`CondBranch { cond, body, exit }`), and `body_terminator`
+  (`Branch(header)` back-edge). Bodies remain AST stubs until
+  Phase 4g; the loops expose `exit_block` so `Statement::Break`
+  resolves through the unchanged `loop_exit_stack`. `for` keeps
+  its iterable AST + binding `Pattern` inline, mirroring the
+  `PatternBinaryMatch` precedent: the multi-block iterator
+  desugar (`length()` / `get()` / `Option` unwrap / pattern
+  bind) stays whole at the IR seam, broken into ≤40-LOC helpers.
+  `compile_while` / `compile_loop` / `compile_for` collapse to
+  five-line shims; the 233-LOC legacy `loops.rs` body is
+  deleted.
+  In parallel, the ambient `FnLowerState::tail_position` flag
+  retires. `IRInstruction::Call` and `IRInstruction::MethodCall`
+  gain a `tail: bool` field; new
+  `Lowerer::lower_tail_expr_to_operand` threads `tail = true`
+  into the immediately-emitted call (transparent through
+  `Group`). `Statement::Return` and the last-statement-implicit-
+  return swap their `mark_tail` / `clear_tail` brackets for the
+  explicit lowering via a new `compile_tail_expr` helper;
+  `compile_body_as_value`'s `save_tail` / `restore_tail`
+  save/restore loop is deleted. The TCO rewrite (drop live
+  variables, store args into `param_allocas`, branch to
+  `tco_loop`) moves from `structs.rs` into
+  `emit_tail_call_back_edge` in `control/instructions.rs`'s
+  `emit_method_call`, gated on `IRInstruction::MethodCall.tail`
+  and `FnLowerState::is_self_call`. The
+  `tail_position` / `mark_tail` / `clear_tail` / `save_tail` /
+  `restore_tail` / `is_self_tail_call(was_tail)` accessors are
+  deleted; only `current_fn` / `is_self_call` survive for
+  self-recursion detection. **Outcome.** Loops are
+  indistinguishable from conditionals at the IR surface; TCO is
+  honest IR data on the call instruction. The `tco_loop` block
+  - `param_allocas` LLVM-side scaffolding in `compile_method_body`
+    is unchanged -- it's the rewrite target, orthogonal to the IR
+    flag. LLVM IR for `Counter.count_down` (the
+    `tests/lang/functions/tail_call.expo` regression) confirms
+    the self-recursive call is rewritten to `br label %tco_loop`
+    byte-for-byte as before.
 
 ### Phase 4g -- Function bodies in IR
 

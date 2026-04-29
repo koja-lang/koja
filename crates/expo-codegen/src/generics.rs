@@ -16,7 +16,6 @@ use inkwell::values::{FunctionValue, PointerValue};
 
 use crate::compiler::{Compiler, EmitResult};
 use crate::drop::{Ownership, drop_live_variables};
-use crate::expr::compile_expr;
 use crate::hashtable::monomorphize_hashtable_struct;
 use expo_ir::lower::mangling::try_parse_mangled_name;
 use expo_ir::lower::processes::resolve_process_envelope_type;
@@ -64,9 +63,7 @@ pub(crate) fn compile_function_body<'ctx>(
         }
 
         if is_last && let Statement::Expr(expr) = stmt {
-            c.fn_lower.mark_tail();
-            let val = compile_expr(c, expr, fn_value)?.map(|tv| tv.value);
-            c.fn_lower.clear_tail();
+            let val = crate::expr::compile_tail_expr(c, expr, fn_value)?.map(|tv| tv.value);
             if !c.current_block_terminated() && *return_type != Type::Unit {
                 if let Some(v) = val {
                     let v = apply_coercion(c, v, expr)?;

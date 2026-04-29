@@ -220,9 +220,8 @@ pub struct Compiler<'ctx> {
     pub fn_ref_thunks: HashMap<FunctionIdentifier, FunctionValue<'ctx>>,
     /// LLVM-free per-function semantic state (lives in `expo-ir`). Hosts
     /// `return_type_hint`, `process_msg_type`, `type_subst`, `self_type_name`,
-    /// and the TCO ambient flags (`current_fn`, `tail_position`). Companion
-    /// to [`Self::layouts`]: layouts is type-scoped, fn_lower is
-    /// function-scoped.
+    /// and the TCO bookkeeping (`current_fn`). Companion to [`Self::layouts`]:
+    /// layouts is type-scoped, fn_lower is function-scoped.
     pub fn_lower: FnLowerState,
     /// LLVM type cache: handles for non-generic and monomorphized struct
     /// types, plus identity-keyed enum payload structs. Populated during

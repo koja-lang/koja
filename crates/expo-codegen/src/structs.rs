@@ -321,21 +321,41 @@ pub fn compile_method_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    // Lift attempt runs before `save_tail` so the lift helper still
-    // observes the surrounding tail flag and defers to the legacy path
-    // for self-tail-recursive method calls (which need the
-    // `loop_header` jump rewrite).
+    compile_method_call_with_tail(c, receiver, method, args, false, function)
+}
+
+/// Inner method-call compiler that takes an explicit `tail` flag.
+/// Replaces the legacy ambient `FnLowerState::tail_position` read --
+/// callers that know they are in tail position
+/// ([`crate::expr::compile_tail_expr`] and friends) thread `tail =
+/// true`; everyone else uses the [`compile_method_call`] shim which
+/// passes `false`.
+///
+/// TCO (the back-edge to `tco_loop` + `param_allocas` store) lives in
+/// the IR codegen executor's MethodCall arm
+/// ([`crate::control::execute_instructions`]), not here. The legacy
+/// fallback path below is used only for cases the IR lift defers to
+/// Stub for (closure-via-field calls, non-self self-recursive but
+/// pending-monomorphization-blocked, etc.); none of those interact
+/// with TCO, which only applies to self-tail-recursive direct
+/// method calls (always lifted in the IR layer).
+pub fn compile_method_call_with_tail<'ctx>(
+    c: &mut Compiler<'ctx>,
+    receiver: &Expr,
+    method: &str,
+    args: &[Arg],
+    tail: bool,
+    function: FunctionValue<'ctx>,
+) -> ExprResult<'ctx> {
     let mut instructions = Vec::new();
     if let Some((operand, return_type)) =
         c.lowerer()
-            .lower_method_call_or_stub(&mut instructions, receiver, method, args)
+            .lower_method_call_or_stub(&mut instructions, receiver, method, args, tail)
     {
         let mut value_map = HashMap::new();
         execute_instructions(c, &instructions, function, None, &mut value_map)?;
         return maybe_typed_value(c, &operand, &value_map, return_type);
     }
-
-    let was_tail = c.fn_lower.save_tail();
 
     if let ExprKind::Ident { name, .. } = &receiver.kind {
         let resolved = resolve_type_alias_name(name, &c.type_ctx.type_aliases);
@@ -435,22 +455,6 @@ pub fn compile_method_call<'ctx>(
                 .value
         };
         llvm_args.push(val.into());
-    }
-
-    c.fn_lower.restore_tail(was_tail);
-
-    let is_tail = c
-        .fn_lower
-        .is_self_tail_call(&resolved.mangled_name, was_tail);
-
-    if is_tail && let Some(loop_header) = c.fn_state.loop_header {
-        crate::drop::drop_live_variables(c, Some("self"));
-        for (arg, alloca) in llvm_args.iter().zip(c.fn_state.param_allocas.iter()) {
-            let val: BasicValueEnum = (*arg).try_into().unwrap();
-            c.builder.build_store(*alloca, val).unwrap();
-        }
-        c.builder.build_unconditional_branch(loop_header).unwrap();
-        return Ok(None);
     }
 
     let result = c.call(
@@ -1012,6 +1016,7 @@ fn compile_static_call<'ctx>(
         resolved_type,
         method,
         args,
+        false,
     ) {
         let mut value_map = HashMap::new();
         execute_instructions(c, &instructions, function, None, &mut value_map)?;

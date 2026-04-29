@@ -137,6 +137,15 @@ pub enum IRInstruction {
         /// destination so wrappers can re-attach a typed value at
         /// the materialization seam.
         return_type: Type,
+        /// Whether this call is in tail position. Set by
+        /// [`crate::lower::values::Lowerer::lower_tail_expr_to_operand`]
+        /// (and its IR-level callers) when the call is the immediate
+        /// expression of a `return` / last-statement-implicit-return.
+        /// Plain function calls do not currently support TCO, so this
+        /// is metadata only -- threaded through for consistency with
+        /// [`IRInstruction::MethodCall::tail`] and to make the
+        /// tail-context lift surface symmetric.
+        tail: bool,
     },
     /// Static GEP chain on a field-access path rooted at a named
     /// local (`a.b.c`, `self.origin.x`). Carries the chain's base
@@ -293,6 +302,17 @@ pub enum IRInstruction {
         param_types: Vec<Type>,
         /// Callee's resolved return type.
         return_type: Type,
+        /// Whether this call is in tail position. Set by
+        /// [`crate::lower::values::Lowerer::lower_tail_expr_to_operand`]
+        /// (and its IR-level callers) when the call is the immediate
+        /// expression of a `return` / last-statement-implicit-return.
+        /// The codegen executor reads this and performs the TCO
+        /// rewrite (back-edge to the function's `tco_loop` block,
+        /// args stored into `param_allocas`) when the call is also
+        /// self-recursive. Replaces the legacy ambient
+        /// `FnLowerState::tail_position` flag retired in Slice 6
+        /// Wave 25.
+        tail: bool,
     },
     /// Compile a binary-pattern match (multi-segment match against
     /// raw bytes) at the IR seam. Wraps `compile_binary_pattern`'s
