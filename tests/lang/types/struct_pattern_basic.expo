@@ -1,0 +1,25 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+struct Classifier
+end
+
+impl Classifier
+  fn label(self, p: Point) -> String
+    match p
+      Point{x: 5, y: 2} -> "exact"
+      Point{x: 0, y: 0} -> "origin"
+      _other -> "other"
+    end
+  end
+end
+
+fn main
+  c = Classifier{}
+  print(c.label(Point{x: 5, y: 2}))
+  print(c.label(Point{x: 0, y: 0}))
+  print(c.label(Point{x: 5, y: 9}))
+  print(c.label(Point{x: 1, y: 2}))
+end

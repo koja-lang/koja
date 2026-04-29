@@ -350,6 +350,37 @@ are summarized inline below.
   `StoreField`) and one new terminator (`Return`) that Slice 2
   (per-construct body lift) and Slice 3 (function-body lift)
   build on directly.
+- **Sidebar -- Plain struct patterns + field-shorthand removal
+  (done, Wave 28).** Adds `Pattern::Struct` (`Point{x: 5, y: 2}`) as a
+  strict simplification of `Pattern::EnumStruct`: same `FieldPattern`
+  parse + same `lower_field_patterns` resolution path, but no tag
+  check and no payload-block split. The new
+  `IRInstruction::PatternProjectStructField { dest, subject_ptr,
+  struct_key, field_index, field_ty, name_hint }` mirrors
+  `PatternProjectVariantField` minus the variant lookup; the new
+  `Lowerer::lower_plain_struct_into_arm` lowers per-field projections
+  into the open block (no `gate_tag_check`) with the existing
+  `gate_intermediate_field` sequencing literal-bearing siblings.
+  Partial coverage is automatic: the IR layer only emits checks for
+  listed fields (`Point{x: 5}` matches any `y`; empty `Point{}`
+  matches any value). Same lift applies to the legacy
+  `compile_pattern` path via `lower_plain_struct_pattern` (struct
+  projection is unconditionally safe -- no Wave 27 hazard class).
+  The same wave **removed the field-shorthand binding**:
+  `FieldPattern.pattern: Option<Pattern>` collapses to `Pattern`,
+  `parse_field_pattern` requires `:` (with a teaching diagnostic
+  when missing), and three lowering helpers
+  (`lower_enum_struct_pattern`, `lower_enum_struct_into_arm`,
+  `lower_plain_struct_into_arm`) shed their "bind under field name"
+  branches -- the recursion now flows through `ResolvedPattern::Bind`
+  which already emits the same `PatternBindFromPtr` in the right
+  block. Single-way principle: construction is named-only
+  (`Point{x: 5, y: 2}`), so destructuring is too. Regression locked
+  in via four tests under `tests/lang/types/`:
+  [struct_pattern_basic.expo](../tests/lang/types/struct_pattern_basic.expo),
+  [struct_pattern_partial.expo](../tests/lang/types/struct_pattern_partial.expo),
+  [struct_pattern_bind.expo](../tests/lang/types/struct_pattern_bind.expo),
+  [struct_pattern_nested.expo](../tests/lang/types/struct_pattern_nested.expo).
 - **Sidebar -- Pattern-CFG gating for nested-enum-literal payloads
   (done, Wave 27).** Resolves the GAPS "Nested enum pattern matching
   with literal payloads" segfault that the Slice 5b match rework had
@@ -423,6 +454,7 @@ to plan a slice.
 | `compound_assign`           | Full IR pipeline            | `Lowerer::lower_compound_assign_stmt` -> load-current + `IRInstruction::BinaryOp` + `StoreLocal` / `StoreField` (single ordered instruction stream, no extra terminator)                                                                                                                                                                                                                    |
 | `field_assignment`          | Full IR pipeline            | Multi-segment lvalue assignments lower to `IRInstruction::StoreField` (executor walks the resolved chain via the new `walk_field_chain` helper that ports the legacy `field_ptr`)                                                                                                                                                                                                           |
 | Binary pattern              | Instruction-only            | `PatternBinaryMatch` wraps `compile_binary_pattern` whole at IR seam (multi-block algorithm; no further decomposition planned)                                                                                                                                                                                                                                                               |
+| Plain struct pattern        | Full IR pipeline            | `Lowerer::lower_pattern` -> `ResolvedPattern::Struct { struct_key, fields }` -> `Lowerer::lower_plain_struct_into_arm` (per-field `IRInstruction::PatternProjectStructField` into the open block; no tag check, no payload-block split because struct projection is unconditionally safe; `gate_intermediate_field` sequences literal-bearing siblings). Legacy `compile_pattern` path handled by `Lowerer::lower_plain_struct_pattern` (Wave 28). |
 | Struct construction         | AST -> LLVM                 | Phase 4h                                                                                                                                                                                                                                                                                                                                                                                     |
 | Enum construction           | AST -> LLVM                 | Phase 4h                                                                                                                                                                                                                                                                                                                                                                                     |
 | Closure construction        | AST -> LLVM                 | Phase 4h (`partial_apply` shape)                                                                                                                                                                                                                                                                                                                                                             |

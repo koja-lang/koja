@@ -1468,11 +1468,9 @@ fn substitute_named_in_pattern(pat: &mut Pattern, from: &str, to: &TypeExpr) {
                 substitute_named_in_pattern(e, from, to);
             }
         }
-        Pattern::EnumStruct { fields, .. } => {
+        Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
             for f in fields {
-                if let Some(p) = &mut f.pattern {
-                    substitute_named_in_pattern(p, from, to);
-                }
+                substitute_named_in_pattern(&mut f.pattern, from, to);
             }
         }
         Pattern::Constructor { elements, .. } => {
@@ -1711,11 +1709,9 @@ fn substitute_self_in_pattern(pat: &mut Pattern, target: &str) {
                 substitute_self_in_pattern(e, target);
             }
         }
-        Pattern::EnumStruct { fields, .. } => {
+        Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
             for f in fields {
-                if let Some(p) = &mut f.pattern {
-                    substitute_self_in_pattern(p, target);
-                }
+                substitute_self_in_pattern(&mut f.pattern, target);
             }
         }
         Pattern::Constructor { elements, .. } => {

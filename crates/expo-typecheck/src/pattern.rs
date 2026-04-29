@@ -234,6 +234,60 @@ fn resolve_enum_id_from_subject(subject_type: &Type, _ctx: &TypeContext) -> Opti
     }
 }
 
+/// Resolves the field-name/type pairs for a plain struct pattern, applying
+/// generic type substitution when the subject type is a generic instance.
+/// Mirrors [`resolve_variant_data`] for the struct case.
+pub(crate) fn resolve_struct_field_types(
+    struct_name: &str,
+    subject_type: &Type,
+    ctx: &TypeContext,
+) -> Option<Vec<(String, Type)>> {
+    let effective_ty = match subject_type {
+        Type::Indirect(inner) => inner.as_ref(),
+        other => other,
+    };
+    let type_info = ctx.find_type(struct_name)?;
+    let fields = type_info.fields()?.clone();
+
+    if let Type::Named { type_args, .. } = effective_ty
+        && !type_args.is_empty()
+        && !type_info.type_params.is_empty()
+    {
+        let subst = build_substitution(&type_info.type_params, type_args);
+        return Some(
+            fields
+                .into_iter()
+                .map(|(n, t)| (n, substitute_preserving(&t, &subst)))
+                .collect(),
+        );
+    }
+    Some(fields)
+}
+
+/// Validates a list of `FieldPattern`s against a struct's expected fields,
+/// recursing into sub-patterns and binding shorthand fields. Shared by
+/// [`Pattern::EnumStruct`] (variant context) and [`Pattern::Struct`] (plain
+/// struct context); `container_label` provides the diagnostic prefix
+/// (e.g. `"variant `Color.Red`"` or `"struct `Point`"`).
+fn check_struct_field_patterns(
+    fields: &mut [FieldPattern],
+    expected_fields: &[(String, Type)],
+    container_label: &str,
+    ctx: &mut TypeContext,
+    env: &mut HashMap<String, VarInfo>,
+) {
+    for fp in fields {
+        let Some((_, field_ty)) = expected_fields.iter().find(|(n, _)| *n == fp.name) else {
+            ctx.error(
+                format!("{container_label} has no field `{}`", fp.name),
+                fp.span,
+            );
+            continue;
+        };
+        check_pattern(&mut fp.pattern, field_ty, ctx, env);
+    }
+}
+
 /// Recursively validates a match pattern against the expected subject type,
 /// binding pattern variables into the environment.
 pub(crate) fn check_pattern(
@@ -282,31 +336,8 @@ pub(crate) fn check_pattern(
 
             match variant_data {
                 Some(VariantData::Struct(expected_fields)) => {
-                    for fp in fields {
-                        if let Some((_, field_ty)) =
-                            expected_fields.iter().find(|(n, _)| *n == fp.name)
-                        {
-                            if let Some(sub_pat) = &mut fp.pattern {
-                                check_pattern(sub_pat, field_ty, ctx, env);
-                            } else {
-                                env.insert(
-                                    fp.name.clone(),
-                                    VarInfo {
-                                        ty: field_ty.clone(),
-                                        state: VarState::Live,
-                                    },
-                                );
-                            }
-                        } else {
-                            ctx.error(
-                                format!(
-                                    "variant `{}.{}` has no field `{}`",
-                                    enum_name, variant, fp.name
-                                ),
-                                fp.span,
-                            );
-                        }
-                    }
+                    let label = format!("variant `{}.{}`", enum_name, variant);
+                    check_struct_field_patterns(fields, &expected_fields, &label, ctx, env);
                 }
                 Some(VariantData::Unit) => {
                     ctx.error(
@@ -329,6 +360,27 @@ pub(crate) fn check_pattern(
                             format!("enum `{}` has no variant `{}`", enum_name, variant),
                             *span,
                         );
+                    }
+                }
+            }
+        }
+
+        Pattern::Struct {
+            type_path,
+            fields,
+            span,
+            resolved_type,
+        } => {
+            let struct_name = type_path.join(".");
+            *resolved_type = ctx.resolve_name(&struct_name).cloned();
+            match resolve_struct_field_types(&struct_name, subject_type, ctx) {
+                Some(expected_fields) => {
+                    let label = format!("struct `{}`", struct_name);
+                    check_struct_field_patterns(fields, &expected_fields, &label, ctx, env);
+                }
+                None => {
+                    if !ctx.is_struct(&struct_name) {
+                        ctx.error(format!("unknown struct `{}`", struct_name), *span);
                     }
                 }
             }
@@ -739,13 +791,9 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
                 collect_bindings_inner(sub, out);
             }
         }
-        Pattern::EnumStruct { fields, .. } => {
+        Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
             for f in fields {
-                if let Some(sub) = &f.pattern {
-                    collect_bindings_inner(sub, out);
-                } else {
-                    out.push((f.name.clone(), f.span));
-                }
+                collect_bindings_inner(&f.pattern, out);
             }
         }
         Pattern::TypedBinding { name, span, .. } => {

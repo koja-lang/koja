@@ -268,21 +268,11 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             } else {
                 format!("{}.{}", type_path.join("."), variant)
             };
-            let field_docs: Vec<Doc> = fields.iter().map(field_pattern_to_doc).collect();
-            group(concat(vec![
-                text(prefix),
-                text("{"),
-                indent(
-                    2,
-                    concat(vec![
-                        softline(),
-                        intersperse(field_docs, concat(vec![text(","), line()])),
-                    ]),
-                ),
-                softline(),
-                text("}"),
-            ]))
+            struct_pattern_to_doc(&prefix, fields)
         }
+        Pattern::Struct {
+            type_path, fields, ..
+        } => struct_pattern_to_doc(&type_path.join("."), fields),
         Pattern::Constructor { name, elements, .. } => {
             if elements.is_empty() {
                 text(name.clone())
@@ -388,10 +378,32 @@ fn expr_value_to_doc(expr: &Expr) -> Doc {
 
 /// Formats a single field pattern inside a struct destructure.
 pub(super) fn field_pattern_to_doc(fp: &FieldPattern) -> Doc {
-    match &fp.pattern {
-        Some(pat) => concat(vec![text(&fp.name), text(": "), pattern_to_doc(pat)]),
-        None => text(&fp.name),
-    }
+    concat(vec![
+        text(&fp.name),
+        text(": "),
+        pattern_to_doc(&fp.pattern),
+    ])
+}
+
+/// Shared `Type{f1, f2, ...}` rendering for both enum-struct variant
+/// patterns and plain struct patterns. `prefix` is the qualified head
+/// (e.g. `"Shape.Rect"` or `"Point"`); `fields` are the listed field
+/// patterns.
+fn struct_pattern_to_doc(prefix: &str, fields: &[FieldPattern]) -> Doc {
+    let field_docs: Vec<Doc> = fields.iter().map(field_pattern_to_doc).collect();
+    group(concat(vec![
+        text(prefix.to_string()),
+        text("{"),
+        indent(
+            2,
+            concat(vec![
+                softline(),
+                intersperse(field_docs, concat(vec![text(","), line()])),
+            ]),
+        ),
+        softline(),
+        text("}"),
+    ]))
 }
 
 /// Formats a literal value.

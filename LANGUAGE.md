@@ -641,13 +641,34 @@ result = match x
 end
 ```
 
-Patterns: literals (integers, floats, booleans, strings), wildcards (`_`), variable bindings, nested patterns, enum variant destructuring. Guards use `when`:
+Patterns: literals (integers, floats, booleans, strings), wildcards (`_`), variable bindings, nested patterns, enum and struct destructuring. Guards use `when`:
 
 ```expo
 match x
   Option.Some(v) when v > 5 -> "big"
   Option.Some(_) -> "small"
   Option.None -> "none"
+end
+```
+
+Struct destructuring works for both plain structs and enum-struct variants. Field syntax is always `name: pattern` -- there is no shorthand form. To bind a field under its own name, write `x: x`. Unlisted fields are implicit wildcards, and an empty `{}` matches any value of that type:
+
+```expo
+struct Point
+  x: Int
+  y: Int
+end
+
+match p
+  Point{x: 0, y: 0} -> "origin"
+  Point{x: 5}       -> "x is five"   # y is unconstrained
+  Point{x: x, y: y} -> "(#{x}, #{y})"
+end
+
+# Enum-struct variants follow the same rules.
+match shape
+  Shape.Rect{width: w, height: h} -> w * h
+  Shape.Circle{radius: r}         -> r * r * 314 / 100
 end
 ```
 

@@ -1,0 +1,32 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+struct Inspector
+end
+
+impl Inspector
+  # Composes the new flat struct-pattern path with the Wave 27 CFG-gated
+  # enum-pattern path: `Some(Point{x: 5})` projects the payload only when
+  # the outer tag check succeeds, then projects the inner field. The
+  # `None` case must not crash on payload deref.
+  fn label(self, op: Option<Point>) -> String
+    match op
+      Option.Some(Point{x: 0, y: 0}) -> "some origin"
+      Option.Some(Point{x: 5}) -> "some x=5"
+      Option.Some(Point{x: x, y: y}) -> "some (#{x}, #{y})"
+      Option.None -> "none"
+    end
+  end
+end
+
+fn main
+  i = Inspector{}
+  none_p: Option<Point> = Option.None
+  print(i.label(none_p))
+  print(i.label(Option.Some(Point{x: 0, y: 0})))
+  print(i.label(Option.Some(Point{x: 5, y: 1})))
+  print(i.label(Option.Some(Point{x: 5, y: 9})))
+  print(i.label(Option.Some(Point{x: 7, y: 8})))
+end

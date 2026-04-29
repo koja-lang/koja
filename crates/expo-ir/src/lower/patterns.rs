@@ -131,6 +131,19 @@ pub fn lower_pattern(
             })
         }
 
+        Pattern::Struct {
+            type_path, fields, ..
+        } => {
+            let struct_key = resolve_struct_key_from_path(ctx, type_path, subject_type)?;
+            let expected = get_struct_fields(ctx, &struct_key)?;
+            let resolved =
+                lower_field_patterns(ctx, &expected, fields, &format!("struct `{struct_key}`"))?;
+            Ok(ResolvedPattern::Struct {
+                struct_key,
+                fields: resolved,
+            })
+        }
+
         Pattern::Constructor { name, elements, .. } => {
             let enum_key = resolve_enum_key_from_constructor(ctx, name, subject_type)?;
             let tag = lookup_variant_tag(ctx, &enum_key, name)?;
@@ -241,23 +254,33 @@ pub fn lower_struct_fields(
     fields: &[FieldPattern],
 ) -> Result<Vec<ResolvedFieldPattern>, String> {
     let expected = get_struct_variant_fields(ctx, enum_key, variant)?;
+    lower_field_patterns(ctx, &expected, fields, &format!("{enum_key}.{variant}"))
+}
+
+/// Resolve a list of `FieldPattern`s against a known field layout. Shared
+/// by [`lower_struct_fields`] (enum-struct variant context) and by the
+/// plain `Pattern::Struct` arm in [`lower_pattern`]. `container_label`
+/// is the diagnostic prefix used when an unknown field is referenced
+/// (e.g. `"Color.Red"` or `"struct \`Point\`"`).
+pub fn lower_field_patterns(
+    ctx: &LowerCtx<'_>,
+    expected_fields: &[(String, Type)],
+    fields: &[FieldPattern],
+    container_label: &str,
+) -> Result<Vec<ResolvedFieldPattern>, String> {
     let mut out = Vec::with_capacity(fields.len());
     for fp in fields {
-        let (idx, (_, field_type)) = expected
+        let (idx, (_, field_type)) = expected_fields
             .iter()
             .enumerate()
             .find(|(_, (n, _))| *n == fp.name)
-            .ok_or_else(|| format!("unknown field `{}` in {enum_key}.{variant}", fp.name))?;
+            .ok_or_else(|| format!("unknown field `{}` in {container_label}", fp.name))?;
         let inner_ty = unwrap_indirect(field_type);
-        let sub = match &fp.pattern {
-            Some(p) => Some(lower_pattern(ctx, p, inner_ty)?),
-            None => None,
-        };
         out.push(ResolvedFieldPattern {
             name: fp.name.clone(),
             field_index: idx as u32,
             field_type: field_type.clone(),
-            sub,
+            sub: lower_pattern(ctx, &fp.pattern, inner_ty)?,
         });
     }
     Ok(out)
@@ -409,6 +432,99 @@ fn get_struct_variant_fields(
         VariantData::Struct(fields) => Ok(fields),
         _ => Err(format!("{enum_key}.{variant} is not a struct variant")),
     }
+}
+
+/// Resolves the LLVMTypeCache key for a plain struct referenced via an
+/// AST type path. Mirrors [`resolve_enum_key_from_path`] but resolves
+/// against struct registrations: applies generic-arg mangling when the
+/// subject's resolved type carries them, otherwise prefers the
+/// package-qualified identifier and falls back to a name-only lookup.
+pub fn resolve_struct_key_from_path(
+    ctx: &LowerCtx<'_>,
+    type_path: &[String],
+    subject_type: &Type,
+) -> Result<String, String> {
+    let ty = unwrap_indirect(subject_type);
+    match ty {
+        Type::Named {
+            identifier,
+            type_args,
+        } if !type_args.is_empty() => Ok(mangle_name(identifier, type_args)),
+        Type::Named { identifier, .. } => {
+            let name = &identifier.name;
+            if let Some((base, _)) = try_parse_mangled_name(ctx, name)
+                && ctx.type_ctx.is_struct(&base)
+            {
+                Ok(name.clone())
+            } else if identifier.package != Package::Unresolved {
+                Ok(identifier.qualified_name())
+            } else if !type_path.is_empty() {
+                resolve_struct_key_from_joined(ctx, &type_path.join("."), subject_type)
+            } else {
+                Err("cannot determine struct name for pattern".to_string())
+            }
+        }
+        _ if !type_path.is_empty() => {
+            resolve_struct_key_from_joined(ctx, &type_path.join("."), subject_type)
+        }
+        _ => Err("cannot determine struct name for pattern".to_string()),
+    }
+}
+
+fn resolve_struct_key_from_joined(
+    ctx: &LowerCtx<'_>,
+    joined: &str,
+    subject_type: &Type,
+) -> Result<String, String> {
+    if let Some(id) = resolve_name_current(ctx, joined) {
+        let qualified = id.qualified_name();
+        let qualified_id = MonomorphizedTypeIdentifier::new(&qualified);
+        if ctx.type_ctx.get_type(id).is_some() || ctx.layouts.contains_monomorphized(&qualified_id)
+        {
+            return Ok(qualified);
+        }
+    }
+    let bare_id = TypeIdentifier::from_qualified_name(joined);
+    let joined_id = MonomorphizedTypeIdentifier::new(joined);
+    if ctx.type_ctx.get_type(&bare_id).is_some() || ctx.layouts.contains_monomorphized(&joined_id) {
+        return Ok(joined.to_string());
+    }
+    Err(format!(
+        "cannot resolve struct name from pattern `{joined}` for match subject type `{}`",
+        subject_type.display()
+    ))
+}
+
+/// Field-name/type pairs for a struct identified by its cache key. Tries
+/// the in-context registry first (for non-generic structs and generic
+/// structs whose type-params are already substituted at the type-info
+/// level) and falls back to a parsed-mangled-name lookup for monomorphic
+/// instances of generic structs.
+fn get_struct_fields(ctx: &LowerCtx<'_>, struct_key: &str) -> Result<Vec<(String, Type)>, String> {
+    if let Some(ti) = find_type_current(ctx, struct_key)
+        && let Some(fields) = ti.fields()
+    {
+        return Ok(fields.clone());
+    }
+    if let Some((base, type_args)) = try_parse_mangled_name(ctx, struct_key)
+        && let Some(ti) = find_type_current(ctx, &base)
+        && let Some(fields) = ti.fields()
+    {
+        if ti.type_params.is_empty() || type_args.is_empty() {
+            return Ok(fields.clone());
+        }
+        let subst = expo_typecheck::types::build_substitution(&ti.type_params, &type_args);
+        return Ok(fields
+            .iter()
+            .map(|(n, t)| {
+                (
+                    n.clone(),
+                    expo_typecheck::types::substitute_preserving(t, &subst),
+                )
+            })
+            .collect());
+    }
+    Err(format!("struct fields not found for `{struct_key}`"))
 }
 
 fn get_tuple_variant_types(
@@ -776,6 +892,13 @@ impl<'a> Lowerer<'a> {
             ResolvedPattern::Or(subs) => {
                 self.lower_or_into_arm(subs, subject_ptr, failure_target, blocks)
             }
+            ResolvedPattern::Struct { struct_key, fields } => self.lower_plain_struct_into_arm(
+                struct_key,
+                fields,
+                subject_ptr,
+                failure_target,
+                blocks,
+            ),
             ResolvedPattern::UnionMember {
                 union_mangled,
                 tag,
@@ -911,6 +1034,9 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(result)
             }
+            ResolvedPattern::Struct { struct_key, fields } => {
+                self.lower_plain_struct_pattern(struct_key, fields, subject_ptr, out)
+            }
             ResolvedPattern::UnionMember {
                 union_mangled,
                 tag,
@@ -984,11 +1110,8 @@ impl<'a> Lowerer<'a> {
 
     /// Lower a [`ResolvedPattern::EnumStruct`]: emit a tag check, then
     /// per field emit a [`IRInstruction::PatternProjectVariantField`]
-    /// followed by either a recursive sub-pattern (with `BoolAnd`
-    /// fusion) or a direct [`IRInstruction::PatternBindFromPtr`] when
-    /// the field has no sub-pattern (the field name doubles as the
-    /// binding name). Mirrors the legacy `emit_pattern`'s struct-variant
-    /// branch.
+    /// followed by a recursive sub-pattern (with `BoolAnd` fusion).
+    /// Mirrors the legacy `emit_pattern`'s struct-variant branch.
     fn lower_enum_struct_pattern(
         &mut self,
         enum_key: &str,
@@ -1017,19 +1140,9 @@ impl<'a> Lowerer<'a> {
                 field_ty: fp.field_type.clone(),
                 name_hint: fp.name.clone(),
             });
-            if let Some(sub) = &fp.sub {
-                let sub_result =
-                    self.lower_resolved_pattern(sub, &IROperand::Local(field_ptr_dest), out)?;
-                result =
-                    self.fuse_check_results(result, sub_result, out, ResolvedBinaryOp::BoolAnd);
-            } else {
-                out.push(IRInstruction::PatternBindFromPtr {
-                    name: fp.name.clone(),
-                    ty: unwrap_indirect(&fp.field_type).clone(),
-                    source_ptr: IROperand::Local(field_ptr_dest),
-                    strict_llvm: false,
-                });
-            }
+            let sub_result =
+                self.lower_resolved_pattern(&fp.sub, &IROperand::Local(field_ptr_dest), out)?;
+            result = self.fuse_check_results(result, sub_result, out, ResolvedBinaryOp::BoolAnd);
         }
         Ok(result)
     }
@@ -1092,10 +1205,12 @@ impl<'a> Lowerer<'a> {
 
     /// Lower a [`ResolvedPattern::EnumStruct`] into the arm's check
     /// sub-CFG with payload-gating. Same shape as
-    /// [`Self::lower_enum_tuple_into_arm`] but with named fields:
-    /// fields with a sub-pattern recurse, fields without get a direct
-    /// `PatternBindFromPtr` (so the binding only registers in the
-    /// payload block, never speculatively).
+    /// [`Self::lower_enum_tuple_into_arm`] but with named fields: each
+    /// field's sub-pattern recurses through
+    /// [`Self::lower_pattern_into_arm`]. Bindings happen via the
+    /// recursion's `ResolvedPattern::Bind` arm, which emits the
+    /// `PatternBindFromPtr` only inside the payload block (never
+    /// speculatively).
     fn lower_enum_struct_into_arm(
         &mut self,
         header: ConstructorHeader<'_>,
@@ -1124,25 +1239,12 @@ impl<'a> Lowerer<'a> {
                     name_hint: fp.name.clone(),
                 },
             );
-            let sub_result =
-                if let Some(sub) = &fp.sub {
-                    self.lower_pattern_into_arm(
-                        sub,
-                        &IROperand::Local(field_ptr_dest),
-                        failure_target,
-                        blocks,
-                    )?
-                } else {
-                    blocks.last_mut().unwrap().instructions.push(
-                        IRInstruction::PatternBindFromPtr {
-                            name: fp.name.clone(),
-                            ty: unwrap_indirect(&fp.field_type).clone(),
-                            source_ptr: IROperand::Local(field_ptr_dest),
-                            strict_llvm: false,
-                        },
-                    );
-                    IROperand::ConstBool(true)
-                };
+            let sub_result = self.lower_pattern_into_arm(
+                &fp.sub,
+                &IROperand::Local(field_ptr_dest),
+                failure_target,
+                blocks,
+            )?;
             let is_last = i + 1 == fields.len();
             if is_last {
                 return Ok(sub_result);
@@ -1154,6 +1256,87 @@ impl<'a> Lowerer<'a> {
             }
         }
         Ok(IROperand::ConstBool(true))
+    }
+
+    /// Lower a [`ResolvedPattern::Struct`] into the arm's check sub-CFG.
+    /// Plain (non-enum) structs have no tag and no untagged-union
+    /// payload memory, so projection is unconditionally safe -- there's
+    /// no payload-block split. Per-field
+    /// [`IRInstruction::PatternProjectStructField`] emits into the open
+    /// block, then recurses into the field's sub-pattern with
+    /// [`Self::gate_intermediate_field`] sequencing literal-bearing
+    /// siblings.
+    fn lower_plain_struct_into_arm(
+        &mut self,
+        struct_key: &str,
+        fields: &[ResolvedFieldPattern],
+        subject_ptr: &IROperand,
+        failure_target: IRBlockId,
+        blocks: &mut Vec<IRBasicBlock>,
+    ) -> Result<IROperand, String> {
+        if fields.is_empty() {
+            return Ok(IROperand::ConstBool(true));
+        }
+        for (i, fp) in fields.iter().enumerate() {
+            let field_ptr_dest = self.next_value_id();
+            blocks.last_mut().unwrap().instructions.push(
+                IRInstruction::PatternProjectStructField {
+                    dest: field_ptr_dest,
+                    subject_ptr: subject_ptr.clone(),
+                    struct_key: struct_key.to_string(),
+                    field_index: fp.field_index,
+                    field_ty: fp.field_type.clone(),
+                    name_hint: fp.name.clone(),
+                },
+            );
+            let sub_result = self.lower_pattern_into_arm(
+                &fp.sub,
+                &IROperand::Local(field_ptr_dest),
+                failure_target,
+                blocks,
+            )?;
+            let is_last = i + 1 == fields.len();
+            if is_last {
+                return Ok(sub_result);
+            }
+            if let Some(short_circuit) =
+                self.gate_intermediate_field(sub_result, failure_target, blocks)
+            {
+                return Ok(short_circuit);
+            }
+        }
+        Ok(IROperand::ConstBool(true))
+    }
+
+    /// Lower a [`ResolvedPattern::Struct`] in the legacy flat instruction
+    /// stream (single-pattern path: `compile_pattern` for `receive` arms
+    /// and `expr matches Pattern`). Mirror of
+    /// [`Self::lower_enum_struct_pattern`] minus the tag check; safe in
+    /// the flat shape because struct projection has no payload-deref
+    /// vulnerability.
+    fn lower_plain_struct_pattern(
+        &mut self,
+        struct_key: &str,
+        fields: &[ResolvedFieldPattern],
+        subject_ptr: &IROperand,
+        out: &mut Vec<IRInstruction>,
+    ) -> Result<IROperand, String> {
+        let mut result = IROperand::ConstBool(true);
+        for fp in fields {
+            let field_ptr_dest = self.next_value_id();
+            out.push(IRInstruction::PatternProjectStructField {
+                dest: field_ptr_dest,
+                subject_ptr: subject_ptr.clone(),
+                struct_key: struct_key.to_string(),
+                field_index: fp.field_index,
+                field_ty: fp.field_type.clone(),
+                name_hint: fp.name.clone(),
+            });
+            let sub_result =
+                self.lower_resolved_pattern(&fp.sub, &IROperand::Local(field_ptr_dest), out)?;
+            result = self.fuse_check_results(result, sub_result, out, ResolvedBinaryOp::BoolAnd);
+        }
+        Ok(result)
     }
 
     /// Lower a [`ResolvedPattern::Or`] into the arm's check sub-CFG.

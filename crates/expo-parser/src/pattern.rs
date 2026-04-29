@@ -192,6 +192,17 @@ impl Parser {
             };
         }
 
+        // Plain struct destructuring: Point{x: 5, y: 2}, Point{x, y}, Point{}
+        if self.eat(&TokenKind::LBrace).is_some() {
+            let fields = self.parse_struct_field_block();
+            return Pattern::Struct {
+                type_path: vec![first],
+                fields,
+                span: self.span_from(start),
+                resolved_type: None,
+            };
+        }
+
         Pattern::Constructor {
             name: first,
             elements: vec![],
@@ -229,14 +240,7 @@ impl Parser {
                 resolved_type: None,
             }
         } else if self.eat(&TokenKind::LBrace).is_some() {
-            let mut fields = Vec::new();
-            self.skip_newlines();
-            while !self.at(&TokenKind::RBrace) && !self.at_eof() {
-                fields.push(self.parse_field_pattern());
-                self.eat(&TokenKind::Comma);
-                self.skip_newlines();
-            }
-            self.expect(&TokenKind::RBrace);
+            let fields = self.parse_struct_field_block();
             Pattern::EnumStruct {
                 type_path,
                 variant,
@@ -346,14 +350,37 @@ impl Parser {
         }
     }
 
+    /// Parses a brace-delimited list of field patterns (the `{...}` shared
+    /// by `Pattern::EnumStruct` and `Pattern::Struct`). Assumes the opening
+    /// `{` has already been consumed and consumes through the matching `}`.
+    /// Trailing commas and an empty field list are both legal.
+    fn parse_struct_field_block(&mut self) -> Vec<FieldPattern> {
+        let mut fields = Vec::new();
+        self.skip_newlines();
+        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            fields.push(self.parse_field_pattern());
+            self.eat(&TokenKind::Comma);
+            self.skip_newlines();
+        }
+        self.expect(&TokenKind::RBrace);
+        fields
+    }
+
     fn parse_field_pattern(&mut self) -> FieldPattern {
         let start = self.current_span();
         let name = self.expect_ident();
-        let pattern = if self.eat(&TokenKind::Colon).is_some() {
-            Some(self.parse_pattern())
-        } else {
-            None
-        };
+        if self.eat(&TokenKind::Colon).is_none() {
+            let span = self.current_span();
+            self.error(
+                format!(
+                    "expected `:` after field name `{}` in struct pattern -- \
+                     write `{}: {}` to bind under the field name, or omit the field entirely",
+                    name, name, name
+                ),
+                span,
+            );
+        }
+        let pattern = self.parse_pattern();
         FieldPattern {
             name,
             pattern,

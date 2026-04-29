@@ -207,6 +207,25 @@ pub(crate) fn execute_instructions<'ctx>(
                     emit_pattern_literal_eq(compiler, subject_ptr, subject_ty, lit, value_map)?;
                 Some((*dest, value.into()))
             }
+            IRInstruction::PatternProjectStructField {
+                dest,
+                subject_ptr,
+                struct_key,
+                field_index,
+                field_ty,
+                name_hint,
+            } => {
+                let value = emit_pattern_project_struct_field(
+                    compiler,
+                    subject_ptr,
+                    struct_key,
+                    *field_index,
+                    field_ty,
+                    name_hint,
+                    value_map,
+                )?;
+                Some((*dest, value.into()))
+            }
             IRInstruction::PatternProjectVariantField {
                 dest,
                 subject_ptr,
@@ -825,6 +844,48 @@ fn materialize_pattern_literal<'ctx>(
             .as_pointer_value()
             .into(),
     }
+}
+
+/// Emit an [`IRInstruction::PatternProjectStructField`]: GEP directly
+/// into the struct subject at `field_index`, `load_maybe_indirect` the
+/// field value, then alloca + store to give the result a stable
+/// pointer (the new alloca is returned). Used as the subject pointer
+/// for a recursive sub-pattern or as the source pointer for a
+/// [`IRInstruction::PatternBindFromPtr`].
+///
+/// Mirror of [`emit_pattern_project_variant_field`] minus the
+/// payload-pointer GEP step (a struct subject is already at the
+/// field-0 base, no tag/payload split).
+fn emit_pattern_project_struct_field<'ctx>(
+    c: &mut Compiler<'ctx>,
+    subject_ptr: &IROperand,
+    struct_key: &str,
+    field_index: u32,
+    field_ty: &Type,
+    name_hint: &str,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+    let subject = materialize_ptr_operand(c, subject_ptr, value_map, "PatternProjectStructField")?;
+    let struct_type = lookup_enum_struct_type(c, struct_key)?;
+    let field_ptr = c
+        .builder
+        .build_struct_gep(
+            struct_type,
+            subject,
+            field_index,
+            &format!("{name_hint}_ptr"),
+        )
+        .unwrap();
+    let field_val = load_maybe_indirect(c, field_ptr, field_ty, &format!("{name_hint}_val"));
+    let inner = expo_typecheck::types::unwrap_indirect(field_ty);
+    let inner_llvm_ty =
+        to_llvm_type(inner, c.context, &c.llvm_types).unwrap_or_else(|| c.context.i8_type().into());
+    let alloca = c
+        .builder
+        .build_alloca(inner_llvm_ty, &format!("{name_hint}_tmp"))
+        .unwrap();
+    c.builder.build_store(alloca, field_val).unwrap();
+    Ok(alloca)
 }
 
 /// Emit an [`IRInstruction::PatternProjectVariantField`]: GEP into the

@@ -31,18 +31,20 @@ pub enum ResolvedLiteral {
     String(String),
 }
 
-/// A resolved field within an `EnumStruct` pattern. The field index has been
-/// looked up against the variant's declared shape so emission can GEP without
-/// re-querying the type registry.
+/// A resolved field within a struct pattern (`Pattern::EnumStruct` or
+/// `Pattern::Struct`). The field index has been looked up against the
+/// declared field layout so emission can GEP without re-querying the
+/// type registry.
 pub struct ResolvedFieldPattern {
-    /// The source-level field name (also the binding name when `sub` is `None`).
+    /// The source-level field name.
     pub name: String,
-    /// The zero-based field index within the variant payload struct.
+    /// The zero-based field index within the (variant payload | struct).
     pub field_index: u32,
-    /// The Expo type of this field (as declared on the variant).
+    /// The Expo type of this field (as declared).
     pub field_type: Type,
-    /// Optional nested pattern. `None` means "bind only" -- no further test.
-    pub sub: Option<ResolvedPattern>,
+    /// The nested pattern. Always present -- there is no shorthand
+    /// "bind under field name" form; users write `name: name` to bind.
+    pub sub: ResolvedPattern,
 }
 
 /// A pattern after resolution: package-qualified enum keys, looked-up tags,
@@ -95,6 +97,15 @@ pub enum ResolvedPattern {
         enum_key: String,
         variant: String,
         tag: u8,
+        fields: Vec<ResolvedFieldPattern>,
+    },
+    /// A plain (non-enum) struct destructuring `Point { x: 5, y: 2 }`.
+    /// Unlisted fields are not represented -- the IR layer emits per-field
+    /// projections only for `fields`, so any unmentioned field is implicitly
+    /// matched (wildcard semantics).
+    Struct {
+        /// LLVMTypeCache key for the struct (package-qualified or mangled).
+        struct_key: String,
         fields: Vec<ResolvedFieldPattern>,
     },
     /// A typed binding into a union member (`p: Post`). Performs a tag check

@@ -675,11 +675,14 @@ pub struct MatchArm {
 
 // Patterns
 
-/// A named field within an enum struct pattern: `name: pattern` or shorthand `name`.
+/// A named field within a struct pattern (either `Pattern::Struct` or
+/// `Pattern::EnumStruct`). Form is always `name: pattern` -- there is no
+/// shorthand. To bind under the field name, write `name: name`; to ignore,
+/// write `name: _` or omit the field entirely (partial coverage).
 #[derive(Debug, Clone)]
 pub struct FieldPattern {
     pub name: String,
-    pub pattern: Option<Pattern>,
+    pub pattern: Pattern,
     pub span: Span,
 }
 
@@ -729,6 +732,17 @@ pub enum Pattern {
         elements: Vec<Pattern>,
         span: Span,
         /// Resolved identity of the enum type. Populated by the type checker.
+        resolved_type: Option<TypeIdentifier>,
+    },
+    /// A plain (non-enum) struct destructuring: `Point{x: 5, y: 2}`.
+    /// Field syntax is always `name: pattern` (no shorthand binding).
+    /// Unlisted fields are implicit wildcards. Empty `Point{}` is legal
+    /// and matches any value of that struct type.
+    Struct {
+        type_path: Vec<String>,
+        fields: Vec<FieldPattern>,
+        span: Span,
+        /// Resolved identity of the struct type. Populated by the type checker.
         resolved_type: Option<TypeIdentifier>,
     },
     /// A typed binding: `p: Post` -- matches a union member by type

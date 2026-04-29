@@ -185,12 +185,16 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Opt
             fields,
             span,
             ..
+        }
+        | Pattern::Struct {
+            type_path,
+            fields,
+            span,
+            ..
         } => {
             if span_contains(span, line, col) {
                 for fp in fields {
-                    if let Some(sub) = &fp.pattern
-                        && let Some(info) = find_in_pattern(sub, line, col, ctx)
-                    {
+                    if let Some(info) = find_in_pattern(&fp.pattern, line, col, ctx) {
                         return Some(info);
                     }
                 }

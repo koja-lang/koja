@@ -348,13 +348,18 @@ pattern = "_"                                                       (* wildcard 
         | named_type , "." , TYPE_IDENT ,
           "(" , pattern , { "," , pattern } , ")"                   (* enum tuple *)
         | named_type , "." , TYPE_IDENT ,
-          "{" , field_pattern , { "," , field_pattern } , "}"       (* enum struct *)
+          "{" , [ field_pattern , { "," , field_pattern } ] , "}"   (* enum struct *)
+        | TYPE_IDENT ,
+          "{" , [ field_pattern , { "," , field_pattern } ] , "}"   (* plain struct *)
         | "[" , [ pattern , { "," , pattern } ] , "]"               (* list *)
         | binary_pattern                                             (* binary *)
         | TYPE_IDENT ,
           "(" , pattern , { "," , pattern } , ")" ;                 (* Some/Ok/Err *)
 
-field_pattern = IDENT , [ ":" , pattern ] ;
+(* Field patterns are always `name: pattern` -- there is no shorthand   *)
+(* form like `Point{x, y}`. To bind under the field's own name, write   *)
+(* `x: x`. Unlisted fields are implicit wildcards.                      *)
+field_pattern = IDENT , ":" , pattern ;
 
 
 (* ========================================================================== *)

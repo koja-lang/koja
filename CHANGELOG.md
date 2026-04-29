@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Plain struct patterns in `match` arms: `match p  Point{x: 5, y: 2} -> ...  end`. Unlisted fields are implicit wildcards (`Point{x: 5}` matches any `y`); empty `Point{}` matches any value of that struct type. Composes with existing patterns, including nested constructors (`Some(Point{x: 5})`) and the Wave 27 enum-pattern CFG-gating that already protects payload projections.
 - Multiple annotations per declaration. Annotations can be stacked on separate lines or placed inline separated by whitespace: `@link "argon2" @extern "C"`. The AST stores `Vec<Annotation>` instead of `Option<Annotation>`. The formatter preserves the author's stacked/inline layout and normalizes spacing.
 - `TCPSocket` -- ergonomic TCP client. `connect(host, port)` resolves DNS and establishes a connection. `connect_addr(addr)` for direct address connections. `read(count)`, `write(data)`, `close()`.
 - `TCPListener` -- TCP server listener. `bind(port)` listens on all interfaces, `bind_addr(addr)` for specific addresses. `accept()` returns a `TCPSocket` for each incoming connection.
@@ -34,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking**: Struct field patterns are always `name: pattern` -- the shorthand `Point{x, y}` (binding under the field's own name) is gone. Write `Point{x: x, y: y}` to bind under the same name, or `Point{x: _}` / omit the field for "don't care". This applies to both plain struct patterns and enum-struct variant patterns (`Shape.Rect{width: width, height: height}`); the explicit form mirrors construction syntax (`Point{x: 5, y: 2}` was already named-only).
 - LSP hover for variables now shows inferred types (e.g. `x: Int32` instead of just `x`).
 - LSP dot-completion rewritten to use the typed AST instead of source-text scanning. Now works for `self.`, chained method calls (`foo.bar().`), and expressions with inferred types.
 - LSP signature help rewritten to use AST-based call-site detection instead of backward parenthesis scanning.

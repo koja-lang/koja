@@ -407,6 +407,34 @@ pub enum IRInstruction {
         /// Label hint for the emitted alloca / load.
         name_hint: String,
     },
+    /// Project a single named field out of a plain (non-enum) struct: GEP
+    /// directly into the struct at `field_index`, `load_maybe_indirect`
+    /// it, alloca, store. Produces a pointer-typed value: the new
+    /// alloca, used as the subject pointer for a recursive sub-pattern
+    /// test or as the source pointer for a
+    /// [`IRInstruction::PatternBindFromPtr`].
+    ///
+    /// Mirror of [`IRInstruction::PatternProjectVariantField`] minus the
+    /// payload-pointer GEP step (a struct subject is already at the
+    /// field-0 base, no tag/payload split). No payload-block gating is
+    /// required either: a struct projection is unconditionally safe, so
+    /// it lowers into the same open block as the other flat pattern
+    /// primitives.
+    PatternProjectStructField {
+        /// SSA destination this instruction produces (a pointer to the
+        /// freshly-allocated field-value alloca).
+        dest: IRValueId,
+        /// Pointer-typed operand referencing the struct subject's storage.
+        subject_ptr: IROperand,
+        /// Resolved struct cache key (e.g. `"std.Point"`, `"alpha.Pair_$Int$"`).
+        struct_key: String,
+        /// Index of the field within the struct.
+        field_index: u32,
+        /// Resolved field type (drives `load_maybe_indirect` + alloca shape).
+        field_ty: Type,
+        /// Label hint for the emitted alloca / load.
+        name_hint: String,
+    },
     /// Tag-equality check on an enum or union subject: load the i8 at
     /// the subject's tag slot (struct index 0) and compare against
     /// `tag`. Produces `i1`.
@@ -606,6 +634,7 @@ impl IRInstruction {
             | IRInstruction::MethodCall { dest, .. }
             | IRInstruction::PatternBinaryMatch { dest, .. }
             | IRInstruction::PatternLiteralEq { dest, .. }
+            | IRInstruction::PatternProjectStructField { dest, .. }
             | IRInstruction::PatternProjectVariantField { dest, .. }
             | IRInstruction::PatternTagEq { dest, .. }
             | IRInstruction::PatternUnionPayloadPtr { dest, .. }
