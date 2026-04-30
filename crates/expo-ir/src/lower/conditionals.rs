@@ -41,7 +41,7 @@ impl<'a> Lowerer<'a> {
         cond: &Expr,
         body: &[Statement],
     ) -> Result<(Option<IRBlockId>, IROperand), String> {
-        let (open, cond_op) = self.lower_expr_to_operand(builder, open, cond)?;
+        let (open, cond_op, _) = self.lower_expr_to_operand(builder, open, cond)?;
         let Some(open) = open else {
             return Ok((None, IROperand::Unit));
         };
@@ -72,7 +72,7 @@ impl<'a> Lowerer<'a> {
         cond: &Expr,
         body: &[Statement],
     ) -> Result<(Option<IRBlockId>, IROperand), String> {
-        let (open, cond_op) = self.lower_expr_to_operand(builder, open, cond)?;
+        let (open, cond_op, _) = self.lower_expr_to_operand(builder, open, cond)?;
         let Some(open) = open else {
             return Ok((None, IROperand::Unit));
         };
@@ -111,7 +111,7 @@ impl<'a> Lowerer<'a> {
         else_body: &[Statement],
         result_ty: Type,
     ) -> Result<(Option<IRBlockId>, IROperand), String> {
-        let (open, cond_op) = self.lower_expr_to_operand(builder, open, cond)?;
+        let (open, cond_op, _) = self.lower_expr_to_operand(builder, open, cond)?;
         let Some(open) = open else {
             return Ok((None, IROperand::Unit));
         };
@@ -171,7 +171,7 @@ impl<'a> Lowerer<'a> {
         else_expr: &Expr,
         ty: Type,
     ) -> Result<(Option<IRBlockId>, IROperand), String> {
-        let (open, cond_op) = self.lower_expr_to_operand(builder, open, cond)?;
+        let (open, cond_op, _) = self.lower_expr_to_operand(builder, open, cond)?;
         let Some(open) = open else {
             return Ok((None, IROperand::Unit));
         };
@@ -190,13 +190,13 @@ impl<'a> Lowerer<'a> {
         );
 
         builder.add_block(then_id, "tern_then");
-        let (then_exit, then_op) = self.lower_expr_to_operand(builder, then_id, then_expr)?;
+        let (then_exit, then_op, _) = self.lower_expr_to_operand(builder, then_id, then_expr)?;
         if let Some(t_exit) = then_exit {
             builder.set_terminator(t_exit, IRTerminator::Branch(merge_id));
         }
 
         builder.add_block(else_id, "tern_else");
-        let (else_exit, else_op) = self.lower_expr_to_operand(builder, else_id, else_expr)?;
+        let (else_exit, else_op, _) = self.lower_expr_to_operand(builder, else_id, else_expr)?;
         if let Some(e_exit) = else_exit {
             builder.set_terminator(e_exit, IRTerminator::Branch(merge_id));
         }
@@ -261,7 +261,7 @@ impl<'a> Lowerer<'a> {
             };
 
             builder.add_block(check_id, "cond_check");
-            let (check_exit, cond_op) =
+            let (check_exit, cond_op, _) =
                 self.lower_expr_to_operand(builder, check_id, &arm.condition)?;
             if let Some(check_exit) = check_exit {
                 builder.set_terminator(

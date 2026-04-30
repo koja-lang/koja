@@ -85,7 +85,7 @@ impl<'a> Lowerer<'a> {
         builder.set_terminator(open, IRTerminator::Branch(header_id));
 
         builder.add_block(header_id, "while_header");
-        let (header_exit, cond_op) = self.lower_expr_to_operand(builder, header_id, cond)?;
+        let (header_exit, cond_op, _) = self.lower_expr_to_operand(builder, header_id, cond)?;
         let Some(header_exit) = header_exit else {
             // Cond lowering terminated all paths; impossible in
             // well-typed code but propagate defensively.
@@ -129,6 +129,7 @@ impl<'a> Lowerer<'a> {
             IRInstruction::Stub {
                 dest,
                 expr: Box::new(for_expr.clone()),
+                result_type: Type::Unit,
             },
         );
         // The Stub's compile_expr path returns Unit (a `for` loop has

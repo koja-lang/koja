@@ -302,7 +302,7 @@ pub(crate) fn execute_instructions<'ctx>(
                 emit_store_local(compiler, name, val, ty, *is_decl, *ownership)?;
                 None
             }
-            IRInstruction::Stub { dest, expr } => {
+            IRInstruction::Stub { dest, expr, .. } => {
                 // Statement-context Stubs (e.g. lowered from
                 // [`expo_ast::ast::Statement::Expr`]) discard their
                 // result; void-returning calls like `print(...)` make

@@ -233,7 +233,7 @@ impl<'a> Lowerer<'a> {
         open: IRBlockId,
         receiver: &Expr,
         field: &str,
-    ) -> Result<Option<(Option<IRBlockId>, IROperand)>, String> {
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         let Some(base_type) = receiver.resolved_type.clone() else {
             return Ok(None);
         };
@@ -244,6 +244,11 @@ impl<'a> Lowerer<'a> {
         };
 
         if let Some(chain) = chain {
+            let result_type = chain
+                .steps
+                .last()
+                .map(|s| s.field_type.clone())
+                .unwrap_or(Type::Unknown);
             let dest = self.next_value_id();
             builder.append(
                 open,
@@ -254,18 +259,19 @@ impl<'a> Lowerer<'a> {
                     steps: chain.steps,
                 },
             );
-            return Ok(Some((Some(open), IROperand::Local(dest))));
+            return Ok(Some((Some(open), IROperand::Local(dest), result_type)));
         }
 
         let Some(step) = lower_struct_field(&self.ctx(), &base_type, field) else {
             return Ok(None);
         };
-        let (open, base) = self.lower_expr_to_operand(builder, open, receiver)?;
+        let result_type = step.field_type.clone();
+        let (open, base, _base_ty) = self.lower_expr_to_operand(builder, open, receiver)?;
         let Some(open) = open else {
-            return Ok(Some((None, IROperand::Unit)));
+            return Ok(Some((None, IROperand::Unit, Type::Unit)));
         };
         let dest = self.next_value_id();
         builder.append(open, IRInstruction::FieldLoad { dest, base, step });
-        Ok(Some((Some(open), IROperand::Local(dest))))
+        Ok(Some((Some(open), IROperand::Local(dest), result_type)))
     }
 }

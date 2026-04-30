@@ -875,7 +875,8 @@ impl<'a> Lowerer<'a> {
             let guard_open = blocks.last().unwrap().id;
             let mut tmp = CFGBuilder::new();
             tmp.add_block(guard_open, "match_guard".to_string());
-            let (next, guard_operand) = self.lower_expr_to_operand(&mut tmp, guard_open, guard)?;
+            let (next, guard_operand, _) =
+                self.lower_expr_to_operand(&mut tmp, guard_open, guard)?;
             let tmp_blocks = tmp.into_blocks();
             if tmp_blocks.len() != 1 || next.is_none() {
                 return Err(format!(

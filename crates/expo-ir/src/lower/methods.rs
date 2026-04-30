@@ -467,7 +467,7 @@ impl<'a> Lowerer<'a> {
         }
 
         let return_type = resolved.return_type.clone();
-        let (open, receiver_operand) = self.lower_expr_to_operand(builder, open, receiver)?;
+        let (open, receiver_operand, _) = self.lower_expr_to_operand(builder, open, receiver)?;
         let Some(open) = open else {
             return Ok(Some((None, IROperand::Unit, return_type)));
         };

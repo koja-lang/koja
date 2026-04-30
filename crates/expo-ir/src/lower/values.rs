@@ -46,9 +46,9 @@
 //! [`expo_ast::ast::ExprKind`] that learns to lower retires its
 //! [`IRInstruction::Stub`] site by adding a branch above.
 
-use expo_ast::ast::{Expr, ExprKind};
+use expo_ast::ast::{Expr, ExprKind, Literal};
 use expo_typecheck::context::FnParam;
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Primitive, Type};
 
 use crate::Lowerer;
 use crate::blocks::IRBlockId;
@@ -59,19 +59,36 @@ use crate::values::{IRInstruction, IROperand};
 
 /// Outcome of lowering an expression to an operand.
 ///
-/// - `Ok((Some(open), op))`: execution continues at `open`. For pure
-///   expressions `open` equals the input; for control-flow expressions
-///   it's the merge block.
-/// - `Ok((None, op))`: every path through this expression terminates
-///   (e.g. a `match` whose arms all `return`). The operand is
-///   conventionally [`IROperand::Unit`] and unused by the caller.
+/// - `Ok((Some(open), op, ty))`: execution continues at `open`. For
+///   pure expressions `open` equals the input; for control-flow
+///   expressions it's the merge block. `ty` is the lowerer's
+///   published type for the resulting value -- the source of truth
+///   for downstream value-typed consumers (notably
+///   [`crate::Lowerer::lower_assignment_stmt`]'s
+///   `resolve_assigned_type`).
+/// - `Ok((None, op, ty))`: every path through this expression
+///   terminates (e.g. a `match` whose arms all `return`). The
+///   operand is conventionally [`IROperand::Unit`] and unused by the
+///   caller; `ty` is conventionally [`Type::Unit`].
 /// - `Err(_)`: lowering failure (semantic error).
-pub type OperandResult = Result<(Option<IRBlockId>, IROperand), String>;
+///
+/// Slice 3a-bis (Wave 31) added the `Type` slot. Half the
+/// surface ([`Lowerer::lower_call_or_stub`],
+/// [`Lowerer::lower_method_call_or_stub`],
+/// [`Lowerer::lower_field_access_or_stub`]) was already publishing
+/// the operand's type internally -- this contract makes the type
+/// part of the universal `lower_expr_to_operand` return so
+/// unannotated assignments (`i = self.length() - 1`,
+/// `addr = addrs.get(0).unwrap()`, `result = self.work()`) can read
+/// the type without falling back to typecheck's often-`Unit`
+/// `expr.resolved_type` or the `infer_type_from_expr` static
+/// estimator.
+pub type OperandResult = Result<(Option<IRBlockId>, IROperand, Type), String>;
 
 impl<'a> Lowerer<'a> {
     /// Lower `expr` into `builder` at `open` and return the new open
-    /// block (if any) plus the produced operand. See [`OperandResult`]
-    /// for the contract.
+    /// block (if any), the produced operand, and the operand's
+    /// resolved [`Type`]. See [`OperandResult`] for the contract.
     pub fn lower_expr_to_operand(
         &mut self,
         builder: &mut CFGBuilder,
@@ -107,39 +124,42 @@ impl<'a> Lowerer<'a> {
         expr: &Expr,
         tail: bool,
     ) -> OperandResult {
-        if let Some(operand) = resolve_const(&expr.kind).and_then(operand_from_const) {
-            return Ok((Some(open), operand));
+        if let Some(constant) = resolve_const(&expr.kind)
+            && let Some(operand) = operand_from_const(&constant)
+        {
+            let ty = const_operand_type(&constant, expr);
+            return Ok((Some(open), operand, ty));
         }
 
         match &expr.kind {
             ExprKind::Binary { op, left, right } => {
-                if let Some((open, operand)) =
+                if let Some((open, operand, ty)) =
                     self.lower_binary_op_or_stub(builder, open, op, left, right)?
                 {
-                    return Ok((open, operand));
+                    return Ok((open, operand, ty));
                 }
             }
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Ident { name } = &callee.kind
-                    && let Some((open, operand, _)) =
+                    && let Some((open, operand, ty)) =
                         self.lower_call_or_stub(builder, open, name, args, tail)?
                 {
-                    return Ok((open, operand));
+                    return Ok((open, operand, ty));
                 }
             }
             ExprKind::FieldAccess { receiver, field } => {
-                if let Some((open, operand)) =
+                if let Some((open, operand, ty)) =
                     self.lower_field_access_or_stub(builder, open, receiver, field)?
                 {
-                    return Ok((open, operand));
+                    return Ok((open, operand, ty));
                 }
             }
             ExprKind::Group { expr: inner } => {
                 return self.lower_expr_to_operand_with_tail(builder, open, inner, tail);
             }
             ExprKind::Ident { name } => {
-                if let Some(operand) = self.lower_ident_or_stub(builder, open, name) {
-                    return Ok((Some(open), operand));
+                if let Some((operand, ty)) = self.lower_ident_or_stub(builder, open, name) {
+                    return Ok((Some(open), operand, ty));
                 }
             }
             ExprKind::MethodCall {
@@ -147,34 +167,38 @@ impl<'a> Lowerer<'a> {
                 method,
                 args,
             } => {
-                if let Some((open, operand, _)) =
+                if let Some((open, operand, ty)) =
                     self.lower_method_call_or_stub(builder, open, receiver, method, args, tail)?
                 {
-                    return Ok((open, operand));
+                    return Ok((open, operand, ty));
                 }
             }
             ExprKind::Self_ => {
-                if let Some(operand) = self.lower_local_load_or_stub(builder, open, "self") {
-                    return Ok((Some(open), operand));
+                if let Some((operand, ty)) = self.lower_local_load_or_stub(builder, open, "self") {
+                    return Ok((Some(open), operand, ty));
                 }
             }
             ExprKind::Unary { op, operand } => {
-                if let Some((open, o)) = self.lower_unary_op_or_stub(builder, open, op, operand)? {
-                    return Ok((open, o));
+                if let Some((open, o, ty)) =
+                    self.lower_unary_op_or_stub(builder, open, op, operand)?
+                {
+                    return Ok((open, o, ty));
                 }
             }
             _ => {}
         }
 
         let dest = self.next_value_id();
+        let result_type = expr.resolved_type.clone().unwrap_or(Type::Unknown);
         builder.append(
             open,
             IRInstruction::Stub {
                 dest,
                 expr: Box::new(expr.clone()),
+                result_type: result_type.clone(),
             },
         );
-        Ok((Some(open), IROperand::Local(dest)))
+        Ok((Some(open), IROperand::Local(dest), result_type))
     }
 
     /// Lower a sequence of sub-expressions into the same builder,
@@ -182,6 +206,12 @@ impl<'a> Lowerer<'a> {
     /// `Ok((None, partial_ops))`) as soon as any sub-expression
     /// terminates, leaving the caller free to stop without emitting
     /// the consuming instruction.
+    ///
+    /// Consumes [`OperandResult`]'s `Type` slot but discards it --
+    /// callers (the `lower_call_or_stub` argument-list lift, etc.)
+    /// only need the operands. Use the per-expression
+    /// [`Self::lower_expr_to_operand`] directly when the type is
+    /// also needed.
     pub fn lower_expr_sequence<'b>(
         &mut self,
         builder: &mut CFGBuilder,
@@ -191,7 +221,7 @@ impl<'a> Lowerer<'a> {
         let mut current = open;
         let mut ops = Vec::new();
         for expr in exprs {
-            let (next, op) = self.lower_expr_to_operand(builder, current, expr)?;
+            let (next, op, _ty) = self.lower_expr_to_operand(builder, current, expr)?;
             ops.push(op);
             let Some(next) = next else {
                 return Ok((None, ops));
@@ -209,13 +239,16 @@ impl<'a> Lowerer<'a> {
     /// reaches that branch, but defensively keep the Stub bridge).
     ///
     /// Pure-expression: same `open` block on the way out, so the
-    /// caller doesn't need to handle a re-opened cursor.
+    /// caller doesn't need to handle a re-opened cursor. Returns
+    /// the operand alongside the binding's resolved [`Type`] so the
+    /// universal [`Self::lower_expr_to_operand`] contract can
+    /// publish it.
     fn lower_ident_or_stub(
         &mut self,
         builder: &mut CFGBuilder,
         open: IRBlockId,
         name: &str,
-    ) -> Option<IROperand> {
+    ) -> Option<(IROperand, Type)> {
         let (local_ty, const_ty, fn_type) = {
             let ctx = self.ctx();
             let local_ty = ctx.locals.type_of(name);
@@ -234,10 +267,10 @@ impl<'a> Lowerer<'a> {
                 IRInstruction::LoadLocal {
                     dest,
                     name: name.to_string(),
-                    ty,
+                    ty: ty.clone(),
                 },
             );
-            return Some(IROperand::Local(dest));
+            return Some((IROperand::Local(dest), ty));
         }
 
         if let Some(ty) = const_ty {
@@ -247,10 +280,10 @@ impl<'a> Lowerer<'a> {
                 IRInstruction::LoadConst {
                     dest,
                     name: name.to_string(),
-                    ty,
+                    ty: ty.clone(),
                 },
             );
-            return Some(IROperand::Local(dest));
+            return Some((IROperand::Local(dest), ty));
         }
 
         if let Some(fn_type) = fn_type {
@@ -260,10 +293,10 @@ impl<'a> Lowerer<'a> {
                 IRInstruction::MakeFnRef {
                     dest,
                     name: name.to_string(),
-                    fn_type,
+                    fn_type: fn_type.clone(),
                 },
             );
-            return Some(IROperand::Local(dest));
+            return Some((IROperand::Local(dest), fn_type));
         }
 
         None
@@ -272,13 +305,14 @@ impl<'a> Lowerer<'a> {
     /// Lower a known-local binding to an [`IRInstruction::LoadLocal`].
     /// Used for [`expo_ast::ast::ExprKind::Self_`] (always with
     /// `name = "self"`); shares the local-resolution path with
-    /// [`Self::lower_ident_or_stub`].
+    /// [`Self::lower_ident_or_stub`]. Returns the operand alongside
+    /// the binding's resolved [`Type`].
     fn lower_local_load_or_stub(
         &mut self,
         builder: &mut CFGBuilder,
         open: IRBlockId,
         name: &str,
-    ) -> Option<IROperand> {
+    ) -> Option<(IROperand, Type)> {
         let ty = self.ctx().locals.type_of(name)?;
         let dest = self.next_value_id();
         builder.append(
@@ -286,10 +320,39 @@ impl<'a> Lowerer<'a> {
             IRInstruction::LoadLocal {
                 dest,
                 name: name.to_string(),
-                ty,
+                ty: ty.clone(),
             },
         );
-        Some(IROperand::Local(dest))
+        Some((IROperand::Local(dest), ty))
+    }
+}
+
+/// Map a resolved compile-time constant to the [`Type`] it produces
+/// at runtime, for [`OperandResult`]'s `Type` slot. Falls back to
+/// `expr.resolved_type` when the constant kind doesn't pin a
+/// specific primitive (mainly `String` literals, which resolve to
+/// `Type::Primitive(String)` either way once typecheck records it).
+fn const_operand_type(constant: &ResolvedConst, expr: &Expr) -> Type {
+    match constant {
+        ResolvedConst::Bool(_) => Type::Primitive(Primitive::Bool),
+        ResolvedConst::Float(_) => Type::Primitive(Primitive::F64),
+        ResolvedConst::Int(_) => Type::Primitive(Primitive::I64),
+        _ => expr.resolved_type.clone().unwrap_or(Type::Unknown),
+    }
+}
+
+/// Map an [`expo_ast::ast::Literal`] to its inline operand-only
+/// [`Type`]. Mirrors [`const_operand_type`] but for the bare-literal
+/// case (no [`ResolvedConst`] involved). Currently unused -- kept
+/// here so future inline-literal lowerings can call it directly.
+#[allow(dead_code)]
+fn literal_type(value: &Literal) -> Type {
+    match value {
+        Literal::Bool(_) => Type::Primitive(Primitive::Bool),
+        Literal::Float(_) => Type::Primitive(Primitive::F64),
+        Literal::Int(_) => Type::Primitive(Primitive::I64),
+        Literal::String(_) => Type::Primitive(Primitive::String),
+        Literal::Unit => Type::Unit,
     }
 }
 
@@ -304,11 +367,11 @@ impl<'a> Lowerer<'a> {
 ///   `materialize_operand` seam doesn't carry that today. String
 ///   literals fall through to the `IRInstruction::Stub` bridge,
 ///   which routes through `compile_expr`'s established string path.
-fn operand_from_const(constant: ResolvedConst) -> Option<IROperand> {
+fn operand_from_const(constant: &ResolvedConst) -> Option<IROperand> {
     match constant {
-        ResolvedConst::Bool(b) => Some(IROperand::ConstBool(b)),
-        ResolvedConst::Float(v) => Some(IROperand::ConstFloat(v)),
-        ResolvedConst::Int(v) => Some(IROperand::ConstInt(v)),
+        ResolvedConst::Bool(b) => Some(IROperand::ConstBool(*b)),
+        ResolvedConst::Float(v) => Some(IROperand::ConstFloat(*v)),
+        ResolvedConst::Int(v) => Some(IROperand::ConstInt(*v)),
         ResolvedConst::EnumVariant { .. }
         | ResolvedConst::String(_)
         | ResolvedConst::Struct { .. } => None,

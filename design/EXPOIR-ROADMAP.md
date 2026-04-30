@@ -11,9 +11,13 @@ SIL-style design prose and the full Wave 1-17 narrative live in
 ## 1. Status snapshot
 
 Phase 4g Slice 3 (Wave 30) landed the recursive [`CFGBuilder`]
-lowering shape. Every operand-shaped lowering helper takes
-`(&mut CFGBuilder, IRBlockId)` and returns `(Option<IRBlockId>,
-IROperand)` -- referentially transparent, no ambient cursor state on
+lowering shape, and Slice 3a-bis (Wave 31) layered on the typed
+[`crate::lower::values::OperandResult`] contract -- every
+value-producing `lower_*` helper now publishes the operand's
+resolved [`Type`] alongside the operand itself. Every
+operand-shaped lowering helper takes `(&mut CFGBuilder, IRBlockId)`
+and returns `(Option<IRBlockId>, IROperand, Type)` -- referentially
+transparent, no ambient cursor state on
 [`crate::FnLowerState`]. The 9 per-construct IR wrappers
 (`IRUnless`, `IRIf`, `IRIfElse`, `IRTernary`, `IRCond`, `IRCondArm`,
 `IRMatch`, `IRMatchArm`, `IRWhile`, `IRLoop`, `IRFor`) and the 9
@@ -1245,6 +1249,58 @@ vs structural cut vs ambient-state retirement).
   big architectural pivot landed cleanly; the structural cut at
   the function-body-emission seam is the natural next step.
 
+- **Slice 3a-bis -- typed [`OperandResult`] (Done, Wave 31).**
+  Foundational lift surfaced mid-3b: every value-producing
+  `Lowerer::lower_*` helper now publishes the operand's resolved
+  [`Type`] alongside the operand itself. The
+  [`crate::lower::values::OperandResult`] type alias is now
+  `Result<(Option<IRBlockId>, IROperand, Type), String>`; the
+  third tuple slot is the lowerer's source-of-truth for the
+  value's runtime type, computed by the same lowering that emitted
+  its instructions.
+
+  Why this lift was necessary: Slice 3b's structural cut needs
+  `Lowerer::lower_function_body` to lower whole functions (not
+  per-statement) so the elaboration pass and codegen can consume
+  a closed `IRProgram`. But `lower_assignment_stmt`'s
+  `resolve_assigned_type` for unannotated assignments
+  (`i = self.length() - 1`, `addr = addrs.get(0).unwrap()`,
+  `result = self.work()`) couldn't determine the binding's type
+  -- the legacy `compile_assignment` worked because `compile_expr`
+  evaluated expressions at codegen time and returned a typed
+  `BasicValueEnum`. The IR Lowerer had no equivalent. Half the
+  surface (`lower_call_or_stub`, `lower_method_call_or_stub`,
+  `lower_field_access_or_stub`) was already publishing types
+  internally; this slice plumbs the type through the universal
+  dispatcher.
+
+  Per-helper changes:
+  - `lower_ident_or_stub` / `lower_local_load_or_stub` -> return
+    `Option<(IROperand, Type)>` (the type they already computed
+    internally for `LoadLocal { ty }` / `LoadConst { ty }` /
+    `MakeFnRef { fn_type }` becomes part of the return).
+  - `lower_binary_op_or_stub` / `lower_unary_op_or_stub` -> return
+    the result type derived from the resolved op (Bool for
+    compares/logical, lhs type for arithmetic, operand type for
+    negation, Bool for `not`).
+  - `IRInstruction::Stub` gains a `result_type: Type` field that
+    lowering fills from `expr.resolved_type` (Stub fallthrough
+    case publishes typecheck's record as best-effort).
+  - `lower_expr_to_operand_with_tail`'s per-arm dispatch
+    propagates the type through every branch.
+  - `lower_assignment_stmt::resolve_assigned_type` adds the
+    lowerer's published type as precedence step #2 (annotation >
+    lowered type > typecheck > static inference).
+
+  The lift is purely additive on the IR side -- callers can
+  ignore the new `Type` slot (`(open, op, _)`) when they don't
+  need it. Slice 3b's deferred deletes (`compile_assignment` 
+  forks, `compile_function_body` retire, structural emit cut) now
+  have the typing fidelity they need to land safely.
+
+  Validation: 25/25 lang tests, 246/246 stdlib tests, zero clippy
+  warnings, `just doit` green.
+
 - **Slice 3 (proposed continuation) -- `IRFunction` carries `Vec<IRBasicBlock>`;
   per-construct types and walkers dissolve.** The structural cut.
   `IRFunctionKind::Free { func_ast, ... }` and
@@ -1573,6 +1629,25 @@ rule plus the concrete behavior it forbids.
     -- but each push/pop pair is balanced by the lowering site's
     own bracketing, never inferred from "we happen to be inside a
     loop construct."
+
+14. **`lower_expr_to_operand` publishes the operand's `Type`
+    (Wave 31).** Every value-producing
+    [`crate::Lowerer::lower_*`] helper returns the operand's
+    resolved [`Type`] alongside the operand itself
+    (`(Option<IRBlockId>, IROperand, Type)`). Downstream
+    value-typed consumers (notably
+    [`crate::Lowerer::lower_assignment_stmt`]'s
+    `resolve_assigned_type`) read the lowerer's published type as
+    the source of truth instead of falling back to typecheck's
+    often-`Unit` `expr.resolved_type` or static
+    [`crate::lower::inference::infer_type_from_expr`] estimators.
+    Forbids: per-shape inference "patches" outside the lowering
+    helper itself; reaching into `expr.resolved_type` from
+    consumers when the lowerer can authoritatively answer; `Stub`
+    fallthroughs that don't carry a `result_type`. The Wave 31
+    lift made Slice 3b's structural cut (whole-function lowering
+    before emit, legacy `compile_assignment` retire) safe -- the
+    typing fidelity gap that blocked it is closed.
 
 ---
 

@@ -580,6 +580,16 @@ pub enum IRInstruction {
         /// because [`Expr`] is large (~280 bytes) and would
         /// otherwise dominate the enum's discriminant size.
         expr: Box<Expr>,
+        /// Lowering's best-effort estimate of the runtime value's
+        /// type. Read by lower-time consumers (notably
+        /// `lower_assignment_stmt`'s `resolve_assigned_type`) so an
+        /// unannotated assignment can still type its binding when
+        /// the RHS lowered to a Stub. Filled from
+        /// `expr.resolved_type` (or [`Type::Unknown`] when typecheck
+        /// didn't record one). Codegen ignores it -- the LLVM
+        /// `BasicValueEnum` carries the runtime type. Phase 4h Stub
+        /// retires bring the two views into alignment.
+        result_type: Type,
     },
     /// Unary negation or logical-not. The [`ResolvedUnaryOp`] variant
     /// encodes both the operand kind (Int vs Float) and which LLVM

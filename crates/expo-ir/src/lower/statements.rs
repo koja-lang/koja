@@ -152,7 +152,7 @@ impl<'a> Lowerer<'a> {
         open: IRBlockId,
         expr: &Expr,
     ) -> Result<Option<IRBlockId>, String> {
-        let (next, _) = self.lower_expr_to_operand(builder, open, expr)?;
+        let (next, _op, _ty) = self.lower_expr_to_operand(builder, open, expr)?;
         Ok(next)
     }
 
@@ -257,7 +257,7 @@ impl<'a> Lowerer<'a> {
         expr: &Expr,
         return_type: &Type,
     ) -> Result<(), String> {
-        let (next, mut operand) = self.lower_tail_expr_to_operand(builder, open, expr)?;
+        let (next, mut operand, _ty) = self.lower_tail_expr_to_operand(builder, open, expr)?;
         let Some(open) = next else {
             return Ok(());
         };
@@ -312,11 +312,23 @@ impl<'a> Lowerer<'a> {
         }
         let last = stmts.last().expect("non-empty body");
         if let Statement::Expr(expr) = last {
-            let (next, trailing) = self.lower_expr_to_operand(builder, current, expr)?;
+            let (next, trailing, lowered_ty) =
+                self.lower_expr_to_operand(builder, current, expr)?;
             let Some(next) = next else {
                 return Ok((None, None));
             };
-            let trailing_ty = expr.resolved_type.clone();
+            // Prefer the lowerer's published type (the new
+            // [`OperandResult`] `Type` slot) over typecheck's
+            // `expr.resolved_type` -- the lowerer's type is the
+            // source of truth for value-typed downstream consumers
+            // (Slice 3a-bis, Wave 31). Falls back to typecheck's
+            // record only when the lowerer published `Unknown`
+            // (e.g. an unhandled Stub shape).
+            let trailing_ty = if lowered_ty != Type::Unknown {
+                Some(lowered_ty)
+            } else {
+                expr.resolved_type.clone()
+            };
             // Unit-typed trailing expressions don't carry a value through
             // the merge phi -- void calls and the unit literal both
             // produce `None` at codegen, leaving their nominal `dest`
@@ -378,8 +390,9 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        let (next, mut value_operand) = self.lower_expr_to_operand(builder, open, value)?;
-        let assigned_type = self.resolve_assigned_type(type_annotation, value);
+        let (next, mut value_operand, value_type) =
+            self.lower_expr_to_operand(builder, open, value)?;
+        let assigned_type = self.resolve_assigned_type(type_annotation, value, &value_type);
         let Some(open) = next else {
             if let Some(saved) = saved_subst {
                 self.fn_state.type_subst = saved;
@@ -421,7 +434,7 @@ impl<'a> Lowerer<'a> {
         value: &Expr,
     ) -> Result<Option<IRBlockId>, String> {
         let (target_type, load_op, sink) = self.compound_assign_target(builder, open, target)?;
-        let (next, rhs_op) = self.lower_expr_to_operand(builder, open, value)?;
+        let (next, rhs_op, _rhs_ty) = self.lower_expr_to_operand(builder, open, value)?;
         let Some(open) = next else {
             return Ok(None);
         };
@@ -466,7 +479,7 @@ impl<'a> Lowerer<'a> {
             );
             return Ok(None);
         };
-        let (next, mut operand) = self.lower_tail_expr_to_operand(builder, open, expr)?;
+        let (next, mut operand, _ty) = self.lower_tail_expr_to_operand(builder, open, expr)?;
         let Some(open) = next else {
             return Ok(None);
         };
@@ -501,11 +514,39 @@ impl<'a> Lowerer<'a> {
         Ok(None)
     }
 
-    /// Resolve the post-RHS assigned type: annotation > inferred
-    /// from typecheck > inferred from expression kind > Unknown.
-    fn resolve_assigned_type(&self, type_annotation: Option<&TypeExpr>, value: &Expr) -> Type {
+    /// Resolve the post-RHS assigned type. Source precedence:
+    ///
+    /// 1. Annotation (when present) -- pinned by the source.
+    /// 2. Lowerer's published `value_type` (from
+    ///    [`crate::Lowerer::lower_expr_to_operand`]'s [`OperandResult`]
+    ///    `Type` slot) -- the source of truth for the operand's
+    ///    runtime type, computed by the same lowering that emitted
+    ///    the value's instructions. Skips when the lowerer published
+    ///    `Unknown` (e.g. an unhandled Stub shape with no typecheck
+    ///    record).
+    /// 3. Typecheck's `value.resolved_type` -- fallback for the
+    ///    Stub-fallthrough case.
+    /// 4. Static expression-kind inference
+    ///    ([`infer_type_from_expr`]) -- last-resort for AST shapes
+    ///    typecheck didn't record a type for.
+    /// 5. [`Type::Unknown`] -- defensive.
+    ///
+    /// Slice 3a-bis (Wave 31) added precedence step 2, eliminating
+    /// the fragile chain through `infer_type_from_expr`'s ad-hoc
+    /// per-shape estimators (chained method calls, field-typed
+    /// calls, match arm join etc.). The lowerer's published type is
+    /// the authoritative answer.
+    fn resolve_assigned_type(
+        &self,
+        type_annotation: Option<&TypeExpr>,
+        value: &Expr,
+        value_type: &Type,
+    ) -> Type {
         if let Some(te) = type_annotation {
             return resolve_final_annotation_type(&self.ctx(), te);
+        }
+        if *value_type != Type::Unknown {
+            return value_type.clone();
         }
         if let Some(ty) = value.resolved_type.as_ref()
             && *ty != Type::Unknown

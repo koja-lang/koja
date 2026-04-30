@@ -72,7 +72,7 @@ impl<'a> Lowerer<'a> {
         op: &BinOp,
         left: &Expr,
         right: &Expr,
-    ) -> Result<Option<(Option<IRBlockId>, IROperand)>, String> {
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         if matches!(op, BinOp::Concat) {
             return Ok(None);
         }
@@ -85,25 +85,29 @@ impl<'a> Lowerer<'a> {
         if matches!(resolved, ResolvedBinaryOp::EnumStructEqual { .. }) {
             return Ok(None);
         }
-        let (open, lhs) = self.lower_expr_to_operand(builder, open, left)?;
+        let (open, lhs, lhs_ty) = self.lower_expr_to_operand(builder, open, left)?;
         let Some(open) = open else {
-            return Ok(Some((None, IROperand::Unit)));
+            return Ok(Some((None, IROperand::Unit, Type::Unit)));
         };
-        let (open, rhs) = self.lower_expr_to_operand(builder, open, right)?;
+        let (open, rhs, _rhs_ty) = self.lower_expr_to_operand(builder, open, right)?;
         let Some(open) = open else {
-            return Ok(Some((None, IROperand::Unit)));
+            return Ok(Some((None, IROperand::Unit, Type::Unit)));
         };
         let dest = self.next_value_id();
         builder.append(
             open,
             IRInstruction::BinaryOp {
                 dest,
-                op: resolved,
+                op: resolved.clone(),
                 lhs,
                 rhs,
             },
         );
-        Ok(Some((Some(open), IROperand::Local(dest))))
+        Ok(Some((
+            Some(open),
+            IROperand::Local(dest),
+            binary_op_result_type(&resolved, &lhs_ty),
+        )))
     }
 
     /// Lower an [`expo_ast::ast::ExprKind::Unary`] to an
@@ -116,7 +120,7 @@ impl<'a> Lowerer<'a> {
         open: IRBlockId,
         op: &UnaryOp,
         operand_expr: &Expr,
-    ) -> Result<Option<(Option<IRBlockId>, IROperand)>, String> {
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         let Some(shape) = operand_expr
             .resolved_type
             .as_ref()
@@ -127,11 +131,13 @@ impl<'a> Lowerer<'a> {
         let Ok(resolved) = resolve_unary_op(op, &shape) else {
             return Ok(None);
         };
-        let (open, operand) = self.lower_expr_to_operand(builder, open, operand_expr)?;
+        let (open, operand, operand_ty) =
+            self.lower_expr_to_operand(builder, open, operand_expr)?;
         let Some(open) = open else {
-            return Ok(Some((None, IROperand::Unit)));
+            return Ok(Some((None, IROperand::Unit, Type::Unit)));
         };
         let dest = self.next_value_id();
+        let result_ty = unary_op_result_type(op, &operand_ty);
         builder.append(
             open,
             IRInstruction::UnaryOp {
@@ -140,6 +146,42 @@ impl<'a> Lowerer<'a> {
                 operand,
             },
         );
-        Ok(Some((Some(open), IROperand::Local(dest))))
+        Ok(Some((Some(open), IROperand::Local(dest), result_ty)))
+    }
+}
+
+/// Result type of a [`ResolvedBinaryOp`]: comparisons / logical ops
+/// produce [`Primitive::Bool`]; arithmetic ops preserve the LHS
+/// operand's type (mirrors LLVM int/float promotion rules and the
+/// codegen-side `compile_binary` behavior).
+fn binary_op_result_type(op: &ResolvedBinaryOp, lhs_ty: &Type) -> Type {
+    match op {
+        ResolvedBinaryOp::BoolAnd
+        | ResolvedBinaryOp::BoolOr
+        | ResolvedBinaryOp::EnumStructEqual { .. }
+        | ResolvedBinaryOp::FloatEqual
+        | ResolvedBinaryOp::FloatGreater
+        | ResolvedBinaryOp::FloatGreaterEqual
+        | ResolvedBinaryOp::FloatLess
+        | ResolvedBinaryOp::FloatLessEqual
+        | ResolvedBinaryOp::FloatNotEqual
+        | ResolvedBinaryOp::IntEqual
+        | ResolvedBinaryOp::IntGreater
+        | ResolvedBinaryOp::IntGreaterEqual
+        | ResolvedBinaryOp::IntLess
+        | ResolvedBinaryOp::IntLessEqual
+        | ResolvedBinaryOp::IntNotEqual
+        | ResolvedBinaryOp::StringEqual
+        | ResolvedBinaryOp::StringNotEqual => Type::Primitive(Primitive::Bool),
+        _ => lhs_ty.clone(),
+    }
+}
+
+/// Result type of a unary operator: `not` -> [`Primitive::Bool`];
+/// numeric negation preserves the operand type.
+fn unary_op_result_type(op: &UnaryOp, operand_ty: &Type) -> Type {
+    match op {
+        UnaryOp::Not => Type::Primitive(Primitive::Bool),
+        UnaryOp::Neg => operand_ty.clone(),
     }
 }
