@@ -157,25 +157,33 @@ impl<'ctx> LLVMTypeCache<'ctx> {
 }
 
 /// Per-function LLVM-bound state that is set/reset at each `define_function`
-/// call. Holds variable allocas, loop-exit stack, and tail-call rewrite
-/// scaffolding (`loop_header` + `param_allocas`). Pure-semantic per-function
-/// state lives in [`expo_ir::FnLowerState`] on `Compiler.fn_lower`.
+/// call. Holds variable allocas, the fn-wide block table, and tail-call
+/// rewrite scaffolding (`loop_header` + `param_allocas`). Pure-semantic
+/// per-function state lives in [`expo_ir::FnLowerState`] on
+/// `Compiler.fn_lower`.
 pub struct FnState<'ctx> {
-    /// Stack of enclosing-loop exits paired with their LLVM block
-    /// handles. Companion to [`expo_ir::FnLowerState::loop_exit`]
-    /// (semantic side: just the [`expo_ir::IRBlockId`]) -- this side
-    /// carries the matched [`BasicBlock`] handle so the
-    /// [`crate::stmt::compile_statement`] shim can resolve a lowered
-    /// [`expo_ir::IRTerminator::Branch`] back to an LLVM successor.
-    /// Maintained in lockstep with `fn_lower.loop_exit` by each loop
-    /// emit walker.
-    pub loop_exit_blocks: Vec<(IRBlockId, BasicBlock<'ctx>)>,
+    /// Function-wide map of [`expo_ir::IRBlockId`] -> LLVM
+    /// [`BasicBlock`]. Every per-construct emit walker registers the
+    /// blocks it allocates here immediately after `append_basic_block`.
+    /// Used as a fallback in [`crate::control::terminator::emit_terminator`]
+    /// when an [`expo_ir::IRTerminator::Branch`] / `CondBranch` /
+    /// `Return` references an `IRBlockId` minted by an enclosing
+    /// construct (e.g. a `break` inside a nested `if` references the
+    /// enclosing loop's `exit_block`). Replaced the old
+    /// `loop_exit_blocks` stack in Phase 4g Slice 2.
+    pub block_table: HashMap<IRBlockId, BasicBlock<'ctx>>,
     /// Loop header block for the current function. When a self-recursive
     /// tail call is detected, codegen stores new arguments into the
     /// parameter allocas and branches here instead of emitting a call.
     pub loop_header: Option<BasicBlock<'ctx>>,
     /// Parameter allocas in call order (self first, then regular params).
     pub param_allocas: Vec<PointerValue<'ctx>>,
+    /// Snapshot stack for [`expo_ir::values::IRInstruction::PushTypeSubst`]
+    /// / [`expo_ir::values::IRInstruction::PopTypeSubst`]. Each entry
+    /// captures the prior `fn_lower.type_subst` value (`Some(prior)`)
+    /// or absence (`None`) for every key the matching push shadowed,
+    /// so the pop can restore precisely the pre-push state.
+    pub type_subst_stack: Vec<HashMap<String, Option<Type>>>,
     pub variables: BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>,
 }
 
@@ -188,9 +196,10 @@ impl<'ctx> LocalBindings for FnState<'ctx> {
 impl<'ctx> FnState<'ctx> {
     pub fn new() -> Self {
         Self {
-            loop_exit_blocks: Vec::new(),
+            block_table: HashMap::new(),
             loop_header: None,
             param_allocas: Vec::new(),
+            type_subst_stack: Vec::new(),
             variables: BTreeMap::new(),
         }
     }

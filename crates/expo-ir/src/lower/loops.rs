@@ -49,15 +49,11 @@ impl<'a> Lowerer<'a> {
     /// `body_block`. The exit block exists so AST `break` statements
     /// can branch to it via the surrounding emit walker's
     /// `loop_exit_stack` (until Phase 4g lifts `break` into IR).
-    pub fn lower_loop(&mut self, body: &[Statement]) -> IRLoop {
-        let body_block = self.next_block_id();
+    pub fn lower_loop(&mut self, body: &[Statement]) -> Result<IRLoop, String> {
+        let body_id = self.next_block_id();
         let exit_block = self.next_block_id();
-        IRLoop {
-            body_block,
-            body_stmts: body.to_vec(),
-            body_terminator: IRTerminator::Branch(body_block),
-            exit_block,
-        }
+        let body = self.lower_body_block(body_id, "loop_body", body, body_id)?;
+        Ok(IRLoop { body, exit_block })
     }
 
     /// Lowers a `while cond ... end`. Mints `header_block` /
@@ -68,25 +64,24 @@ impl<'a> Lowerer<'a> {
     /// then: body_block, otherwise: exit_block }`; body terminator
     /// branches back to the header (re-evaluating the cond each
     /// iteration).
-    pub fn lower_while(&mut self, cond: &Expr, body: &[Statement]) -> IRWhile {
+    pub fn lower_while(&mut self, cond: &Expr, body: &[Statement]) -> Result<IRWhile, String> {
         let header_block = self.next_block_id();
-        let body_block = self.next_block_id();
+        let body_id = self.next_block_id();
         let exit_block = self.next_block_id();
         let mut header_instructions = Vec::new();
         let cond_operand = self.lower_expr_to_operand(&mut header_instructions, cond);
-        IRWhile {
-            body_block,
-            body_stmts: body.to_vec(),
-            body_terminator: IRTerminator::Branch(header_block),
+        let body = self.lower_body_block(body_id, "while_body", body, header_block)?;
+        Ok(IRWhile {
+            body,
             exit_block,
             header_block,
             header_instructions,
             header_terminator: IRTerminator::CondBranch {
                 cond: cond_operand,
-                then: body_block,
+                then: body_id,
                 otherwise: exit_block,
             },
-        }
+        })
     }
 
     /// Lowers a `for binding in iterable ... end`. Mints
@@ -108,22 +103,22 @@ impl<'a> Lowerer<'a> {
         iterable: &Expr,
         binding_pattern: &Pattern,
         body: &[Statement],
-    ) -> IRFor {
-        let body_block = self.next_block_id();
+    ) -> Result<IRFor, String> {
+        let body_id = self.next_block_id();
         let exit_block = self.next_block_id();
         let header_block = self.next_block_id();
         let idx_value = self.next_value_id();
         let iterable_value = self.next_value_id();
-        IRFor {
+        let body = self.lower_body_block(body_id, "for_body", body, header_block)?;
+        Ok(IRFor {
             binding_pattern: binding_pattern.clone(),
-            body_block,
-            body_stmts: body.to_vec(),
+            body,
             exit_block,
             header_block,
             idx_value,
             iterable: iterable.clone(),
             iterable_value,
-        }
+        })
     }
 }
 

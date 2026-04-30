@@ -61,10 +61,12 @@ use expo_typecheck::context::Coercion;
 use expo_typecheck::types::{Primitive, Type};
 
 use crate::Lowerer;
-use crate::blocks::IRTerminator;
+use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
 use crate::lower::inference::infer_type_from_expr;
 use crate::lower::ownership::ownership_for_expr;
-use crate::lower::stmt::{resolve_coercion, resolve_field_path, resolve_final_annotation_type};
+use crate::lower::stmt::{
+    resolve_annotation_subst, resolve_coercion, resolve_field_path, resolve_final_annotation_type,
+};
 use crate::resolved::ops::{
     OperandShape, ResolvedBinaryOp, ResolvedCompoundOp, resolve_compound_op,
 };
@@ -74,6 +76,19 @@ use crate::values::{IRInstruction, IROperand};
 /// sequence to append to the current basic block's body, plus an
 /// optional terminator (set for `Return` and `Break`).
 type LoweredStatement = (Vec<IRInstruction>, Option<IRTerminator>);
+
+/// Output of [`Lowerer::lower_statements_for_value`]: the body's
+/// instruction stream + optional terminator, plus the trailing
+/// expression's operand and Expo type when the body ends in a
+/// [`Statement::Expr`] without an early terminator. Used by value-
+/// producing conditional constructs (`IRIfElse`, `IRCond`, `IRMatch`)
+/// to pre-stage the merge phi at lowering time.
+pub type LoweredStatementsForValue = (
+    Vec<IRInstruction>,
+    Option<IRTerminator>,
+    Option<IROperand>,
+    Option<Type>,
+);
 
 /// Output of [`Lowerer::compound_assign_target`]: the target's
 /// resolved Expo type, the SSA operand carrying the loaded current
@@ -137,33 +152,150 @@ impl<'a> Lowerer<'a> {
         (instructions, None)
     }
 
-    /// Lower an [`Statement::Assignment`]: optionally push the
-    /// annotation's type-subst entries into `fn_lower.type_subst`
-    /// for the duration of RHS lowering, lower the value, optionally
-    /// emit an [`IRInstruction::UnionWrap`] for a recorded
-    /// `UnionWiden` coercion, then emit a [`IRInstruction::StoreLocal`]
+    /// Lower a body statement list into a full [`IRBasicBlock`].
+    /// Used by every per-construct lowering whose body never feeds
+    /// a merge phi (`unless`, `if`-no-else, `loop`, `while`, `for`,
+    /// `match` arms). The block's terminator defaults to
+    /// `Branch(default_target)` and is overridden by an early
+    /// `Return` / `Break` returned from [`Self::lower_statements`].
+    pub fn lower_body_block(
+        &mut self,
+        id: IRBlockId,
+        label: impl Into<String>,
+        stmts: &[Statement],
+        default_target: IRBlockId,
+    ) -> Result<IRBasicBlock, String> {
+        let (instructions, terminator) = self.lower_statements(stmts)?;
+        Ok(IRBasicBlock {
+            id,
+            instructions,
+            label: label.into(),
+            terminator: terminator.unwrap_or(IRTerminator::Branch(default_target)),
+        })
+    }
+
+    /// Lower a statement sequence and capture the trailing
+    /// expression's operand + Expo type when the body ends in a
+    /// [`Statement::Expr`] without an early terminator. Used by
+    /// value-producing conditional constructs to pre-stage a merge
+    /// phi at lowering time.
+    ///
+    /// Returns `(instructions, terminator, trailing_operand, trailing_type)`:
+    ///
+    /// - `instructions` -- the body's full lowered instruction stream.
+    /// - `terminator` -- `Some(...)` only when an early `Return` or
+    ///   `Break` fires partway through the body; the body short-
+    ///   circuits there and contributes no value to the surrounding
+    ///   merge phi.
+    /// - `trailing_operand` / `trailing_type` -- both `Some(...)` iff
+    ///   the body ends in a `Statement::Expr` and no early terminator
+    ///   fired. Both `None` otherwise (body ends in a statement that
+    ///   produces no value, or short-circuited via `Return` / `Break`).
+    pub fn lower_statements_for_value(
+        &mut self,
+        stmts: &[Statement],
+    ) -> Result<LoweredStatementsForValue, String> {
+        let mut instructions = Vec::new();
+        if stmts.is_empty() {
+            return Ok((instructions, None, None, None));
+        }
+        for stmt in &stmts[..stmts.len() - 1] {
+            let (mut stmt_instructions, terminator) = self.lower_statement(stmt)?;
+            instructions.append(&mut stmt_instructions);
+            if terminator.is_some() {
+                return Ok((instructions, terminator, None, None));
+            }
+        }
+        let last = stmts.last().expect("non-empty body");
+        if let Statement::Expr(expr) = last {
+            let trailing = self.lower_expr_to_operand(&mut instructions, expr);
+            let trailing_ty = expr.resolved_type.clone();
+            // Unit-typed trailing expressions don't carry a value through
+            // the merge phi -- void calls and the unit literal both
+            // produce `None` at codegen, leaving their nominal `dest`
+            // unregistered in the executor's `value_map`. Treat the body
+            // as no-value in that case so callers (e.g. match arms) skip
+            // the materialize step entirely.
+            let is_unit = matches!(trailing_ty.as_ref(), Some(Type::Unit));
+            if is_unit {
+                Ok((instructions, None, None, None))
+            } else {
+                Ok((instructions, None, Some(trailing), trailing_ty))
+            }
+        } else {
+            let (mut last_instructions, terminator) = self.lower_statement(last)?;
+            instructions.append(&mut last_instructions);
+            Ok((instructions, terminator, None, None))
+        }
+    }
+
+    /// Lower an [`Statement::Assignment`]: push the annotation's
+    /// type-subst entries into `fn_state.type_subst` for the duration
+    /// of RHS lowering, lower the value, optionally emit an
+    /// [`IRInstruction::UnionWrap`] for a recorded `UnionWiden`
+    /// coercion, then emit a [`IRInstruction::StoreLocal`]
     /// (single-segment) or [`IRInstruction::StoreField`]
     /// (multi-segment) sink.
+    ///
+    /// The codegen-side [`crate::compile_statement`] shim wraps top-
+    /// level statement lowering + execution in its own subst push so
+    /// any [`IRInstruction::Stub`]'s deferred `compile_expr` (e.g.
+    /// `List<Int>::new()`'s type-arg inference) sees the entries at
+    /// execute time too. Pushing here on top of that is idempotent --
+    /// the inner restore drops back to the same outer state.
     fn lower_assignment_stmt(
         &mut self,
         target: &AssignTarget,
         type_annotation: Option<&TypeExpr>,
         value: &Expr,
     ) -> Result<LoweredStatement, String> {
-        // Annotation-driven type-subst push/pop happens at the
-        // [`crate::compile_statement`] shim layer rather than here.
-        // The shim wraps both lowering and execution in the
-        // pushed-subst window so any [`IRInstruction::Stub`] emitted
-        // for unsupported sub-expressions still sees the entries when
-        // its deferred `compile_expr` runs (e.g. `List<Int>::new()`'s
-        // type-arg inference reads from `fn_lower.type_subst`).
+        // Resolve annotation-derived type-subst entries (e.g. `T = Int`
+        // for `list: List<Int> = ...`). When present we (a) push them
+        // into `fn_state.type_subst` for the duration of the lowering
+        // call so any operand-lift decisions see the pinned types, and
+        // (b) bracket the resulting instruction stream with
+        // [`IRInstruction::PushTypeSubst`] / [`IRInstruction::PopTypeSubst`]
+        // so the executor performs the same push at execute time --
+        // necessary because the value's lift may bail to an
+        // [`IRInstruction::Stub`] whose deferred `compile_expr`
+        // re-runs `compile_method_call` (and friends) at execute
+        // time, which independently consults
+        // `compiler.fn_lower.type_subst` for inference.
+        let subst_entries: Vec<(String, Type)> = type_annotation
+            .map(|te| resolve_annotation_subst(&self.ctx(), te))
+            .unwrap_or_default();
+        let saved_subst = if subst_entries.is_empty() {
+            None
+        } else {
+            let saved = self.fn_state.type_subst.clone();
+            for (name, ty) in &subst_entries {
+                self.fn_state.type_subst.insert(name.clone(), ty.clone());
+            }
+            Some(saved)
+        };
+
         let mut instructions = Vec::new();
+        if !subst_entries.is_empty() {
+            instructions.push(IRInstruction::PushTypeSubst {
+                entries: subst_entries.clone(),
+            });
+        }
+
         let mut value_operand = self.lower_expr_to_operand(&mut instructions, value);
         let assigned_type = self.resolve_assigned_type(type_annotation, value);
         value_operand = self.maybe_emit_union_wrap(&mut instructions, value, value_operand);
 
         let store = self.build_store(target, value, &assigned_type, value_operand)?;
         instructions.push(store);
+
+        if !subst_entries.is_empty() {
+            instructions.push(IRInstruction::PopTypeSubst {
+                names: subst_entries.iter().map(|(n, _)| n.clone()).collect(),
+            });
+        }
+        if let Some(saved) = saved_subst {
+            self.fn_state.type_subst = saved;
+        }
         Ok((instructions, None))
     }
 

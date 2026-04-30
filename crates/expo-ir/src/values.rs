@@ -616,6 +616,38 @@ pub enum IRInstruction {
         /// emit time.
         target_union: Type,
     },
+    /// Push an annotation-derived type-substitution scope onto
+    /// `FnLowerState.type_subst` for the duration of the enclosing
+    /// region. The matching [`IRInstruction::PopTypeSubst`] restores
+    /// the prior state.
+    ///
+    /// Mirrors the codegen-side
+    /// [`crate::compile_statement`] shim's annotation push so any
+    /// transitional [`IRInstruction::Stub`] emitted between the push
+    /// and pop sees the entries when its deferred `compile_expr`
+    /// resolves a generic call (e.g. `List<Int>::new()`'s type-arg
+    /// inference reads from `fn_lower.type_subst`). The shim push is
+    /// scoped to a single top-level statement; this instruction
+    /// extends the same scoping to body-block lifts where the
+    /// statement's lowered instructions execute inside an enclosing
+    /// construct's emit walker (e.g. an `if` body inside a top-level
+    /// assignment).
+    PushTypeSubst {
+        /// Entries to insert into `fn_lower.type_subst`. Each entry
+        /// shadows any pre-existing binding for the same name; the
+        /// matching pop restores the prior values.
+        entries: Vec<(String, Type)>,
+    },
+    /// Pop the most recent [`IRInstruction::PushTypeSubst`] scope:
+    /// remove the names that were inserted and restore any prior
+    /// values. The executor maintains a parallel stack of pre-push
+    /// snapshots.
+    PopTypeSubst {
+        /// Names introduced by the matching push, in insertion
+        /// order. Used by the executor to know which keys to remove
+        /// from / restore on `fn_lower.type_subst`.
+        names: Vec<String>,
+    },
 }
 
 impl IRInstruction {
@@ -643,6 +675,8 @@ impl IRInstruction {
             | IRInstruction::UnaryOp { dest, .. }
             | IRInstruction::UnionWrap { dest, .. } => Some(*dest),
             IRInstruction::PatternBindFromPtr { .. }
+            | IRInstruction::PopTypeSubst { .. }
+            | IRInstruction::PushTypeSubst { .. }
             | IRInstruction::StoreField { .. }
             | IRInstruction::StoreLocal { .. } => None,
         }

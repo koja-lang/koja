@@ -48,11 +48,11 @@ use crate::compiler::{Compiler, ExprResult};
 use crate::drop::Ownership;
 use crate::expr::compile_expr;
 use crate::generics::monomorphize_impl_method;
-use crate::stmt::compile_statement;
 use crate::types::to_llvm_type;
 
 use super::instructions::execute_instructions;
 use super::terminator::emit_terminator;
+use super::{register_block, walk_body};
 
 /// Compiles an infinite `loop` block. Only exits via `break`. Lowers
 /// to an [`IRLoop`] via [`expo_ir::Lowerer::lower_loop`] and walks
@@ -62,7 +62,7 @@ pub fn compile_loop<'ctx>(
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let ir = compiler.lowerer().lower_loop(body);
+    let ir = compiler.lowerer().lower_loop(body)?;
     emit_loop_unified(compiler, &ir, function)
 }
 
@@ -75,7 +75,7 @@ pub fn compile_while<'ctx>(
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let ir = compiler.lowerer().lower_while(condition, body);
+    let ir = compiler.lowerer().lower_while(condition, body)?;
     emit_while_unified(compiler, &ir, function)
 }
 
@@ -90,7 +90,7 @@ pub fn compile_for<'ctx>(
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let ir = compiler.lowerer().lower_for(iterable, pattern, body);
+    let ir = compiler.lowerer().lower_for(iterable, pattern, body)?;
     emit_for_unified(compiler, &ir, function)
 }
 
@@ -106,7 +106,7 @@ fn emit_loop_unified<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let block_map = build_loop_block_map(compiler, ir, function);
-    let body_bb = block_map[&ir.body_block];
+    let body_bb = block_map[&ir.body.id];
     let exit_bb = block_map[&ir.exit_block];
 
     compiler
@@ -115,19 +115,9 @@ fn emit_loop_unified<'ctx>(
         .unwrap();
 
     compiler.builder.position_at_end(body_bb);
-    enter_loop(compiler, ir.exit_block, exit_bb);
-    walk_loop_body(compiler, &ir.body_stmts, function)?;
-    if !compiler.current_block_terminated() {
-        let value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-        emit_terminator(
-            compiler,
-            &ir.body_terminator,
-            &block_map,
-            &value_map,
-            function,
-        )?;
-    }
-    leave_loop(compiler);
+    compiler.fn_lower.push_loop_exit(ir.exit_block);
+    walk_body(compiler, &ir.body, &block_map, function)?;
+    compiler.fn_lower.pop_loop_exit();
 
     compiler.builder.position_at_end(exit_bb);
     Ok(None)
@@ -150,7 +140,7 @@ fn emit_while_unified<'ctx>(
 ) -> ExprResult<'ctx> {
     let block_map = build_while_block_map(compiler, ir, function);
     let header_bb = block_map[&ir.header_block];
-    let body_bb = block_map[&ir.body_block];
+    let body_bb = block_map[&ir.body.id];
     let exit_bb = block_map[&ir.exit_block];
 
     compiler
@@ -176,19 +166,9 @@ fn emit_while_unified<'ctx>(
     )?;
 
     compiler.builder.position_at_end(body_bb);
-    enter_loop(compiler, ir.exit_block, exit_bb);
-    walk_loop_body(compiler, &ir.body_stmts, function)?;
-    if !compiler.current_block_terminated() {
-        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-        emit_terminator(
-            compiler,
-            &ir.body_terminator,
-            &block_map,
-            &body_value_map,
-            function,
-        )?;
-    }
-    leave_loop(compiler);
+    compiler.fn_lower.push_loop_exit(ir.exit_block);
+    walk_body(compiler, &ir.body, &block_map, function)?;
+    compiler.fn_lower.pop_loop_exit();
 
     compiler.builder.position_at_end(exit_bb);
     Ok(None)
@@ -210,7 +190,7 @@ fn emit_for_unified<'ctx>(
     let setup = build_for_loop_setup(compiler, ir, function)?;
     let block_map = build_for_block_map(compiler, ir, function);
     let header_bb = block_map[&ir.header_block];
-    let body_bb = block_map[&ir.body_block];
+    let body_bb = block_map[&ir.body.id];
     let exit_bb = block_map[&ir.exit_block];
 
     compiler
@@ -226,9 +206,9 @@ fn emit_for_unified<'ctx>(
         .unwrap();
 
     compiler.builder.position_at_end(body_bb);
-    enter_loop(compiler, ir.exit_block, exit_bb);
-    emit_for_iteration(compiler, ir, &setup, header_bb, function)?;
-    leave_loop(compiler);
+    compiler.fn_lower.push_loop_exit(ir.exit_block);
+    emit_for_iteration(compiler, ir, &setup, header_bb, &block_map, function)?;
+    compiler.fn_lower.pop_loop_exit();
     compiler.fn_state.variables.remove("__for_iter");
 
     compiler.builder.position_at_end(exit_bb);
@@ -238,18 +218,30 @@ fn emit_for_unified<'ctx>(
 /// Per-iteration scaffolding for a `for` loop: load the element via
 /// `get(idx)`, bind it via the `binding_pattern`, walk the body, and
 /// (when the body has not self-terminated) increment the index and
-/// branch back to `header_bb`.
+/// branch back to `header_bb`. The body's own
+/// `IRBasicBlock::terminator` is ignored here -- the back-edge needs
+/// to interleave an `idx += 1` between body completion and the branch
+/// to `header_bb`, which `emit_for_back_edge` handles directly rather
+/// than routing through `emit_terminator`.
 fn emit_for_iteration<'ctx>(
     compiler: &mut Compiler<'ctx>,
     ir: &IRFor,
     setup: &ForLoopSetup<'ctx>,
     header_bb: BasicBlock<'ctx>,
+    block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
     function: FunctionValue<'ctx>,
 ) -> Result<(), String> {
     let elem_val = build_for_element_load(compiler, setup);
     bind_for_pattern(compiler, &ir.binding_pattern, elem_val, setup);
 
-    walk_loop_body(compiler, &ir.body_stmts, function)?;
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    execute_instructions(
+        compiler,
+        &ir.body.instructions,
+        function,
+        Some(block_map),
+        &mut value_map,
+    )?;
 
     if !compiler.current_block_terminated() {
         emit_for_back_edge(compiler, setup, header_bb);
@@ -260,18 +252,18 @@ fn emit_for_iteration<'ctx>(
 /// Allocate LLVM basic blocks for an [`IRLoop`] and return the
 /// id->block map.
 fn build_loop_block_map<'ctx>(
-    compiler: &Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     ir: &IRLoop,
     function: FunctionValue<'ctx>,
 ) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
     block_map.insert(
-        ir.body_block,
-        compiler.context.append_basic_block(function, "loop_body"),
+        ir.body.id,
+        register_block(compiler, function, ir.body.id, "loop_body"),
     );
     block_map.insert(
         ir.exit_block,
-        compiler.context.append_basic_block(function, "loop_exit"),
+        register_block(compiler, function, ir.exit_block, "loop_exit"),
     );
     block_map
 }
@@ -279,24 +271,22 @@ fn build_loop_block_map<'ctx>(
 /// Allocate LLVM basic blocks for an [`IRWhile`] and return the
 /// id->block map.
 fn build_while_block_map<'ctx>(
-    compiler: &Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     ir: &IRWhile,
     function: FunctionValue<'ctx>,
 ) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
     block_map.insert(
         ir.header_block,
-        compiler
-            .context
-            .append_basic_block(function, "while_header"),
+        register_block(compiler, function, ir.header_block, "while_header"),
     );
     block_map.insert(
-        ir.body_block,
-        compiler.context.append_basic_block(function, "while_body"),
+        ir.body.id,
+        register_block(compiler, function, ir.body.id, "while_body"),
     );
     block_map.insert(
         ir.exit_block,
-        compiler.context.append_basic_block(function, "while_exit"),
+        register_block(compiler, function, ir.exit_block, "while_exit"),
     );
     block_map
 }
@@ -304,42 +294,24 @@ fn build_while_block_map<'ctx>(
 /// Allocate LLVM basic blocks for an [`IRFor`] and return the
 /// id->block map.
 fn build_for_block_map<'ctx>(
-    compiler: &Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     ir: &IRFor,
     function: FunctionValue<'ctx>,
 ) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
     block_map.insert(
         ir.header_block,
-        compiler.context.append_basic_block(function, "for_header"),
+        register_block(compiler, function, ir.header_block, "for_header"),
     );
     block_map.insert(
-        ir.body_block,
-        compiler.context.append_basic_block(function, "for_body"),
+        ir.body.id,
+        register_block(compiler, function, ir.body.id, "for_body"),
     );
     block_map.insert(
         ir.exit_block,
-        compiler.context.append_basic_block(function, "for_exit"),
+        register_block(compiler, function, ir.exit_block, "for_exit"),
     );
     block_map
-}
-
-/// Walk a loop body's AST statements, stopping early if the current
-/// block self-terminates. Mirrors the per-statement walk that lived
-/// in the legacy `compile_loop` / `compile_while` / `compile_for`
-/// bodies; pulled out because all three walkers share it.
-fn walk_loop_body<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    body: &[Statement],
-    function: FunctionValue<'ctx>,
-) -> Result<(), String> {
-    for stmt in body {
-        if compiler.current_block_terminated() {
-            break;
-        }
-        compile_statement(compiler, stmt, function)?;
-    }
-    Ok(())
 }
 
 /// Pre-loop scaffolding for a `for` loop: compiles the iterable into
@@ -506,27 +478,6 @@ fn bind_for_pattern<'ctx>(
             (alloca, setup.elem_type.clone(), Ownership::Unowned),
         );
     }
-}
-
-/// Push the loop's exit block id onto both the semantic
-/// [`expo_ir::FnLowerState::loop_exit`] stack (read by
-/// [`expo_ast::ast::Statement::Break`] lowering) and the LLVM-bound
-/// [`crate::compiler::FnState::loop_exit_blocks`] stack (read by the
-/// [`compile_statement`] shim when assembling the terminator block
-/// map). The two stacks stay paired through bracketed
-/// [`enter_loop`] / [`leave_loop`] calls.
-fn enter_loop<'ctx>(compiler: &mut Compiler<'ctx>, exit_id: IRBlockId, exit_bb: BasicBlock<'ctx>) {
-    compiler.fn_lower.push_loop_exit(exit_id);
-    compiler.fn_state.loop_exit_blocks.push((exit_id, exit_bb));
-}
-
-/// Pop the innermost loop frame from both
-/// [`expo_ir::FnLowerState::loop_exit`] and
-/// [`crate::compiler::FnState::loop_exit_blocks`]. Companion to
-/// [`enter_loop`].
-fn leave_loop(compiler: &mut Compiler<'_>) {
-    compiler.fn_state.loop_exit_blocks.pop();
-    compiler.fn_lower.pop_loop_exit();
 }
 
 /// Per-iteration back edge: increment the index and branch back to

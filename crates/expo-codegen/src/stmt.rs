@@ -114,23 +114,18 @@ pub fn compile_statement<'ctx>(
 /// [`expo_ir::Lowerer::lower_statement`] -> [`execute_instructions`]
 /// -> [`emit_terminator`]. Statements never reference cross-block
 /// SSA so `value_map` starts empty; the only IR block ids a
-/// statement-level terminator references today are loop-exit ids
-/// emitted by [`Statement::Break`], so the shim seeds `block_map`
-/// from [`crate::compiler::FnState::loop_exit_blocks`] -- the LLVM-
-/// bound twin of [`expo_ir::FnLowerState::loop_exit`] maintained by
-/// the loop emit walkers' `enter_loop` / `leave_loop` helpers.
+/// statement-level terminator references are enclosing-construct ids
+/// (e.g. a loop's `exit_block` referenced by `Statement::Break`).
+/// Resolution falls through to
+/// [`crate::compiler::FnState::block_table`] -- the fn-wide map every
+/// per-construct emit walker registers its blocks into.
 fn lower_and_execute<'ctx>(
     compiler: &mut Compiler<'ctx>,
     stmt: &Statement,
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
     let (instructions, terminator) = compiler.lowerer().lower_statement(stmt)?;
-    let block_map: HashMap<IRBlockId, inkwell::basic_block::BasicBlock<'ctx>> = compiler
-        .fn_state
-        .loop_exit_blocks
-        .iter()
-        .map(|(id, bb)| (*id, *bb))
-        .collect();
+    let block_map: HashMap<IRBlockId, inkwell::basic_block::BasicBlock<'ctx>> = HashMap::new();
     let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
     execute_instructions(
         compiler,

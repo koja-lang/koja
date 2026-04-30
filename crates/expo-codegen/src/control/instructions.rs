@@ -328,6 +328,47 @@ pub(crate) fn execute_instructions<'ctx>(
                 let wrapped = compile_union_wrap(compiler, val, source_ty, target_union)?;
                 Some((*dest, wrapped))
             }
+            IRInstruction::PushTypeSubst { entries } => {
+                // Snapshot the prior bindings for the names we're
+                // about to shadow so the matching pop can restore
+                // them. Names not previously present are removed by
+                // the pop.
+                let mut snapshot: HashMap<String, Option<Type>> = HashMap::new();
+                for (name, ty) in entries {
+                    let prior = compiler.fn_lower.type_subst.get(name).cloned();
+                    snapshot.insert(name.clone(), prior);
+                    compiler
+                        .fn_lower
+                        .type_subst
+                        .insert(name.clone(), ty.clone());
+                }
+                compiler.fn_state.type_subst_stack.push(snapshot);
+                None
+            }
+            IRInstruction::PopTypeSubst { names } => {
+                let snapshot = compiler
+                    .fn_state
+                    .type_subst_stack
+                    .pop()
+                    .ok_or("IRInstruction::PopTypeSubst: type_subst_stack underflow")?;
+                for name in names {
+                    match snapshot.get(name) {
+                        Some(Some(prior)) => {
+                            compiler
+                                .fn_lower
+                                .type_subst
+                                .insert(name.clone(), prior.clone());
+                        }
+                        Some(None) => {
+                            compiler.fn_lower.type_subst.remove(name);
+                        }
+                        None => {
+                            compiler.fn_lower.type_subst.remove(name);
+                        }
+                    }
+                }
+                None
+            }
         };
         if let Some((dest, value)) = entry {
             value_map.insert(dest, value);

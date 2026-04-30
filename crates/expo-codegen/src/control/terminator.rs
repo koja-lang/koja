@@ -34,12 +34,17 @@ use super::coerce_to_bool;
 
 /// Emit `terminator` into the builder's current block.
 ///
-/// `block_map` resolves the function-scoped [`IRBlockId`]s carried on
-/// the terminator into LLVM [`BasicBlock`] handles. `value_map`
-/// resolves [`IROperand::Local`] references to LLVM values produced
-/// earlier in the same emission walker. Callers must register every
-/// successor referenced by the terminator before invoking this
-/// helper; an unknown id is treated as a hard error.
+/// `block_map` resolves the construct-local [`IRBlockId`]s carried on
+/// the terminator into LLVM [`BasicBlock`] handles. Misses fall back
+/// to [`crate::compiler::FnState::block_table`] -- the fn-wide map
+/// every per-construct emit walker registers its blocks into. The
+/// fallback covers the common "construct-internal terminator targets
+/// an enclosing-construct block" case, e.g. a `break` inside a nested
+/// `if` referencing the surrounding loop's `exit_block`.
+///
+/// `value_map` resolves [`IROperand::Local`] references to LLVM
+/// values produced earlier in the same emission walker. An unknown
+/// block id (missed in both maps) is a hard error.
 ///
 /// `function` is unused today but retained on the signature because
 /// future operand materialization (e.g. inline literal struct /
@@ -59,7 +64,7 @@ pub(crate) fn emit_terminator<'ctx>(
 ) -> Result<(), String> {
     match terminator {
         IRTerminator::Branch(target) => {
-            let target_bb = lookup_block(block_map, target)?;
+            let target_bb = lookup_block(compiler, block_map, target)?;
             compiler
                 .builder
                 .build_unconditional_branch(target_bb)
@@ -73,8 +78,8 @@ pub(crate) fn emit_terminator<'ctx>(
         } => {
             let cond_val = materialize_operand(compiler, cond, value_map)?;
             let cond_int = coerce_to_bool(compiler, cond_val, "conditional terminator condition")?;
-            let then_bb = lookup_block(block_map, then)?;
-            let else_bb = lookup_block(block_map, otherwise)?;
+            let then_bb = lookup_block(compiler, block_map, then)?;
+            let else_bb = lookup_block(compiler, block_map, otherwise)?;
             compiler
                 .builder
                 .build_conditional_branch(cond_int, then_bb, else_bb)
@@ -146,11 +151,15 @@ pub(crate) fn materialize_operand<'ctx>(
 }
 
 fn lookup_block<'ctx>(
+    compiler: &Compiler<'ctx>,
     block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
     id: &IRBlockId,
 ) -> Result<BasicBlock<'ctx>, String> {
     block_map
         .get(id)
+        .or_else(|| compiler.fn_state.block_table.get(id))
         .copied()
-        .ok_or_else(|| format!("emit_terminator: block id {id:?} not in block_map"))
+        .ok_or_else(|| {
+            format!("emit_terminator: block id {id:?} not in local block_map nor fn block_table")
+        })
 }

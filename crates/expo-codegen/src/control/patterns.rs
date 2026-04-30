@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{Expr, MatchArm, Pattern, Statement};
 use expo_ir::IRBlockId;
+use expo_ir::blocks::IRTerminator;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::patterns::resolve_subject_ty;
 use expo_ir::lower::types::monomorphize_type;
@@ -34,10 +35,9 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
-use crate::stmt::compile_union_wrap;
 
-use super::compile_body_as_value;
 use super::instructions::execute_instructions;
+use super::register_block;
 use super::terminator::{emit_terminator, materialize_operand};
 
 /// Compiles a `match` expression. Patterns are tested sequentially; the first
@@ -299,7 +299,7 @@ fn emit_match_unified<'ctx>(
 /// gate / payload blocks emitted by the gated pattern lowering land
 /// under `match_test_{i}_aux_{n}`.
 fn build_match_block_map<'ctx>(
-    compiler: &Compiler<'ctx>,
+    compiler: &mut Compiler<'ctx>,
     ir: &IRMatch,
     function: FunctionValue<'ctx>,
 ) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
@@ -311,19 +311,17 @@ fn build_match_block_map<'ctx>(
             } else {
                 format!("match_test_{i}_aux_{n}")
             };
-            let bb = compiler.context.append_basic_block(function, &label);
+            let bb = register_block(compiler, function, blk.id, &label);
             block_map.insert(blk.id, bb);
         }
     }
     for (i, arm) in ir.arms.iter().enumerate() {
-        let bb = compiler
-            .context
-            .append_basic_block(function, &format!("match_body_{i}"));
-        block_map.insert(arm.body_block, bb);
+        let bb = register_block(compiler, function, arm.body.id, &format!("match_body_{i}"));
+        block_map.insert(arm.body.id, bb);
     }
-    let fallthrough_bb = compiler.context.append_basic_block(function, "match_none");
+    let fallthrough_bb = register_block(compiler, function, ir.fallthrough_block, "match_none");
     block_map.insert(ir.fallthrough_block, fallthrough_bb);
-    let merge_bb = compiler.context.append_basic_block(function, "match_end");
+    let merge_bb = register_block(compiler, function, ir.merge_block, "match_end");
     block_map.insert(ir.merge_block, merge_bb);
     block_map
 }
@@ -358,14 +356,24 @@ fn emit_match_arm_check<'ctx>(
     Ok(())
 }
 
-/// Walks one arm's body block: walks the AST stub body via
-/// [`compile_body_as_value`]. Pattern bindings already exist in
-/// `Compiler.fn_state.variables` (registered by `PatternBindFromPtr`
-/// instructions during [`emit_match_arm_check`]); their per-arm
-/// scoping is enforced by the surrounding [`emit_match_unified`] loop.
-/// Returns the captured trailing-expression value (when present) and
-/// the actual end block (which may differ from `body_block` when the
-/// body contains nested control flow).
+/// Walks one arm's body [`expo_ir::IRBasicBlock`]: executes the
+/// lowered body instructions through [`execute_instructions`] (which
+/// registers any trailing-expression operand into `value_map`),
+/// captures the end block, and routes to one of three outcomes:
+///
+/// - `Terminated` if the body self-terminated (e.g. early `return`
+///   or `panic`) inside `body.instructions`.
+/// - `Value` if [`IRMatchArm::trailing_value`] is `Some(...)` -- the
+///   captured operand is materialized from `value_map` and bound to
+///   the actual end block.
+/// - `NoValue` otherwise -- the body produced no merge phi
+///   contribution; emit its declared `Branch(merge)` terminator and
+///   move on.
+///
+/// Per-arm UnionWrap (when the lowered strategy is UnionWrap) was
+/// already pre-staged inside `body.instructions` at lowering time
+/// (see [`expo_ir::Lowerer::lower_match_expr`]), so the operand
+/// referenced by `trailing_value` is the post-wrap value.
 fn emit_match_arm_body<'ctx>(
     compiler: &mut Compiler<'ctx>,
     ir_arm: &IRMatchArm,
@@ -373,27 +381,68 @@ fn emit_match_arm_body<'ctx>(
     value_map: &mut HashMap<IRValueId, BasicValueEnum<'ctx>>,
     function: FunctionValue<'ctx>,
 ) -> Result<ArmEmission<'ctx>, String> {
-    let body_bb = block_map[&ir_arm.body_block];
+    let body_bb = block_map[&ir_arm.body.id];
     compiler.builder.position_at_end(body_bb);
-    let arm_tv = compile_body_as_value(compiler, &ir_arm.body_stmts, function)?;
+    execute_instructions(
+        compiler,
+        &ir_arm.body.instructions,
+        function,
+        Some(block_map),
+        value_map,
+    )?;
     let terminated = compiler.current_block_terminated();
     let end_bb = compiler.builder.get_insert_block().unwrap();
 
     if terminated {
         return Ok(ArmEmission::Terminated);
     }
-    if let Some(tv) = arm_tv {
-        return Ok(ArmEmission::Value { end_bb, tv });
+    if let Some(operand) = &ir_arm.trailing_value {
+        // If the captured operand is a Stub destination whose
+        // `compile_expr` returned `Ok(None)` (e.g. a void call or a
+        // Unit-typed match expression whose `resolved_type` didn't
+        // propagate, so `lower_statements_for_value` couldn't classify
+        // the trailing as Unit at lowering time), treat the arm as
+        // NoValue and emit its declared `Branch(merge)` terminator.
+        // Mirrors the legacy `compile_body_as_value` semantics where
+        // a `None`-returning trailing expression silently demoted the
+        // arm out of the merge phi.
+        let materialized = match operand {
+            IROperand::Local(id) if !value_map.contains_key(id) => None,
+            other => Some(materialize_operand(compiler, other, value_map)?),
+        };
+        if let Some(value) = materialized {
+            // The TypedValue's expo_type is consulted by
+            // assemble_match_phi only as a final fallback for the
+            // result_type lookup, which already walks the strategy
+            // first; passing Unknown here is safe and matches the
+            // legacy `compile_body_as_value` shape (it propagated
+            // whatever Expo type the trailing expr had, which for the
+            // post-UnionWrap case was the union target -- exactly what
+            // assemble_match_phi reads from `ir.result_ty`).
+            let tv = TypedValue::new(value, Type::Unknown);
+            return Ok(ArmEmission::Value { end_bb, tv });
+        }
     }
 
+    // Body's terminator drives the next state. `Branch(merge)` means
+    // the arm ran to completion without producing a phi contribution
+    // (legacy `NoValue`). Anything else (`Return` / `Unreachable` /
+    // pre-staged `CondBranch`) means the arm self-terminated and is
+    // invisible to the merge phi (legacy `Terminated`).
+    let outcome = match &ir_arm.body.terminator {
+        IRTerminator::Branch(_) => ArmEmission::NoValue,
+        IRTerminator::Return { .. }
+        | IRTerminator::Unreachable
+        | IRTerminator::CondBranch { .. } => ArmEmission::Terminated,
+    };
     emit_terminator(
         compiler,
-        &ir_arm.body_terminator,
+        &ir_arm.body.terminator,
         block_map,
         value_map,
         function,
     )?;
-    Ok(ArmEmission::NoValue)
+    Ok(outcome)
 }
 
 /// Assembles the final merge phi for an [`IRMatch`]. Applies the lowered
@@ -466,36 +515,33 @@ fn assemble_match_phi<'ctx>(
     Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)))
 }
 
-/// Apply the lowered result strategy to each value-producing arm and
-/// emit its `Branch(merge)` terminator. Returns one `(value, end_bb)`
-/// per arm in iteration order. UnionWrap arms whose value already has
-/// the union shape pass through unwrapped; Direct arms always pass
-/// through untouched.
+/// Emit each value-producing arm's `Branch(merge)` terminator and
+/// return one `(value, end_bb)` pair per arm in iteration order.
+/// Per-arm UnionWrap was already pre-staged inside the arm's
+/// `body.instructions` at lowering time (see
+/// [`expo_ir::Lowerer::lower_match_expr`]'s
+/// `maybe_union_wrap_match_arm` helper), so this helper just emits
+/// the branch and harvests the actual end block.
+///
+/// `_result_ty` is retained on the signature for diagnostic
+/// continuity (and so that any future per-arm strategy
+/// post-processing has a place to land); the legacy inline
+/// `compile_union_wrap` call moved into lowering.
 fn collect_match_incoming<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    result_ty: &ResolvedMatchType,
+    _result_ty: &ResolvedMatchType,
     pending: &[(TypedValue<'ctx>, BasicBlock<'ctx>)],
     merge_bb: BasicBlock<'ctx>,
 ) -> Result<Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)>, String> {
     let mut incoming = Vec::with_capacity(pending.len());
     for (tv, bb) in pending {
         compiler.builder.position_at_end(*bb);
-        let final_val = match result_ty {
-            ResolvedMatchType::UnionWrap { target } => {
-                if matches!(tv.expo_type, Type::Union(_)) {
-                    tv.value
-                } else {
-                    compile_union_wrap(compiler, tv.value, &tv.expo_type, target)?
-                }
-            }
-            ResolvedMatchType::Direct { .. } => tv.value,
-        };
         compiler
             .builder
             .build_unconditional_branch(merge_bb)
             .unwrap();
         let end_bb = compiler.builder.get_insert_block().unwrap();
-        incoming.push((final_val, end_bb));
+        incoming.push((tv.value, end_bb));
     }
     Ok(incoming)
 }

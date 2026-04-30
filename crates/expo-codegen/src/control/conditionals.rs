@@ -11,10 +11,10 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
-use crate::stmt::compile_statement;
 
 use super::instructions::execute_instructions;
-use super::{compile_body_as_value, emit_terminator};
+use super::terminator::emit_terminator;
+use super::{register_block, walk_body};
 
 /// Compiles a `cond` expression (multi-arm conditional).
 ///
@@ -46,7 +46,7 @@ pub fn compile_cond<'ctx>(
     let merge_phi_ty = resolved_type.cloned().unwrap_or(Type::Unknown);
     let ir = compiler
         .lowerer()
-        .lower_cond(arms, else_body.as_deref(), merge_phi_ty);
+        .lower_cond(arms, else_body.as_deref(), merge_phi_ty)?;
     emit_cond(compiler, &ir, function)
 }
 
@@ -79,14 +79,14 @@ pub fn compile_if<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     let Some(else_stmts) = else_body else {
-        let ir = compiler.lowerer().lower_if_no_else(condition, then_body);
+        let ir = compiler.lowerer().lower_if_no_else(condition, then_body)?;
         return emit_if(compiler, &ir, function);
     };
 
     let merge_phi_ty = resolved_type.cloned().unwrap_or(Type::Unknown);
     let ir = compiler
         .lowerer()
-        .lower_if_else(condition, then_body, else_stmts, merge_phi_ty);
+        .lower_if_else(condition, then_body, else_stmts, merge_phi_ty)?;
     emit_if_else(compiler, &ir, function)
 }
 
@@ -104,7 +104,7 @@ pub fn compile_unless<'ctx>(
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let ir = compiler.lowerer().lower_unless(condition, body);
+    let ir = compiler.lowerer().lower_unless(condition, body)?;
     emit_unless(compiler, &ir, function)
 }
 
@@ -124,11 +124,11 @@ fn emit_unless<'ctx>(
     ir: &IRUnless,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let body_bb = compiler.context.append_basic_block(function, "unless_body");
-    let merge_bb = compiler.context.append_basic_block(function, "unless_end");
+    let body_bb = register_block(compiler, function, ir.body.id, "unless_body");
+    let merge_bb = register_block(compiler, function, ir.merge_block, "unless_end");
 
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
-    block_map.insert(ir.body_block, body_bb);
+    block_map.insert(ir.body.id, body_bb);
     block_map.insert(ir.merge_block, merge_bb);
 
     let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
@@ -148,22 +148,7 @@ fn emit_unless<'ctx>(
     )?;
 
     compiler.builder.position_at_end(body_bb);
-    for stmt in &ir.body_stmts {
-        if compiler.current_block_terminated() {
-            break;
-        }
-        compile_statement(compiler, stmt, function)?;
-    }
-    if !compiler.current_block_terminated() {
-        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-        emit_terminator(
-            compiler,
-            &ir.body_terminator,
-            &block_map,
-            &body_value_map,
-            function,
-        )?;
-    }
+    walk_body(compiler, &ir.body, &block_map, function)?;
 
     compiler.builder.position_at_end(merge_bb);
     Ok(None)
@@ -189,11 +174,11 @@ fn emit_if<'ctx>(
     ir: &IRIf,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let body_bb = compiler.context.append_basic_block(function, "then");
-    let merge_bb = compiler.context.append_basic_block(function, "ifcont");
+    let body_bb = register_block(compiler, function, ir.body.id, "then");
+    let merge_bb = register_block(compiler, function, ir.merge_block, "ifcont");
 
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
-    block_map.insert(ir.body_block, body_bb);
+    block_map.insert(ir.body.id, body_bb);
     block_map.insert(ir.merge_block, merge_bb);
 
     let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
@@ -213,22 +198,7 @@ fn emit_if<'ctx>(
     )?;
 
     compiler.builder.position_at_end(body_bb);
-    for stmt in &ir.body_stmts {
-        if compiler.current_block_terminated() {
-            break;
-        }
-        compile_statement(compiler, stmt, function)?;
-    }
-    if !compiler.current_block_terminated() {
-        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-        emit_terminator(
-            compiler,
-            &ir.body_terminator,
-            &block_map,
-            &body_value_map,
-            function,
-        )?;
-    }
+    walk_body(compiler, &ir.body, &block_map, function)?;
 
     compiler.builder.position_at_end(merge_bb);
     Ok(None)
@@ -259,74 +229,88 @@ fn emit_if_else<'ctx>(
     ir: &IRIfElse,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let then_bb = compiler.context.append_basic_block(function, "then");
-    let else_bb = compiler.context.append_basic_block(function, "else");
-    let merge_bb = compiler.context.append_basic_block(function, "ifcont");
+    let then_bb = register_block(compiler, function, ir.then.id, "then");
+    let else_bb = register_block(compiler, function, ir.else_arm.id, "else");
+    let merge_bb = register_block(compiler, function, ir.merge_block, "ifcont");
 
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
-    block_map.insert(ir.then_block, then_bb);
-    block_map.insert(ir.else_block, else_bb);
+    block_map.insert(ir.then.id, then_bb);
+    block_map.insert(ir.else_arm.id, else_bb);
     block_map.insert(ir.merge_block, merge_bb);
 
-    let mut entry_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
     execute_instructions(
         compiler,
         &ir.entry_instructions,
         function,
         None,
-        &mut entry_value_map,
+        &mut value_map,
     )?;
     emit_terminator(
         compiler,
         &ir.entry_terminator,
         &block_map,
-        &entry_value_map,
+        &value_map,
         function,
     )?;
 
     compiler.builder.position_at_end(then_bb);
-    let (then_tv, then_end_bb) = walk_arm_value(compiler, &ir.then_stmts, function)?;
+    execute_instructions(
+        compiler,
+        &ir.then.instructions,
+        function,
+        None,
+        &mut value_map,
+    )?;
+    let then_end_bb = compiler.builder.get_insert_block().unwrap();
     if !compiler.current_block_terminated() {
-        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
         emit_terminator(
             compiler,
-            &ir.then_terminator,
+            &ir.then.terminator,
             &block_map,
-            &body_value_map,
+            &value_map,
             function,
         )?;
     }
 
     compiler.builder.position_at_end(else_bb);
-    let (else_tv, else_end_bb) = walk_arm_value(compiler, &ir.else_stmts, function)?;
+    execute_instructions(
+        compiler,
+        &ir.else_arm.instructions,
+        function,
+        None,
+        &mut value_map,
+    )?;
+    let else_end_bb = compiler.builder.get_insert_block().unwrap();
     if !compiler.current_block_terminated() {
-        let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
         emit_terminator(
             compiler,
-            &ir.else_terminator,
+            &ir.else_arm.terminator,
             &block_map,
-            &body_value_map,
+            &value_map,
             function,
         )?;
     }
 
     compiler.builder.position_at_end(merge_bb);
+    block_map.insert(ir.then.id, then_end_bb);
+    block_map.insert(ir.else_arm.id, else_end_bb);
+    execute_instructions(
+        compiler,
+        &ir.merge_instructions,
+        function,
+        Some(&block_map),
+        &mut value_map,
+    )?;
 
-    if let (Some(then_tv), Some(else_tv)) = (&then_tv, &else_tv)
-        && then_tv.value.get_type() == else_tv.value.get_type()
-    {
-        let phi = compiler
-            .builder
-            .build_phi(then_tv.value.get_type(), "ifval")
-            .unwrap();
-        phi.add_incoming(&[(&then_tv.value, then_end_bb), (&else_tv.value, else_end_bb)]);
-        return Ok(Some(TypedValue::new(
-            phi.as_basic_value(),
-            then_tv.expo_type.clone(),
-        )));
-    }
-
-    Ok(None)
+    let Some(merge_value) = ir.merge_value else {
+        return Ok(None);
+    };
+    let value = value_map
+        .get(&merge_value)
+        .copied()
+        .ok_or("IRIfElse: pre-staged merge phi did not register an LLVM value")?;
+    Ok(Some(TypedValue::new(value, ir.result_ty.clone())))
 }
 
 /// Walks an [`IRCond`] into LLVM IR. N-arm generalization of
@@ -360,7 +344,7 @@ fn emit_cond<'ctx>(
     ir: &IRCond,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let merge_bb = compiler.context.append_basic_block(function, "cond_end");
+    let merge_bb = register_block(compiler, function, ir.merge_block, "cond_end");
 
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
     block_map.insert(ir.merge_block, merge_bb);
@@ -370,29 +354,29 @@ fn emit_cond<'ctx>(
         .iter()
         .enumerate()
         .map(|(i, arm)| {
-            let bb = compiler
-                .context
-                .append_basic_block(function, &format!("cond_body_{i}"));
-            block_map.insert(arm.body_block, bb);
+            let bb = register_block(compiler, function, arm.body.id, &format!("cond_body_{i}"));
+            block_map.insert(arm.body.id, bb);
             bb
         })
         .collect();
 
     for (i, arm) in ir.arms.iter().enumerate().skip(1) {
-        let bb = compiler
-            .context
-            .append_basic_block(function, &format!("cond_check_{i}"));
+        let bb = register_block(
+            compiler,
+            function,
+            arm.check_block,
+            &format!("cond_check_{i}"),
+        );
         block_map.insert(arm.check_block, bb);
     }
 
-    let else_bb = ir.else_block.map(|else_block_id| {
-        let bb = compiler.context.append_basic_block(function, "cond_else");
-        block_map.insert(else_block_id, bb);
+    let else_bb = ir.else_arm.as_ref().map(|else_block| {
+        let bb = register_block(compiler, function, else_block.id, "cond_else");
+        block_map.insert(else_block.id, bb);
         bb
     });
 
-    let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
-    let mut branch_expo_type: Option<Type> = None;
+    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
 
     for (i, arm) in ir.arms.iter().enumerate() {
         if i > 0 {
@@ -400,91 +384,81 @@ fn emit_cond<'ctx>(
             compiler.builder.position_at_end(check_bb);
         }
 
-        let mut check_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
         execute_instructions(
             compiler,
             &arm.check_instructions,
             function,
             None,
-            &mut check_value_map,
+            &mut value_map,
         )?;
         emit_terminator(
             compiler,
             &arm.check_terminator,
             &block_map,
-            &check_value_map,
+            &value_map,
             function,
         )?;
 
         compiler.builder.position_at_end(body_bbs[i]);
-        let (arm_tv, arm_end_bb) = walk_arm_value(compiler, &arm.body_stmts, function)?;
+        execute_instructions(
+            compiler,
+            &arm.body.instructions,
+            function,
+            None,
+            &mut value_map,
+        )?;
+        let arm_end_bb = compiler.builder.get_insert_block().unwrap();
         if !compiler.current_block_terminated() {
-            let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
             emit_terminator(
                 compiler,
-                &arm.body_terminator,
+                &arm.body.terminator,
                 &block_map,
-                &body_value_map,
+                &value_map,
                 function,
             )?;
         }
-        if let Some(tv) = arm_tv {
-            if branch_expo_type.is_none() {
-                branch_expo_type = Some(tv.expo_type.clone());
-            }
-            incoming.push((tv.value, arm_end_bb));
-        }
+        block_map.insert(arm.body.id, arm_end_bb);
     }
 
-    if let (Some(else_bb), Some(else_stmts), Some(else_terminator)) = (
-        else_bb,
-        ir.else_stmts.as_deref(),
-        ir.else_terminator.as_ref(),
-    ) {
+    if let (Some(else_bb), Some(else_block)) = (else_bb, ir.else_arm.as_ref()) {
         compiler.builder.position_at_end(else_bb);
-        let (else_tv, else_end_bb) = walk_arm_value(compiler, else_stmts, function)?;
+        execute_instructions(
+            compiler,
+            &else_block.instructions,
+            function,
+            None,
+            &mut value_map,
+        )?;
+        let else_end_bb = compiler.builder.get_insert_block().unwrap();
         if !compiler.current_block_terminated() {
-            let body_value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
             emit_terminator(
                 compiler,
-                else_terminator,
+                &else_block.terminator,
                 &block_map,
-                &body_value_map,
+                &value_map,
                 function,
             )?;
         }
-        if let Some(tv) = else_tv {
-            if branch_expo_type.is_none() {
-                branch_expo_type = Some(tv.expo_type.clone());
-            }
-            incoming.push((tv.value, else_end_bb));
-        }
+        block_map.insert(else_block.id, else_end_bb);
     }
 
     compiler.builder.position_at_end(merge_bb);
+    execute_instructions(
+        compiler,
+        &ir.merge_instructions,
+        function,
+        Some(&block_map),
+        &mut value_map,
+    )?;
 
-    let expected_sources = ir.arms.len() + usize::from(ir.else_block.is_some());
-    if !incoming.is_empty() && incoming.len() == expected_sources {
-        let first_ty = incoming[0].0.get_type();
-        if incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
-            let phi = compiler.builder.build_phi(first_ty, "condval").unwrap();
-            for (value, bb) in &incoming {
-                phi.add_incoming(&[(value, *bb)]);
-            }
-            let result_type = branch_expo_type.unwrap_or(Type::Unknown);
-            return Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)));
-        }
-    }
-
-    if !incoming.is_empty() && incoming.len() != expected_sources {
-        return Err(format!(
-            "cond arms have inconsistent types: {} of {} arms produce a value",
-            incoming.len(),
-            expected_sources
-        ));
-    }
-
-    Ok(None)
+    let Some(merge_value) = ir.merge_value else {
+        return Ok(None);
+    };
+    let value = value_map
+        .get(&merge_value)
+        .copied()
+        .ok_or("IRCond: pre-staged merge phi did not register an LLVM value")?;
+    Ok(Some(TypedValue::new(value, ir.result_ty.clone())))
 }
 
 /// Walks an [`IRTernary`] into LLVM IR.
@@ -510,9 +484,9 @@ fn emit_ternary<'ctx>(
     ir: &IRTernary,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let then_bb = compiler.context.append_basic_block(function, "tern_then");
-    let else_bb = compiler.context.append_basic_block(function, "tern_else");
-    let merge_bb = compiler.context.append_basic_block(function, "tern_cont");
+    let then_bb = register_block(compiler, function, ir.then_block, "tern_then");
+    let else_bb = register_block(compiler, function, ir.else_block, "tern_else");
+    let merge_bb = register_block(compiler, function, ir.merge_block, "tern_cont");
 
     let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
     block_map.insert(ir.then_block, then_bb);
@@ -596,22 +570,6 @@ fn emit_ternary<'ctx>(
         })
         .unwrap_or(Type::Unknown);
     Ok(Some(TypedValue::new(value, result_type)))
-}
-
-/// Walk a body's AST statements with the builder positioned at the
-/// arm's entry block, capturing the trailing-expression value (if
-/// the body ends in an expression statement) and the actual LLVM
-/// block where control sits when the arm finishes. Nested control
-/// flow inside the body can move the builder past the entry block,
-/// so the captured end block may differ from where we started.
-fn walk_arm_value<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    body: &[Statement],
-    function: FunctionValue<'ctx>,
-) -> Result<(Option<TypedValue<'ctx>>, BasicBlock<'ctx>), String> {
-    let tv = compile_body_as_value(compiler, body, function)?;
-    let end_bb = compiler.builder.get_insert_block().unwrap();
-    Ok((tv, end_bb))
 }
 
 /// Compiles a ternary expression (`condition ? then_expr : else_expr`).

@@ -18,11 +18,10 @@
 //! non-expression statement; that's an emission-time observation
 //! (`incoming.is_empty()`), not a typecheck decision.
 
-use expo_ast::ast::Statement;
 use expo_ast::types::Type;
 
-use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
-use crate::values::IRValueId;
+use crate::blocks::{IRBasicBlock, IRBlockId};
+use crate::values::{IROperand, IRValueId};
 
 /// The result-type strategy for a match expression: how arm values are
 /// combined into the final phi.
@@ -94,16 +93,23 @@ pub enum ResolvedMatchType {
 ///
 /// ## Body
 ///
-/// `body_block` runs when the final cond-branch in `check_blocks`
-/// fires. Holds `body_stmts` (AST stub); declared exit is
-/// `body_terminator` = `Branch(merge_block)`. Emission honors the
-/// terminator only when the body has not already self-terminated
-/// (e.g. via early `return` / `panic`).
+/// `body` runs when the final cond-branch in `check_blocks` fires.
+/// Full IR basic block; declared exit is `Branch(merge_block)` (or
+/// the body's own terminator when it ends in `return` / `break`).
+///
+/// `trailing_value` is the captured trailing-expression operand
+/// (after the per-arm UnionWrap pre-stage when `IRMatch.result_ty`
+/// is UnionWrap and the arm's trailing type isn't already a union).
+/// `Some(...)` iff the body ends in a `Statement::Expr` and no early
+/// terminator fired at lowering time. The inline merge-phi assembly
+/// in `expo_codegen` reads this operand from the per-arm `value_map`
+/// after `body.instructions` runs to seed the phi's incoming pair
+/// `(value, body_end_bb)`. See [`IRMatch`] for the surrounding
+/// strategy.
 pub struct IRMatchArm {
-    pub body_block: IRBlockId,
-    pub body_stmts: Vec<Statement>,
-    pub body_terminator: IRTerminator,
+    pub body: IRBasicBlock,
     pub check_blocks: Vec<IRBasicBlock>,
+    pub trailing_value: Option<IROperand>,
 }
 
 /// Outcome of lowering a `match` expression. N-arm structure mirroring
@@ -131,36 +137,32 @@ pub struct IRMatchArm {
 ///
 /// Value-merge contract (matches legacy `emit_match` semantics):
 ///
-/// - All reachable arms produced a value with matching LLVM type under
-///   the lowered strategy -> `Ok(Some(TypedValue))`.
+/// - All reachable arms produced a value with matching LLVM type
+///   under the lowered strategy -> `Ok(Some(TypedValue))`.
 /// - Zero arms produced (every arm terminated or ended in a non-Expr
 ///   statement) -> `Ok(None)` (structural void).
 /// - Some-but-not-all arms produced -> `Ok(None)` (matches legacy:
 ///   no unified phi shape, drop the value silently).
 /// - All arms produced but LLVM types disagree under the lowered
-///   strategy -> `Err` (typecheck/codegen disagreement surfaced).
+///   strategy -> `Err`.
 ///
-/// `merge_phi_dest` is pre-allocated at lowering time so a future slice
-/// can fan the merge instruction out for inspection (e.g. ownership
-/// analysis); the walker does not consult it today and synthesizes the
-/// phi inline (mirrors `IRIfElse` / `IRCond`).
+/// Per-arm UnionWrap (when `result_ty == UnionWrap` and the arm's
+/// trailing type isn't already the union) is pre-staged as the last
+/// instruction of `arms[i].body.instructions`; the dest is what
+/// `arms[i].trailing_value` references. The merge phi itself is
+/// still synthesized inline by [`expo_codegen`]'s
+/// `assemble_match_phi` (Slice 2 deferred full pre-staging because
+/// `match` arm bodies can self-terminate via `panic` calls --
+/// indistinguishable from a plain `Statement::Expr` at lowering --
+/// and a pre-staged phi has no clean way to elide the resulting
+/// dead incoming).
 ///
 /// `subject_value` is the SSA slot the emit walker stuffs the match
-/// subject's pointer (a freshly-allocated stack slot for the subject
-/// value) into before running per-arm pattern checks. Each arm's
-/// pattern primitives reference it via [`crate::values::IROperand::Local`]
-/// (`subject_ptr` parameter). Slice 5b retired the prior approach of
-/// passing the subject pointer in via an out-of-band `PointerValue`
-/// argument to the walker.
-///
-/// `subject_ty` and `result_ty` are forwarded from the inner pattern
-/// resolution; emission consults `result_ty` to pick the per-arm value
-/// strategy (Direct vs UnionWrap).
+/// subject's pointer into before running per-arm pattern checks.
 pub struct IRMatch {
     pub arms: Vec<IRMatchArm>,
     pub fallthrough_block: IRBlockId,
     pub merge_block: IRBlockId,
-    pub merge_phi_dest: IRValueId,
     pub result_ty: ResolvedMatchType,
     pub subject_ty: Type,
     pub subject_value: IRValueId,

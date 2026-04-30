@@ -10,10 +10,9 @@
 //! by branch-target ordering on [`IRTerminator::CondBranch`]; no
 //! construct emits a `Not` operator or a `negated` flag.
 
-use expo_ast::ast::Statement;
 use expo_typecheck::types::Type;
 
-use crate::blocks::{IRBlockId, IRTerminator};
+use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
 use crate::values::{IRInstruction, IROperand, IRValueId};
 
 /// Outcome of lowering an `unless cond ... end` statement.
@@ -38,17 +37,11 @@ use crate::values::{IRInstruction, IROperand, IRValueId};
 /// block; emission honors it only when the body has not already
 /// terminated itself (e.g. via early `return` or `panic`).
 ///
-/// Fields are stored as parallel slots (an [`IRBlockId`], an
-/// instruction sequence, and a terminator) rather than embedded in
-/// [`crate::blocks::IRBasicBlock`] values. Structurally identical to
-/// [`IRIf`]; the only difference is which slot the body lands on
-/// (`otherwise` here, `then` for `IRIf`). Both dissolve in slice 5+
-/// when [`crate::blocks::IRBasicBlock`] is promoted to first-class
-/// and `body_stmts` retires (statement-level lowering).
+/// Structurally identical to [`IRIf`]; the only difference is which
+/// slot the body lands on (`otherwise` here, `then` for `IRIf`). Both
+/// dissolve into a flat `Vec<IRBasicBlock>` in Slice 3.
 pub struct IRUnless {
-    pub body_block: IRBlockId,
-    pub body_stmts: Vec<Statement>,
-    pub body_terminator: IRTerminator,
+    pub body: IRBasicBlock,
     pub entry_block: IRBlockId,
     pub entry_instructions: Vec<IRInstruction>,
     pub entry_terminator: IRTerminator,
@@ -82,16 +75,13 @@ pub struct IRUnless {
 /// body block; emission honors it only when the body has not
 /// already terminated itself (e.g. via early `return` or `panic`).
 ///
-/// Both [`IRUnless`] and `IRIf` dissolve in slice 5+ when
-/// [`crate::blocks::IRBasicBlock`] is promoted to first-class and
-/// `body_stmts` retires (statement-level lowering). Until then, the
+/// Both [`IRUnless`] and `IRIf` dissolve in Slice 3 when
+/// `IRFunction.blocks: Vec<IRBasicBlock>` lands. Until then, the
 /// duplication is the cost of direct construct names; the truly
-/// construct-agnostic emission mechanic (`execute_instructions`)
-/// is shared at the `expo-codegen` seam.
+/// construct-agnostic emission mechanic (`execute_instructions`) is
+/// shared at the `expo-codegen` seam.
 pub struct IRIf {
-    pub body_block: IRBlockId,
-    pub body_stmts: Vec<Statement>,
-    pub body_terminator: IRTerminator,
+    pub body: IRBasicBlock,
     pub entry_block: IRBlockId,
     pub entry_instructions: Vec<IRInstruction>,
     pub entry_terminator: IRTerminator,
@@ -100,55 +90,34 @@ pub struct IRIf {
 
 /// Outcome of lowering an `if cond ... else ... end` expression.
 /// Shape 2 -- two body blocks plus a value merge. Distinct from
-/// [`IRIf`] because the with-else form can flow back as a value:
-/// when both arms produce a `TypedValue` of compatible types,
-/// emission constructs an [`IRInstruction::Phi`] in `merge_block`
-/// whose dest is `merge_phi_dest`. When either arm is
-/// statement-shaped (no trailing expression value, or the arm
-/// diverges via early return / panic), emission drops the phi and
-/// the construct returns `None` -- mirroring today's lenient
-/// behavior in `compile_if`.
+/// [`IRIf`] because the with-else form can flow back as a value via
+/// `merge_instructions` (a pre-staged [`IRInstruction::Phi`]).
 ///
 /// Five blocks:
 ///
 /// - `entry_block` -- holds `entry_instructions` (the lowered cond)
 ///   followed by `entry_terminator`
-///   (`CondBranch { cond, then: then_block, otherwise: else_block }`).
-/// - `then_block` -- runs when `cond` is truthy. Holds the then-arm
-///   statements as an AST stub (`then_stmts`); declared exit is
-///   `then_terminator` = `Branch(merge_block)`.
-/// - `else_block` -- runs when `cond` is falsy. Holds the else-arm
-///   statements as an AST stub (`else_stmts`); declared exit is
-///   `else_terminator` = `Branch(merge_block)`.
-/// - `merge_block` -- landing point. Emission positions there after
-///   walking both arms; if both produced values, an
-///   [`IRInstruction::Phi`] is synthesized at emit time (its
-///   incomings reference the *actual* end blocks of each arm, which
-///   may differ from `then_block` / `else_block` when bodies
-///   contain nested control flow).
+///   (`CondBranch { cond, then: then.id, otherwise: else_arm.id }`).
+/// - `then` -- runs when `cond` is truthy. Full IR block.
+/// - `else_arm` -- runs when `cond` is falsy. Full IR block.
+/// - `merge_block` -- landing point. Holds `merge_instructions`
+///   (the pre-staged Phi when both arms produced values; empty
+///   otherwise -- the construct is statement-shaped).
 ///
-/// `merge_phi_dest` and `merge_phi_ty` are pre-allocated at lowering
-/// time so the emit walker can construct the phi without minting a
-/// fresh value id mid-emission. Pre-allocation also ensures the
-/// dest stays stable if a future slice fans the merge instruction
-/// out for inspection (e.g. ownership analysis in Phase 6).
-///
-/// Dissolves in Phase 4g together with [`IRUnless`] / [`IRIf`] when
-/// `IRBasicBlock` becomes first-class and `then_stmts` / `else_stmts`
-/// retire (statement-level lowering).
+/// The Phi's incomings reference the *nominal* arm block ids; the
+/// emit walker remaps those to the actual end-of-arm `BasicBlock`s
+/// before running `merge_instructions` (same idiom as `IRTernary`).
+/// `merge_value` is the SSA dest of the pre-staged phi when present.
 pub struct IRIfElse {
-    pub else_block: IRBlockId,
-    pub else_stmts: Vec<Statement>,
-    pub else_terminator: IRTerminator,
+    pub else_arm: IRBasicBlock,
     pub entry_block: IRBlockId,
     pub entry_instructions: Vec<IRInstruction>,
     pub entry_terminator: IRTerminator,
     pub merge_block: IRBlockId,
-    pub merge_phi_dest: IRValueId,
-    pub merge_phi_ty: Type,
-    pub then_block: IRBlockId,
-    pub then_stmts: Vec<Statement>,
-    pub then_terminator: IRTerminator,
+    pub merge_instructions: Vec<IRInstruction>,
+    pub merge_value: Option<IRValueId>,
+    pub result_ty: Type,
+    pub then: IRBasicBlock,
 }
 
 /// Outcome of lowering a `cond ? then_expr : else_expr` ternary.
@@ -219,9 +188,7 @@ pub struct IRTernary {
 /// [`IRIfElse`] / [`IRTernary`] for their `entry_*` slots). Arms
 /// 1..N each get a fresh LLVM block.
 pub struct IRCondArm {
-    pub body_block: IRBlockId,
-    pub body_stmts: Vec<Statement>,
-    pub body_terminator: IRTerminator,
+    pub body: IRBasicBlock,
     pub check_block: IRBlockId,
     pub check_instructions: Vec<IRInstruction>,
     pub check_terminator: IRTerminator,
@@ -241,46 +208,32 @@ pub struct IRCondArm {
 /// - `arms[0].check_block` -- implicit entry; no LLVM block
 ///   allocated (see [`IRCondArm`] doc).
 /// - `arms[1..N].check_block` -- fresh LLVM blocks per arm.
-/// - `arms[*].body_block` -- one fresh LLVM block per arm.
-/// - `else_block` -- present iff `else_stmts` is `Some`. Holds the
-///   else body as an AST stub; declared exit is `else_terminator`
-///   = `Branch(merge_block)`.
-/// - `merge_block` -- landing point. Emission positions there after
-///   walking every arm + the else; if every arm + else (when
-///   present) produced a value with matching LLVM type, an
-///   [`IRInstruction::Phi`] is synthesized at emit time (its
-///   incomings reference the *actual* end blocks of each arm,
-///   which may differ from `arms[i].body_block` /
-///   `else_block` when bodies contain nested control flow).
+/// - `arms[*].body` -- one fresh LLVM block per arm.
+/// - `else_arm` -- present iff the source `cond` had an `else`
+///   clause. Full IR block.
+/// - `merge_block` -- landing point. Holds `merge_instructions`
+///   (pre-staged Phi when every arm + else produced a value with
+///   matching Expo type; empty otherwise -- the construct is
+///   statement-shaped).
 ///
 /// Value-merge contract is all-or-nothing (matches legacy
-/// `compile_cond` semantics):
+/// `compile_cond` semantics): either every reachable arm + the
+/// else (when present) contributes to the phi, or the construct
+/// returns `Ok(None)`. Typecheck catches mismatched arm types at
+/// the source level.
 ///
-/// - All arms + else (when present) produced a value with matching
-///   LLVM type -> `Ok(Some(TypedValue))`.
-/// - No arms produced a value -> `Ok(None)` (statement-shaped
-///   construct).
-/// - Some-but-not-all arms produced -> `Err` (defensive; typecheck
-///   normally catches this at the source level via the
-///   "cond arms have inconsistent types" diagnostic in
-///   `expo-typecheck::expr::infer_expr`).
-///
-/// `merge_phi_dest` and `merge_phi_ty` are pre-allocated at lowering
-/// time so the emit walker can construct the phi without minting
-/// fresh ids mid-emission, mirroring [`IRIfElse`]. Like `IRIfElse`,
-/// the phi itself is *not* pre-staged in `merge_instructions`
-/// because per-arm trailing-expression values are not visible from
-/// lowering until Phase 4g lifts statement-level lowering.
+/// `merge_value` is the SSA dest of the pre-staged phi when
+/// present. The phi's incomings reference the *nominal* arm block
+/// ids; emission remaps to actual end-of-arm `BasicBlock`s.
 ///
 /// `arms` is non-empty by construction -- the parser produces a
 /// `cond` with at least one arm, and the shim guards
 /// `arms.is_empty() && else_body.is_none()` before lowering.
 pub struct IRCond {
     pub arms: Vec<IRCondArm>,
-    pub else_block: Option<IRBlockId>,
-    pub else_stmts: Option<Vec<Statement>>,
-    pub else_terminator: Option<IRTerminator>,
+    pub else_arm: Option<IRBasicBlock>,
     pub merge_block: IRBlockId,
-    pub merge_phi_dest: IRValueId,
-    pub merge_phi_ty: Type,
+    pub merge_instructions: Vec<IRInstruction>,
+    pub merge_value: Option<IRValueId>,
+    pub result_ty: Type,
 }
