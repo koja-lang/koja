@@ -58,10 +58,12 @@ use expo_ast::ast::{
     AssignTarget, CompoundOp, Expr, ExprKind, LValue, Pattern, Statement, TypeExpr,
 };
 use expo_typecheck::context::Coercion;
-use expo_typecheck::types::{Primitive, Type};
+use expo_typecheck::types::{Primitive, Type, mangle_name};
 
 use crate::Lowerer;
-use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
+use crate::blocks::{IRBlockId, IRTerminator};
+use crate::cfg::CFGBuilder;
+use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::inference::infer_type_from_expr;
 use crate::lower::ownership::ownership_for_expr;
 use crate::lower::stmt::{
@@ -72,23 +74,13 @@ use crate::resolved::ops::{
 };
 use crate::values::{IRInstruction, IROperand};
 
-/// Output of lowering a single [`Statement`]: the instruction
-/// sequence to append to the current basic block's body, plus an
-/// optional terminator (set for `Return` and `Break`).
-type LoweredStatement = (Vec<IRInstruction>, Option<IRTerminator>);
-
-/// Output of [`Lowerer::lower_statements_for_value`]: the body's
-/// instruction stream + optional terminator, plus the trailing
+/// Output of [`Lowerer::lower_statements_for_value`]: the new open
+/// block (or `None` if all paths terminated) plus the trailing
 /// expression's operand and Expo type when the body ends in a
 /// [`Statement::Expr`] without an early terminator. Used by value-
-/// producing conditional constructs (`IRIfElse`, `IRCond`, `IRMatch`)
+/// producing conditional constructs (`if`/`else`, `cond`, `match`)
 /// to pre-stage the merge phi at lowering time.
-pub type LoweredStatementsForValue = (
-    Vec<IRInstruction>,
-    Option<IRTerminator>,
-    Option<IROperand>,
-    Option<Type>,
-);
+pub type LoweredStatementsForValue = (Option<IRBlockId>, Option<(IROperand, Type)>);
 
 /// Output of [`Lowerer::compound_assign_target`]: the target's
 /// resolved Expo type, the SSA operand carrying the loaded current
@@ -103,112 +95,227 @@ type CompoundAssignTarget = (
 );
 
 impl<'a> Lowerer<'a> {
-    /// Lower one [`Statement`] into instructions plus an optional
-    /// terminator. The terminator is `Some` only for `Return` and
-    /// `Break`; the other variants leave the basic block open for
-    /// the next statement.
-    pub fn lower_statement(&mut self, stmt: &Statement) -> Result<LoweredStatement, String> {
+    /// Lower one [`Statement`] into `builder` at `open`. Returns the
+    /// new open block (or `None` if the statement terminated all paths
+    /// via `Return` / `Break`).
+    pub fn lower_statement(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        stmt: &Statement,
+    ) -> Result<Option<IRBlockId>, String> {
         match stmt {
             Statement::Assignment {
                 target,
                 type_annotation,
                 value,
                 ..
-            } => self.lower_assignment_stmt(target, type_annotation.as_ref(), value),
-            Statement::Break { .. } => self.lower_break_stmt(),
+            } => self.lower_assignment_stmt(builder, open, target, type_annotation.as_ref(), value),
+            Statement::Break { .. } => self.lower_break_stmt(builder, open),
             Statement::CompoundAssign {
                 target, op, value, ..
-            } => self.lower_compound_assign_stmt(target, op, value),
-            Statement::Expr(expr) => Ok(self.lower_expr_stmt(expr)),
-            Statement::Return { value, .. } => Ok(self.lower_return_stmt(value.as_ref())),
-        }
-    }
-
-    /// Lower a sequence of statements into a single instruction
-    /// stream plus an optional trailing terminator. The terminator
-    /// only ever comes from the last statement; if any earlier
-    /// statement produces one (defensively, since `Return` / `Break`
-    /// must syntactically be last in well-typed code), iteration
-    /// halts and the terminator is returned.
-    pub fn lower_statements(&mut self, stmts: &[Statement]) -> Result<LoweredStatement, String> {
-        let mut instructions = Vec::new();
-        for stmt in stmts {
-            let (mut stmt_instructions, terminator) = self.lower_statement(stmt)?;
-            instructions.append(&mut stmt_instructions);
-            if terminator.is_some() {
-                return Ok((instructions, terminator));
+            } => self.lower_compound_assign_stmt(builder, open, target, op, value),
+            Statement::Expr(expr) => self.lower_expr_stmt(builder, open, expr),
+            Statement::Return { value, .. } => {
+                self.lower_return_stmt(builder, open, value.as_ref())
             }
         }
-        Ok((instructions, None))
     }
 
-    /// Lower an [`Statement::Expr`]: append whatever instructions
-    /// the expression's lowering needs (typically a single direct
-    /// instruction or a Stub bridge) and discard the resulting
-    /// operand.
-    fn lower_expr_stmt(&mut self, expr: &Expr) -> LoweredStatement {
-        let mut instructions = Vec::new();
-        let _ = self.lower_expr_to_operand(&mut instructions, expr);
-        (instructions, None)
+    /// Lower a sequence of statements. Threads `open` through each
+    /// statement's lowering. Returns `None` as soon as any statement
+    /// terminates (defensively, since `Return` / `Break` must
+    /// syntactically be last in well-typed code).
+    pub fn lower_statements(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        stmts: &[Statement],
+    ) -> Result<Option<IRBlockId>, String> {
+        let mut current = open;
+        for stmt in stmts {
+            let Some(next) = self.lower_statement(builder, current, stmt)? else {
+                return Ok(None);
+            };
+            current = next;
+        }
+        Ok(Some(current))
     }
 
-    /// Lower a body statement list into a full [`IRBasicBlock`].
-    /// Used by every per-construct lowering whose body never feeds
-    /// a merge phi (`unless`, `if`-no-else, `loop`, `while`, `for`,
-    /// `match` arms). The block's terminator defaults to
-    /// `Branch(default_target)` and is overridden by an early
-    /// `Return` / `Break` returned from [`Self::lower_statements`].
+    /// Lower an [`Statement::Expr`]: lower the inner expression and
+    /// discard its operand. Returns the new open block (control flow
+    /// inside the expression may have advanced the cursor through a
+    /// merge block).
+    fn lower_expr_stmt(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        expr: &Expr,
+    ) -> Result<Option<IRBlockId>, String> {
+        let (next, _) = self.lower_expr_to_operand(builder, open, expr)?;
+        Ok(next)
+    }
+
+    /// Lower `stmts` into a fresh block with id `id` and the given
+    /// `label`. Adds the block to `builder` first so subsequent
+    /// statement lowering targets it. If lowering does not terminate
+    /// the body (no early `Return` / `Break`), closes the block with
+    /// `Branch(default_target)`. Returns the id passed in (callers
+    /// rarely need it; the block has been added to the builder either
+    /// way).
     pub fn lower_body_block(
         &mut self,
+        builder: &mut CFGBuilder,
         id: IRBlockId,
         label: impl Into<String>,
         stmts: &[Statement],
         default_target: IRBlockId,
-    ) -> Result<IRBasicBlock, String> {
-        let (instructions, terminator) = self.lower_statements(stmts)?;
-        Ok(IRBasicBlock {
-            id,
-            instructions,
-            label: label.into(),
-            terminator: terminator.unwrap_or(IRTerminator::Branch(default_target)),
-        })
+    ) -> Result<(), String> {
+        builder.add_block(id, label);
+        let exit = self.lower_statements(builder, id, stmts)?;
+        if let Some(exit) = exit {
+            builder.set_terminator(exit, IRTerminator::Branch(default_target));
+        }
+        Ok(())
     }
 
-    /// Lower a statement sequence and capture the trailing
+    /// Lower a full function body into a flat
+    /// [`Vec<crate::IRBasicBlock>`].
+    ///
+    /// Builds a fresh [`CFGBuilder`], opens an `entry` block, walks
+    /// the body via [`Self::lower_statements`] (control-flow
+    /// expressions inside statements mint their own blocks via the
+    /// recursive lowering), and synthesizes the implicit-return
+    /// terminator for the trailing slot:
+    ///
+    /// - Trailing [`Statement::Expr`] in a non-`Unit` return: lowers
+    ///   the value through [`Self::lower_tail_expr_to_operand`] (so a
+    ///   direct call in tail position picks up `tail = true`),
+    ///   optionally union-wraps it, and closes with
+    ///   `Return { value: Some(op), drop_skip }`.
+    /// - Trailing [`Statement::Expr`] in a `Unit` return: discards the
+    ///   value; closes with `Return { value: None, .. }`.
+    /// - No trailing expression: closes with `Return(None)` for
+    ///   `Unit` returns or [`IRTerminator::Unreachable`] otherwise
+    ///   (matches the legacy `compile_function_body` fallthrough).
+    ///
+    /// Returns the [`Vec<crate::IRBasicBlock>`] for the planner to
+    /// store on [`crate::IRFunctionKind::Free`] /
+    /// [`crate::IRFunctionKind::Method`]'s `blocks` field.
+    pub fn lower_function_body(
+        &mut self,
+        body: &[Statement],
+        return_type: &Type,
+    ) -> Result<Vec<crate::blocks::IRBasicBlock>, String> {
+        let saved_hint = std::mem::replace(
+            &mut self.fn_state.return_type_hint,
+            (*return_type != Type::Unit).then(|| return_type.clone()),
+        );
+
+        let mut builder = CFGBuilder::new();
+        let entry_id = self.next_block_id();
+        builder.add_block(entry_id, "entry");
+
+        let mut current = Some(entry_id);
+        let body_len = body.len();
+        for (i, stmt) in body.iter().enumerate() {
+            let Some(open) = current else {
+                break;
+            };
+            let is_last = i == body_len - 1;
+            if is_last && let Statement::Expr(expr) = stmt {
+                self.close_with_implicit_return(&mut builder, open, expr, return_type)?;
+                current = None;
+                continue;
+            }
+            current = self.lower_statement(&mut builder, open, stmt)?;
+        }
+
+        if let Some(open) = current {
+            let term = if *return_type == Type::Unit {
+                IRTerminator::Return {
+                    value: None,
+                    drop_skip: None,
+                }
+            } else {
+                IRTerminator::Unreachable
+            };
+            builder.set_terminator(open, term);
+        }
+
+        self.fn_state.return_type_hint = saved_hint;
+        Ok(builder.into_blocks())
+    }
+
+    /// Lower a function-body trailing [`Statement::Expr`] into the
+    /// implicit-return terminator. Splits out for the ≤40-LOC budget
+    /// in [`Self::lower_function_body`].
+    fn close_with_implicit_return(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        expr: &Expr,
+        return_type: &Type,
+    ) -> Result<(), String> {
+        let (next, mut operand) = self.lower_tail_expr_to_operand(builder, open, expr)?;
+        let Some(open) = next else {
+            return Ok(());
+        };
+        operand = self.maybe_emit_union_wrap(builder, open, expr, operand);
+        let term = if *return_type == Type::Unit {
+            IRTerminator::Return {
+                value: None,
+                drop_skip: None,
+            }
+        } else {
+            let drop_skip = match &expr.kind {
+                ExprKind::Ident { name, .. } => Some(name.clone()),
+                _ => None,
+            };
+            IRTerminator::Return {
+                value: Some(operand),
+                drop_skip,
+            }
+        };
+        builder.set_terminator(open, term);
+        Ok(())
+    }
+
+    /// Lower a statement sequence into `open`, capturing the trailing
     /// expression's operand + Expo type when the body ends in a
     /// [`Statement::Expr`] without an early terminator. Used by
-    /// value-producing conditional constructs to pre-stage a merge
-    /// phi at lowering time.
+    /// value-producing conditional constructs to feed the merge phi.
     ///
-    /// Returns `(instructions, terminator, trailing_operand, trailing_type)`:
+    /// Returns `(new_open, trailing_value)`:
     ///
-    /// - `instructions` -- the body's full lowered instruction stream.
-    /// - `terminator` -- `Some(...)` only when an early `Return` or
-    ///   `Break` fires partway through the body; the body short-
-    ///   circuits there and contributes no value to the surrounding
-    ///   merge phi.
-    /// - `trailing_operand` / `trailing_type` -- both `Some(...)` iff
-    ///   the body ends in a `Statement::Expr` and no early terminator
-    ///   fired. Both `None` otherwise (body ends in a statement that
-    ///   produces no value, or short-circuited via `Return` / `Break`).
+    /// - `new_open` -- `Some(...)` if execution continues after the
+    ///   body (cursor advanced through any internal control flow);
+    ///   `None` if all paths terminated.
+    /// - `trailing_value` -- `Some((operand, type))` iff the body ends
+    ///   in a `Statement::Expr` and lowering didn't terminate; `None`
+    ///   otherwise (body is statement-shaped or short-circuited).
     pub fn lower_statements_for_value(
         &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         stmts: &[Statement],
     ) -> Result<LoweredStatementsForValue, String> {
-        let mut instructions = Vec::new();
         if stmts.is_empty() {
-            return Ok((instructions, None, None, None));
+            return Ok((Some(open), None));
         }
+        let mut current = open;
         for stmt in &stmts[..stmts.len() - 1] {
-            let (mut stmt_instructions, terminator) = self.lower_statement(stmt)?;
-            instructions.append(&mut stmt_instructions);
-            if terminator.is_some() {
-                return Ok((instructions, terminator, None, None));
-            }
+            let Some(next) = self.lower_statement(builder, current, stmt)? else {
+                return Ok((None, None));
+            };
+            current = next;
         }
         let last = stmts.last().expect("non-empty body");
         if let Statement::Expr(expr) = last {
-            let trailing = self.lower_expr_to_operand(&mut instructions, expr);
+            let (next, trailing) = self.lower_expr_to_operand(builder, current, expr)?;
+            let Some(next) = next else {
+                return Ok((None, None));
+            };
             let trailing_ty = expr.resolved_type.clone();
             // Unit-typed trailing expressions don't carry a value through
             // the merge phi -- void calls and the unit literal both
@@ -218,49 +325,37 @@ impl<'a> Lowerer<'a> {
             // the materialize step entirely.
             let is_unit = matches!(trailing_ty.as_ref(), Some(Type::Unit));
             if is_unit {
-                Ok((instructions, None, None, None))
+                Ok((Some(next), None))
             } else {
-                Ok((instructions, None, Some(trailing), trailing_ty))
+                let ty = trailing_ty.unwrap_or(Type::Unknown);
+                Ok((Some(next), Some((trailing, ty))))
             }
         } else {
-            let (mut last_instructions, terminator) = self.lower_statement(last)?;
-            instructions.append(&mut last_instructions);
-            Ok((instructions, terminator, None, None))
+            let next = self.lower_statement(builder, current, last)?;
+            Ok((next, None))
         }
     }
 
     /// Lower an [`Statement::Assignment`]: push the annotation's
     /// type-subst entries into `fn_state.type_subst` for the duration
-    /// of RHS lowering, lower the value, optionally emit an
-    /// [`IRInstruction::UnionWrap`] for a recorded `UnionWiden`
-    /// coercion, then emit a [`IRInstruction::StoreLocal`]
+    /// of RHS lowering, lower the value into the cursor, optionally
+    /// emit an [`IRInstruction::UnionWrap`] for a recorded
+    /// `UnionWiden` coercion, then emit a [`IRInstruction::StoreLocal`]
     /// (single-segment) or [`IRInstruction::StoreField`]
     /// (multi-segment) sink.
     ///
-    /// The codegen-side [`crate::compile_statement`] shim wraps top-
-    /// level statement lowering + execution in its own subst push so
-    /// any [`IRInstruction::Stub`]'s deferred `compile_expr` (e.g.
+    /// `Push` / `PopTypeSubst` brackets the RHS lowering so any
+    /// [`IRInstruction::Stub`]'s deferred `compile_expr` (e.g.
     /// `List<Int>::new()`'s type-arg inference) sees the entries at
-    /// execute time too. Pushing here on top of that is idempotent --
-    /// the inner restore drops back to the same outer state.
+    /// execute time too.
     fn lower_assignment_stmt(
         &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         target: &AssignTarget,
         type_annotation: Option<&TypeExpr>,
         value: &Expr,
-    ) -> Result<LoweredStatement, String> {
-        // Resolve annotation-derived type-subst entries (e.g. `T = Int`
-        // for `list: List<Int> = ...`). When present we (a) push them
-        // into `fn_state.type_subst` for the duration of the lowering
-        // call so any operand-lift decisions see the pinned types, and
-        // (b) bracket the resulting instruction stream with
-        // [`IRInstruction::PushTypeSubst`] / [`IRInstruction::PopTypeSubst`]
-        // so the executor performs the same push at execute time --
-        // necessary because the value's lift may bail to an
-        // [`IRInstruction::Stub`] whose deferred `compile_expr`
-        // re-runs `compile_method_call` (and friends) at execute
-        // time, which independently consults
-        // `compiler.fn_lower.type_subst` for inference.
+    ) -> Result<Option<IRBlockId>, String> {
         let subst_entries: Vec<(String, Type)> = type_annotation
             .map(|te| resolve_annotation_subst(&self.ctx(), te))
             .unwrap_or_default();
@@ -274,29 +369,42 @@ impl<'a> Lowerer<'a> {
             Some(saved)
         };
 
-        let mut instructions = Vec::new();
         if !subst_entries.is_empty() {
-            instructions.push(IRInstruction::PushTypeSubst {
-                entries: subst_entries.clone(),
-            });
+            builder.append(
+                open,
+                IRInstruction::PushTypeSubst {
+                    entries: subst_entries.clone(),
+                },
+            );
         }
 
-        let mut value_operand = self.lower_expr_to_operand(&mut instructions, value);
+        let (next, mut value_operand) = self.lower_expr_to_operand(builder, open, value)?;
         let assigned_type = self.resolve_assigned_type(type_annotation, value);
-        value_operand = self.maybe_emit_union_wrap(&mut instructions, value, value_operand);
+        let Some(open) = next else {
+            if let Some(saved) = saved_subst {
+                self.fn_state.type_subst = saved;
+            }
+            return Ok(None);
+        };
+        value_operand = self.maybe_emit_union_wrap(builder, open, value, value_operand);
+        value_operand =
+            self.maybe_emit_from_list_literal(builder, open, value, &assigned_type, value_operand);
 
         let store = self.build_store(target, value, &assigned_type, value_operand)?;
-        instructions.push(store);
+        builder.append(open, store);
 
         if !subst_entries.is_empty() {
-            instructions.push(IRInstruction::PopTypeSubst {
-                names: subst_entries.iter().map(|(n, _)| n.clone()).collect(),
-            });
+            builder.append(
+                open,
+                IRInstruction::PopTypeSubst {
+                    names: subst_entries.iter().map(|(n, _)| n.clone()).collect(),
+                },
+            );
         }
         if let Some(saved) = saved_subst {
             self.fn_state.type_subst = saved;
         }
-        Ok((instructions, None))
+        Ok(Some(open))
     }
 
     /// Lower an [`Statement::CompoundAssign`] (`target op= value`):
@@ -306,27 +414,33 @@ impl<'a> Lowerer<'a> {
     /// the result back into the target.
     fn lower_compound_assign_stmt(
         &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         target: &LValue,
         op: &CompoundOp,
         value: &Expr,
-    ) -> Result<LoweredStatement, String> {
-        let mut instructions = Vec::new();
-        let (target_type, load_op, sink) =
-            self.compound_assign_target(target, &mut instructions)?;
-        let rhs_op = self.lower_expr_to_operand(&mut instructions, value);
+    ) -> Result<Option<IRBlockId>, String> {
+        let (target_type, load_op, sink) = self.compound_assign_target(builder, open, target)?;
+        let (next, rhs_op) = self.lower_expr_to_operand(builder, open, value)?;
+        let Some(open) = next else {
+            return Ok(None);
+        };
 
         let shape = operand_shape_for_type(&target_type)
             .ok_or("compound assignment requires matching numeric types")?;
         let resolved = resolve_compound_op(op, &shape)?;
         let dest = self.next_value_id();
-        instructions.push(IRInstruction::BinaryOp {
-            dest,
-            op: compound_to_binary(&resolved),
-            lhs: load_op,
-            rhs: rhs_op,
-        });
-        instructions.push(sink(IROperand::Local(dest), target_type));
-        Ok((instructions, None))
+        builder.append(
+            open,
+            IRInstruction::BinaryOp {
+                dest,
+                op: compound_to_binary(&resolved),
+                lhs: load_op,
+                rhs: rhs_op,
+            },
+        );
+        builder.append(open, sink(IROperand::Local(dest), target_type));
+        Ok(Some(open))
     }
 
     /// Lower a [`Statement::Return`]: in the `Some(expr)` case lift
@@ -334,41 +448,57 @@ impl<'a> Lowerer<'a> {
     /// inherit `tail = true`), optionally wrap into a widening
     /// union, and capture the binding name to skip in the pre-
     /// return drop pass when the expression is a bare ident.
-    fn lower_return_stmt(&mut self, value: Option<&Expr>) -> LoweredStatement {
+    /// Closes `open` with [`IRTerminator::Return`] and returns
+    /// `Ok(None)`.
+    fn lower_return_stmt(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        value: Option<&Expr>,
+    ) -> Result<Option<IRBlockId>, String> {
         let Some(expr) = value else {
-            return (
-                Vec::new(),
-                Some(IRTerminator::Return {
+            builder.set_terminator(
+                open,
+                IRTerminator::Return {
                     value: None,
                     drop_skip: None,
-                }),
+                },
             );
+            return Ok(None);
         };
-        let mut instructions = Vec::new();
-        let mut operand = self.lower_tail_expr_to_operand(&mut instructions, expr);
-        operand = self.maybe_emit_union_wrap(&mut instructions, expr, operand);
+        let (next, mut operand) = self.lower_tail_expr_to_operand(builder, open, expr)?;
+        let Some(open) = next else {
+            return Ok(None);
+        };
+        operand = self.maybe_emit_union_wrap(builder, open, expr, operand);
         let drop_skip = match &expr.kind {
             ExprKind::Ident { name, .. } => Some(name.clone()),
             _ => None,
         };
-        (
-            instructions,
-            Some(IRTerminator::Return {
+        builder.set_terminator(
+            open,
+            IRTerminator::Return {
                 value: Some(operand),
                 drop_skip,
-            }),
-        )
+            },
+        );
+        Ok(None)
     }
 
-    /// Lower a [`Statement::Break`]: finish the block with an
+    /// Lower a [`Statement::Break`]: close `open` with an
     /// unconditional branch to the innermost enclosing loop's exit
     /// id, read from [`crate::FnLowerState::current_loop_exit`].
-    fn lower_break_stmt(&mut self) -> Result<LoweredStatement, String> {
+    fn lower_break_stmt(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+    ) -> Result<Option<IRBlockId>, String> {
         let exit = self
             .fn_state
             .current_loop_exit()
             .ok_or("break outside of loop")?;
-        Ok((Vec::new(), Some(IRTerminator::Branch(exit))))
+        builder.set_terminator(open, IRTerminator::Branch(exit));
+        Ok(None)
     }
 
     /// Resolve the post-RHS assigned type: annotation > inferred
@@ -386,12 +516,57 @@ impl<'a> Lowerer<'a> {
         infer_type_from_expr(&self.ctx(), &var_type, value).unwrap_or(Type::Unknown)
     }
 
+    /// Emit a [`IRInstruction::FromListLiteral`] when the RHS of an
+    /// assignment is an [`ExprKind::List`] literal and the target
+    /// type is a non-`List` named type with type-args (e.g.
+    /// `Set<Int> = [1, 2, 3]`). The pre-codegen elaboration pass
+    /// rewrites the instruction into a typed
+    /// [`IRInstruction::MethodCall`] on `target.from_list` after
+    /// monomorphizing the impl method into [`crate::IRProgram`].
+    /// Pass-through for any other shape (target is `List`, RHS is
+    /// not a list literal, target lacks type-args, etc.).
+    fn maybe_emit_from_list_literal(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        value: &Expr,
+        assigned_type: &Type,
+        operand: IROperand,
+    ) -> IROperand {
+        if !matches!(value.kind, ExprKind::List { .. }) {
+            return operand;
+        }
+        let Type::Named {
+            identifier,
+            type_args,
+        } = assigned_type
+        else {
+            return operand;
+        };
+        if identifier.name == "List" || type_args.is_empty() {
+            return operand;
+        }
+        let target_mangled = MonomorphizedTypeIdentifier::new(mangle_name(identifier, type_args));
+        let dest = self.next_value_id();
+        builder.append(
+            open,
+            IRInstruction::FromListLiteral {
+                dest,
+                value: operand,
+                target_ty: assigned_type.clone(),
+                target_mangled,
+            },
+        );
+        IROperand::Local(dest)
+    }
+
     /// Emit a [`IRInstruction::UnionWrap`] if typecheck recorded a
     /// [`Coercion::UnionWiden`] for the expression's span, returning
     /// the wrapped operand. Pass-through otherwise.
-    fn maybe_emit_union_wrap(
+    pub(crate) fn maybe_emit_union_wrap(
         &mut self,
-        instructions: &mut Vec<IRInstruction>,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         expr: &Expr,
         value: IROperand,
     ) -> IROperand {
@@ -401,12 +576,15 @@ impl<'a> Lowerer<'a> {
             return value;
         };
         let dest = self.next_value_id();
-        instructions.push(IRInstruction::UnionWrap {
-            dest,
-            value,
-            source_ty: source,
-            target_union: target,
-        });
+        builder.append(
+            open,
+            IRInstruction::UnionWrap {
+                dest,
+                value,
+                source_ty: source,
+                target_union: target,
+            },
+        );
         IROperand::Local(dest)
     }
 
@@ -493,8 +671,9 @@ impl<'a> Lowerer<'a> {
     /// [`IRInstruction::StoreField`] sink.
     fn compound_assign_target(
         &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         target: &LValue,
-        instructions: &mut Vec<IRInstruction>,
     ) -> Result<CompoundAssignTarget, String> {
         if target.segments.len() == 1 {
             let name = target.segments[0].clone();
@@ -504,11 +683,14 @@ impl<'a> Lowerer<'a> {
                 .type_of(&name)
                 .ok_or_else(|| format!("undefined variable: {name}"))?;
             let dest = self.next_value_id();
-            instructions.push(IRInstruction::LoadLocal {
-                dest,
-                name: name.clone(),
-                ty: target_ty.clone(),
-            });
+            builder.append(
+                open,
+                IRInstruction::LoadLocal {
+                    dest,
+                    name: name.clone(),
+                    ty: target_ty.clone(),
+                },
+            );
             let sink: Box<dyn FnOnce(IROperand, Type) -> IRInstruction> =
                 Box::new(move |value, ty| IRInstruction::StoreLocal {
                     name,
@@ -528,12 +710,15 @@ impl<'a> Lowerer<'a> {
             .unwrap_or(Type::Unknown);
         let load_dest = self.next_value_id();
         let base_name = target.segments[0].clone();
-        instructions.push(IRInstruction::FieldChain {
-            dest: load_dest,
-            base_name: base_name.clone(),
-            base_type: base_type.clone(),
-            steps: steps.clone(),
-        });
+        builder.append(
+            open,
+            IRInstruction::FieldChain {
+                dest: load_dest,
+                base_name: base_name.clone(),
+                base_type: base_type.clone(),
+                steps: steps.clone(),
+            },
+        );
         let sink: Box<dyn FnOnce(IROperand, Type) -> IRInstruction> =
             Box::new(move |value, ty| IRInstruction::StoreField {
                 base_name,

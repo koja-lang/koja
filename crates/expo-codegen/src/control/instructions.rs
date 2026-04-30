@@ -369,23 +369,9 @@ pub(crate) fn execute_instructions<'ctx>(
                 }
                 None
             }
-            IRInstruction::EnterScope => {
-                let snapshot = compiler.fn_state.variables.clone();
-                compiler.fn_state.scope_stack.push(snapshot);
-                None
-            }
-            IRInstruction::ExitScope { names: _ } => {
-                let snapshot = compiler
-                    .fn_state
-                    .scope_stack
-                    .pop()
-                    .ok_or("IRInstruction::ExitScope: scope_stack underflow")?;
-                compiler.fn_state.variables = snapshot;
-                None
-            }
-            IRInstruction::ForLoopStub { .. } => {
+            IRInstruction::FromListLiteral { .. } => {
                 return Err(
-                    "IRInstruction::ForLoopStub reached codegen: elaboration pass missed this"
+                    "IRInstruction::FromListLiteral reached codegen: elaboration pass missed this"
                         .to_string(),
                 );
             }
@@ -599,27 +585,97 @@ fn emit_phi<'ctx>(
     block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
     value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    let mut materialized: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> =
+    // Filter incomings to actual LLVM predecessors of the current
+    // merge block: an IR block id whose remapped LLVM block did not
+    // branch to the current merge block (because a Stub at execute
+    // time terminated the block via Return / Unreachable / etc.) is
+    // NOT a predecessor and would corrupt the phi's predecessor list.
+    let merge_bb = c.builder.get_insert_block().unwrap();
+    let mut entries: Vec<(Option<BasicValueEnum<'ctx>>, BasicBlock<'ctx>)> =
         Vec::with_capacity(incomings.len());
     for (block_id, operand) in incomings {
         let llvm_block = *block_map.get(block_id).ok_or_else(|| {
             format!("IRInstruction::Phi: incoming block {block_id:?} not in block_map")
         })?;
+        if !branches_to(llvm_block, merge_bb) {
+            continue;
+        }
+        // Sentinel: IROperand::Unit means "fallthrough / undef of
+        // matching type" (set by `try_stage_match_phi` for the
+        // fallthrough block; legacy `assemble_match_phi` parity).
+        if matches!(operand, IROperand::Unit) {
+            entries.push((None, llvm_block));
+            continue;
+        }
+        // Locals whose dest isn't in `value_map` survived from a
+        // Stub-deferred expression whose `compile_expr` returned
+        // `Ok(None)` (e.g. void `print` / divergent `panic`). The
+        // LLVM block IS still a predecessor (we filtered for that
+        // above), so include the entry with `undef` of the matching
+        // type.
+        if let IROperand::Local(id) = operand
+            && !value_map.contains_key(id)
+        {
+            entries.push((None, llvm_block));
+            continue;
+        }
         let value = materialize_operand(c, operand, value_map)?;
-        materialized.push((value, llvm_block));
+        entries.push((Some(value), llvm_block));
     }
 
-    let llvm_ty = materialized
-        .first()
-        .map(|(value, _)| value.get_type())
-        .or_else(|| to_llvm_type(ty, c.context, &c.llvm_types))
-        .ok_or_else(|| format!("IRInstruction::Phi: no incomings and no fallback type ({ty:?})"))?;
+    let llvm_ty = entries
+        .iter()
+        .find_map(|(value, _)| value.map(|v| v.get_type()))
+        .or_else(|| to_llvm_type(ty, c.context, &c.llvm_types));
+
+    // No usable type AND no concrete incoming values: the construct
+    // produced no live merge values (e.g. all match arms emitted
+    // divergent calls whose Stubs returned `Ok(None)` at execute
+    // time, leaving only the fallthrough sentinel). Emit no phi --
+    // the surrounding caller will fall back through the
+    // unresolvable result operand. Using i8 undef as the dest type
+    // keeps the phi well-formed if we still need to produce one.
+    let llvm_ty = llvm_ty.unwrap_or_else(|| c.context.i8_type().into());
 
     let phi: PhiValue<'ctx> = c.builder.build_phi(llvm_ty, "phi").unwrap();
-    for (value, llvm_block) in &materialized {
-        phi.add_incoming(&[(value, *llvm_block)]);
+    let undef = llvm_ty.const_zero();
+    for (value, llvm_block) in &entries {
+        let v: BasicValueEnum<'ctx> = value.unwrap_or(undef);
+        phi.add_incoming(&[(&v, *llvm_block)]);
     }
     Ok(phi.as_basic_value())
+}
+
+/// `true` iff `from`'s terminator is an unconditional or
+/// conditional branch that lists `to` as one of its targets, OR if
+/// `from` has no terminator yet (it'll fall through to `to` when
+/// the surrounding walker emits one). Used by [`emit_phi`] to
+/// filter phi incomings down to actual LLVM predecessors of the
+/// current merge block.
+fn branches_to(from: BasicBlock<'_>, to: BasicBlock<'_>) -> bool {
+    let Some(term) = from.get_terminator() else {
+        // Block hasn't been terminated yet; the surrounding walker
+        // will emit a fallthrough branch to `to` (typical when the
+        // merge block contains the phi we're emitting now).
+        return true;
+    };
+    use inkwell::values::{InstructionOpcode, Operand};
+    if !matches!(
+        term.get_opcode(),
+        InstructionOpcode::Br | InstructionOpcode::Switch
+    ) {
+        // Return / Unreachable / Resume / Invoke etc. -- not a
+        // predecessor of `to`.
+        return false;
+    }
+    for i in 0..term.get_num_operands() {
+        if let Some(Operand::Block(bb)) = term.get_operand(i)
+            && bb == to
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Materialize each operand and coerce it against the matching

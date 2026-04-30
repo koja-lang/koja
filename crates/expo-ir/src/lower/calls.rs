@@ -19,6 +19,8 @@ use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute, unwrap_indirect};
 
 use crate::Lowerer;
+use crate::blocks::IRBlockId;
+use crate::cfg::CFGBuilder;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::ctx::LowerCtx;
 use crate::lower::inference::infer_static_struct_type_args_from_args;
@@ -286,11 +288,12 @@ impl<'a> Lowerer<'a> {
     ///   does not silently mis-lift.
     pub fn lower_call_or_stub(
         &mut self,
-        instructions: &mut Vec<IRInstruction>,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         name: &str,
         args: &[Arg],
         tail: bool,
-    ) -> Option<(IROperand, Type)> {
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         if self
             .program
             .contains_struct(&MonomorphizedTypeIdentifier::new(name))
@@ -298,21 +301,22 @@ impl<'a> Lowerer<'a> {
                 .program
                 .contains_enum(&MonomorphizedTypeIdentifier::new(name))
         {
-            return None;
+            return Ok(None);
         }
         if args_need_coercion(self, args) {
-            return None;
+            return Ok(None);
         }
 
-        let resolved = resolve_call(
+        let Ok(resolved) = resolve_call(
             &self.ctx(),
             self.program,
             name,
             |_, _| false,
             |_| None,
             |_| false,
-        )
-        .ok()?;
+        ) else {
+            return Ok(None);
+        };
 
         let ResolvedCall::Direct {
             mangled_name,
@@ -320,24 +324,28 @@ impl<'a> Lowerer<'a> {
             return_type,
         } = resolved
         else {
-            return None;
+            return Ok(None);
         };
 
-        let lowered_args: Vec<IROperand> = args
-            .iter()
-            .map(|arg| self.lower_expr_to_operand(instructions, &arg.value))
-            .collect();
+        let (open, lowered_args) =
+            self.lower_expr_sequence(builder, open, args.iter().map(|a| &a.value))?;
+        let Some(open) = open else {
+            return Ok(Some((None, IROperand::Unit, return_type)));
+        };
 
         let dest = self.next_value_id();
-        instructions.push(IRInstruction::Call {
-            dest,
-            mangled: mangled_name,
-            args: lowered_args,
-            param_types,
-            return_type: return_type.clone(),
-            tail,
-        });
-        Some((IROperand::Local(dest), return_type))
+        builder.append(
+            open,
+            IRInstruction::Call {
+                dest,
+                mangled: mangled_name,
+                args: lowered_args,
+                param_types,
+                return_type: return_type.clone(),
+                tail,
+            },
+        );
+        Ok(Some((Some(open), IROperand::Local(dest), return_type)))
     }
 
     /// Attempt to lift a `Type.method(args)` static call to an
@@ -352,19 +360,21 @@ impl<'a> Lowerer<'a> {
     /// monomorphization queue requires LLVM-bound work in
     /// `expo-codegen`. The caller's legacy path runs that drain and
     /// re-attempts after the symbol is registered.
+    #[allow(clippy::too_many_arguments)]
     pub fn lower_static_call_or_stub(
         &mut self,
-        instructions: &mut Vec<IRInstruction>,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         type_name: &str,
         resolved_type: Option<&TypeIdentifier>,
         method: &str,
         args: &[Arg],
         tail: bool,
-    ) -> Option<(IROperand, Type)> {
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         if args_need_coercion(self, args) {
-            return None;
+            return Ok(None);
         }
-        let resolved = resolve_static_call(
+        let Ok(resolved) = resolve_static_call(
             &self.ctx(),
             self.program,
             &|_| None,
@@ -373,32 +383,37 @@ impl<'a> Lowerer<'a> {
             resolved_type,
             method,
             args,
-        )
-        .ok()?;
+        ) else {
+            return Ok(None);
+        };
 
         if resolved.pending_type_mono.is_some() || resolved.pending_mono.is_some() {
-            return None;
+            return Ok(None);
         }
         if !self.program.contains_function(&resolved.mangled_name) {
-            return None;
+            return Ok(None);
         }
 
-        let lowered_args: Vec<IROperand> = args
-            .iter()
-            .map(|arg| self.lower_expr_to_operand(instructions, &arg.value))
-            .collect();
+        let return_type = resolved.return_type.clone();
+        let (open, lowered_args) =
+            self.lower_expr_sequence(builder, open, args.iter().map(|a| &a.value))?;
+        let Some(open) = open else {
+            return Ok(Some((None, IROperand::Unit, return_type)));
+        };
 
         let dest = self.next_value_id();
-        let return_type = resolved.return_type.clone();
-        instructions.push(IRInstruction::Call {
-            dest,
-            mangled: resolved.mangled_name,
-            args: lowered_args,
-            param_types: resolved.param_types,
-            return_type: resolved.return_type,
-            tail,
-        });
-        Some((IROperand::Local(dest), return_type))
+        builder.append(
+            open,
+            IRInstruction::Call {
+                dest,
+                mangled: resolved.mangled_name,
+                args: lowered_args,
+                param_types: resolved.param_types,
+                return_type: resolved.return_type,
+                tail,
+            },
+        );
+        Ok(Some((Some(open), IROperand::Local(dest), return_type)))
     }
 }
 

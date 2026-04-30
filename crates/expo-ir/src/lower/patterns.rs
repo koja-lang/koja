@@ -12,17 +12,18 @@ use expo_typecheck::types::{Type, mangle_name, mangle_type, named, unwrap_indire
 
 use crate::Lowerer;
 use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
+use crate::cfg::CFGBuilder;
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
 use crate::lower::types::{
     find_type_current, monomorphize_type, resolve_name_current, resolve_type_expr,
 };
-use crate::resolved::match_expr::{IRMatch, IRMatchArm, ResolvedMatchType};
+use crate::resolved::match_expr::ResolvedMatchType;
 use crate::resolved::ops::ResolvedBinaryOp;
 use crate::resolved::patterns::{ResolvedFieldPattern, ResolvedLiteral, ResolvedPattern};
 use crate::util::parse_int_literal;
-use crate::values::{IRInstruction, IROperand, IRValueId};
+use crate::values::{IRInstruction, IROperand};
 
 /// Picks the most specific Expo type available for the match subject.
 /// Prefers the post-emit `expo_type` (codegen has full monomorphization
@@ -560,16 +561,27 @@ fn lookup_variant_data(
     Err(format!("variant not found: {enum_name}.{variant}"))
 }
 
-/// Per-arm + global block / value identifiers minted for an [`IRMatch`].
-/// Pulled out into a struct so [`Lowerer::lower_match_expr`] can hand
-/// the ids to the per-arm builder without threading them as a long
-/// parameter list.
+/// Per-arm + global block / value identifiers minted for the
+/// `match` lowering. Pulled out into a struct so
+/// [`Lowerer::lower_match_expr`] can hand the ids to the per-arm
+/// builder without threading them as a long parameter list.
 struct MatchBlockIds {
     arm_body_blocks: Vec<IRBlockId>,
     arm_check_blocks: Vec<IRBlockId>,
     fallthrough_block: IRBlockId,
     merge_block: IRBlockId,
-    subject_value: IRValueId,
+}
+
+/// Per-arm intermediate emitted during the `match` lowering. The
+/// pattern arm's check sub-CFG is built into a temporary
+/// `Vec<IRBasicBlock>` (via the gated CFG builder
+/// [`Lowerer::lower_pattern_into_arm`]); the body block is built
+/// alongside. Both are drained into the [`crate::CFGBuilder`] in
+/// source order by [`Lowerer::lower_match_expr`].
+struct LoweredMatchArm {
+    body: IRBasicBlock,
+    check_blocks: Vec<IRBasicBlock>,
+    trailing_value: Option<IROperand>,
 }
 
 /// Outcome of lowering a single AST [`Pattern`] into a flat
@@ -627,31 +639,112 @@ impl<'a> Lowerer<'a> {
     /// registers an `undef` incoming from it when value-producing.
     pub fn lower_match_expr(
         &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        subject_ptr: IROperand,
         subject_ty: Type,
         arms: &[MatchArm],
         result_ty: ResolvedMatchType,
-    ) -> Result<IRMatch, String> {
+    ) -> Result<(Option<IRBlockId>, IROperand), String> {
         let ids = self.mint_match_block_ids(arms.len());
-        let subject_operand = IROperand::Local(ids.subject_value);
+
+        // Branch from caller's open block into the first arm's check entry.
+        builder.set_terminator(open, IRTerminator::Branch(ids.arm_check_blocks[0]));
+
         let mut lowered_arms = Vec::with_capacity(arms.len());
         for (i, arm) in arms.iter().enumerate() {
             lowered_arms.push(self.build_match_arm(
                 arm,
                 &subject_ty,
-                &subject_operand,
+                &subject_ptr,
                 &ids,
                 i,
                 &result_ty,
             )?);
         }
-        Ok(IRMatch {
-            arms: lowered_arms,
-            fallthrough_block: ids.fallthrough_block,
-            merge_block: ids.merge_block,
-            result_ty,
-            subject_ty,
-            subject_value: ids.subject_value,
-        })
+
+        // Drain per-arm check sub-CFGs and body blocks into the builder.
+        for arm in &lowered_arms {
+            for blk in &arm.check_blocks {
+                builder.add_block(blk.id, blk.label.clone());
+                for instr in &blk.instructions {
+                    builder.append(blk.id, instr.clone());
+                }
+                builder.set_terminator(blk.id, blk.terminator.clone());
+            }
+            builder.add_block(arm.body.id, arm.body.label.clone());
+            for instr in &arm.body.instructions {
+                builder.append(arm.body.id, instr.clone());
+            }
+            builder.set_terminator(arm.body.id, arm.body.terminator.clone());
+        }
+
+        // Fallthrough block: all-patterns-failed landing pad. Branches
+        // into merge so the merge phi can register an `undef` incoming
+        // for it (legacy semantics).
+        builder.add_block(ids.fallthrough_block, "match_none");
+        builder.set_terminator(ids.fallthrough_block, IRTerminator::Branch(ids.merge_block));
+
+        builder.add_block(ids.merge_block, "match_end");
+
+        // Pre-stage merge phi if every reachable arm produced a value.
+        let result = self.try_stage_match_phi(builder, &ids, &lowered_arms, &result_ty);
+        Ok((Some(ids.merge_block), result))
+    }
+
+    /// Pre-stage the merge [`IRInstruction::Phi`] when every
+    /// non-self-terminated arm produced a trailing value AND no arm
+    /// reached `Branch(merge)` without one. Returns
+    /// [`IROperand::Local`] referencing the phi's dest, or
+    /// [`IROperand::Unit`] for statement-shaped merges. Mirrors legacy
+    /// `assemble_match_phi`'s all-or-nothing contract.
+    ///
+    /// The merge block has one predecessor per value-producing arm
+    /// plus the `fallthrough_block` (always present as an
+    /// all-patterns-failed landing pad). The Phi includes an
+    /// `IROperand::Unit` sentinel for the fallthrough; the codegen
+    /// executor materializes it as `undef` of the same LLVM type as
+    /// the other incomings (legacy parity).
+    fn try_stage_match_phi(
+        &mut self,
+        builder: &mut CFGBuilder,
+        ids: &MatchBlockIds,
+        lowered_arms: &[LoweredMatchArm],
+        result_ty: &ResolvedMatchType,
+    ) -> IROperand {
+        let mut incomings: Vec<(IRBlockId, IROperand)> = Vec::new();
+        let mut any_no_value_branch = false;
+        for arm in lowered_arms {
+            match (&arm.body.terminator, &arm.trailing_value) {
+                (IRTerminator::Branch(_), Some(op)) => {
+                    incomings.push((arm.body.id, op.clone()));
+                }
+                (IRTerminator::Branch(_), None) => any_no_value_branch = true,
+                _ => {} // self-terminated arm (Return / Unreachable / pre-staged CondBranch)
+            }
+        }
+        if incomings.is_empty() || any_no_value_branch {
+            return IROperand::Unit;
+        }
+        // Fallthrough block branches to merge unconditionally; the
+        // Phi must include an entry for it. Use IROperand::Unit as
+        // the sentinel; the codegen executor materializes it as
+        // `undef` of the matching LLVM type.
+        incomings.push((ids.fallthrough_block, IROperand::Unit));
+        let ty = match result_ty {
+            ResolvedMatchType::Direct { ty } => ty.clone(),
+            ResolvedMatchType::UnionWrap { target } => target.clone(),
+        };
+        let dest = self.next_value_id();
+        builder.append(
+            ids.merge_block,
+            IRInstruction::Phi {
+                dest,
+                incomings,
+                ty,
+            },
+        );
+        IROperand::Local(dest)
     }
 
     /// Lowers a single AST [`Pattern`] (with its subject's resolved
@@ -675,23 +768,22 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// Mints fresh per-arm and global identifiers for an [`IRMatch`]:
-    /// one `check_block` and one `body_block` per arm, plus shared
-    /// `fallthrough_block`, `merge_block`, and `subject_value` (the
-    /// SSA slot the codegen walker stuffs the match subject's pointer
-    /// into before running per-arm checks).
+    /// Mints fresh per-arm and global identifiers for the `match`
+    /// lowering: one `check_block` and one `body_block` per arm, plus
+    /// shared `fallthrough_block` and `merge_block`. The subject
+    /// pointer comes in as an [`IROperand`] from the caller (typically
+    /// the codegen shim passing the LLVM alloca's pointer through
+    /// the value map).
     fn mint_match_block_ids(&mut self, arm_count: usize) -> MatchBlockIds {
         let arm_check_blocks: Vec<_> = (0..arm_count).map(|_| self.next_block_id()).collect();
         let arm_body_blocks: Vec<_> = (0..arm_count).map(|_| self.next_block_id()).collect();
         let fallthrough_block = self.next_block_id();
         let merge_block = self.next_block_id();
-        let subject_value = self.next_value_id();
         MatchBlockIds {
             arm_body_blocks,
             arm_check_blocks,
             fallthrough_block,
             merge_block,
-            subject_value,
         }
     }
 
@@ -718,15 +810,53 @@ impl<'a> Lowerer<'a> {
         ids: &MatchBlockIds,
         idx: usize,
         result_ty: &ResolvedMatchType,
-    ) -> Result<IRMatchArm, String> {
+    ) -> Result<LoweredMatchArm, String> {
         let entry_id = ids.arm_check_blocks[idx];
-        let body_block = ids.arm_body_blocks[idx];
+        let body_id = ids.arm_body_blocks[idx];
         let failure_target = if idx + 1 < ids.arm_check_blocks.len() {
             ids.arm_check_blocks[idx + 1]
         } else {
             ids.fallthrough_block
         };
 
+        let check_blocks = self.build_match_arm_checks(
+            arm,
+            subject_ty,
+            subject_ptr,
+            entry_id,
+            body_id,
+            failure_target,
+            idx,
+        )?;
+
+        let (mut body, trailing_op, trailing_ty) =
+            self.build_match_arm_body(arm, body_id, ids.merge_block, idx)?;
+        let trailing_value = trailing_op.map(|op| {
+            self.maybe_pre_stage_arm_union_wrap(&mut body, op, trailing_ty.as_ref(), result_ty)
+        });
+
+        Ok(LoweredMatchArm {
+            body,
+            check_blocks,
+            trailing_value,
+        })
+    }
+
+    /// Build the per-arm check sub-CFG (legacy `Vec<IRBasicBlock>`
+    /// shape consumed by [`Self::lower_pattern_into_arm`]). Returns
+    /// the blocks in source order; [`Self::lower_match_expr`] drains
+    /// them into the outer [`crate::CFGBuilder`].
+    #[allow(clippy::too_many_arguments)]
+    fn build_match_arm_checks(
+        &mut self,
+        arm: &MatchArm,
+        subject_ty: &Type,
+        subject_ptr: &IROperand,
+        entry_id: IRBlockId,
+        body_block: IRBlockId,
+        failure_target: IRBlockId,
+        idx: usize,
+    ) -> Result<Vec<IRBasicBlock>, String> {
         let mut blocks = vec![placeholder_block(
             entry_id,
             format!("match_test_{idx}_entry"),
@@ -737,8 +867,27 @@ impl<'a> Lowerer<'a> {
             self.lower_pattern_into_arm(&resolved, subject_ptr, failure_target, &mut blocks)?;
 
         if let Some(guard) = &arm.guard {
-            let guard_operand =
-                self.lower_expr_to_operand(&mut blocks.last_mut().unwrap().instructions, guard);
+            // Guards lower through a temporary single-block CFGBuilder
+            // and drain instructions back into the arm's open block.
+            // Nested control flow inside guards is rejected (matches
+            // legacy behavior; `match Some(v) when v > 0 -> ...`-style
+            // guards are pure expressions).
+            let guard_open = blocks.last().unwrap().id;
+            let mut tmp = CFGBuilder::new();
+            tmp.add_block(guard_open, "match_guard".to_string());
+            let (next, guard_operand) = self.lower_expr_to_operand(&mut tmp, guard_open, guard)?;
+            let tmp_blocks = tmp.into_blocks();
+            if tmp_blocks.len() != 1 || next.is_none() {
+                return Err(format!(
+                    "match arm {idx}: nested control flow inside guard not yet supported"
+                ));
+            }
+            let guard_block = tmp_blocks.into_iter().next().unwrap();
+            blocks
+                .last_mut()
+                .unwrap()
+                .instructions
+                .extend(guard_block.instructions);
             check_result = self.fuse_check_results(
                 check_result,
                 guard_operand,
@@ -756,70 +905,74 @@ impl<'a> Lowerer<'a> {
                 otherwise: failure_target,
             },
         };
-
-        let (mut body_instructions, body_terminator, trailing_op, trailing_ty) =
-            self.lower_statements_for_value(&arm.body)?;
-
-        // Pre-stage UnionWrap when the result strategy widens this
-        // arm's value into a union and the arm's trailing type isn't
-        // already that union. The wrapped operand replaces the raw
-        // trailing op for the inline merge-phi assembly in
-        // `assemble_match_phi` (see [`IRMatchArm::trailing_value`]).
-        //
-        // Capture the trailing operand whenever lowering produced one,
-        // even when typecheck didn't propagate `resolved_type` for the
-        // trailing expression (e.g. pattern-bound idents in
-        // monomorphized stdlib bodies). UnionWrap pre-staging is
-        // skipped in the type-less case -- match arms whose Expo type
-        // can't be observed structurally fall back to the legacy
-        // post-emit LLVM-shape check inside `assemble_match_phi`.
-        let trailing_value = match (body_terminator.as_ref(), trailing_op, trailing_ty) {
-            (None, Some(op), Some(ty)) => {
-                Some(self.maybe_union_wrap_match_arm(&mut body_instructions, op, &ty, result_ty))
-            }
-            (None, Some(op), None) => Some(op),
-            _ => None,
-        };
-
-        let body = IRBasicBlock {
-            id: body_block,
-            instructions: body_instructions,
-            label: format!("match_body_{idx}"),
-            terminator: body_terminator.unwrap_or(IRTerminator::Branch(ids.merge_block)),
-        };
-
-        Ok(IRMatchArm {
-            body,
-            check_blocks: blocks,
-            trailing_value,
-        })
+        Ok(blocks)
     }
 
-    /// Append an [`IRInstruction::UnionWrap`] when an arm's trailing
-    /// value needs widening to fit the match's lowered UnionWrap
-    /// strategy. Returns the operand the surrounding merge phi
-    /// should reference (either the wrapped dest or the original
-    /// trailing operand untouched).
-    fn maybe_union_wrap_match_arm(
+    /// Lower the arm body into an [`IRBasicBlock`] using a temporary
+    /// [`CFGBuilder`] (since [`Self::lower_statements_for_value`]
+    /// builds blocks via the recursive CFG API). Drains the temp
+    /// builder back into a single body [`IRBasicBlock`] consumed by
+    /// [`Self::build_match_arm`]; multi-block bodies (control flow
+    /// inside the arm) are flattened into a single body block today
+    /// because match-arm body CFG support is post-Slice-3 work.
+    fn build_match_arm_body(
         &mut self,
-        instructions: &mut Vec<IRInstruction>,
+        arm: &MatchArm,
+        body_id: IRBlockId,
+        merge_id: IRBlockId,
+        idx: usize,
+    ) -> Result<(IRBasicBlock, Option<IROperand>, Option<Type>), String> {
+        let mut tmp = CFGBuilder::new();
+        tmp.add_block(body_id, format!("match_body_{idx}"));
+        let (exit, trailing) = self.lower_statements_for_value(&mut tmp, body_id, &arm.body)?;
+        let (trailing_op, trailing_ty) = match trailing {
+            Some((op, ty)) => (Some(op), Some(ty)),
+            None => (None, None),
+        };
+        // Match arms today support straight-line bodies (no nested
+        // control flow that would mint extra blocks). Nested control
+        // inside arms is post-Slice-3 work.
+        let blocks = tmp.into_blocks();
+        if blocks.len() != 1 {
+            return Err(format!(
+                "match arm {idx}: nested control flow inside body not yet supported \
+                 (got {} blocks)",
+                blocks.len()
+            ));
+        }
+        let mut body = blocks.into_iter().next().unwrap();
+        if exit.is_some() {
+            body.terminator = IRTerminator::Branch(merge_id);
+        }
+        Ok((body, trailing_op, trailing_ty))
+    }
+
+    /// Pre-stage an [`IRInstruction::UnionWrap`] inside the body block
+    /// when the lowered result strategy widens the arm's value and
+    /// the trailing type isn't already a union. Returns the operand
+    /// the merge phi should reference (either the wrapped dest or the
+    /// original trailing operand untouched).
+    fn maybe_pre_stage_arm_union_wrap(
+        &mut self,
+        body: &mut IRBasicBlock,
         trailing_op: IROperand,
-        trailing_ty: &Type,
+        trailing_ty: Option<&Type>,
         result_ty: &ResolvedMatchType,
     ) -> IROperand {
         let target = match result_ty {
-            ResolvedMatchType::UnionWrap { target } => target,
+            ResolvedMatchType::UnionWrap { target } => target.clone(),
             ResolvedMatchType::Direct { .. } => return trailing_op,
         };
-        if matches!(trailing_ty, Type::Union(_)) {
+        if matches!(trailing_ty, Some(Type::Union(_))) {
             return trailing_op;
         }
+        let source_ty = trailing_ty.cloned().unwrap_or(Type::Unknown);
         let dest = self.next_value_id();
-        instructions.push(IRInstruction::UnionWrap {
+        body.instructions.push(IRInstruction::UnionWrap {
             dest,
             value: trailing_op,
-            source_ty: trailing_ty.clone(),
-            target_union: target.clone(),
+            source_ty,
+            target_union: target,
         });
         IROperand::Local(dest)
     }

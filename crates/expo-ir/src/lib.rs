@@ -12,6 +12,7 @@
 //! `expo/design/EXPOIR-ROADMAP.md` for design intent and current phase status.
 
 pub mod blocks;
+pub mod cfg;
 mod fn_state;
 pub mod identity;
 pub mod lower;
@@ -23,6 +24,7 @@ pub mod util;
 pub mod values;
 
 pub use blocks::{IRBasicBlock, IRBlockId, IRTerminator};
+pub use cfg::CFGBuilder;
 pub use fn_state::FnLowerState;
 pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 pub use lower::Lowerer;

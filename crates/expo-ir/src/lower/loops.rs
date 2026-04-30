@@ -1,124 +1,139 @@
-//! Lowering for loop constructs (`while`, `loop`, `for`) plus the
-//! `Enumeration` impl-dispatch resolver `for` loops use at emission.
+//! Lowering for loop constructs (`while`, `loop`, `for`).
 //!
-//! ## Construct lifts (Slice 6)
+//! Each lowering takes a `&mut CFGBuilder` plus the currently-open
+//! [`IRBlockId`], mints fresh per-construct block ids, wires the
+//! loop scaffolding (header / body / exit), pushes the exit id onto
+//! [`crate::FnLowerState::loop_exit`] for inner `break` resolution,
+//! and returns the new open block (the exit) plus
+//! [`IROperand::Unit`] (loops are statement-shaped).
 //!
-//! [`Lowerer::lower_while`] / [`Lowerer::lower_loop`] /
-//! [`Lowerer::lower_for`] mirror
-//! [`Lowerer::lower_if_no_else`](crate::Lowerer::lower_if_no_else) /
-//! [`Lowerer::lower_unless`](crate::Lowerer::lower_unless): mint
-//! fresh per-construct [`IRBlockId`](crate::blocks::IRBlockId)s,
-//! lower the cond expression (where present) into the header's
-//! instruction sequence via
-//! [`Lowerer::lower_expr_to_operand`](crate::Lowerer::lower_expr_to_operand),
-//! and record the canonicalized branch on the resulting
-//! `IR*` value. Bodies remain AST `Vec<Statement>` stubs walked by
-//! emission until Phase 4g (statement-level lowering).
+//! ## `for` loops and `IRInstruction::ForLoopStub`
 //!
-//! `for` keeps the iterable + binding pattern as AST stubs because
-//! the iterator-protocol desugaring (`length()` + `get()` + `Option`
-//! unwrap + pattern bind) lives at the codegen seam where the LLVM
-//! type registry is reachable; the lowerer only mints the block ids
-//! and the value-map slots the emit walker stuffs the iterable /
-//! index allocas into.
+//! `for` keeps the iterable expression and binding pattern alongside
+//! a structural placeholder ([`IRInstruction::ForLoopStub`]; planned
+//! in Slice 3c). The pre-codegen elaboration pass expands the stub
+//! into the iterator-protocol multi-block desugar (`length()` /
+//! `get()` / `Option` unwrap / pattern bind / `idx++`), calling
+//! [`crate::lower::monomorphize::monomorphize_impl_method`] on
+//! `length` / `get` to register the impl methods in `IRProgram`.
+//! Until 3c lands, `lower_for` Stubs the entire `for` expression and
+//! the codegen shim handles emission directly.
 //!
-//! ## `Enumeration` dispatch (`for` loops)
+//! ## `Enumeration` dispatch resolution
 //!
-//! `for item in iterable` desugars at emission time to an indexed `while`
-//! loop calling `iterable.length()` and `iterable.get(idx)`. To pick the
-//! right impl methods and bind `item` with the right LLVM type, the
-//! emitter needs the iterable's mangled type key, base name, type-args,
-//! and element Expo type. [`resolve_enumerable_info`] computes all of
-//! that against the type registry; emission then derives the LLVM
-//! element type with one `to_llvm_type(...)` call.
+//! [`resolve_enumerable_info`] consumes the iterable's `Type` and
+//! produces a [`ResolvedEnumerable`] -- the mangled type, base name,
+//! type-args, and element type the elaboration pass needs.
 
-use expo_ast::ast::{Expr, Pattern, Statement};
+use expo_ast::ast::{Expr, Statement};
 use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute_preserving};
 
 use crate::Lowerer;
-use crate::blocks::IRTerminator;
+use crate::blocks::{IRBlockId, IRTerminator};
+use crate::cfg::CFGBuilder;
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
 use crate::lower::mangling::try_parse_mangled_name;
 use crate::lower::types::resolve_name_current;
-use crate::resolved::loops::{IRFor, IRLoop, IRWhile, ResolvedEnumerable};
+use crate::resolved::loops::ResolvedEnumerable;
+use crate::values::{IRInstruction, IROperand};
 
 impl<'a> Lowerer<'a> {
-    /// Lowers a `loop ... end` (infinite loop). Mints `body_block` /
-    /// `exit_block`; body terminator unconditionally branches back to
-    /// `body_block`. The exit block exists so AST `break` statements
-    /// can branch to it via the surrounding emit walker's
-    /// `loop_exit_stack` (until Phase 4g lifts `break` into IR).
-    pub fn lower_loop(&mut self, body: &[Statement]) -> Result<IRLoop, String> {
+    /// Lower an infinite `loop ... end`. Two blocks: a body block
+    /// whose declared terminator is `Branch(body)` (the back-edge --
+    /// overridden by `break` / `return` / `panic`), and an exit
+    /// block that subsequent control flow lands in.
+    pub fn lower_loop(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        body: &[Statement],
+    ) -> Result<(Option<IRBlockId>, IROperand), String> {
         let body_id = self.next_block_id();
-        let exit_block = self.next_block_id();
-        let body = self.lower_body_block(body_id, "loop_body", body, body_id)?;
-        Ok(IRLoop { body, exit_block })
+        let exit_id = self.next_block_id();
+
+        builder.set_terminator(open, IRTerminator::Branch(body_id));
+
+        // Push the loop's exit id onto `FnLowerState::loop_exit` so
+        // any [`Statement::Break`] reachable through this body --
+        // including ones lowered later at execute time inside a
+        // Stub-deferred control-flow expression -- resolves to the
+        // right exit. The codegen-side `compile_loop` shim pops
+        // after the walk completes.
+        self.fn_state.push_loop_exit(exit_id);
+        self.lower_body_block(builder, body_id, "loop_body", body, body_id)?;
+
+        builder.add_block(exit_id, "loop_exit");
+        Ok((Some(exit_id), IROperand::Unit))
     }
 
-    /// Lowers a `while cond ... end`. Mints `header_block` /
-    /// `body_block` / `exit_block`; lowers `cond` into
-    /// `header_instructions` via
-    /// [`Self::lower_expr_to_operand`](crate::Lowerer::lower_expr_to_operand).
-    /// Header terminator is the canonicalized `CondBranch { cond,
-    /// then: body_block, otherwise: exit_block }`; body terminator
-    /// branches back to the header (re-evaluating the cond each
-    /// iteration).
-    pub fn lower_while(&mut self, cond: &Expr, body: &[Statement]) -> Result<IRWhile, String> {
-        let header_block = self.next_block_id();
+    /// Lower a `while cond ... end`. Three blocks: a header (cond
+    /// lift + canonicalized `CondBranch { cond, then: body, otherwise:
+    /// exit }`), a body whose back-edge terminator branches to
+    /// header, and an exit block.
+    pub fn lower_while(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        cond: &Expr,
+        body: &[Statement],
+    ) -> Result<(Option<IRBlockId>, IROperand), String> {
+        let header_id = self.next_block_id();
         let body_id = self.next_block_id();
-        let exit_block = self.next_block_id();
-        let mut header_instructions = Vec::new();
-        let cond_operand = self.lower_expr_to_operand(&mut header_instructions, cond);
-        let body = self.lower_body_block(body_id, "while_body", body, header_block)?;
-        Ok(IRWhile {
-            body,
-            exit_block,
-            header_block,
-            header_instructions,
-            header_terminator: IRTerminator::CondBranch {
-                cond: cond_operand,
+        let exit_id = self.next_block_id();
+
+        builder.set_terminator(open, IRTerminator::Branch(header_id));
+
+        builder.add_block(header_id, "while_header");
+        let (header_exit, cond_op) = self.lower_expr_to_operand(builder, header_id, cond)?;
+        let Some(header_exit) = header_exit else {
+            // Cond lowering terminated all paths; impossible in
+            // well-typed code but propagate defensively.
+            return Ok((None, IROperand::Unit));
+        };
+        builder.set_terminator(
+            header_exit,
+            IRTerminator::CondBranch {
+                cond: cond_op,
                 then: body_id,
-                otherwise: exit_block,
+                otherwise: exit_id,
             },
-        })
+        );
+
+        // Codegen-side `compile_while` pops loop_exit after the
+        // walk completes; pushing here lets break statements
+        // inside Stub-deferred sub-expressions resolve to `exit_id`
+        // at execute time too.
+        self.fn_state.push_loop_exit(exit_id);
+        self.lower_body_block(builder, body_id, "while_body", body, header_id)?;
+
+        builder.add_block(exit_id, "while_exit");
+        Ok((Some(exit_id), IROperand::Unit))
     }
 
-    /// Lowers a `for binding in iterable ... end`. Mints
-    /// `header_block` / `body_block` / `exit_block` and pre-allocates
-    /// `iterable_value` / `idx_value` slots in the function-scoped
-    /// value map (the emit walker stuffs the iterable's stack-stored
-    /// alloca pointer and the index alloca pointer into them so
-    /// future IR instructions can reference them via
-    /// [`IROperand::Local`](crate::values::IROperand::Local)).
-    ///
-    /// The iterable expression and the binding pattern stay AST-stubbed
-    /// because the iterator-protocol desugaring (calls `length()` and
-    /// `get()`, unwraps the `Option`, then binds via the pattern)
-    /// lives at the codegen seam where the LLVM type registry is
-    /// reachable. Same precedent as
-    /// [`crate::values::IRInstruction::PatternBinaryMatch`] from Slice 5b.
+    /// Lower a `for binding in iterable ... end`. Today: emits a
+    /// fallback [`IRInstruction::Stub`] wrapping the full `for`
+    /// expression (codegen routes through `compile_for`). Once the
+    /// elaboration pass lands in Slice 3c, switch to emitting an
+    /// [`IRInstruction::ForLoopStub`] that elaboration expands into
+    /// the iterator-protocol desugar.
     pub fn lower_for(
         &mut self,
-        iterable: &Expr,
-        binding_pattern: &Pattern,
-        body: &[Statement],
-    ) -> Result<IRFor, String> {
-        let body_id = self.next_block_id();
-        let exit_block = self.next_block_id();
-        let header_block = self.next_block_id();
-        let idx_value = self.next_value_id();
-        let iterable_value = self.next_value_id();
-        let body = self.lower_body_block(body_id, "for_body", body, header_block)?;
-        Ok(IRFor {
-            binding_pattern: binding_pattern.clone(),
-            body,
-            exit_block,
-            header_block,
-            idx_value,
-            iterable: iterable.clone(),
-            iterable_value,
-        })
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        for_expr: &Expr,
+    ) -> Result<(Option<IRBlockId>, IROperand), String> {
+        let dest = self.next_value_id();
+        builder.append(
+            open,
+            IRInstruction::Stub {
+                dest,
+                expr: Box::new(for_expr.clone()),
+            },
+        );
+        // The Stub's compile_expr path returns Unit (a `for` loop has
+        // no value). Continue lowering on the same open block.
+        Ok((Some(open), IROperand::Unit))
     }
 }
 

@@ -15,6 +15,8 @@ use expo_typecheck::types::{
 };
 
 use crate::Lowerer;
+use crate::blocks::IRBlockId;
+use crate::cfg::CFGBuilder;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::LowerCtx;
 use crate::lower::calls::{args_need_coercion, receiver_variable_name};
@@ -382,23 +384,24 @@ impl<'a> Lowerer<'a> {
     ///   [`IRProgram`] (consistency check against `pending_mono`).
     pub fn lower_method_call_or_stub(
         &mut self,
-        instructions: &mut Vec<IRInstruction>,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         receiver: &Expr,
         method: &str,
         args: &[Arg],
         tail: bool,
-    ) -> Option<(IROperand, Type)> {
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         if method == "clone" && args.is_empty() {
-            return None;
+            return Ok(None);
         }
         if args_need_coercion(self, args) {
-            return None;
+            return Ok(None);
         }
         // Receiver coercion would be applied at materialization time;
         // bail conservatively when the receiver has any recorded
         // coercion so the legacy `compile_method_call` path handles it.
         if resolve_coercion(&self.ctx(), receiver.span).is_some() {
-            return None;
+            return Ok(None);
         }
 
         if let ExprKind::Ident { name, .. } = &receiver.kind {
@@ -409,7 +412,8 @@ impl<'a> Lowerer<'a> {
                 && self.type_ctx.get_type(id).is_some()
             {
                 return self.lower_static_call_or_stub(
-                    instructions,
+                    builder,
+                    open,
                     &alias_name,
                     Some(id),
                     method,
@@ -419,10 +423,15 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        let recv_type = receiver.resolved_type.as_ref()?;
+        let Some(recv_type) = receiver.resolved_type.as_ref() else {
+            return Ok(None);
+        };
 
-        let resolved_name =
-            resolve_struct_name(&self.ctx(), receiver, recv_type, |_| None, None).ok()?;
+        let Ok(resolved_name) =
+            resolve_struct_name(&self.ctx(), receiver, recv_type, |_| None, None)
+        else {
+            return Ok(None);
+        };
 
         let has_impl_method = resolved_name
             .identifier
@@ -433,10 +442,10 @@ impl<'a> Lowerer<'a> {
             .and_then(|ti| ti.functions.get(method))
             .is_some();
         if !has_impl_method {
-            return None;
+            return Ok(None);
         }
 
-        let resolved = resolve_method_call(
+        let Ok(resolved) = resolve_method_call(
             &self.ctx(),
             self.program,
             &|_| None,
@@ -446,35 +455,43 @@ impl<'a> Lowerer<'a> {
             &resolved_name.type_args,
             method,
             args,
-        )
-        .ok()?;
+        ) else {
+            return Ok(None);
+        };
 
         if resolved.pending_mono.is_some() {
-            return None;
+            return Ok(None);
         }
         if !self.program.contains_function(&resolved.mangled_name) {
-            return None;
+            return Ok(None);
         }
 
-        let receiver_operand = self.lower_expr_to_operand(instructions, receiver);
-        let lowered_args: Vec<IROperand> = args
-            .iter()
-            .map(|arg| self.lower_expr_to_operand(instructions, &arg.value))
-            .collect();
+        let return_type = resolved.return_type.clone();
+        let (open, receiver_operand) = self.lower_expr_to_operand(builder, open, receiver)?;
+        let Some(open) = open else {
+            return Ok(Some((None, IROperand::Unit, return_type)));
+        };
+        let (open, lowered_args) =
+            self.lower_expr_sequence(builder, open, args.iter().map(|a| &a.value))?;
+        let Some(open) = open else {
+            return Ok(Some((None, IROperand::Unit, return_type)));
+        };
 
         let dest = self.next_value_id();
-        let return_type = resolved.return_type.clone();
-        instructions.push(IRInstruction::MethodCall {
-            dest,
-            mangled: resolved.mangled_name,
-            receiver: receiver_operand,
-            receiver_name: receiver_variable_name(receiver),
-            is_move: resolved.is_move,
-            args: lowered_args,
-            param_types: resolved.param_types,
-            return_type: resolved.return_type,
-            tail,
-        });
-        Some((IROperand::Local(dest), return_type))
+        builder.append(
+            open,
+            IRInstruction::MethodCall {
+                dest,
+                mangled: resolved.mangled_name,
+                receiver: receiver_operand,
+                receiver_name: receiver_variable_name(receiver),
+                is_move: resolved.is_move,
+                args: lowered_args,
+                param_types: resolved.param_types,
+                return_type: resolved.return_type,
+                tail,
+            },
+        );
+        Ok(Some((Some(open), IROperand::Local(dest), return_type)))
     }
 }

@@ -1,44 +1,21 @@
 //! Loop compilation: `while`, infinite `loop`, and `for` (desugared at
 //! emission into an indexed `while` loop over an `Enumeration` impl).
 //!
-//! Slice 6 lifted all three constructs onto the
-//! [`expo_ir::Lowerer`] + `emit_*_unified` pipeline that the
-//! conditional walkers and `match` walker already use:
-//!
-//! - `compile_while` / `compile_loop` / `compile_for` are thin shims
-//!   that lower the AST construct into an
-//!   [`expo_ir::resolved::loops::IRWhile`] /
-//!   [`expo_ir::resolved::loops::IRLoop`] /
-//!   [`expo_ir::resolved::loops::IRFor`] and dispatch through the
-//!   shared [`super::execute_instructions`] +
-//!   [`super::emit_terminator`] machinery.
-//! - Bodies remain AST `Vec<Statement>` stubs walked via
-//!   [`super::compile_body_as_value`] (statement-level lowering is
-//!   Phase 4g territory).
-//! - `break` lowers to an [`expo_ir::IRTerminator::Branch`] targeting
-//!   the loop's `exit_block` id; the [`enter_loop`] / [`leave_loop`]
-//!   helpers maintain the paired
-//!   [`expo_ir::FnLowerState::loop_exit`] (semantic) and
-//!   [`crate::compiler::FnState::loop_exit_blocks`] (LLVM-bound)
-//!   stacks so the lowering site reads the id and the
-//!   [`compile_statement`] shim resolves the id back to a
-//!   [`BasicBlock`] for terminator emission.
-//!
-//! `for` keeps the iterator-protocol desugaring at the codegen seam
-//! (`length()` / `get()` / `Option` unwrap / pattern bind) because the
-//! desugaring needs the LLVM type registry; the lowerer only mints
-//! the structural block / value ids. Same precedent as
-//! [`expo_ir::values::IRInstruction::PatternBinaryMatch`] from Slice
-//! 5b.
-
-use std::collections::HashMap;
+//! Slice 3: `compile_while` and `compile_loop` collapse to thin shims
+//! over [`expo_ir::Lowerer::lower_while`] /
+//! [`expo_ir::Lowerer::lower_loop`] threaded through the recursive
+//! [`expo_ir::CFGBuilder`] surface and walked via
+//! [`super::walk_function_blocks`]. `compile_for` keeps the legacy
+//! AST-driven iterator-protocol desugaring at the codegen seam --
+//! the IR-side `lower_for` Stubs the entire `for` AST today, and the
+//! desugar relocates into the elaboration pass when [`expo_ir::values::IRInstruction::ForLoopStub`]
+//! lands.
 
 use expo_ast::ast::{Expr, Pattern, Statement};
-use expo_ir::IRBlockId;
 use expo_ir::identity::FunctionIdentifier;
 use expo_ir::lower::loops::resolve_enumerable_info;
-use expo_ir::resolved::loops::{IRFor, IRLoop, IRWhile, ResolvedEnumerable};
-use expo_ir::values::IRValueId;
+use expo_ir::resolved::loops::ResolvedEnumerable;
+use expo_ir::{CFGBuilder, IRBlockId, IROperand};
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::BasicTypeEnum;
@@ -50,39 +27,66 @@ use crate::expr::compile_expr;
 use crate::generics::monomorphize_impl_method;
 use crate::types::to_llvm_type;
 
-use super::instructions::execute_instructions;
-use super::terminator::emit_terminator;
-use super::{register_block, walk_body};
+use super::register_block;
+use super::walk_function_blocks;
 
-/// Compiles an infinite `loop` block. Only exits via `break`. Lowers
-/// to an [`IRLoop`] via [`expo_ir::Lowerer::lower_loop`] and walks
-/// via [`emit_loop_unified`].
+/// Compiles an infinite `loop` block. Only exits via `break`.
 pub fn compile_loop<'ctx>(
     compiler: &mut Compiler<'ctx>,
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let ir = compiler.lowerer().lower_loop(body)?;
-    emit_loop_unified(compiler, &ir, function)
+    lift_loop(compiler, function, |lowerer, builder, open| {
+        lowerer.lower_loop(builder, open, body)
+    })
 }
 
-/// Compiles a `while` loop. Condition is re-evaluated each iteration.
-/// Lowers to an [`IRWhile`] via [`expo_ir::Lowerer::lower_while`] and
-/// walks via [`emit_while_unified`].
+/// Compiles a `while` loop.
 pub fn compile_while<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let ir = compiler.lowerer().lower_while(condition, body)?;
-    emit_while_unified(compiler, &ir, function)
+    lift_loop(compiler, function, |lowerer, builder, open| {
+        lowerer.lower_while(builder, open, condition, body)
+    })
 }
 
-/// Compiles a `for` loop by desugaring (at emit time) into an indexed
-/// `while`-style loop over an `Enumeration` impl. Lowers to an
-/// [`IRFor`] via [`expo_ir::Lowerer::lower_for`] and walks via
-/// [`emit_for_unified`].
+fn lift_loop<'ctx, F>(
+    compiler: &mut Compiler<'ctx>,
+    function: FunctionValue<'ctx>,
+    lift: F,
+) -> ExprResult<'ctx>
+where
+    F: FnOnce(
+        &mut expo_ir::Lowerer<'_>,
+        &mut CFGBuilder,
+        IRBlockId,
+    ) -> Result<(Option<IRBlockId>, IROperand), String>,
+{
+    let mut builder = CFGBuilder::new();
+    let entry = compiler.fn_lower.next_block_id();
+    builder.add_block(entry, "loop_entry");
+    let (_open, _) = {
+        let mut lowerer = compiler.lowerer();
+        // The loop lowering pushed `loop_exit` for break resolution.
+        // Walk runs Stub-deferred sub-expressions which may contain
+        // breaks; pop after the walk.
+        lift(&mut lowerer, &mut builder, entry)?
+    };
+    let (blocks, closed) = builder.into_blocks_with_closed();
+    walk_function_blocks(compiler, &blocks, &closed, function, None)?;
+    compiler.fn_lower.pop_loop_exit();
+    Ok(None)
+}
+
+/// Compiles a `for` loop by desugaring (at emission time) into an
+/// indexed `while`-style loop over an `Enumeration` impl. The IR-side
+/// lowering Stubs the entire `for` AST; this codegen-side shim does
+/// the actual iterator-protocol desugar (planned to relocate into
+/// the elaboration pass once [`expo_ir::values::IRInstruction::ForLoopStub`]
+/// is reintroduced in a follow-up slice).
 pub fn compile_for<'ctx>(
     compiler: &mut Compiler<'ctx>,
     pattern: &Pattern,
@@ -90,108 +94,15 @@ pub fn compile_for<'ctx>(
     body: &[Statement],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let ir = compiler.lowerer().lower_for(iterable, pattern, body)?;
-    emit_for_unified(compiler, &ir, function)
-}
+    let setup = build_for_loop_setup(compiler, iterable, function)?;
 
-/// Walks an [`IRLoop`] into LLVM IR. Allocates LLVM blocks for
-/// `body_block` / `exit_block`, branches into the body, walks the
-/// AST-stub body via [`compile_statement`], and dispatches the
-/// declared back-edge `body_terminator` only when the body has not
-/// already self-terminated. `exit_block` is pushed onto
-/// `loop_exit_stack` for AST `break` resolution.
-fn emit_loop_unified<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir: &IRLoop,
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    let block_map = build_loop_block_map(compiler, ir, function);
-    let body_bb = block_map[&ir.body.id];
-    let exit_bb = block_map[&ir.exit_block];
+    let header_id = compiler.fn_lower.next_block_id();
+    let body_id = compiler.fn_lower.next_block_id();
+    let exit_id = compiler.fn_lower.next_block_id();
 
-    compiler
-        .builder
-        .build_unconditional_branch(body_bb)
-        .unwrap();
-
-    compiler.builder.position_at_end(body_bb);
-    compiler.fn_lower.push_loop_exit(ir.exit_block);
-    walk_body(compiler, &ir.body, &block_map, function)?;
-    compiler.fn_lower.pop_loop_exit();
-
-    compiler.builder.position_at_end(exit_bb);
-    Ok(None)
-}
-
-/// Walks an [`IRWhile`] into LLVM IR. Allocates LLVM blocks for
-/// `header_block` / `body_block` / `exit_block`, branches into the
-/// header, runs `header_instructions` through
-/// [`execute_instructions`] and dispatches `header_terminator`
-/// (`CondBranch { cond, then: body, otherwise: exit }`) via
-/// [`emit_terminator`]. The body walks as in [`emit_loop_unified`]
-/// with the loop exit pushed onto both
-/// [`expo_ir::FnLowerState::loop_exit`] (semantic, for IR-level
-/// `break` lowering) and `FnState::loop_exit_blocks` (LLVM-bound,
-/// for the [`compile_statement`] shim's terminator block_map).
-fn emit_while_unified<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir: &IRWhile,
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    let block_map = build_while_block_map(compiler, ir, function);
-    let header_bb = block_map[&ir.header_block];
-    let body_bb = block_map[&ir.body.id];
-    let exit_bb = block_map[&ir.exit_block];
-
-    compiler
-        .builder
-        .build_unconditional_branch(header_bb)
-        .unwrap();
-
-    compiler.builder.position_at_end(header_bb);
-    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-    execute_instructions(
-        compiler,
-        &ir.header_instructions,
-        function,
-        None,
-        &mut value_map,
-    )?;
-    emit_terminator(
-        compiler,
-        &ir.header_terminator,
-        &block_map,
-        &value_map,
-        function,
-    )?;
-
-    compiler.builder.position_at_end(body_bb);
-    compiler.fn_lower.push_loop_exit(ir.exit_block);
-    walk_body(compiler, &ir.body, &block_map, function)?;
-    compiler.fn_lower.pop_loop_exit();
-
-    compiler.builder.position_at_end(exit_bb);
-    Ok(None)
-}
-
-/// Walks an [`IRFor`] into LLVM IR. Desugars `for binding in iterable`
-/// into an indexed loop over an `Enumeration` impl: compiles the
-/// iterable into a stack alloca, monomorphizes `length` / `get` and
-/// looks up their LLVM symbols, allocates the index slot, then runs
-/// the standard header (`idx < len` cond branch) / body
-/// (`elem = get(idx); bind; body_stmts; idx += 1`) / exit skeleton
-/// through the same block-map + value-map plumbing the other loop
-/// walkers use.
-fn emit_for_unified<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir: &IRFor,
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    let setup = build_for_loop_setup(compiler, ir, function)?;
-    let block_map = build_for_block_map(compiler, ir, function);
-    let header_bb = block_map[&ir.header_block];
-    let body_bb = block_map[&ir.body.id];
-    let exit_bb = block_map[&ir.exit_block];
+    let header_bb = register_block(compiler, function, header_id, "for_header");
+    let body_bb = register_block(compiler, function, body_id, "for_body");
+    let exit_bb = register_block(compiler, function, exit_id, "for_exit");
 
     compiler
         .builder
@@ -206,8 +117,8 @@ fn emit_for_unified<'ctx>(
         .unwrap();
 
     compiler.builder.position_at_end(body_bb);
-    compiler.fn_lower.push_loop_exit(ir.exit_block);
-    emit_for_iteration(compiler, ir, &setup, header_bb, &block_map, function)?;
+    compiler.fn_lower.push_loop_exit(exit_id);
+    emit_for_iteration(compiler, pattern, body, &setup, header_bb, function)?;
     compiler.fn_lower.pop_loop_exit();
     compiler.fn_state.variables.remove("__for_iter");
 
@@ -218,30 +129,25 @@ fn emit_for_unified<'ctx>(
 /// Per-iteration scaffolding for a `for` loop: load the element via
 /// `get(idx)`, bind it via the `binding_pattern`, walk the body, and
 /// (when the body has not self-terminated) increment the index and
-/// branch back to `header_bb`. The body's own
-/// `IRBasicBlock::terminator` is ignored here -- the back-edge needs
-/// to interleave an `idx += 1` between body completion and the branch
-/// to `header_bb`, which `emit_for_back_edge` handles directly rather
-/// than routing through `emit_terminator`.
+/// branch back to `header_bb`.
 fn emit_for_iteration<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    ir: &IRFor,
+    pattern: &Pattern,
+    body: &[Statement],
     setup: &ForLoopSetup<'ctx>,
     header_bb: BasicBlock<'ctx>,
-    block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
     function: FunctionValue<'ctx>,
 ) -> Result<(), String> {
     let elem_val = build_for_element_load(compiler, setup);
-    bind_for_pattern(compiler, &ir.binding_pattern, elem_val, setup);
+    bind_for_pattern(compiler, pattern, elem_val, setup);
 
-    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-    execute_instructions(
-        compiler,
-        &ir.body.instructions,
-        function,
-        Some(block_map),
-        &mut value_map,
-    )?;
+    // Lower the body via the IR pipeline, then walk the resulting
+    // blocks at the current LLVM builder position. Body may contain
+    // statements like `break` / `return`; the surrounding
+    // `push_loop_exit` already published the exit id.
+    let (body_blocks, body_closed, body_open) = lower_for_body(compiler, body)?;
+    walk_function_blocks(compiler, &body_blocks, &body_closed, function, None)?;
+    let _ = body_open;
 
     if !compiler.current_block_terminated() {
         emit_for_back_edge(compiler, setup, header_bb);
@@ -249,69 +155,30 @@ fn emit_for_iteration<'ctx>(
     Ok(())
 }
 
-/// Allocate LLVM basic blocks for an [`IRLoop`] and return the
-/// id->block map.
-fn build_loop_block_map<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir: &IRLoop,
-    function: FunctionValue<'ctx>,
-) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
-    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
-    block_map.insert(
-        ir.body.id,
-        register_block(compiler, function, ir.body.id, "loop_body"),
-    );
-    block_map.insert(
-        ir.exit_block,
-        register_block(compiler, function, ir.exit_block, "loop_exit"),
-    );
-    block_map
-}
+/// Lowered `for`-body fragment: the IR blocks, the set of blocks
+/// whose terminator was explicitly set by lowering, and the final
+/// open block id (or `None` if all paths terminated).
+type LoweredForBody = (
+    Vec<expo_ir::IRBasicBlock>,
+    std::collections::HashSet<IRBlockId>,
+    Option<IRBlockId>,
+);
 
-/// Allocate LLVM basic blocks for an [`IRWhile`] and return the
-/// id->block map.
-fn build_while_block_map<'ctx>(
+/// Lower a `for` loop body into IR blocks via a fresh
+/// [`CFGBuilder`].
+fn lower_for_body<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    ir: &IRWhile,
-    function: FunctionValue<'ctx>,
-) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
-    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
-    block_map.insert(
-        ir.header_block,
-        register_block(compiler, function, ir.header_block, "while_header"),
-    );
-    block_map.insert(
-        ir.body.id,
-        register_block(compiler, function, ir.body.id, "while_body"),
-    );
-    block_map.insert(
-        ir.exit_block,
-        register_block(compiler, function, ir.exit_block, "while_exit"),
-    );
-    block_map
-}
-
-/// Allocate LLVM basic blocks for an [`IRFor`] and return the
-/// id->block map.
-fn build_for_block_map<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir: &IRFor,
-    function: FunctionValue<'ctx>,
-) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
-    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
-    block_map.insert(
-        ir.header_block,
-        register_block(compiler, function, ir.header_block, "for_header"),
-    );
-    block_map.insert(
-        ir.body.id,
-        register_block(compiler, function, ir.body.id, "for_body"),
-    );
-    block_map.insert(
-        ir.exit_block,
-        register_block(compiler, function, ir.exit_block, "for_exit"),
-    );
-    block_map
+    body: &[Statement],
+) -> Result<LoweredForBody, String> {
+    let mut builder = CFGBuilder::new();
+    let entry = compiler.fn_lower.next_block_id();
+    builder.add_block(entry, "for_body_entry");
+    let exit = {
+        let mut lowerer = compiler.lowerer();
+        lowerer.lower_statements(&mut builder, entry, body)?
+    };
+    let (blocks, closed) = builder.into_blocks_with_closed();
+    Ok((blocks, closed, exit))
 }
 
 /// Pre-loop scaffolding for a `for` loop: compiles the iterable into
@@ -333,11 +200,11 @@ struct ForLoopSetup<'ctx> {
 
 fn build_for_loop_setup<'ctx>(
     compiler: &mut Compiler<'ctx>,
-    ir: &IRFor,
+    iterable: &Expr,
     function: FunctionValue<'ctx>,
 ) -> Result<ForLoopSetup<'ctx>, String> {
     let iter_tv =
-        compile_expr(compiler, &ir.iterable, function)?.ok_or("for iterable produced no value")?;
+        compile_expr(compiler, iterable, function)?.ok_or("for iterable produced no value")?;
     let iter_ty = iter_tv.expo_type;
     let iter_llvm_ty = iter_tv.value.get_type();
 
@@ -506,4 +373,9 @@ fn emit_for_back_edge<'ctx>(
         .builder
         .build_unconditional_branch(header_bb)
         .unwrap();
+}
+
+#[allow(dead_code)] // Reserved for the elaboration-pass relocation.
+fn _unused_for_compat<'ctx>(_: &mut Compiler<'ctx>) -> ExprResult<'ctx> {
+    Ok(None)
 }

@@ -64,7 +64,7 @@ use inkwell::values::{
 
 use crate::calls::invoke_closure_fat_ptr;
 use crate::compiler::{Compiler, ExprResult, TypedValue};
-use crate::control::{execute_instructions, maybe_typed_value};
+use crate::control::{LiftOutcome, lift_at_current};
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::{
     ensure_types_exist, monomorphize_enum, monomorphize_impl_method, monomorphize_struct,
@@ -346,14 +346,10 @@ pub fn compile_method_call_with_tail<'ctx>(
     tail: bool,
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let mut instructions = Vec::new();
-    if let Some((operand, return_type)) =
-        c.lowerer()
-            .lower_method_call_or_stub(&mut instructions, receiver, method, args, tail)
-    {
-        let mut value_map = HashMap::new();
-        execute_instructions(c, &instructions, function, None, &mut value_map)?;
-        return maybe_typed_value(c, &operand, &value_map, return_type);
+    if let LiftOutcome::Emitted(value) = lift_at_current(c, function, |lowerer, builder, open| {
+        lowerer.lower_method_call_or_stub(builder, open, receiver, method, args, tail)
+    })? {
+        return Ok(value);
     }
 
     if let ExprKind::Ident { name, .. } = &receiver.kind {
@@ -989,18 +985,18 @@ fn compile_static_call<'ctx>(
     args: &[Arg],
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
-    let mut instructions = Vec::new();
-    if let Some((operand, return_type)) = c.lowerer().lower_static_call_or_stub(
-        &mut instructions,
-        type_name,
-        resolved_type,
-        method,
-        args,
-        false,
-    ) {
-        let mut value_map = HashMap::new();
-        execute_instructions(c, &instructions, function, None, &mut value_map)?;
-        return maybe_typed_value(c, &operand, &value_map, return_type);
+    if let LiftOutcome::Emitted(value) = lift_at_current(c, function, |lowerer, builder, open| {
+        lowerer.lower_static_call_or_stub(
+            builder,
+            open,
+            type_name,
+            resolved_type,
+            method,
+            args,
+            false,
+        )
+    })? {
+        return Ok(value);
     }
 
     let resolved = resolve_static_call(c, type_name, resolved_type, method, args)?;

@@ -36,17 +36,14 @@ use expo_typecheck::types::{Primitive, Type, mangle_name, mangle_type};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use std::collections::HashMap;
 
-use expo_ir::IRBlockId;
 use expo_ir::lower::inference::infer_type_from_expr as ir_infer_type_from_expr;
 use expo_ir::lower::ownership::ownership_for_expr;
 use expo_ir::lower::stmt::{
     resolve_annotation_subst, resolve_coercion, resolve_field_path, resolve_final_annotation_type,
     resolve_union_member,
 };
-use expo_ir::values::IRValueId;
 
 use crate::compiler::Compiler;
-use crate::control::{emit_terminator, execute_instructions};
 use crate::expr::compile_expr;
 use crate::generics::{ensure_types_exist, monomorphize_impl_method};
 use crate::types::to_llvm_type;
@@ -124,19 +121,15 @@ fn lower_and_execute<'ctx>(
     stmt: &Statement,
     function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-    let (instructions, terminator) = compiler.lowerer().lower_statement(stmt)?;
-    let block_map: HashMap<IRBlockId, inkwell::basic_block::BasicBlock<'ctx>> = HashMap::new();
-    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-    execute_instructions(
-        compiler,
-        &instructions,
-        function,
-        Some(&block_map),
-        &mut value_map,
-    )?;
-    if let Some(term) = terminator {
-        emit_terminator(compiler, &term, &block_map, &value_map, function)?;
+    let mut builder = expo_ir::CFGBuilder::new();
+    let entry = compiler.fn_lower.next_block_id();
+    builder.add_block(entry, "stmt_entry");
+    {
+        let mut lowerer = compiler.lowerer();
+        lowerer.lower_statement(&mut builder, entry, stmt)?;
     }
+    let (blocks, closed) = builder.into_blocks_with_closed();
+    crate::control::walk_function_blocks(compiler, &blocks, &closed, function, None)?;
     Ok(None)
 }
 

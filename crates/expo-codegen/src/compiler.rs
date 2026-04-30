@@ -185,13 +185,6 @@ pub struct FnState<'ctx> {
     /// so the pop can restore precisely the pre-push state.
     pub type_subst_stack: Vec<HashMap<String, Option<Type>>>,
     pub variables: BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>,
-    /// Snapshot stack for [`expo_ir::values::IRInstruction::EnterScope`]
-    /// / [`expo_ir::values::IRInstruction::ExitScope`]. Each entry
-    /// captures the entire `variables` map at scope entry so the
-    /// matching exit can restore it byte-for-byte. Used at match-arm
-    /// boundaries (and any other lowering site that wants to rewind
-    /// per-arm pattern bindings).
-    pub scope_stack: Vec<BTreeMap<String, (PointerValue<'ctx>, Type, Ownership)>>,
 }
 
 impl<'ctx> LocalBindings for FnState<'ctx> {
@@ -208,7 +201,6 @@ impl<'ctx> FnState<'ctx> {
             param_allocas: Vec::new(),
             type_subst_stack: Vec::new(),
             variables: BTreeMap::new(),
-            scope_stack: Vec::new(),
         }
     }
 

@@ -17,6 +17,8 @@ use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_ast::types::{Type, mangle_name};
 
 use crate::Lowerer;
+use crate::blocks::IRBlockId;
+use crate::cfg::CFGBuilder;
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::LowerCtx;
 use crate::resolved::fields::{ResolvedChain, ResolvedFieldStep};
@@ -227,11 +229,14 @@ impl<'a> Lowerer<'a> {
     /// haven't lifted yet.
     pub(super) fn lower_field_access_or_stub(
         &mut self,
-        instructions: &mut Vec<IRInstruction>,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         receiver: &Expr,
         field: &str,
-    ) -> Option<IROperand> {
-        let base_type = receiver.resolved_type.clone()?;
+    ) -> Result<Option<(Option<IRBlockId>, IROperand)>, String> {
+        let Some(base_type) = receiver.resolved_type.clone() else {
+            return Ok(None);
+        };
 
         let chain = {
             let ctx = self.ctx();
@@ -240,19 +245,27 @@ impl<'a> Lowerer<'a> {
 
         if let Some(chain) = chain {
             let dest = self.next_value_id();
-            instructions.push(IRInstruction::FieldChain {
-                dest,
-                base_name: chain.base_name,
-                base_type: chain.base_type,
-                steps: chain.steps,
-            });
-            return Some(IROperand::Local(dest));
+            builder.append(
+                open,
+                IRInstruction::FieldChain {
+                    dest,
+                    base_name: chain.base_name,
+                    base_type: chain.base_type,
+                    steps: chain.steps,
+                },
+            );
+            return Ok(Some((Some(open), IROperand::Local(dest))));
         }
 
-        let step = lower_struct_field(&self.ctx(), &base_type, field)?;
-        let base = self.lower_expr_to_operand(instructions, receiver);
+        let Some(step) = lower_struct_field(&self.ctx(), &base_type, field) else {
+            return Ok(None);
+        };
+        let (open, base) = self.lower_expr_to_operand(builder, open, receiver)?;
+        let Some(open) = open else {
+            return Ok(Some((None, IROperand::Unit)));
+        };
         let dest = self.next_value_id();
-        instructions.push(IRInstruction::FieldLoad { dest, base, step });
-        Some(IROperand::Local(dest))
+        builder.append(open, IRInstruction::FieldLoad { dest, base, step });
+        Ok(Some((Some(open), IROperand::Local(dest))))
     }
 }

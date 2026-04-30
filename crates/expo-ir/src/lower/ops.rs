@@ -20,6 +20,8 @@ use expo_ast::ast::{BinOp, Expr, UnaryOp};
 use expo_ast::types::{Primitive, Type};
 
 use crate::Lowerer;
+use crate::blocks::IRBlockId;
+use crate::cfg::CFGBuilder;
 use crate::resolved::ops::{OperandShape, ResolvedBinaryOp, resolve_binary_op, resolve_unary_op};
 use crate::values::{IRInstruction, IROperand};
 
@@ -65,50 +67,79 @@ impl<'a> Lowerer<'a> {
     ///   shape (parameters, named types, etc.).
     pub(super) fn lower_binary_op_or_stub(
         &mut self,
-        instructions: &mut Vec<IRInstruction>,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         op: &BinOp,
         left: &Expr,
         right: &Expr,
-    ) -> Option<IROperand> {
+    ) -> Result<Option<(Option<IRBlockId>, IROperand)>, String> {
         if matches!(op, BinOp::Concat) {
-            return None;
+            return Ok(None);
         }
-        let shape = operand_shape_for_type(left.resolved_type.as_ref()?)?;
-        let resolved = resolve_binary_op(op, &shape).ok()?;
+        let Some(shape) = left.resolved_type.as_ref().and_then(operand_shape_for_type) else {
+            return Ok(None);
+        };
+        let Ok(resolved) = resolve_binary_op(op, &shape) else {
+            return Ok(None);
+        };
         if matches!(resolved, ResolvedBinaryOp::EnumStructEqual { .. }) {
-            return None;
+            return Ok(None);
         }
-        let lhs = self.lower_expr_to_operand(instructions, left);
-        let rhs = self.lower_expr_to_operand(instructions, right);
+        let (open, lhs) = self.lower_expr_to_operand(builder, open, left)?;
+        let Some(open) = open else {
+            return Ok(Some((None, IROperand::Unit)));
+        };
+        let (open, rhs) = self.lower_expr_to_operand(builder, open, right)?;
+        let Some(open) = open else {
+            return Ok(Some((None, IROperand::Unit)));
+        };
         let dest = self.next_value_id();
-        instructions.push(IRInstruction::BinaryOp {
-            dest,
-            op: resolved,
-            lhs,
-            rhs,
-        });
-        Some(IROperand::Local(dest))
+        builder.append(
+            open,
+            IRInstruction::BinaryOp {
+                dest,
+                op: resolved,
+                lhs,
+                rhs,
+            },
+        );
+        Ok(Some((Some(open), IROperand::Local(dest))))
     }
 
     /// Lower an [`expo_ast::ast::ExprKind::Unary`] to an
-    /// [`IRInstruction::UnaryOp`]. Returns `None` for operands whose
-    /// resolved type doesn't map to a supported shape, falling back
-    /// to the [`IRInstruction::Stub`] bridge.
+    /// [`IRInstruction::UnaryOp`]. Returns `Ok(None)` for operands
+    /// whose resolved type doesn't map to a supported shape, falling
+    /// back to the [`IRInstruction::Stub`] bridge.
     pub(super) fn lower_unary_op_or_stub(
         &mut self,
-        instructions: &mut Vec<IRInstruction>,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
         op: &UnaryOp,
         operand_expr: &Expr,
-    ) -> Option<IROperand> {
-        let shape = operand_shape_for_type(operand_expr.resolved_type.as_ref()?)?;
-        let resolved = resolve_unary_op(op, &shape).ok()?;
-        let operand = self.lower_expr_to_operand(instructions, operand_expr);
+    ) -> Result<Option<(Option<IRBlockId>, IROperand)>, String> {
+        let Some(shape) = operand_expr
+            .resolved_type
+            .as_ref()
+            .and_then(operand_shape_for_type)
+        else {
+            return Ok(None);
+        };
+        let Ok(resolved) = resolve_unary_op(op, &shape) else {
+            return Ok(None);
+        };
+        let (open, operand) = self.lower_expr_to_operand(builder, open, operand_expr)?;
+        let Some(open) = open else {
+            return Ok(Some((None, IROperand::Unit)));
+        };
         let dest = self.next_value_id();
-        instructions.push(IRInstruction::UnaryOp {
-            dest,
-            op: resolved,
-            operand,
-        });
-        Some(IROperand::Local(dest))
+        builder.append(
+            open,
+            IRInstruction::UnaryOp {
+                dest,
+                op: resolved,
+                operand,
+            },
+        );
+        Ok(Some((Some(open), IROperand::Local(dest))))
     }
 }

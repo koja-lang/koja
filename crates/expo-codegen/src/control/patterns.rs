@@ -19,17 +19,15 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{Expr, MatchArm, Pattern, Statement};
-use expo_ir::IRBlockId;
-use expo_ir::blocks::IRTerminator;
+use expo_ir::CFGBuilder;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::patterns::resolve_subject_ty;
 use expo_ir::lower::types::monomorphize_type;
-use expo_ir::resolved::match_expr::{IRMatch, IRMatchArm, ResolvedMatchType};
+use expo_ir::resolved::match_expr::ResolvedMatchType;
 use expo_ir::values::{IROperand, IRValueId};
 use expo_typecheck::types::{Type, TypeIdentifier, mangle_type};
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
-use inkwell::basic_block::BasicBlock;
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
@@ -37,8 +35,8 @@ use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::expr::compile_expr;
 
 use super::instructions::execute_instructions;
-use super::register_block;
-use super::terminator::{emit_terminator, materialize_operand};
+use super::terminator::materialize_operand;
+use super::walk_function_blocks_seeded;
 
 /// Compiles a `match` expression. Patterns are tested sequentially; the first
 /// matching arm executes. Bindings introduced by patterns are scoped to their
@@ -94,6 +92,10 @@ pub fn compile_match<'ctx>(
         },
     );
     let result_ty = lower_result_ty(compiler, arms);
+    let result_expo_ty = match &result_ty {
+        ResolvedMatchType::Direct { ty } => ty.clone(),
+        ResolvedMatchType::UnionWrap { target } => target.clone(),
+    };
     let subject_alloca = compiler
         .builder
         .build_alloca(subject_tv.value.get_type(), "match_subject")
@@ -102,10 +104,36 @@ pub fn compile_match<'ctx>(
         .builder
         .build_store(subject_alloca, subject_tv.value)
         .unwrap();
-    let ir = compiler
-        .lowerer()
-        .lower_match_expr(subject_ty, arms, result_ty)?;
-    emit_match_unified(compiler, &ir, subject_alloca, function)
+
+    let mut builder = CFGBuilder::new();
+    let entry = compiler.fn_lower.next_block_id();
+    builder.add_block(entry, "match_entry");
+    let subject_id = compiler.fn_lower.next_value_id();
+    let (_open, operand) = {
+        let mut lowerer = compiler.lowerer();
+        lowerer.lower_match_expr(
+            &mut builder,
+            entry,
+            IROperand::Local(subject_id),
+            subject_ty,
+            arms,
+            result_ty,
+        )?
+    };
+    let (blocks, closed) = builder.into_blocks_with_closed();
+    let result = walk_function_blocks_seeded(
+        compiler,
+        &blocks,
+        &closed,
+        function,
+        if matches!(operand, IROperand::Unit) {
+            None
+        } else {
+            Some(&operand)
+        },
+        &[(subject_id, subject_alloca.into())],
+    )?;
+    Ok(result.map(|v| TypedValue::new(v, result_expo_ty)))
 }
 
 // ---------------------------------------------------------------------------
@@ -176,381 +204,6 @@ fn arm_value_type(arm: &MatchArm, compiler: &Compiler<'_>) -> Option<Type> {
     last.resolved_type
         .as_ref()
         .map(|t| monomorphize_type(&compiler.lower_ctx(), t))
-}
-
-// ---------------------------------------------------------------------------
-// Emission: IRMatch -> LLVM IR.
-//
-// Slice 5b made the per-arm checks self-contained `IRInstruction` streams
-// dispatched through `execute_instructions`. Pattern primitives
-// (`PatternTagEq` / `PatternLiteralEq` / `PatternProjectVariantField` /
-// `PatternUnionPayloadPtr` / `PatternBindFromPtr` / `PatternBinaryMatch`)
-// each have an arm in the executor that performs the LLVM builder calls.
-// The arm body block runs `bind_instructions` (binding setup) before
-// walking `body_stmts`; bindings exist only when the cond branch fires.
-// ---------------------------------------------------------------------------
-
-/// Outcome of walking a single match arm's body.
-enum ArmEmission<'ctx> {
-    /// Body ran to completion without a trailing-expression value. The
-    /// body's `Branch(merge)` terminator has already been dispatched.
-    /// Drives the legacy "partial production" decision: if any arm
-    /// reaches this state and another arm produced a value, the merge
-    /// phi is dropped silently.
-    NoValue,
-    /// Body self-terminated (early `return` / `panic`). No body
-    /// terminator dispatched because the block already has one. Does
-    /// not contribute an incoming to the merge phi and does not block
-    /// phi construction either -- the legacy contract is that
-    /// terminated arms are invisible to the value-merge decision.
-    Terminated,
-    /// Body produced a value at the captured end block. The body
-    /// terminator is deferred to [`collect_match_incoming`], which
-    /// applies the lowered result strategy (UnionWrap if needed) and
-    /// branches to merge.
-    Value {
-        end_bb: BasicBlock<'ctx>,
-        tv: TypedValue<'ctx>,
-    },
-}
-
-/// Walks an [`IRMatch`] into LLVM IR. N-arm generalization of
-/// [`super::conditionals::emit_cond`] with native pattern + guard
-/// instruction streams driving the per-arm cond branch and a
-/// strategy-applying merge-phi assembly that mirrors legacy semantics
-/// exactly.
-///
-/// Allocates LLVM blocks for every block in every `arm.check_blocks`
-/// sub-CFG, every `arm.body_block`, the all-patterns-failed
-/// `fallthrough_block`, and the shared `merge_block`. Branches into
-/// `arms[0].check_blocks[0].id` from the call-site builder position
-/// (which holds the subject alloca). A single `value_map` is threaded
-/// across all arms with `subject_alloca` pre-registered under
-/// `ir.subject_value`, so every per-arm check stream's pattern
-/// primitives resolve their `subject_ptr` operand against the same
-/// storage.
-///
-/// For each arm: walk every block in `check_blocks` in order via
-/// [`emit_match_arm_check`] (each block has its instruction stream
-/// executed and its terminator emitted), then position at `body_block`
-/// and run [`emit_match_arm_body`] (walks `body_stmts` via
-/// [`compile_body_as_value`]).
-///
-/// After every arm: hand the value-producing arms to
-/// [`assemble_match_phi`], which applies the lowered result strategy
-/// (Direct vs UnionWrap), branches each value-producing arm to merge,
-/// terminates the fallthrough block, and synthesizes the final phi at
-/// `merge_block`.
-fn emit_match_unified<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir: &IRMatch,
-    subject_alloca: PointerValue<'ctx>,
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    let block_map = build_match_block_map(compiler, ir, function);
-    let mut value_map: HashMap<IRValueId, BasicValueEnum<'ctx>> = HashMap::new();
-    value_map.insert(ir.subject_value, subject_alloca.into());
-
-    let first_check_bb = block_map[&ir.arms[0].check_blocks[0].id];
-    compiler
-        .builder
-        .build_unconditional_branch(first_check_bb)
-        .unwrap();
-
-    let mut pending: Vec<(TypedValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
-    let mut any_no_value = false;
-    for ir_arm in &ir.arms {
-        // Wrap each arm (check sub-CFG + body) in a
-        // `fn_state.variables` clone/restore so per-arm pattern
-        // bindings (registered by `PatternBindFromPtr` instructions
-        // emitted somewhere inside `check_blocks`) and any
-        // `let`-bindings inside the body don't leak into subsequent
-        // arms or shadow outer-scope variables past the arm. Slice 5b
-        // lifted the binding *setup* into IR; per-arm *scoping* still
-        // lives here because the variables map carries LLVM-typed
-        // allocas that are not part of the IR surface.
-        let saved_vars = compiler.fn_state.variables.clone();
-        emit_match_arm_check(compiler, ir_arm, &block_map, &mut value_map, function)?;
-        let outcome = emit_match_arm_body(compiler, ir_arm, &block_map, &mut value_map, function)?;
-        compiler.fn_state.variables = saved_vars;
-        match outcome {
-            ArmEmission::NoValue => any_no_value = true,
-            ArmEmission::Terminated => {}
-            ArmEmission::Value { tv, end_bb } => pending.push((tv, end_bb)),
-        }
-    }
-
-    let fallthrough_bb = block_map[&ir.fallthrough_block];
-    let merge_bb = block_map[&ir.merge_block];
-    assemble_match_phi(
-        compiler,
-        ir,
-        pending,
-        any_no_value,
-        fallthrough_bb,
-        merge_bb,
-    )
-}
-
-/// Allocate LLVM basic blocks for every [`IRBlockId`] referenced by an
-/// [`IRMatch`] and return the map. Block labels mirror the legacy
-/// `emit_match` naming for the per-arm entry blocks (`match_test_{i}`)
-/// so `.ll` output stays diff-friendly for flat patterns; auxiliary
-/// gate / payload blocks emitted by the gated pattern lowering land
-/// under `match_test_{i}_aux_{n}`.
-fn build_match_block_map<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir: &IRMatch,
-    function: FunctionValue<'ctx>,
-) -> HashMap<IRBlockId, BasicBlock<'ctx>> {
-    let mut block_map: HashMap<IRBlockId, BasicBlock<'ctx>> = HashMap::new();
-    for (i, arm) in ir.arms.iter().enumerate() {
-        for (n, blk) in arm.check_blocks.iter().enumerate() {
-            let label = if n == 0 {
-                format!("match_test_{i}")
-            } else {
-                format!("match_test_{i}_aux_{n}")
-            };
-            let bb = register_block(compiler, function, blk.id, &label);
-            block_map.insert(blk.id, bb);
-        }
-    }
-    for (i, arm) in ir.arms.iter().enumerate() {
-        let bb = register_block(compiler, function, arm.body.id, &format!("match_body_{i}"));
-        block_map.insert(arm.body.id, bb);
-    }
-    let fallthrough_bb = register_block(compiler, function, ir.fallthrough_block, "match_none");
-    block_map.insert(ir.fallthrough_block, fallthrough_bb);
-    let merge_bb = register_block(compiler, function, ir.merge_block, "match_end");
-    block_map.insert(ir.merge_block, merge_bb);
-    block_map
-}
-
-/// Walks one arm's check sub-CFG. For each block in `check_blocks`:
-/// position the LLVM builder at the corresponding LLVM basic block,
-/// execute the IR instruction stream against the shared `value_map`,
-/// then emit the block's terminator. Successive blocks in a sub-CFG
-/// are reached only through their predecessor's terminator (the
-/// gating `CondBranch` / `Branch`), so positioning each LLVM block
-/// before walking its instructions is correct -- LLVM treats the
-/// sequence as independent blocks tied together by the emitted
-/// terminator edges.
-fn emit_match_arm_check<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir_arm: &IRMatchArm,
-    block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
-    value_map: &mut HashMap<IRValueId, BasicValueEnum<'ctx>>,
-    function: FunctionValue<'ctx>,
-) -> Result<(), String> {
-    for blk in &ir_arm.check_blocks {
-        compiler.builder.position_at_end(block_map[&blk.id]);
-        execute_instructions(
-            compiler,
-            &blk.instructions,
-            function,
-            Some(block_map),
-            value_map,
-        )?;
-        emit_terminator(compiler, &blk.terminator, block_map, value_map, function)?;
-    }
-    Ok(())
-}
-
-/// Walks one arm's body [`expo_ir::IRBasicBlock`]: executes the
-/// lowered body instructions through [`execute_instructions`] (which
-/// registers any trailing-expression operand into `value_map`),
-/// captures the end block, and routes to one of three outcomes:
-///
-/// - `Terminated` if the body self-terminated (e.g. early `return`
-///   or `panic`) inside `body.instructions`.
-/// - `Value` if [`IRMatchArm::trailing_value`] is `Some(...)` -- the
-///   captured operand is materialized from `value_map` and bound to
-///   the actual end block.
-/// - `NoValue` otherwise -- the body produced no merge phi
-///   contribution; emit its declared `Branch(merge)` terminator and
-///   move on.
-///
-/// Per-arm UnionWrap (when the lowered strategy is UnionWrap) was
-/// already pre-staged inside `body.instructions` at lowering time
-/// (see [`expo_ir::Lowerer::lower_match_expr`]), so the operand
-/// referenced by `trailing_value` is the post-wrap value.
-fn emit_match_arm_body<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir_arm: &IRMatchArm,
-    block_map: &HashMap<IRBlockId, BasicBlock<'ctx>>,
-    value_map: &mut HashMap<IRValueId, BasicValueEnum<'ctx>>,
-    function: FunctionValue<'ctx>,
-) -> Result<ArmEmission<'ctx>, String> {
-    let body_bb = block_map[&ir_arm.body.id];
-    compiler.builder.position_at_end(body_bb);
-    execute_instructions(
-        compiler,
-        &ir_arm.body.instructions,
-        function,
-        Some(block_map),
-        value_map,
-    )?;
-    let terminated = compiler.current_block_terminated();
-    let end_bb = compiler.builder.get_insert_block().unwrap();
-
-    if terminated {
-        return Ok(ArmEmission::Terminated);
-    }
-    if let Some(operand) = &ir_arm.trailing_value {
-        // If the captured operand is a Stub destination whose
-        // `compile_expr` returned `Ok(None)` (e.g. a void call or a
-        // Unit-typed match expression whose `resolved_type` didn't
-        // propagate, so `lower_statements_for_value` couldn't classify
-        // the trailing as Unit at lowering time), treat the arm as
-        // NoValue and emit its declared `Branch(merge)` terminator.
-        // Mirrors the legacy `compile_body_as_value` semantics where
-        // a `None`-returning trailing expression silently demoted the
-        // arm out of the merge phi.
-        let materialized = match operand {
-            IROperand::Local(id) if !value_map.contains_key(id) => None,
-            other => Some(materialize_operand(compiler, other, value_map)?),
-        };
-        if let Some(value) = materialized {
-            // The TypedValue's expo_type is consulted by
-            // assemble_match_phi only as a final fallback for the
-            // result_type lookup, which already walks the strategy
-            // first; passing Unknown here is safe and matches the
-            // legacy `compile_body_as_value` shape (it propagated
-            // whatever Expo type the trailing expr had, which for the
-            // post-UnionWrap case was the union target -- exactly what
-            // assemble_match_phi reads from `ir.result_ty`).
-            let tv = TypedValue::new(value, Type::Unknown);
-            return Ok(ArmEmission::Value { end_bb, tv });
-        }
-    }
-
-    // Body's terminator drives the next state. `Branch(merge)` means
-    // the arm ran to completion without producing a phi contribution
-    // (legacy `NoValue`). Anything else (`Return` / `Unreachable` /
-    // pre-staged `CondBranch`) means the arm self-terminated and is
-    // invisible to the merge phi (legacy `Terminated`).
-    let outcome = match &ir_arm.body.terminator {
-        IRTerminator::Branch(_) => ArmEmission::NoValue,
-        IRTerminator::Return { .. }
-        | IRTerminator::Unreachable
-        | IRTerminator::CondBranch { .. } => ArmEmission::Terminated,
-    };
-    emit_terminator(
-        compiler,
-        &ir_arm.body.terminator,
-        block_map,
-        value_map,
-        function,
-    )?;
-    Ok(outcome)
-}
-
-/// Assembles the final merge phi for an [`IRMatch`]. Applies the lowered
-/// result strategy (Direct vs UnionWrap) to each value-producing arm,
-/// branches each to merge, terminates the fallthrough block, then
-/// constructs the phi at `merge_block` with one incoming per
-/// value-producing arm plus an `undef` from the fallthrough.
-///
-/// Mirrors the legacy `emit_match` semantics exactly:
-/// - zero value-producing arms => `Ok(None)` (structural void).
-/// - some-but-not-all => `Ok(None)` (no unified phi shape).
-/// - all produced with matching LLVM types => `Ok(Some(TypedValue))`.
-/// - all produced but LLVM types disagree under the strategy => `Err`.
-fn assemble_match_phi<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    ir: &IRMatch,
-    pending: Vec<(TypedValue<'ctx>, BasicBlock<'ctx>)>,
-    any_no_value: bool,
-    fallthrough_bb: BasicBlock<'ctx>,
-    merge_bb: BasicBlock<'ctx>,
-) -> ExprResult<'ctx> {
-    compiler.builder.position_at_end(fallthrough_bb);
-    compiler
-        .builder
-        .build_unconditional_branch(merge_bb)
-        .unwrap();
-
-    if pending.is_empty() {
-        compiler.builder.position_at_end(merge_bb);
-        return Ok(None);
-    }
-
-    if any_no_value {
-        // Some arms produced a value while others ran to completion
-        // without one -- no unified phi shape, drop the value silently
-        // (matches legacy `emit_match` partial-production behavior).
-        // Self-terminated arms (early `return` / `panic`) are
-        // intentionally invisible to this decision.
-        compiler.builder.position_at_end(merge_bb);
-        return Ok(None);
-    }
-
-    let incoming = collect_match_incoming(compiler, &ir.result_ty, &pending, merge_bb)?;
-    compiler.builder.position_at_end(merge_bb);
-
-    let first_ty = incoming[0].0.get_type();
-    if !incoming.iter().all(|(v, _)| v.get_type() == first_ty) {
-        return Err(format!(
-            "match arms produced incompatible LLVM types under lowered strategy `{}`",
-            describe_match_strategy(&ir.result_ty),
-        ));
-    }
-    let undef = first_ty.const_zero();
-    let phi = compiler.builder.build_phi(first_ty, "matchval").unwrap();
-    for (value, bb) in &incoming {
-        phi.add_incoming(&[(value, *bb)]);
-    }
-    phi.add_incoming(&[(&undef, fallthrough_bb)]);
-
-    let result_type = match &ir.result_ty {
-        ResolvedMatchType::UnionWrap { target } => target.clone(),
-        ResolvedMatchType::Direct { ty } if !matches!(ty, Type::Unknown) => ty.clone(),
-        // Fallback: lowering had no typecheck-derived result type (e.g.
-        // an arm body whose `resolved_type` didn't propagate into the
-        // cached impl-AST clone). Trust the post-emit Expo type of the
-        // first value-producing arm instead. Once the AST-clone story
-        // is fixed this branch can go away.
-        ResolvedMatchType::Direct { .. } => pending[0].0.expo_type.clone(),
-    };
-    Ok(Some(TypedValue::new(phi.as_basic_value(), result_type)))
-}
-
-/// Emit each value-producing arm's `Branch(merge)` terminator and
-/// return one `(value, end_bb)` pair per arm in iteration order.
-/// Per-arm UnionWrap was already pre-staged inside the arm's
-/// `body.instructions` at lowering time (see
-/// [`expo_ir::Lowerer::lower_match_expr`]'s
-/// `maybe_union_wrap_match_arm` helper), so this helper just emits
-/// the branch and harvests the actual end block.
-///
-/// `_result_ty` is retained on the signature for diagnostic
-/// continuity (and so that any future per-arm strategy
-/// post-processing has a place to land); the legacy inline
-/// `compile_union_wrap` call moved into lowering.
-fn collect_match_incoming<'ctx>(
-    compiler: &mut Compiler<'ctx>,
-    _result_ty: &ResolvedMatchType,
-    pending: &[(TypedValue<'ctx>, BasicBlock<'ctx>)],
-    merge_bb: BasicBlock<'ctx>,
-) -> Result<Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)>, String> {
-    let mut incoming = Vec::with_capacity(pending.len());
-    for (tv, bb) in pending {
-        compiler.builder.position_at_end(*bb);
-        compiler
-            .builder
-            .build_unconditional_branch(merge_bb)
-            .unwrap();
-        let end_bb = compiler.builder.get_insert_block().unwrap();
-        incoming.push((tv.value, end_bb));
-    }
-    Ok(incoming)
-}
-
-fn describe_match_strategy(strategy: &ResolvedMatchType) -> String {
-    match strategy {
-        ResolvedMatchType::Direct { ty } => format!("Direct({})", ty.display()),
-        ResolvedMatchType::UnionWrap { target } => format!("UnionWrap({})", target.display()),
-    }
 }
 
 /// Compiles a single pattern test against a subject pointer. Emits the

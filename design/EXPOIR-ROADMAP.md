@@ -10,43 +10,81 @@ SIL-style design prose and the full Wave 1-17 narrative live in
 
 ## 1. Status snapshot
 
-The instruction-level scaffold has landed. `IRProgram` is the canonical
-declaration registry. Fifteen `Lowerer<'a>` lift methods (adding
-`lower_statement` / `lower_statements` / `lower_statements_for_value`
-in Slices 1-2) cover nineteen typed `IRInstruction` variants. Every
-control-flow construct (`unless`, `if`-no-else, `if`/`else`, ternary,
-`cond`, `match`, `while`, `loop`, `for`) now carries its body as an
-`IRBasicBlock` populated at lowering time (Slice 2, Wave 29); three
-call families (`Call`, static call, method call) plus `FieldChain` /
-`FieldLoad`, `LoadLocal` / `LoadConst` / `MakeFnRef`, `BinaryOp`,
-`UnaryOp`, the six pattern primitives (`PatternTagEq`,
+Phase 4g Slice 3 (Wave 30) landed the recursive [`CFGBuilder`]
+lowering shape. Every operand-shaped lowering helper takes
+`(&mut CFGBuilder, IRBlockId)` and returns `(Option<IRBlockId>,
+IROperand)` -- referentially transparent, no ambient cursor state on
+[`crate::FnLowerState`]. The 9 per-construct IR wrappers
+(`IRUnless`, `IRIf`, `IRIfElse`, `IRTernary`, `IRCond`, `IRCondArm`,
+`IRMatch`, `IRMatchArm`, `IRWhile`, `IRLoop`, `IRFor`) and the 9
+per-construct emit walkers (`emit_unless`, `emit_if`, `emit_if_else`,
+`emit_cond`, `emit_ternary`, `emit_match_unified` + helpers,
+`emit_while_unified`, `emit_loop_unified`) are deleted -- recursive
+lowering writes blocks directly into the builder; one fn-wide
+[`walk_function_blocks`] walker replaces them all.
+
+[`crate::Lowerer::lower_function_body`] takes an AST body + return
+type and returns a [`Vec<IRBasicBlock>`] driven by the recursive
+lowering. [`IRFunctionKind::Free`] / [`IRFunctionKind::Method`] gain
+a `blocks: Vec<IRBasicBlock>` field alongside the transitional
+`func_ast` for downstream wiring; see "What we do _not_ have yet."
+
+`IRProgram` is the canonical declaration registry. The
+operand-lowering surface covers nineteen typed `IRInstruction`
+variants plus the new [`IRInstruction::FromListLiteral`] coercion
+stub (deferred to the future elaboration pass; codegen errors on it
+today). Three call families (`Call`, static call, method call), 
+`FieldChain` / `FieldLoad`, `LoadLocal` / `LoadConst` / `MakeFnRef`,
+`BinaryOp`, `UnaryOp`, the six pattern primitives (`PatternTagEq`,
 `PatternLiteralEq`, `PatternProjectVariantField`,
 `PatternUnionPayloadPtr`, `PatternBindFromPtr`, `PatternBinaryMatch`),
-and the three statement primitives from Slice 1 (`StoreLocal`,
-`StoreField`, `UnionWrap`) reach typed instructions when consumed via
-the codegen wrappers' lift-then-fallthrough paths. The IR-level
-value-merging primitive (`IRInstruction::Phi`) is in place and
-load-bearing for ternary, `if`/`else`, and `cond` (all pre-staged at
-lowering); `match` assembles its merge phi at emit time from each arm's
-captured trailing operand, with per-arm `UnionWrap` pre-staged inside
-the body. `IRTerminator::Return` joins `Branch` / `CondBranch` /
-`Unreachable` so `Statement::Return` finishes a basic block in IR
-rather than emitting a codegen-side `build_return`.
+and the three statement primitives (`StoreLocal`, `StoreField`,
+`UnionWrap`) all reach typed instructions through the recursive
+lowering. The IR-level value-merging primitive
+(`IRInstruction::Phi`) is in place and load-bearing for ternary,
+`if`/`else`, `cond`, and `match` -- the codegen executor filters
+phi incomings against actual LLVM predecessors via inkwell so
+Stub-deferred control flow inside arms doesn't corrupt the
+predecessor list.
+
+`compile_X` shims (`compile_match`, `compile_if`, `compile_for`,
+`compile_while`, `compile_loop`, `compile_unless`, `compile_ternary`,
+`compile_cond`) collapse to ~5-line wrappers that build a fresh
+[`CFGBuilder`], call the corresponding `Lowerer::lower_*`, and walk
+the resulting blocks via [`walk_function_blocks`] (or the
+[`lift_at_current`] helper for non-control-flow lifts). The single
+[`LiftOutcome`] tri-state (`FallThrough` vs `Emitted(value)`)
+distinguishes "didn't emit, use legacy" from "emitted void" so
+callers don't double-emit.
 
 What we do _not_ have yet:
 
-- `IRBasicBlock` is owned per-construct (`IRUnless`, `IRIf`, ...)
-  instead of free-floating on `IRFunction`.
-- `IRFunction` still carries `expo_ast::ast::Function` AST bodies.
-- `compile_function_body` and `compile_method_body` walk AST
-  end-to-end (`compile_statement` is now a thin shim that drives the
-  IR pipeline; see Phase 4g Slice 1).
+- [`IRFunctionKind::Free`] / [`IRFunctionKind::Method`] still carry
+  the `func_ast` field; codegen's `emit_ir_function` /
+  `emit_ir_impl_method` and the non-generic `define_function` /
+  `compile_method_body` / `compile_function_body` family still walk
+  the AST end-to-end. The new `blocks` field is populated only
+  through the codegen-side `lower_and_execute` shim (per
+  Statement::Expr / `compile_statement`), not for the function as a
+  whole. Removing `func_ast` and switching emit to walk
+  `IRFunction.blocks` is the next slice.
+- `compile_assignment`'s three transitional forks (list-literal RHS,
+  destructuring pattern, unannotated assignment) still live in
+  `expo-codegen/src/stmt.rs`.
+- The pre-codegen elaboration pass is not implemented;
+  [`IRInstruction::FromListLiteral`] errors at codegen if it ever
+  reaches the executor (today the legacy `compile_assignment` fork
+  intercepts list-literal RHS before lowering emits the stub).
 - The `IRInstruction::Stub` bridge is alive (single producer:
-  `Lowerer::lower_expr_to_operand`); now tolerates void-returning
-  expressions so statement-context discards (`print(...)`) round-trip
-  through the IR path.
-- ~12 constructs still go AST -> LLVM with no IR touchpoint at all
-  (the full list is in section 3a).
+  [`crate::Lowerer::lower_expr_to_operand`]); ~12 expression kinds
+  still defer through it (struct construction, enum construction,
+  string literals + interpolation, closures, `EnumStructEqual`,
+  `spawn` / `receive`, `print*` / `panic`, generic-fn /
+  struct-constructor calls).
+- Per-arm match scoping still happens via codegen-side
+  `fn_state.variables` clone/restore in the arm's body walk
+  (legacy mechanism pending an `IRInstruction::ScopeMark`-style lift
+  if it pays off).
 
 ---
 
@@ -428,12 +466,21 @@ to plan a slice.
 
 ### 3a. Lift status by construct
 
+After Wave 30, the 8 control-flow constructs all converge on the
+recursive [`crate::Lowerer::lower_*`](../crates/expo-ir/src/lower/)
+methods (each takes `&mut CFGBuilder, IRBlockId` and returns
+`(Option<IRBlockId>, IROperand)`) plus the single fn-wide
+[`walk_function_blocks`](../crates/expo-codegen/src/control/mod.rs)
+walker. The per-construct IR wrapper types (`IRUnless`, `IRIf`,
+`IRIfElse`, `IRTernary`, `IRCond`, `IRMatch`, `IRWhile`, `IRLoop`,
+`IRFor`) and their per-construct emit walkers are all deleted.
+
 | Construct                   | Status                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unless`                    | Full IR pipeline            | `Lowerer::lower_unless` -> `IRUnless` -> `emit_unless` + `execute_instructions`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `if` (no else)              | Full IR pipeline            | `Lowerer::lower_if_no_else` -> `IRIf` -> `emit_if` + `execute_instructions`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `if`/`else` (with else)     | Full IR pipeline            | `Lowerer::lower_if_else` -> `IRIfElse` -> `emit_if_else` (arm bodies lifted to `IRBasicBlock`s, Wave 29; merge phi pre-staged in `merge_instructions` at lowering)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `ternary`                   | Full IR pipeline            | `Lowerer::lower_ternary` -> `IRTernary` -> `emit_ternary` + `execute_instructions` (merge phi pre-staged in `merge_instructions`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `unless`                    | Full IR pipeline            | `Lowerer::lower_unless(builder, open, ...)` writes blocks directly; `compile_unless` shim drives the walk via `walk_function_blocks`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `if` (no else)              | Full IR pipeline            | `Lowerer::lower_if_no_else(builder, open, ...)` writes blocks directly; `compile_if` shim drives the walk                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `if`/`else` (with else)     | Full IR pipeline            | `Lowerer::lower_if_else(builder, open, ...)` writes blocks directly; merge phi pre-staged at lowering when both arms produce values                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `ternary`                   | Full IR pipeline            | `Lowerer::lower_ternary(builder, open, ...)` writes blocks directly; merge phi pre-staged unconditionally (typecheck rejects unifiable arms)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `Call` / `static_call`      | Instruction-only            | `Lowerer::lower_call_or_stub(..., tail)` / `lower_static_call_or_stub(..., tail)` -> `IRInstruction::Call { tail, .. }` (tail flag carried for symmetry with `MethodCall`; only `MethodCall` currently triggers a TCO back-edge)                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `MethodCall`                | Instruction-only            | `Lowerer::lower_method_call_or_stub(..., tail)` -> `IRInstruction::MethodCall { tail, .. }`. The `tail` field is set via `Lowerer::lower_tail_expr_to_operand` from `Statement::Return` and the last-statement-implicit-return; the codegen executor rewrites self-recursive `tail = true` calls to a `tco_loop` back-edge.                                                                                                                                                                                                                                                                                                                               |
 | `FieldAccess` (chains)      | Instruction-only            | `Lowerer::lower_field_access_or_stub` -> `IRInstruction::FieldChain` (rooted at named local; delegates to `emit_chain_field_access`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -1130,7 +1177,75 @@ vs structural cut vs ambient-state retirement).
   Validation: 25/25 lang tests, 246/246 stdlib tests, zero clippy
   warnings.
 
-- **Slice 3 -- `IRFunction` carries `Vec<IRBasicBlock>`;
+- **Slice 3 (partial) -- Recursive [`CFGBuilder`] + per-construct
+  types/walkers retire (Done, Wave 30).** Architectural pivot
+  mid-slice: the cursor-on-`FnLowerState` design (open/close/append
+  + `scope_stack` from commit `6c39591`) was discarded in favor of
+  recursive lowering threading a [`CFGBuilder`] through every
+  `lower_*` call. Each lowering takes `(&mut CFGBuilder, IRBlockId)`
+  and returns `(Option<IRBlockId>, IROperand)` -- referentially
+  transparent, no ambient cursor state. The 9 per-construct IR
+  wrapper types (`IRUnless`, `IRIf`, `IRIfElse`, `IRTernary`,
+  `IRCond`, `IRCondArm`, `IRMatch`, `IRMatchArm`, `IRWhile`,
+  `IRLoop`, `IRFor`) and the 9 per-construct emit walkers
+  (`emit_unless`, `emit_if`, `emit_if_else`, `emit_cond`,
+  `emit_ternary`, `emit_match_unified` + helpers,
+  `emit_while_unified`, `emit_loop_unified`) all delete -- `lower_X`
+  writes blocks directly into the builder, and a single fn-wide
+  `walk_function_blocks` walker replaces them all. New
+  [`crate::Lowerer::lower_function_body`] takes an AST body + return
+  type and produces `Vec<IRBasicBlock>` driven by
+  `lower_statements`. The `compile_X` shims collapse to ~5-line
+  wrappers via [`lift_at_current`] (single-block fragments,
+  no-control-flow case) or `walk_function_blocks` (multi-block
+  control-flow case).
+
+  Foundation pieces that survive from Slice 2: [`IRBasicBlock`] is
+  first-class (`Clone+Debug`); [`IRTerminator`] is `Clone+Debug`;
+  [`IRFunctionMeta`] / [`IRParam`] hold the codegen-needed metadata
+  for the function-body lift. [`IRFunctionKind::Free`] /
+  [`IRFunctionKind::Method`] gain a `blocks: Vec<IRBasicBlock>`
+  field alongside the transitional `func_ast` (the codegen pipeline
+  doesn't consume `blocks` yet -- see deferred work below).
+
+  Codegen executor refinements: the IR `Phi` instruction filters
+  incomings against actual LLVM predecessors via inkwell, so
+  Stub-deferred control flow inside arm bodies (e.g. nested `if` /
+  nested `match` inside a match arm body that lowered as a Stub)
+  doesn't corrupt the predecessor list at emit time. Match
+  fallthrough is encoded with a `IROperand::Unit` sentinel that the
+  executor materializes as `undef` of the matching type. The
+  [`LiftOutcome`] tri-state (`FallThrough` vs `Emitted(value)`)
+  distinguishes "didn't emit, use legacy" from "emitted void" so
+  callers don't double-emit.
+
+  New stub instruction [`IRInstruction::FromListLiteral`] reserved
+  for the elaboration pass (deferred). Codegen errors if it ever
+  reaches the executor; the legacy `compile_assignment` fork
+  intercepts list-literal RHS before lowering emits the stub today.
+
+  Validation: 25/25 lang tests (lib + integration), 246/246 stdlib
+  tests, zero clippy warnings, `just doit` green.
+
+  **Deferred from the original Slice 3 scope:**
+  - Wiring `Vec<IRBasicBlock>` into `emit_ir_function` /
+    `emit_ir_impl_method` (still consume `func_ast`).
+  - Deleting `compile_function_body` / `compile_method_body` /
+    `compile_statement` / `compile_assignment`. Statement-by-statement
+    lowering happens through the new pipeline (`lower_and_execute`
+    creates a fresh `CFGBuilder` per statement), but the function-body
+    driver is still AST-walking via `compile_function_body`.
+  - The pre-codegen elaboration pass (`expo_ir::elaborate`) and the
+    `from_list` substitution.
+  - The three transitional `compile_assignment` forks.
+  - Updating the `fn main` `__expo_user_main` path to use the IR
+    pipeline.
+
+  These move into a follow-up sub-slice (Slice 3b proposed). The
+  big architectural pivot landed cleanly; the structural cut at
+  the function-body-emission seam is the natural next step.
+
+- **Slice 3 (proposed continuation) -- `IRFunction` carries `Vec<IRBasicBlock>`;
   per-construct types and walkers dissolve.** The structural cut.
   `IRFunctionKind::Free { func_ast, ... }` and
   `IRFunctionKind::Method { func_ast, ... }` swap their
@@ -1440,6 +1555,24 @@ rule plus the concrete behavior it forbids.
     using `register_extern` as a "declare without committing to a
     kind" shortcut. New misclassification would be a regression,
     not a pattern to preserve.
+
+13. **Lowering is referentially transparent (Wave 30).** Every
+    `Lowerer::lower_*` method takes `(&mut CFGBuilder, IRBlockId)`
+    and returns `(Option<IRBlockId>, ...)` -- given the same
+    `(builder snapshot, open block id, AST node)` it produces the
+    same instruction stream and CFG shape. Forbids: ambient cursor
+    state on `FnLowerState` (the cursor API from commit `6c39591`
+    was deleted mid-Slice 3 in favor of explicit threading);
+    scope-stack tricks that nest "where am I writing" implicitly;
+    re-emitting instructions when a lift bails out (the
+    [`LiftOutcome`] tri-state distinguishes "didn't emit, use
+    legacy" from "emitted void" so callers don't re-fire). Loop
+    `break` resolution and per-arm match scoping that span the
+    Stub-deferred LLVM emit phase still use `FnLowerState` as a
+    transient stack -- `current_fn`, `loop_exit`, `type_subst` etc.
+    -- but each push/pop pair is balanced by the lowering site's
+    own bracketing, never inferred from "we happen to be inside a
+    loop construct."
 
 ---
 
