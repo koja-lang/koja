@@ -575,14 +575,33 @@ struct MatchBlockIds {
 /// Per-arm intermediate emitted during the `match` lowering. The
 /// pattern arm's check sub-CFG is built into a temporary
 /// `Vec<IRBasicBlock>` (via the gated CFG builder
-/// [`Lowerer::lower_pattern_into_arm`]); the body block is built
-/// alongside. Both are drained into the [`crate::CFGBuilder`] in
-/// source order by [`Lowerer::lower_match_expr`].
+/// [`Lowerer::lower_pattern_into_arm`]); the body's blocks are built
+/// alongside (one block for straight-line bodies, more when nested
+/// control-flow expressions inside the body mint their own blocks).
+/// Both are drained into the [`crate::CFGBuilder`] in source order
+/// by [`Lowerer::lower_match_expr`].
+///
+/// `body_exit` identifies the block where the arm's trailing
+/// expression was lowered (and where the merge phi reads its
+/// incoming operand from). It's `None` when every path through the
+/// body terminates (`return` / `break`).
 struct LoweredMatchArm {
-    body: IRBasicBlock,
+    body_blocks: Vec<IRBasicBlock>,
+    body_exit: Option<IRBlockId>,
     check_blocks: Vec<IRBasicBlock>,
     trailing_value: Option<IROperand>,
 }
+
+/// Output of [`Lowerer::build_match_arm_body`]: the lowered block
+/// list, the body's exit block id (or `None` when every path
+/// terminates), and the trailing operand + type when the body ends
+/// in a value-producing expression.
+type LoweredMatchArmBody = (
+    Vec<IRBasicBlock>,
+    Option<IRBlockId>,
+    Option<IROperand>,
+    Option<Type>,
+);
 
 /// Outcome of lowering a single AST [`Pattern`] into a flat
 /// instruction stream + final i1 operand. The single-pattern entry
@@ -672,11 +691,13 @@ impl<'a> Lowerer<'a> {
                 }
                 builder.set_terminator(blk.id, blk.terminator.clone());
             }
-            builder.add_block(arm.body.id, arm.body.label.clone());
-            for instr in &arm.body.instructions {
-                builder.append(arm.body.id, instr.clone());
+            for blk in &arm.body_blocks {
+                builder.add_block(blk.id, blk.label.clone());
+                for instr in &blk.instructions {
+                    builder.append(blk.id, instr.clone());
+                }
+                builder.set_terminator(blk.id, blk.terminator.clone());
             }
-            builder.set_terminator(arm.body.id, arm.body.terminator.clone());
         }
 
         // Fallthrough block: all-patterns-failed landing pad. Branches
@@ -715,12 +736,22 @@ impl<'a> Lowerer<'a> {
         let mut incomings: Vec<(IRBlockId, IROperand)> = Vec::new();
         let mut any_no_value_branch = false;
         for arm in lowered_arms {
-            match (&arm.body.terminator, &arm.trailing_value) {
+            let Some(exit_id) = arm.body_exit else {
+                // Self-terminated arm (Return / Unreachable / pre-staged
+                // CondBranch); contributes no incoming.
+                continue;
+            };
+            let exit_block = arm
+                .body_blocks
+                .iter()
+                .find(|b| b.id == exit_id)
+                .expect("body_exit must reference a block in body_blocks");
+            match (&exit_block.terminator, &arm.trailing_value) {
                 (IRTerminator::Branch(_), Some(op)) => {
-                    incomings.push((arm.body.id, op.clone()));
+                    incomings.push((exit_id, op.clone()));
                 }
                 (IRTerminator::Branch(_), None) => any_no_value_branch = true,
-                _ => {} // self-terminated arm (Return / Unreachable / pre-staged CondBranch)
+                _ => {}
             }
         }
         if incomings.is_empty() || any_no_value_branch {
@@ -829,14 +860,24 @@ impl<'a> Lowerer<'a> {
             idx,
         )?;
 
-        let (mut body, trailing_op, trailing_ty) =
+        let (mut body_blocks, body_exit, trailing_op, trailing_ty) =
             self.build_match_arm_body(arm, body_id, ids.merge_block, idx)?;
         let trailing_value = trailing_op.map(|op| {
-            self.maybe_pre_stage_arm_union_wrap(&mut body, op, trailing_ty.as_ref(), result_ty)
+            // The trailing operand was lowered into the exit block;
+            // pre-stage the union wrap there (immediately before its
+            // branch terminator) so the merge phi sees a uniformly-
+            // typed incoming.
+            let exit_id = body_exit.expect("trailing op present implies body_exit is Some");
+            let exit_block = body_blocks
+                .iter_mut()
+                .find(|b| b.id == exit_id)
+                .expect("body_exit must reference a block in body_blocks");
+            self.maybe_pre_stage_arm_union_wrap(exit_block, op, trailing_ty.as_ref(), result_ty)
         });
 
         Ok(LoweredMatchArm {
-            body,
+            body_blocks,
+            body_exit,
             check_blocks,
             trailing_value,
         })
@@ -909,20 +950,27 @@ impl<'a> Lowerer<'a> {
         Ok(blocks)
     }
 
-    /// Lower the arm body into an [`IRBasicBlock`] using a temporary
-    /// [`CFGBuilder`] (since [`Self::lower_statements_for_value`]
-    /// builds blocks via the recursive CFG API). Drains the temp
-    /// builder back into a single body [`IRBasicBlock`] consumed by
-    /// [`Self::build_match_arm`]; multi-block bodies (control flow
-    /// inside the arm) are flattened into a single body block today
-    /// because match-arm body CFG support is post-Slice-3 work.
+    /// Lower the arm body into one or more [`IRBasicBlock`]s using a
+    /// temporary [`CFGBuilder`] (since [`Self::lower_statements_for_value`]
+    /// builds blocks via the recursive CFG API). Returns the full
+    /// block list, the exit block id (where the trailing operand was
+    /// lowered, or `None` when every path terminates), the trailing
+    /// operand, and its type.
+    ///
+    /// Straight-line bodies produce exactly one block (the original
+    /// body block). Bodies containing nested control-flow expressions
+    /// (`if`/`else`, `cond`, `ternary`) produce additional blocks for
+    /// the construct's then/else/merge sub-CFG. The exit block is the
+    /// last block lower_statements_for_value left open; its terminator
+    /// is set to `Branch(merge_id)` here so the arm flows into the
+    /// match's merge.
     fn build_match_arm_body(
         &mut self,
         arm: &MatchArm,
         body_id: IRBlockId,
         merge_id: IRBlockId,
         idx: usize,
-    ) -> Result<(IRBasicBlock, Option<IROperand>, Option<Type>), String> {
+    ) -> Result<LoweredMatchArmBody, String> {
         let mut tmp = CFGBuilder::new();
         tmp.add_block(body_id, format!("match_body_{idx}"));
         let (exit, trailing) = self.lower_statements_for_value(&mut tmp, body_id, &arm.body)?;
@@ -930,29 +978,27 @@ impl<'a> Lowerer<'a> {
             Some((op, ty)) => (Some(op), Some(ty)),
             None => (None, None),
         };
-        // Match arms today support straight-line bodies (no nested
-        // control flow that would mint extra blocks). Nested control
-        // inside arms is post-Slice-3 work.
-        let blocks = tmp.into_blocks();
-        if blocks.len() != 1 {
-            return Err(format!(
-                "match arm {idx}: nested control flow inside body not yet supported \
-                 (got {} blocks)",
-                blocks.len()
-            ));
+        let mut blocks = tmp.into_blocks();
+        if let Some(exit_id) = exit {
+            let exit_block = blocks
+                .iter_mut()
+                .find(|b| b.id == exit_id)
+                .expect("lower_statements_for_value's exit block must be in the drained list");
+            exit_block.terminator = IRTerminator::Branch(merge_id);
         }
-        let mut body = blocks.into_iter().next().unwrap();
-        if exit.is_some() {
-            body.terminator = IRTerminator::Branch(merge_id);
-        }
-        Ok((body, trailing_op, trailing_ty))
+        Ok((blocks, exit, trailing_op, trailing_ty))
     }
 
     /// Pre-stage an [`IRInstruction::UnionWrap`] inside the body block
-    /// when the lowered result strategy widens the arm's value and
-    /// the trailing type isn't already a union. Returns the operand
-    /// the merge phi should reference (either the wrapped dest or the
-    /// original trailing operand untouched).
+    /// when the lowered result strategy widens the arm's value to a
+    /// union. Returns the operand the merge phi should reference
+    /// (either the wrapped dest or the original trailing operand
+    /// untouched). Thin caller of [`Self::build_arm_union_wrap`] that
+    /// maps the [`ResolvedMatchType`] strategy to the union target
+    /// (or short-circuits for `Direct`).
+    ///
+    /// Transitional: see [`Self::build_arm_union_wrap`] for the
+    /// retirement note.
     fn maybe_pre_stage_arm_union_wrap(
         &mut self,
         body: &mut IRBasicBlock,
@@ -964,18 +1010,14 @@ impl<'a> Lowerer<'a> {
             ResolvedMatchType::UnionWrap { target } => target.clone(),
             ResolvedMatchType::Direct { .. } => return trailing_op,
         };
-        if matches!(trailing_ty, Some(Type::Union(_))) {
-            return trailing_op;
-        }
         let source_ty = trailing_ty.cloned().unwrap_or(Type::Unknown);
-        let dest = self.next_value_id();
-        body.instructions.push(IRInstruction::UnionWrap {
-            dest,
-            value: trailing_op,
-            source_ty,
-            target_union: target,
-        });
-        IROperand::Local(dest)
+        match self.build_arm_union_wrap(trailing_op.clone(), &source_ty, &target) {
+            Some((dest, instruction)) => {
+                body.instructions.push(instruction);
+                IROperand::Local(dest)
+            }
+            None => trailing_op,
+        }
     }
 
     /// Gated CFG builder for pattern lowering. Mirrors

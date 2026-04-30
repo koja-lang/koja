@@ -13,6 +13,7 @@
 
 pub mod blocks;
 pub mod cfg;
+pub mod elaborate;
 mod fn_state;
 pub mod identity;
 pub mod lower;
@@ -25,6 +26,7 @@ pub mod values;
 
 pub use blocks::{IRBasicBlock, IRBlockId, IRTerminator};
 pub use cfg::CFGBuilder;
+pub use elaborate::elaborate_program;
 pub use fn_state::FnLowerState;
 pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 pub use lower::Lowerer;

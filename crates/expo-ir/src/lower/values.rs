@@ -185,6 +185,52 @@ impl<'a> Lowerer<'a> {
                     return Ok((open, o, ty));
                 }
             }
+            ExprKind::If {
+                condition,
+                then_body,
+                else_body: Some(else_stmts),
+            } => {
+                let result_ty = expr.resolved_type.clone().unwrap_or(Type::Unknown);
+                let (out, op) = self.lower_if_else(
+                    builder,
+                    open,
+                    condition,
+                    then_body,
+                    else_stmts,
+                    result_ty.clone(),
+                )?;
+                return Ok((out, op, result_ty));
+            }
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                let result_ty = expr.resolved_type.clone().unwrap_or(Type::Unknown);
+                let (out, op) = self.lower_ternary(
+                    builder,
+                    open,
+                    condition,
+                    then_expr,
+                    else_expr,
+                    result_ty.clone(),
+                )?;
+                return Ok((out, op, result_ty));
+            }
+            ExprKind::Cond {
+                arms,
+                else_body: Some(else_stmts),
+            } => {
+                let result_ty = expr.resolved_type.clone().unwrap_or(Type::Unknown);
+                let (out, op) = self.lower_cond(
+                    builder,
+                    open,
+                    arms,
+                    Some(else_stmts.as_slice()),
+                    result_ty.clone(),
+                )?;
+                return Ok((out, op, result_ty));
+            }
             _ => {}
         }
 
@@ -324,6 +370,43 @@ impl<'a> Lowerer<'a> {
             },
         );
         Some((IROperand::Local(dest), ty))
+    }
+
+    /// Build the per-arm widening instruction when `target_ty` is a
+    /// [`Type::Union`] and `arm_ty` is a non-union member of it.
+    /// Returns `Some((dest, instruction))` when widening is needed,
+    /// `None` when the operand can flow through unchanged (target
+    /// isn't a union, or the operand already has a union shape).
+    /// The caller is responsible for placing the instruction at the
+    /// arm's exit block (immediately before its branch terminator).
+    ///
+    /// Transitional: shared coercion staging for the value-context
+    /// control-flow constructs (`if`/`else`, `cond`, `match`,
+    /// `ternary`). The future elaboration pass replaces this with a
+    /// generic walk of every [`IRInstruction::Phi`] that compares
+    /// each incoming operand's type against the phi's `ty` and
+    /// prepends [`IRInstruction::UnionWrap`] (or future
+    /// `NumericCoerce`) wherever they disagree.
+    pub(crate) fn build_arm_union_wrap(
+        &mut self,
+        arm_op: IROperand,
+        arm_ty: &Type,
+        target_ty: &Type,
+    ) -> Option<(crate::values::IRValueId, IRInstruction)> {
+        let Type::Union(_) = target_ty else {
+            return None;
+        };
+        if matches!(arm_ty, Type::Union(_)) {
+            return None;
+        }
+        let dest = self.next_value_id();
+        let instruction = IRInstruction::UnionWrap {
+            dest,
+            value: arm_op,
+            source_ty: arm_ty.clone(),
+            target_union: target_ty.clone(),
+        };
+        Some((dest, instruction))
     }
 }
 

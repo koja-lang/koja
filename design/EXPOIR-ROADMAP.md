@@ -21,9 +21,30 @@ typed-locals mirror of `expo-codegen`'s
 (method/free param entry, `bind_for_pattern`, executor
 `StoreLocal { is_decl: true }`, legacy `compile_assignment` fresh
 decls, IR `store_local` fresh decls, pattern-binder lowerings)
-and consumed by `Lowerer::ctx().locals.type_of(...)`. Every
-operand-shaped lowering helper takes `(&mut CFGBuilder, IRBlockId)`
-and returns `(Option<IRBlockId>, IROperand, Type)` -- referentially
+and consumed by `Lowerer::ctx().locals.type_of(...)`. Slice 6
+(Wave 33) closed the [`IRInstruction::Stub`] back door for the
+operand-context value-producing control-flow expressions
+(`if`/`else`, `cond` with `else`, ternary): typecheck now
+publishes a meaningful arm-joined result type via the local
+`arm_type_meaningful` predicate (the
+[`expo_ast::types::Type::is_known`] quirk no longer suppresses
+`Type::Named { type_args, .. }` with non-empty args), and
+[`crate::Lowerer::lower_expr_to_operand`] routes those three
+forms directly to the existing typed lowering helpers
+(`lower_if_else`, `lower_cond`, `lower_ternary`). Per-arm
+[`IRInstruction::UnionWrap`] pre-staging extends from match (the
+existing `maybe_pre_stage_arm_union_wrap`) to the other three via
+the shared [`crate::Lowerer::build_arm_union_wrap`] decision
+helper. Match arm bodies now support nested control flow
+(`LoweredMatchArm.body_blocks: Vec<IRBasicBlock>`) so routing
+control-flow expressions inside match arms works without the
+post-Slice-3 1-block restriction. The pre-codegen elaboration
+seam ships as [`crate::elaborate::elaborate_program`] (no-op
+today), wired into [`expo_codegen::compile_modules`]'s
+`run_codegen` between `synthesize_all_formats` and
+`define_functions`. Every operand-shaped lowering helper takes
+`(&mut CFGBuilder, IRBlockId)` and returns
+`(Option<IRBlockId>, IROperand, Type)` -- referentially
 transparent, no ambient cursor state on
 [`crate::FnLowerState`]. The 9 per-construct IR wrappers
 (`IRUnless`, `IRIf`, `IRIfElse`, `IRTernary`, `IRCond`, `IRCondArm`,
@@ -70,42 +91,79 @@ callers don't double-emit.
 
 What we do _not_ have yet (next-step pointers in **bold**):
 
-- **Typed `Match` / `If` / `Cond` / `Block` lowering in
-  [`crate::Lowerer::lower_expr_to_operand`] (Slice 6, next).**
-  These expression kinds still defer through
-  [`IRInstruction::Stub`] -- the Stub executor is `compile_expr`,
-  which builds PHIs from per-arm outputs without unifying arm
-  types. Concrete failure mode (surfaced by the reverted Wave-32
-  attempt this session) and the proposed instruction shape live
-  in section 4's **Phase 4g pickup guide**; this is the
-  prerequisite for the structural cut.
-- **Structural cut: `IRFunctionKind::{Free,Method}.func_ast`
-  retires; emit walks `Vec<IRBasicBlock>` (Slice 7, after Slice 6).**
-  Today both kinds still carry `func_ast`; `emit_ir_function` /
-  `emit_ir_impl_method` / `compile_method_body` /
-  `compile_function_body` walk the AST end-to-end. The `blocks`
-  field added in Wave 30 is populated only per-statement through
-  `lower_and_execute`, not for the function as a whole. Mechanical
-  once Slice 6 lands.
-- **Pre-codegen elaboration pass
-  ([`expo-ir/src/elaborate.rs`], part of Slice 7).** Not implemented;
-  [`IRInstruction::FromListLiteral`] errors at codegen if it ever
-  reaches the executor (today the legacy `compile_assignment`
-  fork intercepts list-literal RHS before lowering emits the
-  stub).
+- **Slice 7: structural cut + elaboration body + Match operand
+  routing.** Three things land together because they share
+  consumers and want a single integration window. (a) Structural
+  cut: `IRFunctionKind::{Free,Method}.func_ast` retires; emit
+  walks `Vec<IRBasicBlock>`; `compile_function_body` /
+  `compile_method_body` / `compile_assignment` retire. Today
+  both kinds still carry `func_ast`; the `blocks` field added
+  in Wave 30 is populated only per-statement through
+  `lower_and_execute`, not for the function as a whole.
+  `compile_statement` / `compile_expr` survive transitionally
+  for closure body / receive arm emission and the Stub
+  executor; Slice 8 closes that statement seam. (b) Elaboration
+  body ([`crate::elaborate::elaborate_program`], today the
+  no-op seam Slice 6 shipped): protocol-driven coercion
+  rewriting (e.g. [`IRInstruction::FromListLiteral`] -> typed
+  [`IRInstruction::Call`] after monomorphizing `from_list`),
+  generic phi-incoming coercion (subsumes the transitional
+  per-arm `UnionWrap` staging in
+  [`crate::Lowerer::build_arm_union_wrap`] today inside the
+  value-context conditional/match constructs), and
+  numeric-coercion staging (replaces codegen-side
+  `coerce_numeric` / `apply_coercion`).
+  [`IRInstruction::FromListLiteral`] errors at codegen if it
+  ever reaches the executor (today the legacy
+  `compile_assignment` fork intercepts list-literal RHS before
+  lowering emits the stub). (c) Match operand-seam routing:
+  Match still routes through [`IRInstruction::Stub`] for the
+  operand-context entry. Closing this needs an
+  `IRInstruction::Alloca { dest, value, value_ty } -> ptr`
+  primitive so the pattern instructions get a pointer-typed
+  subject without the codegen `compile_match` shim doing the
+  LLVM alloca + value-map seed. The arm-join + per-arm
+  `UnionWrap` work that landed in Slice 6 already benefits
+  Match via the existing Stub -> `compile_match` ->
+  `lower_match_expr` path (the typed lowering helpers are
+  shared) -- the remaining gap is the operand seam routing
+  only.
+- **Slice 8: statement seam closure-out.** Lifts
+  `compile_body_as_value`'s two remaining consumers (closure
+  body emission, `receive` arm emission) onto a typed
+  `Lowerer::lower_body_as_value` + `walk_function_blocks`
+  pipeline. After this lands, codegen has zero AST statement
+  walkers (`compile_statement` deletes outright; `compile_expr`
+  survives only as the `IRInstruction::Stub` executor until
+  Phase 4h closes that backdoor). Independent from Slice 9's
+  `closure_id` reform: span-keyed `closure_info_at` keeps
+  working through Slice 8.
 - **`compile_assignment`'s three transitional forks** (list-literal
   RHS, destructuring pattern, unannotated assignment) still live
   in `expo-codegen/src/stmt.rs`. Retire with Slice 7 (the
   elaboration pass + typed assignment plumbing makes them
   redundant).
+- **Implicit-union arm-join is "first meaningful arm" only.**
+  Typecheck now publishes the first meaningful arm type for
+  `match` / `cond` / `if`/`else` / ternary instead of silently
+  defaulting to `Type::Unknown` for `Type::Named` with non-empty
+  type args. The full implicit-union derivation (publish
+  `Type::Union([sorted arm types])` when arms differ + register
+  ad-hoc arm-derived unions through monomorphization) is a
+  planned feature that needs the monomorphization pipeline to
+  accept lowering-derived unions; the per-arm
+  [`IRInstruction::UnionWrap`] pre-staging in
+  [`crate::Lowerer::build_arm_union_wrap`] is in place to
+  consume the wider published types when that lands.
 - **The [`IRInstruction::Stub`] bridge is alive (Phase 4h
   retirement).** Single producer:
   [`crate::Lowerer::lower_expr_to_operand`]; ~12 expression kinds
   still defer through it (struct construction, enum construction,
   string literals + interpolation, closures, `EnumStructEqual`,
   `spawn` / `receive`, `print*` / `panic`, generic-fn /
-  struct-constructor calls). Slice 6 retires the control-flow
-  shapes; Phase 4h retires the rest.
+  struct-constructor calls). Slice 6 retired the value-producing
+  `if`/`else`, `cond`, and ternary forms; Match's operand-seam
+  routing and the rest are Phase 4h.
 - Per-arm match scoping still happens via codegen-side
   `fn_state.variables` clone/restore in the arm's body walk
   (legacy mechanism pending an `IRInstruction::ScopeMark`-style
@@ -989,15 +1047,15 @@ x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
     the only codegen-side concession is per-arm variable scoping
     around LLVM-typed allocas.
 
-            The flat-stream shape preserved by this slice (a single
-            `Vec<IRInstruction>` per arm with `BoolAnd` fusion across all
-            sub-checks) carried over the legacy `emit_pattern`'s
-            payload-deref-before-tag-gate hazard verbatim. Wave 27 splits
-            the per-arm check into a CFG (`IRMatchArm.check_blocks:
-            Vec<IRBasicBlock>`) so constructor patterns gate via
-            `CondBranch(tag, payload_block, failure_target)` and payload
-            loads only run on the success edge. See the Wave 27 sidebar
-            entry in section 2 for the full follow-up.
+                The flat-stream shape preserved by this slice (a single
+                `Vec<IRInstruction>` per arm with `BoolAnd` fusion across all
+                sub-checks) carried over the legacy `emit_pattern`'s
+                payload-deref-before-tag-gate hazard verbatim. Wave 27 splits
+                the per-arm check into a CFG (`IRMatchArm.check_blocks:
+                Vec<IRBasicBlock>`) so constructor patterns gate via
+                `CondBranch(tag, payload_block, failure_target)` and payload
+                loads only run on the success edge. See the Wave 27 sidebar
+                entry in section 2 for the full follow-up.
 
 - **Slice 6 -- loops + tail-flag retirement (Done, Wave 25).**
   `while`, `loop`, and `for` lift onto the `Lowerer::lower_*` +
@@ -1324,84 +1382,157 @@ entry point.
     an earlier conditional branch declared it.
     Validation: 25/25 lang, 246/246 stdlib, `just doit` green.
 
-- **Slice 6 -- typed control-flow lowering (Proposed, next).**
-  Prerequisite for the structural cut. Today
-  `Match` / `If` / `Cond` / `Block` value-producing expressions
-  fall through to [`expo_ir::IRInstruction::Stub`] in
-  [`crate::Lowerer::lower_expr_to_operand`]; the Stub executor
-  is `compile_expr`, which builds the PHI from per-arm
-  `compile_expr` outputs without unifying arm types. The legacy
-  `compile_method_body` path derived the unified arm type at
-  codegen time and coerced both arms before the PHI; the
-  structural cut needs the IR vocabulary to express that
-  unification declaratively. Concrete shape:
-  - New typed `IRInstruction::Match { subject, arms, result_type,
-merge_block }` where `IRMatchArm` carries its check-blocks,
-    body-blocks, trailing operand, _and the per-arm coercion_
-    to `result_type`. (Today's per-arm coercion lives in
-    `Coercion::UnionWiden` records keyed by span; codegen reads
-    via `resolve_coercion(span)`. Lowering reads the same
-    records and pre-stages [`IRInstruction::UnionWrap`] inside
-    each arm's body.)
-  - Same shape for `IRInstruction::If` / `IRInstruction::Cond` /
-    `IRInstruction::Block` (the last for trailing-statement-as
-    -value blocks).
-  - `lower_expr_to_operand`'s arm-join helper computes
-    `result_type` by joining arm tail types, treating
-    `Type::Named { type_args, .. }` with all-known args as
-    concrete (the typecheck `is_known` quirk in
-    [`expo-ast/src/types.rs`] -- which returns `false` for
-    `List<IPAddress>` -- needs a Match-handler-local relax in
-    [`expo-typecheck/src/expr.rs::infer_expr`]; do **not**
-    change `is_known` itself, ~50 callers across typecheck rely
-    on its current behavior).
-  - Codegen executor for typed control-flow becomes a pure
-    walker: emit each arm's blocks, materialize the
-    pre-staged `UnionWrap` (no codegen-time coercion decision),
-    build the PHI from already-coerced operands.
-    Why now: blocks the structural cut. The 3b attempt this
-    session reverted exactly because the IR Stub fallthrough
-    routed Match through `compile_expr`'s PHI builder, surfacing
-    `Result_$T.unknown$` vs `Result_$unknown.T$` LLVM rejects on
-    every stdlib `Result<T, String>` return path.
-    **Done when** `lower_expr_to_operand` emits typed `Match` /
-    `If` / `Cond` / `Block` instructions with unified
-    `result_type` and per-arm coercion baked in;
-    `compile_match_expr` / `compile_if_expr` / `compile_cond` /
-    `compile_block_as_value` (in
-    [`expo-codegen/src/expr.rs`](../crates/expo-codegen/src/expr.rs)
-    and [`expo-codegen/src/control/`])
-    collapse to pure executor arms; PHI seam owns no
-    type-derivation logic.
+- **Slice 6 -- typed control-flow lowering (Done, Wave 33).**
+  Three landings, one architectural commitment: typecheck
+  publishes meaningful arm-joined types instead of falling back
+  to `Type::Unknown` for `Type::Named { type_args, .. }`;
+  lowering routes value-producing `if`/`else`, `cond` (with
+  `else`), and ternary directly from
+  [`crate::Lowerer::lower_expr_to_operand`] to the existing
+  typed lowering helpers (no Stub round-trip); per-arm
+  [`IRInstruction::UnionWrap`] pre-staging extends from match
+  to the other three constructs via a shared decision helper.
+  - **Typecheck arm-join (`expo-typecheck/src/expr.rs`).** Adds
+    `arm_type_meaningful(ty)` (mirrors the existing
+    `arg_ty_participates_in_unification` in the same file) and
+    swaps it in at the four arm-join sites (`Match`, `Cond`,
+    `If`/`Else`, `Ternary`). [`Type::is_known`] is unchanged
+    -- ~52 callers depend on its strict semantics. The
+    cross-arm consistency check on `Cond` and `Ternary` keeps
+    the strict `is_known` predicate so partial-typed
+    constructor results (`Result<T, unknown>` vs
+    `Result<unknown, String>`) don't fire spurious mismatch
+    errors. Implicit-union derivation when arms differ
+    (publishing `Type::Union([sorted arm types])`) is the
+    planned next step but needs the monomorphization pipeline
+    to register ad-hoc arm-derived unions; not in this slice.
+  - **Operand seam routing
+    ([`expo-ir/src/lower/values.rs`]).**
+    [`crate::Lowerer::lower_expr_to_operand_with_tail`] gains
+    arms for [`expo_ast::ast::ExprKind::If { else_body: Some }`],
+    [`expo_ast::ast::ExprKind::Ternary`], and
+    [`expo_ast::ast::ExprKind::Cond { else_body: Some }`] that
+    call `lower_if_else` / `lower_ternary` / `lower_cond`
+    directly with `result_ty = expr.resolved_type`. The
+    statement-only forms (`If` without `else`, `Cond` without
+    `else`, `Unless`) stay Stub-routed: they don't produce
+    values. Match also stays Stub-routed; its operand-seam
+    routing needs an `IRInstruction::Alloca`-style primitive
+    (the `compile_match` shim today does the LLVM alloca + value
+    map seed) and is queued as a Slice 6 follow-up.
+  - **Per-arm coercion staging.**
+    [`crate::Lowerer::build_arm_union_wrap`] is the shared
+    decision: given an arm operand + arm type + target type,
+    return the wrapping [`IRInstruction::UnionWrap`] when the
+    target is a `Type::Union` and the arm is a non-union
+    member. Match's `maybe_pre_stage_arm_union_wrap` becomes a
+    thin caller that maps `ResolvedMatchType` to a target type;
+    `lower_if_else` / `lower_cond` / `lower_ternary` route
+    through a CFGBuilder-based wrapper
+    (`widen_arm_into_block`) that appends the wrap to each
+    arm's exit block before its branch terminator. Both helpers
+    are tagged transitional -- the elaboration pass (Slice 7)
+    subsumes them with a generic phi-incoming coercion walk.
+  - **Multi-block match arm bodies
+    ([`expo-ir/src/lower/patterns.rs`]).** The post-Slice-3
+    1-block guard on match arm bodies is lifted: `LoweredMatchArm`
+    now carries `body_blocks: Vec<IRBasicBlock>` plus
+    `body_exit: Option<IRBlockId>`. `build_match_arm_body`
+    drains the temp builder's full block list and sets the
+    exit block's terminator to `Branch(merge_id)`;
+    `try_stage_match_phi` reads from the exit block's
+    terminator + trailing value. Required because routing
+    `if`/`else` / `cond` / `ternary` inside a match arm body
+    now mints additional blocks into the same builder.
+  - **Void-call lift fix
+    ([`expo-codegen/src/control/mod.rs`]).**
+    `walk_function_blocks_seeded` treats a `Local` result
+    operand whose id was never registered in the value map as
+    statement-shaped (returns `Ok(None)`), mirroring the
+    single-block `lift_at_current` path's `maybe_typed_value`
+    handling. Surfaced when the IR-routed ternary turned a
+    previously single-block call lift into multi-block, and the
+    void call's dest was correctly skipped by `emit_call`.
+  - **Elaboration seam ([`expo-ir/src/elaborate.rs`]).** Empty
+    `pub fn elaborate_program(_: &mut IRProgram) -> Result<(), String>`,
+    re-exported from `expo-ir`'s root and called in
+    `expo_codegen::compile_modules::run_codegen` between
+    `synthesize_all_formats` and `define_functions`. No
+    behavior change today; the seam exists so Slice 7 can
+    fill in the body without relocating call sites.
+    Validation: 25/25 lang, 56/56 expo-typecheck, 246/246
+    stdlib, `cargo clippy --workspace --all-targets` clean,
+    `just doit` green.
 
-- **Slice 7 -- structural cut + elaboration pass
-  (Proposed, after Slice 6).** The mechanical cleanup unblocked
-  by Slice 6. `IRFunctionKind::{Free,Method}.func_ast` retires; bodies
-  live in `blocks: Vec<IRBasicBlock>` populated at planning /
-  declare time. `emit_ir_function` / `emit_ir_impl_method` in
+- **Slice 7 -- structural cut + elaboration pass + Match operand
+  routing (Proposed, after Slice 6).** The mechanical cleanup
+  unblocked by Slice 6 plus the remaining operand-seam closure.
+
+  _Structural cut._ `IRFunctionKind::{Free,Method}.func_ast`
+  retires; bodies live in `blocks: Vec<IRBasicBlock>` populated
+  at planning / declare time. `emit_ir_function` /
+  `emit_ir_impl_method` in
   [`expo-codegen/src/generics.rs`](../crates/expo-codegen/src/generics.rs)
   walk `IRFunction.blocks` via `walk_function_blocks` after a
   thin `setup_function_frame` helper handles entry block /
   param allocas / debug `push_function` / `type_subst`
   save/restore / `tco_loop` scaffolding.
   `compile_function_body` / `compile_method_body` /
-  `compile_statement` / `compile_assignment` /
-  `apply_coercion` / `convert_list_literal_if_needed` /
-  `infer_type_from_expr_codegen` all retire.
+  `compile_assignment` / `apply_coercion` /
+  `convert_list_literal_if_needed` /
+  `infer_type_from_expr_codegen` all retire. The
+  `compile_method_body` `mem::take` / restore plumbing on
+  `variables` / `local_types` / `type_subst` (in
+  [`generics.rs`](../crates/expo-codegen/src/generics.rs))
+  goes with it. `compile_statement` / `compile_expr` survive
+  this slice as transitional walkers for two remaining
+  consumers: closure body emission and `receive` arm emission
+  (both via [`compile_body_as_value`]) plus the
+  [`IRInstruction::Stub`] executor. Slice 8 retires both via
+  the statement-seam closure-out lift; Phase 4h takes the
+  `compile_expr` Stub backdoor.
   Param names + span info migrate to a per-function metadata
   struct so debug emission keeps source positions.
   `fn main` / `__expo_user_main` route through the standard IR
   pipeline.
-  This slice also lands the **pre-codegen elaboration pass**
-  ([`expo-ir/src/elaborate.rs`], new) that walks each function's
-  lowered blocks after monomorphization planning and rewrites
-  protocol-driven coercion stubs (today:
+
+  _Match operand-seam routing._ Match still routes through
+  [`IRInstruction::Stub`] for the operand-context entry
+  ([`crate::Lowerer::lower_expr_to_operand_with_tail`] has no
+  `Match` arm). Today the codegen `compile_match` shim does the
+  LLVM alloca + value-map seed before calling
+  `lower_match_expr`. Slice 7 closes this by adding an
+  `IRInstruction::Alloca { dest, value, value_ty }` primitive
+  (executor: `build_alloca + build_store`, returns the pointer
+  in `dest`) so the IR can mint a pointer-typed subject
+  operand for the pattern instructions without a codegen-side
+  shim. With this in place, `lower_expr_to_operand` routes
+  Match the same way Slice 6 routed `if`/`else`, `cond`, and
+  ternary; `compile_match`'s alloca + seed responsibility
+  retires.
+
+  _Elaboration body._ Fills in
+  [`crate::elaborate::elaborate_program`] (the no-op seam
+  Slice 6 shipped) with three responsibilities:
+  protocol-driven coercion rewriting (today:
   [`IRInstruction::FromListLiteral`] -> typed
   [`IRInstruction::Call`] after monomorphizing the `from_list`
-  impl; future: `FromBinaryLiteral` / `FromFloatLiteral`).
+  impl; future: `FromBinaryLiteral` / `FromFloatLiteral`);
+  generic phi-incoming coercion (walks every
+  [`IRInstruction::Phi`], compares each incoming operand's
+  type against the phi's `ty`, and prepends
+  [`IRInstruction::UnionWrap`] -- subsumes the transitional
+  per-arm staging in
+  [`crate::Lowerer::build_arm_union_wrap`] and the match-side
+  `maybe_pre_stage_arm_union_wrap`); and numeric-coercion
+  staging (replaces codegen-side `coerce_numeric` /
+  `apply_coercion` with explicit `IRInstruction::NumericCoerce`
+  staged at elaboration time so backends emit without
+  inference).
   With elaboration landed, the three transitional
   `compile_assignment` forks (list-literal RHS, destructuring
   pattern, unannotated RHS) all retire.
+
   Implicit-return becomes an `IRTerminator::Return` synthesized
   by lowering when the body's tail block ends in an expression
   statement; tail-call status (`lower_tail_expr_to_operand`, in
@@ -1411,104 +1542,182 @@ merge_block }` where `IRMatchArm` carries its check-blocks,
   transitional shims.
   **Done when** `IRFunctionKind::{Free,Method}` carry
   `Vec<IRBasicBlock>`; `compile_function_body` /
-  `compile_method_body` / `compile_statement` /
-  `compile_assignment` are deleted; the elaboration pass
-  pre-resolves protocol coercions into `IRProgram`;
-  `expo-codegen` performs no AST traversal except inside
-  [`IRInstruction::Stub`] (whose retirement is Phase 4h).
+  `compile_method_body` / `compile_assignment` /
+  `apply_coercion` / `coerce_numeric` are deleted;
+  `IRInstruction::Alloca` exists and Match routes from
+  [`crate::Lowerer::lower_expr_to_operand`] without the
+  codegen-side `compile_match` alloca + value-map seed;
+  [`crate::elaborate::elaborate_program`] pre-resolves
+  protocol coercions and per-phi-incoming widening into
+  `IRProgram` (per-arm `UnionWrap` staging in
+  [`crate::Lowerer::build_arm_union_wrap`] retires);
+  `expo-codegen` performs no AST traversal for top-level
+  function bodies (closure bodies and `receive` arms remain
+  on `compile_body_as_value` until Slice 8;
+  [`IRInstruction::Stub`] retires in Phase 4h).
 
-- **Phase 4g pickup guide.** Read this before starting any
-  Slice 6 / 7 work in a fresh session.
+- **Phase 4g pickup guide.** Read this before starting Slice 7
+  in a fresh session.
 
-  _Where you are._ The function-body track is half-landed: the
-  recursive [`CFGBuilder`] shape (Slice 3, Wave 30), the typed
-  [`OperandResult`] contract (Slice 4, Wave 31), and the typed
-  locals on [`FnLowerState`] (Slice 5, Wave 32) are all in
-  place and validated. The next move is **Slice 6 (typed
-  control-flow lowering)**, not Slice 7 (structural cut).
-  Slice 7 is mechanical once Slice 6 lands; jumping straight
-  to Slice 7 gets you the failure described below.
+  _Where you are._ The function-body track is mostly landed:
+  the recursive [`CFGBuilder`] shape (Slice 3, Wave 30), the
+  typed [`OperandResult`] contract (Slice 4, Wave 31), the
+  typed locals on [`FnLowerState`] (Slice 5, Wave 32), and
+  typed control-flow lowering for value-producing `if`/`else`,
+  `cond`, and ternary plus the elaboration seam (Slice 6,
+  Wave 33) are all in place and validated. Slice 7 is the
+  next work, bundling three pieces that share consumers and
+  want a single integration window. Slice 8 then closes out
+  the statement seam (closure body + receive arm lift to
+  retire `compile_body_as_value` and `compile_statement`);
+  Slice 9 retires `Compiler.current_package` plus the
+  `closure_id` reform.
 
-  _The wall._ If you skip Slice 6 and route every function through
-  `lower_function_blocks` / `walk_function_blocks` (the
-  natural-looking Slice 7 move), you'll see two failure modes
-  on the stdlib that pre-Slice-6 IR can't express:
-  1. `addrs = match Socket.resolve(host) ... end` lowers as a
-     `Unit`-typed local, then `compile_expr`'s `Ident` reader
-     rejects it: `cannot load variable of unsupported type:
-addrs (type: Unit, in fn TCPSocket)`. Root cause: the
-     typecheck `Type::is_known` check in
-     [`expo-ast/src/types.rs`] returns `false` for
-     `Type::Named { type_args, .. }` with non-empty args, so
-     the Match arm-join handler in
-     [`expo-typecheck/src/expr.rs::infer_expr`] fails to set
-     `expr.resolved_type` to the concrete `List<IPAddress>` and
-     defaults to `Type::Unit`. The IR Stub fallthrough in
-     `lower_expr_to_operand` publishes that Unit, and
-     `resolve_assigned_type` accepts it as the binding type.
-  2. LLVM PHI verification rejects ternary / match arms whose
-     constructor calls produce different partial types
-     (`Result_$T.unknown$` vs `Result_$unknown.T$`). The IR
-     Stub's `compile_expr` evaluation builds the PHI from
-     per-arm `compile_expr` outputs without unifying arm types.
+  _Three pieces of Slice 7._
+  1. **Structural cut.**
+     `IRFunctionKind::{Free,Method}.func_ast` retires; bodies
+     live in `blocks: Vec<IRBasicBlock>` populated at planning
+     / declare time. `emit_ir_function` /
+     `emit_ir_impl_method` in
+     [`expo-codegen/src/generics.rs`] walk `IRFunction.blocks`
+     via `walk_function_blocks` after a thin
+     `setup_function_frame` helper handles entry block / param
+     allocas / debug `push_function` / `type_subst`
+     save/restore / `tco_loop` scaffolding.
+     `compile_function_body` / `compile_method_body` /
+     `compile_assignment` / `apply_coercion` /
+     `convert_list_literal_if_needed` /
+     `infer_type_from_expr_codegen` all retire. The
+     `compile_method_body` `mem::take` / restore plumbing on
+     `variables` / `local_types` / `type_subst` goes with it.
+     `compile_statement` / `compile_expr` survive as
+     transitional walkers for closure/receive emission and the
+     Stub executor; Slice 8 closes the statement seam.
+  2. **Match operand-seam routing.** Match still routes through
+     [`IRInstruction::Stub`] for the operand-context entry
+     ([`expo-ir/src/lower/values.rs::lower_expr_to_operand_with_tail`]
+     has no `Match` arm). The codegen `compile_match` shim
+     does the LLVM alloca + value-map seed before calling
+     `lower_match_expr`. Add an
+     `IRInstruction::Alloca { dest, value, value_ty }`
+     primitive (executor: `build_alloca + build_store`) so the
+     IR mints the pointer-typed subject without the codegen
+     shim, then add a `Match` arm in
+     `lower_expr_to_operand_with_tail` mirroring the Slice 6
+     `if`/`else` / `cond` / `ternary` arms. The arm-join +
+     per-arm `UnionWrap` work already benefits Match through
+     the existing Stub -> `compile_match` -> `lower_match_expr`
+     path (the typed lowering helpers are shared); only the
+     operand seam routing is missing.
+  3. **Elaboration body.** Fill
+     [`crate::elaborate::elaborate_program`] (the no-op seam
+     Slice 6 shipped) with protocol-driven coercion rewriting
+     (e.g. [`IRInstruction::FromListLiteral`] -> typed
+     [`IRInstruction::Call`] after monomorphizing `from_list`),
+     generic phi-incoming coercion (walks every
+     [`IRInstruction::Phi`], compares each incoming operand's
+     type against the phi's `ty`, and prepends
+     [`IRInstruction::UnionWrap`] -- subsumes Slice 6's
+     [`crate::Lowerer::build_arm_union_wrap`] per-arm staging
+     in lowering), and numeric-coercion staging (replaces
+     `coerce_numeric` / `apply_coercion`). With elaboration
+     landed, the three transitional `compile_assignment`
+     forks (list-literal RHS, destructuring pattern,
+     unannotated RHS) all retire. Implicit-return becomes
+     `IRTerminator::Return` synthesized by lowering.
+     Invariant 9 ("one walker per IR shape") finally holds
+     without transitional shims.
 
-  Both trace back to the same gap: control-flow expressions in
-  `lower_expr_to_operand` defer through
-  [`IRInstruction::Stub`], and the Stub executor is
-  `compile_expr` -- which is codegen-side decision-making (per
-  Invariant 1, this is exactly what backends should not do).
-  Until the IR vocabulary covers typed control flow, the
-  structural cut just relocates the codegen decisions; it
-  doesn't retire them.
+  _Why bundle them._ See Invariant 1 in section 5 ("SIL-style,
+  not MIR-style"): backends emit, they do not reconstruct
+  semantics. The structural cut depends on Match's operand
+  routing being closed (otherwise the Stub-rooted
+  `compile_match` keeps an AST walker alive in codegen); the
+  elaboration body's per-phi-incoming coercion only makes
+  sense when function bodies live as a single
+  `Vec<IRBasicBlock>` for elaboration to walk; the per-arm
+  `UnionWrap` staging in lowering only retires cleanly when
+  elaboration takes over. Slice 6 closed the backdoor for
+  value-producing `if`/`else`, `cond`, and ternary; Slice 7
+  closes it for Match and finishes the "one source of truth"
+  story for coercion.
 
-  _Smallest viable next step._ Add typed
-  [`IRInstruction::Match`] in
-  [`expo-ir/src/lower/values.rs::lower_expr_to_operand`]
-  (the `Match` case currently falls through to the Stub
-  branch). Match is the most load-bearing case and exercises
-  every component of the lift -- arms with bindings, arm-type
-  unification, per-arm coercion, PHI assembly. Once Match
-  works, `If` / `Cond` / `Block` are smaller variations on the
-  same shape.
-
-  _Concrete shape._ See the Slice 6 entry above for the
-  proposed instruction shape. Key constraints:
-  - The arm-type unification in lowering must use a relaxed
-    `is_known`-style check that accepts
-    `Type::Named { type_args, .. }` with all-known args as
-    concrete -- but local to the Match handler in
-    [`expo-typecheck/src/expr.rs::infer_expr`], **not** by
-    changing `Type::is_known()` itself (~50 typecheck callers
-    rely on its current behavior).
-  - Per-arm coercions live in `Coercion::UnionWiden` records
-    keyed by span (today read by
-    [`expo-codegen/src/stmt.rs::apply_coercion`] via
-    `resolve_coercion(span)`). Lowering pre-stages the
-    coercion as [`IRInstruction::UnionWrap`] inside each arm's
-    body block; codegen executor materializes it without
-    inspecting source spans.
-  - PHI assembly is mechanical at codegen: incomings are
-    already coerced to the unified type, no emit-time
-    type-derivation needed.
-
-  _Validation expectations._ After Slice 6:
+  _Validation expectations._ After Slice 7:
   `cargo fmt`, `cargo clippy --workspace --all-targets` (zero
   warnings), `just doit` green (25/25 lang, 56/56 lib,
-  246/246 stdlib). User notes: `just doit` is slow but
+  246/246 stdlib). User note: `just doit` is slow but
   `just install` separately is unnecessary.
 
-  _Why this ordering matters._ See Invariant 1 in section 5
-  ("SIL-style, not MIR-style"): backends emit, they do not
-  reconstruct semantics. As long as `IRInstruction::Stub`
-  routes through `compile_expr`, codegen reconstructs the
-  semantics every Stub-shaped expression hides. The Wave-32
-  session attempted to retire codegen's AST walk while leaving
-  the Stub backdoor wide open -- that's structural regression.
-  Slice 6 closes the backdoor for control flow (the most
-  semantically rich Stub category); Slice 7 then makes the
-  structural cut mechanical.
+- **Slice 8 -- Statement seam closure-out
+  (Proposed, after Slice 7).** Retires `compile_body_as_value`
+  ([`expo-codegen/src/control/mod.rs`](../crates/expo-codegen/src/control/mod.rs))
+  and the `compile_statement` / `compile_expr` AST walkers'
+  remaining role as statement-body walkers. After Slice 7,
+  those two walkers survive only to serve closure body
+  emission and `receive` arm emission (both via
+  `compile_body_as_value`) plus the [`IRInstruction::Stub`]
+  executor (Phase 4h closes that backdoor). Slice 8 lifts the
+  former; Phase 4h closes the latter.
 
-- **Slice 8 -- Compiler trim (no `IRPackage`, no `IRFile`).**
+  _Lift target._ A new
+  [`crate::Lowerer::lower_body_as_value`] returns
+  [`crate::lower::values::OperandResult`]
+  (`(Option<IRBlockId>, IROperand, Type)`) by walking the
+  trailing [`expo_ast::ast::Statement::Expr`] through
+  [`crate::Lowerer::lower_expr_to_operand`] and the rest
+  through [`crate::Lowerer::lower_statement`]. Mirrors what
+  [`crate::Lowerer::lower_statements_for_value`] does for the
+  conditional/match arm bodies (Slice 6); the new helper is a
+  thin wrapper that exposes the body-as-value seam to
+  closure / receive sites.
+
+  _Closure body emission._ `compile_closure_core`
+  ([`expo-codegen/src/expr.rs`](../crates/expo-codegen/src/expr.rs))
+  positions the LLVM builder at the closure's function entry
+  block, then walks the body through `lower_body_as_value` +
+  `walk_function_blocks` (instead of `compile_body_as_value`).
+  The closure's captures, debug push/pop, and parameter
+  allocas stay where they are; only the body walker swaps.
+  Closure identification still keys on `Span` until Slice 9's
+  `closure_id` reform.
+
+  _Receive arm emission._ `compile_receive`
+  ([`expo-codegen/src/processes.rs`](../crates/expo-codegen/src/processes.rs))
+  walks each arm body through `lower_body_as_value` +
+  `walk_function_blocks` (replacing the per-arm
+  `compile_body_as_value` call). Receive arm scoping stays
+  on the existing codegen-side variable clone/restore
+  (matches the per-arm scope mechanism Phase 4h's
+  `IRInstruction::ScopeMark` lift will eventually retire).
+
+  _Statement-walker retirement._ With the two `compile_body_as_value`
+  callers rerouted, `compile_body_as_value` deletes outright.
+  `compile_statement` / `compile_expr` lose their AST-walker
+  role: codegen no longer iterates statement lists from any
+  AST surface. `compile_expr` survives only as the
+  [`IRInstruction::Stub`] executor (Phase 4h retires it
+  alongside the Stub variant); `compile_statement` deletes
+  outright (the Stub executor doesn't call it).
+
+  _Why this slice exists separately from Slice 7._ Slice 7's
+  invariant 1 milestone ("backends emit, they do not
+  reconstruct semantics") only fully holds when codegen has
+  zero AST statement walkers. Bundling closure/receive lift
+  into Slice 7 would balloon its scope (closure body
+  emission has its own LLVM function-context setup, capture
+  plumbing, debug bookkeeping); separating them keeps each
+  slice's blast radius reviewable. The closure-body lift also
+  has zero dependency on `closure_id` reform: span-keyed
+  `closure_info_at` keeps working until Slice 9 swaps the
+  key type.
+
+  **Done when** `compile_body_as_value` is deleted;
+  `compile_statement` is deleted; `compile_expr` survives only
+  as the `IRInstruction::Stub` executor; closure body
+  emission and receive arm emission both flow through
+  `lower_body_as_value` + `walk_function_blocks`.
+
+- **Slice 9 -- Compiler trim (no `IRPackage`, no `IRFile`).**
   Retires `Compiler.current_package` because every IR element
   already carries its package via `TypeIdentifier` /
   `FunctionIdentifier`
@@ -1792,6 +2001,42 @@ rule plus the concrete behavior it forbids.
     between the typed view and the runtime view); reading
     `local_types` from codegen-only code (use `variables` for
     the alloca, `local_types` is the lowerer's mirror).
+
+16. **Typecheck publishes meaningful arm-joined result types
+    for value-context control-flow constructs (Wave 33).**
+    `match` / `if`/`else` / `cond` / `ternary`'s arm-join
+    site in `expo-typecheck/src/expr.rs::infer_expr` uses the
+    local `arm_type_meaningful` predicate -- not
+    [`expo_ast::types::Type::is_known`] -- to decide whether
+    an arm's tail type seeds the construct's `result_type`.
+    `is_known` returns false for `Type::Named { type_args, .. }`
+    with non-empty args (e.g. `List<IPAddress>`); the relaxed
+    predicate accepts those. Mirrors the existing
+    `arg_ty_participates_in_unification` helper in the same
+    file and keeps `Type::is_known` strict for its ~52 other
+    callers. Forbids: lowering or codegen re-deriving
+    control-flow result types from per-arm typechecker info
+    (the [`expo_ir::lower::values::OperandResult`] `Type`
+    slot is the source of truth for the published value's
+    type; `expr.resolved_type` is the source of truth for the
+    construct's joined type).
+
+17. **Coercion lives in lowering as transitional
+    [`IRInstruction::UnionWrap`] pre-staging (Wave 33).** The
+    value-context conditional / match constructs stage per-arm
+    `UnionWrap` via [`crate::Lowerer::build_arm_union_wrap`]
+    (a shared decision returning the wrapping instruction
+    when target is `Type::Union` and arm is a non-union
+    member). Match's `maybe_pre_stage_arm_union_wrap` and the
+    if/else / cond / ternary `widen_arm_into_block` wrappers
+    are thin callers. Both are scoped to migrate to
+    [`crate::elaborate::elaborate_program`]'s generic
+    phi-incoming coercion walk in Slice 7. Forbids:
+    codegen-side coercion decisions for value-context
+    control-flow merges (the legacy `apply_coercion` /
+    `coerce_numeric` retirement target); per-construct
+    coercion paths that bypass the shared
+    `build_arm_union_wrap` decision.
 
 ---
 

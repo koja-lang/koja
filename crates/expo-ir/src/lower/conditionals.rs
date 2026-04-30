@@ -137,17 +137,23 @@ impl<'a> Lowerer<'a> {
         builder.add_block(merge_id, "ifcont");
 
         // Phi only when both arms produced a trailing operand AND
-        // their cursors reached the merge (didn't terminate). Type
-        // matching is intentionally permissive (mirrors legacy):
-        // executor verifies LLVM-type compatibility at emission time.
+        // their cursors reached the merge (didn't terminate). When
+        // `result_ty` is a union and an arm's trailing type is a
+        // non-union member, [`Self::widen_arm_into_block`] pre-stages
+        // an [`IRInstruction::UnionWrap`] in the arm's exit block so
+        // the phi sees uniformly-typed incomings.
         let result = match (then_exit, else_exit, &then_value, &else_value) {
-            (Some(t_exit), Some(e_exit), Some((t_op, _)), Some((e_op, _))) => {
+            (Some(t_exit), Some(e_exit), Some((t_op, t_ty)), Some((e_op, e_ty))) => {
+                let t_op =
+                    self.widen_arm_into_block(builder, t_exit, t_op.clone(), t_ty, &result_ty);
+                let e_op =
+                    self.widen_arm_into_block(builder, e_exit, e_op.clone(), e_ty, &result_ty);
                 let dest = self.next_value_id();
                 builder.append(
                     merge_id,
                     IRInstruction::Phi {
                         dest,
-                        incomings: vec![(t_exit, t_op.clone()), (e_exit, e_op.clone())],
+                        incomings: vec![(t_exit, t_op), (e_exit, e_op)],
                         ty: result_ty,
                     },
                 );
@@ -190,20 +196,20 @@ impl<'a> Lowerer<'a> {
         );
 
         builder.add_block(then_id, "tern_then");
-        let (then_exit, then_op, _) = self.lower_expr_to_operand(builder, then_id, then_expr)?;
-        if let Some(t_exit) = then_exit {
-            builder.set_terminator(t_exit, IRTerminator::Branch(merge_id));
-        }
+        let (then_exit, then_op, then_ty) =
+            self.lower_expr_to_operand(builder, then_id, then_expr)?;
 
         builder.add_block(else_id, "tern_else");
-        let (else_exit, else_op, _) = self.lower_expr_to_operand(builder, else_id, else_expr)?;
-        if let Some(e_exit) = else_exit {
-            builder.set_terminator(e_exit, IRTerminator::Branch(merge_id));
-        }
+        let (else_exit, else_op, else_ty) =
+            self.lower_expr_to_operand(builder, else_id, else_expr)?;
 
         builder.add_block(merge_id, "tern_cont");
         let result = match (then_exit, else_exit) {
             (Some(t_exit), Some(e_exit)) => {
+                let then_op = self.widen_arm_into_block(builder, t_exit, then_op, &then_ty, &ty);
+                let else_op = self.widen_arm_into_block(builder, e_exit, else_op, &else_ty, &ty);
+                builder.set_terminator(t_exit, IRTerminator::Branch(merge_id));
+                builder.set_terminator(e_exit, IRTerminator::Branch(merge_id));
                 let dest = self.next_value_id();
                 builder.append(
                     merge_id,
@@ -215,7 +221,15 @@ impl<'a> Lowerer<'a> {
                 );
                 IROperand::Local(dest)
             }
-            _ => IROperand::Unit,
+            _ => {
+                if let Some(t_exit) = then_exit {
+                    builder.set_terminator(t_exit, IRTerminator::Branch(merge_id));
+                }
+                if let Some(e_exit) = else_exit {
+                    builder.set_terminator(e_exit, IRTerminator::Branch(merge_id));
+                }
+                IROperand::Unit
+            }
         };
         Ok((Some(merge_id), result))
     }
@@ -301,6 +315,32 @@ impl<'a> Lowerer<'a> {
         Ok((Some(merge_id), result))
     }
 
+    /// Append an [`IRInstruction::UnionWrap`] to `block_id` (landing
+    /// before its branch terminator) when `target_ty` is a
+    /// [`Type::Union`] and `arm_ty` is a non-union member of it.
+    /// Returns the operand the merge phi should reference (the new
+    /// wrapped dest, or `arm_op` untouched).
+    ///
+    /// Builder-based wrapper around [`Self::build_arm_union_wrap`]
+    /// for the value-context conditional constructs whose arm bodies
+    /// already live in the builder when widening is decided.
+    fn widen_arm_into_block(
+        &mut self,
+        builder: &mut CFGBuilder,
+        block_id: IRBlockId,
+        arm_op: IROperand,
+        arm_ty: &Type,
+        target_ty: &Type,
+    ) -> IROperand {
+        match self.build_arm_union_wrap(arm_op.clone(), arm_ty, target_ty) {
+            Some((dest, instruction)) => {
+                builder.append(block_id, instruction);
+                IROperand::Local(dest)
+            }
+            None => arm_op,
+        }
+    }
+
     /// Lower a value-arm body block: add the block to the builder,
     /// lower stmts via [`Self::lower_statements_for_value`], close
     /// the exit (when present) with `Branch(merge)`, return the exit
@@ -325,6 +365,8 @@ impl<'a> Lowerer<'a> {
     /// arm + the else (when present) produced a trailing value with
     /// reachable exit. Returns `IROperand::Local(phi.dest)` on
     /// success or `IROperand::Unit` for statement-shaped constructs.
+    /// Widens each arm's trailing operand to `ty` via
+    /// [`Self::widen_arm_into_block`] when `ty` is a union.
     #[allow(clippy::too_many_arguments)]
     fn try_stage_cond_phi(
         &mut self,
@@ -351,12 +393,14 @@ impl<'a> Lowerer<'a> {
         let mut incomings: Vec<(IRBlockId, IROperand)> = Vec::with_capacity(arm_exits.len() + 1);
         for (exit, value) in arm_exits {
             let exit = exit.expect("guarded by any(is_none) check above");
-            let (op, _) = value.as_ref().expect("guarded by any(is_none) check above");
-            incomings.push((exit, op.clone()));
+            let (op, arm_ty) = value.as_ref().expect("guarded by any(is_none) check above");
+            let op = self.widen_arm_into_block(builder, exit, op.clone(), arm_ty, &ty);
+            incomings.push((exit, op));
         }
         let e_exit = else_exit.expect("guarded above");
-        let (e_op, _) = else_value.expect("guarded above");
-        incomings.push((e_exit, e_op.clone()));
+        let (e_op, e_ty) = else_value.expect("guarded above");
+        let e_op = self.widen_arm_into_block(builder, e_exit, e_op.clone(), e_ty, &ty);
+        incomings.push((e_exit, e_op));
         let dest = self.next_value_id();
         builder.append(
             merge_id,

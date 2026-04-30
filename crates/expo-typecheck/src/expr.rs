@@ -53,12 +53,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 arm_types.push(infer_body_type(body, ctx, &mut child));
             }
 
-            let result_type = arm_types
-                .iter()
-                .find(|t| t.is_known() && **t != Type::Unit)
-                .cloned()
-                .or_else(|| arm_types.iter().find(|t| t.is_known()).cloned())
-                .unwrap_or(Type::Unknown);
+            let result_type = join_arm_types(&arm_types);
 
             if result_type.is_known() && result_type != Type::Unit {
                 for arm_ty in &arm_types {
@@ -158,7 +153,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 let mut else_ce = ce.child(Type::Unknown);
                 let else_ty = infer_body_type(else_stmts, ctx, &mut else_ce);
                 ce.merge_branches(&[then_ce.env, else_ce.env]);
-                if then_ty.is_known() { then_ty } else { else_ty }
+                join_arm_types(&[then_ty, else_ty])
             } else {
                 ce.merge_branches(&[then_ce.env]);
                 Type::Unit
@@ -244,7 +239,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
 
         ExprKind::Match { subject, arms } => {
             let subject_type = infer_expr(subject, ctx, ce);
-            let mut result_type = Type::Unknown;
+            let mut arm_types: Vec<Type> = Vec::with_capacity(arms.len());
             for arm in arms.iter_mut() {
                 let mut arm_ce = ce.child(Type::Unknown);
                 let bound_vars = collect_pattern_bindings(&arm.pattern);
@@ -258,9 +253,10 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                     arm.body.last(),
                     Some(Statement::Expr(e)) if is_diverging(e)
                 );
-                let arm_meaningful = arm_ty.is_known() || matches!(arm_ty, Type::Parameter(_));
-                if matches!(result_type, Type::Unknown) && arm_meaningful && !arm_diverges {
-                    result_type = arm_ty;
+                if !arm_diverges
+                    && (arm_type_meaningful(&arm_ty) || matches!(arm_ty, Type::Parameter(_)))
+                {
+                    arm_types.push(arm_ty);
                 }
                 for (name, name_span) in &bound_vars {
                     if !name.starts_with('_') && !arm_ce.used_vars.contains(name) {
@@ -269,7 +265,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 }
             }
             check_match_exhaustiveness(&subject_type, arms, span, ctx);
-            result_type
+            join_arm_types(&arm_types)
         }
 
         ExprKind::MethodCall {
@@ -443,7 +439,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                     span,
                 );
             }
-            if then_ty.is_known() { then_ty } else { else_ty }
+            join_arm_types(&[then_ty, else_ty])
         }
 
         ExprKind::Unary { op, operand } => {
@@ -869,6 +865,31 @@ fn is_closure_expr(expr: &Expr) -> bool {
 /// instances like `Ref<(), Int>` must still unify with `Ref<(), R>` to bind `R`.
 fn arg_ty_participates_in_unification(ty: &Type) -> bool {
     !matches!(unwrap_indirect(ty), Type::Unknown | Type::Error)
+}
+
+/// Whether an arm's tail type should seed a control-flow construct's result type.
+/// [`Type::is_known`] returns false for [`Type::Named`] with non-empty `type_args`,
+/// but concrete instances like `List<IPAddress>` are exactly the result types
+/// downstream lowering needs typecheck to publish. Mirrors
+/// [`arg_ty_participates_in_unification`].
+fn arm_type_meaningful(ty: &Type) -> bool {
+    !matches!(unwrap_indirect(ty), Type::Unknown | Type::Error)
+}
+
+/// Picks the result type for a value-context control-flow construct (`Match`,
+/// `If`, `Cond`, `Ternary`) from its arm tail types. Returns the first
+/// meaningful non-`Unit` arm, falling back to the first meaningful arm, then
+/// to `Type::Unknown`. Implicit-union derivation from differing arms is a
+/// planned feature pending the monomorphization infrastructure to register
+/// ad-hoc arm-derived unions; until then arm-type disagreements remain a
+/// downstream type-mismatch error.
+fn join_arm_types(arm_types: &[Type]) -> Type {
+    arm_types
+        .iter()
+        .find(|t| arm_type_meaningful(t) && **t != Type::Unit)
+        .or_else(|| arm_types.iter().find(|t| arm_type_meaningful(t)))
+        .cloned()
+        .unwrap_or(Type::Unknown)
 }
 
 /// If `ty` is a monomorphized named type (`Ref_$unit.Int$`), expand to [`Type::Named`]

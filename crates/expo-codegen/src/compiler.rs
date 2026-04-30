@@ -1687,6 +1687,12 @@ fn run_codegen<'ctx>(
 
     finalize_pending_unions(&mut compiler);
 
+    // Elaboration boundary: structural decisions that need a fully-
+    // declared IR view land here. No-op today; the seam exists so
+    // future protocol-coercion / phi-incoming-coercion / numeric-
+    // coercion passes have a single fixed integration point.
+    expo_ir::elaborate_program(&mut compiler.ir).map_err(|e| codegen_error(e, entry_span))?;
+
     for (module, pkg) in modules.iter().zip(packages.iter()) {
         compiler
             .with_package(package_from_str(pkg), |c| c.define_functions(module))

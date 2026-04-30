@@ -91,7 +91,12 @@ pub(crate) fn register_block<'ctx>(
 /// when present (used by Stub-execute-time control-flow shims to
 /// plumb a merge-phi value back through `compile_expr`'s return).
 /// When `result_operand` is `None` the construct is statement-shaped
-/// and no value is captured.
+/// and no value is captured. When `result_operand` is
+/// `Some(IROperand::Local(id))` and `id` was not registered in the
+/// value map (for example, when the lifted construct's trailing
+/// instruction is a void call that mints a destination but emits no
+/// LLVM value), returns `Ok(None)` -- mirrors the single-block
+/// `lift_at_current` path's `maybe_typed_value` graceful handling.
 pub(crate) fn walk_function_blocks<'ctx>(
     compiler: &mut Compiler<'ctx>,
     blocks: &[IRBasicBlock],
@@ -169,7 +174,21 @@ pub(crate) fn walk_function_blocks_seeded<'ctx>(
     }
 
     let result = match result_operand {
-        Some(operand) => Some(materialize_operand(compiler, operand, &value_map)?),
+        Some(operand) => {
+            // Local operands referencing a value id that was never
+            // registered in `value_map` indicate the lifted construct's
+            // trailing instruction was void (e.g. a `void`-returning
+            // call whose dest the executor skipped). Treat as a
+            // statement-shaped result rather than failing -- the
+            // single-block path already does this via `maybe_typed_value`.
+            if let IROperand::Local(id) = operand
+                && !value_map.contains_key(id)
+            {
+                None
+            } else {
+                Some(materialize_operand(compiler, operand, &value_map)?)
+            }
+        }
         None => None,
     };
     Ok(result)
