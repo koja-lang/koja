@@ -494,7 +494,7 @@ fn resolve_method_call<'ctx>(
             closure_site_path: c.closure_site_path.as_deref(),
             fn_lower: &c.fn_lower,
             layouts: &c.layouts,
-            locals: &c.fn_state,
+            locals: &c.fn_lower,
             package: c.current_package.as_ref(),
             type_ctx: c.type_ctx,
         };
@@ -922,7 +922,7 @@ fn resolve_static_call<'ctx>(
             closure_site_path: c.closure_site_path.as_deref(),
             fn_lower: &c.fn_lower,
             layouts: &c.layouts,
-            locals: &c.fn_state,
+            locals: &c.fn_lower,
             package: c.current_package.as_ref(),
             type_ctx: c.type_ctx,
         };

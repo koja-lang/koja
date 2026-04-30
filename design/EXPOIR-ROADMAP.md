@@ -11,10 +11,17 @@ SIL-style design prose and the full Wave 1-17 narrative live in
 ## 1. Status snapshot
 
 Phase 4g Slice 3 (Wave 30) landed the recursive [`CFGBuilder`]
-lowering shape, and Slice 3a-bis (Wave 31) layered on the typed
+lowering shape; Slice 3a-bis (Wave 31) layered on the typed
 [`crate::lower::values::OperandResult`] contract -- every
 value-producing `lower_*` helper now publishes the operand's
-resolved [`Type`] alongside the operand itself. Every
+resolved [`Type`] alongside the operand itself. Slice 3b-0 (Wave 32)
+introduced [`crate::FnLowerState::local_types`] (the LLVM-free
+typed-locals mirror of `expo-codegen`'s
+`Compiler.fn_state.variables`), populated at every binding site
+(method/free param entry, `bind_for_pattern`, executor
+`StoreLocal { is_decl: true }`, legacy `compile_assignment` fresh
+decls, IR `store_local` fresh decls, pattern-binder lowerings)
+and consumed by `Lowerer::ctx().locals.type_of(...)`. Every
 operand-shaped lowering helper takes `(&mut CFGBuilder, IRBlockId)`
 and returns `(Option<IRBlockId>, IROperand, Type)` -- referentially
 transparent, no ambient cursor state on
@@ -71,7 +78,35 @@ What we do _not_ have yet:
   through the codegen-side `lower_and_execute` shim (per
   Statement::Expr / `compile_statement`), not for the function as a
   whole. Removing `func_ast` and switching emit to walk
-  `IRFunction.blocks` is the next slice.
+  `IRFunction.blocks` is the next slice -- but the structural cut
+  is blocked on typed control-flow lowering (see below).
+- **Typed `Match` / `If` / `Cond` / `Block` lowering in
+  [`crate::Lowerer::lower_expr_to_operand`]** -- these expression
+  kinds still defer through [`IRInstruction::Stub`] with
+  `expr.resolved_type.unwrap_or(Unknown)` as the published type,
+  and the typecheck `Type::is_known()` quirk
+  ([`expo-ast/src/types.rs::is_known`])
+  treats `Type::Named { type_args, .. }` with non-empty args as
+  not-known. Together that means an arm-join over a perfectly
+  concrete `List<IPAddress>` resolves to `Type::Unit` in the
+  Match handler ([`expo-typecheck/src/expr.rs`] line ~245), so
+  `addrs = match Socket.resolve(host) ... end` lowers as a
+  Unit-typed local -- which the `compile_expr` `Ident` reader then
+  rejects with "cannot load variable of unsupported type". Slice
+  3b's structural cut (drain `func_ast`, route emit through
+  `lower_function_blocks` -> `walk_function_blocks`) was attempted
+  in this session and reverted: even with the `is_known` quirk
+  patched, the IR-Stub PHI seam surfaces ternary / match arm-type
+  mismatches (`Result_$T.unknown$` vs `Result_$unknown.T$` PHI
+  operands LLVM rejects). The legacy `compile_method_body` path
+  derived the unified arm type at codegen time and coerced both
+  arms to it before building the PHI; the new IR-execute path
+  builds the PHI from per-arm `compile_expr` outputs without that
+  unification step. Typed control-flow lowering is the next
+  prerequisite -- once `lower_expr_to_operand` emits typed
+  `IRInstruction::Match` / `IRInstruction::If` / etc. with a
+  unified arm type and per-arm `IRInstruction::UnionWrap`-style
+  coercions, the structural 3b cut becomes mechanical.
 - `compile_assignment`'s three transitional forks (list-literal RHS,
   destructuring pattern, unannotated assignment) still live in
   `expo-codegen/src/stmt.rs`.
@@ -1301,6 +1336,78 @@ vs structural cut vs ambient-state retirement).
   Validation: 25/25 lang tests, 246/246 stdlib tests, zero clippy
   warnings, `just doit` green.
 
+- **Slice 3b-0 -- typed locals on [`crate::FnLowerState`] (Done, Wave 32).**
+  Foundational lift extracted from the abandoned 3b structural
+  cut. [`crate::FnLowerState`] gains a
+  `local_types: HashMap<String, Type>` field and an inherent
+  [`crate::lower::ctx::LocalBindings`] impl; [`crate::Lowerer`]
+  drops its separate `locals: &dyn LocalBindings` borrow and
+  exposes both through `Self::ctx().fn_lower` /
+  `Self::ctx().locals` (same `&FnLowerState` re-borrow, no
+  aliasing). Population mirrors `expo-codegen`'s
+  `Compiler.fn_state.variables` at every binding site:
+  - method/free function param entry
+    ([`crate::generics::compile_method_body`] /
+    [`crate::generics::emit_ir_function`])
+  - `bind_for_pattern` (for-loop element binding)
+  - executor [`expo_ir::IRInstruction::StoreLocal`]
+    `is_decl: true` arm
+    ([`expo-codegen/src/control/instructions.rs::emit_store_local`])
+  - legacy [`expo-codegen/src/stmt.rs::compile_assignment`]
+    fresh-decl branch (both LValue and Pattern targets)
+  - IR-side
+    [`expo-ir/src/lower/statements.rs::Lowerer::store_local`]
+    fresh-decl branch
+  - pattern-binder lowerings
+    ([`expo-ir/src/lower/patterns.rs`])'s `ResolvedPattern::Bind`
+    and `ResolvedPattern::UnionMember` arms in both
+    `lower_pattern_into_arm` and `lower_resolved_pattern`.
+  Decoupling rationale: the lowerer needs to resolve `Ident`
+  references at lower time (before any LLVM state exists) but
+  `FnState::variables` is LLVM-alloca-bound and only meaningful
+  at execute time; `local_types` is the LLVM-free typed view.
+  The previous bridge (`LocalBindings for FnState` reading from
+  `variables`) only worked because lowering was always preceded
+  by the `compile_method_body` AST walk that filled `variables`
+  -- a precondition the future structural cut (`IRFunction`
+  carries `Vec<IRBasicBlock>`, no per-statement codegen) cannot
+  honor.
+  
+  Slice 3b's structural cut (drain `func_ast`, route emit through
+  `lower_function_blocks` -> `walk_function_blocks`,
+  pre-codegen elaboration pass for
+  [`expo_ir::IRInstruction::FromListLiteral`]) was attempted in
+  this session and reverted: even with the typed-locals
+  foundation in place, typed control-flow lowering
+  (`Match` / `If` / `Cond` / `Block` in
+  [`crate::Lowerer::lower_expr_to_operand`]) is a hard
+  prerequisite. Today these expression kinds fall through to
+  [`expo_ir::IRInstruction::Stub`] with
+  `expr.resolved_type.unwrap_or(Unknown)` as the published type,
+  and a typecheck quirk in
+  [`expo-ast/src/types.rs::is_known`]
+  treats `Type::Named { type_args, .. }` with non-empty args as
+  not-known -- so the typecheck Match arm-join handler
+  ([`expo-typecheck/src/expr.rs::infer_expr`]) resolves a
+  perfectly concrete `List<IPAddress>` arm to `Type::Unit`,
+  leaving `addrs = match Socket.resolve(host) ...` lowered with a
+  `Unit`-typed local that `compile_expr`'s `Ident` reader rejects
+  ("cannot load variable of unsupported type"). The downstream
+  PHI seam compounds the issue: the IR-Stub's `compile_expr`
+  evaluation builds PHI nodes from per-arm `compile_expr`
+  outputs without unifying the arm types, leaving LLVM with
+  `Result_$T.unknown$` vs `Result_$unknown.T$` PHI operands it
+  rejects. The legacy `compile_method_body` path derived the
+  unified arm type at codegen time and coerced both arms before
+  the PHI; the structural cut needs the IR vocabulary to express
+  that unification declaratively (typed
+  `IRInstruction::Match` / `IRInstruction::If` / per-arm
+  `IRInstruction::UnionWrap`-style coercions) before the legacy
+  path can retire.
+  
+  Validation: 25/25 lang tests, 246/246 stdlib tests, zero
+  clippy warnings, `just doit` green.
+
 - **Slice 3 (proposed continuation) -- `IRFunction` carries `Vec<IRBasicBlock>`;
   per-construct types and walkers dissolve.** The structural cut.
   `IRFunctionKind::Free { func_ast, ... }` and
@@ -1646,8 +1753,32 @@ rule plus the concrete behavior it forbids.
     consumers when the lowerer can authoritatively answer; `Stub`
     fallthroughs that don't carry a `result_type`. The Wave 31
     lift made Slice 3b's structural cut (whole-function lowering
-    before emit, legacy `compile_assignment` retire) safe -- the
-    typing fidelity gap that blocked it is closed.
+    before emit, legacy `compile_assignment` retire) safe for
+    leaf expressions; control-flow expressions
+    (`Match` / `If` / `Cond` / `Block`) still need typed
+    lowering before the structural cut can land (see invariant
+    15).
+
+15. **Typed-locals seam: lowerer reads
+    [`crate::FnLowerState::local_types`] (Wave 32).** The IR
+    lowerer's view of in-scope local bindings comes from the
+    LLVM-free `local_types` map on `FnLowerState`, not from
+    `expo-codegen`'s LLVM-alloca-bound `Compiler.fn_state.variables`.
+    [`crate::lower::ctx::LocalBindings`] is impl'd directly on
+    `FnLowerState`; the lowerer's `Self::ctx().locals`
+    re-borrows the same `&FnLowerState`. Every binding site
+    (param entry, for-loop binding, executor `StoreLocal`
+    fresh-decl, legacy `compile_assignment` fresh-decl, IR
+    `store_local` fresh-decl, pattern-binder `Bind` /
+    `UnionMember` arms) writes to *both* `local_types` (for
+    lowering's typed view) and `variables` (for the LLVM-bound
+    runtime view). Forbids: the lowerer reading
+    `Compiler.fn_state.variables` (would re-introduce the
+    LLVM-precondition that blocks whole-function lowering); a
+    binding site populating only one of the two maps (drift
+    between the typed view and the runtime view); reading
+    `local_types` from codegen-only code (use `variables` for
+    the alloca, `local_types` is the lowerer's mirror).
 
 ---
 

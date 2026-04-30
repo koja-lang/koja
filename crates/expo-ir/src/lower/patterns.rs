@@ -1021,6 +1021,7 @@ impl<'a> Lowerer<'a> {
                 ty,
                 strict_llvm,
             } => {
+                self.fn_state.local_types.insert(name.clone(), ty.clone());
                 blocks
                     .last_mut()
                     .unwrap()
@@ -1123,6 +1124,9 @@ impl<'a> Lowerer<'a> {
                 bind_name,
                 ..
             } => {
+                self.fn_state
+                    .local_types
+                    .insert(bind_name.clone(), member_ty.clone());
                 let tag_dest = self.next_value_id();
                 blocks
                     .last_mut()
@@ -1193,6 +1197,7 @@ impl<'a> Lowerer<'a> {
                 ty,
                 strict_llvm,
             } => {
+                self.fn_state.local_types.insert(name.clone(), ty.clone());
                 out.push(IRInstruction::PatternBindFromPtr {
                     name: name.clone(),
                     ty: ty.clone(),
@@ -1261,6 +1266,9 @@ impl<'a> Lowerer<'a> {
                 bind_name,
                 ..
             } => {
+                self.fn_state
+                    .local_types
+                    .insert(bind_name.clone(), member_ty.clone());
                 let tag_dest = self.next_value_id();
                 out.push(IRInstruction::PatternTagEq {
                     dest: tag_dest,

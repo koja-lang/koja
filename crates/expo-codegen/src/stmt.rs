@@ -265,7 +265,11 @@ fn compile_assignment<'ctx>(
                     compiler
                         .fn_state
                         .variables
-                        .insert(name.clone(), (alloca, assigned_type, ownership));
+                        .insert(name.clone(), (alloca, assigned_type.clone(), ownership));
+                    compiler
+                        .fn_lower
+                        .local_types
+                        .insert(name.clone(), assigned_type);
                 }
             } else {
                 compile_field_assignment(compiler, &lvalue.segments, val)?;
@@ -284,7 +288,11 @@ fn compile_assignment<'ctx>(
             compiler
                 .fn_state
                 .variables
-                .insert(name.clone(), (alloca, assigned_type, ownership));
+                .insert(name.clone(), (alloca, assigned_type.clone(), ownership));
+            compiler
+                .fn_lower
+                .local_types
+                .insert(name.clone(), assigned_type);
         }
     }
     Ok(())

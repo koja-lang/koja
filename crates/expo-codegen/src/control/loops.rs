@@ -344,6 +344,10 @@ fn bind_for_pattern<'ctx>(
             name.clone(),
             (alloca, setup.elem_type.clone(), Ownership::Unowned),
         );
+        compiler
+            .fn_lower
+            .local_types
+            .insert(name.clone(), setup.elem_type.clone());
     }
 }
 

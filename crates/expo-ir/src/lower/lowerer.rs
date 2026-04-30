@@ -27,7 +27,7 @@ use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::Package;
 
 use crate::blocks::IRBlockId;
-use crate::lower::ctx::{LocalBindings, LowerCtx};
+use crate::lower::ctx::LowerCtx;
 use crate::program::IRProgram;
 use crate::values::IRValueId;
 use crate::{FnLowerState, TypeLayouts};
@@ -42,15 +42,17 @@ use crate::{FnLowerState, TypeLayouts};
 /// therefore safe to lift to a typed [`crate::values::IRInstruction::Call`]
 /// / [`crate::values::IRInstruction::MethodCall`]) versus deferring
 /// to [`crate::values::IRInstruction::Stub`].
+///
+/// Slice 3b (Wave 32): the lowerer's local-binding view comes from
+/// [`FnLowerState::local_types`] (typed-locals table populated by
+/// the binding-site emitters; LLVM-free), so a separate `locals`
+/// borrow on the lowerer would alias the `&mut fn_state`. The
+/// `Self::ctx` accessor exposes both via the same `&FnLowerState`
+/// re-borrow.
 pub struct Lowerer<'a> {
     pub closure_site_path: Option<&'a Path>,
     pub fn_state: &'a mut FnLowerState,
     pub layouts: &'a TypeLayouts,
-    /// Local bindings in scope at the current lowering site. Mirrors
-    /// the field on [`LowerCtx`]; propagated through [`Self::ctx`] so
-    /// free functions in [`crate::lower`] can resolve `Ident`-shaped
-    /// receivers against the same binding store.
-    pub locals: &'a dyn LocalBindings,
     pub package: Option<&'a Package>,
     pub program: &'a IRProgram,
     pub type_ctx: &'a TypeContext,
@@ -59,16 +61,17 @@ pub struct Lowerer<'a> {
 impl<'a> Lowerer<'a> {
     /// Build an ad-hoc [`LowerCtx<'_>`] view tied to this lowerer's
     /// program-level references. The returned view borrows
-    /// [`Self::fn_state`] immutably; once it is dropped the lowerer
-    /// can resume `&mut self` operations on the same fn_state. Use
-    /// when delegating to free functions in [`crate::lower`] that
-    /// still take `&LowerCtx`.
+    /// [`Self::fn_state`] immutably (used both as `fn_lower` and as
+    /// the `LocalBindings` source for typed-local lookups); once it
+    /// is dropped the lowerer can resume `&mut self` operations on
+    /// the same fn_state. Use when delegating to free functions in
+    /// [`crate::lower`] that still take `&LowerCtx`.
     pub fn ctx(&self) -> LowerCtx<'_> {
         LowerCtx {
             closure_site_path: self.closure_site_path,
             fn_lower: &*self.fn_state,
             layouts: self.layouts,
-            locals: self.locals,
+            locals: &*self.fn_state,
             package: self.package,
             type_ctx: self.type_ctx,
         }

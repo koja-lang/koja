@@ -635,7 +635,7 @@ impl<'a> Lowerer<'a> {
     /// patterns (typecheck rejects most cases; codegen never
     /// supported them).
     fn build_store(
-        &self,
+        &mut self,
         target: &AssignTarget,
         value_expr: &Expr,
         assigned_type: &Type,
@@ -659,8 +659,12 @@ impl<'a> Lowerer<'a> {
     /// Build a [`IRInstruction::StoreLocal`] for a single-segment
     /// lvalue or pattern binding. Looks up the binding to decide
     /// `is_decl`: existing -> reassignment; absent -> fresh let.
+    /// Fresh-decl bindings register their (name, type) pair in
+    /// [`crate::FnLowerState::local_types`] so subsequent statements
+    /// can resolve `Ident` references via
+    /// [`crate::Lowerer::lower_ident_or_stub`]'s typed-local lookup.
     fn store_local(
-        &self,
+        &mut self,
         name: String,
         value_expr: &Expr,
         assigned_type: &Type,
@@ -676,6 +680,9 @@ impl<'a> Lowerer<'a> {
                 Some(ownership_for_expr(value_expr, assigned_type)),
             )
         };
+        if is_decl {
+            self.fn_state.local_types.insert(name.clone(), ty.clone());
+        }
         IRInstruction::StoreLocal {
             name,
             value,
@@ -688,7 +695,11 @@ impl<'a> Lowerer<'a> {
     /// Build a [`IRInstruction::StoreField`] for a multi-segment
     /// lvalue chain. Mirrors [`IRInstruction::FieldChain`]'s shape
     /// so the executor can share its GEP-walking helper.
-    fn store_field(&self, segments: &[String], value: IROperand) -> Result<IRInstruction, String> {
+    fn store_field(
+        &mut self,
+        segments: &[String],
+        value: IROperand,
+    ) -> Result<IRInstruction, String> {
         let var_type = |name: &str| self.ctx().locals.type_of(name);
         let (base_type, steps) = resolve_field_path(&self.ctx(), segments, var_type)?;
         let ty = steps

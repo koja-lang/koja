@@ -121,6 +121,7 @@ pub(crate) fn compile_method_body<'ctx>(
 
     let entry = c.context.append_basic_block(fn_value, "entry");
     let saved_vars = mem::take(&mut c.fn_state.variables);
+    let saved_locals = mem::take(&mut c.fn_lower.local_types);
     let saved_block = c.builder.get_insert_block();
     let saved_subst = mem::replace(&mut c.fn_lower.type_subst, subst);
 
@@ -159,9 +160,11 @@ pub(crate) fn compile_method_body<'ctx>(
             let alloca = c.builder.build_alloca(llvm_ty, "self").unwrap();
             let param_val = fn_value.get_nth_param(param_idx).unwrap();
             c.builder.build_store(alloca, param_val).unwrap();
-            c.fn_state
-                .variables
-                .insert("self".to_string(), (alloca, self_ty, Ownership::Unowned));
+            c.fn_state.variables.insert(
+                "self".to_string(),
+                (alloca, self_ty.clone(), Ownership::Unowned),
+            );
+            c.fn_lower.local_types.insert("self".to_string(), self_ty);
             param_allocas.push(alloca);
             param_idx += 1;
         }
@@ -181,6 +184,7 @@ pub(crate) fn compile_method_body<'ctx>(
                 c.fn_state
                     .variables
                     .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
+                c.fn_lower.local_types.insert(pname.clone(), ty.clone());
                 param_allocas.push(alloca);
                 param_idx += 1;
             }
@@ -216,6 +220,7 @@ pub(crate) fn compile_method_body<'ctx>(
     c.fn_state.restore_loop(saved_loop);
     c.fn_lower.process_msg_type = saved_process_msg;
     c.fn_state.variables = saved_vars;
+    c.fn_lower.local_types = saved_locals;
     c.fn_lower.type_subst = saved_subst;
     if let Some(bb) = saved_block {
         c.builder.position_at_end(bb);
@@ -567,6 +572,7 @@ pub(crate) fn emit_ir_function<'ctx>(
 
     let entry = c.context.append_basic_block(fn_value, "entry");
     let saved_vars = mem::take(&mut c.fn_state.variables);
+    let saved_locals = mem::take(&mut c.fn_lower.local_types);
     let saved_block = c.builder.get_insert_block();
     let saved_subst = mem::replace(&mut c.fn_lower.type_subst, subst.clone());
 
@@ -588,6 +594,7 @@ pub(crate) fn emit_ir_function<'ctx>(
                 c.fn_state
                     .variables
                     .insert(pname.clone(), (alloca, ty.clone(), Ownership::Unowned));
+                c.fn_lower.local_types.insert(pname.clone(), ty.clone());
             }
         }
     }
@@ -601,6 +608,7 @@ pub(crate) fn emit_ir_function<'ctx>(
     )?;
 
     c.fn_state.variables = saved_vars;
+    c.fn_lower.local_types = saved_locals;
     c.fn_lower.type_subst = saved_subst;
     if let Some(bb) = saved_block {
         c.builder.position_at_end(bb);

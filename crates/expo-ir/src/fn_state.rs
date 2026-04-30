@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use expo_ast::types::Type;
 
 use crate::blocks::IRBlockId;
+use crate::lower::ctx::LocalBindings;
 use crate::values::IRValueId;
 
 #[derive(Default)]
@@ -30,6 +31,21 @@ pub struct FnLowerState {
     pub block_counter: u32,
     pub closure_counter: usize,
     current_fn: Option<String>,
+    /// Name -> resolved Expo type for locals visible to lowering.
+    /// Seeded from `meta.params` (incl. `self` for methods) at
+    /// function entry; updated by `lower_assignment_stmt::store_local`
+    /// (fresh decls) and the codegen-side bind sites
+    /// (`bind_self_param`, `bind_regular_params`, `bind_for_pattern`,
+    /// the `IRInstruction::StoreLocal` executor's `is_decl` arm,
+    /// and the legacy `compile_assignment` fork) as the lowerer
+    /// walks. Decoupled from `expo-codegen`'s `FnState::variables`
+    /// (LLVM-alloca-bound, only meaningful at execute time): the
+    /// lowerer reads its own typed view here so whole-function
+    /// lowering can resolve `Ident` references to typed `LoadLocal`
+    /// instructions before any LLVM state exists. Flat scope --
+    /// `insert` overwrites for shadowing; block-scope escape rules
+    /// are enforced by typecheck.
+    pub local_types: HashMap<String, Type>,
     /// Stack of enclosing-loop exit block ids. The lowering site for
     /// [`expo_ast::ast::Statement::Break`] reads `loop_exit.last()` to
     /// emit an [`crate::IRTerminator::Branch`] to the innermost loop's
@@ -40,6 +56,12 @@ pub struct FnLowerState {
     pub self_type_name: Option<String>,
     pub type_subst: HashMap<String, Type>,
     pub value_counter: u32,
+}
+
+impl LocalBindings for FnLowerState {
+    fn type_of(&self, name: &str) -> Option<Type> {
+        self.local_types.get(name).cloned()
+    }
 }
 
 impl FnLowerState {

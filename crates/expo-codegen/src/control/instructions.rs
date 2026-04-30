@@ -1192,6 +1192,15 @@ fn emit_store_local<'ctx>(
     is_decl: bool,
     ownership: Option<Ownership>,
 ) -> Result<(), String> {
+    // Re-decide `is_decl` at execute time using the up-to-date
+    // `fn_state.variables` (the LLVM-bound runtime view). Lowering's
+    // flat `local_types` tracking can mark a binding as a
+    // re-assignment when an earlier conditional branch declared it,
+    // even though that branch may not execute at runtime; legacy
+    // `compile_assignment` always re-checked at codegen time, so we
+    // mirror that here to preserve per-branch semantics.
+    let is_decl = is_decl || !c.fn_state.variables.contains_key(name);
+
     if is_decl {
         let alloca_type = to_llvm_type(ty, c.context, &c.llvm_types).unwrap_or(val.get_type());
         let alloca = c.build_entry_alloca(alloca_type, name);
@@ -1201,6 +1210,7 @@ fn emit_store_local<'ctx>(
             name.to_string(),
             (alloca, ty.clone(), ownership.unwrap_or(Ownership::Owned)),
         );
+        c.fn_lower.local_types.insert(name.to_string(), ty.clone());
         return Ok(());
     }
 
