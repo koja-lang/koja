@@ -37,6 +37,7 @@ pub struct IRBlockId(pub u32);
 
 /// How a basic block finishes. A block has exactly one terminator; the
 /// terminator names the successor block(s) (if any).
+#[derive(Clone, Debug)]
 pub enum IRTerminator {
     /// Unconditional jump to `target`.
     Branch(IRBlockId),
@@ -85,13 +86,10 @@ pub enum IRTerminator {
 /// A basic block: an id, a human-readable debug label, an instruction
 /// sequence, and a single terminator.
 ///
-/// Today the type is defined for forward-compat: constructs still
-/// store parallel `IRBlockId` + `Vec<IRInstruction>` + `IRTerminator`
-/// fields directly on their `IR*` value (see
-/// [`crate::resolved::conditionals::IRUnless`]). When a second
-/// construct lifts (slice 2, `compile_if` no else), the duplication
-/// motivates promoting `IRBasicBlock` to first-class: constructs hold
-/// `IRBasicBlock` values and the parallel-field shape goes away.
+/// First-class basic block; the only function-body container in
+/// [`crate::IRFunctionKind::Free`] / [`crate::IRFunctionKind::Method`]
+/// (Phase 4g Slice 3 retired the per-construct wrappers).
+#[derive(Clone, Debug)]
 pub struct IRBasicBlock {
     pub id: IRBlockId,
     pub instructions: Vec<IRInstruction>,

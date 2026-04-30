@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use expo_ast::types::Type;
 
-use crate::blocks::IRBlockId;
-use crate::values::IRValueId;
+use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
+use crate::values::{IRInstruction, IRValueId};
 
 #[derive(Default)]
 pub struct FnLowerState {
@@ -27,16 +27,24 @@ pub struct FnLowerState {
     /// Stack of enclosing-loop exit block ids. The lowering site for
     /// [`expo_ast::ast::Statement::Break`] reads `loop_exit.last()` to
     /// emit an [`crate::IRTerminator::Branch`] to the innermost loop's
-    /// exit. Pushed by each loop emit walker (`emit_loop_unified` /
-    /// `emit_while_unified` / `emit_for_unified`) before walking the
-    /// body and popped after, mirroring the LLVM-bound exit-block
-    /// stack on `expo-codegen`'s `FnState`.
+    /// exit.
     pub loop_exit: Vec<IRBlockId>,
     pub process_msg_type: Option<Type>,
     pub return_type_hint: Option<Type>,
     pub self_type_name: Option<String>,
     pub type_subst: HashMap<String, Type>,
     pub value_counter: u32,
+    /// Pending blocks under construction by the function-body lowerer.
+    /// Populated by [`crate::Lowerer::open_block`] /
+    /// [`crate::Lowerer::close_block`] / [`crate::Lowerer::append_instr`];
+    /// drained by [`crate::Lowerer::lower_function_body`] into the
+    /// resulting `Vec<IRBasicBlock>` returned to the caller.
+    pub blocks: Vec<IRBasicBlock>,
+    /// The block currently being written to. `None` when the previous
+    /// block's terminator has been emitted but the next block has not
+    /// been opened yet -- in that state instructions cannot be appended
+    /// without first calling [`crate::Lowerer::open_block`].
+    pub current_block: Option<IRBlockId>,
 }
 
 impl FnLowerState {
@@ -98,5 +106,74 @@ impl FnLowerState {
     /// emit a [`crate::IRTerminator::Branch`] target.
     pub fn current_loop_exit(&self) -> Option<IRBlockId> {
         self.loop_exit.last().copied()
+    }
+
+    /// Append `instr` to the currently-open block. Panics if no
+    /// block is open -- callers must follow each [`Self::close_block`]
+    /// with [`Self::open_block`] before emitting more instructions.
+    pub fn append_instr(&mut self, instr: IRInstruction) {
+        let id = self
+            .current_block
+            .expect("FnLowerState::append_instr called with no open block");
+        let block = self
+            .blocks
+            .iter_mut()
+            .find(|b| b.id == id)
+            .expect("current_block must be present in blocks");
+        block.instructions.push(instr);
+    }
+
+    /// Mint a fresh [`IRBasicBlock`] with `label`, push it onto the
+    /// pending-blocks vector, set it as the cursor, and return its
+    /// id. The new block starts empty with a placeholder
+    /// `Branch(self)` terminator that the next [`Self::close_block`]
+    /// overwrites; using a self-branch keeps the IR well-formed if a
+    /// builder bug ever leaves a block open.
+    pub fn open_block(&mut self, label: impl Into<String>) -> IRBlockId {
+        let id = self.next_block_id();
+        self.blocks.push(IRBasicBlock {
+            id,
+            instructions: Vec::new(),
+            label: label.into(),
+            terminator: IRTerminator::Branch(id),
+        });
+        self.current_block = Some(id);
+        id
+    }
+
+    /// Open a block with a pre-allocated id (minted earlier so a
+    /// successor terminator could reference it). Otherwise identical
+    /// to [`Self::open_block`].
+    pub fn open_block_with_id(&mut self, id: IRBlockId, label: impl Into<String>) {
+        self.blocks.push(IRBasicBlock {
+            id,
+            instructions: Vec::new(),
+            label: label.into(),
+            terminator: IRTerminator::Branch(id),
+        });
+        self.current_block = Some(id);
+    }
+
+    /// Write `terminator` onto the currently-open block and clear the
+    /// cursor. The next instruction emission requires a fresh
+    /// [`Self::open_block`].
+    pub fn close_block(&mut self, terminator: IRTerminator) {
+        let id = self
+            .current_block
+            .take()
+            .expect("FnLowerState::close_block called with no open block");
+        let block = self
+            .blocks
+            .iter_mut()
+            .find(|b| b.id == id)
+            .expect("current_block must be present in blocks");
+        block.terminator = terminator;
+    }
+
+    /// `true` iff the previous block was closed without opening a
+    /// successor. Lowering uses this to decide whether to synthesize
+    /// an implicit-return terminator at the end of a function body.
+    pub fn cursor_is_closed(&self) -> bool {
+        self.current_block.is_none()
     }
 }

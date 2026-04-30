@@ -35,11 +35,11 @@
 //! keeps the stream single-source-of-truth and gives the migration a
 //! clear, greppable retirement marker.
 
-use expo_ast::ast::{BinarySegment, Expr};
+use expo_ast::ast::{BinarySegment, Expr, Pattern};
 use expo_typecheck::types::Type;
 
 use crate::blocks::IRBlockId;
-use crate::identity::FunctionIdentifier;
+use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::ownership::Ownership;
 use crate::resolved::fields::ResolvedFieldStep;
 use crate::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
@@ -648,6 +648,35 @@ pub enum IRInstruction {
         /// from / restore on `fn_lower.type_subst`.
         names: Vec<String>,
     },
+    /// Snapshot the current set of `fn_state.variables` bindings for
+    /// the names a subsequent [`IRInstruction::ExitScope`] will
+    /// restore. Used at match-arm boundaries (and similar block-local
+    /// scopes) so per-arm pattern bindings don't leak forward.
+    EnterScope,
+    /// Restore the snapshot pushed by the matching
+    /// [`IRInstruction::EnterScope`]: drop the named bindings from
+    /// `fn_state.variables` and reinstate any pre-push entries the
+    /// snapshot recorded.
+    ExitScope {
+        /// Names whose bindings should be removed from
+        /// `fn_state.variables` (any pre-existing values for them are
+        /// restored from the matching `EnterScope`'s snapshot).
+        names: Vec<String>,
+    },
+    /// Placeholder for a `for binding in iterable ... end` loop. The
+    /// elaboration pass ([`crate::elaborate::elaborate`]) rewrites
+    /// each occurrence into a `length()` / `get()` / `Option`-unwrap /
+    /// pattern-bind / `idx++` block sequence before codegen runs;
+    /// codegen panics if it sees this variant.
+    ForLoopStub {
+        iterable: Box<Expr>,
+        binding_pattern: Pattern,
+        header_block: IRBlockId,
+        body_entry: IRBlockId,
+        exit_block: IRBlockId,
+        elem_ty: Type,
+        mangled_type: MonomorphizedTypeIdentifier,
+    },
 }
 
 impl IRInstruction {
@@ -674,7 +703,10 @@ impl IRInstruction {
             | IRInstruction::Stub { dest, .. }
             | IRInstruction::UnaryOp { dest, .. }
             | IRInstruction::UnionWrap { dest, .. } => Some(*dest),
-            IRInstruction::PatternBindFromPtr { .. }
+            IRInstruction::EnterScope
+            | IRInstruction::ExitScope { .. }
+            | IRInstruction::ForLoopStub { .. }
+            | IRInstruction::PatternBindFromPtr { .. }
             | IRInstruction::PopTypeSubst { .. }
             | IRInstruction::PushTypeSubst { .. }
             | IRInstruction::StoreField { .. }

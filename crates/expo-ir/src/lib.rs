@@ -28,7 +28,8 @@ pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdent
 pub use lower::Lowerer;
 pub use ownership::Ownership;
 pub use program::{
-    ExternAbi, ExternAttrs, IREnum, IRFunction, IRFunctionKind, IRProgram, IRStruct, IRStructKind,
+    ExternAbi, ExternAttrs, IREnum, IRFunction, IRFunctionKind, IRFunctionMeta, IRParam, IRProgram,
+    IRStruct, IRStructKind,
 };
 pub use type_layouts::TypeLayouts;
 pub use values::{IRInstruction, IROperand, IRValueId};

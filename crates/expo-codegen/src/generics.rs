@@ -515,7 +515,10 @@ pub(crate) fn emit_ir_function<'ctx>(
     c: &mut Compiler<'ctx>,
     decl: &IRFunction,
 ) -> Result<(), String> {
-    let IRFunctionKind::Free { func_ast, subst } = &decl.kind else {
+    let IRFunctionKind::Free {
+        func_ast, subst, ..
+    } = &decl.kind
+    else {
         return Err(format!(
             "emit_ir_function called with non-free IRFunction `{}`",
             decl.mangled
@@ -623,6 +626,7 @@ pub(crate) fn emit_ir_impl_method<'ctx>(
         mangled_type,
         self_type,
         is_static,
+        ..
     } = &decl.kind
     else {
         return Err(format!(

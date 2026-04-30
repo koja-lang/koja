@@ -369,6 +369,26 @@ pub(crate) fn execute_instructions<'ctx>(
                 }
                 None
             }
+            IRInstruction::EnterScope => {
+                let snapshot = compiler.fn_state.variables.clone();
+                compiler.fn_state.scope_stack.push(snapshot);
+                None
+            }
+            IRInstruction::ExitScope { names: _ } => {
+                let snapshot = compiler
+                    .fn_state
+                    .scope_stack
+                    .pop()
+                    .ok_or("IRInstruction::ExitScope: scope_stack underflow")?;
+                compiler.fn_state.variables = snapshot;
+                None
+            }
+            IRInstruction::ForLoopStub { .. } => {
+                return Err(
+                    "IRInstruction::ForLoopStub reached codegen: elaboration pass missed this"
+                        .to_string(),
+                );
+            }
         };
         if let Some((dest, value)) = entry {
             value_map.insert(dest, value);

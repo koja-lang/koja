@@ -28,7 +28,9 @@ use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::LowerCtx;
 use crate::lower::methods::resolve_method_signature;
 use crate::lower::types::resolve_name_current;
-use crate::program::{IREnum, IRFunction, IRFunctionKind, IRProgram, IRStruct, IRStructKind};
+use crate::program::{
+    IREnum, IRFunction, IRFunctionKind, IRFunctionMeta, IRProgram, IRStruct, IRStructKind,
+};
 
 /// Plans a monomorphized struct: resolves field types under the
 /// substitution, classifies the struct as user-defined or a stdlib
@@ -182,11 +184,17 @@ pub fn monomorphize_function(
         .map(|p| substitute(&p.ty, &subst))
         .collect();
 
+    let meta = IRFunctionMeta::from_ast(&func_ast);
     program.insert_function(IRFunction {
         mangled: mangled.clone(),
         param_types,
         return_type,
-        kind: IRFunctionKind::Free { func_ast, subst },
+        kind: IRFunctionKind::Free {
+            func_ast,
+            meta,
+            subst,
+            blocks: Vec::new(),
+        },
     });
 
     Ok(Some(mangled))
@@ -212,17 +220,20 @@ pub fn monomorphize_impl_method(
     }
 
     let mangled = sig.mangled_fn.clone();
+    let meta = IRFunctionMeta::from_ast(&sig.func_ast);
     program.insert_function(IRFunction {
         mangled: sig.mangled_fn,
         param_types: sig.param_types,
         return_type: sig.return_type,
         kind: IRFunctionKind::Method {
             func_ast: sig.func_ast,
+            meta,
             subst: sig.subst,
             base_type: base_type.to_string(),
             mangled_type: sig.mangled_type,
             self_type: sig.self_type,
             is_static: sig.is_static,
+            blocks: Vec::new(),
         },
     });
 

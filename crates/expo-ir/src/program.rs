@@ -19,9 +19,11 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::Function;
+use expo_ast::span::Span;
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::Type;
 
+use crate::blocks::IRBasicBlock;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 
 /// Top-level IR container: a flat collection of monomorphized struct,
@@ -175,10 +177,57 @@ impl ExternAttrs {
     }
 }
 
+/// Per-function metadata shared across both AST-driven backends and
+/// the IR-block walker. Carries the source-level identity of the
+/// function (name, span, type-parameter list) plus the parameter
+/// kinds the codegen seam needs to materialize entry-block allocas
+/// and route the implicit `self` argument.
+#[derive(Clone, Debug)]
+pub struct IRFunctionMeta {
+    pub name: String,
+    pub span: Span,
+    pub params: Vec<IRParam>,
+    pub type_params: Vec<String>,
+}
+
+/// One parameter of a function as seen by codegen. The `Self_` kind
+/// matches [`expo_ast::ast::Param::Self_`] (the implicit receiver of
+/// instance methods) and reserves the leading parameter slot for the
+/// `self` alloca; `Regular` parameters carry the binding name codegen
+/// inserts into `fn_state.variables`.
+#[derive(Clone, Debug)]
+pub enum IRParam {
+    Self_,
+    Regular { name: String },
+}
+
+impl IRFunctionMeta {
+    /// Build an [`IRFunctionMeta`] from an [`expo_ast::ast::Function`]
+    /// AST node. Used by the monomorphize planners during the Slice 3
+    /// transition so the IR-level fields are populated alongside the
+    /// transitional `func_ast` body.
+    pub fn from_ast(func: &expo_ast::ast::Function) -> Self {
+        use expo_ast::ast::Param as AstParam;
+        Self {
+            name: func.name.clone(),
+            span: func.span,
+            params: func
+                .params
+                .iter()
+                .map(|p| match p {
+                    AstParam::Self_ { .. } => IRParam::Self_,
+                    AstParam::Regular { name, .. } => IRParam::Regular { name: name.clone() },
+                })
+                .collect(),
+            type_params: func.type_params.iter().map(|tp| tp.name.clone()).collect(),
+        }
+    }
+}
+
 /// Discriminates the callable symbol categories tracked by
-/// [`IRProgram`]. `Free` and `Method` own the AST body codegen lowers
-/// to LLVM; `Extern` is a linker-resolved declaration; `Intrinsic`,
-/// `MainEntry`, and `Thunk` carry no AST body because the
+/// [`IRProgram`]. `Free` and `Method` own the IR basic-block stream
+/// codegen walks; `Extern` is a linker-resolved declaration;
+/// `Intrinsic`, `MainEntry`, and `Thunk` carry no body because the
 /// implementation is hand-emitted by the backend.
 #[derive(Clone)]
 pub enum IRFunctionKind {
@@ -189,10 +238,21 @@ pub enum IRFunctionKind {
     /// backend to declare and link the symbol without consulting the
     /// LLVM module.
     Extern(ExternAttrs),
-    /// Free function (top-level, no `self`).
+    /// Free function (top-level, no `self`). Carries the source AST
+    /// body (`func_ast`) consumed by the codegen seam today and the
+    /// IR-level metadata + basic-block list populated at planning time
+    /// by [`crate::Lowerer::lower_function_body`].
+    ///
+    /// Phase 4g Slice 3 transition: `func_ast` and `blocks` coexist
+    /// while the per-construct emit walkers and elaboration pass land
+    /// incrementally; once codegen no longer needs `func_ast` the
+    /// field is dropped. `meta` and `blocks` are populated whenever
+    /// the planner already has the AST in hand.
     Free {
         func_ast: Function,
+        meta: IRFunctionMeta,
         subst: HashMap<String, Type>,
+        blocks: Vec<IRBasicBlock>,
     },
     /// Compiler-defined method whose body is hand-emitted by the
     /// backend (no AST). Originally introduced for stdlib types
@@ -218,9 +278,14 @@ pub enum IRFunctionKind {
     /// replacement entry-point convention will get its own
     /// classification at that time.
     MainEntry,
-    /// Impl method (instance or static).
+    /// Impl method (instance or static). Carries the source AST body
+    /// (`func_ast`) consumed by the codegen seam today and the
+    /// IR-level metadata + basic-block list populated at planning time
+    /// by [`crate::Lowerer::lower_function_body`]. See [`IRFunctionKind::Free`]
+    /// for the Slice 3 coexistence rationale.
     Method {
         func_ast: Function,
+        meta: IRFunctionMeta,
         subst: HashMap<String, Type>,
         /// Unmangled base type (e.g. `"List"`, `"MyStruct"`).
         base_type: String,
@@ -231,6 +296,7 @@ pub enum IRFunctionKind {
         self_type: Option<Type>,
         /// Whether this method has no `self` (static dispatch).
         is_static: bool,
+        blocks: Vec<IRBasicBlock>,
     },
     /// Forwarding wrapper that adapts a top-level function for use as
     /// a closure-compatible fat pointer. The body is synthetic
