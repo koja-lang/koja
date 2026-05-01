@@ -145,6 +145,17 @@ pub(crate) fn walk_function_blocks_seeded<'ctx>(
     for blk in blocks {
         let bb = block_map[&blk.id];
         compiler.builder.position_at_end(bb);
+        // Re-establish the enclosing-loop scope for Stub-deferred
+        // breaks. See [`expo_ir::LoopExitOp`].
+        match &blk.loop_exit_op {
+            expo_ir::LoopExitOp::None => {}
+            expo_ir::LoopExitOp::Push(exit_id) => {
+                compiler.fn_lower.push_loop_exit(*exit_id);
+            }
+            expo_ir::LoopExitOp::Pop => {
+                compiler.fn_lower.pop_loop_exit();
+            }
+        }
         execute_instructions(
             compiler,
             &blk.instructions,

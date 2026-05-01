@@ -5,13 +5,13 @@
 //! and produces [`crate::resolved::patterns`] / [`crate::resolved::match_expr`]
 //! values that the match-emission scaffolding can consume mechanically.
 
-use expo_ast::ast::{Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern};
+use expo_ast::ast::{Expr, ExprKind, FieldPattern, Literal, MatchArm, Pattern, Statement};
 use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_typecheck::context::VariantData;
 use expo_typecheck::types::{Type, mangle_name, mangle_type, named, unwrap_indirect};
 
 use crate::Lowerer;
-use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
+use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator, LoopExitOp};
 use crate::cfg::CFGBuilder;
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
@@ -636,14 +636,148 @@ pub struct LoweredPattern {
     pub instructions: Vec<IRInstruction>,
 }
 
+/// Per-arm trailing-expression type after monomorphization. `None`
+/// for arms ending in a non-expr statement -- those contribute no
+/// value to the match's merge phi.
+fn arm_value_type(arm: &MatchArm, ctx: &LowerCtx<'_>) -> Option<Type> {
+    let Statement::Expr(last) = arm.body.last()? else {
+        return None;
+    };
+    last.resolved_type
+        .as_ref()
+        .map(|t| monomorphize_type(ctx, t))
+}
+
+/// Wildcard / binding / literal / plain-struct (recursively
+/// minimal-fielded). Enum / union / binary / OR / list / typed-binding
+/// patterns return `false` because their IR lowering needs
+/// codegen-time monomorphization that isn't available at IR-lower
+/// time.
+fn is_minimal_pattern(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Binding { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => true,
+        Pattern::Struct { fields, .. } => fields.iter().all(|f| is_minimal_pattern(&f.pattern)),
+        Pattern::Binary { .. }
+        | Pattern::Constructor { .. }
+        | Pattern::EnumStruct { .. }
+        | Pattern::EnumTuple { .. }
+        | Pattern::EnumUnit { .. }
+        | Pattern::List { .. }
+        | Pattern::Or { .. }
+        | Pattern::TypedBinding { .. } => false,
+    }
+}
+
+/// Lift gate for [`crate::Lowerer::lower_match_arm`]. Non-minimal
+/// arms (or any guard) keep falling to the Stub-deferred
+/// `compile_match` shim.
+pub(crate) fn arms_are_minimal(arms: &[MatchArm]) -> bool {
+    arms.iter()
+        .all(|arm| arm.guard.is_none() && is_minimal_pattern(&arm.pattern))
+}
+
 impl<'a> Lowerer<'a> {
+    /// All arm types equal -> [`ResolvedMatchType::Direct`]. Arms
+    /// differ but every value-producing arm is a member of the
+    /// surrounding fn's union return-type hint -> [`ResolvedMatchType::UnionWrap`].
+    /// Otherwise `Direct` with the first arm's type as a best guess.
+    ///
+    /// Counterpart of `expo_codegen::control::patterns::lower_result_ty`
+    /// without the LLVM-types gate; the `UnionWrap` codegen executor
+    /// handles unmonomorphized failures downstream.
+    pub(crate) fn resolve_match_result_ty(&self, arms: &[MatchArm]) -> ResolvedMatchType {
+        let ctx = self.ctx();
+        let arm_types: Vec<Type> = arms
+            .iter()
+            .filter_map(|arm| arm_value_type(arm, &ctx))
+            .collect();
+
+        if arm_types.is_empty() {
+            return ResolvedMatchType::Direct { ty: Type::Unknown };
+        }
+
+        let first_mangled = mangle_type(&arm_types[0]);
+        let all_eq = arm_types.iter().all(|t| mangle_type(t) == first_mangled);
+        if all_eq {
+            return ResolvedMatchType::Direct {
+                ty: arm_types[0].clone(),
+            };
+        }
+
+        if let Some(Type::Union(members)) = &self.fn_state.return_type_hint {
+            let target = Type::Union(members.clone());
+            let all_members = arm_types.iter().all(|t| {
+                matches!(t, Type::Union(_))
+                    || members.iter().any(|m| mangle_type(m) == mangle_type(t))
+            });
+            if all_members {
+                return ResolvedMatchType::UnionWrap { target };
+            }
+        }
+
+        ResolvedMatchType::Direct {
+            ty: arm_types[0].clone(),
+        }
+    }
+
+    /// Dispatch for the [`ExprKind::Match`] arm of
+    /// [`Self::lower_expr_to_operand_with_tail`]: lower subject,
+    /// emit [`IRInstruction::MatchSubject`], delegate to
+    /// [`Self::lower_match_expr`]. Gated by [`arms_are_minimal`].
+    pub(crate) fn lower_match_arm(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        subject: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<(Option<IRBlockId>, IROperand, Type), String> {
+        let (open, subject_op, subject_lower_ty) =
+            self.lower_expr_to_operand(builder, open, subject)?;
+        let Some(open) = open else {
+            return Ok((None, IROperand::Unit, Type::Unit));
+        };
+
+        let subject_ty = {
+            let ctx = self.ctx();
+            resolve_subject_ty(&ctx, subject, &subject_lower_ty, |name| {
+                ctx.locals.type_of(name)
+            })
+        };
+        let result_ty = self.resolve_match_result_ty(arms);
+        let result_expo_ty = match &result_ty {
+            ResolvedMatchType::Direct { ty } => ty.clone(),
+            ResolvedMatchType::UnionWrap { target } => target.clone(),
+        };
+
+        let subject_id = self.next_value_id();
+        builder.append(
+            open,
+            IRInstruction::MatchSubject {
+                dest: subject_id,
+                value: subject_op,
+                ty: subject_ty.clone(),
+            },
+        );
+
+        let (out, op) = self.lower_match_expr(
+            builder,
+            open,
+            IROperand::Local(subject_id),
+            subject_ty,
+            arms,
+            result_ty,
+        )?;
+        Ok((out, op, result_expo_ty))
+    }
+
     /// Lowers a `match` expression into an [`IRMatch`].
     ///
     /// Pattern resolution flows through [`lower_pattern`] (per arm) and
     /// then [`Self::lower_pattern_into_arm`] (the gated CFG builder) to
     /// produce each arm's `check_blocks` sub-CFG. `result_ty` is the
     /// typecheck-derived Direct vs UnionWrap strategy, computed up-front
-    /// by the codegen shim and threaded in.
+    /// by the codegen shim or [`Self::resolve_match_result_ty`] and
+    /// threaded in.
     ///
     /// Guards lift to operand-emitting instructions appended to the
     /// final block of the arm's check sub-CFG; the result operand is
@@ -1787,5 +1921,6 @@ fn placeholder_block(id: IRBlockId, label: String) -> IRBasicBlock {
         instructions: Vec::new(),
         label,
         terminator: IRTerminator::Branch(id),
+        loop_exit_op: LoopExitOp::None,
     }
 }

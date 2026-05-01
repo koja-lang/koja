@@ -42,7 +42,11 @@ impl<'a> Lowerer<'a> {
     /// Lower an infinite `loop ... end`. Two blocks: a body block
     /// whose declared terminator is `Branch(body)` (the back-edge --
     /// overridden by `break` / `return` / `panic`), and an exit
-    /// block that subsequent control flow lands in.
+    /// block that subsequent control flow lands in. IR-time
+    /// `push_loop_exit` / `pop_loop_exit` balance around body
+    /// lowering; [`CFGBuilder::mark_loop`] then tags the body / exit
+    /// blocks for the codegen-walk-time replay (see
+    /// [`crate::LoopExitOp`]).
     pub fn lower_loop(
         &mut self,
         builder: &mut CFGBuilder,
@@ -54,23 +58,21 @@ impl<'a> Lowerer<'a> {
 
         builder.set_terminator(open, IRTerminator::Branch(body_id));
 
-        // Push the loop's exit id onto `FnLowerState::loop_exit` so
-        // any [`Statement::Break`] reachable through this body --
-        // including ones lowered later at execute time inside a
-        // Stub-deferred control-flow expression -- resolves to the
-        // right exit. The codegen-side `compile_loop` shim pops
-        // after the walk completes.
         self.fn_state.push_loop_exit(exit_id);
         self.lower_body_block(builder, body_id, "loop_body", body, body_id)?;
+        self.fn_state.pop_loop_exit();
 
         builder.add_block(exit_id, "loop_exit");
+        builder.mark_loop(body_id, exit_id);
         Ok((Some(exit_id), IROperand::Unit))
     }
 
     /// Lower a `while cond ... end`. Three blocks: a header (cond
     /// lift + canonicalized `CondBranch { cond, then: body, otherwise:
     /// exit }`), a body whose back-edge terminator branches to
-    /// header, and an exit block.
+    /// header, and an exit block. Same `loop_exit` discipline as
+    /// [`Self::lower_loop`]; the header is intentionally unmarked so
+    /// a `break` in the condition targets the surrounding loop.
     pub fn lower_while(
         &mut self,
         builder: &mut CFGBuilder,
@@ -100,14 +102,12 @@ impl<'a> Lowerer<'a> {
             },
         );
 
-        // Codegen-side `compile_while` pops loop_exit after the
-        // walk completes; pushing here lets break statements
-        // inside Stub-deferred sub-expressions resolve to `exit_id`
-        // at execute time too.
         self.fn_state.push_loop_exit(exit_id);
         self.lower_body_block(builder, body_id, "while_body", body, header_id)?;
+        self.fn_state.pop_loop_exit();
 
         builder.add_block(exit_id, "while_exit");
+        builder.mark_loop(body_id, exit_id);
         Ok((Some(exit_id), IROperand::Unit))
     }
 

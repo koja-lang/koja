@@ -30,7 +30,9 @@ use crate::types::to_llvm_type;
 use super::register_block;
 use super::walk_function_blocks;
 
-/// Compiles an infinite `loop` block. Only exits via `break`.
+/// AST-level emitter for `loop ... end`. Kept alive by Stub-nested
+/// parents (closures, list literals, match operands) until those
+/// lift; top-level `loop` now goes through the IR arm.
 pub fn compile_loop<'ctx>(
     compiler: &mut Compiler<'ctx>,
     body: &[Statement],
@@ -41,7 +43,8 @@ pub fn compile_loop<'ctx>(
     })
 }
 
-/// Compiles a `while` loop.
+/// AST-level emitter for `while cond ... end`. Same retention rule
+/// as [`compile_loop`].
 pub fn compile_while<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,
@@ -70,14 +73,12 @@ where
     builder.add_block(entry, "loop_entry");
     let (_open, _) = {
         let mut lowerer = compiler.lowerer();
-        // The loop lowering pushed `loop_exit` for break resolution.
-        // Walk runs Stub-deferred sub-expressions which may contain
-        // breaks; pop after the walk.
         lift(&mut lowerer, &mut builder, entry)?
     };
     let (blocks, closed) = builder.into_blocks_with_closed();
+    // `walk_function_blocks` handles loop_exit push/pop via the
+    // body / exit block tags emitted by `CFGBuilder::mark_loop`.
     walk_function_blocks(compiler, &blocks, &closed, function, None)?;
-    compiler.fn_lower.pop_loop_exit();
     Ok(None)
 }
 

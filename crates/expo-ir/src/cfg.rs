@@ -24,7 +24,7 @@
 
 use std::collections::HashSet;
 
-use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator};
+use crate::blocks::{IRBasicBlock, IRBlockId, IRTerminator, LoopExitOp};
 use crate::values::IRInstruction;
 
 /// Accumulator for a single CFG fragment. Owns the in-progress
@@ -67,7 +67,17 @@ impl CFGBuilder {
             instructions: Vec::new(),
             label: label.into(),
             terminator: IRTerminator::Branch(id),
+            loop_exit_op: LoopExitOp::None,
         });
+    }
+
+    /// Tag `body_id` with [`LoopExitOp::Push`] of `exit_id` and
+    /// `exit_id` with [`LoopExitOp::Pop`] so `walk_function_blocks`
+    /// re-establishes the enclosing loop scope at codegen-execute
+    /// time. See [`crate::LoopExitOp`].
+    pub fn mark_loop(&mut self, body_id: IRBlockId, exit_id: IRBlockId) {
+        self.block_mut(body_id).loop_exit_op = LoopExitOp::Push(exit_id);
+        self.block_mut(exit_id).loop_exit_op = LoopExitOp::Pop;
     }
 
     /// Append `instr` to the block identified by `id`. Panics if the

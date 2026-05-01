@@ -426,6 +426,23 @@ fn collect_expo_files_with_prefix(
     }
 }
 
+/// `expo eval <file>` -- runs the file through the IR interpreter and
+/// prints the entry function's result. The interpreter's coverage
+/// matches what the IR lowerer produces without `IRInstruction::Stub`;
+/// programs that exceed that coverage report a precise interpreter
+/// error rather than silently falling through to codegen.
+pub fn cmd_eval(file: String, entry: Option<String>) {
+    let path = Path::new(&file);
+    match expo_shell::eval_file(path, entry.as_deref()) {
+        Ok(Some(value)) => println!("{value}"),
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("error: {error}");
+            process::exit(1);
+        }
+    }
+}
+
 /// `expo test` -- discovers `@test` functions, compiles a test harness, and runs it.
 ///
 /// Requires an `expo.toml` in the current directory.

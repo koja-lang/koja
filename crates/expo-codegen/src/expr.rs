@@ -32,16 +32,17 @@ use expo_ir::lower::types::{resolve_name_current, resolve_type_expr};
 use expo_ir::resolved::strings::{ResolvedString, resolve_string};
 use expo_ir::util::parse_int_literal;
 
-use crate::debug::call_format;
 use crate::drop::Ownership;
 use crate::enums::compile_enum_construction;
 use crate::generics::{monomorphize_impl_method, monomorphize_struct};
 use crate::ops::{compile_binary, compile_unary};
 use crate::spawn;
 use crate::stmt::{apply_coercion, coerce_numeric, compile_statement, compile_union_wrap};
+use crate::strings::{
+    append_literal_to_format, assemble_interpolated_string, interp_arg_for_value,
+};
 use crate::structs::{compile_field_access, compile_method_call, compile_struct_construction};
 use crate::types::to_llvm_type;
-use crate::util::printf_format_spec;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 /// Compiles `expr` in *tail position*: when `expr` is (transparently
 /// through `Group`) a direct method call, the IR lift produces an
@@ -126,14 +127,19 @@ pub fn compile_expr<'ctx>(
                 return Ok(Some(TypedValue::new(value, ty)));
             }
 
-            if let Some(constant) = compiler.constants.get(name) {
+            if let Some(value) = compiler.lookup_const_value(name) {
                 let ty = compiler
-                    .type_ctx
-                    .constants
-                    .get(name)
+                    .current_package
+                    .as_ref()
+                    .and_then(|pkg| {
+                        compiler.type_ctx.constants.get(&TypeIdentifier {
+                            package: pkg.clone(),
+                            name: name.clone(),
+                        })
+                    })
                     .cloned()
                     .unwrap_or(Type::Unknown);
-                return Ok(Some(TypedValue::new(*constant, ty)));
+                return Ok(Some(TypedValue::new(value, ty)));
             }
 
             if compiler.module.get_function(name).is_some() {
@@ -373,6 +379,16 @@ fn compile_literal<'ctx>(compiler: &Compiler<'ctx>, literal: &Literal) -> ExprRe
     }
 }
 
+/// AST-level emitter for `ExprKind::String`. Top-level string literals
+/// and interpolations are now lifted to `IRInstruction::StringFormat`
+/// (see `emit_string_format` in `control/instructions.rs`), so this
+/// path is only reached when an `ExprKind::String` lives inside an
+/// AST that is itself still bridged via `IRInstruction::Stub` -- e.g.
+/// closure bodies that contain interpolated strings, like
+/// [tests/lang/generics/generic_impl_typecheck.expo](../../../tests/lang/generics/generic_impl_typecheck.expo)
+/// line 40: `fn (n: Int) -> String "item_#{n}" end`. Retained until
+/// those Stub'd parents (closures, list literals, match operands, ...)
+/// also lift; will collapse with `emit_string_format` at that point.
 fn compile_string<'ctx>(
     compiler: &mut Compiler<'ctx>,
     parts: &[StringPart],
@@ -388,118 +404,28 @@ fn compile_string<'ctx>(
         )));
     }
 
-    let snprintf = *compiler
-        .functions
-        .get(&FunctionIdentifier::new("snprintf"))
-        .ok_or("snprintf not declared")?;
-
     let mut fmt_string = String::new();
     let mut interp_values: Vec<BasicValueEnum<'ctx>> = Vec::new();
 
     for part in parts {
         match part {
             StringPart::Literal { value, .. } => {
-                for ch in value.chars() {
-                    if ch == '%' {
-                        fmt_string.push_str("%%");
-                    } else {
-                        fmt_string.push(ch);
-                    }
-                }
+                append_literal_to_format(&mut fmt_string, value);
             }
             StringPart::Interpolation { expr, .. } => {
                 let typed_value = compile_expr(compiler, expr, function)?
                     .ok_or("interpolated expression produced no value")?;
-                let value = typed_value.value;
-
-                let is_bool =
-                    value.is_int_value() && value.into_int_value().get_type().get_bit_width() == 1;
-                let is_plain_printf =
-                    !value.is_struct_value() && !is_bool && printf_format_spec(&value).is_ok();
-
-                if is_plain_printf {
-                    fmt_string.push_str(printf_format_spec(&value).unwrap());
-                    interp_values.push(value);
-                } else {
-                    let str_ptr = call_format(compiler, value, &typed_value.expo_type)?;
-                    fmt_string.push_str("%s");
-                    interp_values.push(str_ptr.into());
-                }
+                let arg =
+                    interp_arg_for_value(compiler, typed_value.value, &typed_value.expo_type)?;
+                fmt_string.push_str(arg.format_spec);
+                interp_values.push(arg.value);
             }
         }
     }
 
-    let fmt_global = compiler
-        .builder
-        .build_global_string_ptr(&fmt_string, "interp_fmt")
-        .unwrap();
-    let fmt_ptr = fmt_global.as_pointer_value();
-
-    let i32_type = compiler.context.i32_type();
-    let ptr_type = compiler.context.ptr_type(AddressSpace::default());
-    let null_ptr = ptr_type.const_null();
-    let zero = i32_type.const_int(0, false);
-
-    let mut size_args: Vec<BasicValueEnum> = vec![null_ptr.into(), zero.into(), fmt_ptr.into()];
-    size_args.extend_from_slice(&interp_values);
-    let size_args_meta: Vec<_> = size_args.iter().map(|v| (*v).into()).collect();
-
-    let needed = compiler
-        .call(snprintf, &size_args_meta, "interp_len")
-        .ok_or("snprintf did not return a value")?
-        .into_int_value();
-
-    let one = i32_type.const_int(1, false);
-    let buf_size = compiler
-        .builder
-        .build_int_add(needed, one, "buf_size")
-        .unwrap();
-
-    let malloc_fn = *compiler
-        .functions
-        .get(&FunctionIdentifier::new("malloc"))
-        .ok_or("malloc not declared")?;
-    let i64_type = compiler.context.i64_type();
-    let i8_type = compiler.context.i8_type();
-    let needed_i64 = compiler
-        .builder
-        .build_int_z_extend(needed, i64_type, "needed_i64")
-        .unwrap();
-    let alloc_size = compiler
-        .builder
-        .build_int_add(needed_i64, i64_type.const_int(9, false), "interp_alloc_sz")
-        .unwrap();
-    let base_ptr = compiler
-        .call(malloc_fn, &[alloc_size.into()], "interp_base")
-        .ok_or("malloc did not return a value")?
-        .into_pointer_value();
-
-    let bit_length = compiler
-        .builder
-        .build_int_mul(needed_i64, i64_type.const_int(8, false), "bit_length")
-        .unwrap();
-    compiler.builder.build_store(base_ptr, bit_length).unwrap();
-
-    let payload = unsafe {
-        compiler
-            .builder
-            .build_in_bounds_gep(
-                i8_type,
-                base_ptr,
-                &[i64_type.const_int(8, false)],
-                "interp_payload",
-            )
-            .unwrap()
-    };
-
-    let mut write_args: Vec<BasicValueEnum> = vec![payload.into(), buf_size.into(), fmt_ptr.into()];
-    write_args.extend_from_slice(&interp_values);
-    let write_args_meta: Vec<_> = write_args.iter().map(|v| (*v).into()).collect();
-
-    compiler.call_void(snprintf, &write_args_meta, "interp_write");
-
+    let payload = assemble_interpolated_string(compiler, &fmt_string, &interp_values)?;
     Ok(Some(TypedValue::new(
-        payload.into(),
+        payload,
         Type::Primitive(Primitive::String),
     )))
 }

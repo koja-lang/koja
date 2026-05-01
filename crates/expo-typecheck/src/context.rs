@@ -30,7 +30,7 @@ pub struct TypeContext {
     /// active check.
     pub current_package: Option<Package>,
     pub coercions: HashMap<Span, Coercion>,
-    pub constants: BTreeMap<String, Type>,
+    pub constants: BTreeMap<TypeIdentifier, Type>,
     pub diagnostics: Vec<Diagnostic>,
     pub functions: BTreeMap<String, FunctionSig>,
     pub generic_enum_asts: BTreeMap<String, EnumDecl>,

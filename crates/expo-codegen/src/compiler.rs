@@ -8,14 +8,12 @@ use std::path::{Path, PathBuf};
 use expo_ir::Lowerer;
 use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 use expo_ir::lower::LowerCtx;
-use expo_ir::lower::constants::{resolve_const, resolve_const_enum};
+use expo_ir::lower::constants::{ConstantTables, populate_constants};
 use expo_ir::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
 use expo_ir::lower::types::{resolve_name_current, resolve_type_expr, type_name_from_expr};
-use expo_ir::resolved::constants::{ResolvedConst, ResolvedConstStruct};
-use expo_ir::util::parse_int_literal;
 use expo_ir::{
-    ExternAbi, ExternAttrs, FnLowerState, IRBlockId, IRFunction, IRFunctionKind, IRFunctionMeta,
-    IRProgram, TypeLayouts,
+    ExternAbi, ExternAttrs, FnLowerState, IRBlockId, IRConstantValue, IRFunction, IRFunctionKind,
+    IRFunctionMeta, IROperand, IRProgram, TypeLayouts,
 };
 
 use crate::debug::synthesize_all_formats;
@@ -33,8 +31,7 @@ pub enum EmitResult {
 }
 
 use expo_ast::ast::{
-    AnnotationValue, Diagnostic, ExprKind, FieldInit, Function, ImplMember, Item, Literal, Module,
-    Param, Severity, StringPart,
+    AnnotationValue, Diagnostic, Function, ImplMember, Item, Module, Param, Severity,
 };
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
@@ -223,7 +220,15 @@ pub struct Compiler<'ctx> {
     pub context: &'ctx Context,
     pub module: LlvmModule<'ctx>,
     pub builder: Builder<'ctx>,
-    pub constants: HashMap<String, BasicValueEnum<'ctx>>,
+    /// LLVM-materialized compound constants, indexed by
+    /// [`expo_ir::IRConstId`]. Populated by [`Self::declare_constants`]
+    /// in IR-pool order. Primitives never appear here -- they inline at
+    /// IR-lower time.
+    pub constants: Vec<BasicValueEnum<'ctx>>,
+    /// Name -> [`expo_ir::IRConstId`] / inline-primitive lookup tables
+    /// produced by [`populate_constants`] and consulted by every
+    /// [`Lowerer`] this compiler hands out.
+    pub const_tables: ConstantTables,
     pub functions: HashMap<FunctionIdentifier, FunctionValue<'ctx>>,
     pub type_ctx: &'ctx TypeContext,
     pub generic_fn_asts: HashMap<String, Function>,
@@ -263,6 +268,15 @@ pub struct Compiler<'ctx> {
     /// method symbols can be qualified per package (e.g. `alpha.Config_new`)
     /// and disambiguated across user packages that share a type name.
     pub current_package: Option<Package>,
+    /// Counter incremented by the `monomorphize_*` shims in
+    /// [`crate::generics`] every time their underlying planner adds a
+    /// new IR decl post-closure-pass. Reaches a non-zero value only
+    /// when [`expo_ir::closure_program`] missed a generic instantiation
+    /// the lazy codegen path is now backfilling. Logged at the end of
+    /// [`run_codegen`] for visibility; remains advisory until the
+    /// closure pass is proven complete enough to make it a hard
+    /// assertion.
+    pub lazy_mono_count: usize,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -282,7 +296,8 @@ impl<'ctx> Compiler<'ctx> {
             context,
             module,
             builder,
-            constants: HashMap::new(),
+            constants: Vec::new(),
+            const_tables: ConstantTables::default(),
             functions: HashMap::new(),
             type_ctx,
             generic_fn_asts: HashMap::new(),
@@ -295,6 +310,7 @@ impl<'ctx> Compiler<'ctx> {
             closure_site_path: None,
             debug,
             current_package: None,
+            lazy_mono_count: 0,
         }
     }
 
@@ -365,6 +381,7 @@ impl<'ctx> Compiler<'ctx> {
     pub fn lowerer(&mut self) -> Lowerer<'_> {
         Lowerer {
             closure_site_path: self.closure_site_path.as_deref(),
+            const_tables: &self.const_tables,
             fn_state: &mut self.fn_lower,
             layouts: &self.layouts,
             package: self.current_package.as_ref(),
@@ -840,133 +857,100 @@ impl<'ctx> Compiler<'ctx> {
         Ok(self.module.add_function(&mangled, fn_type, None))
     }
 
-    fn declare_constants(&mut self, module: &Module) -> Result<(), String> {
-        for item in &module.items {
-            if let Item::Constant(c) = item {
-                let resolved = resolve_const(&c.value.kind);
-                let val: BasicValueEnum = match resolved {
-                    Some(ResolvedConst::Bool(b)) => self
-                        .context
-                        .bool_type()
-                        .const_int(if b { 1 } else { 0 }, false)
-                        .into(),
-                    Some(ResolvedConst::EnumVariant { enum_name, variant }) => {
-                        let Some(enum_id) =
-                            resolve_name_current(&self.lower_ctx(), &enum_name).cloned()
-                        else {
-                            continue;
-                        };
-                        let Some(info) = resolve_const_enum(
-                            &self.lower_ctx(),
-                            &enum_id.qualified_name(),
-                            &variant,
-                        ) else {
-                            continue;
-                        };
-                        let Some(enum_type) = self.llvm_types.get_concrete(&enum_id) else {
-                            continue;
-                        };
-                        let tag_val = self.context.i8_type().const_int(info.tag as u64, false);
-                        if enum_type.count_fields() > 1 {
-                            let payload_ty = enum_type.get_field_type_at_index(1).unwrap();
-                            let zero_payload = payload_ty.const_zero();
-                            enum_type
-                                .const_named_struct(&[tag_val.into(), zero_payload])
-                                .into()
-                        } else {
-                            enum_type.const_named_struct(&[tag_val.into()]).into()
-                        }
-                    }
-                    Some(ResolvedConst::Float(v)) => self.context.f64_type().const_float(v).into(),
-                    Some(ResolvedConst::Int(v)) => {
-                        self.context.i64_type().const_int(v as u64, true).into()
-                    }
-                    Some(ResolvedConst::String(s)) => {
-                        self.create_string_global(s.as_bytes(), &c.name).into()
-                    }
-                    Some(ResolvedConst::Struct {
-                        fields,
-                        struct_name,
-                    }) => {
-                        let Some(struct_id) =
-                            resolve_name_current(&self.lower_ctx(), &struct_name).cloned()
-                        else {
-                            continue;
-                        };
-                        let Some(info) = self
-                            .type_ctx
-                            .get_type(&struct_id)
-                            .and_then(|ti| ti.fields())
-                            .map(|fs| ResolvedConstStruct {
-                                field_types: fs.to_vec(),
-                            })
-                        else {
-                            continue;
-                        };
-                        let Some(struct_type) = self.llvm_types.get_concrete(&struct_id) else {
-                            continue;
-                        };
-                        match self.build_const_struct(struct_type, &info.field_types, &fields) {
-                            Some(val) => val,
-                            None => continue,
-                        }
-                    }
-                    None => continue,
-                };
-                self.constants.insert(c.name.clone(), val);
-            }
+    /// Materialize every [`IRProgram::constants`] entry into an LLVM
+    /// value and push it into [`Self::constants`] in `IRConstId`
+    /// order. Pure emission -- the entry is already fully resolved.
+    /// Slots whose enum / struct identity hasn't registered fall back
+    /// to a zero placeholder (the executor surfaces a runtime error
+    /// if it's ever indexed).
+    fn declare_constants(&mut self) -> Result<(), String> {
+        let pool = mem::take(&mut self.ir.constants);
+        self.constants = Vec::with_capacity(pool.len());
+        for entry in &pool {
+            let symbol = entry.identifier.qualified_name();
+            let value = self
+                .materialize_ir_constant_value(&entry.value, &symbol)
+                .unwrap_or_else(|| self.context.i8_type().const_zero().into());
+            self.constants.push(value);
         }
+        self.ir.constants = pool;
         Ok(())
     }
 
-    fn build_const_struct(
-        &self,
-        struct_type: StructType<'ctx>,
-        struct_fields: &[(String, Type)],
-        field_inits: &[FieldInit],
-    ) -> Option<BasicValueEnum<'ctx>> {
-        let mut values: Vec<BasicValueEnum<'ctx>> =
-            vec![self.context.i8_type().const_zero().into(); struct_fields.len()];
-        for fi in field_inits {
-            let idx = struct_fields.iter().position(|(n, _)| *n == fi.name)?;
-            let val: BasicValueEnum = match &fi.value.kind {
-                ExprKind::Literal {
-                    value: Literal::Int(s),
-                    ..
-                } => {
-                    let v = parse_int_literal(s).ok()?;
-                    self.context.i64_type().const_int(v as u64, true).into()
-                }
-                ExprKind::Literal {
-                    value: Literal::Float(s),
-                    ..
-                } => {
-                    let v: f64 = s.parse().ok()?;
-                    self.context.f64_type().const_float(v).into()
-                }
-                ExprKind::Literal {
-                    value: Literal::Bool(b),
-                    ..
-                } => self
-                    .context
-                    .bool_type()
-                    .const_int(if *b { 1 } else { 0 }, false)
-                    .into(),
-                ExprKind::String { parts, .. } => {
-                    let mut combined = String::new();
-                    for part in parts {
-                        if let StringPart::Literal { value, .. } = part {
-                            combined.push_str(value);
-                        }
-                    }
-                    self.create_string_global(combined.as_bytes(), &fi.name)
-                        .into()
-                }
-                _ => return None,
-            };
-            values[idx] = val;
+    /// Look up a module-level constant by source-level `name` from
+    /// [`ConstantTables`]. Compounds return the cached
+    /// [`Self::constants`] slot; primitives materialize the inline
+    /// operand on the fly. Used by the AST-level Stub-fallback path
+    /// in [`crate::expr::compile_expr`]; the IR-lifted path emits
+    /// [`expo_ir::IRInstruction::LoadConst`] directly. Returns `None`
+    /// when no `current_package` is set (no qualified key to build).
+    pub fn lookup_const_value(&self, name: &str) -> Option<BasicValueEnum<'ctx>> {
+        let const_id = TypeIdentifier {
+            package: self.current_package.clone()?,
+            name: name.to_string(),
+        };
+        if let Some(id) = self.const_tables.compounds.get(&const_id).copied() {
+            return self.constants.get(id.0 as usize).copied();
         }
-        Some(struct_type.const_named_struct(&values).into())
+        let operand = self.const_tables.primitives.get(&const_id)?;
+        Some(self.operand_to_llvm_const(operand, name))
+    }
+
+    /// Pure LLVM emission for one [`IRConstantValue`] pool entry.
+    /// `name_hint` labels the LLVM symbol for `String` and field
+    /// globals; the entry already carries its resolved type identity
+    /// and tag / field operands from [`populate_constants`].
+    fn materialize_ir_constant_value(
+        &self,
+        value: &IRConstantValue,
+        name_hint: &str,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match value {
+            IRConstantValue::EnumVariant { enum_id, tag, .. } => {
+                let enum_type = self.llvm_types.get_concrete(enum_id)?;
+                let tag_val = self.context.i8_type().const_int(*tag as u64, false);
+                let value = if enum_type.count_fields() > 1 {
+                    let payload_ty = enum_type.get_field_type_at_index(1).unwrap();
+                    enum_type
+                        .const_named_struct(&[tag_val.into(), payload_ty.const_zero()])
+                        .into()
+                } else {
+                    enum_type.const_named_struct(&[tag_val.into()]).into()
+                };
+                Some(value)
+            }
+            IRConstantValue::String(s) => {
+                Some(self.create_string_global(s.as_bytes(), name_hint).into())
+            }
+            IRConstantValue::Struct { struct_id, fields } => {
+                let struct_type = self.llvm_types.get_concrete(struct_id)?;
+                let values: Vec<BasicValueEnum<'ctx>> = fields
+                    .iter()
+                    .map(|(field_name, operand)| self.operand_to_llvm_const(operand, field_name))
+                    .collect();
+                Some(struct_type.const_named_struct(&values).into())
+            }
+        }
+    }
+
+    /// Inline [`IROperand`] -> LLVM constant. Only the four
+    /// `Const*` arms are reachable from the constant pool / primitives
+    /// map; other arms are produced inside function bodies and never
+    /// reach this path.
+    fn operand_to_llvm_const(&self, operand: &IROperand, name_hint: &str) -> BasicValueEnum<'ctx> {
+        match operand {
+            IROperand::ConstBool(b) => self
+                .context
+                .bool_type()
+                .const_int(u64::from(*b), false)
+                .into(),
+            IROperand::ConstFloat(v) => self.context.f64_type().const_float(*v).into(),
+            IROperand::ConstInt(v) => self.context.i64_type().const_int(*v as u64, true).into(),
+            IROperand::ConstStr(s) => self.create_string_global(s.as_bytes(), name_hint).into(),
+            IROperand::Local(_) | IROperand::Unit => {
+                unreachable!("non-const IROperand reached operand_to_llvm_const")
+            }
+        }
     }
 
     /// Pre-pass: ensures LLVM struct types exist for all parameter/return types
@@ -1665,11 +1649,17 @@ fn run_codegen<'ctx>(
         }
     }
 
-    for (module, pkg) in modules.iter().zip(packages.iter()) {
-        compiler
-            .with_package(package_from_str(pkg), |c| c.declare_constants(module))
-            .map_err(|e| codegen_error(e, module.span))?;
-    }
+    compiler.const_tables = populate_constants(
+        modules,
+        packages,
+        &mut compiler.ir,
+        compiler.type_ctx,
+        &compiler.layouts,
+    );
+    let constants_span = modules.first().map(|m| m.span).unwrap_or_default();
+    compiler
+        .declare_constants()
+        .map_err(|e| codegen_error(e, constants_span))?;
 
     for (module, pkg) in modules.iter().zip(packages.iter()) {
         compiler
@@ -1684,6 +1674,37 @@ fn run_codegen<'ctx>(
 
     let entry_span = modules.first().map(|m| m.span).unwrap_or_default();
     synthesize_all_formats(&mut compiler).map_err(|e| codegen_error(e, entry_span))?;
+
+    finalize_pending_unions(&mut compiler);
+
+    // Whole-program monomorphization closure: walks every function
+    // body's AST and registers every reachable generic struct / enum
+    // / function / (future: method) instantiation in `IRProgram` ahead
+    // of body emission. Codegen still has on-demand monomorphization
+    // shims as a safety net; they no-op for already-registered decls.
+    //
+    // `mem::take` shuffles `generic_fn_asts` out of the compiler so the
+    // closure pass can read it while `lower_ctx_and_ir` holds a
+    // mutable borrow on `compiler.ir`; the asts are restored
+    // immediately after.
+    {
+        let generic_fn_asts = mem::take(&mut compiler.generic_fn_asts);
+        let result = {
+            let (lower_ctx, ir) = compiler.lower_ctx_and_ir();
+            expo_ir::closure_program(ir, lower_ctx.type_ctx, lower_ctx.layouts, &generic_fn_asts)
+        };
+        compiler.generic_fn_asts = generic_fn_asts;
+        result.map_err(|e| codegen_error(e, entry_span))?;
+    }
+
+    // Drain every IR decl the closure pass registered into the LLVM
+    // caches. The closure pass is LLVM-free (it only mutates
+    // `IRProgram`); this pass mirrors each registered struct / enum /
+    // function into `c.llvm_types` / `c.functions` so subsequent
+    // `compile_*` calls (and the IR-level `IRInstruction::Call` /
+    // `StructConstruct` emit walkers) find the LLVM handles they need.
+    // Each `emit_ir_*` is idempotent on its respective LLVM cache.
+    drain_pending_ir_decls(&mut compiler).map_err(|e| codegen_error(e, entry_span))?;
 
     finalize_pending_unions(&mut compiler);
 
@@ -1709,7 +1730,315 @@ fn run_codegen<'ctx>(
             .map_err(|e| codegen_error(e, entry_span))?;
     }
 
+    populate_ir_blocks(&mut compiler, modules, packages);
+
+    // Verify the closure pass covered every generic instantiation the
+    // codegen path had to backfill. Non-zero indicates a closure pass
+    // gap; today this is logged advisory-only, but the eventual goal
+    // (post-Slice 4 hardening) is `assert_eq!(0)`.
+    if compiler.lazy_mono_count > 0 {
+        eprintln!(
+            "warning: closure pass missed {} generic instantiation(s); \
+             codegen lazy path backfilled them",
+            compiler.lazy_mono_count
+        );
+    }
+
     Ok(compiler)
+}
+
+/// Walk every decl the closure pass registered in `compiler.ir` and
+/// emit its LLVM declaration via the corresponding `emit_ir_*` helper.
+///
+/// `emit_ir_struct` / `emit_ir_enum` / `emit_ir_function` are each
+/// idempotent on their respective LLVM caches (`llvm_types`,
+/// `c.functions`), so this pass is a no-op for decls codegen had
+/// already emitted via the legacy lazy-monomorphization path.
+///
+/// Run between `closure_program` and `define_functions` so subsequent
+/// `compile_*` calls + the IR-level `IRInstruction::Call` /
+/// `StructConstruct` emit walkers find every monomorphized symbol.
+fn drain_pending_ir_decls<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(), String> {
+    let struct_ids: Vec<expo_ir::MonomorphizedTypeIdentifier> = compiler.ir.struct_order.clone();
+    for id in struct_ids {
+        let decl = compiler.ir.structs.get(&id).cloned();
+        if let Some(decl) = decl {
+            crate::generics::emit_ir_struct(compiler, &decl)?;
+        }
+    }
+    let enum_ids: Vec<expo_ir::MonomorphizedTypeIdentifier> = compiler.ir.enum_order.clone();
+    for id in enum_ids {
+        let decl = compiler.ir.enums.get(&id).cloned();
+        if let Some(decl) = decl {
+            crate::generics::emit_ir_enum(compiler, &decl)?;
+        }
+    }
+    // Function bodies are NOT pre-emitted here. `emit_ir_function` /
+    // `emit_ir_impl_method` compile bodies which may reference other
+    // unemitted symbols, so a naive `function_order` walk hits
+    // dependency-ordering hazards. Instead, the IR-walker's
+    // `emit_call` / `emit_method_call` lazy-heal by emitting the
+    // callee on demand (see those functions in
+    // `crate::control::instructions`). Struct / enum LLVM types are
+    // declaration-level and order-independent, which is why they're
+    // safe to drain here.
+    Ok(())
+}
+
+/// Lower every `Free` / `Method` body in `compiler.ir` into its
+/// `blocks` field via [`expo_ir::Lowerer::lower_function_body`]. Runs
+/// after the LLVM-emitting `define_functions` pass so the IR carries
+/// the same body in both representations until the codegen rewrite
+/// makes the IR-blocks path the only one.
+///
+/// Lowering failures are tolerated: bodies that can't lower cleanly
+/// are left empty. Backends that walk blocks
+/// (e.g. [`crate::lower_modules`]'s consumers) treat an empty `blocks`
+/// field as "unsupported" and surface a structured error.
+fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, modules: &[&Module], packages: &[&str]) {
+    let fn_packages = build_fn_package_map(modules, packages);
+    let plans: Vec<LowerPlan> = compiler
+        .ir
+        .function_order
+        .iter()
+        .filter_map(|id| capture_lower_plan(&compiler.ir, id, compiler.type_ctx))
+        .collect();
+    for plan in plans {
+        let snapshot = swap_fn_state_for_plan(&mut compiler.fn_lower, &plan);
+        // Constants are resolved via `Lowerer.package`, which mirrors
+        // `Compiler.current_package`. Source-declared free / impl
+        // functions get their original package; generic instantiations
+        // and other synthesized bodies fall through with `None` (no
+        // bare-name const refs in those bodies today).
+        let pkg = fn_packages.get(&plan.id).cloned();
+        let result = match pkg {
+            Some(pkg) => compiler.with_package(pkg, |c| {
+                c.lowerer()
+                    .lower_function_body(&plan.body, &plan.return_type)
+            }),
+            None => compiler
+                .lowerer()
+                .lower_function_body(&plan.body, &plan.return_type),
+        };
+        restore_fn_state(&mut compiler.fn_lower, snapshot);
+        if let Ok(blocks) = result {
+            store_ir_blocks(&mut compiler.ir, &plan.id, blocks);
+        }
+    }
+}
+
+/// Map every source-declared function's [`FunctionIdentifier`] to its
+/// originating package. Mirrors the mangling
+/// [`Compiler::declare_functions`] uses: free fns are bare-name, impl
+/// methods are `{target}_{method}`. Used by [`populate_ir_blocks`] to
+/// re-establish per-function package context (needed for bare-name
+/// const lookups in [`expo_ir::Lowerer::lower_ident_or_stub`]) for the
+/// IR-blocks lowering pass, which runs outside the per-module
+/// `with_package` loop. Generic instantiations and synthesized bodies
+/// (closure pass, intrinsics, etc.) aren't in any module's items and
+/// fall through with no package — same as before this map existed.
+fn build_fn_package_map(
+    modules: &[&Module],
+    packages: &[&str],
+) -> HashMap<FunctionIdentifier, Package> {
+    let mut map: HashMap<FunctionIdentifier, Package> = HashMap::new();
+    for (module, pkg_str) in modules.iter().zip(packages.iter()) {
+        let pkg = package_from_str(pkg_str);
+        for item in &module.items {
+            match item {
+                Item::Function(func) => {
+                    map.entry(FunctionIdentifier::new(&func.name))
+                        .or_insert_with(|| pkg.clone());
+                }
+                Item::Struct(s) => {
+                    register_methods(&mut map, &s.name, &s.functions, &pkg);
+                }
+                Item::Enum(e) => {
+                    register_methods(&mut map, &e.name, &e.functions, &pkg);
+                }
+                Item::Impl(impl_block) => {
+                    if let Some(target) = type_name_from_expr(&impl_block.target) {
+                        let fns: Vec<Function> = impl_block
+                            .members
+                            .iter()
+                            .filter_map(|m| match m {
+                                ImplMember::Function(f) => Some(f.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        register_methods(&mut map, &target, &fns, &pkg);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    map
+}
+
+fn register_methods(
+    map: &mut HashMap<FunctionIdentifier, Package>,
+    target: &str,
+    fns: &[Function],
+    pkg: &Package,
+) {
+    for func in fns {
+        let mangled = format!("{}_{}", target, func.name);
+        map.entry(FunctionIdentifier::new(&mangled))
+            .or_insert_with(|| pkg.clone());
+    }
+}
+
+struct LowerPlan {
+    id: expo_ir::FunctionIdentifier,
+    body: Vec<expo_ast::ast::Statement>,
+    return_type: expo_typecheck::types::Type,
+    self_type_name: Option<String>,
+    /// Parameter (name, type) pairs to seed `FnLowerState.local_types`
+    /// before the lowerer walks the body. Includes the implicit
+    /// `self` binding for instance methods.
+    param_locals: Vec<(String, expo_typecheck::types::Type)>,
+}
+
+fn capture_lower_plan(
+    program: &expo_ir::IRProgram,
+    id: &expo_ir::FunctionIdentifier,
+    type_ctx: &TypeContext,
+) -> Option<LowerPlan> {
+    let function = program.functions.get(id)?;
+    let lookup_param_types = |func_ast: &Function| -> Vec<expo_typecheck::types::Type> {
+        // `IRFunction.param_types` is empty on main (Free/Method
+        // registration uses `Vec::new()`), so fall back to the
+        // typecheck-published function signature for the param
+        // types the lowerer needs to seed `local_types`.
+        if !function.param_types.is_empty() {
+            return function.param_types.clone();
+        }
+        type_ctx
+            .functions
+            .get(&func_ast.name)
+            .map(|sig| sig.params.iter().map(|p| p.ty.clone()).collect())
+            .unwrap_or_default()
+    };
+    let lookup_return_type = |func_ast: &Function| -> expo_typecheck::types::Type {
+        // `IRFunction.return_type` is `Type::Unknown` on non-generic
+        // user free fns (`register_free` hardcodes it), so fall back
+        // to the typecheck-published signature. Without this the
+        // lowerer's "fallthrough -> Return None vs Unreachable"
+        // dispatch in `lower_function_body` would emit `Unreachable`
+        // for any unannotated function whose body lacks a trailing
+        // expression -- a runtime crash for the interpreter and an
+        // LLVM verification failure for codegen.
+        if !matches!(function.return_type, expo_typecheck::types::Type::Unknown) {
+            return function.return_type.clone();
+        }
+        type_ctx
+            .functions
+            .get(&func_ast.name)
+            .map(|sig| sig.return_type.clone())
+            .unwrap_or(expo_typecheck::types::Type::Unknown)
+    };
+    match &function.kind {
+        IRFunctionKind::Free {
+            func_ast, blocks, ..
+        } if blocks.is_empty() => {
+            let param_types = lookup_param_types(func_ast);
+            Some(LowerPlan {
+                id: id.clone(),
+                body: func_ast.body.clone().unwrap_or_default(),
+                return_type: lookup_return_type(func_ast),
+                self_type_name: None,
+                param_locals: collect_param_locals(func_ast, &param_types, None),
+            })
+        }
+        IRFunctionKind::Method {
+            func_ast,
+            base_type,
+            self_type,
+            blocks,
+            ..
+        } if blocks.is_empty() => {
+            let param_types = lookup_param_types(func_ast);
+            Some(LowerPlan {
+                id: id.clone(),
+                body: func_ast.body.clone().unwrap_or_default(),
+                return_type: lookup_return_type(func_ast),
+                self_type_name: Some(base_type.clone()),
+                param_locals: collect_param_locals(func_ast, &param_types, self_type.as_ref()),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn collect_param_locals(
+    func_ast: &Function,
+    param_types: &[expo_typecheck::types::Type],
+    self_type: Option<&expo_typecheck::types::Type>,
+) -> Vec<(String, expo_typecheck::types::Type)> {
+    let mut locals = Vec::new();
+    if let Some(self_ty) = self_type {
+        locals.push(("self".to_string(), self_ty.clone()));
+    }
+    let mut idx = 0;
+    for param in &func_ast.params {
+        if let Param::Regular { name, .. } = param
+            && let Some(ty) = param_types.get(idx)
+        {
+            locals.push((name.clone(), ty.clone()));
+            idx += 1;
+        }
+    }
+    locals
+}
+
+struct FnStateSnapshot {
+    block_counter: u32,
+    value_counter: u32,
+    local_types: std::collections::HashMap<String, expo_typecheck::types::Type>,
+    self_type_name: Option<String>,
+}
+
+fn swap_fn_state_for_plan(
+    fn_lower: &mut expo_ir::FnLowerState,
+    plan: &LowerPlan,
+) -> FnStateSnapshot {
+    let snapshot = FnStateSnapshot {
+        block_counter: fn_lower.block_counter,
+        value_counter: fn_lower.value_counter,
+        local_types: std::mem::take(&mut fn_lower.local_types),
+        self_type_name: fn_lower.self_type_name.take(),
+    };
+    fn_lower.block_counter = 0;
+    fn_lower.value_counter = 0;
+    fn_lower.self_type_name = plan.self_type_name.clone();
+    for (name, ty) in &plan.param_locals {
+        fn_lower.local_types.insert(name.clone(), ty.clone());
+    }
+    snapshot
+}
+
+fn restore_fn_state(fn_lower: &mut expo_ir::FnLowerState, snapshot: FnStateSnapshot) {
+    fn_lower.block_counter = snapshot.block_counter;
+    fn_lower.value_counter = snapshot.value_counter;
+    fn_lower.local_types = snapshot.local_types;
+    fn_lower.self_type_name = snapshot.self_type_name;
+}
+
+fn store_ir_blocks(
+    program: &mut expo_ir::IRProgram,
+    id: &expo_ir::FunctionIdentifier,
+    new_blocks: Vec<expo_ir::IRBasicBlock>,
+) {
+    let Some(function) = program.functions.get_mut(id) else {
+        return;
+    };
+    match &mut function.kind {
+        IRFunctionKind::Free { blocks, .. } | IRFunctionKind::Method { blocks, .. } => {
+            *blocks = new_blocks;
+        }
+        _ => {}
+    }
 }
 
 /// Compiles multiple Expo modules into a single native object file. Registers
@@ -1778,6 +2107,32 @@ pub fn emit_llvm_ir(
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
     Ok(compiler.module.print_to_string().to_string())
+}
+
+/// Lower Expo modules into a sealed [`expo_ir::IRProgram`] without
+/// emitting an LLVM artifact. Used by execution backends
+/// (`expo-ir-eval`, the planned Cranelift JIT) that consume IR directly.
+///
+/// Today this still constructs an LLVM `Context` internally because
+/// lowering shares the [`Compiler`] state machine; a future phase will
+/// extract the lowering pipeline so this entry is genuinely LLVM-free.
+/// The returned `IRProgram` is the same one a successful
+/// [`compile_modules`] would have built immediately before
+/// `emit_object_file`.
+///
+/// See [`compile_modules`] for the `packages` parameter semantics.
+pub fn lower_modules(
+    modules: &[&Module],
+    packages: &[&str],
+    type_ctx: &TypeContext,
+    app_name: &str,
+    entry_type: Option<&str>,
+) -> Result<IRProgram, Vec<Diagnostic>> {
+    let context = Context::create();
+    let compiler = run_codegen(
+        modules, packages, type_ctx, &context, false, app_name, entry_type,
+    )?;
+    Ok(compiler.ir)
 }
 
 /// Returns the natural ABI alignment (in bytes) of an LLVM type.

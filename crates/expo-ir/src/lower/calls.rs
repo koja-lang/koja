@@ -14,9 +14,14 @@
 //! name from the call site) to fetch the actual
 //! `FunctionValue`/`PointerValue` post-dispatch.
 
+use std::collections::HashMap;
+
 use expo_ast::ast::{Arg, Expr, ExprKind, TypeParam};
 use expo_ast::identifier::TypeIdentifier;
-use expo_typecheck::types::{Type, build_substitution, mangle_name, substitute, unwrap_indirect};
+use expo_typecheck::context::TypeContext;
+use expo_typecheck::types::{
+    Type, build_substitution, mangle_name, substitute, unify, unwrap_indirect,
+};
 
 use crate::Lowerer;
 use crate::blocks::IRBlockId;
@@ -125,6 +130,61 @@ pub fn resolve_call(
     }
 
     Err(format!("undefined function: {name}"))
+}
+
+/// True when `name` resolves to a generic free function in `type_ctx`
+/// (a top-level function with at least one type parameter). Used by
+/// the lift's `is_generic_function` predicate so the closure pass's
+/// pre-registered monomorphizations can be discovered through the
+/// `ResolvedCall::Generic` arm.
+fn is_generic_free_function(type_ctx: &TypeContext, name: &str) -> bool {
+    type_ctx
+        .functions
+        .get(name)
+        .is_some_and(|signature| !signature.type_params.is_empty())
+}
+
+/// Resolved free-call target shared by [`ResolvedCall::Direct`] and
+/// the closure-pass-resolved generic path: mangled symbol plus
+/// resolved param/return types ready for an [`IRInstruction::Call`].
+struct Direct {
+    mangled_name: FunctionIdentifier,
+    param_types: Vec<Type>,
+    return_type: Type,
+}
+
+/// Infer the concrete type-argument vector for a generic free function
+/// `name` from the resolved types of its call-site arguments. Mirrors
+/// the inference half of `expo_codegen::calls::resolve_generic_call`
+/// so the closure pass and codegen share one canonical implementation.
+///
+/// Returns the type args in declaration order; entries the unifier
+/// could not pin remain as [`Type::Unknown`]. Callers that require
+/// fully-resolved type args should treat any `Unknown` as a signal to
+/// skip (the closure pass does this; codegen surfaces it as an error).
+pub fn infer_function_type_args(
+    type_ctx: &TypeContext,
+    name: &str,
+    arg_types: &[Type],
+) -> Result<Vec<Type>, String> {
+    let signature = type_ctx
+        .functions
+        .get(name)
+        .ok_or_else(|| format!("no signature for generic function `{name}`"))?;
+    let mut subst: HashMap<String, Type> = HashMap::new();
+    for (parameter, arg_type) in signature.params.iter().zip(arg_types.iter()) {
+        if !unify(&parameter.ty, arg_type, &mut subst) {
+            return Err(format!(
+                "type mismatch for argument `{}` in generic call to `{name}`",
+                parameter.name
+            ));
+        }
+    }
+    Ok(signature
+        .type_params
+        .iter()
+        .map(|tp| subst.get(&tp.name).cloned().unwrap_or(Type::Unknown))
+        .collect())
 }
 
 /// Resolves the call target for `Type.method(args)` (a static method
@@ -307,45 +367,84 @@ impl<'a> Lowerer<'a> {
             return Ok(None);
         }
 
+        let type_ctx = self.ctx().type_ctx;
         let Ok(resolved) = resolve_call(
             &self.ctx(),
             self.program,
             name,
             |_, _| false,
             |_| None,
-            |_| false,
+            |candidate| is_generic_free_function(type_ctx, candidate),
         ) else {
             return Ok(None);
         };
 
-        let ResolvedCall::Direct {
-            mangled_name,
-            param_types,
-            return_type,
-        } = resolved
-        else {
-            return Ok(None);
+        let direct = match resolved {
+            ResolvedCall::Direct {
+                mangled_name,
+                param_types,
+                return_type,
+            } => Direct {
+                mangled_name,
+                param_types,
+                return_type,
+            },
+            ResolvedCall::Generic => match self.resolve_generic_direct_call(name, args) {
+                Some(direct) => direct,
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
         };
 
         let (open, lowered_args) =
             self.lower_expr_sequence(builder, open, args.iter().map(|a| &a.value))?;
         let Some(open) = open else {
-            return Ok(Some((None, IROperand::Unit, return_type)));
+            return Ok(Some((None, IROperand::Unit, direct.return_type)));
         };
 
         let dest = self.next_value_id();
+        let return_type = direct.return_type.clone();
         builder.append(
             open,
             IRInstruction::Call {
                 dest,
-                mangled: mangled_name,
+                mangled: direct.mangled_name,
                 args: lowered_args,
-                param_types,
-                return_type: return_type.clone(),
+                param_types: direct.param_types,
+                return_type: direct.return_type,
                 tail,
             },
         );
         Ok(Some((Some(open), IROperand::Local(dest), return_type)))
+    }
+
+    /// Resolve a [`ResolvedCall::Generic`] callee to the same shape as
+    /// [`ResolvedCall::Direct`] using the closure-pass-registered
+    /// [`crate::IRFunction`]. Infers type-args via
+    /// [`infer_function_type_args`] from the call site's resolved arg
+    /// types; bails (returns `None`) when any arg type is missing or
+    /// inference yields [`Type::Unknown`] for any slot, leaving the
+    /// caller to fall through to [`IRInstruction::Stub`].
+    fn resolve_generic_direct_call(&self, name: &str, args: &[Arg]) -> Option<Direct> {
+        let arg_types: Option<Vec<Type>> = args
+            .iter()
+            .map(|arg| arg.value.resolved_type.clone())
+            .collect();
+        let arg_types = arg_types?;
+        let type_ctx = self.ctx().type_ctx;
+        let type_args = infer_function_type_args(type_ctx, name, &arg_types).ok()?;
+        if type_args.iter().any(|t| matches!(t, Type::Unknown)) {
+            return None;
+        }
+        let mangled = FunctionIdentifier::new(expo_typecheck::types::mangle_method_suffix(
+            name, &type_args,
+        ));
+        let function = self.program.functions.get(&mangled)?;
+        Some(Direct {
+            mangled_name: mangled,
+            param_types: function.param_types.clone(),
+            return_type: function.return_type.clone(),
+        })
     }
 
     /// Attempt to lift a `Type.method(args)` static call to an

@@ -119,7 +119,12 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 ce.check_not_moved(name, span, ctx);
                 ce.used_vars.insert(name.clone());
                 info.ty.clone()
-            } else if let Some(ty) = ctx.constants.get(name) {
+            } else if let Some(ty) = ctx.current_package.as_ref().and_then(|pkg| {
+                ctx.constants.get(&TypeIdentifier {
+                    package: pkg.clone(),
+                    name: name.clone(),
+                })
+            }) {
                 ty.clone()
             } else if let Some(sig) = ctx.functions.get(name) {
                 if sig.type_params.is_empty() {

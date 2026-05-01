@@ -27,6 +27,7 @@ use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::Package;
 
 use crate::blocks::IRBlockId;
+use crate::lower::constants::ConstantTables;
 use crate::lower::ctx::LowerCtx;
 use crate::program::IRProgram;
 use crate::values::IRValueId;
@@ -51,6 +52,7 @@ use crate::{FnLowerState, TypeLayouts};
 /// re-borrow.
 pub struct Lowerer<'a> {
     pub closure_site_path: Option<&'a Path>,
+    pub const_tables: &'a ConstantTables,
     pub fn_state: &'a mut FnLowerState,
     pub layouts: &'a TypeLayouts,
     pub package: Option<&'a Package>,

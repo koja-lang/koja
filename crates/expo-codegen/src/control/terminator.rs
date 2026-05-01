@@ -137,9 +137,7 @@ pub(crate) fn materialize_operand<'ctx>(
             .i64_type()
             .const_int(*v as u64, true)
             .into()),
-        IROperand::ConstStr(_) => {
-            Err("operand: string literals not yet materialized at the codegen seam".to_string())
-        }
+        IROperand::ConstStr(s) => Ok(compiler.create_string_global(s.as_bytes(), "str").into()),
         IROperand::Local(id) => value_map
             .get(id)
             .copied()

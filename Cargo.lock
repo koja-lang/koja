@@ -405,6 +405,7 @@ dependencies = [
  "expo-lexer",
  "expo-parser",
  "expo-runtime",
+ "expo-shell",
  "expo-stdlib",
  "expo-typecheck",
  "libc",
@@ -426,6 +427,19 @@ name = "expo-ir"
 version = "0.9.0"
 dependencies = [
  "expo-ast",
+ "expo-typecheck",
+]
+
+[[package]]
+name = "expo-ir-eval"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-codegen",
+ "expo-ir",
+ "expo-lexer",
+ "expo-parser",
+ "expo-stdlib",
  "expo-typecheck",
 ]
 
@@ -469,6 +483,20 @@ dependencies = [
  "cc",
  "libc",
  "polling",
+]
+
+[[package]]
+name = "expo-shell"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-codegen",
+ "expo-fmt",
+ "expo-ir",
+ "expo-ir-eval",
+ "expo-lexer",
+ "expo-parser",
+ "expo-typecheck",
 ]
 
 [[package]]

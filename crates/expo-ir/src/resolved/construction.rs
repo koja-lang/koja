@@ -33,6 +33,7 @@ pub struct ResolvedStructConstruction {
 /// Computed without LLVM by walking the AST segments and validating
 /// byte-alignment; emission then packs values according to each
 /// [`ResolvedBinarySegment::kind`].
+#[derive(Clone, Debug)]
 pub struct ResolvedBinaryLayout {
     pub segments: Vec<ResolvedBinarySegment>,
     pub total_bits: u64,
@@ -40,12 +41,14 @@ pub struct ResolvedBinaryLayout {
 
 /// A single resolved binary segment with its kind and byte-aligned bit
 /// width.
+#[derive(Clone, Debug)]
 pub struct ResolvedBinarySegment {
     pub bit_width: u64,
     pub kind: ResolvedBinarySegmentKind,
 }
 
 /// The resolved kind of a single binary segment, determined without LLVM.
+#[derive(Clone, Copy, Debug)]
 pub enum ResolvedBinarySegmentKind {
     Float,
     Integer { endianness: BinaryEndianness },

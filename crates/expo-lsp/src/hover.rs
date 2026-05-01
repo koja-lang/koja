@@ -7,6 +7,7 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use expo_ast::ast::Module;
+use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::VariantData;
 
 use crate::backend::{Backend, DocumentState};
@@ -160,7 +161,11 @@ fn build_constant_hover(
     state: &DocumentState,
     stdlib_modules: &[Module],
 ) -> Option<String> {
-    let ty = state.ctx.constants.get(name)?;
+    let const_id = TypeIdentifier {
+        package: state.ctx.current_package.clone()?,
+        name: name.to_string(),
+    };
+    let ty = state.ctx.constants.get(&const_id)?;
     let signature = format!("const {}: {}", name, ty.display());
     let doc = resolve_doc(name, state, stdlib_modules);
     Some(format_hover(&signature, doc.as_deref()))

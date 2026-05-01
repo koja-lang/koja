@@ -5,6 +5,7 @@
 //! statements.
 
 use expo_ast::ast::*;
+use expo_ast::identifier::TypeIdentifier;
 
 use crate::check::{record_coercion_if_needed, types_compatible};
 use crate::context::{FunctionKind, PassMode, TypeContext};
@@ -85,7 +86,12 @@ pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &
                     }
                     if lv.segments.len() == 1 {
                         let name = &lv.segments[0];
-                        if ctx.constants.contains_key(name) {
+                        if ctx.current_package.as_ref().is_some_and(|pkg| {
+                            ctx.constants.contains_key(&TypeIdentifier {
+                                package: pkg.clone(),
+                                name: name.clone(),
+                            })
+                        }) {
                             ctx.error_with_hint(
                                 format!("cannot assign to constant `{}`", name),
                                 "constants are immutable and cannot be reassigned".into(),
@@ -140,7 +146,12 @@ pub(crate) fn check_statement(stmt: &mut Statement, ctx: &mut TypeContext, ce: &
             ..
         } => {
             let target_name = &target.segments[0];
-            if ctx.constants.contains_key(target_name) {
+            if ctx.current_package.as_ref().is_some_and(|pkg| {
+                ctx.constants.contains_key(&TypeIdentifier {
+                    package: pkg.clone(),
+                    name: target_name.clone(),
+                })
+            }) {
                 ctx.error_with_hint(
                     format!("cannot assign to constant `{}`", target_name),
                     "constants are immutable and cannot be reassigned".into(),

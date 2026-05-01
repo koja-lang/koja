@@ -8,6 +8,7 @@ mod span;
 mod traverse;
 
 use expo_ast::ast::*;
+use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::TypeContext;
 
 use span::{span_contains, span_contains_name};
@@ -285,7 +286,12 @@ pub(crate) fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo>
         Some(SymbolInfo::Protocol {
             name: name.to_string(),
         })
-    } else if ctx.constants.contains_key(name) {
+    } else if ctx.current_package.as_ref().is_some_and(|pkg| {
+        ctx.constants.contains_key(&TypeIdentifier {
+            package: pkg.clone(),
+            name: name.to_string(),
+        })
+    }) {
         Some(SymbolInfo::Constant {
             name: name.to_string(),
         })
