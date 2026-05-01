@@ -336,7 +336,11 @@ fn lookup_enum_llvm_type<'ctx>(
     Err(format!("unknown enum type: {}", resolved.mangled_name))
 }
 
-fn store_variant_tag<'ctx>(
+/// Write the variant tag (an `i8`) at slot 0 of an enum alloca.
+/// Shared by both the legacy AST-driven [`emit_enum_construction`] in
+/// this module and the IR-driven `emit_enum_construct` in
+/// [`crate::control::instructions`].
+pub(crate) fn store_variant_tag<'ctx>(
     compiler: &Compiler<'ctx>,
     enum_type: StructType<'ctx>,
     alloca: PointerValue<'ctx>,

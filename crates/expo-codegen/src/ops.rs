@@ -239,7 +239,15 @@ pub(crate) fn truncate_to_common_width<'ctx>(
     (l, r)
 }
 
-/// Compiles the `<>` concatenation operator for String, Binary, and Bits.
+/// AST-level emitter for the `<>` concatenation operator (String,
+/// Binary, Bits). Top-level concats now lift to
+/// `IRInstruction::Concat` (see `emit_concat` in
+/// `control/instructions.rs`), so this path only runs when a `<>`
+/// expression is nested inside a Stub'd parent AST (closures, list
+/// literals, match operands, ...). Not currently exercised by the
+/// test suite -- retained until those Stub'd parents lift, at which
+/// point this collapses into `emit_concat`'s shared
+/// `compile_string_concat` / `compile_binary_concat` helpers.
 fn compile_concat<'ctx>(
     compiler: &mut Compiler<'ctx>,
     left: &Expr,
@@ -283,7 +291,13 @@ fn concat_operand_type(compiler: &Compiler, expr: &Expr) -> Type {
 
 /// String <> String: load bit_lengths from headers, malloc(8 + l_bytes + r_bytes + 1),
 /// store combined bit_length, memcpy payloads, null-terminate.
-fn compile_string_concat<'ctx>(
+///
+/// Also reused by the [`expo_ir::IRInstruction::Concat`] executor in
+/// [`crate::control::instructions`]; both the AST-level wrapper
+/// `compile_concat` (still reachable through `Stub`-nested AST
+/// expressions, e.g. `<>` inside a list literal) and the typed-IR
+/// executor materialize operands first and call this helper.
+pub(crate) fn compile_string_concat<'ctx>(
     c: &mut Compiler<'ctx>,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
@@ -393,7 +407,9 @@ fn compile_string_concat<'ctx>(
 
 /// Binary/Bits <> Binary/Bits: load bit_lengths from headers, compute byte counts,
 /// malloc(8 + l_bytes + r_bytes), store combined bit_length, memcpy payloads.
-fn compile_binary_concat<'ctx>(
+///
+/// See [`compile_string_concat`] for the dual-call-site rationale.
+pub(crate) fn compile_binary_concat<'ctx>(
     c: &mut Compiler<'ctx>,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,

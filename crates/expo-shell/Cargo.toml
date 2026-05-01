@@ -1,0 +1,16 @@
+[package]
+name = "expo-shell"
+description = "Interactive REPL backed by the ExpoIR interpreter"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+expo-ast = { path = "../expo-ast" }
+expo-codegen = { path = "../expo-codegen" }
+expo-fmt = { path = "../expo-fmt" }
+expo-ir = { path = "../expo-ir" }
+expo-ir-eval = { path = "../expo-ir-eval" }
+expo-lexer = { path = "../expo-lexer" }
+expo-parser = { path = "../expo-parser" }
+expo-typecheck = { path = "../expo-typecheck" }

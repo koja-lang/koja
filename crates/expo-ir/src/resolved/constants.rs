@@ -1,38 +1,26 @@
-//! Resolved types for constant initializers: literals, unit enum variants,
-//! and struct constants. The accompanying lowering helpers (`resolve_const`,
-//! `resolve_const_enum`) live in [`crate::lower::constants`].
+//! Lowering-decision form of a fully-resolved module-level constant.
+//! Produced by [`crate::lower::constants::resolve_const`] and
+//! consumed only by the bridge in
+//! [`crate::lower::constants::populate_constants`]; backends never
+//! see this -- they get [`crate::IRConstantValue`] / [`crate::IROperand`].
 
-use expo_ast::ast::FieldInit;
-use expo_ast::types::Type;
+use expo_ast::identifier::TypeIdentifier;
 
-/// The semantic kind of a constant initializer, determined without touching
-/// any backend.
+#[derive(Clone, Debug)]
 pub enum ResolvedConst {
-    /// A boolean literal (`true` / `false`).
     Bool(bool),
-    /// A unit enum variant used as a constant (e.g. `Color.Red`).
-    EnumVariant { enum_name: String, variant: String },
-    /// A floating-point literal.
-    Float(f64),
-    /// An integer literal.
-    Int(i64),
-    /// A string literal (after interpolation parts are joined).
-    String(String),
-    /// A struct literal used as a constant initializer.
-    Struct {
-        fields: Vec<FieldInit>,
-        struct_name: String,
+    EnumVariant {
+        enum_id: TypeIdentifier,
+        variant: String,
+        tag: u8,
     },
-}
-
-/// Resolved metadata for a constant enum variant.
-pub struct ResolvedConstEnum {
-    /// The discriminant tag value for this variant.
-    pub tag: u8,
-}
-
-/// Resolved metadata for a constant struct initializer.
-pub struct ResolvedConstStruct {
-    /// The struct's fields in declaration order, each with name and type.
-    pub field_types: Vec<(String, Type)>,
+    Float(f64),
+    Int(i64),
+    String(String),
+    Struct {
+        struct_id: TypeIdentifier,
+        /// Declared-order fields. Each value is a primitive-only
+        /// `ResolvedConst` -- nested compounds aren't supported.
+        fields: Vec<(String, ResolvedConst)>,
+    },
 }

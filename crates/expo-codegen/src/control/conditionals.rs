@@ -19,8 +19,12 @@ use crate::compiler::{Compiler, ExprResult, TypedValue};
 
 use super::walk_function_blocks;
 
-/// Compiles a `cond ... end` expression. Empty-and-no-else is a
-/// no-op (matches legacy semantics).
+/// AST-level emitter for `cond ... end`. The else-bearing case and
+/// the non-empty no-else case both lift through the IR arm in
+/// [`expo_ir::Lowerer::lower_expr_to_operand`]; this shim is kept
+/// alive by Stub-nested parents (closures, list literals, match
+/// operands) plus the empty-and-no-else degenerate case (a no-op
+/// matching legacy semantics).
 pub fn compile_cond<'ctx>(
     compiler: &mut Compiler<'ctx>,
     arms: &[CondArm],
@@ -42,7 +46,11 @@ pub fn compile_cond<'ctx>(
     )
 }
 
-/// Compiles an `if cond ... [else ...] end`.
+/// AST-level emitter for `if cond ... [else ...] end`. Both arms
+/// (with and without `else`) now lift through the IR arm in
+/// [`expo_ir::Lowerer::lower_expr_to_operand`]; this shim is kept
+/// alive by Stub-nested parents (closures, list literals, match
+/// operands).
 pub fn compile_if<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,
@@ -67,7 +75,10 @@ pub fn compile_if<'ctx>(
     }
 }
 
-/// Compiles an `unless cond ... end`.
+/// AST-level emitter for `unless cond ... end`. Lifted through the
+/// IR arm in [`expo_ir::Lowerer::lower_expr_to_operand`]; this shim
+/// is kept alive by Stub-nested parents (closures, list literals,
+/// match operands).
 pub fn compile_unless<'ctx>(
     compiler: &mut Compiler<'ctx>,
     condition: &Expr,

@@ -567,7 +567,11 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                         }
                     }
                 };
-                if ctx.constants.contains_key(&c.name) {
+                let const_id = TypeIdentifier {
+                    package: package_from_str(package),
+                    name: c.name.clone(),
+                };
+                if ctx.constants.contains_key(&const_id) {
                     ctx.error(format!("duplicate constant `{}`", c.name), c.span);
                 } else if ctx.functions.contains_key(&c.name)
                     || resolve_type_key(&ctx, &c.name, package).is_some()
@@ -580,7 +584,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
                         c.span,
                     );
                 } else {
-                    ctx.constants.insert(c.name.clone(), ty);
+                    ctx.constants.insert(const_id, ty);
                 }
             }
             Item::Protocol(p) => {

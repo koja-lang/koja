@@ -10,6 +10,8 @@ mod resolve;
 
 use expo_runtime as _;
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -46,6 +48,15 @@ enum Command {
     Check {
         /// Source files (omit to use expo.toml)
         files: Vec<String>,
+    },
+    /// Run a source file through the IR interpreter
+    Eval {
+        /// Source file
+        file: String,
+
+        /// Entry function to invoke (defaults to `main`)
+        #[arg(long)]
+        entry: Option<String>,
     },
     /// Generate HTML documentation
     Doc {
@@ -97,6 +108,15 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Start an interactive REPL backed by the IR interpreter
+    Shell {
+        /// Load a project directory before starting the REPL
+        /// (currently ignored -- project loading is a future
+        /// enhancement; the MVP shell evaluates each input as a
+        /// self-contained expression).
+        #[arg(short = 'S', long = "project")]
+        project: Option<PathBuf>,
+    },
     /// Run tests (requires expo.toml)
     Test,
 }
@@ -114,6 +134,7 @@ fn main() {
         } => commands::cmd_build(file, output, emit_llvm, release, color),
         Command::Check { files } => commands::cmd_check(files, color),
         Command::Doc { files, output } => commands::cmd_doc(files, output, color),
+        Command::Eval { file, entry } => commands::cmd_eval(file, entry),
         Command::Format {
             files,
             check,
@@ -127,6 +148,7 @@ fn main() {
             release,
             args,
         } => commands::cmd_run(file, release, args, color),
+        Command::Shell { project } => expo_shell::run(project, color),
         Command::Test => commands::cmd_test(color),
     }
 }

@@ -202,12 +202,11 @@ fn resolve_generic_call<'ctx>(
 
     let mangled_name = mangle_method_suffix(name, &type_args);
 
-    if !compiler
-        .ir
-        .contains_function(&FunctionIdentifier::new(&mangled_name))
-    {
-        monomorphize_function(compiler, name, &type_args)?;
-    }
+    // Always call the shim: the planner is idempotent and the wrapper
+    // gates LLVM emission on `compiler.functions` presence, so this
+    // is correct whether the closure pass already pre-registered the
+    // IR decl or not.
+    monomorphize_function(compiler, name, &type_args)?;
 
     let callee = *compiler
         .functions

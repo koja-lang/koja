@@ -41,6 +41,7 @@ use expo_typecheck::types::Type;
 use crate::blocks::IRBlockId;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::ownership::Ownership;
+use crate::resolved::construction::{ResolvedBinaryLayout, ResolvedBinarySegmentKind};
 use crate::resolved::fields::ResolvedFieldStep;
 use crate::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 use crate::resolved::patterns::ResolvedLiteral;
@@ -51,6 +52,124 @@ use crate::resolved::patterns::ResolvedLiteral;
 /// owning function's lowering/emission context.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct IRValueId(pub u32);
+
+/// Program-scoped index into [`crate::program::IRProgram::constants`].
+/// Allocated by [`crate::lower::constants::populate_constants`] for
+/// each compound constant; primitive consts inline as
+/// [`IROperand::ConstBool`] / `ConstInt` / `ConstFloat` instead.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct IRConstId(pub u32);
+
+/// Lowered payload for [`IRInstruction::EnumConstruct`], shape-tagged
+/// to match the variant's payload kind:
+///
+/// - `Struct` -- named-field variants (`Shape.Rect { w: 10, h: 20 }`).
+///   Reuses [`StructFieldInit`] (the same shape works for both struct
+///   construction and named-field enum payloads -- the codegen +
+///   interpreter walkers use a single materialize / coerce / store
+///   helper across the two call sites).
+/// - `Tuple` -- positional variants (`Option.Some(42)`). Each entry
+///   carries the resolved element type alongside the lowered operand
+///   so the codegen executor can apply the same `store_maybe_indirect`
+///   coercion path the legacy AST emitter uses; index is the
+///   element's position in the variant's payload struct.
+/// - `Unit` -- no payload (`Color.Red`). The codegen executor only
+///   writes the variant tag.
+#[derive(Clone, Debug)]
+pub enum EnumPayload {
+    Struct(Vec<StructFieldInit>),
+    Tuple(Vec<EnumTupleFieldInit>),
+    Unit,
+}
+
+/// One positional-field initializer for an [`EnumPayload::Tuple`]
+/// variant. Carries the resolved element type so the codegen path
+/// applies the same `store_maybe_indirect` coercion the legacy
+/// AST-driven emitter does.
+#[derive(Clone, Debug)]
+pub struct EnumTupleFieldInit {
+    /// Resolved Expo type of the element. Drives the numeric
+    /// coercion applied to `value` before the store.
+    pub field_type: Type,
+    /// Operand carrying the element's value, materialized at emit time.
+    pub value: IROperand,
+}
+
+/// One field initializer for [`IRInstruction::StructConstruct`] and
+/// [`EnumPayload::Struct`]. Carries the layout index (where this
+/// field lives in its parent struct's record), the resolved field
+/// type (drives numeric coercion at emit), the source-level field
+/// name (debug / error labels), and the already-lowered operand for
+/// the value.
+///
+/// Shared between struct construction and named-field enum variant
+/// construction because both consume an identical shape: the only
+/// difference is the parent struct (a top-level `IRStruct`'s LLVM
+/// type vs. an enum variant's payload struct), and codegen +
+/// interpreter both pick that up from the surrounding instruction.
+#[derive(Clone, Debug)]
+pub struct StructFieldInit {
+    /// Source-level field name (e.g. `"x"`, `"name"`).
+    pub name: String,
+    /// Zero-based index of this field within its parent struct's
+    /// layout.
+    pub index: u32,
+    /// Resolved Expo type of the field. Drives the numeric coercion
+    /// applied to `value` before the store.
+    pub field_type: Type,
+    /// Operand carrying the field's value, materialized at emit time.
+    pub value: IROperand,
+}
+
+/// One piece of an [`IRInstruction::StringFormat`] template.
+///
+/// Mirrors the source-level [`expo_ast::ast::StringPart`] split: a
+/// `Literal` carries raw text to be reproduced verbatim; an
+/// `Interpolated` carries a lowered operand alongside its resolved
+/// type (so the emission backend can pick the right `_format` /
+/// printf specifier without re-deriving the shape from runtime
+/// values) and the original `format` hint, if any (`#{x:%.2f}`).
+///
+/// The codegen executor reads `ty` to choose between the cheap
+/// printf-spec path and the `call_format` round-trip; the IR
+/// interpreter currently ignores `format` and always calls
+/// [`crate::Value::Display`] on the materialized operand, matching
+/// what `compile_string` does for non-primitive holes.
+#[derive(Clone, Debug)]
+pub enum StringFormatPart {
+    /// Verbatim text fragment.
+    Literal(String),
+    /// Lowered interpolation hole (`#{expr}` or `#{expr:fmt}`).
+    Interpolated {
+        /// Already-lowered operand for the inner expression.
+        value: IROperand,
+        /// Resolved type of the inner expression. Codegen reads
+        /// this to pick the printf format specifier.
+        ty: Type,
+        /// Optional source-level format hint (`#{x:%.2f}`). Carried
+        /// in the IR shape but ignored by the interpreter today.
+        format: Option<String>,
+    },
+}
+
+/// One segment of an [`IRInstruction::BinaryConstruct`] payload --
+/// the lowered analogue of an [`expo_ast::ast::BinarySegment`].
+///
+/// Pairs the segment's bit width and resolved kind (carried in
+/// [`ResolvedBinarySegmentKind`]: String, Float, or Integer with
+/// endianness) with the already-lowered value operand. Sub-byte
+/// segment widths are rejected at lowering time -- see
+/// [`crate::lower::binary::resolve_binary_segments`] -- so every
+/// `bit_width` here is a multiple of 8.
+#[derive(Clone, Debug)]
+pub struct LoweredBinarySegment {
+    /// Byte-aligned width of this segment in bits.
+    pub bit_width: u64,
+    /// Segment shape (String / Float / Integer with endianness).
+    pub kind: ResolvedBinarySegmentKind,
+    /// Already-lowered operand carrying the segment's value.
+    pub value: IROperand,
+}
 
 /// What an instruction or terminator references when it wants a
 /// value. Either a previously-produced [`IRValueId`] or an inline
@@ -87,6 +206,39 @@ pub enum IROperand {
 /// the last consumer is gone, `Stub` is deleted.
 #[derive(Clone, Debug)]
 pub enum IRInstruction {
+    /// Build a `Binary` value from a `<<segments...>>` literal.
+    ///
+    /// Carries the resolved [`ResolvedBinaryLayout`] (per-segment
+    /// widths, kinds, and total bit-length) alongside the lowered
+    /// per-segment value operands packaged as
+    /// [`LoweredBinarySegment`]s. The codegen executor reproduces
+    /// the legacy `compile_binary_literal` packing (malloc +
+    /// length-prefixed buffer + per-segment endianness/width
+    /// packing); the interpreter assembles the equivalent
+    /// `Vec<u8>` directly.
+    ///
+    /// Sub-byte segment widths are rejected at lowering time
+    /// (see [`crate::lower::binary::resolve_binary_segments`]), so
+    /// every backend can assume byte-aligned packing. Future Bits
+    /// support will need either a `bit_len` companion field on this
+    /// variant or a separate `BitsConstruct` variant -- explicitly
+    /// out of scope today.
+    BinaryConstruct {
+        /// SSA destination this instruction produces (the assembled
+        /// `Value::Binary` -- or, in codegen, the pointer to the
+        /// payload past the 8-byte length prefix).
+        dest: IRValueId,
+        /// Per-segment widths + kinds + total bit-length, computed
+        /// at lowering by `resolve_binary_segments`. The codegen
+        /// emitter reads `total_bits` to size the malloc and writes
+        /// the bit-length into the leading 8-byte header.
+        layout: ResolvedBinaryLayout,
+        /// Lowered per-segment values, parallel to `layout.segments`.
+        /// Each entry's `bit_width` / `kind` mirror the matching
+        /// layout entry; carrying both makes the executor walk
+        /// self-contained.
+        segments: Vec<LoweredBinarySegment>,
+    },
     /// Binary arithmetic, comparison, or logical operation. The
     /// [`ResolvedBinaryOp`] variant fully encodes both operand kind
     /// (Int vs Float vs String) and result kind (comparisons -> Bool,
@@ -108,6 +260,39 @@ pub enum IRInstruction {
         lhs: IROperand,
         /// Right-hand operand.
         rhs: IROperand,
+    },
+    /// Concatenation of N homogeneous string- or binary-shaped
+    /// operands (`a <> b`, eventually `a <> b <> c`). The
+    /// [`crate::resolved::strings::ResolvedConcatKind`] discriminates
+    /// the runtime layout the executor produces -- both kinds share
+    /// the `[i64 bit_length][payload]` representation but differ in
+    /// the trailing NUL byte and the codegen `compile_string_concat`
+    /// vs `compile_binary_concat` packing routine.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::Binary`] with
+    /// [`expo_ast::ast::BinOp::Concat`]. The kind is decided up-front
+    /// at lowering using
+    /// [`crate::lower::strings::resolve_concat_kind`] (left-operand
+    /// type sniffing, identical to what `compile_concat` did at
+    /// emission time) so the codegen executor and the interpreter
+    /// don't need to re-derive it.
+    ///
+    /// `parts` carries the operands left-to-right; today lowering
+    /// emits 2-part instructions (one per source `<>`). Folding
+    /// `a <> b <> c` into a single 3-part instruction is a cheap
+    /// follow-up the IR shape already supports.
+    Concat {
+        /// SSA destination this instruction produces (the assembled
+        /// `Value::String` / `Value::Binary` -- or, in codegen, the
+        /// pointer to the malloc'd payload).
+        dest: IRValueId,
+        /// Which concat strategy emission should run -- mirrors what
+        /// `compile_concat` derived from the left operand's type.
+        kind: crate::resolved::strings::ResolvedConcatKind,
+        /// Left-to-right operand list. The codegen executor and the
+        /// interpreter materialize each in order before assembling.
+        parts: Vec<IROperand>,
     },
     /// Direct or static-method function call. Encodes the resolved
     /// mangled symbol, the lowered argument operands, and the
@@ -147,6 +332,39 @@ pub enum IRInstruction {
         /// [`IRInstruction::MethodCall::tail`] and to make the
         /// tail-context lift surface symmetric.
         tail: bool,
+    },
+    /// Construct an enum value: allocate the enum struct, write the
+    /// variant tag at slot 0, and (for non-Unit variants) write the
+    /// payload fields at slot 1's per-variant payload struct. Carries
+    /// the mangled enum identifier (looked up in the backend's type
+    /// table at emit time), the resulting Expo type, the variant tag,
+    /// the source-level variant name, and the lowered payload
+    /// operands.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::EnumConstruction`].
+    /// Both concrete (`Color.Red`) and generic (`Option.Some(42)`)
+    /// instantiations lift through this variant: generics rely on the
+    /// closure pass ([`crate::closure_program`]) having registered the
+    /// monomorphized enum in [`crate::IRProgram`] ahead of lowering.
+    EnumConstruct {
+        /// SSA destination this instruction produces (the constructed
+        /// enum value).
+        dest: IRValueId,
+        /// Mangled enum identifier -- the registry key both the
+        /// codegen LLVM-type cache and the interpreter use.
+        mangled: MonomorphizedTypeIdentifier,
+        /// Resulting Expo type of the construction.
+        result_type: Type,
+        /// Variant tag (the variant's position in the enum's
+        /// declaration / variant order; matches what
+        /// [`crate::TypeLayouts::variant_index`] returns).
+        tag: u8,
+        /// Source-level variant name (e.g. `"Some"`, `"Red"`).
+        variant: String,
+        /// Lowered payload operands, shape-tagged to match the
+        /// variant's payload kind.
+        payload: EnumPayload,
     },
     /// Static GEP chain on a field-access path rooted at a named
     /// local (`a.b.c`, `self.origin.x`). Carries the chain's base
@@ -199,22 +417,15 @@ pub enum IRInstruction {
         /// so emission needs no further lookups.
         step: ResolvedFieldStep,
     },
-    /// Load a module-level `const` value into an SSA slot. The
-    /// codegen executor reads the precomputed [`inkwell::values::BasicValueEnum`]
-    /// out of `Compiler.constants` and binds it to `dest`.
-    ///
-    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
-    /// dispatching on [`expo_ast::ast::ExprKind::Ident`] when the
-    /// name is registered in
-    /// [`expo_typecheck::context::TypeContext::constants`].
+    /// Load a compound module-level `const` (`String` / `EnumVariant` /
+    /// `Struct`) into an SSA slot by indexing
+    /// [`crate::program::IRProgram::constants`]. Primitive consts
+    /// (`Bool` / `Int` / `Float`) never reach this instruction --
+    /// [`crate::lower::values`] folds them inline as
+    /// [`IROperand::ConstBool`] / `ConstInt` / `ConstFloat`.
     LoadConst {
-        /// SSA destination this instruction produces.
         dest: IRValueId,
-        /// Source-level constant name (the registry key in
-        /// `Compiler.constants` and `type_ctx.constants`).
-        name: String,
-        /// Declared type of the constant. Carried so backends that
-        /// don't reach into `type_ctx` still have full type info.
+        id: IRConstId,
         ty: Type,
     },
     /// Load a named local binding into an SSA slot. The codegen
@@ -258,6 +469,22 @@ pub enum IRInstruction {
         /// backends that don't reach into `type_ctx` still have full
         /// type info.
         fn_type: Type,
+    },
+    /// Materialize a subject value as a pattern-matchable handle that
+    /// subsequent `Pattern*` instructions reference as their
+    /// `subject_ptr` / `source_ptr`. Codegen emits `alloca + store`
+    /// (so the handle is a real pointer GEPable by `Pattern*`); the
+    /// interpreter stores the value directly (handle is identity).
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::Match`]. The
+    /// Stub-deferred `compile_match` shim seeds the same pointer
+    /// externally via `walk_function_blocks_seeded` and does not emit
+    /// this instruction.
+    MatchSubject {
+        dest: IRValueId,
+        value: IROperand,
+        ty: Type,
     },
     /// Instance method call (`receiver.method(args)`). The receiver
     /// is materialized first and passed as the implicit `self`
@@ -529,6 +756,32 @@ pub enum IRInstruction {
         /// numeric coercion applied to `value` before the store.
         ty: Type,
     },
+    /// Construct a plain (non-enum) struct value from per-field
+    /// operands. Carries the mangled struct identifier (looked up in
+    /// the backend's type table at emit time), the resulting Expo type,
+    /// and one [`StructFieldInit`] per source-level initializer in
+    /// source order.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::StructConstruction`]
+    /// when [`crate::lower::structs::lower_concrete_struct`] succeeds
+    /// (concrete, non-generic struct). Generic struct constructions
+    /// fall through to [`IRInstruction::Stub`] until monomorphization
+    /// moves upstream of codegen.
+    StructConstruct {
+        /// SSA destination this instruction produces (the constructed
+        /// struct value).
+        dest: IRValueId,
+        /// Mangled struct identifier -- the registry key both the
+        /// codegen LLVM-type cache and the interpreter use.
+        mangled: MonomorphizedTypeIdentifier,
+        /// Resulting Expo type of the construction.
+        result_type: Type,
+        /// Field initializers in source (initializer) order. Each entry's
+        /// `index` slots into the struct layout; `value` is the
+        /// already-lowered operand for that field.
+        fields: Vec<StructFieldInit>,
+    },
     /// Single-segment local assignment / let-binding. When `is_decl`
     /// is `true` the executor allocates a fresh entry-block alloca,
     /// stores the materialized `value` (coerced to `ty`), and inserts
@@ -560,6 +813,36 @@ pub enum IRInstruction {
         /// [`crate::lower::ownership::ownership_for_expr`]. Ignored
         /// when `is_decl` is `false`.
         ownership: Option<Ownership>,
+    },
+    /// Build a `String` value by interpolating zero or more
+    /// expression results into a literal/template skeleton -- the IR
+    /// shape that backs `"hello, #{name}, you are #{age}"`.
+    ///
+    /// Reaches lowering via [`crate::lower::values::lower_expr_to_operand`]
+    /// dispatching on [`expo_ast::ast::ExprKind::String`] when the
+    /// part list contains at least one [`expo_ast::ast::StringPart::Interpolation`]
+    /// (pure-literal strings short-circuit through
+    /// [`crate::lower::constants::resolve_const`] -> [`IROperand::ConstStr`]
+    /// before this arm runs and never produce a `StringFormat`).
+    ///
+    /// Each [`StringFormatPart::Interpolated`] carries an already-
+    /// lowered operand plus the resolved hole type, so the codegen
+    /// executor can reproduce the existing `compile_string`'s
+    /// snprintf+malloc routine without re-lowering AST sub-trees, and
+    /// the interpreter can call [`crate::Value::Display`] on the
+    /// materialized value. The optional `format` hint
+    /// (`#{x:%.2f}`) is carried in the IR shape for future plumbing
+    /// but ignored by the interpreter today (matches what
+    /// `compile_string` does for non-primitive holes).
+    StringFormat {
+        /// SSA destination this instruction produces (the assembled
+        /// `Value::String` -- or, in codegen, the pointer to the
+        /// malloc'd payload returned by snprintf).
+        dest: IRValueId,
+        /// Left-to-right template parts. Literal text is reproduced
+        /// verbatim; interpolated holes carry their lowered operand
+        /// plus type information for emit-time format selection.
+        parts: Vec<StringFormatPart>,
     },
     /// **Transitional.** Bridges to AST-level expression emission
     /// while the rest of the instruction set fills in. The emission
@@ -681,14 +964,18 @@ impl IRInstruction {
     /// Useful for emission walkers populating a `HashMap<IRValueId, _>`.
     pub fn dest(&self) -> Option<IRValueId> {
         match self {
-            IRInstruction::BinaryOp { dest, .. }
+            IRInstruction::BinaryConstruct { dest, .. }
+            | IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
+            | IRInstruction::Concat { dest, .. }
+            | IRInstruction::EnumConstruct { dest, .. }
             | IRInstruction::FieldChain { dest, .. }
             | IRInstruction::FieldLoad { dest, .. }
             | IRInstruction::FromListLiteral { dest, .. }
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LoadLocal { dest, .. }
             | IRInstruction::MakeFnRef { dest, .. }
+            | IRInstruction::MatchSubject { dest, .. }
             | IRInstruction::MethodCall { dest, .. }
             | IRInstruction::PatternBinaryMatch { dest, .. }
             | IRInstruction::PatternLiteralEq { dest, .. }
@@ -697,6 +984,8 @@ impl IRInstruction {
             | IRInstruction::PatternTagEq { dest, .. }
             | IRInstruction::PatternUnionPayloadPtr { dest, .. }
             | IRInstruction::Phi { dest, .. }
+            | IRInstruction::StringFormat { dest, .. }
+            | IRInstruction::StructConstruct { dest, .. }
             | IRInstruction::Stub { dest, .. }
             | IRInstruction::UnaryOp { dest, .. }
             | IRInstruction::UnionWrap { dest, .. } => Some(*dest),

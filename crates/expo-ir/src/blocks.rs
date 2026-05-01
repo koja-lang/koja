@@ -95,4 +95,24 @@ pub struct IRBasicBlock {
     pub instructions: Vec<IRInstruction>,
     pub label: String,
     pub terminator: IRTerminator,
+    /// Codegen-walk-time push/pop applied before this block's
+    /// instructions execute. See [`LoopExitOp`].
+    pub loop_exit_op: LoopExitOp,
+}
+
+/// Codegen-walk-time mutation of the [`crate::FnLowerState::loop_exit`]
+/// stack. Set on a loop's body / exit blocks by
+/// [`crate::cfg::CFGBuilder::mark_loop`] so Stub-deferred constructs
+/// inside a lifted loop (e.g. an `if`-no-else holding a `break`)
+/// re-enter `lower_break_stmt` with the correct enclosing loop on
+/// the stack at codegen-execute time.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum LoopExitOp {
+    /// No change to the stack.
+    #[default]
+    None,
+    /// Push `exit_id` -- tags a loop body block.
+    Push(IRBlockId),
+    /// Pop one entry -- tags the matching loop exit block.
+    Pop,
 }

@@ -4,6 +4,7 @@ use expo_ast::ast::StringPart;
 
 /// Which concatenation strategy `<>` should use, decided from the
 /// left-operand's resolved type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolvedConcatKind {
     Binary,
     String,

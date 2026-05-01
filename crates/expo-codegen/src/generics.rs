@@ -236,12 +236,17 @@ pub(crate) fn compile_method_body<'ctx>(
 /// emitter pair: `expo_ir::lower::monomorphize::monomorphize_function`
 /// appends an [`IRFunction`] to `c.ir`, then [`emit_ir_function`] walks
 /// that decl to declare the LLVM function and compile its body.
+///
+/// The closure pass ([`expo_ir::closure_program`]) may have already
+/// registered the decl in `c.ir`; gates emission on `c.functions`
+/// presence rather than the planner's "newly added" return so the
+/// LLVM half still runs in that case.
 pub(crate) fn monomorphize_function<'ctx>(
     c: &mut Compiler<'ctx>,
     name: &str,
     type_args: &[Type],
 ) -> Result<(), String> {
-    let new_id = {
+    let added = {
         let generic_fn_asts = mem::take(&mut c.generic_fn_asts);
         let (lower_ctx, ir) = c.lower_ctx_and_ir();
         let result = expo_ir::lower::monomorphize::monomorphize_function(
@@ -254,13 +259,17 @@ pub(crate) fn monomorphize_function<'ctx>(
         c.generic_fn_asts = generic_fn_asts;
         result?
     };
-    let Some(new_id) = new_id else {
+    if added.is_some() {
+        c.lazy_mono_count += 1;
+    }
+    let mangled = FunctionIdentifier::new(mangle_method_suffix(name, type_args));
+    if c.functions.contains_key(&mangled) {
         return Ok(());
-    };
+    }
     let decl =
         c.ir.functions
-            .get(&new_id)
-            .expect("planner just inserted")
+            .get(&mangled)
+            .ok_or_else(|| format!("monomorphize_function: `{mangled}` missing from IRProgram"))?
             .clone();
     emit_ir_function(c, &decl)
 }
@@ -269,22 +278,32 @@ pub(crate) fn monomorphize_function<'ctx>(
 /// the given concrete type arguments. Plans an [`IRStruct`] via the
 /// `expo-ir` monomorphize planner, then defers to [`emit_ir_struct`] for
 /// LLVM emission.
+///
+/// The closure pass ([`expo_ir::closure_program`]) may have already
+/// registered the decl in `c.ir`, in which case the planner is a no-op
+/// but LLVM emission still has to run if `LLVMTypeCache` doesn't know
+/// the type yet. Gates emission on `llvm_types` presence rather than
+/// the planner's "newly added" return.
 pub(crate) fn monomorphize_struct<'ctx>(
     c: &mut Compiler<'ctx>,
     id: &TypeIdentifier,
     type_args: &[Type],
 ) -> Result<(), String> {
-    let new_id = {
+    let added = {
         let (lower_ctx, ir) = c.lower_ctx_and_ir();
         expo_ir::lower::monomorphize::monomorphize_struct(&lower_ctx, ir, id, type_args)?
     };
-    let Some(new_id) = new_id else {
+    if added.is_some() {
+        c.lazy_mono_count += 1;
+    }
+    let mangled = MonomorphizedTypeIdentifier::new(mangle_name(id, type_args));
+    if c.llvm_types.contains_monomorphized(&mangled) {
         return Ok(());
-    };
+    }
     let decl =
         c.ir.structs
-            .get(&new_id)
-            .expect("planner just inserted")
+            .get(&mangled)
+            .ok_or_else(|| format!("monomorphize_struct: `{mangled}` missing from IRProgram"))?
             .clone();
     emit_ir_struct(c, &decl)
 }
@@ -292,23 +311,28 @@ pub(crate) fn monomorphize_struct<'ctx>(
 /// Generates a monomorphized (specialized) version of a generic enum for
 /// the given concrete type arguments. Plans an [`IREnum`] via the
 /// `expo-ir` monomorphize planner, then defers to [`emit_ir_enum`] for
-/// LLVM emission.
+/// LLVM emission. Same closure-pass idempotency story as
+/// [`monomorphize_struct`].
 pub(crate) fn monomorphize_enum<'ctx>(
     c: &mut Compiler<'ctx>,
     id: &TypeIdentifier,
     type_args: &[Type],
 ) -> Result<(), String> {
-    let new_id = {
+    let added = {
         let (lower_ctx, ir) = c.lower_ctx_and_ir();
         expo_ir::lower::monomorphize::monomorphize_enum(&lower_ctx, ir, id, type_args)?
     };
-    let Some(new_id) = new_id else {
+    if added.is_some() {
+        c.lazy_mono_count += 1;
+    }
+    let mangled = MonomorphizedTypeIdentifier::new(mangle_name(id, type_args));
+    if c.llvm_types.contains_monomorphized(&mangled) {
         return Ok(());
-    };
+    }
     let decl =
         c.ir.enums
-            .get(&new_id)
-            .expect("planner just inserted")
+            .get(&mangled)
+            .ok_or_else(|| format!("monomorphize_enum: `{mangled}` missing from IRProgram"))?
             .clone();
     emit_ir_enum(c, &decl)
 }
@@ -339,9 +363,8 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         let mangled_method = mangle_method_suffix(method_name, method_type_args);
         format!("{}_{}", mangled_type, mangled_method)
     };
-    if c.ir
-        .contains_function(&FunctionIdentifier::new(&mangled_fn))
-    {
+    let mangled_id = FunctionIdentifier::new(&mangled_fn);
+    if c.functions.contains_key(&mangled_id) {
         return Ok(());
     }
 
@@ -397,7 +420,7 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
         }
     }
 
-    let new_id = {
+    let added = {
         let (lower_ctx, ir) = c.lower_ctx_and_ir();
         expo_ir::lower::monomorphize::monomorphize_impl_method(
             &lower_ctx,
@@ -408,14 +431,15 @@ pub(crate) fn monomorphize_impl_method<'ctx>(
             method_type_args,
         )?
     };
-    let Some(new_id) = new_id else {
-        return Ok(());
-    };
-    let decl =
-        c.ir.functions
-            .get(&new_id)
-            .expect("planner just inserted")
-            .clone();
+    if added.is_some() {
+        c.lazy_mono_count += 1;
+    }
+    let decl = c
+        .ir
+        .functions
+        .get(&mangled_id)
+        .ok_or_else(|| format!("monomorphize_impl_method: `{mangled_id}` missing from IRProgram"))?
+        .clone();
     emit_ir_impl_method(c, &decl)
 }
 

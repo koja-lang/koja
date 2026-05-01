@@ -249,12 +249,12 @@ fn add_symbol_completions(ctx: &TypeContext, prefix_lower: &str, items: &mut Vec
         });
     }
 
-    for (name, ty) in &ctx.constants {
-        if !matches(name) {
+    for (id, ty) in &ctx.constants {
+        if !matches(&id.name) {
             continue;
         }
         items.push(CompletionItem {
-            label: name.clone(),
+            label: id.name.clone(),
             kind: Some(CompletionItemKind::CONSTANT),
             detail: Some(ty.display()),
             ..Default::default()

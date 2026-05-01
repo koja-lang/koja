@@ -23,11 +23,16 @@ use std::collections::HashMap;
 
 use expo_ast::ast::BinarySegment;
 use expo_ir::IRBlockId;
-use expo_ir::identity::FunctionIdentifier;
+use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
+use expo_ir::resolved::construction::ResolvedBinaryLayout;
 use expo_ir::resolved::fields::{ResolvedChain, ResolvedFieldStep};
 use expo_ir::resolved::ops::{ResolvedBinaryOp, ResolvedUnaryOp};
 use expo_ir::resolved::patterns::ResolvedLiteral;
-use expo_ir::values::{IRInstruction, IROperand, IRValueId};
+use expo_ir::resolved::strings::ResolvedConcatKind;
+use expo_ir::values::{
+    EnumPayload, IRInstruction, IROperand, IRValueId, LoweredBinarySegment, StringFormatPart,
+    StructFieldInit,
+};
 use expo_typecheck::types::Type;
 use inkwell::AddressSpace;
 use inkwell::basic_block::BasicBlock;
@@ -36,14 +41,21 @@ use inkwell::values::{
 };
 use inkwell::{FloatPredicate, IntPredicate};
 
+use crate::binary::construction::{allocate_binary_buffer, pack_segment};
 use crate::binary::patterns::compile_binary_pattern;
 use crate::compiler::Compiler;
 use crate::control::patterns::{lookup_enum_struct_type, match_values, resolve_payload_info};
 use crate::drop::Ownership;
+use crate::enums::store_variant_tag;
 use crate::expr::compile_expr;
-use crate::ops::truncate_to_common_width;
+use crate::ops::{compile_binary_concat, compile_string_concat, truncate_to_common_width};
 use crate::stmt::{coerce_numeric, compile_union_wrap};
-use crate::structs::{emit_chain_field_access, emit_field_load, load_maybe_indirect};
+use crate::strings::{
+    append_literal_to_format, assemble_interpolated_string, interp_arg_for_value,
+};
+use crate::structs::{
+    emit_chain_field_access, emit_field_load, load_maybe_indirect, store_maybe_indirect,
+};
 use crate::types::to_llvm_type;
 
 use super::terminator::materialize_operand;
@@ -94,6 +106,14 @@ pub(crate) fn execute_instructions<'ctx>(
 ) -> Result<(), String> {
     for instruction in instructions {
         let entry = match instruction {
+            IRInstruction::BinaryConstruct {
+                dest,
+                layout,
+                segments,
+            } => {
+                let value = emit_binary_construct(compiler, layout, segments, value_map)?;
+                Some((*dest, value))
+            }
             IRInstruction::BinaryOp { dest, op, lhs, rhs } => {
                 let l = materialize_operand(compiler, lhs, value_map)?;
                 let r = materialize_operand(compiler, rhs, value_map)?;
@@ -108,6 +128,29 @@ pub(crate) fn execute_instructions<'ctx>(
                 return_type: _,
                 tail: _,
             } => emit_call(compiler, *dest, mangled, args, param_types, value_map)?,
+            IRInstruction::Concat { dest, kind, parts } => {
+                let value = emit_concat(compiler, *kind, parts, value_map)?;
+                Some((*dest, value))
+            }
+            IRInstruction::EnumConstruct {
+                dest,
+                mangled,
+                result_type,
+                tag,
+                variant,
+                payload,
+            } => {
+                let value = emit_enum_construct(
+                    compiler,
+                    mangled,
+                    result_type,
+                    *tag,
+                    variant,
+                    payload,
+                    value_map,
+                )?;
+                Some((*dest, value))
+            }
             IRInstruction::FieldChain {
                 dest,
                 base_name,
@@ -127,9 +170,12 @@ pub(crate) fn execute_instructions<'ctx>(
                 let value = emit_field_load(compiler, base_value.into_struct_value(), step)?;
                 Some((*dest, value))
             }
-            IRInstruction::LoadConst { dest, name, ty: _ } => {
-                let value = *compiler.constants.get(name).ok_or_else(|| {
-                    format!("IRInstruction::LoadConst: unregistered constant `{name}`")
+            IRInstruction::LoadConst { dest, id, ty: _ } => {
+                let value = *compiler.constants.get(id.0 as usize).ok_or_else(|| {
+                    format!(
+                        "IRInstruction::LoadConst: out-of-range constant id {}",
+                        id.0
+                    )
                 })?;
                 Some((*dest, value))
             }
@@ -144,6 +190,10 @@ pub(crate) fn execute_instructions<'ctx>(
             } => {
                 let value = emit_make_fn_ref(compiler, name)?;
                 Some((*dest, value))
+            }
+            IRInstruction::MatchSubject { dest, value, ty: _ } => {
+                let pointer = emit_match_subject(compiler, value, value_map)?;
+                Some((*dest, pointer))
             }
             IRInstruction::MethodCall {
                 dest,
@@ -302,6 +352,20 @@ pub(crate) fn execute_instructions<'ctx>(
                 emit_store_local(compiler, name, val, ty, *is_decl, *ownership)?;
                 None
             }
+            IRInstruction::StringFormat { dest, parts } => {
+                let value = emit_string_format(compiler, parts, value_map)?;
+                Some((*dest, value))
+            }
+            IRInstruction::StructConstruct {
+                dest,
+                mangled,
+                result_type,
+                fields,
+            } => {
+                let value =
+                    emit_struct_construct(compiler, mangled, result_type, fields, value_map)?;
+                Some((*dest, value))
+            }
             IRInstruction::Stub { dest, expr, .. } => {
                 // Statement-context Stubs (e.g. lowered from
                 // [`expo_ast::ast::Statement::Expr`]) discard their
@@ -390,6 +454,33 @@ pub(crate) fn execute_instructions<'ctx>(
 /// build the LLVM call. Returns `None` for void-returning callees so
 /// the caller skips the value-map insert; non-void returns produce
 /// `Some((dest, value))`.
+/// Guarantee `mangled` has an LLVM `FunctionValue` bound in
+/// `c.functions` before the IR-walker tries to emit a call to it.
+///
+/// The closure pass ([`expo_ir::closure_program`]) registers
+/// monomorphized [`expo_ir::IRFunction`] decls in `c.ir` ahead of
+/// codegen, but LLVM emission is deferred (function-body emission has
+/// dependency-ordering hazards if drained eagerly). This helper
+/// lazy-emits a closure-registered decl on first call-site encounter
+/// by routing through the matching `emit_ir_*` helper, which is
+/// idempotent on `c.functions`.
+fn ensure_callee_emitted<'ctx>(
+    c: &mut Compiler<'ctx>,
+    mangled: &FunctionIdentifier,
+) -> Result<(), String> {
+    if c.functions.contains_key(mangled) {
+        return Ok(());
+    }
+    let Some(decl) = c.ir.functions.get(mangled).cloned() else {
+        return Ok(());
+    };
+    match &decl.kind {
+        expo_ir::IRFunctionKind::Free { .. } => crate::generics::emit_ir_function(c, &decl),
+        expo_ir::IRFunctionKind::Method { .. } => crate::generics::emit_ir_impl_method(c, &decl),
+        _ => Ok(()),
+    }
+}
+
 fn emit_call<'ctx>(
     c: &mut Compiler<'ctx>,
     dest: IRValueId,
@@ -398,6 +489,7 @@ fn emit_call<'ctx>(
     param_types: &[Type],
     value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
 ) -> Result<Option<(IRValueId, BasicValueEnum<'ctx>)>, String> {
+    ensure_callee_emitted(c, mangled)?;
     let callee = *c
         .functions
         .get(mangled)
@@ -436,6 +528,7 @@ fn emit_method_call<'ctx>(
     tail: bool,
     value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
 ) -> Result<Option<(IRValueId, BasicValueEnum<'ctx>)>, String> {
+    ensure_callee_emitted(c, mangled)?;
     let callee = *c
         .functions
         .get(mangled)
@@ -562,6 +655,23 @@ fn emit_make_fn_ref<'ctx>(
         .unwrap()
         .into_struct_value();
     Ok(fat_ptr.into())
+}
+
+/// Emit an [`IRInstruction::MatchSubject`]: alloca + store the
+/// materialized subject and return the pointer. Subsequent `Pattern*`
+/// instructions GEP into it.
+fn emit_match_subject<'ctx>(
+    c: &mut Compiler<'ctx>,
+    value: &IROperand,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let subject = materialize_operand(c, value, value_map)?;
+    let alloca = c
+        .builder
+        .build_alloca(subject.get_type(), "match_subject")
+        .unwrap();
+    c.builder.build_store(alloca, subject).unwrap();
+    Ok(alloca.into())
 }
 
 /// Emit an [`IRInstruction::Phi`]: build an LLVM phi node and
@@ -783,6 +893,108 @@ fn emit_binary_op<'ctx>(
         ResolvedBinaryOp::StringEqual => emit_string_cmp(c, lhs, rhs, IntPredicate::EQ)?,
         ResolvedBinaryOp::StringNotEqual => emit_string_cmp(c, lhs, rhs, IntPredicate::NE)?,
     })
+}
+
+/// Walk a [`StringFormatPart`] slice, building the snprintf format
+/// string and the parallel argument list, then run the same
+/// snprintf+malloc+payload-pointer dance the AST-level
+/// `compile_string` does for the interpolated branch. Mirrors that
+/// helper line-for-line; the only difference is that this version
+/// reads already-materialized operands out of `value_map` instead of
+/// recursing into `compile_expr` per hole. Returns the payload
+/// pointer (caller wraps in `Type::Primitive(Primitive::String)`).
+fn emit_string_format<'ctx>(
+    c: &mut Compiler<'ctx>,
+    parts: &[StringFormatPart],
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let mut fmt_string = String::new();
+    let mut interp_values: Vec<BasicValueEnum<'ctx>> = Vec::new();
+    for part in parts {
+        match part {
+            StringFormatPart::Literal(value) => {
+                append_literal_to_format(&mut fmt_string, value);
+            }
+            StringFormatPart::Interpolated {
+                value,
+                ty,
+                format: _,
+            } => {
+                let val = materialize_operand(c, value, value_map)?;
+                let arg = interp_arg_for_value(c, val, ty)?;
+                fmt_string.push_str(arg.format_spec);
+                interp_values.push(arg.value);
+            }
+        }
+    }
+
+    assemble_interpolated_string(c, &fmt_string, &interp_values)
+}
+
+/// Mirror of the AST-level `compile_binary_literal` that operates
+/// on already-materialized operands carried by
+/// [`IRInstruction::BinaryConstruct`]. Both paths now delegate to
+/// the shared [`allocate_binary_buffer`] / [`pack_segment`] helpers
+/// in `binary/construction.rs`; this executor's only specialization
+/// is feeding values from the SSA `value_map` rather than from
+/// `compile_expr`.
+fn emit_binary_construct<'ctx>(
+    c: &mut Compiler<'ctx>,
+    layout: &ResolvedBinaryLayout,
+    segments: &[LoweredBinarySegment],
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let (_base_ptr, payload_ptr) = allocate_binary_buffer(c, layout.total_bits)?;
+
+    let mut byte_offset: u64 = 0;
+    for segment in segments {
+        let value = materialize_operand(c, &segment.value, value_map)?;
+        pack_segment(
+            c,
+            segment.kind,
+            segment.bit_width,
+            value,
+            payload_ptr,
+            byte_offset,
+        )?;
+        byte_offset += segment.bit_width / 8;
+    }
+
+    Ok(payload_ptr.into())
+}
+
+/// Materialize each [`IRInstruction::Concat`] part and fold them
+/// pairwise via the existing [`compile_string_concat`] /
+/// [`compile_binary_concat`] helpers (which already operate on raw
+/// LLVM values, having been the inner half of the AST-level
+/// `compile_concat`). The pairwise fold matches today's lowering
+/// shape (one IR instruction per source `<>`); a future folding pass
+/// can collapse `a <> b <> c` into a single 3-part instruction
+/// without touching this executor.
+fn emit_concat<'ctx>(
+    c: &mut Compiler<'ctx>,
+    kind: ResolvedConcatKind,
+    parts: &[IROperand],
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    if parts.len() < 2 {
+        return Err(format!(
+            "IRInstruction::Concat: expected at least 2 parts, got {}",
+            parts.len()
+        ));
+    }
+    let mut iter = parts.iter();
+    let first = iter.next().unwrap();
+    let mut acc = materialize_operand(c, first, value_map)?;
+    for next in iter {
+        let rhs = materialize_operand(c, next, value_map)?;
+        acc = match kind {
+            ResolvedConcatKind::Binary => compile_binary_concat(c, acc, rhs)?,
+            ResolvedConcatKind::String => compile_string_concat(c, acc, rhs)?,
+        }
+        .ok_or("concat helper produced no value")?;
+    }
+    Ok(acc)
 }
 
 fn emit_unary_op<'ctx>(
@@ -1223,4 +1435,175 @@ fn emit_store_local<'ctx>(
     let store_val = coerce_numeric(c, val, &var_ty);
     c.builder.build_store(ptr, store_val).unwrap();
     Ok(())
+}
+
+/// Emit an [`IRInstruction::EnumConstruct`]: look up the enum's LLVM
+/// type, allocate it, write the variant tag at slot 0, and (for
+/// non-Unit variants) populate the variant's payload struct at slot 1
+/// from the lowered operands. Mirrors `crate::enums::emit_enum_construction`'s
+/// shape but consumes pre-lowered [`EnumPayload`] operands rather
+/// than walking AST.
+#[allow(clippy::too_many_arguments)]
+fn emit_enum_construct<'ctx>(
+    c: &mut Compiler<'ctx>,
+    mangled: &MonomorphizedTypeIdentifier,
+    result_type: &Type,
+    tag: u8,
+    variant: &str,
+    payload: &EnumPayload,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let enum_type = lookup_named_llvm_type(c, mangled, result_type, "EnumConstruct")?;
+    let alloca_label = format!("{mangled}_{variant}");
+    let alloca = c.build_entry_alloca(enum_type, &alloca_label);
+    store_variant_tag(c, enum_type, alloca, tag as u64);
+    if !matches!(payload, EnumPayload::Unit) {
+        let payload_ptr = c
+            .builder
+            .build_struct_gep(enum_type, alloca, 1, "payload_ptr")
+            .unwrap();
+        let payload_type = c
+            .llvm_types
+            .variant_payload(&VariantIdentifier::new(mangled, variant))
+            .ok_or_else(|| format!("no payload type for {mangled}.{variant}"))?;
+        emit_enum_payload(c, payload, payload_type, payload_ptr, value_map)?;
+    }
+    Ok(c.builder
+        .build_load(enum_type, alloca, mangled.as_str())
+        .unwrap())
+}
+
+/// Materialize each [`EnumPayload`] operand and store it into the
+/// variant's payload struct at the corresponding index. Tuple
+/// variants store at successive indices; struct variants use the
+/// per-field `index` from the lowered field initializer. Both arms
+/// dispatch through [`emit_field_store`] so the GEP + coerce + store
+/// path is shared with [`emit_struct_construct`].
+fn emit_enum_payload<'ctx>(
+    c: &mut Compiler<'ctx>,
+    payload: &EnumPayload,
+    payload_type: inkwell::types::StructType<'ctx>,
+    payload_ptr: inkwell::values::PointerValue<'ctx>,
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<(), String> {
+    match payload {
+        EnumPayload::Struct(fields) => {
+            for field in fields {
+                let value = materialize_operand(c, &field.value, value_map)?;
+                emit_field_store(
+                    c,
+                    payload_type,
+                    payload_ptr,
+                    field.index,
+                    &field.name,
+                    value,
+                    &field.field_type,
+                );
+            }
+            Ok(())
+        }
+        EnumPayload::Tuple(elements) => {
+            for (index, element) in elements.iter().enumerate() {
+                let value = materialize_operand(c, &element.value, value_map)?;
+                let label = format!("field_{index}");
+                emit_field_store(
+                    c,
+                    payload_type,
+                    payload_ptr,
+                    index as u32,
+                    &label,
+                    value,
+                    &element.field_type,
+                );
+            }
+            Ok(())
+        }
+        EnumPayload::Unit => Ok(()),
+    }
+}
+
+/// Emit an [`IRInstruction::StructConstruct`]: look up the struct's
+/// LLVM type, allocate it in the entry block, materialize each field
+/// operand and store it at its layout index (via [`emit_field_store`]
+/// for the per-field GEP + coerce + store), then load the struct
+/// value back. Mirrors `crate::structs::emit_struct_construction`'s
+/// concrete-path shape but consumes pre-lowered [`StructFieldInit`]s
+/// instead of an AST `FieldInit` list.
+fn emit_struct_construct<'ctx>(
+    c: &mut Compiler<'ctx>,
+    mangled: &MonomorphizedTypeIdentifier,
+    result_type: &Type,
+    fields: &[StructFieldInit],
+    value_map: &HashMap<IRValueId, BasicValueEnum<'ctx>>,
+) -> Result<BasicValueEnum<'ctx>, String> {
+    let struct_type = lookup_named_llvm_type(c, mangled, result_type, "StructConstruct")?;
+    let alloca = c.build_entry_alloca(struct_type, &format!("{mangled}_tmp"));
+    for field in fields {
+        let value = materialize_operand(c, &field.value, value_map)?;
+        emit_field_store(
+            c,
+            struct_type,
+            alloca,
+            field.index,
+            &field.name,
+            value,
+            &field.field_type,
+        );
+    }
+    Ok(c.builder
+        .build_load(struct_type, alloca, mangled.as_str())
+        .unwrap())
+}
+
+/// GEP into `parent` at `index` and store `value`, honouring
+/// indirect-typed fields via [`store_maybe_indirect`] when a concrete
+/// `field_type` is known. Callers can pass [`Type::Unknown`] to fall
+/// back to a plain `build_store` (e.g. for slots whose type isn't
+/// resolved at lowering time).
+///
+/// Shared by [`emit_struct_construct`], the [`EnumPayload::Struct`]
+/// arm of [`emit_enum_payload`], and the [`EnumPayload::Tuple`] arm
+/// (the variant payload struct is just a layout-compatible struct
+/// for these purposes).
+fn emit_field_store<'ctx>(
+    c: &mut Compiler<'ctx>,
+    parent_type: inkwell::types::StructType<'ctx>,
+    parent_ptr: inkwell::values::PointerValue<'ctx>,
+    index: u32,
+    label: &str,
+    value: BasicValueEnum<'ctx>,
+    field_type: &Type,
+) {
+    let field_ptr = c
+        .builder
+        .build_struct_gep(parent_type, parent_ptr, index, label)
+        .unwrap();
+    if matches!(field_type, Type::Unknown) {
+        c.builder.build_store(field_ptr, value).unwrap();
+    } else {
+        store_maybe_indirect(c, field_ptr, value, field_type, label);
+    }
+}
+
+/// Look up the LLVM `StructType` for a named type referenced by an
+/// [`IRInstruction::StructConstruct`] or [`IRInstruction::EnumConstruct`].
+/// Tries the concrete-by-identifier path first; falls back to the
+/// monomorphized-by-mangled-name path for closure-pass-registered
+/// generic instantiations. `kind_label` ("StructConstruct" /
+/// "EnumConstruct") is woven into the not-found error so callers
+/// don't have to wrap the error.
+fn lookup_named_llvm_type<'ctx>(
+    c: &Compiler<'ctx>,
+    mangled: &MonomorphizedTypeIdentifier,
+    result_type: &Type,
+    kind_label: &str,
+) -> Result<inkwell::types::StructType<'ctx>, String> {
+    if let Type::Named { identifier, .. } = result_type
+        && let Some(t) = c.llvm_types.get_concrete(identifier)
+    {
+        return Ok(t);
+    }
+    c.llvm_types
+        .get_monomorphized(mangled)
+        .ok_or_else(|| format!("{kind_label}: unknown type `{mangled}`"))
 }

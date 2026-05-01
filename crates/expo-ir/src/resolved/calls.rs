@@ -18,6 +18,7 @@ use crate::identity::FunctionIdentifier;
 
 /// Builtin call kinds that lowering distinguishes by name (`panic`,
 /// `print`, `print_<Primitive>`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinCall {
     Panic,
     Print,

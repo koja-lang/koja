@@ -11,8 +11,11 @@
 //! by what `Resolved*` consumers need to be stitched together. See
 //! `expo/design/EXPOIR-ROADMAP.md` for design intent and current phase status.
 
+pub mod backend;
 pub mod blocks;
 pub mod cfg;
+pub mod closure;
+pub mod constants;
 pub mod elaborate;
 mod fn_state;
 pub mod identity;
@@ -24,16 +27,22 @@ mod type_layouts;
 pub mod util;
 pub mod values;
 
-pub use blocks::{IRBasicBlock, IRBlockId, IRTerminator};
+pub use backend::Backend;
+pub use blocks::{IRBasicBlock, IRBlockId, IRTerminator, LoopExitOp};
 pub use cfg::CFGBuilder;
+pub use closure::closure_program;
+pub use constants::IRConstantValue;
 pub use elaborate::elaborate_program;
 pub use fn_state::FnLowerState;
 pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 pub use lower::Lowerer;
 pub use ownership::Ownership;
 pub use program::{
-    ExternAbi, ExternAttrs, IREnum, IRFunction, IRFunctionKind, IRFunctionMeta, IRParam, IRProgram,
-    IRStruct, IRStructKind,
+    ExternAbi, ExternAttrs, IRConstant, IREnum, IRFunction, IRFunctionKind, IRFunctionMeta,
+    IRParam, IRProgram, IRStruct, IRStructKind, ProgramInvariantError,
 };
 pub use type_layouts::TypeLayouts;
-pub use values::{IRInstruction, IROperand, IRValueId};
+pub use values::{
+    EnumPayload, EnumTupleFieldInit, IRConstId, IRInstruction, IROperand, IRValueId,
+    LoweredBinarySegment, StringFormatPart, StructFieldInit,
+};

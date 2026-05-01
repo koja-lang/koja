@@ -38,9 +38,16 @@ use super::instructions::execute_instructions;
 use super::terminator::materialize_operand;
 use super::walk_function_blocks_seeded;
 
-/// Compiles a `match` expression. Patterns are tested sequentially; the first
-/// matching arm executes. Bindings introduced by patterns are scoped to their
-/// arm. Returns a phi value when all arms produce a value of the same type.
+/// AST-level emitter for `match`. The minimal-scope subset
+/// (wildcard / binding / literal / plain-struct arms, no guards)
+/// lifts through [`expo_ir::Lowerer::lower_match_arm`]; this shim
+/// stays for everything else (enum / union / binary / OR / list
+/// patterns, guards) plus Stub-nested parents, and retires once
+/// those lift.
+///
+/// Patterns are tested sequentially; the first matching arm executes.
+/// Bindings introduced by patterns are scoped to their arm. Returns a
+/// phi value when all arms produce a value of the same type.
 ///
 /// Today's ordering is: emit the subject first (so its post-emit Expo type is
 /// available), then [`expo_ir::Lowerer::lower_match_expr`] resolves all arm

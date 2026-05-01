@@ -19,8 +19,9 @@ mod registration;
 mod set;
 mod spawn;
 mod stmt;
+mod strings;
 mod structs;
 mod types;
 mod util;
 
-pub use compiler::{compile, compile_modules, emit_llvm_ir};
+pub use compiler::{compile, compile_modules, emit_llvm_ir, lower_modules};

@@ -22,7 +22,10 @@ use expo_ast::types::{Primitive, Type};
 use crate::Lowerer;
 use crate::blocks::IRBlockId;
 use crate::cfg::CFGBuilder;
+use crate::lower::ctx::LocalBindings;
+use crate::lower::strings::resolve_concat_kind;
 use crate::resolved::ops::{OperandShape, ResolvedBinaryOp, resolve_binary_op, resolve_unary_op};
+use crate::resolved::strings::ResolvedConcatKind;
 use crate::values::{IRInstruction, IROperand};
 
 /// Derive the [`OperandShape`] for a typecheck-resolved [`Type`].
@@ -58,13 +61,16 @@ impl<'a> Lowerer<'a> {
     /// shapes are within the IR vocabulary. Returns `None` for cases
     /// that fall through to the [`IRInstruction::Stub`] bridge:
     ///
-    /// - [`BinOp::Concat`] -- runs through `compile_concat`'s
-    ///   multi-block memcpy sequence; awaits its own dedicated
-    ///   instruction.
     /// - [`ResolvedBinaryOp::EnumStructEqual`] -- multi-block
     ///   per-variant equality; awaits its own dedicated instruction.
     /// - Operands whose resolved type doesn't map to a supported
     ///   shape (parameters, named types, etc.).
+    ///
+    /// [`BinOp::Concat`] is handled separately and lifts to
+    /// [`IRInstruction::Concat`] (not `BinaryOp`) -- the operand kind
+    /// is decided up-front via [`resolve_concat_kind`] so the
+    /// codegen executor and the interpreter don't need to re-derive
+    /// it from runtime LLVM-value shapes.
     pub(super) fn lower_binary_op_or_stub(
         &mut self,
         builder: &mut CFGBuilder,
@@ -74,7 +80,7 @@ impl<'a> Lowerer<'a> {
         right: &Expr,
     ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         if matches!(op, BinOp::Concat) {
-            return Ok(None);
+            return self.lower_concat(builder, open, left, right).map(Some);
         }
         let Some(shape) = left.resolved_type.as_ref().and_then(operand_shape_for_type) else {
             return Ok(None);
@@ -108,6 +114,51 @@ impl<'a> Lowerer<'a> {
             IROperand::Local(dest),
             binary_op_result_type(&resolved, &lhs_ty),
         )))
+    }
+
+    /// Lift [`BinOp::Concat`] (`a <> b`) into an
+    /// [`IRInstruction::Concat`]. The operand kind is decided up-front
+    /// from the left operand's resolved type via [`resolve_concat_kind`]
+    /// (mirroring what `compile_concat` does), then both operands are
+    /// lowered through the universal `lower_expr_to_operand` recursion.
+    ///
+    /// Concat always lifts -- there is no Stub fallback -- so this
+    /// helper drops the `Option` wrapper that the `_or_stub` cousins
+    /// (e.g. [`Self::lower_binary_op_or_stub`]) return for cases the
+    /// IR vocabulary doesn't yet cover. The inner `Option<IRBlockId>`
+    /// is `None` if a sub-expression's CFG terminates (`return`,
+    /// `panic`, etc.), at which point the operand is conventionally
+    /// [`IROperand::Unit`] and unused by the caller.
+    fn lower_concat(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(Option<IRBlockId>, IROperand, Type), String> {
+        let kind = resolve_concat_kind(&self.ctx(), left, |name| self.fn_state.type_of(name));
+        let result_ty = match kind {
+            ResolvedConcatKind::Binary => Type::Primitive(Primitive::Binary),
+            ResolvedConcatKind::String => Type::Primitive(Primitive::String),
+        };
+        let (open, lhs, _lhs_ty) = self.lower_expr_to_operand(builder, open, left)?;
+        let Some(open) = open else {
+            return Ok((None, IROperand::Unit, Type::Unit));
+        };
+        let (open, rhs, _rhs_ty) = self.lower_expr_to_operand(builder, open, right)?;
+        let Some(open) = open else {
+            return Ok((None, IROperand::Unit, Type::Unit));
+        };
+        let dest = self.next_value_id();
+        builder.append(
+            open,
+            IRInstruction::Concat {
+                dest,
+                kind,
+                parts: vec![lhs, rhs],
+            },
+        );
+        Ok((Some(open), IROperand::Local(dest), result_ty))
     }
 
     /// Lower an [`expo_ast::ast::ExprKind::Unary`] to an
