@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, Expr, ExprKind, TypeParam};
 use expo_ast::identifier::TypeIdentifier;
+use expo_ast::span::Span;
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{
     Type, build_substitution, mangle_name, substitute, unify, unwrap_indirect,
@@ -28,6 +29,11 @@ use crate::blocks::{IRBlockId, IRTerminator};
 use crate::cfg::CFGBuilder;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::ctx::LowerCtx;
+use crate::lower::diag::{
+    HELPER_CALL, REASON_CALL_ARGS_NEED_COERCION, REASON_CALL_NO_RESOLVED_FUNCTION,
+    REASON_CALL_NON_DIRECT_ROUTE, REASON_CALL_PENDING_MONO, REASON_CALL_STRUCT_OR_ENUM_CTOR,
+    log_helper_bail,
+};
 use crate::lower::inference::infer_static_struct_type_args_from_args;
 use crate::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
 use crate::lower::stmt::resolve_coercion;
@@ -37,6 +43,13 @@ use crate::resolved::calls::{
     PendingMethodMono, PendingTypeMono, ResolvedCall, ResolvedStaticCall,
 };
 use crate::values::{IRInstruction, IROperand};
+
+/// Routes a `lower_call_or_stub` bail through [`log_helper_bail`] with
+/// the [`HELPER_CALL`] tag. See `expo/stub/regenerate.sh` for how the
+/// resulting `[HELPER-BAIL]` lines feed slice planning.
+fn note_call_bail(lowerer: &Lowerer<'_>, reason: &'static str, span: &Span) {
+    log_helper_bail(HELPER_CALL, reason, lowerer.fn_state.current_fn(), span);
+}
 
 /// Resolves a bare-name function call to a [`ResolvedCall`].
 ///
@@ -344,6 +357,7 @@ impl<'a> Lowerer<'a> {
         name: &str,
         args: &[Arg],
         tail: bool,
+        call_span: Span,
     ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         if self
             .program
@@ -352,9 +366,11 @@ impl<'a> Lowerer<'a> {
                 .program
                 .contains_enum(&MonomorphizedTypeIdentifier::new(name))
         {
+            note_call_bail(self, REASON_CALL_STRUCT_OR_ENUM_CTOR, &call_span);
             return Ok(None);
         }
         if args_need_coercion(self, args) {
+            note_call_bail(self, REASON_CALL_ARGS_NEED_COERCION, &call_span);
             return Ok(None);
         }
 
@@ -367,6 +383,7 @@ impl<'a> Lowerer<'a> {
             |_| None,
             |candidate| is_generic_free_function(type_ctx, candidate),
         ) else {
+            note_call_bail(self, REASON_CALL_NO_RESOLVED_FUNCTION, &call_span);
             return Ok(None);
         };
 
@@ -382,9 +399,15 @@ impl<'a> Lowerer<'a> {
             },
             ResolvedCall::Generic => match self.resolve_generic_direct_call(name, args) {
                 Some(direct) => direct,
-                None => return Ok(None),
+                None => {
+                    note_call_bail(self, REASON_CALL_PENDING_MONO, &call_span);
+                    return Ok(None);
+                }
             },
-            _ => return Ok(None),
+            _ => {
+                note_call_bail(self, REASON_CALL_NON_DIRECT_ROUTE, &call_span);
+                return Ok(None);
+            }
         };
 
         let (open, lowered_args) =

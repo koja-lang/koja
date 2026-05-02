@@ -181,9 +181,10 @@ fn check_instruction_invariant(
 
 /// Static name of an [`expo_ast::ast::ExprKind`] variant, suitable for
 /// human-facing diagnostics. Surfaced by
-/// [`ProgramInvariantError::StubInstruction`] so callers know which
-/// construct still routes through the transitional `Stub` bridge.
-fn expr_kind_name(kind: &expo_ast::ast::ExprKind) -> &'static str {
+/// [`ProgramInvariantError::StubInstruction`] and the lowering-side
+/// `Stub` panic messages so callers know which construct still routes
+/// through the transitional `Stub` bridge.
+pub fn expr_kind_name(kind: &expo_ast::ast::ExprKind) -> &'static str {
     use expo_ast::ast::ExprKind;
     match kind {
         ExprKind::Arena { .. } => "Arena",

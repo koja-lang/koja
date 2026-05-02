@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, Expr, ExprKind, ImplMember, TypeExpr, TypeParam};
 use expo_ast::identifier::TypeIdentifier;
+use expo_ast::span::Span;
 use expo_typecheck::context::{FunctionKind, PassMode};
 use expo_typecheck::types::{
     Type, build_substitution, mangle_method_suffix, mangle_name, named_generic,
@@ -19,16 +20,34 @@ use crate::blocks::IRBlockId;
 use crate::cfg::CFGBuilder;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::LowerCtx;
-use crate::lower::calls::{args_need_coercion, receiver_variable_name};
+use crate::lower::calls::receiver_variable_name;
+use crate::lower::diag::{
+    HELPER_METHOD_CALL, REASON_METHOD_CALL_CLONE_SHORTCUT, REASON_METHOD_CALL_NO_IMPL_METHOD,
+    REASON_METHOD_CALL_NO_RESOLVED_RECEIVER_TYPE, REASON_METHOD_CALL_PENDING_MONO,
+    REASON_METHOD_CALL_RESOLVE_METHOD_CALL_FAILED, REASON_METHOD_CALL_RESOLVE_STRUCT_NAME_FAILED,
+    REASON_METHOD_CALL_STATIC_CALL_ROUTE, REASON_METHOD_CALL_UNREGISTERED_MANGLED_NAME,
+    log_helper_bail,
+};
 use crate::lower::inference::{infer_method_type_args, lookup_method_type_params};
 use crate::lower::naming::method_symbol_prefix;
-use crate::lower::stmt::resolve_coercion;
 use crate::lower::structs::resolve_struct_name;
 use crate::lower::types::{find_type_current, id_for, resolve_name_current};
 use crate::program::IRProgram;
 use crate::resolved::calls::{PendingMethodMono, ResolvedMethodCall};
 use crate::resolved::methods::ResolvedMethodSignature;
 use crate::values::{IRInstruction, IROperand};
+
+/// Routes a `lower_method_call_or_stub` bail through [`log_helper_bail`]
+/// with the [`HELPER_METHOD_CALL`] tag. See `expo/stub/regenerate.sh`
+/// for how the resulting `[HELPER-BAIL]` lines feed slice planning.
+fn note_method_call_bail(lowerer: &Lowerer<'_>, reason: &'static str, span: &Span) {
+    log_helper_bail(
+        HELPER_METHOD_CALL,
+        reason,
+        lowerer.fn_state.current_fn(),
+        span,
+    );
+}
 
 /// Resolves the method signature for a generic impl method by looking up
 /// the AST (specialized or generic path), building type substitutions,
@@ -392,15 +411,7 @@ impl<'a> Lowerer<'a> {
         tail: bool,
     ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         if method == "clone" && args.is_empty() {
-            return Ok(None);
-        }
-        if args_need_coercion(self, args) {
-            return Ok(None);
-        }
-        // Receiver coercion would be applied at materialization time;
-        // bail conservatively when the receiver has any recorded
-        // coercion so the legacy `compile_method_call` path handles it.
-        if resolve_coercion(&self.ctx(), receiver.span).is_some() {
+            note_method_call_bail(self, REASON_METHOD_CALL_CLONE_SHORTCUT, &receiver.span);
             return Ok(None);
         }
 
@@ -411,6 +422,7 @@ impl<'a> Lowerer<'a> {
             if let Some(ref id) = resolved_id
                 && self.type_ctx.get_type(id).is_some()
             {
+                note_method_call_bail(self, REASON_METHOD_CALL_STATIC_CALL_ROUTE, &receiver.span);
                 return self.lower_static_call_or_stub(
                     builder,
                     open,
@@ -424,12 +436,22 @@ impl<'a> Lowerer<'a> {
         }
 
         let Some(recv_type) = receiver.resolved_type.as_ref() else {
+            note_method_call_bail(
+                self,
+                REASON_METHOD_CALL_NO_RESOLVED_RECEIVER_TYPE,
+                &receiver.span,
+            );
             return Ok(None);
         };
 
         let Ok(resolved_name) =
             resolve_struct_name(&self.ctx(), receiver, recv_type, |_| None, None)
         else {
+            note_method_call_bail(
+                self,
+                REASON_METHOD_CALL_RESOLVE_STRUCT_NAME_FAILED,
+                &receiver.span,
+            );
             return Ok(None);
         };
 
@@ -442,6 +464,7 @@ impl<'a> Lowerer<'a> {
             .and_then(|ti| ti.functions.get(method))
             .is_some();
         if !has_impl_method {
+            note_method_call_bail(self, REASON_METHOD_CALL_NO_IMPL_METHOD, &receiver.span);
             return Ok(None);
         }
 
@@ -456,26 +479,65 @@ impl<'a> Lowerer<'a> {
             method,
             args,
         ) else {
+            note_method_call_bail(
+                self,
+                REASON_METHOD_CALL_RESOLVE_METHOD_CALL_FAILED,
+                &receiver.span,
+            );
             return Ok(None);
         };
 
         if resolved.pending_mono.is_some() {
+            note_method_call_bail(self, REASON_METHOD_CALL_PENDING_MONO, &receiver.span);
             return Ok(None);
         }
         if !self.program.contains_function(&resolved.mangled_name) {
+            note_method_call_bail(
+                self,
+                REASON_METHOD_CALL_UNREGISTERED_MANGLED_NAME,
+                &receiver.span,
+            );
             return Ok(None);
         }
 
+        self.emit_method_call_instruction(builder, open, receiver, args, resolved, tail)
+    }
+
+    /// Lowers the receiver and arguments, applies any
+    /// `Coercion::UnionWiden` registered for either, and stages the
+    /// final [`IRInstruction::MethodCall`].
+    ///
+    /// Split out from [`Self::lower_method_call_or_stub`] (Slice 1)
+    /// so the dispatch helper stays focused on routing decisions and
+    /// the operand-materialization sequence stays under build.mdc's
+    /// 40-line guideline. Receiver and per-arg coercion both flow
+    /// through [`Self::stage_union_widen`] -- the single seam future
+    /// `Coercion` variants extend.
+    fn emit_method_call_instruction(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        receiver: &Expr,
+        args: &[Arg],
+        resolved: ResolvedMethodCall,
+        tail: bool,
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         let return_type = resolved.return_type.clone();
         let (open, receiver_operand, _) = self.lower_expr_to_operand(builder, open, receiver)?;
         let Some(open) = open else {
             return Ok(Some((None, IROperand::Unit, return_type)));
         };
-        let (open, lowered_args) =
+        let receiver_operand =
+            self.stage_union_widen(builder, open, receiver.span, receiver_operand);
+
+        let (open, mut lowered_args) =
             self.lower_expr_sequence(builder, open, args.iter().map(|a| &a.value))?;
         let Some(open) = open else {
             return Ok(Some((None, IROperand::Unit, return_type)));
         };
+        for (arg, slot) in args.iter().zip(lowered_args.iter_mut()) {
+            *slot = self.stage_union_widen(builder, open, arg.value.span, slot.clone());
+        }
 
         let dest = self.next_value_id();
         builder.append(

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, FieldInit};
 use expo_ast::identifier::TypeIdentifier;
+use expo_ast::span::Span;
 use expo_ir::lower::calls::resolve_call;
 use expo_ir::resolved::calls::ResolvedCall;
 use expo_typecheck::context::FnParam;
@@ -83,12 +84,13 @@ pub fn compile_call<'ctx>(
     name: &str,
     args: &[Arg],
     function: FunctionValue<'ctx>,
+    call_span: Span,
 ) -> ExprResult<'ctx> {
     // Try the IR lift first; falls through to the legacy ResolvedCall
     // dispatch below for Closure / Generic / StructConstructor cases the
     // lift helper deliberately defers to Stub.
     if let LiftOutcome::Emitted(value) = lift_at_current(c, function, |lowerer, builder, open| {
-        lowerer.lower_call_or_stub(builder, open, name, args, false)
+        lowerer.lower_call_or_stub(builder, open, name, args, false, call_span)
     })? {
         return Ok(value);
     }

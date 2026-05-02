@@ -58,6 +58,10 @@ use crate::cfg::CFGBuilder;
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::binary::resolve_binary_segments;
 use crate::lower::constants::{resolve_const_inline, resolved_to_operand};
+use crate::lower::diag::{
+    HELPER_CALL, HELPER_IDENT, REASON_CALL_NON_IDENT_CALLEE, REASON_IDENT_NO_BINDING,
+    log_helper_bail, log_stub_fallthrough,
+};
 use crate::lower::enums::lower_concrete_enum;
 use crate::lower::patterns::arms_are_minimal;
 use crate::lower::structs::lower_concrete_struct;
@@ -155,11 +159,19 @@ impl<'a> Lowerer<'a> {
                 return Ok((out, operand, Type::Primitive(Primitive::Binary)));
             }
             ExprKind::Call { callee, args } => {
-                if let ExprKind::Ident { name } = &callee.kind
-                    && let Some((open, operand, ty)) =
-                        self.lower_call_or_stub(builder, open, name, args, tail)?
-                {
-                    return Ok((open, operand, ty));
+                if let ExprKind::Ident { name } = &callee.kind {
+                    if let Some((open, operand, ty)) =
+                        self.lower_call_or_stub(builder, open, name, args, tail, expr.span)?
+                    {
+                        return Ok((open, operand, ty));
+                    }
+                } else {
+                    log_helper_bail(
+                        HELPER_CALL,
+                        REASON_CALL_NON_IDENT_CALLEE,
+                        self.fn_state.current_fn(),
+                        &expr.span,
+                    );
                 }
             }
             ExprKind::FieldAccess { receiver, field } => {
@@ -176,6 +188,12 @@ impl<'a> Lowerer<'a> {
                 if let Some((operand, ty)) = self.lower_ident_or_stub(builder, open, name) {
                     return Ok((Some(open), operand, ty));
                 }
+                log_helper_bail(
+                    HELPER_IDENT,
+                    REASON_IDENT_NO_BINDING,
+                    self.fn_state.current_fn(),
+                    &expr.span,
+                );
             }
             ExprKind::MethodCall {
                 receiver,
@@ -304,6 +322,11 @@ impl<'a> Lowerer<'a> {
             _ => {}
         }
 
+        log_stub_fallthrough(
+            crate::program::expr_kind_name(&expr.kind),
+            self.fn_state.current_fn(),
+            &expr.span,
+        );
         let dest = self.next_value_id();
         let result_type = expr.resolved_type.clone().unwrap_or(Type::Unknown);
         builder.append(

@@ -469,8 +469,18 @@ pub(crate) fn compile_union_wrap<'ctx>(
     Ok(result)
 }
 
-/// Applies a recorded coercion to a compiled value, if one exists for the
+/// Apply a recorded coercion to a compiled value, if one exists for the
 /// given expression span. Currently handles union widening.
+///
+/// Slice 1 (Wave 32) lifted the `MethodCall` receiver / argument
+/// `UnionWiden` seam into [`expo_ir::values::IRInstruction::UnionWrap`]
+/// via [`expo_ir::Lowerer::stage_union_widen`], but the legacy
+/// [`compile_assignment`] / `compile_function_body`-tail-return /
+/// `compile_expr_coerced` paths still go through this helper for
+/// the consumption sites the IR layer hasn't yet sealed (function
+/// arguments, function return values, list-literal assignments).
+/// The follow-up slices that retire those legacy emit paths can also
+/// retire this helper.
 pub(crate) fn apply_coercion<'ctx>(
     compiler: &mut Compiler<'ctx>,
     val: BasicValueEnum<'ctx>,
