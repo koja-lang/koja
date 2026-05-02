@@ -1,4 +1,4 @@
-//! Module-level constant lowering and the IR-side pool bridge.
+//! Package-level constant lowering and the IR-side pool bridge.
 //!
 //! [`resolve_const_inline`] folds primitive literals; [`resolve_const`]
 //! adds compound resolution. [`populate_constants`] runs once per
@@ -35,13 +35,13 @@ pub struct ConstantTables {
     pub primitives: HashMap<TypeIdentifier, IROperand>,
 }
 
-/// Resolve every module-level constant once, routing each to its
+/// Resolve every package-level constant once, routing each to its
 /// IR home: primitives become [`ConstantTables::primitives`]
 /// operands, compounds become [`IRProgram::constants`] entries (with
 /// the id mirrored into [`ConstantTables::compounds`]). Unfoldable
 /// initializers are skipped.
 pub fn populate_constants(
-    modules: &[&Module],
+    files: &[&Module],
     packages: &[&str],
     program: &mut IRProgram,
     type_ctx: &TypeContext,
@@ -49,7 +49,7 @@ pub fn populate_constants(
 ) -> ConstantTables {
     let mut tables = ConstantTables::default();
     let empty_fn_lower = crate::FnLowerState::new();
-    for (module, package) in modules.iter().zip(packages.iter()) {
+    for (file, package) in files.iter().zip(packages.iter()) {
         let pkg = package_from_str(package);
         let ctx = LowerCtx {
             closure_site_path: None,
@@ -59,7 +59,7 @@ pub fn populate_constants(
             package: Some(&pkg),
             type_ctx,
         };
-        for item in &module.items {
+        for item in &file.items {
             let Item::Constant(constant) = item else {
                 continue;
             };

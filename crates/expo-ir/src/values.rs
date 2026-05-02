@@ -417,7 +417,7 @@ pub enum IRInstruction {
         /// so emission needs no further lookups.
         step: ResolvedFieldStep,
     },
-    /// Load a compound module-level `const` (`String` / `EnumVariant` /
+    /// Load a compound package-level `const` (`String` / `EnumVariant` /
     /// `Struct`) into an SSA slot by indexing
     /// [`crate::program::IRProgram::constants`]. Primitive consts
     /// (`Bool` / `Int` / `Float`) never reach this instruction --

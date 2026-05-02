@@ -1,4 +1,4 @@
-//! Lowering-decision form of a fully-resolved module-level constant.
+//! Lowering-decision form of a fully-resolved package-level constant.
 //! Produced by [`crate::lower::constants::resolve_const`] and
 //! consumed only by the bridge in
 //! [`crate::lower::constants::populate_constants`]; backends never

@@ -20,7 +20,7 @@
 //! - Ident -- typed [`IRInstruction::LoadLocal`] /
 //!   [`IRInstruction::LoadConst`] / [`IRInstruction::MakeFnRef`]
 //!   based on the same precedence `compile_expr` uses (locals first,
-//!   then module constants, then function-as-value).
+//!   then package constants, then function-as-value).
 //! - MethodCall -- typed [`IRInstruction::MethodCall`] via
 //!   [`crate::lower::methods`] when the receiver has a static type
 //!   and the resolved callee is registered; tail-recursive,
@@ -465,7 +465,7 @@ impl<'a> Lowerer<'a> {
 
     /// Lower an [`expo_ast::ast::ExprKind::Ident`] to a typed
     /// instruction matching `compile_expr`'s precedence: in-scope
-    /// local binding -> module constant -> function-as-value
+    /// local binding -> package constant -> function-as-value
     /// (closure-compatible fat pointer). Returns `None` when the
     /// name resolves to none of the three (well-typed code never
     /// reaches that branch, but defensively keep the Stub bridge).

@@ -20,7 +20,7 @@
 //!   generic free-function calls written directly in `fn main` (e.g.
 //!   `identity(42)` in `tests/lang/generics/generics.expo`) reach
 //!   codegen's lazy fallback. Closing this gap requires either
-//!   teaching `MainEntry` to carry the body or threading the modules
+//!   teaching `MainEntry` to carry the body or threading the files
 //!   slice through [`super::closure_program`]; both are larger
 //!   architectural changes than this walk.
 //!

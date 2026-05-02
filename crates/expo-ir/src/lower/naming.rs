@@ -10,9 +10,9 @@ use expo_ast::identifier::Package;
 use crate::lower::ctx::LowerCtx;
 
 /// Convenience wrapper: like [`method_symbol_prefix`] but reads the current
-/// module's package from the lowering context. Use at definition sites
-/// where the owning package is the one we're currently compiling. Defaults
-/// to bare `type_name` when no package is set.
+/// package from the lowering context. Use at definition sites where the
+/// owning package is the one we're currently compiling. Defaults to bare
+/// `type_name` when no package is set.
 pub fn current_method_symbol_prefix(ctx: &LowerCtx<'_>, type_name: &str) -> String {
     match ctx.package {
         Some(pkg) => method_symbol_prefix(pkg, type_name),
