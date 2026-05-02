@@ -8,7 +8,7 @@
 use crate::doc::*;
 use expo_ast::ast::*;
 
-/// A forward-only cursor over a module's source comments.
+/// A forward-only cursor over a file's source comments.
 ///
 /// Comments are sorted by source position. The cursor tracks how far we've
 /// consumed, so each call to `drain_before` / `drain_trailing` advances past
@@ -78,7 +78,7 @@ impl<'a> CommentCursor<'a> {
         }
     }
 
-    /// Drains all remaining unconsumed comments (used at the end of a module).
+    /// Drains all remaining unconsumed comments (used at the end of a file).
     pub(super) fn drain_rest(&mut self) -> Vec<Doc> {
         let mut docs = Vec::new();
         while self.pos < self.comments.len() {

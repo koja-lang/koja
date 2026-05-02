@@ -1,6 +1,6 @@
 //! Pretty-printer: converts a parsed Expo AST back into formatted source code.
 //!
-//! The entry point is [`module_to_doc`], which produces a [`Doc`] document tree
+//! The entry point is [`file_to_doc`], which produces a [`Doc`] document tree
 //! that the renderer in [`crate::doc`] lays out to a target line width.
 //!
 //! Internally the printer is split into submodules:
@@ -20,10 +20,10 @@ use expo_ast::ast::*;
 use comments::CommentCursor;
 use util::*;
 
-/// Converts a parsed module into a `Doc` tree ready for rendering.
-pub fn module_to_doc(module: &Module) -> Doc {
-    let mut p = Printer::new(&module.comments);
-    p.print_module(module)
+/// Converts a parsed file into a `Doc` tree ready for rendering.
+pub fn file_to_doc(file: &Module) -> Doc {
+    let mut p = Printer::new(&file.comments);
+    p.print_file(file)
 }
 
 /// Holds the comment cursor used during formatting to re-attach comments
@@ -33,29 +33,29 @@ pub(super) struct Printer<'a> {
 }
 
 impl<'a> Printer<'a> {
-    /// Creates a new printer with a comment cursor over the module's comments.
+    /// Creates a new printer with a comment cursor over the file's comments.
     fn new(comments: &'a [Comment]) -> Self {
         Self {
             comments: CommentCursor::new(comments),
         }
     }
 
-    /// Formats an entire module: items with interleaved comments.
-    fn print_module(&mut self, module: &Module) -> Doc {
+    /// Formats an entire file: items with interleaved comments.
+    fn print_file(&mut self, file: &Module) -> Doc {
         let mut parts: Vec<Doc> = Vec::new();
         let mut emitted = false;
 
         let mut i = 0;
 
-        while i < module.items.len() {
-            if matches!(&module.items[i], Item::Constant(_) | Item::Alias(_)) {
+        while i < file.items.len() {
+            if matches!(&file.items[i], Item::Constant(_) | Item::Alias(_)) {
                 if emitted {
                     parts.push(hardline());
                 }
 
-                let anchor = mem::discriminant(&module.items[i]);
-                while i < module.items.len() && mem::discriminant(&module.items[i]) == anchor {
-                    let item = &module.items[i];
+                let anchor = mem::discriminant(&file.items[i]);
+                while i < file.items.len() && mem::discriminant(&file.items[i]) == anchor {
+                    let item = &file.items[i];
                     let span = item_span(item);
                     let (comment_docs, _) = self.comments.drain_before(span.start.line);
                     for c in comment_docs {
@@ -68,7 +68,7 @@ impl<'a> Printer<'a> {
 
                 emitted = true;
             } else {
-                let item = &module.items[i];
+                let item = &file.items[i];
                 let span = item_span(item);
                 let (comment_docs, _) = self.comments.drain_before(span.start.line);
                 for c in comment_docs {
