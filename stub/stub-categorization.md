@@ -108,13 +108,13 @@ landed:
   factors the receiver-then-args-then-call sequence out of
   `lower_method_call_or_stub` to keep both functions readable.
 - **Phase 3b -- codegen `apply_coercion` retirement: deferred.**
-  Empirically (lang_suite verifies it) the legacy
+  Empirically (lang*suite verifies it) the legacy
   `compile_function_body`-tail-return,
   [`compile_assignment`](../crates/expo-codegen/src/stmt.rs), and
   `compile_expr_coerced` paths still depend on
   `apply_coercion`'s `UnionWiden` arm to coerce free-function
   arguments, function return values, and list-literal-RHS
-  assignments. Slice 1 lifted _only_ the `MethodCall`
+  assignments. Slice 1 lifted \_only* the `MethodCall`
   receiver / argument seam to IR; the AST escape hatch for
   `UnionWiden` will close in the slice that retires those legacy
   emit paths. The helper carries a doc-comment marking the
@@ -178,17 +178,17 @@ landed:
 
 `[HELPER-BAIL]` lines from `regenerate.sh`:
 
-| Helper                       | Reason                      | Count |
-| ---------------------------- | --------------------------- | ----- |
-| `lower_method_call_or_stub`  | `static-call-route`         | 1378  |
-| `lower_ident_or_stub`        | `no-binding`                | 248   |
-| `lower_method_call_or_stub`  | `no-resolved-receiver-type` | 186   |
-| `lower_method_call_or_stub`  | `pending-mono`              | 118   |
-| `lower_static_call_or_stub`  | `pending-type-mono`         | 63    |
-| `lower_call_or_stub`         | `no-resolved-function`      | 61    |
-| `lower_method_call_or_stub`  | `no-impl-method`            | 25    |
-| `lower_method_call_or_stub`  | `clone-shortcut`            | 17    |
-| `lower_call_or_stub`         | `pending-mono`              | 9     |
+| Helper                      | Reason                      | Count |
+| --------------------------- | --------------------------- | ----- |
+| `lower_method_call_or_stub` | `static-call-route`         | 1378  |
+| `lower_ident_or_stub`       | `no-binding`                | 248   |
+| `lower_method_call_or_stub` | `no-resolved-receiver-type` | 186   |
+| `lower_method_call_or_stub` | `pending-mono`              | 118   |
+| `lower_static_call_or_stub` | `pending-type-mono`         | 63    |
+| `lower_call_or_stub`        | `no-resolved-function`      | 61    |
+| `lower_method_call_or_stub` | `no-impl-method`            | 25    |
+| `lower_method_call_or_stub` | `clone-shortcut`            | 17    |
+| `lower_call_or_stub`        | `pending-mono`              | 9     |
 
 Three `lower_static_call_or_stub` reasons currently log zero
 hits (kept for completeness because the lifter does tag them):

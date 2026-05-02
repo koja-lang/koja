@@ -7,8 +7,8 @@
 //! struct field layouts, enum variant payloads, and function signatures
 //! are concrete `Type`s, but function bodies are still raw AST
 //! ([`expo_ast::ast::Function`]) — bottom-up IR-ification of bodies into
-//! basic blocks and instructions is the next wave's work. See
-//! `expo/design/EXPOIR-ROADMAP.md`.
+//! basic blocks and instructions is in-progress work. See
+//! `expo/design/COMPILER-NORTHSTAR.md` for the destination architecture.
 //!
 //! Long-term, [`IRProgram`] is expected to grow into a thin container of
 //! `IRPackage`s so users can address per-package partitioning. For now the

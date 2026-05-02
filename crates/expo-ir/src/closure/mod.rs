@@ -14,14 +14,15 @@
 //!    completed.
 //! 4. Backends consume a sealed [`crate::IRProgram`].
 //!
-//! ## Slice coverage
+//! ## Sub-walks
 //!
-//! - Slice 1: struct + enum instantiations ([`types`]).
-//! - Slice 2: free-function instantiations ([`functions`]).
-//! - Slice 3: user impl-method instantiations ([`methods`]).
+//! - [`types`]: struct + enum instantiations (including static-call
+//!   receiver types like `Foo<Int>.new()`).
+//! - [`functions`]: free-function instantiations.
+//! - [`methods`]: user impl-method instantiations, including
+//!   method-level type parameters.
 //!
-//! Each slice plugs another sub-walk into [`closure_program`]. The
-//! per-walk traversal scaffolding (descend into block bodies,
+//! The per-walk traversal scaffolding (descend into block bodies,
 //! conditional arms, etc.) lives in [`visit`] and is shared.
 
 mod functions;

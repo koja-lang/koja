@@ -21,8 +21,9 @@
 //! [`compile_enum_construction`] is the public entry point and a thin
 //! shim over those two phases. For generics, the shim pre-compiles the
 //! tuple arguments so lower can drive `unify` over their resolved types --
-//! see the design note in `expo/design/EXPOIR-ROADMAP.md` for why the
-//! boundary relaxes here vs. patterns.
+//! see the design note in `expo/design/archive/20260502-EXPOIR-ROADMAP.md`
+//! (superseded by `expo/design/COMPILER-NORTHSTAR.md`) for why the boundary
+//! relaxes here vs. patterns.
 //!
 //! ## Equality
 //!

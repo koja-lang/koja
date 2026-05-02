@@ -16,18 +16,20 @@
 //! Idempotency comes from the planners' `if program.contains_*` early
 //! return, which also bounds the worklist.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-use expo_ast::ast::{Expr, ExprKind, Function};
+use expo_ast::ast::{Arg, Expr, ExprKind, Function};
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::{TypeContext, VariantData};
-use expo_typecheck::types::{Type, mangle_name};
+use expo_typecheck::types::{Type, mangle_name, substitute};
 
 use crate::closure::visit::visit_function_exprs;
 use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::ctx::LowerCtx;
+use crate::lower::inference::infer_static_struct_type_args_from_args;
 use crate::lower::monomorphize::{monomorphize_enum, monomorphize_struct};
+use crate::lower::types::find_type_current;
 use crate::program::{IRFunctionKind, IRProgram};
 use crate::{FnLowerState, TypeLayouts};
 
@@ -41,7 +43,7 @@ const MAX_WORKLIST_ITERATIONS: usize = 1024;
 /// the LLVM-free planners. Repeats over freshly-registered decls'
 /// sub-types until fixpoint.
 pub fn run(program: &mut IRProgram, type_ctx: &TypeContext) -> Result<(), String> {
-    let mut pending = collect_pending_from_bodies(program);
+    let mut pending = collect_pending_from_bodies(program, type_ctx);
     let mut iteration = 0;
     while !pending.is_empty() {
         iteration += 1;
@@ -58,18 +60,18 @@ pub fn run(program: &mut IRProgram, type_ctx: &TypeContext) -> Result<(), String
 
 /// Walk every callable body in `program`, collecting the initial set
 /// of generic struct/enum instantiations referenced by the source.
-fn collect_pending_from_bodies(program: &IRProgram) -> Vec<Pending> {
+fn collect_pending_from_bodies(program: &IRProgram, type_ctx: &TypeContext) -> Vec<Pending> {
     let mut pending: Vec<Pending> = Vec::new();
     let mut seen: HashSet<MonomorphizedTypeIdentifier> = HashSet::new();
     for id in &program.function_order {
         let Some(function) = program.functions.get(id) else {
             continue;
         };
-        let Some(func_ast) = func_ast_of(&function.kind) else {
+        let Some((func_ast, subst)) = func_ast_of(&function.kind) else {
             continue;
         };
         visit_function_exprs(func_ast, |expr| {
-            collect_from_expr(expr, &mut pending, &mut seen);
+            collect_from_expr(expr, type_ctx, subst, &mut pending, &mut seen);
         });
     }
     pending
@@ -152,21 +154,84 @@ fn collect_from_variant(
     }
 }
 
-/// Inspect an `Expr` for a generic struct/enum construction and
-/// record the instantiation in `pending` (skipping ones already in
-/// `seen`).
+/// Inspect an `Expr` for a generic struct/enum construction or a
+/// `Type.method(...)` static-call receiver and record the
+/// instantiation in `pending` (skipping ones already in `seen`).
+///
+/// Static-call receiver-type discovery: `Foo<Int>.new()` doesn't
+/// produce a `StructConstruction` AST node, so the
+/// construction-only walk above misses it. Detect the pattern via
+/// `MethodCall { receiver: Ident { name } }` whose `name` resolves
+/// to a generic type, infer the type-args from the call args via
+/// [`infer_static_struct_type_args_from_args`], and queue the
+/// receiver type for monomorphization. Drains the
+/// `lower_static_call_or_stub pending-type-mono` IR bail.
 fn collect_from_expr(
     expr: &Expr,
+    type_ctx: &TypeContext,
+    subst: &HashMap<String, Type>,
     pending: &mut Vec<Pending>,
     seen: &mut HashSet<MonomorphizedTypeIdentifier>,
 ) {
-    let resolved = expr.resolved_type.as_ref();
-    if matches!(
-        &expr.kind,
-        ExprKind::StructConstruction { .. } | ExprKind::EnumConstruction { .. }
-    ) && let Some(ty) = resolved
-    {
-        collect_from_type(ty, pending, seen);
+    match &expr.kind {
+        ExprKind::StructConstruction { .. } | ExprKind::EnumConstruction { .. } => {
+            if let Some(ty) = expr.resolved_type.as_ref() {
+                collect_from_type(&substitute(ty, subst), pending, seen);
+            }
+        }
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            collect_from_static_call(receiver, method, args, type_ctx, subst, pending, seen);
+        }
+        _ => {}
+    }
+}
+
+/// `MethodCall` static-receiver branch: when the receiver is a bare
+/// identifier that resolves to a generic type, queue the receiver's
+/// monomorphization. Inference goes through the same helper the IR
+/// lifter uses ([`infer_static_struct_type_args_from_args`]) so the
+/// closure pass and the lifter agree on which type-args to pick.
+fn collect_from_static_call(
+    receiver: &Expr,
+    method: &str,
+    args: &[Arg],
+    type_ctx: &TypeContext,
+    subst: &HashMap<String, Type>,
+    pending: &mut Vec<Pending>,
+    seen: &mut HashSet<MonomorphizedTypeIdentifier>,
+) {
+    let ExprKind::Ident { name } = &receiver.kind else {
+        return;
+    };
+    let ctx = empty_lower_ctx(type_ctx);
+    let Some(type_info) = find_type_current(&ctx, name) else {
+        return;
+    };
+    if type_info.type_params.is_empty() {
+        return;
+    }
+    let Ok(type_args) = infer_static_struct_type_args_from_args(
+        &ctx,
+        &|_| None,
+        name,
+        method,
+        args,
+        &type_info.type_params,
+    ) else {
+        return;
+    };
+    let type_args: Vec<Type> = type_args.iter().map(|t| substitute(t, subst)).collect();
+    if type_args.iter().any(|t| matches!(t, Type::Unknown)) {
+        return;
+    }
+    let id = type_info.identifier.clone();
+    let mangled = MonomorphizedTypeIdentifier::new(mangle_name(&id, &type_args));
+    if seen.insert(mangled) {
+        pending.push(Pending { id, type_args });
     }
 }
 
@@ -241,14 +306,20 @@ pub(super) fn empty_lower_ctx(type_ctx: &TypeContext) -> LowerCtx<'_> {
     }
 }
 
-/// Borrow the AST body off a callable [`IRFunctionKind`], or `None`
-/// for kinds that don't carry one (extern, intrinsic, main entry,
-/// thunk).
-fn func_ast_of(kind: &IRFunctionKind) -> Option<&Function> {
+/// Borrow the AST body and type substitution off a callable
+/// [`IRFunctionKind`], or `None` for kinds that don't carry a body
+/// (extern, intrinsic, main entry, thunk). The subst captures the
+/// per-instantiation `T -> ConcreteType` bindings recorded by the
+/// monomorphize planners; visitors apply it before treating
+/// `expr.resolved_type` as a concrete type.
+fn func_ast_of(kind: &IRFunctionKind) -> Option<(&Function, &HashMap<String, Type>)> {
     match kind {
-        IRFunctionKind::Free { func_ast, .. } | IRFunctionKind::Method { func_ast, .. } => {
-            Some(func_ast)
+        IRFunctionKind::Free {
+            func_ast, subst, ..
         }
+        | IRFunctionKind::Method {
+            func_ast, subst, ..
+        } => Some((func_ast, subst)),
         _ => None,
     }
 }
