@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{env, fs, mem, process};
 
-use expo_ast::ast::{Annotation, AnnotationValue, ImplMember, Item, Module, Severity};
+use expo_ast::ast::{Annotation, AnnotationValue, Diagnostic, ImplMember, Item, Module, Severity};
 
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{Package, fqn_to_package};
@@ -17,6 +17,44 @@ use expo_typecheck::types::{Package, fqn_to_package};
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
 use crate::resolve::{self, SourceSet};
+
+/// Parsed build arguments: what to build and where the output goes.
+pub struct BuildArgs {
+    pub output_name: Option<String>,
+    pub source_file: Option<String>,
+}
+
+/// Knobs that apply to every build path: how loud, how aggressive, and what
+/// to emit. Cheap to copy so callers can pass it by value.
+#[derive(Clone, Copy)]
+pub struct BuildOptions {
+    pub color: bool,
+    pub emit_llvm: bool,
+    pub quiet: bool,
+    pub release: bool,
+}
+
+/// Unwraps a `Result<T, String>` from one of the resolve entry points,
+/// printing the error to stderr and exiting on failure.
+fn resolve_or_exit<T>(result: Result<T, String>) -> T {
+    result.unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        process::exit(1);
+    })
+}
+
+/// Renders a codegen failure (whose diagnostics are scoped to the entry file)
+/// using the entry file's source for context, then exits non-zero.
+fn render_codegen_failure(sources: &SourceSet, diagnostics: &[Diagnostic], color: bool) -> ! {
+    let entry_rm = &sources.files[&sources.entry];
+    render_diagnostics(
+        entry_rm.path.to_str().unwrap_or(&entry_rm.name),
+        &entry_rm.source,
+        diagnostics,
+        color,
+    );
+    process::exit(1);
+}
 
 /// Builds the set of [`Package`]s visible to the resolver from a source
 /// set's FQNs. `std.*` files collapse to a single [`Package::Std`]; every
@@ -169,16 +207,9 @@ pub fn typecheck_sources(
 ///
 /// Type-checks all files, merges contexts, emits LLVM IR, and links.
 /// The source set must include stdlib files (via [`resolve::insert_stdlib`]).
-/// When `emit_llvm` is true, prints LLVM IR to stdout instead of linking.
-pub fn build_from_sources(
-    sources: &mut SourceSet,
-    output: &str,
-    quiet: bool,
-    color: bool,
-    emit_llvm: bool,
-    release: bool,
-) {
-    let (file_contexts, has_errors) = typecheck_sources(sources, color);
+/// When `options.emit_llvm` is true, prints LLVM IR to stdout instead of linking.
+pub fn build_from_sources(sources: &mut SourceSet, output: &str, options: BuildOptions) {
+    let (file_contexts, has_errors) = typecheck_sources(sources, options.color);
     if has_errors {
         process::exit(1);
     }
@@ -210,7 +241,7 @@ pub fn build_from_sources(
 
     let entry_type = sources.entry_type.as_deref();
 
-    if emit_llvm {
+    if options.emit_llvm {
         match expo_codegen::emit_llvm_ir(
             &files_ast,
             &file_packages_refs,
@@ -219,16 +250,7 @@ pub fn build_from_sources(
             entry_type,
         ) {
             Ok(ir) => print!("{ir}"),
-            Err(diagnostics) => {
-                let entry_rm = &sources.files[&sources.entry];
-                render_diagnostics(
-                    entry_rm.path.to_str().unwrap_or(&entry_rm.name),
-                    &entry_rm.source,
-                    &diagnostics,
-                    color,
-                );
-                process::exit(1);
-            }
+            Err(diagnostics) => render_codegen_failure(sources, &diagnostics, options.color),
         }
         return;
     }
@@ -239,22 +261,15 @@ pub fn build_from_sources(
         &file_packages_refs,
         &merged_ctx,
         Path::new(&obj_path),
-        release,
+        options.release,
         &app_name,
         entry_type,
     ) {
-        let entry_rm = &sources.files[&sources.entry];
-        render_diagnostics(
-            entry_rm.path.to_str().unwrap_or(&entry_rm.name),
-            &entry_rm.source,
-            &diagnostics,
-            color,
-        );
-        process::exit(1);
+        render_codegen_failure(sources, &diagnostics, options.color);
     }
 
     let link_libs = collect_link_libraries(&files_ast);
-    link(&obj_path, output, quiet, release, &link_libs);
+    link(&obj_path, output, &link_libs, options);
 }
 
 /// Walks all files and collects unique `@link` library names from function
@@ -305,24 +320,15 @@ pub fn build_project(
     config: &ProjectConfig,
     project_root: &Path,
     output: Option<&str>,
-    quiet: bool,
-    color: bool,
-    emit_llvm: bool,
-    release: bool,
+    options: BuildOptions,
 ) {
-    let mut sources = match resolve::resolve_project_sources(config, project_root) {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("error: {e}");
-            process::exit(1);
-        }
-    };
+    let mut sources = resolve_or_exit(resolve::resolve_project_sources(config, project_root));
 
     let default_output;
     let output = match output {
         Some(o) => o,
         None => {
-            let target_dir = if release {
+            let target_dir = if options.release {
                 project_root.join("target").join("release")
             } else {
                 project_root.join("target").join("debug")
@@ -335,15 +341,15 @@ pub fn build_project(
             default_output.to_str().unwrap()
         }
     };
-    build_from_sources(&mut sources, output, quiet, color, emit_llvm, release);
+    build_from_sources(&mut sources, output, options);
 }
 
 /// Full single-file build pipeline: resolve sources from an entry file,
 /// type-check, merge contexts, codegen, and link into an executable.
 ///
-/// When `quiet` is true, the "compiled: <output>" message is suppressed
+/// When `options.quiet` is true, the "compiled: <output>" message is suppressed
 /// (used by `expo run` to avoid noise).
-pub fn build(args: BuildArgs, quiet: bool, color: bool) {
+pub fn build(args: BuildArgs, options: BuildOptions) {
     let path = args.source_file.unwrap_or_else(|| {
         eprintln!("Usage: expo build <file.expo> [-o output]");
         process::exit(1);
@@ -362,23 +368,9 @@ pub fn build(args: BuildArgs, quiet: bool, color: bool) {
         process::exit(1);
     });
 
-    let mut sources = match resolve::resolve_sources(&entry_path) {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("error: {e}");
-            process::exit(1);
-        }
-    };
-
+    let mut sources = resolve_or_exit(resolve::resolve_sources(&entry_path));
     prepend_stdlib(&mut sources);
-    build_from_sources(
-        &mut sources,
-        &output,
-        quiet,
-        color,
-        args.emit_llvm,
-        args.release,
-    );
+    build_from_sources(&mut sources, &output, options);
 }
 
 /// Type-checks a single-file source set (without compiling).
@@ -388,7 +380,7 @@ pub fn build(args: BuildArgs, quiet: bool, color: bool) {
 /// the dump happens either way (callers gate the OK-line on `!emit_ast`).
 pub fn check_single_file(entry_path: &Path, color: bool, emit_ast: bool) -> bool {
     let mut sources = match resolve::resolve_sources(entry_path) {
-        Ok(g) => g,
+        Ok(s) => s,
         Err(e) => {
             eprintln!("error: {e}");
             return true;
@@ -413,7 +405,7 @@ pub fn check_project(
     emit_ast: bool,
 ) -> bool {
     let mut sources = match resolve::resolve_project_sources(config, project_root) {
-        Ok(g) => g,
+        Ok(s) => s,
         Err(e) => {
             eprintln!("error: {e}");
             return true;
@@ -449,20 +441,14 @@ fn prepend_stdlib(sources: &mut SourceSet) {
 
 /// A discovered `@test` function inside a struct, called as `StructName.fn_name()`.
 struct TestCase {
-    struct_name: String,
-    fn_name: String,
     description: String,
+    fn_name: String,
+    struct_name: String,
 }
 
 /// Discovers `@test` functions, generates a test harness, compiles and runs it.
 pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
-    let mut sources = match resolve::resolve_test_project_sources(config, project_root) {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("error: {e}");
-            process::exit(1);
-        }
-    };
+    let mut sources = resolve_or_exit(resolve::resolve_test_project_sources(config, project_root));
 
     let tests = discover_tests(&sources, &config.name);
 
@@ -471,7 +457,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
         return;
     }
 
-    let harness_source = generate_harness(&tests, &sources);
+    let harness_source = generate_harness(&tests);
     let harness_name = format!("{}.__test_harness__", config.name);
 
     let parse_result = expo_parser::parse(&harness_source);
@@ -487,11 +473,11 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     sources.files.insert(
         harness_name.clone(),
         resolve::ResolvedFile {
+            ast: parse_result.module,
+            errors: parse_result.errors,
             name: harness_name.clone(),
             path: PathBuf::from("<test_harness>"),
             source: harness_source,
-            ast: parse_result.module,
-            errors: parse_result.errors,
         },
     );
     sources.entry = harness_name;
@@ -504,7 +490,13 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     let binary = target_dir.join(format!("{}_test", config.name));
     let output = binary.to_str().unwrap().to_string();
 
-    build_from_sources(&mut sources, &output, true, color, false, false);
+    let options = BuildOptions {
+        color,
+        emit_llvm: false,
+        quiet: true,
+        release: false,
+    };
+    build_from_sources(&mut sources, &output, options);
 
     let status = process::Command::new(&binary).status();
     let _ = fs::remove_file(&binary);
@@ -539,9 +531,9 @@ fn discover_tests(sources: &SourceSet, project_name: &str) -> Vec<TestCase> {
                             _ => func.name.clone(),
                         };
                         tests.push(TestCase {
-                            struct_name: s.name.clone(),
-                            fn_name: func.name.clone(),
                             description,
+                            fn_name: func.name.clone(),
+                            struct_name: s.name.clone(),
                         });
                     }
                 }
@@ -561,7 +553,7 @@ fn discover_tests(sources: &SourceSet, project_name: &str) -> Vec<TestCase> {
 ///
 /// No imports are needed -- the gather-then-check pipeline makes all project
 /// types visible to every file automatically.
-fn generate_harness(tests: &[TestCase], _sources: &SourceSet) -> String {
+fn generate_harness(tests: &[TestCase]) -> String {
     let green = "\x1b[32m";
     let red = "\x1b[31m";
     let reset = "\x1b[0m";
@@ -617,14 +609,6 @@ fn generate_harness(tests: &[TestCase], _sources: &SourceSet) -> String {
     source
 }
 
-/// Parsed build arguments.
-pub struct BuildArgs {
-    pub source_file: Option<String>,
-    pub output_name: Option<String>,
-    pub emit_llvm: bool,
-    pub release: bool,
-}
-
 /// Embedded static libraries written to the temp link directory.
 /// The runtime is always linked; others are available for `@link` resolution.
 const EMBEDDED_RUNTIME: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
@@ -657,9 +641,9 @@ fn macos_version() -> &'static str {
 
 /// Links an object file with the embedded runtime library to produce an executable.
 /// `link_libraries` contains library names from `@link` annotations (passed as `-l` flags).
-fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries: &[String]) {
+fn link(obj_path: &str, output: &str, link_libraries: &[String], options: BuildOptions) {
     #[cfg(not(target_os = "macos"))]
-    let _ = release;
+    let _ = options.release;
 
     let tmp_dir = env::temp_dir().join(format!("expo-link-{}", process::id()));
     fs::create_dir_all(&tmp_dir).expect("failed to create temp dir for linking");
@@ -698,47 +682,43 @@ fn link(obj_path: &str, output: &str, quiet: bool, release: bool, link_libraries
     {
         cmd.env("MACOSX_DEPLOYMENT_TARGET", macos_version());
     }
-    let result = cmd.output();
 
     let cleanup = |tmp: &Path, obj: &str| {
         let _ = fs::remove_dir_all(tmp);
         let _ = fs::remove_file(obj);
     };
 
-    match result {
-        Ok(output_result) => {
-            let stderr = String::from_utf8_lossy(&output_result.stderr);
-            for line in stderr.lines() {
-                if !line.contains("reexported library") {
-                    eprintln!("{line}");
-                }
-            }
+    let link_output = cmd.output().unwrap_or_else(|e| {
+        eprintln!("failed to run linker: {e}");
+        cleanup(&tmp_dir, obj_path);
+        process::exit(1);
+    });
 
-            if output_result.status.success() {
-                #[cfg(target_os = "macos")]
-                if !release {
-                    let _ = process::Command::new("dsymutil")
-                        .arg(output)
-                        .stderr(process::Stdio::null())
-                        .status();
-                }
-                cleanup(&tmp_dir, obj_path);
-                if !quiet {
-                    println!("compiled: {output}");
-                }
-            } else {
-                eprintln!(
-                    "linker failed with exit code: {}",
-                    output_result.status.code().unwrap_or(-1)
-                );
-                cleanup(&tmp_dir, obj_path);
-                process::exit(1);
-            }
+    let stderr = String::from_utf8_lossy(&link_output.stderr);
+    for line in stderr.lines() {
+        if !line.contains("reexported library") {
+            eprintln!("{line}");
         }
-        Err(e) => {
-            eprintln!("failed to run linker: {e}");
-            cleanup(&tmp_dir, obj_path);
-            process::exit(1);
-        }
+    }
+
+    if !link_output.status.success() {
+        eprintln!(
+            "linker failed with exit code: {}",
+            link_output.status.code().unwrap_or(-1)
+        );
+        cleanup(&tmp_dir, obj_path);
+        process::exit(1);
+    }
+
+    #[cfg(target_os = "macos")]
+    if !options.release {
+        let _ = process::Command::new("dsymutil")
+            .arg(output)
+            .stderr(process::Stdio::null())
+            .status();
+    }
+    cleanup(&tmp_dir, obj_path);
+    if !options.quiet {
+        println!("compiled: {output}");
     }
 }

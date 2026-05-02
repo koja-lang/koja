@@ -9,7 +9,7 @@ use std::{env, fs, process};
 
 use crate::diagnostics::render_diagnostics;
 use crate::pipeline;
-use crate::project;
+use crate::project::{self, ProjectConfig};
 use crate::resolve;
 
 /// Replaces the current process with the given binary via `exec`. Never returns on success.
@@ -29,6 +29,37 @@ fn target_debug_dir(project_root: &Path) -> PathBuf {
         process::exit(1);
     });
     dir
+}
+
+/// Returns the process's current directory, or prints an error to stderr and
+/// exits non-zero.
+fn current_dir_or_exit() -> PathBuf {
+    env::current_dir().unwrap_or_else(|e| {
+        eprintln!("error: cannot determine current directory: {e}");
+        process::exit(1);
+    })
+}
+
+/// Loads `expo.toml` from the current directory, returning `(config, cwd)`.
+///
+/// On a missing `expo.toml`, prints each line in `missing_message` to stderr
+/// and exits non-zero. On any other error, prints `error: {e}` and exits.
+fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, PathBuf) {
+    let cwd = current_dir_or_exit();
+    let config = match project::load_project(&cwd) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            for line in missing_message {
+                eprintln!("{line}");
+            }
+            process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+    };
+    (config, cwd)
 }
 
 /// Strips the common leading whitespace from a multi-line string so that
@@ -64,43 +95,27 @@ pub fn cmd_build(
     release: bool,
     color: bool,
 ) {
+    let options = pipeline::BuildOptions {
+        color,
+        emit_llvm,
+        quiet: false,
+        release,
+    };
+
     if let Some(source) = file {
         let args = pipeline::BuildArgs {
-            source_file: Some(source),
             output_name: output,
-            emit_llvm,
-            release,
+            source_file: Some(source),
         };
-        pipeline::build(args, false, color);
+        pipeline::build(args, options);
     } else {
-        let cwd = env::current_dir().unwrap_or_else(|e| {
-            eprintln!("error: cannot determine current directory: {e}");
-            process::exit(1);
-        });
+        let (config, cwd) = load_project_or_exit(&[
+            "error: no source file specified and no expo.toml found",
+            "Usage: expo build <file.expo> [-o output]",
+            "  or:  create an expo.toml in the current directory",
+        ]);
 
-        let config = match project::load_project(&cwd) {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                eprintln!("error: no source file specified and no expo.toml found");
-                eprintln!("Usage: expo build <file.expo> [-o output]");
-                eprintln!("  or:  create an expo.toml in the current directory");
-                process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                process::exit(1);
-            }
-        };
-
-        pipeline::build_project(
-            &config,
-            &cwd,
-            output.as_deref(),
-            false,
-            color,
-            emit_llvm,
-            release,
-        );
+        pipeline::build_project(&config, &cwd, output.as_deref(), options);
     }
 }
 
@@ -111,6 +126,13 @@ pub fn cmd_build(
 /// or a temp directory for single-file mode. On Unix, the current process
 /// is replaced with the binary via `exec` so signals reach it directly.
 pub fn cmd_run(file: Option<String>, release: bool, run_args: Vec<String>, color: bool) {
+    let options = pipeline::BuildOptions {
+        color,
+        emit_llvm: false,
+        quiet: true,
+        release,
+    };
+
     if let Some(path) = file {
         let tmp_dir = env::temp_dir();
         let binary = tmp_dir.join(format!(
@@ -123,37 +145,22 @@ pub fn cmd_run(file: Option<String>, release: bool, run_args: Vec<String>, color
         let output = binary.to_str().unwrap().to_string();
 
         let args = pipeline::BuildArgs {
-            source_file: Some(path),
             output_name: Some(output),
-            emit_llvm: false,
-            release,
+            source_file: Some(path),
         };
-        pipeline::build(args, true, color);
+        pipeline::build(args, options);
         exec_binary(&binary, &run_args);
     } else {
-        let cwd = env::current_dir().unwrap_or_else(|e| {
-            eprintln!("error: cannot determine current directory: {e}");
-            process::exit(1);
-        });
-
-        let config = match project::load_project(&cwd) {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                eprintln!("error: no source file specified and no expo.toml found");
-                eprintln!("Usage: expo run <file.expo>");
-                eprintln!("  or:  create an expo.toml in the current directory");
-                process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                process::exit(1);
-            }
-        };
+        let (config, cwd) = load_project_or_exit(&[
+            "error: no source file specified and no expo.toml found",
+            "Usage: expo run <file.expo>",
+            "  or:  create an expo.toml in the current directory",
+        ]);
 
         let binary = target_debug_dir(&cwd).join(&config.name);
         let output = binary.to_str().unwrap().to_string();
 
-        pipeline::build_project(&config, &cwd, Some(&output), true, color, false, release);
+        pipeline::build_project(&config, &cwd, Some(&output), options);
         exec_binary(&binary, &run_args);
     }
 }
@@ -167,24 +174,11 @@ pub fn cmd_run(file: Option<String>, release: bool, run_args: Vec<String>, color
 /// how `--emit-llvm` works on `expo build`.
 pub fn cmd_check(files: Vec<String>, color: bool, emit_ast: bool) {
     if files.is_empty() {
-        let cwd = env::current_dir().unwrap_or_else(|e| {
-            eprintln!("error: cannot determine current directory: {e}");
-            process::exit(1);
-        });
-
-        let config = match project::load_project(&cwd) {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                eprintln!("error: no source file specified and no expo.toml found");
-                eprintln!("Usage: expo check <file.expo>");
-                eprintln!("  or:  create an expo.toml in the current directory");
-                process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                process::exit(1);
-            }
-        };
+        let (config, cwd) = load_project_or_exit(&[
+            "error: no source file specified and no expo.toml found",
+            "Usage: expo check <file.expo>",
+            "  or:  create an expo.toml in the current directory",
+        ]);
 
         let has_errors = pipeline::check_project(&config, &cwd, color, emit_ast);
         if has_errors {
@@ -217,81 +211,103 @@ pub fn cmd_check(files: Vec<String>, color: bool, emit_ast: bool) {
 ///
 /// With no arguments, looks for `expo.toml` in the current directory.
 pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
-    let mut collected: Vec<(String, String)> = Vec::new();
+    let mut inputs = discover_doc_inputs(&files);
+    inputs.sort_by(|a, b| a.1.cmp(&b.1));
+
+    let project = extract_doc_project(&inputs, color);
+    if project.items.is_empty() {
+        println!("no items to document");
+        return;
+    }
+
+    let out_path = Path::new(&output);
+    if let Err(e) = fs::create_dir_all(out_path) {
+        eprintln!("error creating output directory: {e}");
+        process::exit(1);
+    }
+
+    write_doc_files(&project, out_path);
+    println!("docs generated: {}", out_path.display());
+}
+
+/// Resolves the list of source files `expo doc` will process, as
+/// `(path, file_fqn)` pairs. Empty `files` means project mode (walk `src`
+/// from `expo.toml` and every dep's `src`); otherwise treat each entry as a
+/// path or a directory of `.expo` files.
+fn discover_doc_inputs(files: &[String]) -> Vec<(String, String)> {
+    let mut inputs = Vec::new();
 
     if files.is_empty() {
-        let cwd = env::current_dir().unwrap_or_else(|e| {
-            eprintln!("error: cannot determine current directory: {e}");
-            process::exit(1);
-        });
-
-        let config = match project::load_project(&cwd) {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                eprintln!("error: no source file specified and no expo.toml found");
-                eprintln!("Usage: expo doc <file.expo ...> [-o output_dir]");
-                eprintln!("  or:  create an expo.toml in the current directory");
-                process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                process::exit(1);
-            }
-        };
+        let (config, cwd) = load_project_or_exit(&[
+            "error: no source file specified and no expo.toml found",
+            "Usage: expo doc <file.expo ...> [-o output_dir]",
+            "  or:  create an expo.toml in the current directory",
+        ]);
 
         for src_dir in &config.src {
             let dir = cwd.join(src_dir);
             if dir.is_dir() {
-                collect_expo_files_with_prefix(&dir, &dir, &config.name, &mut collected);
+                collect_expo_files(&dir, &dir, Some(&config.name), &mut inputs);
             }
         }
+        discover_dep_doc_inputs(&config, &cwd, &mut inputs);
+        return inputs;
+    }
 
-        for (alias, dep) in &config.dependencies {
-            let dep_path = match &dep.path {
-                Some(p) => cwd.join(p),
-                None => {
-                    eprintln!("warning: dependency `{alias}` has no path, skipping docs");
-                    continue;
-                }
-            };
-            let dep_config = match project::load_project(&dep_path) {
-                Ok(Some(c)) => c,
-                Ok(None) => {
-                    eprintln!(
-                        "warning: dependency `{alias}` has no expo.toml at {}",
-                        dep_path.display()
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("warning: dependency `{alias}`: {e}");
-                    continue;
-                }
-            };
-            for src_dir in &dep_config.src {
-                let dir = dep_path.join(src_dir);
-                if dir.is_dir() {
-                    collect_expo_files_with_prefix(&dir, &dir, &dep_config.name, &mut collected);
-                }
-            }
+    for input in files {
+        let p = Path::new(input);
+        if p.is_dir() {
+            collect_expo_files(p, p, None, &mut inputs);
+        } else {
+            let name = Path::new(input)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            inputs.push((input.clone(), name));
         }
-    } else {
-        for input in &files {
-            let p = Path::new(input);
-            if p.is_dir() {
-                collect_expo_files(p, p, &mut collected);
-            } else {
-                let name = Path::new(input)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                collected.push((input.clone(), name));
+    }
+    inputs
+}
+
+/// Walks every dependency declared in `[dependencies]` and appends its source
+/// files to `out`. Missing paths or unreadable `expo.toml` files emit a
+/// warning and skip the dep rather than aborting the doc build.
+fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<(String, String)>) {
+    for (alias, dep) in &config.dependencies {
+        let dep_path = match &dep.path {
+            Some(p) => cwd.join(p),
+            None => {
+                eprintln!("warning: dependency `{alias}` has no path, skipping docs");
+                continue;
+            }
+        };
+        let dep_config = match project::load_project(&dep_path) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                eprintln!(
+                    "warning: dependency `{alias}` has no expo.toml at {}",
+                    dep_path.display()
+                );
+                continue;
+            }
+            Err(e) => {
+                eprintln!("warning: dependency `{alias}`: {e}");
+                continue;
+            }
+        };
+        for src_dir in &dep_config.src {
+            let dir = dep_path.join(src_dir);
+            if dir.is_dir() {
+                collect_expo_files(&dir, &dir, Some(&dep_config.name), out);
             }
         }
     }
-    collected.sort_by(|a, b| a.1.cmp(&b.1));
+}
 
+/// Parses every input file and extracts doc-renderable items into a
+/// [`expo_doc::DocProject`]. Files with parse errors are reported and skipped.
+fn extract_doc_project(inputs: &[(String, String)], color: bool) -> expo_doc::DocProject {
     let mut project = expo_doc::DocProject {
         constants: Vec::new(),
         enums: Vec::new(),
@@ -301,7 +317,7 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
         structs: Vec::new(),
     };
 
-    for (path, _file_fqn) in &collected {
+    for (path, _file_fqn) in inputs {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -320,42 +336,35 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
     }
 
     expo_doc::finalize_project(&mut project);
+    project
+}
 
-    if project.items.is_empty() {
-        println!("no items to document");
-        return;
-    }
-
-    let out_path = Path::new(&output);
-    if let Err(e) = fs::create_dir_all(out_path) {
-        eprintln!("error creating output directory: {e}");
-        process::exit(1);
-    }
-
+/// Renders each item in `project` as HTML and writes it under `out_path`,
+/// plus a top-level `index.html`.
+fn write_doc_files(project: &expo_doc::DocProject, out_path: &Path) {
     for c in &project.constants {
-        let html = expo_doc::render_constant(c, &project);
+        let html = expo_doc::render_constant(c, project);
         write_doc_file(&out_path.join(format!("{}.html", c.name)), &html);
     }
     for e in &project.enums {
-        let html = expo_doc::render_enum(e, &project);
+        let html = expo_doc::render_enum(e, project);
         write_doc_file(&out_path.join(format!("{}.html", e.name)), &html);
     }
     for f in &project.functions {
-        let html = expo_doc::render_function(f, &project);
+        let html = expo_doc::render_function(f, project);
         write_doc_file(&out_path.join(format!("{}.html", f.name)), &html);
     }
     for p in &project.protocols {
-        let html = expo_doc::render_protocol(p, &project);
+        let html = expo_doc::render_protocol(p, project);
         write_doc_file(&out_path.join(format!("{}.html", p.name)), &html);
     }
     for s in &project.structs {
-        let html = expo_doc::render_struct(s, &project);
+        let html = expo_doc::render_struct(s, project);
         write_doc_file(&out_path.join(format!("{}.html", s.name)), &html);
     }
 
-    let index_html = expo_doc::render_index(&project);
+    let index_html = expo_doc::render_index(project);
     write_doc_file(&out_path.join("index.html"), &index_html);
-    println!("docs generated: {}", out_path.display());
 }
 
 fn write_doc_file(path: &Path, content: &str) {
@@ -368,40 +377,12 @@ fn write_doc_file(path: &Path, content: &str) {
 
 /// Recursively collects `.expo` files from a directory, building file FQNs
 /// from relative paths (e.g. `foo/bar.expo` becomes file FQN `foo.bar`).
-fn collect_expo_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("error reading directory {}: {e}", dir.display());
-            return;
-        }
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_expo_files(&path, root, out);
-        } else if path.extension().is_some_and(|ext| ext == "expo") {
-            let file_fqn = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .with_extension("")
-                .components()
-                .filter_map(|c| c.as_os_str().to_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            if let Some(s) = path.to_str() {
-                out.push((s.to_string(), file_fqn));
-            }
-        }
-    }
-}
-
-/// Like [`collect_expo_files`], but prefixes each file FQN with a project name
-/// (e.g. `src/lexer.expo` becomes `myproject.lexer`).
-fn collect_expo_files_with_prefix(
+/// When `prefix` is `Some`, each FQN is prefixed with `{prefix}.` (e.g.
+/// `src/lexer.expo` with prefix `myproject` becomes `myproject.lexer`).
+fn collect_expo_files(
     dir: &Path,
     root: &Path,
-    prefix: &str,
+    prefix: Option<&str>,
     out: &mut Vec<(String, String)>,
 ) {
     let entries = match fs::read_dir(dir) {
@@ -414,20 +395,26 @@ fn collect_expo_files_with_prefix(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_expo_files_with_prefix(&path, root, prefix, out);
-        } else if path.extension().is_some_and(|ext| ext == "expo") {
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .with_extension("")
-                .components()
-                .filter_map(|c| c.as_os_str().to_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let file_fqn = format!("{prefix}.{relative}");
-            if let Some(s) = path.to_str() {
-                out.push((s.to_string(), file_fqn));
-            }
+            collect_expo_files(&path, root, prefix, out);
+            continue;
+        }
+        if path.extension().is_none_or(|ext| ext != "expo") {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .with_extension("")
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        let file_fqn = match prefix {
+            Some(p) => format!("{p}.{relative}"),
+            None => relative,
+        };
+        if let Some(s) = path.to_str() {
+            out.push((s.to_string(), file_fqn));
         }
     }
 }
@@ -453,23 +440,10 @@ pub fn cmd_eval(file: String, entry: Option<String>) {
 ///
 /// Requires an `expo.toml` in the current directory.
 pub fn cmd_test(color: bool) {
-    let cwd = env::current_dir().unwrap_or_else(|e| {
-        eprintln!("error: cannot determine current directory: {e}");
-        process::exit(1);
-    });
-
-    let config = match project::load_project(&cwd) {
-        Ok(Some(c)) => c,
-        Ok(None) => {
-            eprintln!("error: no expo.toml found");
-            eprintln!("Usage: expo test (run from a directory containing expo.toml)");
-            process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            process::exit(1);
-        }
-    };
+    let (config, cwd) = load_project_or_exit(&[
+        "error: no expo.toml found",
+        "Usage: expo test (run from a directory containing expo.toml)",
+    ]);
 
     pipeline::test_project(&config, &cwd, color);
 }
@@ -481,24 +455,11 @@ pub fn cmd_test(color: bool) {
 /// recursively for `.expo` files.
 pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
     let resolved = if files.is_empty() {
-        let cwd = env::current_dir().unwrap_or_else(|e| {
-            eprintln!("error: cannot determine current directory: {e}");
-            process::exit(1);
-        });
-
-        let config = match project::load_project(&cwd) {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                eprintln!("error: no files specified and no expo.toml found");
-                eprintln!("Usage: expo format [files...] [--check] [--write]");
-                eprintln!("  or:  create an expo.toml in the current directory");
-                process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                process::exit(1);
-            }
-        };
+        let (config, cwd) = load_project_or_exit(&[
+            "error: no files specified and no expo.toml found",
+            "Usage: expo format [files...] [--check] [--write]",
+            "  or:  create an expo.toml in the current directory",
+        ]);
 
         let roots: Vec<PathBuf> = config
             .src

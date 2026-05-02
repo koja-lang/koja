@@ -53,15 +53,6 @@ enum Command {
         #[arg(long)]
         emit_ast: bool,
     },
-    /// Run a source file through the IR interpreter
-    Eval {
-        /// Source file
-        file: String,
-
-        /// Entry function to invoke (defaults to `main`)
-        #[arg(long)]
-        entry: Option<String>,
-    },
     /// Generate HTML documentation
     Doc {
         /// Source files or directories (omit to use expo.toml)
@@ -70,6 +61,15 @@ enum Command {
         /// Output directory for generated HTML
         #[arg(short, long, default_value = "doc")]
         output: String,
+    },
+    /// Run a source file through the IR interpreter
+    Eval {
+        /// Source file
+        file: String,
+
+        /// Entry function to invoke (defaults to `main`)
+        #[arg(long)]
+        entry: Option<String>,
     },
     /// Format source files
     Format {

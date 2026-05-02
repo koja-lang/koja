@@ -83,14 +83,14 @@ pub struct DocProject {
     pub structs: Vec<DocStruct>,
 }
 
-/// Extract documentation items from a parsed module into the running project.
+/// Extract documentation items from a parsed file into the running project.
 ///
 /// Items with `@doc false` are excluded.
-pub fn extract_items(module: &Module, project: &mut DocProject) {
+pub fn extract_items(file: &Module, project: &mut DocProject) {
     let mut local_structs: Vec<DocStruct> = Vec::new();
     let mut local_enums: Vec<DocEnum> = Vec::new();
 
-    for item in &module.items {
+    for item in &file.items {
         match item {
             Item::Alias(_) => {}
             Item::Constant(c) => {

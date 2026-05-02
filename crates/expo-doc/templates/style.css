@@ -278,7 +278,7 @@ a:hover { text-decoration: underline; }
   .chip-protocol { background: #3a1c2e; color: #cc7eaa; }
 }
 
-/* Item listing (module index) */
+/* Item listing (index page) */
 .item-list { margin-top: 16px; }
 
 .item-row {
@@ -382,26 +382,6 @@ a:hover { text-decoration: underline; }
   width: 46px;
   text-align: center;
   flex-shrink: 0;
-}
-
-/* Index page */
-.module-list { margin-top: 24px; }
-
-.module-list li {
-  list-style: none;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.module-list li a {
-  font-size: 16px;
-  font-weight: 500;
-}
-
-.module-list .module-brief {
-  color: var(--fg-muted);
-  font-size: 14px;
-  margin-top: 2px;
 }
 
 .impl-functions-heading {
