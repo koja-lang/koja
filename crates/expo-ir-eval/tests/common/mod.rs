@@ -11,8 +11,8 @@ use std::sync::Arc;
 use expo_ir::Backend;
 use expo_ir_eval::{Interp, Value};
 
-/// Parse `source` into an AST module, asserting no parser errors.
-pub fn parse_module(source: &str) -> expo_ast::ast::Module {
+/// Parse `source` into an AST file, asserting no parser errors.
+pub fn parse_file(source: &str) -> expo_ast::ast::Module {
     let parsed = expo_parser::parse(source);
     assert!(
         parsed.errors.is_empty(),
@@ -54,14 +54,14 @@ pub fn dedent(s: &str) -> String {
         .join("\n")
 }
 
-/// Lower a self-contained module (no stdlib auto-import) and
+/// Lower a self-contained file (no stdlib auto-import) and
 /// interpret `entry`. Use for tests that only touch primitives.
 pub fn eval_entry(source: &str, entry: &str) -> Value {
-    let mut module = parse_module(source);
-    let type_ctx = expo_typecheck::check(&mut module);
-    let modules = vec![&module];
+    let mut file = parse_file(source);
+    let type_ctx = expo_typecheck::check(&mut file);
+    let files = vec![&file];
     let packages = vec!["__test__"];
-    let program = expo_codegen::lower_modules(&modules, &packages, &type_ctx, "__test__", None)
+    let program = expo_codegen::lower_modules(&files, &packages, &type_ctx, "__test__", None)
         .unwrap_or_else(|diags| panic!("lower_modules failed: {diags:?}"));
     let mut interp = Interp::new(Arc::new(program), Arc::new(type_ctx)).expect("interp init");
     interp
