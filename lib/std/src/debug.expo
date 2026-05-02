@@ -2,14 +2,19 @@
 String representations of values for developer-facing output.
 All types get a compiler-derived implementation.
 
-  - `format(self) -> String` returns the string representation
+  - `format(self) -> String` returns the round-trippable string representation
+  - `print(self)` prints `self.format()` to stdout via `IO.puts`
   - `inspect(move self) -> Self` prints and returns self for chaining
 """
 protocol Debug
   fn format(self) -> String
 
+  fn print(self)
+    IO.puts(self.format())
+  end
+
   fn inspect(move self) -> Self
-    print(self.format())
+    self.print()
     self
   end
 end
@@ -71,6 +76,6 @@ end
 
 impl Debug for String
   fn format(self) -> String
-    self
+    "\"" <> self.escape_debug() <> "\""
   end
 end

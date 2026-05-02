@@ -9,21 +9,21 @@ fn main
 
   match v
     Val.Num(n) ->
-      print(n)
+      n.print()
 
     Val.Arr(items) ->
-      print(items.length())
+      items.length().print()
       first = items.get(0)
 
       match first
         Option.Some(item) ->
           match item
-            Val.Num(n) -> print(n)
-            Val.Arr(_) -> print("nested arr")
+            Val.Num(n) -> n.print()
+            Val.Arr(_) -> "nested arr".print()
           end
 
         Option.None ->
-          print("empty")
+          "empty".print()
       end
   end
 end

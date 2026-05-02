@@ -1,6 +1,6 @@
 fn worker
   receive
-    msg -> print(msg)
+    msg -> msg.print()
   end
 end
 

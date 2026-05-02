@@ -13,8 +13,8 @@ fn main
   c: Option<Color> = Option.Some(Color.Blue)
   n: Option<Color> = Option.None
 
-  print(a == b)
-  print(a == c)
-  print(a == n)
-  print(n == n)
+  (a == b).print()
+  (a == c).print()
+  (a == n).print()
+  (n == n).print()
 end

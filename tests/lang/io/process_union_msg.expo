@@ -25,7 +25,7 @@ impl Process<ParentConfig, MsgA | MsgB, String> for Parent
       a: MsgA ->
         match a
           MsgA.Ping(s) ->
-            print("ping: #{s}")
+            "ping: #{s}".print()
             ReplyTo.reply(from, "ok")
             Step.Continue(Parent{count: self.count + 1})
         end
@@ -33,7 +33,7 @@ impl Process<ParentConfig, MsgA | MsgB, String> for Parent
       b: MsgB ->
         match b
           MsgB.Pong(n) ->
-            print("pong: #{n}")
+            "pong: #{n}".print()
             ReplyTo.reply(from, "ok")
             Step.Continue(Parent{count: self.count + 1})
         end

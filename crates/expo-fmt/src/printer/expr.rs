@@ -466,7 +466,8 @@ impl<'a> Printer<'a> {
             for part in parts {
                 match part {
                     StringPart::Literal { value, .. } => {
-                        for (i, l) in value.split('\n').enumerate() {
+                        let escaped = escape_multiline_literal(value);
+                        for (i, l) in escaped.split('\n').enumerate() {
                             if i > 0 {
                                 doc_parts.push(hardline());
                             }

@@ -10,5 +10,5 @@ end
 
 fn main
   b: Box<Int> = Box{value: 3}
-  print(b.squared())
+  b.squared().print()
 end

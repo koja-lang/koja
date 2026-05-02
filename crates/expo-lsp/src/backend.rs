@@ -57,7 +57,8 @@ impl Backend {
         let mut source_names = Vec::new();
 
         for &(name, source) in expo_stdlib::SOURCES {
-            let parsed = expo_parser::parse(source);
+            let mut parsed = expo_parser::parse(source);
+            expo_preprocess::preprocess_module(&mut parsed.module);
             source_names.push(name);
             stdlib_modules.push(parsed.module);
         }

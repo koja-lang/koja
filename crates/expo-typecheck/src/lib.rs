@@ -66,12 +66,6 @@ pub fn mark_recursive_fields(ctx: &mut TypeContext) {
     cycle::mark_recursive_fields(ctx);
 }
 
-/// Auto-derives `Debug` protocol methods (`format`, `inspect`) on all struct
-/// and enum types that don't already have them. Call after merging stdlib.
-pub fn auto_derive_debug(ctx: &mut TypeContext) {
-    collect::auto_derive_debug(ctx);
-}
-
 /// Resolves all `Package::Unresolved` identifiers in a [`TypeContext`] by
 /// matching bare names against the type registry's map keys (which carry real
 /// packages from collection). Must be called after merging and before checking.

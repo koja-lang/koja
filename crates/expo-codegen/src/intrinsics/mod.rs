@@ -108,6 +108,10 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
         .ok_or_else(|| format!("undeclared intrinsic: {mangled}"))?;
     let key = intrinsic_key(mangled);
 
+    if key == "Kernel_panic" {
+        return emit_kernel_panic(c, fn_val);
+    }
+
     if CONVERSION_INTRINSICS.contains(&key) {
         return emit_conversion_intrinsic(c, fn_val, key);
     }
@@ -148,6 +152,26 @@ pub fn emit_primitive_intrinsic<'ctx>(c: &mut Compiler<'ctx>, mangled: &str) -> 
         }
         Err(format!("unknown primitive intrinsic: {mangled}"))
     }
+}
+
+/// Emits the body of `Kernel.panic(message: String)`: forwards `message`
+/// to the panic-backtrace runtime via [`Compiler::emit_panic`], which
+/// terminates the block with `unreachable`.
+fn emit_kernel_panic<'ctx>(
+    c: &mut Compiler<'ctx>,
+    fn_val: inkwell::values::FunctionValue<'ctx>,
+) -> Result<(), String> {
+    let entry = c.context.append_basic_block(fn_val, "entry");
+    let saved_block = c.builder.get_insert_block();
+    c.builder.position_at_end(entry);
+
+    let message = fn_val.get_nth_param(0).unwrap();
+    c.emit_panic("%s", &[message]);
+
+    if let Some(bb) = saved_block {
+        c.builder.position_at_end(bb);
+    }
+    Ok(())
 }
 
 /// Constructs a `Result.Ok(value)` struct: tag=0, payload=value.

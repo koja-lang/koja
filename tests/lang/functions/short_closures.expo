@@ -8,28 +8,28 @@ end
 
 fn main
   # basic: short closure passed inline to a typed function
-  print(apply(5, x -> x * 2))
+  apply(5, x -> x * 2).print()
 
   # short closure with string param inferred from context
-  print(apply_str("world", s -> "hello " <> s))
+  apply_str("world", s -> "hello " <> s).print()
 
   # wildcard param
-  print(apply(999, _ -> 42))
+  apply(999, _ -> 42).print()
 
   # short closure capturing a variable
   offset = 100
-  print(apply(5, x -> x + offset))
+  apply(5, x -> x + offset).print()
 
   # chained application
-  print(apply(apply(1, x -> x + 1), x -> x * 3))
+  apply(apply(1, x -> x + 1), x -> x * 3).print()
 
   # option.map with short closure
   opt = Option.Some(7)
   mapped = opt.map(v -> v * 10)
-  print(mapped.unwrap())
+  mapped.unwrap().print()
 
   # option.map on None
   none_opt: Option<Int> = Option.None
   none_mapped = none_opt.map(v -> v * 10)
-  print(none_mapped.or(-1))
+  (none_mapped.or(-1)).print()
 end

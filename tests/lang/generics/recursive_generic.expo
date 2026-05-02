@@ -6,10 +6,10 @@ end
 fn main
   a = GNode{value: 10, next: Option.None}
   b = GNode{value: 20, next: Option.Some(a)}
-  print(b.value)
+  b.value.print()
 
   match b.next
-    Option.Some(n) -> print(n.value)
-    Option.None -> print("none")
+    Option.Some(n) -> n.value.print()
+    Option.None -> "none".print()
   end
 end

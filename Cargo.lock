@@ -404,6 +404,7 @@ dependencies = [
  "expo-fmt",
  "expo-lexer",
  "expo-parser",
+ "expo-preprocess",
  "expo-runtime",
  "expo-shell",
  "expo-stdlib",
@@ -458,6 +459,7 @@ dependencies = [
  "expo-ast",
  "expo-fmt",
  "expo-parser",
+ "expo-preprocess",
  "expo-stdlib",
  "expo-typecheck",
  "serde",
@@ -473,6 +475,14 @@ dependencies = [
  "expo-ast",
  "expo-lexer",
  "proptest",
+]
+
+[[package]]
+name = "expo-preprocess"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-parser",
 ]
 
 [[package]]

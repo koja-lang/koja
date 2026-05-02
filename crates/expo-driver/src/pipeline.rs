@@ -91,7 +91,8 @@ pub fn typecheck_graph(
 
     // Auto-imported std modules: merge into stdlib_ctx directly.
     for name in &stdlib_names {
-        let rm = &graph.modules[*name];
+        let rm = graph.modules.get_mut(*name).expect("module present");
+        expo_preprocess::preprocess_module(&mut rm.module);
         let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, "std");
         ctx.merge(&stdlib_ctx);
 
@@ -101,11 +102,15 @@ pub fn typecheck_graph(
 
     // Gather: collect signatures from every project module.
     for name in &project_names {
-        let rm = &graph.modules[*name];
+        let rm = graph.modules.get_mut(*name).expect("module present");
+        expo_preprocess::preprocess_module(&mut rm.module);
         let pkg = fqn_to_package(name);
         let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, pkg);
         ctx.merge(&stdlib_ctx);
-        expo_typecheck::auto_derive_debug(&mut ctx);
+        // Other stdlib protocols (today: `Process` with `run` /
+        // `handle_signal`) still rely on default-method synthesis for
+        // user impls. `Debug` flows through preprocess and never
+        // touches this codepath.
         expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx, pkg);
         expo_typecheck::mark_recursive_fields(&mut ctx);
         module_contexts.insert((*name).clone(), ctx);
@@ -555,22 +560,22 @@ fn generate_harness(tests: &[TestCase], _graph: &ModuleGraph) -> String {
         body.push_str("  end\n");
     }
 
-    body.push_str("  print(\"\")\n");
+    body.push_str("  IO.puts(\"\")\n");
     body.push_str("  if failed > 0\n");
-    body.push_str("    print(\"\")\n");
-    body.push_str("    print(\"Failures:\")\n");
-    body.push_str("    print(\"\")\n");
+    body.push_str("    IO.puts(\"\")\n");
+    body.push_str("    IO.puts(\"Failures:\")\n");
+    body.push_str("    IO.puts(\"\")\n");
     body.push_str("    for f in failures\n");
-    body.push_str("      print(f)\n");
-    body.push_str("      print(\"\")\n");
+    body.push_str("      IO.puts(f)\n");
+    body.push_str("      IO.puts(\"\")\n");
     body.push_str("    end\n");
     body.push_str(&format!(
-        "    print(\"{red}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
+        "    IO.puts(\"{red}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
     ));
     body.push_str("    Kernel.exit(1)\n");
     body.push_str("  else\n");
     body.push_str(&format!(
-        "    print(\"{green}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
+        "    IO.puts(\"{green}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
     ));
     body.push_str("  end\n");
 

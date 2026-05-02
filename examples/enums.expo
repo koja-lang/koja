@@ -29,6 +29,6 @@ end
 fn main
   dir = Direction.North
   other = opposite(dir)
-  print("opposite of North is #{other}")
-  print("42 is #{describe(42)}")
+  "opposite of North is #{other}".print()
+  "42 is #{describe(42)}".print()
 end

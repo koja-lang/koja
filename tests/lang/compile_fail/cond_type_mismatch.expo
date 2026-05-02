@@ -13,5 +13,5 @@ fn pick(n: Int) -> String
 end
 
 fn main
-  print(pick(5))
+  pick(5).print()
 end

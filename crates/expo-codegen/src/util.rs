@@ -25,30 +25,20 @@ pub fn printf_format_spec(value: &BasicValueEnum<'_>) -> Result<&'static str, St
     }
 }
 
-/// Emits an LLVM `select` that picks the global string `"true"` or `"false"`
-/// based on an `i1` value, returning the chosen pointer.
+/// Emits an LLVM `select` that picks an Expo-format `String` (`"true"` or
+/// `"false"`) based on an `i1` value, returning the chosen payload pointer.
+/// The globals are length-prefixed so the result satisfies `String`'s
+/// runtime contract (`byte_length`, `Fd.write`, etc.).
 pub fn bool_to_string_ptr<'ctx>(
     compiler: &mut Compiler<'ctx>,
     value: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    let true_str = compiler
-        .builder
-        .build_global_string_ptr("true", "bool_true")
-        .unwrap();
-
-    let false_str = compiler
-        .builder
-        .build_global_string_ptr("false", "bool_false")
-        .unwrap();
+    let true_str = compiler.create_string_global(b"true", "bool_true");
+    let false_str = compiler.create_string_global(b"false", "bool_false");
 
     compiler
         .builder
-        .build_select(
-            value,
-            true_str.as_pointer_value(),
-            false_str.as_pointer_value(),
-            "bool_str",
-        )
+        .build_select(value, true_str, false_str, "bool_str")
         .unwrap()
         .into_pointer_value()
 }

@@ -15,9 +15,9 @@ end
 
 fn main
   p = Point{x: 3, y: 4}
-  print(p.distance_squared())
+  p.distance_squared().print()
 
   p2 = p.translate(1, 2)
-  print(p2.x)
-  print(p2.y)
+  p2.x.print()
+  p2.y.print()
 end

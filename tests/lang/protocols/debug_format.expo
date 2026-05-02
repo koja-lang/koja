@@ -16,26 +16,26 @@ enum Shape
 end
 
 fn main
-  print(42.format())
-  print(true.format())
-  print(false.format())
-  print("hello".format())
-  print(3.140000.format())
+  42.format().print()
+  true.format().print()
+  false.format().print()
+  "hello".format().print()
+  3.140000.format().print()
 
-  print(Color.Red.format())
-  print(Color.Green.format())
-  print(Color.Blue.format())
+  Color.Red.format().print()
+  Color.Green.format().print()
+  Color.Blue.format().print()
 
-  print(Shape.Point.format())
-  print(Shape.Circle(5).format())
-  print(Shape.Square(10).format())
+  Shape.Point.format().print()
+  Shape.Circle(5).format().print()
+  Shape.Square(10).format().print()
 
   u = User{name: "alice", age: 30}
-  print(u.format())
+  u.format().print()
 
-  print("user: #{u}")
+  "user: #{u}".print()
 
-  print(42)
-  print(true)
-  print("hello")
+  42.print()
+  true.print()
+  "hello".print()
 end

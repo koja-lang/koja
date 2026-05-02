@@ -21,23 +21,23 @@ end
 fn main
   # Phase 1: primitive FFI
   sum = FFI.add_c(3, 4)
-  print(sum)
+  sum.print()
 
   product = FFI.mul_c(5, 6)
-  print(product)
+  product.print()
 
   # Phase 2: pointer FFI
   # Allocate a buffer, let C fill it, read it back
   buf: CPtr<Int32> = CPtr.alloc(4)
   FFI.fill_array(buf, 4, 10)
-  print(FFI.read_at(buf, 0))
-  print(FFI.read_at(buf, 1))
-  print(FFI.read_at(buf, 2))
-  print(FFI.read_at(buf, 3))
+  FFI.read_at(buf, 0).print()
+  FFI.read_at(buf, 1).print()
+  FFI.read_at(buf, 2).print()
+  FFI.read_at(buf, 3).print()
 
   # Sum the filled array via C
   total = FFI.sum_array(buf, 4)
-  print(total)
+  total.print()
   buf.free()
 
   # Pass a CString to C and get back a pointer
@@ -64,6 +64,6 @@ fn main
 
   greeting_cs = CString{ptr: greeting_ptr, len: greeting_len}
   greeting = greeting_cs.to_string()
-  print(greeting)
+  greeting.print()
   greeting_cs.free()
 end

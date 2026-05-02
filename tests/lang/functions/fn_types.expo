@@ -6,9 +6,9 @@ fn main
   double =
     fn (n: Int) -> Int n * 2 end
 
-  print(apply(5, double))
+  apply(5, double).print()
 
   result =
     apply(7, fn (n: Int) -> Int n + 3 end)
-  print(result)
+  result.print()
 end

@@ -9,24 +9,24 @@ end
 fn main
   # closure as inline argument with capture
   base = 100
-  print(apply(5, fn (x: Int) -> Int x + base end))
+  apply(5, fn (x: Int) -> Int x + base end).print()
 
   # closure returning a string
   prefix = "hello "
-  print(apply_str("world", fn (s: String) -> String prefix <> s end))
+  apply_str("world", fn (s: String) -> String prefix <> s end).print()
 
   # chained closure calls
   inc =
     fn (x: Int) -> Int x + 1 end
 
-  print(apply(apply(0, inc), inc))
+  apply(apply(0, inc), inc).print()
 
   # closure capturing multiple variables
   a = 10
   b = 20
   c = 30
-  print(apply(1, fn (x: Int) -> Int x + a + b + c end))
+  apply(1, fn (x: Int) -> Int x + a + b + c end).print()
 
   # closure that ignores its parameter
-  print(apply(999, fn (x: Int) -> Int 42 end))
+  apply(999, fn (x: Int) -> Int 42 end).print()
 end

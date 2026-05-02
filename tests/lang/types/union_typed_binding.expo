@@ -33,10 +33,10 @@ fn main
   comment = Comment{body: "Great post!"}
   ad = Ad{url: "https://example.com"}
 
-  print(describe(post))
-  print(describe(comment))
-  print(describe(ad))
+  describe(post).print()
+  describe(comment).print()
+  describe(ad).print()
 
-  print(summarize(Post{title: "Summary"}))
-  print(summarize(Comment{body: "Nice"}))
+  summarize(Post{title: "Summary"}).print()
+  summarize(Comment{body: "Nice"}).print()
 end

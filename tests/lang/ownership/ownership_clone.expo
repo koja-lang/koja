@@ -10,11 +10,11 @@ end
 fn main
   p = Point{x: 10, y: 20}
   q = p.clone()
-  print(consume(q))
-  print(p.x)
+  consume(q).print()
+  p.x.print()
 
   n = 42
   m = n.clone()
-  print(m)
-  print(n)
+  m.print()
+  n.print()
 end

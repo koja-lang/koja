@@ -17,7 +17,7 @@ impl Process<CalcConfig, CalcMsg, Int> for Calc
     match msg
       CalcMsg.Add(a, b) ->
         sum = a + b
-        print("calc: #{sum}")
+        "calc: #{sum}".print()
 
         match from
           Option.Some(reply) -> reply.send(sum)
@@ -34,7 +34,7 @@ fn main
   result = calc.call(CalcMsg.Add(10, 32), 5000)
 
   match result
-    Result.Ok(n) -> print("result: #{n}")
-    Result.Err(_) -> print("call failed!")
+    Result.Ok(n) -> "result: #{n}".print()
+    Result.Err(_) -> "call failed!".print()
   end
 end

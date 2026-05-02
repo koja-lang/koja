@@ -19,7 +19,7 @@ impl Process<CounterConfig, CounterMsg, Int> for Counter
     match msg
       CounterMsg.Increment ->
         new_count = self.count + 1
-        print("count: #{new_count}")
+        "count: #{new_count}".print()
 
         match from
           Option.Some(r) -> r.send(new_count)

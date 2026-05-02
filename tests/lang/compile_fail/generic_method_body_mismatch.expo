@@ -10,5 +10,5 @@ end
 
 fn main
   c = Counter{value: 1}
-  print(c.value)
+  c.value.print()
 end

@@ -15,5 +15,5 @@ fn main
   right = Tree.Branch(Tree.Leaf(2), Tree.Leaf(3))
   t = Tree.Branch(left, right)
 
-  print(sum(t))
+  sum(t).print()
 end

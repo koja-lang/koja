@@ -3,8 +3,8 @@ alias greeter.Greeter as G
 
 fn main
   g = Greeter.new("World")
-  print(g.greet())
+  g.greet().print()
 
   g2 = G.new("Alias")
-  print(g2.greet())
+  g2.greet().print()
 end

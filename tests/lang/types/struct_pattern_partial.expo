@@ -22,9 +22,9 @@ end
 
 fn main
   s = Sieve{}
-  print(s.classify(Point{x: 0, y: 0}))
-  print(s.classify(Point{x: 5, y: 1}))
-  print(s.classify(Point{x: 5, y: 9}))
-  print(s.classify(Point{x: 1, y: 9}))
-  print(s.classify(Point{x: 7, y: 7}))
+  s.classify(Point{x: 0, y: 0}).print()
+  s.classify(Point{x: 5, y: 1}).print()
+  s.classify(Point{x: 5, y: 9}).print()
+  s.classify(Point{x: 1, y: 9}).print()
+  s.classify(Point{x: 7, y: 7}).print()
 end

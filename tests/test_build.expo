@@ -3,7 +3,7 @@ fn main
   while i < 5
     i += 1
   end
-  print(i)
+  i.print()
 
   sum = 0
   n = 1
@@ -11,7 +11,7 @@ fn main
     sum += n
     n += 1
   end
-  print(sum)
+  sum.print()
 
-  print("done")
+  "done".print()
 end

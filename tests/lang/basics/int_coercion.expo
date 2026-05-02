@@ -16,9 +16,9 @@ end
 
 fn main
   c = Counter.new(10)
-  print(c.value)
-  print(c.add(5))
+  c.value.print()
+  c.add(5).print()
 
   x: Int32 = identity(42)
-  print(x)
+  x.print()
 end

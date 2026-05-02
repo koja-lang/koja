@@ -13,20 +13,20 @@ end
 fn main
   # assign a function to a variable and call it
   f = double
-  print(f(5))
+  f(5).print()
 
   # pass a bare function name as an argument
-  print(apply(10, double))
+  apply(10, double).print()
 
   # bare function ref with list.map
   nums: List<Int> = [1, 2, 3]
   doubled = nums.map(double)
 
   for d in doubled
-    print(d)
+    d.print()
   end
 
   # bare function ref returning String
   g = greet
-  print(g("world"))
+  g("world").print()
 end

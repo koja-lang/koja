@@ -10,7 +10,7 @@ fn main
   i = 0
 
   while i < 10
-    print(fib(i))
+    fib(i).print()
     i += 1
   end
 end

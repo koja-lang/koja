@@ -16,7 +16,6 @@ use expo_ir::{
     IRFunctionMeta, IROperand, IRProgram, TypeLayouts,
 };
 
-use crate::debug::synthesize_all_formats;
 use crate::drop::Ownership;
 use crate::generics::{compile_function_body, compile_method_body, ensure_types_exist};
 use crate::registration::{finalize_pending_unions, register_types};
@@ -1677,13 +1676,10 @@ fn run_codegen<'ctx>(
 
     // Impl-block parameter/return types may have monomorphized new generic
     // instances (and enqueued unions) during declaration. Finalize before
-    // format synthesis and body compilation so union sizes are correct.
+    // body compilation so union sizes are correct.
     finalize_pending_unions(&mut compiler);
 
     let entry_span = modules.first().map(|m| m.span).unwrap_or_default();
-    synthesize_all_formats(&mut compiler).map_err(|e| codegen_error(e, entry_span))?;
-
-    finalize_pending_unions(&mut compiler);
 
     // Whole-program monomorphization closure: walks every function
     // body's AST and registers every reachable generic struct / enum

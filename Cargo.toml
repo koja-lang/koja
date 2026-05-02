@@ -11,6 +11,7 @@ members = [
     "crates/expo-lexer",
     "crates/expo-lsp",
     "crates/expo-parser",
+    "crates/expo-preprocess",
     "crates/expo-runtime",
     "crates/expo-shell",
     "crates/expo-stdlib",

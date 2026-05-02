@@ -30,8 +30,8 @@ end
 fn main
   c = Cat{name: "Whiskers"}
   pet: Pet = c
-  print(describe(pet))
+  describe(pet).print()
 
   f = Fish{color: "orange"}
-  print(small_only(f))
+  small_only(f).print()
 end

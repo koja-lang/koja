@@ -5,11 +5,11 @@ end
 
 fn main
   p = Point{x: 3, y: 4}
-  print(p.x)
-  print(p.y)
+  p.x.print()
+  p.y.print()
 
   p.x = 10
-  print(p.x)
+  p.x.print()
 
-  print("(#{p.x}, #{p.y})")
+  "(#{p.x}, #{p.y})".print()
 end
