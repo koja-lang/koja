@@ -18,7 +18,6 @@ expo-doc = { path = "../expo-doc" }
 expo-fmt = { path = "../expo-fmt" }
 expo-lexer = { path = "../expo-lexer" }
 expo-parser = { path = "../expo-parser" }
-expo-preprocess = { path = "../expo-preprocess" }
 expo-shell = { path = "../expo-shell" }
 expo-stdlib = { path = "../expo-stdlib" }
 expo-typecheck = { path = "../expo-typecheck" }

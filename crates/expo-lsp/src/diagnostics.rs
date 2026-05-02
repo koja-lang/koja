@@ -127,7 +127,6 @@ fn parse_sibling_modules(
                                 .all(|d| !matches!(d.severity, ExpoSeverity::Error))
                             {
                                 let mut module = pr.module;
-                                expo_preprocess::preprocess_module(&mut module);
                                 module.path = Some(file.clone());
                                 mods.push((module, pkg.to_string()));
                             }
@@ -189,7 +188,6 @@ impl Backend {
     /// resolve correctly.
     pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
         let mut parse_result = expo_parser::parse(text);
-        expo_preprocess::preprocess_module(&mut parse_result.module);
         let file_path = uri_to_path(uri.as_str());
 
         let mut all_diags: Vec<ExpoDiagnostic> = parse_result.errors;
@@ -203,7 +201,7 @@ impl Backend {
                 .and_then(|p| p.parent())
                 .and_then(find_project_root);
 
-            let sibling_modules: Vec<(Module, String)> = match (&project_root, &file_path) {
+            let mut sibling_modules: Vec<(Module, String)> = match (&project_root, &file_path) {
                 (Some(root), Some(fp)) => parse_sibling_modules(root, Some(fp)),
                 _ => Vec::new(),
             };
@@ -225,14 +223,19 @@ impl Backend {
             known_packages.insert(package_from_str(&current_pkg));
             let global_names = expo_typecheck::collect_all_names(&all_for_names, known_packages);
 
+            // `collect_module` is `&mut` because the synthesize sub-pass
+            // (auto-derive `Debug`) runs inside it and mutates the AST.
             let mut unified_ctx = self.stdlib_ctx.clone();
-            for (m, sibling_pkg) in &sibling_modules {
+            for (m, sibling_pkg) in &mut sibling_modules {
                 let mod_ctx = expo_typecheck::collect_module(m, &global_names, sibling_pkg);
                 unified_ctx.merge(&mod_ctx);
             }
 
-            let mut ctx =
-                expo_typecheck::collect_module(&parse_result.module, &global_names, &current_pkg);
+            let mut ctx = expo_typecheck::collect_module(
+                &mut parse_result.module,
+                &global_names,
+                &current_pkg,
+            );
             ctx.merge(&unified_ctx);
             expo_typecheck::synthesize_protocol_defaults(
                 &parse_result.module,

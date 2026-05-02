@@ -90,10 +90,12 @@ pub fn typecheck_graph(
         graph.order.iter().partition(|n| is_stdlib(n));
 
     // Auto-imported std modules: merge into stdlib_ctx directly.
+    // `collect_module` now runs the synthesize sub-pass internally
+    // (auto-derives `impl Debug for T`), so the AST gains synthesized
+    // items as a side effect.
     for name in &stdlib_names {
         let rm = graph.modules.get_mut(*name).expect("module present");
-        expo_preprocess::preprocess_module(&mut rm.module);
-        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, "std");
+        let mut ctx = expo_typecheck::collect_module(&mut rm.module, &global_names, "std");
         ctx.merge(&stdlib_ctx);
 
         stdlib_ctx.merge(&ctx);
@@ -103,14 +105,14 @@ pub fn typecheck_graph(
     // Gather: collect signatures from every project module.
     for name in &project_names {
         let rm = graph.modules.get_mut(*name).expect("module present");
-        expo_preprocess::preprocess_module(&mut rm.module);
         let pkg = fqn_to_package(name);
-        let mut ctx = expo_typecheck::collect_module(&rm.module, &global_names, pkg);
+        let mut ctx = expo_typecheck::collect_module(&mut rm.module, &global_names, pkg);
         ctx.merge(&stdlib_ctx);
         // Other stdlib protocols (today: `Process` with `run` /
         // `handle_signal`) still rely on default-method synthesis for
-        // user impls. `Debug` flows through preprocess and never
-        // touches this codepath.
+        // user impls. `Debug` is auto-derived by the synthesize
+        // sub-pass inside `collect_module` and never touches this
+        // codepath.
         expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx, pkg);
         expo_typecheck::mark_recursive_fields(&mut ctx);
         module_contexts.insert((*name).clone(), ctx);
@@ -381,7 +383,11 @@ pub fn build(args: BuildArgs, quiet: bool, color: bool) {
 }
 
 /// Type-checks a single-file module graph (without compiling).
-pub fn check_single_file(entry_path: &Path, color: bool) -> bool {
+///
+/// When `emit_ast` is true, dumps every module's post-typecheck AST to stdout
+/// after diagnostics run. Errors still gate the returned `has_errors` bool;
+/// the dump happens either way (callers gate the OK-line on `!emit_ast`).
+pub fn check_single_file(entry_path: &Path, color: bool, emit_ast: bool) -> bool {
     let mut graph = match resolve::resolve_modules(entry_path) {
         Ok(g) => g,
         Err(e) => {
@@ -392,11 +398,21 @@ pub fn check_single_file(entry_path: &Path, color: bool) -> bool {
 
     prepend_stdlib(&mut graph);
     let (_, has_errors) = typecheck_graph(&mut graph, color);
+    if emit_ast {
+        emit_graph_ast(&graph);
+    }
     has_errors
 }
 
 /// Type-checks a project module graph (without compiling).
-pub fn check_project(config: &ProjectConfig, project_root: &Path, color: bool) -> bool {
+///
+/// See [`check_single_file`] for `emit_ast` semantics.
+pub fn check_project(
+    config: &ProjectConfig,
+    project_root: &Path,
+    color: bool,
+    emit_ast: bool,
+) -> bool {
     let mut graph = match resolve::resolve_project_modules(config, project_root) {
         Ok(g) => g,
         Err(e) => {
@@ -406,7 +422,22 @@ pub fn check_project(config: &ProjectConfig, project_root: &Path, color: bool) -
     };
 
     let (_, has_errors) = typecheck_graph(&mut graph, color);
+    if emit_ast {
+        emit_graph_ast(&graph);
+    }
     has_errors
+}
+
+/// Prints every module in `graph.order` to stdout as a pretty-Debug dump,
+/// preceded by a `// === <name> ===` header. Used by `expo check --emit-ast`.
+/// Pretty-Debug is intentional for now; a proper S-expression printer is a
+/// separate slice (see `design/COMPILER-NORTHSTAR.md` "Per-phase debug emitters").
+fn emit_graph_ast(graph: &ModuleGraph) {
+    for name in &graph.order {
+        let rm = &graph.modules[name];
+        println!("// === {name} ===");
+        println!("{:#?}", rm.module);
+    }
 }
 
 /// Inserts stdlib modules at the front of an existing graph's order.

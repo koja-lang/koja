@@ -158,10 +158,14 @@ pub fn cmd_run(file: Option<String>, release: bool, run_args: Vec<String>, color
     }
 }
 
-/// `expo check [file.expo ...]` -- type-checks without producing an executable.
+/// `expo check [file.expo ...] [--emit-ast]` -- type-checks without producing an executable.
 ///
 /// With no arguments, looks for `expo.toml` in the current directory.
-pub fn cmd_check(files: Vec<String>, color: bool) {
+/// With `--emit-ast`, prints each type-checked module's AST (`{:#?}`) to stdout
+/// instead of the per-file/project OK line. The dump runs even when typecheck
+/// reports diagnostics, but a non-zero exit is still gated on errors -- mirrors
+/// how `--emit-llvm` works on `expo build`.
+pub fn cmd_check(files: Vec<String>, color: bool, emit_ast: bool) {
     if files.is_empty() {
         let cwd = env::current_dir().unwrap_or_else(|e| {
             eprintln!("error: cannot determine current directory: {e}");
@@ -182,11 +186,13 @@ pub fn cmd_check(files: Vec<String>, color: bool) {
             }
         };
 
-        let has_errors = pipeline::check_project(&config, &cwd, color);
+        let has_errors = pipeline::check_project(&config, &cwd, color, emit_ast);
         if has_errors {
             process::exit(1);
         }
-        println!("{}: OK", config.name);
+        if !emit_ast {
+            println!("{}: OK", config.name);
+        }
         return;
     }
 
@@ -199,9 +205,9 @@ pub fn cmd_check(files: Vec<String>, color: bool) {
             }
         };
 
-        let has_errors = pipeline::check_single_file(&entry_path, color);
+        let has_errors = pipeline::check_single_file(&entry_path, color, emit_ast);
 
-        if !has_errors {
+        if !has_errors && !emit_ast {
             println!("{path}: OK");
         }
     }
@@ -629,8 +635,12 @@ pub fn cmd_new(name: String) {
     println!("created project '{name}'");
 }
 
-/// `expo parse <file.expo>` -- parses and reports item count or errors.
-pub fn cmd_parse(files: Vec<String>, color: bool) {
+/// `expo parse <file.expo> [--emit-ast]` -- parses and reports item count or errors.
+///
+/// With `--emit-ast`, prints the raw parsed AST (`{:#?}`) to stdout instead of the
+/// item-count line. Annotation slots like `Expr.resolved_type` are `None` here --
+/// no typecheck has run. Diagnostics still go to stderr regardless.
+pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
     if files.is_empty() {
         eprintln!("Usage: expo parse <file.expo>");
         process::exit(1);
@@ -647,10 +657,16 @@ pub fn cmd_parse(files: Vec<String>, color: bool) {
 
         let result = expo_parser::parse(&source);
 
-        if result.errors.is_empty() {
-            println!("{path}: OK ({} items)", result.module.items.len());
-        } else {
+        if !result.errors.is_empty() {
             render_diagnostics(path, &source, &result.errors, color);
+            continue;
+        }
+
+        if emit_ast {
+            println!("// === {path} ===");
+            println!("{:#?}", result.module);
+        } else {
+            println!("{path}: OK ({} items)", result.module.items.len());
         }
     }
 }

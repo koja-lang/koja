@@ -1,18 +1,14 @@
-//! Auto-derives the `Debug` protocol for user-defined structs and enums.
+//! Synthesize sub-pass: AST-level rewrites that run before collection.
 //!
-//! Walks every [`Item::Struct`] / [`Item::Enum`] and, unless the user
-//! already wrote `impl Debug for T`, appends a synthetic
-//! `impl Debug for T` block containing all three `Debug` methods:
-//! `format`, `print`, and `inspect`. The synthesized impl is
-//! indistinguishable from a user-written one, so collect / typecheck /
-//! IR / codegen treat it as ordinary source.
+//! Today the only synthesizer is [`derive_debug`], which appends an
+//! `impl Debug for T` block for every user-defined struct / enum that
+//! doesn't already have one. The synthesized impls are indistinguishable
+//! from user-written code, so the rest of typecheck (collect / resolve /
+//! check) needs no special-casing.
 //!
-//! `print` and `inspect` mirror the bodies declared on the `Debug`
-//! protocol in `std/debug.expo`. They're inlined here -- not pulled
-//! from the protocol AST at runtime -- because preprocess only sees
-//! one module at a time. Today `Debug` is the only stdlib protocol
-//! with default bodies; if more land, this pass will need to grow a
-//! cross-module protocol map.
+//! Runs as the first step inside [`crate::collect_module`]. Mutates the
+//! `Module` in place. Purely syntactic -- no `TypeContext`, no resolution
+//! data is required, so this can run before any name binding has happened.
 //!
 //! ## Generic types: degraded body
 //!
@@ -25,6 +21,16 @@
 //! method, which is what other structs' interpolated bodies need when
 //! they hold a generic field. Output is degraded (`"List"` instead of
 //! `"[1, 2, 3]"`) but the protocol contract is satisfied.
+//!
+//! ## Planned future synthesizers
+//!
+//! - `cfg_prune` -- evaluate `@cfg` / `@target` annotations against the
+//!   build context and drop items that don't match. Must run before any
+//!   `derive_*` so we don't synthesize impls for items that get pruned.
+//! - `derive_equality`, `derive_hash`, `derive_ord` -- mechanical
+//!   follow-ups once `derive_debug` lands.
+//! - `expand_destructuring` -- desugar struct destructuring assignments.
+//! - `expand_command` -- desugar the planned `command` construct.
 
 use expo_ast::ast::{
     Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern,
@@ -44,7 +50,7 @@ const STRING_TYPE: &str = "String";
 /// Synthesizes `impl Debug for T` for every struct / enum that doesn't
 /// already have one. Mutates `module.items` in place by appending the
 /// synthetic impl blocks.
-pub fn derive_debug(module: &mut Module) {
+pub(crate) fn derive_debug(module: &mut Module) {
     let existing = collect_existing_debug_impls(module);
     let mut synthesized: Vec<Item> = Vec::new();
 
@@ -497,7 +503,7 @@ fn literal_part(value: String, span: Span) -> StringPart {
 
 /// Wraps an expression in a `format()` method call before splicing into
 /// a string literal. Without the explicit `.format()`, codegen's
-/// interpolation path would dispatch through [`debug::call_format`] --
+/// interpolation path would dispatch through `debug::call_format` --
 /// but we want this synthesis to depend only on the public `Debug`
 /// protocol so the codegen-side helper can be retired.
 fn interpolation_part(expr: Expr, span: Span) -> StringPart {

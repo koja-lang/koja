@@ -57,8 +57,7 @@ impl Backend {
         let mut source_names = Vec::new();
 
         for &(name, source) in expo_stdlib::SOURCES {
-            let mut parsed = expo_parser::parse(source);
-            expo_preprocess::preprocess_module(&mut parsed.module);
+            let parsed = expo_parser::parse(source);
             source_names.push(name);
             stdlib_modules.push(parsed.module);
         }
@@ -76,7 +75,9 @@ impl Backend {
         // package "std". Qualified modules (json, net, etc.) use their
         // package name as the identifier, making them accessible via
         // ctx.is_package_type() for alias resolution.
-        for (i, module) in stdlib_modules.iter().enumerate() {
+        // `collect_module` is `&mut` because it runs the synthesize
+        // sub-pass internally (auto-derives `impl Debug`).
+        for (i, module) in stdlib_modules.iter_mut().enumerate() {
             let name = source_names[i];
             let pkg = if name.starts_with("std.") {
                 "std"

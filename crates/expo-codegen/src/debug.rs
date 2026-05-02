@@ -4,9 +4,10 @@
 //! interpolation.
 //!
 //! Format function bodies for user-defined structs / enums are
-//! synthesized at the AST level by `expo-preprocess::derive::derive_debug`
-//! and emitted through the normal codegen path -- this module no longer
-//! performs lazy LLVM-side synthesis for them.
+//! synthesized at the AST level by `expo-typecheck`'s `synthesize`
+//! sub-pass (auto-derive `Debug`) and emitted through the normal
+//! codegen path -- this module no longer performs lazy LLVM-side
+//! synthesis for them.
 
 use expo_ast::identifier::Package;
 use expo_ir::identity::FunctionIdentifier;
@@ -23,8 +24,8 @@ use crate::intrinsics::{emit_primitive_intrinsic, is_primitive_intrinsic, type_d
 /// Primitive types (`Int`, `Bool`, `Float`, ...) lazily synthesize their
 /// intrinsic format function the first time they're requested. Every
 /// other type relies on a `format` declared by an explicit `impl Debug`
-/// (user-written or auto-derived by `expo-preprocess`); this helper does
-/// not synthesize those bodies.
+/// (user-written or auto-derived by `expo-typecheck`'s `synthesize`
+/// sub-pass); this helper does not synthesize those bodies.
 pub fn call_format<'ctx>(
     compiler: &mut Compiler<'ctx>,
     val: BasicValueEnum<'ctx>,

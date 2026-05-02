@@ -11,6 +11,7 @@ Two-pass type checker: collect (build TypeContext) then check (verify types).
 - `expr.rs` -- Expression inference and checking (calls, closures, methods, generics). Largest checking file (~1837 lines)
 - `stmt.rs` -- Statement checking (assignments, moves, returns, breaks)
 - `pattern.rs` -- Pattern checking and match exhaustiveness
+- `synthesize.rs` -- Pre-collect AST rewrites (today: auto-derive `Debug` impls). Runs at the top of `collect_module`. See `design/COMPILER-NORTHSTAR.md` for the full sub-pass plan.
 - `types.rs` -- Type helpers: `resolve_type_expr`, alias resolution, substitution, unification
 - `cycle.rs` -- Recursive struct/enum detection, marks `Type::Indirect`
 - `env.rs` -- Per-function `CheckEnv`, variable state tracking for ownership
@@ -20,7 +21,7 @@ Two-pass type checker: collect (build TypeContext) then check (verify types).
 
 ```
 collect_all_names (global struct/enum names)
-  -> collect_module (build TypeContext per module)
+  -> collect_module (synthesize -> build TypeContext per module)
     -> merge (combine all modules + stdlib)
       -> synthesize_protocol_defaults
         -> mark_recursive_fields

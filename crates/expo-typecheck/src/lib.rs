@@ -8,6 +8,7 @@ mod expr;
 mod pattern;
 pub mod resolve;
 mod stmt;
+mod synthesize;
 pub mod types;
 mod validate;
 
@@ -24,6 +25,11 @@ pub use types::{Package, fqn_to_package, package_for_path, package_from_str};
 /// Uses module-local names only (for single-file / test usage). The module's
 /// file stem is used as the synthetic package name so bare-name lookups have
 /// a deterministic scope.
+///
+/// Deliberately bypasses [`synthesize`]: the auto-derived `Debug` bodies
+/// reference `IO` (from `std`), which isn't loaded in single-file test
+/// usage. Production callers go through [`collect_module`] and get
+/// synthesis as a side effect; this single-file helper does not.
 pub fn check(module: &mut Module) -> TypeContext {
     let package = types::package_for_path(module.path.as_deref(), "__test__");
     let packages = BTreeSet::from([Package::Std, package_from_str(&package)]);
@@ -50,7 +56,17 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
 /// type references resolve correctly on the first pass.
 /// The `package` identifies which package the module belongs to (e.g. `"std"`,
 /// `"json"`, or the project name from `expo.toml`).
-pub fn collect_module(module: &Module, global_names: &GlobalNames, package: &str) -> TypeContext {
+///
+/// Runs the [`synthesize`] sub-pass first (today: auto-derive `Debug` impls
+/// for every struct/enum that doesn't have one), then walks the resulting
+/// AST. The mutation is why the parameter is `&mut Module` -- callers should
+/// expect the AST to gain synthesized items after this returns.
+pub fn collect_module(
+    module: &mut Module,
+    global_names: &GlobalNames,
+    package: &str,
+) -> TypeContext {
+    synthesize::derive_debug(module);
     collect::collect(module, global_names, package)
 }
 

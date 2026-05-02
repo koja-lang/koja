@@ -48,6 +48,10 @@ enum Command {
     Check {
         /// Source files (omit to use expo.toml)
         files: Vec<String>,
+
+        /// Print the type-checked AST to stdout instead of just OK/diagnostics
+        #[arg(long)]
+        emit_ast: bool,
     },
     /// Run a source file through the IR interpreter
     Eval {
@@ -94,6 +98,10 @@ enum Command {
     Parse {
         /// Source files to parse
         files: Vec<String>,
+
+        /// Print the parsed AST to stdout instead of just an item count
+        #[arg(long)]
+        emit_ast: bool,
     },
     /// Compile and run a source file
     Run {
@@ -132,7 +140,7 @@ fn main() {
             emit_llvm,
             release,
         } => commands::cmd_build(file, output, emit_llvm, release, color),
-        Command::Check { files } => commands::cmd_check(files, color),
+        Command::Check { files, emit_ast } => commands::cmd_check(files, color, emit_ast),
         Command::Doc { files, output } => commands::cmd_doc(files, output, color),
         Command::Eval { file, entry } => commands::cmd_eval(file, entry),
         Command::Format {
@@ -142,7 +150,7 @@ fn main() {
         } => commands::cmd_format(files, check, write_back, color),
         Command::Lex { files } => commands::cmd_lex(files, color),
         Command::New { name } => commands::cmd_new(name),
-        Command::Parse { files } => commands::cmd_parse(files, color),
+        Command::Parse { files, emit_ast } => commands::cmd_parse(files, color, emit_ast),
         Command::Run {
             file,
             release,
