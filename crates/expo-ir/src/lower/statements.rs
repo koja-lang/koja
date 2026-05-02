@@ -57,7 +57,6 @@
 use expo_ast::ast::{
     AssignTarget, CompoundOp, Expr, ExprKind, LValue, Pattern, Statement, TypeExpr,
 };
-use expo_typecheck::context::Coercion;
 use expo_typecheck::types::{Primitive, Type, mangle_name};
 
 use crate::Lowerer;
@@ -67,7 +66,7 @@ use crate::identity::MonomorphizedTypeIdentifier;
 use crate::lower::inference::infer_type_from_expr;
 use crate::lower::ownership::ownership_for_expr;
 use crate::lower::stmt::{
-    resolve_annotation_subst, resolve_coercion, resolve_field_path, resolve_final_annotation_type,
+    resolve_annotation_subst, resolve_field_path, resolve_final_annotation_type,
 };
 use crate::resolved::ops::{
     OperandShape, ResolvedBinaryOp, ResolvedCompoundOp, resolve_compound_op,
@@ -604,6 +603,12 @@ impl<'a> Lowerer<'a> {
     /// Emit a [`IRInstruction::UnionWrap`] if typecheck recorded a
     /// [`Coercion::UnionWiden`] for the expression's span, returning
     /// the wrapped operand. Pass-through otherwise.
+    ///
+    /// Thin convenience wrapper around
+    /// [`Lowerer::stage_union_widen`]: keeps the existing
+    /// assignment-RHS / return-value call-sites readable while the
+    /// new method-call coercion seam (Slice 1) calls the span-keyed
+    /// helper directly.
     pub(crate) fn maybe_emit_union_wrap(
         &mut self,
         builder: &mut CFGBuilder,
@@ -611,22 +616,7 @@ impl<'a> Lowerer<'a> {
         expr: &Expr,
         value: IROperand,
     ) -> IROperand {
-        let Some(Coercion::UnionWiden { source, target }) =
-            resolve_coercion(&self.ctx(), expr.span)
-        else {
-            return value;
-        };
-        let dest = self.next_value_id();
-        builder.append(
-            open,
-            IRInstruction::UnionWrap {
-                dest,
-                value,
-                source_ty: source,
-                target_union: target,
-            },
-        );
-        IROperand::Local(dest)
+        self.stage_union_widen(builder, open, expr.span, value)
     }
 
     /// Build the storage sink instruction for an [`AssignTarget`]:

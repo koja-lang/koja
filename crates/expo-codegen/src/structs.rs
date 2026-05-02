@@ -21,8 +21,9 @@
 //! [`compile_struct_construction`] is the public entry point and a thin
 //! shim. For generics it pre-compiles the field initializers so lower can
 //! drive `unify` over their resolved types before triggering monomorphization
-//! -- see the design note in `expo/design/EXPOIR-ROADMAP.md` for why the
-//! boundary relaxes here vs. patterns.
+//! -- see the design note in `expo/design/archive/20260502-EXPOIR-ROADMAP.md`
+//! (superseded by `expo/design/COMPILER-NORTHSTAR.md`) for why the boundary
+//! relaxes here vs. patterns.
 //!
 //! ## Field access
 //!
@@ -45,6 +46,7 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{Arg, Expr, ExprKind, FieldInit};
+use expo_ast::span::Span;
 use expo_ir::lower::LowerCtx;
 use expo_ir::lower::fields::{lower_struct_field, resolve_chain_steps};
 use expo_ir::lower::structs::{lower_concrete_struct, resolve_struct_name};
@@ -359,7 +361,15 @@ pub fn compile_method_call_with_tail<'ctx>(
         if let Some(ref id) = resolved_id
             && c.type_ctx.get_type(id).is_some()
         {
-            return compile_static_call(c, &resolved, Some(id), method, args, function);
+            return compile_static_call(
+                c,
+                &resolved,
+                Some(id),
+                method,
+                args,
+                function,
+                receiver.span,
+            );
         }
     }
 
@@ -984,6 +994,7 @@ fn compile_static_call<'ctx>(
     method: &str,
     args: &[Arg],
     function: FunctionValue<'ctx>,
+    call_span: Span,
 ) -> ExprResult<'ctx> {
     if let LiftOutcome::Emitted(value) = lift_at_current(c, function, |lowerer, builder, open| {
         lowerer.lower_static_call_or_stub(
@@ -994,6 +1005,7 @@ fn compile_static_call<'ctx>(
             method,
             args,
             false,
+            call_span,
         )
     })? {
         return Ok(value);

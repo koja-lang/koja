@@ -1809,6 +1809,7 @@ fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, modules: &[&Module], 
         .collect();
     for plan in plans {
         let snapshot = swap_fn_state_for_plan(&mut compiler.fn_lower, &plan);
+        let saved_fn = compiler.fn_lower.enter_fn(plan.id.as_str().to_string());
         // Constants are resolved via `Lowerer.package`, which mirrors
         // `Compiler.current_package`. Source-declared free / impl
         // functions get their original package; generic instantiations
@@ -1824,6 +1825,7 @@ fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, modules: &[&Module], 
                 .lowerer()
                 .lower_function_body(&plan.body, &plan.return_type),
         };
+        compiler.fn_lower.leave_fn(saved_fn);
         restore_fn_state(&mut compiler.fn_lower, snapshot);
         if let Ok(blocks) = result {
             store_ir_blocks(&mut compiler.ir, &plan.id, blocks);

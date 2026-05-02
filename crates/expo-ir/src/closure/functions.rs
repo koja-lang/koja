@@ -14,6 +14,15 @@
 //!   (typecheck didn't produce enough information for inference).
 //! - Sites where inference yields a type-arg slot of [`Type::Unknown`]
 //!   (some type parameters can't be inferred from arguments alone).
+//! - Sites inside the user `fn main` body. The synthesized
+//!   [`crate::IRFunctionKind::MainEntry`] kind carries no AST body, so
+//!   the function-order walk above has nothing to inspect for `main`;
+//!   generic free-function calls written directly in `fn main` (e.g.
+//!   `identity(42)` in `tests/lang/generics/generics.expo`) reach
+//!   codegen's lazy fallback. Closing this gap requires either
+//!   teaching `MainEntry` to carry the body or threading the modules
+//!   slice through [`super::closure_program`]; both are larger
+//!   architectural changes than this walk.
 //!
 //! The outer fixpoint loop in [`super::closure_program`] re-runs the
 //! type closure after this walk so any newly-monomorphized function's
@@ -24,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 
 use expo_ast::ast::{Expr, ExprKind, Function};
 use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::Type;
+use expo_typecheck::types::{Type, substitute};
 
 use crate::closure::visit::visit_function_exprs;
 use crate::identity::FunctionIdentifier;
@@ -67,11 +76,18 @@ fn collect_pending_from_bodies(
         let Some(function) = program.functions.get(id) else {
             continue;
         };
-        let Some(func_ast) = func_ast_of(&function.kind) else {
+        let Some((func_ast, subst)) = func_ast_of(&function.kind) else {
             continue;
         };
         visit_function_exprs(func_ast, |expr| {
-            collect_from_expr(expr, type_ctx, generic_fn_asts, &mut pending, &mut seen);
+            collect_from_expr(
+                expr,
+                type_ctx,
+                subst,
+                generic_fn_asts,
+                &mut pending,
+                &mut seen,
+            );
         });
     }
     pending
@@ -81,9 +97,14 @@ fn collect_pending_from_bodies(
 /// instantiation in `pending` (skipping ones already in `seen`).
 /// Bails on missing `resolved_type` on any argument or on inference
 /// failure: those sites stay on codegen's lazy fallback for now.
+///
+/// Each argument's `resolved_type` is filtered through the enclosing
+/// function's `subst` so a call inside `foo<T>` whose arg type is
+/// `T` becomes the concrete instantiation type before inference.
 fn collect_from_expr(
     expr: &Expr,
     type_ctx: &TypeContext,
+    subst: &HashMap<String, Type>,
     generic_fn_asts: &HashMap<String, Function>,
     pending: &mut Vec<Pending>,
     seen: &mut HashSet<FunctionIdentifier>,
@@ -99,7 +120,12 @@ fn collect_from_expr(
     }
     let arg_types: Option<Vec<Type>> = args
         .iter()
-        .map(|arg| arg.value.resolved_type.clone())
+        .map(|arg| {
+            arg.value
+                .resolved_type
+                .as_ref()
+                .map(|t| substitute(t, subst))
+        })
         .collect();
     let Some(arg_types) = arg_types else {
         return;
@@ -125,13 +151,16 @@ fn mangled_name(name: &str, type_args: &[Type]) -> String {
     expo_typecheck::types::mangle_method_suffix(name, type_args)
 }
 
-/// Borrow the AST body off a callable [`IRFunctionKind`], or `None`
-/// for kinds that don't carry one.
-fn func_ast_of(kind: &IRFunctionKind) -> Option<&Function> {
+/// Borrow the AST body and type substitution off a callable
+/// [`IRFunctionKind`], or `None` for kinds that don't carry one.
+fn func_ast_of(kind: &IRFunctionKind) -> Option<(&Function, &HashMap<String, Type>)> {
     match kind {
-        IRFunctionKind::Free { func_ast, .. } | IRFunctionKind::Method { func_ast, .. } => {
-            Some(func_ast)
+        IRFunctionKind::Free {
+            func_ast, subst, ..
         }
+        | IRFunctionKind::Method {
+            func_ast, subst, ..
+        } => Some((func_ast, subst)),
         _ => None,
     }
 }

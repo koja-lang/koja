@@ -16,10 +16,12 @@
 pub mod binary;
 pub mod calls;
 pub mod closures;
+pub mod coercion;
 pub mod conditionals;
 pub mod constants;
 pub mod ctx;
 pub mod debug;
+pub mod diag;
 pub mod enums;
 pub mod fields;
 pub mod inference;

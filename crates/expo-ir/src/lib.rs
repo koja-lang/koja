@@ -9,7 +9,7 @@
 //! instruction sequence) are intentionally undefined in code -- their shape
 //! will be discovered bottom-up during the lowering/emission split, driven
 //! by what `Resolved*` consumers need to be stitched together. See
-//! `expo/design/EXPOIR-ROADMAP.md` for design intent and current phase status.
+//! `expo/design/COMPILER-NORTHSTAR.md` for the destination architecture.
 
 pub mod backend;
 pub mod blocks;

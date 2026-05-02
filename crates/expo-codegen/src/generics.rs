@@ -37,7 +37,33 @@ use expo_ir::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 /// Compiles a function body: iterates statements, handles implicit return
 /// of the last expression, and inserts a terminator if missing. When
 /// `is_main` is true, a missing terminator returns `0` instead of void.
+///
+/// Brackets per-function lowering state via [`enter_fn`] /
+/// [`leave_fn`] so every nested `lower_expr_to_operand` (and friends)
+/// can attribute its work to `fn_value.get_name()`. This single seam
+/// covers both the direct callers in `compiler.rs` and the indirect
+/// ones via [`compile_method_body`] / `emit_ir_function` /
+/// `emit_ir_impl_method`, so the `[STUB-FALLTHROUGH]` and
+/// `[HELPER-BAIL]` inventories no longer report `<unknown>`.
+///
+/// [`enter_fn`]: expo_ir::FnLowerState::enter_fn
+/// [`leave_fn`]: expo_ir::FnLowerState::leave_fn
 pub(crate) fn compile_function_body<'ctx>(
+    c: &mut Compiler<'ctx>,
+    body: &[Statement],
+    return_type: &Type,
+    fn_value: FunctionValue<'ctx>,
+    is_main: bool,
+) -> Result<(), String> {
+    let saved_fn = c
+        .fn_lower
+        .enter_fn(fn_value.get_name().to_str().unwrap_or("").to_string());
+    let result = compile_function_body_inner(c, body, return_type, fn_value, is_main);
+    c.fn_lower.leave_fn(saved_fn);
+    result
+}
+
+fn compile_function_body_inner<'ctx>(
     c: &mut Compiler<'ctx>,
     body: &[Statement],
     return_type: &Type,
@@ -203,9 +229,6 @@ pub(crate) fn compile_method_body<'ctx>(
         }
     }
 
-    let saved_fn = c
-        .fn_lower
-        .enter_fn(fn_value.get_name().to_str().unwrap_or("").to_string());
     let saved_loop = c.fn_state.set_loop(loop_header, param_allocas);
 
     let result = compile_function_body(
@@ -216,7 +239,6 @@ pub(crate) fn compile_method_body<'ctx>(
         false,
     );
 
-    c.fn_lower.leave_fn(saved_fn);
     c.fn_state.restore_loop(saved_loop);
     c.fn_lower.process_msg_type = saved_process_msg;
     c.fn_state.variables = saved_vars;

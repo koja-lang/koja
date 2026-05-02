@@ -7,8 +7,8 @@
 //! struct field layouts, enum variant payloads, and function signatures
 //! are concrete `Type`s, but function bodies are still raw AST
 //! ([`expo_ast::ast::Function`]) — bottom-up IR-ification of bodies into
-//! basic blocks and instructions is the next wave's work. See
-//! `expo/design/EXPOIR-ROADMAP.md`.
+//! basic blocks and instructions is in-progress work. See
+//! `expo/design/COMPILER-NORTHSTAR.md` for the destination architecture.
 //!
 //! Long-term, [`IRProgram`] is expected to grow into a thin container of
 //! `IRPackage`s so users can address per-package partitioning. For now the
@@ -181,9 +181,10 @@ fn check_instruction_invariant(
 
 /// Static name of an [`expo_ast::ast::ExprKind`] variant, suitable for
 /// human-facing diagnostics. Surfaced by
-/// [`ProgramInvariantError::StubInstruction`] so callers know which
-/// construct still routes through the transitional `Stub` bridge.
-fn expr_kind_name(kind: &expo_ast::ast::ExprKind) -> &'static str {
+/// [`ProgramInvariantError::StubInstruction`] and the lowering-side
+/// `Stub` panic messages so callers know which construct still routes
+/// through the transitional `Stub` bridge.
+pub fn expr_kind_name(kind: &expo_ast::ast::ExprKind) -> &'static str {
     use expo_ast::ast::ExprKind;
     match kind {
         ExprKind::Arena { .. } => "Arena",

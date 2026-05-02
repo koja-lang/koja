@@ -100,6 +100,14 @@ impl FnLowerState {
         self.current_fn.as_deref() == Some(callee)
     }
 
+    /// Name of the function currently being lowered, if any. Read by
+    /// diagnostic helpers (e.g. the `[STUB-FALLTHROUGH]` inventory
+    /// logger in [`crate::lower::values`]) so messages can attribute
+    /// surviving `IRInstruction::Stub` sites to a specific function.
+    pub fn current_fn(&self) -> Option<&str> {
+        self.current_fn.as_deref()
+    }
+
     /// Restore the previous function name when leaving a method body.
     pub fn leave_fn(&mut self, saved: Option<String>) {
         self.current_fn = saved;

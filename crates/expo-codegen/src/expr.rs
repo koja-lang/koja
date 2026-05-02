@@ -186,7 +186,7 @@ pub fn compile_expr<'ctx>(
 
         ExprKind::Call { callee, args, .. } => {
             if let ExprKind::Ident { name, .. } = &callee.kind {
-                compile_call(compiler, name, args, function)
+                compile_call(compiler, name, args, function, expr.span)
             } else {
                 Err("only named function calls are supported".to_string())
             }
