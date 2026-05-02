@@ -256,7 +256,7 @@ pub fn build_from_sources(sources: &mut SourceSet, output: &str, options: BuildO
     }
 
     let obj_path = format!("{output}.o");
-    if let Err(diagnostics) = expo_codegen::compile_modules(
+    if let Err(diagnostics) = expo_codegen::compile_files(
         &files_ast,
         &file_packages_refs,
         &merged_ctx,

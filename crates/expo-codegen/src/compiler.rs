@@ -213,7 +213,7 @@ impl<'ctx> FnState<'ctx> {
     }
 }
 
-/// Holds all LLVM state needed to compile an Expo module: the LLVM context,
+/// Holds all LLVM state needed to compile an Expo file: the LLVM context,
 /// module, builder, declared functions, variable bindings, and type mappings.
 pub struct Compiler<'ctx> {
     pub context: &'ctx Context,
@@ -257,13 +257,13 @@ pub struct Compiler<'ctx> {
     /// and tail-call loop scaffolding. Semantic per-function state lives
     /// in [`Self::fn_lower`].
     pub fn_state: FnState<'ctx>,
-    /// Source path of the Expo module currently being defined; matches
+    /// Source path of the Expo file currently being defined; matches
     /// [`TypeContext::closure_info`] keys during lookup.
     pub closure_site_path: Option<PathBuf>,
     /// DWARF debug info state (always present; emitted in all builds).
     pub debug: DebugContext<'ctx>,
-    /// Package of the module whose items are currently being declared/defined.
-    /// Set by [`run_codegen`] around each module's declare and define passes so
+    /// Package of the file whose items are currently being declared/defined.
+    /// Set by [`run_codegen`] around each file's declare and define passes so
     /// method symbols can be qualified per package (e.g. `alpha.Config_new`)
     /// and disambiguated across user packages that share a type name.
     pub current_package: Option<Package>,
@@ -315,7 +315,7 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Sets [`Self::current_package`] to `pkg` for the duration of `f`,
     /// restoring whatever scope was previously active. Used by `run_codegen`
-    /// to thread per-module package context through declare/define passes.
+    /// to thread per-file package context through declare/define passes.
     pub fn with_package<R>(&mut self, pkg: Package, f: impl FnOnce(&mut Self) -> R) -> R {
         let prev = self.current_package.take();
         self.current_package = Some(pkg);
@@ -789,7 +789,7 @@ impl<'ctx> Compiler<'ctx> {
     /// prefix is *distinct* from the type's bare name because method
     /// symbols are qualified (`alpha.Config_new`) while the `Self` type
     /// lookup still uses the unqualified type name (`Config`), resolved
-    /// under the current module's package scope.
+    /// under the current package's scope.
     fn declare_function(
         &self,
         func: &Function,
@@ -876,7 +876,7 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
-    /// Look up a module-level constant by source-level `name` from
+    /// Look up a package-level constant by source-level `name` from
     /// [`ConstantTables`]. Compounds return the cached
     /// [`Self::constants`] slot; primitives materialize the inline
     /// operand on the fly. Used by the AST-level Stub-fallback path
@@ -1044,8 +1044,8 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
-    fn declare_functions(&mut self, module: &Module) -> Result<(), String> {
-        for item in &module.items {
+    fn declare_functions(&mut self, file: &Module) -> Result<(), String> {
+        for item in &file.items {
             match item {
                 Item::Impl(impl_block) => {
                     let fns: Vec<&Function> = impl_block
@@ -1078,7 +1078,7 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
-        for item in &module.items {
+        for item in &file.items {
             match item {
                 Item::Function(func) => {
                     if !func.type_params.is_empty() {
@@ -1300,20 +1300,20 @@ impl<'ctx> Compiler<'ctx> {
         result
     }
 
-    fn define_functions(&mut self, module: &Module) -> Result<(), String> {
+    fn define_functions(&mut self, file: &Module) -> Result<(), String> {
         let prev_site = self.closure_site_path.clone();
-        self.closure_site_path = module.path.clone();
-        let result = self.define_functions_inner(module);
+        self.closure_site_path = file.path.clone();
+        let result = self.define_functions_inner(file);
         self.closure_site_path = prev_site;
         result
     }
 
-    fn define_functions_inner(&mut self, module: &Module) -> Result<(), String> {
-        if let Some(path) = &module.path {
+    fn define_functions_inner(&mut self, file: &Module) -> Result<(), String> {
+        if let Some(path) = &file.path {
             self.debug.set_current_file(path);
         }
 
-        for item in &module.items {
+        for item in &file.items {
             match item {
                 Item::Function(func) => {
                     if !func.type_params.is_empty() {
@@ -1584,16 +1584,16 @@ impl<'ctx> Compiler<'ctx> {
     }
 }
 
-/// Compiles a single Expo module to a native object file.
+/// Compiles a single Expo file to a native object file.
 pub fn compile(
-    module: &Module,
+    file: &Module,
     type_ctx: &TypeContext,
     output_path: &Path,
     release: bool,
     app_name: &str,
 ) -> Result<(), Vec<Diagnostic>> {
-    compile_modules(
-        &[module],
+    compile_files(
+        &[file],
         &[app_name],
         type_ctx,
         output_path,
@@ -1615,12 +1615,12 @@ fn codegen_error(message: String, span: Span) -> Vec<Diagnostic> {
     }]
 }
 
-/// Runs codegen for all modules: register types, declare, define. `packages`
-/// is a parallel slice: `packages[i]` is the owning package of `modules[i]`.
+/// Runs codegen for all files: register types, declare, define. `packages`
+/// is a parallel slice: `packages[i]` is the owning package of `files[i]`.
 /// Every entry must be a real, non-empty package name (the typecheck-side
 /// `package_from_str` panics on `""`).
 fn run_codegen<'ctx>(
-    modules: &[&Module],
+    files: &[&Module],
     packages: &[&str],
     type_ctx: &'ctx TypeContext,
     context: &'ctx Context,
@@ -1628,7 +1628,7 @@ fn run_codegen<'ctx>(
     app_name: &str,
     entry_type: Option<&str>,
 ) -> Result<Compiler<'ctx>, Vec<Diagnostic>> {
-    let (filename, directory) = modules
+    let (filename, directory) = files
         .first()
         .and_then(|m| m.path.as_ref())
         .map(|p| {
@@ -1650,28 +1650,28 @@ fn run_codegen<'ctx>(
     register_types(&mut compiler);
     crate::builtins::declare_builtins(&mut compiler);
 
-    for module in modules {
-        if let Some(path) = &module.path {
+    for file in files {
+        if let Some(path) = &file.path {
             compiler.debug.register_file(path);
         }
     }
 
     compiler.const_tables = populate_constants(
-        modules,
+        files,
         packages,
         &mut compiler.ir,
         compiler.type_ctx,
         &compiler.layouts,
     );
-    let constants_span = modules.first().map(|m| m.span).unwrap_or_default();
+    let constants_span = files.first().map(|m| m.span).unwrap_or_default();
     compiler
         .declare_constants()
         .map_err(|e| codegen_error(e, constants_span))?;
 
-    for (module, pkg) in modules.iter().zip(packages.iter()) {
+    for (file, pkg) in files.iter().zip(packages.iter()) {
         compiler
-            .with_package(package_from_str(pkg), |c| c.declare_functions(module))
-            .map_err(|e| codegen_error(e, module.span))?;
+            .with_package(package_from_str(pkg), |c| c.declare_functions(file))
+            .map_err(|e| codegen_error(e, file.span))?;
     }
 
     // Impl-block parameter/return types may have monomorphized new generic
@@ -1679,7 +1679,7 @@ fn run_codegen<'ctx>(
     // body compilation so union sizes are correct.
     finalize_pending_unions(&mut compiler);
 
-    let entry_span = modules.first().map(|m| m.span).unwrap_or_default();
+    let entry_span = files.first().map(|m| m.span).unwrap_or_default();
 
     // Whole-program monomorphization closure: walks every function
     // body's AST and registers every reachable generic struct / enum
@@ -1718,10 +1718,10 @@ fn run_codegen<'ctx>(
     // coercion passes have a single fixed integration point.
     expo_ir::elaborate_program(&mut compiler.ir).map_err(|e| codegen_error(e, entry_span))?;
 
-    for (module, pkg) in modules.iter().zip(packages.iter()) {
+    for (file, pkg) in files.iter().zip(packages.iter()) {
         compiler
-            .with_package(package_from_str(pkg), |c| c.define_functions(module))
-            .map_err(|e| codegen_error(e, module.span))?;
+            .with_package(package_from_str(pkg), |c| c.define_functions(file))
+            .map_err(|e| codegen_error(e, file.span))?;
     }
 
     finalize_pending_unions(&mut compiler);
@@ -1734,7 +1734,7 @@ fn run_codegen<'ctx>(
             .map_err(|e| codegen_error(e, entry_span))?;
     }
 
-    populate_ir_blocks(&mut compiler, modules, packages);
+    populate_ir_blocks(&mut compiler, files, packages);
 
     // Verify the closure pass covered every generic instantiation the
     // codegen path had to backfill. Non-zero indicates a closure pass
@@ -1797,10 +1797,10 @@ fn drain_pending_ir_decls<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(), Str
 ///
 /// Lowering failures are tolerated: bodies that can't lower cleanly
 /// are left empty. Backends that walk blocks
-/// (e.g. [`crate::lower_modules`]'s consumers) treat an empty `blocks`
+/// (e.g. [`crate::lower_files`]'s consumers) treat an empty `blocks`
 /// field as "unsupported" and surface a structured error.
-fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, modules: &[&Module], packages: &[&str]) {
-    let fn_packages = build_fn_package_map(modules, packages);
+fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, files: &[&Module], packages: &[&str]) {
+    let fn_packages = build_fn_package_map(files, packages);
     let plans: Vec<LowerPlan> = compiler
         .ir
         .function_order
@@ -1839,18 +1839,18 @@ fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, modules: &[&Module], 
 /// methods are `{target}_{method}`. Used by [`populate_ir_blocks`] to
 /// re-establish per-function package context (needed for bare-name
 /// const lookups in [`expo_ir::Lowerer::lower_ident_or_stub`]) for the
-/// IR-blocks lowering pass, which runs outside the per-module
+/// IR-blocks lowering pass, which runs outside the per-file
 /// `with_package` loop. Generic instantiations and synthesized bodies
-/// (closure pass, intrinsics, etc.) aren't in any module's items and
+/// (closure pass, intrinsics, etc.) aren't in any file's items and
 /// fall through with no package — same as before this map existed.
 fn build_fn_package_map(
-    modules: &[&Module],
+    files: &[&Module],
     packages: &[&str],
 ) -> HashMap<FunctionIdentifier, Package> {
     let mut map: HashMap<FunctionIdentifier, Package> = HashMap::new();
-    for (module, pkg_str) in modules.iter().zip(packages.iter()) {
+    for (file, pkg_str) in files.iter().zip(packages.iter()) {
         let pkg = package_from_str(pkg_str);
-        for item in &module.items {
+        for item in &file.items {
             match item {
                 Item::Function(func) => {
                     map.entry(FunctionIdentifier::new(&func.name))
@@ -2047,16 +2047,16 @@ fn store_ir_blocks(
     }
 }
 
-/// Compiles multiple Expo modules into a single native object file. Registers
-/// types, declares all functions across modules, then defines their bodies.
+/// Compiles multiple Expo files into a single native object file. Registers
+/// types, declares all functions across files, then defines their bodies.
 ///
-/// `packages` is parallel to `modules`: each entry is the owning package for
-/// the corresponding module. `"std"` is the stdlib (unqualified method
+/// `packages` is parallel to `files`: each entry is the owning package for
+/// the corresponding file. `"std"` is the stdlib (unqualified method
 /// symbols like `Int_hash`); any other value is a user package whose method
 /// symbols are prefixed (e.g. `alpha.Config_new`). Empty strings are
 /// rejected by the typecheck-side `package_from_str`.
-pub fn compile_modules(
-    modules: &[&Module],
+pub fn compile_files(
+    files: &[&Module],
     packages: &[&str],
     type_ctx: &TypeContext,
     output_path: &Path,
@@ -2066,14 +2066,14 @@ pub fn compile_modules(
 ) -> Result<(), Vec<Diagnostic>> {
     let context = Context::create();
     let compiler = run_codegen(
-        modules, packages, type_ctx, &context, release, app_name, entry_type,
+        files, packages, type_ctx, &context, release, app_name, entry_type,
     )?;
 
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
 
     compiler.module.verify().map_err(|e| {
-        let span = modules.first().map(|m| m.span).unwrap_or_default();
+        let span = files.first().map(|m| m.span).unwrap_or_default();
         vec![Diagnostic {
             severity: Severity::Error,
             message: format!("LLVM verification failed: {e}"),
@@ -2082,7 +2082,7 @@ pub fn compile_modules(
         }]
     })?;
 
-    let span = modules.first().map(|m| m.span).unwrap_or_default();
+    let span = files.first().map(|m| m.span).unwrap_or_default();
     compiler
         .emit_object_file(output_path, release)
         .map_err(|e| {
@@ -2095,12 +2095,12 @@ pub fn compile_modules(
         })
 }
 
-/// Compiles multiple Expo modules and returns the LLVM IR as a string.
+/// Compiles multiple Expo files and returns the LLVM IR as a string.
 /// Skips verification so IR can be inspected even when it contains errors.
 ///
-/// See [`compile_modules`] for the `packages` parameter semantics.
+/// See [`compile_files`] for the `packages` parameter semantics.
 pub fn emit_llvm_ir(
-    modules: &[&Module],
+    files: &[&Module],
     packages: &[&str],
     type_ctx: &TypeContext,
     app_name: &str,
@@ -2108,14 +2108,14 @@ pub fn emit_llvm_ir(
 ) -> Result<String, Vec<Diagnostic>> {
     let context = Context::create();
     let compiler = run_codegen(
-        modules, packages, type_ctx, &context, false, app_name, entry_type,
+        files, packages, type_ctx, &context, false, app_name, entry_type,
     )?;
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
     Ok(compiler.module.print_to_string().to_string())
 }
 
-/// Lower Expo modules into a sealed [`expo_ir::IRProgram`] without
+/// Lower Expo files into a sealed [`expo_ir::IRProgram`] without
 /// emitting an LLVM artifact. Used by execution backends
 /// (`expo-ir-eval`, the planned Cranelift JIT) that consume IR directly.
 ///
@@ -2123,12 +2123,12 @@ pub fn emit_llvm_ir(
 /// lowering shares the [`Compiler`] state machine; a future phase will
 /// extract the lowering pipeline so this entry is genuinely LLVM-free.
 /// The returned `IRProgram` is the same one a successful
-/// [`compile_modules`] would have built immediately before
+/// [`compile_files`] would have built immediately before
 /// `emit_object_file`.
 ///
-/// See [`compile_modules`] for the `packages` parameter semantics.
-pub fn lower_modules(
-    modules: &[&Module],
+/// See [`compile_files`] for the `packages` parameter semantics.
+pub fn lower_files(
+    files: &[&Module],
     packages: &[&str],
     type_ctx: &TypeContext,
     app_name: &str,
@@ -2136,7 +2136,7 @@ pub fn lower_modules(
 ) -> Result<IRProgram, Vec<Diagnostic>> {
     let context = Context::create();
     let compiler = run_codegen(
-        modules, packages, type_ctx, &context, false, app_name, entry_type,
+        files, packages, type_ctx, &context, false, app_name, entry_type,
     )?;
     Ok(compiler.ir)
 }

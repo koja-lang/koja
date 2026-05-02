@@ -61,8 +61,8 @@ pub fn eval_entry(source: &str, entry: &str) -> Value {
     let type_ctx = expo_typecheck::check(&mut file);
     let files = vec![&file];
     let packages = vec!["__test__"];
-    let program = expo_codegen::lower_modules(&files, &packages, &type_ctx, "__test__", None)
-        .unwrap_or_else(|diags| panic!("lower_modules failed: {diags:?}"));
+    let program = expo_codegen::lower_files(&files, &packages, &type_ctx, "__test__", None)
+        .unwrap_or_else(|diags| panic!("lower_files failed: {diags:?}"));
     let mut interp = Interp::new(Arc::new(program), Arc::new(type_ctx)).expect("interp init");
     interp
         .call(&expo_ir::FunctionIdentifier::new(entry), vec![])

@@ -65,7 +65,7 @@ use super::walk_function_blocks_seeded;
 /// monomorphizes from. It currently isn't: collect.rs clones impl blocks
 /// into `ctx.generic_impl_asts` / `ctx.specialized_impl_asts` *before*
 /// check.rs runs, and codegen reads those clones rather than the
-/// typechecked AST in `module.items`. Until that AST-clone story is fixed
+/// typechecked AST in the file's `items`. Until that AST-clone story is fixed
 /// (see fix-generic-impl-typecheck plan, Stage 5), we lean on the
 /// post-emit `subject_tv.expo_type`. The Ident/Self_ branch in
 /// `resolve_subject_ty` is a final defensive fallback for residual gaps.

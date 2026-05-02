@@ -24,4 +24,4 @@ mod structs;
 mod types;
 mod util;
 
-pub use compiler::{compile, compile_modules, emit_llvm_ir, lower_modules};
+pub use compiler::{compile, compile_files, emit_llvm_ir, lower_files};

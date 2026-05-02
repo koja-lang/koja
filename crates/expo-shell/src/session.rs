@@ -25,7 +25,7 @@ const SYNTHETIC_SESSION_ENTRY: &str = "__expo_session_main__";
 /// session module. We set it on the synthesized module's `path` so
 /// [`expo_typecheck::check`] (which derives the package from the path
 /// stem) lines up with the explicit `__repl__` we hand to
-/// [`expo_codegen::lower_modules`]. Without this alignment, types
+/// [`expo_codegen::lower_files`]. Without this alignment, types
 /// like `Color` end up registered under `__test__` (typecheck's
 /// default fallback) but referenced under `__repl__` at lowering
 /// time, producing surprising "unknown field" / "0 fields" runtime
@@ -186,7 +186,7 @@ impl Session {
         let modules = vec![&module];
         let packages = vec![SESSION_PACKAGE];
         let program =
-            expo_codegen::lower_modules(&modules, &packages, &type_ctx, SESSION_PACKAGE, None)
+            expo_codegen::lower_files(&modules, &packages, &type_ctx, SESSION_PACKAGE, None)
                 .map_err(|diagnostics| format_diagnostics(&diagnostics))?;
         let mut interp = Interp::new(Arc::new(program), Arc::new(type_ctx))
             .map_err(|error| error.to_string())?;
