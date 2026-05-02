@@ -223,19 +223,16 @@ impl Backend {
             known_packages.insert(package_from_str(&current_pkg));
             let global_names = expo_typecheck::collect_all_names(&all_for_names, known_packages);
 
-            // `collect_module` is `&mut` because the synthesize sub-pass
+            // `collect_file` is `&mut` because the synthesize sub-pass
             // (auto-derive `Debug`) runs inside it and mutates the AST.
             let mut unified_ctx = self.stdlib_ctx.clone();
             for (m, sibling_pkg) in &mut sibling_modules {
-                let mod_ctx = expo_typecheck::collect_module(m, &global_names, sibling_pkg);
+                let mod_ctx = expo_typecheck::collect_file(m, &global_names, sibling_pkg);
                 unified_ctx.merge(&mod_ctx);
             }
 
-            let mut ctx = expo_typecheck::collect_module(
-                &mut parse_result.module,
-                &global_names,
-                &current_pkg,
-            );
+            let mut ctx =
+                expo_typecheck::collect_file(&mut parse_result.module, &global_names, &current_pkg);
             ctx.merge(&unified_ctx);
             expo_typecheck::synthesize_protocol_defaults(
                 &parse_result.module,
@@ -243,9 +240,9 @@ impl Backend {
                 &current_pkg,
             );
             expo_typecheck::mark_recursive_fields(&mut ctx);
-            expo_typecheck::resolve_module_aliases(&parse_result.module, &mut ctx);
+            expo_typecheck::resolve_file_aliases(&parse_result.module, &mut ctx);
             expo_typecheck::resolve_packages(&mut ctx);
-            expo_typecheck::check_module(&mut parse_result.module, &mut ctx, &current_pkg);
+            expo_typecheck::check_file(&mut parse_result.module, &mut ctx, &current_pkg);
             all_diags.extend(ctx.diagnostics.clone());
             let stored_modules: Vec<Module> = sibling_modules.into_iter().map(|(m, _)| m).collect();
             (ctx, stored_modules)

@@ -105,7 +105,7 @@ pub fn resolve_type_expr(ctx: &LowerCtx<'_>, type_expr: &TypeExpr) -> Type {
         &type_params,
         &ctx.type_ctx.type_aliases,
         &known_packages,
-        &ctx.type_ctx.module_aliases,
+        &ctx.type_ctx.file_aliases,
     );
     match ctx.package {
         Some(pkg) => expo_typecheck::resolve::resolve_type_inline_scoped(

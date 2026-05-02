@@ -14,15 +14,15 @@ pub use crate::types::{FnParam, Package, Type, TypeIdentifier};
 pub type SpecializedMethodMap =
     BTreeMap<TypeIdentifier, Vec<(Vec<Type>, BTreeMap<String, FunctionSig>)>>;
 
-/// Holds all type information gathered during collection and checking for a single module.
+/// Holds all type information gathered during collection and checking for a single file.
 #[derive(Clone)]
 pub struct TypeContext {
     /// Keyed by `(source file path, closure span)` so merged graphs from many
-    /// modules do not collide on identical line/column positions.
+    /// files do not collide on identical line/column positions.
     pub closure_info: HashMap<(Option<PathBuf>, Span), ClosureInfo>,
-    /// Set while [`crate::check_module`] walks a module; used when recording
+    /// Set while [`crate::check_file`] walks a file; used when recording
     /// [`ClosureInfo`] keys. Not meaningful in merged contexts.
-    pub current_module_path: Option<PathBuf>,
+    pub current_file_path: Option<PathBuf>,
     /// The package whose source is currently being type-checked. Bare-name
     /// type lookups (e.g. `find_type("Config")`) consult this first so that
     /// references inside a file always prefer their own package's definition
@@ -45,8 +45,8 @@ pub struct TypeContext {
     pub synthesized_default_fns: BTreeMap<String, Vec<Function>>,
     pub type_aliases: BTreeMap<String, Type>,
     pub types: BTreeMap<TypeIdentifier, TypeInfo>,
-    /// File-private aliases from `alias` declarations. NOT merged across modules.
-    pub module_aliases: BTreeMap<String, Type>,
+    /// File-private aliases from `alias` declarations. NOT merged across files.
+    pub file_aliases: BTreeMap<String, Type>,
     /// Reverse index from type name to its fully qualified [`TypeIdentifier`].
     /// Contains both qualified (`"std.Option"`) and bare (`"Option"`) entries.
     /// Populated by the resolution pass; empty before that.
@@ -409,7 +409,7 @@ impl TypeContext {
     }
 
     /// Resolves a [`TypeExpr`] annotation using the full cached context: type
-    /// aliases, module aliases, and package-qualified type lookups. Replaces the
+    /// aliases, file aliases, and package-qualified type lookups. Replaces the
     /// `resolve_type_expr(...) + ctx.resolve_type(...)` pattern at call sites.
     pub fn resolve_type_annotation(
         &self,
@@ -425,7 +425,7 @@ impl TypeContext {
             &[],
             &self.type_aliases,
             &known_packages,
-            &self.module_aliases,
+            &self.file_aliases,
         );
         self.resolve_type(&mut ty);
         ty
@@ -445,7 +445,7 @@ impl TypeContext {
     pub fn new() -> Self {
         Self {
             closure_info: HashMap::new(),
-            current_module_path: None,
+            current_file_path: None,
             current_package: None,
             coercions: HashMap::new(),
             constants: BTreeMap::new(),
@@ -463,7 +463,7 @@ impl TypeContext {
             synthesized_default_fns: BTreeMap::new(),
             type_aliases: BTreeMap::new(),
             types: BTreeMap::new(),
-            module_aliases: BTreeMap::new(),
+            file_aliases: BTreeMap::new(),
             name_index: BTreeMap::new(),
             package_types: BTreeMap::new(),
         }
@@ -472,7 +472,7 @@ impl TypeContext {
     /// Merges all type information from `other` into `self`. Entries already
     /// present in `self` are kept (first-writer-wins), except for
     /// `generic_impl_asts`, `specialized_impl_asts`, `specialized_methods`,
-    /// and `protocol_impls` which accumulate across modules.
+    /// and `protocol_impls` which accumulate across files.
     ///
     /// When two types share the same bare name but come from different packages,
     /// the first-writer (already in `self`) wins for the flat namespace. Functions
@@ -603,7 +603,7 @@ impl TypeContext {
                 .entry(*span)
                 .or_insert_with(|| coercion.clone());
         }
-        // module_aliases intentionally NOT merged (file-private)
+        // file_aliases intentionally NOT merged (file-private)
     }
 
     /// Records a warning diagnostic at the given span.

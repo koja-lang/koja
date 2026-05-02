@@ -32,7 +32,7 @@ fn resolve_type_key(ctx: &TypeContext, name: &str, package: &str) -> Option<Type
     None
 }
 
-/// Pre-collected struct and enum names across all modules in the program,
+/// Pre-collected struct and enum names across all files in the program,
 /// plus the set of known package labels. Passed into [`collect`] so that type
 /// resolution sees every type name from the start and can validate qualified
 /// `pkg.Type` paths against the known package set on the first pass.
@@ -42,21 +42,21 @@ pub struct GlobalNames {
     pub struct_names: HashSet<String>,
 }
 
-/// Scans all modules for struct and enum names without resolving any types.
+/// Scans all files for struct and enum names without resolving any types.
 /// `packages` is the set of package labels visible to the program (typically
-/// derived from the module graph: `Package::Std` for `std.*` modules and
+/// derived from the file graph: `Package::Std` for `std.*` files and
 /// `Package::Named(...)` for everything else). Together they form the
 /// first phase of a two-phase collection: names and packages are gathered
-/// globally, then passed into [`collect`] so cross-module type references
+/// globally, then passed into [`collect`] so cross-file type references
 /// resolve correctly on the first pass.
-pub fn collect_all_names(modules: &[&Module], packages: BTreeSet<Package>) -> GlobalNames {
+pub fn collect_all_names(files: &[&Module], packages: BTreeSet<Package>) -> GlobalNames {
     let mut names = GlobalNames {
         enum_names: HashSet::new(),
         packages,
         struct_names: HashSet::new(),
     };
-    for module in modules {
-        for item in &module.items {
+    for file in files {
+        for item in &file.items {
             match item {
                 Item::Alias(_) => {}
                 Item::Struct(s) => {
@@ -72,14 +72,14 @@ pub fn collect_all_names(modules: &[&Module], packages: BTreeSet<Package>) -> Gl
     names
 }
 
-/// Walks all top-level items in a module and builds a [`TypeContext`] containing
+/// Walks all top-level items in a file and builds a [`TypeContext`] containing
 /// function signatures, struct definitions, and enum definitions.
-/// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-module
+/// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-file
 /// type references (e.g. imported struct names) resolve correctly.
-/// The `package` parameter identifies which package this module belongs to
+/// The `package` parameter identifies which package this file belongs to
 /// (e.g. `"std"`, `"json"`, or the project name). It's stored on each
 /// [`TypeInfo`]'s [`TypeIdentifier`] for package-aware collision detection.
-pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> TypeContext {
+pub fn collect(file: &Module, global_names: &GlobalNames, package: &str) -> TypeContext {
     let mut ctx = TypeContext::new();
     ctx.current_package = Some(package_from_str(package));
 
@@ -93,7 +93,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
 
     // Pre-pass: collect type aliases so they're available for resolving
     // function signatures and struct/enum fields in the main pass.
-    for item in &module.items {
+    for item in &file.items {
         if let Item::TypeAlias(ta) = item {
             let resolved = resolve_type_expr_with_params(
                 &ta.type_expr,
@@ -121,7 +121,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
 
     let type_aliases = ctx.type_aliases.clone();
 
-    for item in &module.items {
+    for item in &file.items {
         match item {
             Item::Alias(_) => {}
             Item::Enum(e) => {
@@ -676,7 +676,7 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
 /// Final pass of [`collect`]: rewrites `Package::Unresolved` identifiers that
 /// match a type already registered in the current package to that package's
 /// qualified form. This ensures that free function signatures, constants, and
-/// type aliases defined in the module carry the right package before any
+/// type aliases defined in the file carry the right package before any
 /// merge (which would otherwise require a global-scope resolver to guess).
 ///
 /// Stdlib and cross-package references remain unresolved here; they are
@@ -757,7 +757,7 @@ fn resolve_type_locally(ty: &mut Type, local_names: &HashSet<String>, scope: &Pa
 /// Synthesizes default protocol method implementations for impl blocks whose
 /// protocol info wasn't available during initial collection (e.g. stdlib
 /// protocols like `Process`). Must be called after merging the stdlib context.
-pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, package: &str) {
+pub fn synthesize_protocol_defaults(file: &Module, ctx: &mut TypeContext, package: &str) {
     let struct_names: Vec<String> = ctx
         .types
         .values()
@@ -776,7 +776,7 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, pack
     let known_packages: BTreeSet<Package> = ctx.package_types.keys().cloned().collect();
     let tp_refs: Vec<&str> = Vec::new();
 
-    for item in &module.items {
+    for item in &file.items {
         if let Item::Impl(impl_block) = item {
             let target_name = match &impl_block.target {
                 TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. }

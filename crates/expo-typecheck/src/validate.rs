@@ -10,13 +10,13 @@ use expo_ast::types::Type;
 
 use crate::context::TypeContext;
 
-/// Walks every expression in a module and emits an error for any
+/// Walks every expression in a file and emits an error for any
 /// `expr.resolved_type` that contains a `Package::Unresolved` identifier.
 ///
-/// Call after `check_module` to enforce the invariant that all types reaching
+/// Call after `check_file` to enforce the invariant that all types reaching
 /// codegen are fully package-resolved.
-pub fn validate_resolved_types(module: &Module, ctx: &mut TypeContext) {
-    for item in &module.items {
+pub fn validate_resolved_types(file: &Module, ctx: &mut TypeContext) {
+    for item in &file.items {
         validate_item(item, ctx);
     }
 }

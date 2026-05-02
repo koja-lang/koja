@@ -12,7 +12,7 @@ pub use expo_ast::types::{
 
 /// Converts a caller-facing package label (`"std"` or a real package name such
 /// as `"alpha"`) into the matching [`Package`] variant used by the scoped
-/// name-index lookup. Empty strings are rejected because every module must
+/// name-index lookup. Empty strings are rejected because every file must
 /// carry a real package so bare-name lookups have a deterministic scope.
 pub fn package_from_str(package: &str) -> Package {
     assert!(
@@ -26,9 +26,9 @@ pub fn package_from_str(package: &str) -> Package {
     }
 }
 
-/// Derives a synthetic package name from a module's on-disk file stem.
-/// Modules without a path (e.g. in-memory test fixtures or LSP preview
-/// buffers) fall back to `fallback`, so every module still carries a
+/// Derives a synthetic package name from a file's on-disk file stem.
+/// Files without a path (e.g. in-memory test fixtures or LSP preview
+/// buffers) fall back to `fallback`, so every file still carries a
 /// concrete package suitable for [`package_from_str`].
 pub fn package_for_path(path: Option<&Path>, fallback: &str) -> String {
     path.and_then(|p| p.file_stem())
@@ -37,7 +37,7 @@ pub fn package_for_path(path: Option<&Path>, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-/// Extracts the package name from a fully-qualified module name.
+/// Extracts the package name from a fully-qualified file name.
 /// e.g. `"json.decoder"` → `"json"`, `"my_app.main"` → `"my_app"`,
 /// `"json"` → `"json"` (single-segment FQN).
 pub fn fqn_to_package(fqn: &str) -> &str {
@@ -64,13 +64,13 @@ pub fn resolve_type_expr(
     )
 }
 
-/// Checks both global type aliases and file-private module aliases for a name.
+/// Checks both global type aliases and file-private aliases for a name.
 pub fn resolve_alias(
     name: &str,
     type_aliases: &BTreeMap<String, Type>,
-    module_aliases: &BTreeMap<String, Type>,
+    file_aliases: &BTreeMap<String, Type>,
 ) -> Option<Type> {
-    module_aliases
+    file_aliases
         .get(name)
         .or_else(|| type_aliases.get(name))
         .cloned()
@@ -136,7 +136,7 @@ pub fn resolve_type_expr_with_params(
 
 /// Resolves a type expression with full context including the set of known
 /// package labels (used to validate qualified `pkg.Type` paths) and
-/// file-private module aliases.
+/// file-private aliases.
 pub fn resolve_type_expr_full(
     type_expr: &TypeExpr,
     known_structs: &[&str],
@@ -144,7 +144,7 @@ pub fn resolve_type_expr_full(
     known_type_params: &[&str],
     known_type_aliases: &BTreeMap<String, Type>,
     known_packages: &BTreeSet<Package>,
-    module_aliases: &BTreeMap<String, Type>,
+    file_aliases: &BTreeMap<String, Type>,
 ) -> Type {
     match type_expr {
         TypeExpr::Generic { path, args, .. } => {
@@ -156,7 +156,7 @@ pub fn resolve_type_expr_full(
                     known_type_params,
                     known_type_aliases,
                     known_packages,
-                    module_aliases,
+                    file_aliases,
                 );
                 return Type::Pointer(Box::new(inner));
             }
@@ -183,7 +183,7 @@ pub fn resolve_type_expr_full(
                             known_type_params,
                             known_type_aliases,
                             known_packages,
-                            module_aliases,
+                            file_aliases,
                         )
                     })
                     .collect();
@@ -200,7 +200,7 @@ pub fn resolve_type_expr_full(
                 if known_type_params.contains(&name) {
                     return Type::Parameter(name.to_string());
                 }
-                if let Some(aliased) = resolve_alias(name, known_type_aliases, module_aliases) {
+                if let Some(aliased) = resolve_alias(name, known_type_aliases, file_aliases) {
                     return aliased;
                 }
                 match name {
@@ -263,7 +263,7 @@ pub fn resolve_type_expr_full(
                         known_type_params,
                         known_type_aliases,
                         known_packages,
-                        module_aliases,
+                        file_aliases,
                     );
                     FnParam { ty, mode: *mode }
                 })
@@ -275,7 +275,7 @@ pub fn resolve_type_expr_full(
                 known_type_params,
                 known_type_aliases,
                 known_packages,
-                module_aliases,
+                file_aliases,
             );
             Type::Function {
                 params: fn_params,
@@ -293,7 +293,7 @@ pub fn resolve_type_expr_full(
                         known_type_params,
                         known_type_aliases,
                         known_packages,
-                        module_aliases,
+                        file_aliases,
                     )
                 })
                 .collect();

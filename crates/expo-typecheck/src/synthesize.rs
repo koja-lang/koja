@@ -6,7 +6,7 @@
 //! from user-written code, so the rest of typecheck (collect / resolve /
 //! check) needs no special-casing.
 //!
-//! Runs as the first step inside [`crate::collect_module`]. Mutates the
+//! Runs as the first step inside [`crate::collect_file`]. Mutates the
 //! `Module` in place. Purely syntactic -- no `TypeContext`, no resolution
 //! data is required, so this can run before any name binding has happened.
 //!
@@ -48,13 +48,13 @@ const PUTS_METHOD: &str = "puts";
 const STRING_TYPE: &str = "String";
 
 /// Synthesizes `impl Debug for T` for every struct / enum that doesn't
-/// already have one. Mutates `module.items` in place by appending the
+/// already have one. Mutates `file.items` in place by appending the
 /// synthetic impl blocks.
-pub(crate) fn derive_debug(module: &mut Module) {
-    let existing = collect_existing_debug_impls(module);
+pub(crate) fn derive_debug(file: &mut Module) {
+    let existing = collect_existing_debug_impls(file);
     let mut synthesized: Vec<Item> = Vec::new();
 
-    for item in &module.items {
+    for item in &file.items {
         match item {
             Item::Struct(decl) if needs_struct_derive(decl, &existing) => {
                 synthesized.push(synthesize_struct_impl(decl));
@@ -66,16 +66,15 @@ pub(crate) fn derive_debug(module: &mut Module) {
         }
     }
 
-    module.items.extend(synthesized);
+    file.items.extend(synthesized);
 }
 
 /// Returns the set of type names (e.g. `"User"`) that already have an
-/// explicit `impl Debug for T` block in this module. Names are bare --
+/// explicit `impl Debug for T` block in this file. Names are bare --
 /// generic args on the target are intentionally ignored so
 /// `impl Debug for List<T>` matches a struct named `List`.
-fn collect_existing_debug_impls(module: &Module) -> Vec<String> {
-    module
-        .items
+fn collect_existing_debug_impls(file: &Module) -> Vec<String> {
+    file.items
         .iter()
         .filter_map(|item| match item {
             Item::Impl(block) => debug_impl_target(block),
@@ -537,7 +536,7 @@ mod tests {
     use super::*;
     use expo_parser::parse;
 
-    fn parse_module(source: &str) -> Module {
+    fn parse_file(source: &str) -> Module {
         let result = parse(source);
         assert!(
             result.errors.is_empty(),
@@ -547,9 +546,8 @@ mod tests {
         result.module
     }
 
-    fn count_impl_debug(module: &Module, target: &str) -> usize {
-        module
-            .items
+    fn count_impl_debug(file: &Module, target: &str) -> usize {
+        file.items
             .iter()
             .filter(|item| match item {
                 Item::Impl(block) => debug_impl_target(block).as_deref() == Some(target),
@@ -560,7 +558,7 @@ mod tests {
 
     #[test]
     fn struct_with_fields_gets_synthesized_impl() {
-        let mut module = parse_module(
+        let mut file = parse_file(
             r#"
 struct User
   name: String
@@ -568,8 +566,8 @@ struct User
 end
 "#,
         );
-        derive_debug(&mut module);
-        assert_eq!(count_impl_debug(&module, "User"), 1);
+        derive_debug(&mut file);
+        assert_eq!(count_impl_debug(&file, "User"), 1);
     }
 
     #[test]
@@ -577,19 +575,19 @@ end
         // Opaque stdlib-style types like `struct List<T> end` get a
         // degraded format that returns just the type name, so other
         // structs holding `List<T>` fields can still call `.format()`.
-        let mut module = parse_module(
+        let mut file = parse_file(
             r#"
 struct Opaque<T>
 end
 "#,
         );
-        derive_debug(&mut module);
-        assert_eq!(count_impl_debug(&module, "Opaque"), 1);
+        derive_debug(&mut file);
+        assert_eq!(count_impl_debug(&file, "Opaque"), 1);
     }
 
     #[test]
     fn user_impl_takes_precedence() {
-        let mut module = parse_module(
+        let mut file = parse_file(
             r#"
 struct User
   name: String
@@ -602,13 +600,13 @@ impl Debug for User
 end
 "#,
         );
-        derive_debug(&mut module);
-        assert_eq!(count_impl_debug(&module, "User"), 1);
+        derive_debug(&mut file);
+        assert_eq!(count_impl_debug(&file, "User"), 1);
     }
 
     #[test]
     fn enum_with_all_variant_shapes_gets_synthesized_impl() {
-        let mut module = parse_module(
+        let mut file = parse_file(
             r#"
 enum Shape
   Point
@@ -617,20 +615,20 @@ enum Shape
 end
 "#,
         );
-        derive_debug(&mut module);
-        assert_eq!(count_impl_debug(&module, "Shape"), 1);
+        derive_debug(&mut file);
+        assert_eq!(count_impl_debug(&file, "Shape"), 1);
     }
 
     #[test]
     fn empty_enum_is_skipped() {
-        let mut module = parse_module(
+        let mut file = parse_file(
             r#"
 enum Empty<T>
 end
 "#,
         );
-        derive_debug(&mut module);
-        assert_eq!(count_impl_debug(&module, "Empty"), 0);
+        derive_debug(&mut file);
+        assert_eq!(count_impl_debug(&file, "Empty"), 0);
     }
 
     #[test]
@@ -639,7 +637,7 @@ end
         // typechecker rejects without a `T: Debug` bound. Until
         // impl-level bounds land, generics fall back to the
         // type-name-only body so callers still see a `format` method.
-        let mut module = parse_module(
+        let mut file = parse_file(
             r#"
 struct Pair<A, B>
   first: A
@@ -647,7 +645,7 @@ struct Pair<A, B>
 end
 "#,
         );
-        derive_debug(&mut module);
-        assert_eq!(count_impl_debug(&module, "Pair"), 1);
+        derive_debug(&mut file);
+        assert_eq!(count_impl_debug(&file, "Pair"), 1);
     }
 }

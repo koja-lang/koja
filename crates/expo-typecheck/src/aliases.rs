@@ -1,8 +1,8 @@
-//! Module-level `alias` declaration resolution.
+//! File-level `alias` declaration resolution.
 //!
 //! Validates each `alias` against the known package types, reports duplicate
 //! `local_name` entries, and inserts resolved aliases into the context's
-//! `type_aliases` and `module_aliases` maps so they participate in subsequent
+//! `type_aliases` and `file_aliases` maps so they participate in subsequent
 //! bare-name lookups.
 
 use std::collections::BTreeMap;
@@ -13,14 +13,14 @@ use expo_ast::span::Span;
 use crate::context::TypeContext;
 use crate::types::{Type, TypeIdentifier};
 
-/// Resolves `alias` declarations in a module, validating against known package
+/// Resolves `alias` declarations in a file, validating against known package
 /// types and inserting resolved aliases into `ctx.type_aliases` so they are
-/// visible during type checking of this module. Duplicate `local_name` entries
-/// within the same module are reported as errors so two `alias`es never
+/// visible during type checking of this file. Duplicate `local_name` entries
+/// within the same file are reported as errors so two `alias`es never
 /// silently shadow each other (e.g. `alias alpha.Config` + `alias beta.Config`).
-pub fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
+pub fn resolve_file_aliases(file: &Module, ctx: &mut TypeContext) {
     let mut seen: BTreeMap<String, Span> = BTreeMap::new();
-    for item in &module.items {
+    for item in &file.items {
         if let Item::Alias(a) = item {
             if a.path.len() != 2 {
                 ctx.error(
@@ -57,7 +57,7 @@ pub fn resolve_module_aliases(module: &Module, ctx: &mut TypeContext) {
                 identifier: TypeIdentifier::new(pkg, type_name),
                 type_args: vec![],
             };
-            ctx.module_aliases
+            ctx.file_aliases
                 .insert(a.local_name.clone(), resolved.clone());
             ctx.type_aliases.insert(a.local_name.clone(), resolved);
         }

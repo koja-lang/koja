@@ -17,63 +17,59 @@ use std::collections::BTreeSet;
 use context::TypeContext;
 use expo_ast::ast::Module;
 
-pub use aliases::resolve_module_aliases;
+pub use aliases::resolve_file_aliases;
 pub use collect::{GlobalNames, collect_all_names};
 pub use types::{Package, fqn_to_package, package_for_path, package_from_str};
 
 /// Runs collection and type-checking in one step, returning a populated context.
-/// Uses module-local names only (for single-file / test usage). The module's
-/// file stem is used as the synthetic package name so bare-name lookups have
-/// a deterministic scope.
+/// Uses file-local names only (for single-file / test usage). The file's
+/// on-disk stem is used as the synthetic package name so bare-name lookups
+/// have a deterministic scope.
 ///
 /// Deliberately bypasses [`synthesize`]: the auto-derived `Debug` bodies
 /// reference `IO` (from `std`), which isn't loaded in single-file test
-/// usage. Production callers go through [`collect_module`] and get
+/// usage. Production callers go through [`collect_file`] and get
 /// synthesis as a side effect; this single-file helper does not.
-pub fn check(module: &mut Module) -> TypeContext {
-    let package = types::package_for_path(module.path.as_deref(), "__test__");
+pub fn check(file: &mut Module) -> TypeContext {
+    let package = types::package_for_path(file.path.as_deref(), "__test__");
     let packages = BTreeSet::from([Package::Std, package_from_str(&package)]);
-    let global = collect_all_names(&[module], packages);
-    let mut ctx = collect::collect(module, &global, &package);
+    let global = collect_all_names(&[file], packages);
+    let mut ctx = collect::collect(file, &global, &package);
     resolve::resolve_packages(&mut ctx);
-    check::check_module(module, &mut ctx, &package);
-    validate::validate_resolved_types(module, &mut ctx);
+    check::check_file(file, &mut ctx, &package);
+    validate::validate_resolved_types(file, &mut ctx);
     ctx
 }
 
 /// Validates all function bodies, expressions, and patterns against the context.
 ///
-/// `package` is the module's package identifier (e.g. `"std"`, `"alpha"`, or
+/// `package` is the file's package identifier (e.g. `"std"`, `"alpha"`, or
 /// a synthetic file-stem-based name). Bare-name type references inside the
-/// module are resolved within this package first before falling back to
+/// file are resolved within this package first before falling back to
 /// globals.
-pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
-    check::check_module(module, ctx, package);
+pub fn check_file(file: &mut Module, ctx: &mut TypeContext, package: &str) {
+    check::check_file(file, ctx, package);
 }
 
 /// Walks the AST to collect type signatures for functions, structs, and enums.
-/// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-module
+/// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-file
 /// type references resolve correctly on the first pass.
-/// The `package` identifies which package the module belongs to (e.g. `"std"`,
+/// The `package` identifies which package the file belongs to (e.g. `"std"`,
 /// `"json"`, or the project name from `expo.toml`).
 ///
 /// Runs the [`synthesize`] sub-pass first (today: auto-derive `Debug` impls
 /// for every struct/enum that doesn't have one), then walks the resulting
 /// AST. The mutation is why the parameter is `&mut Module` -- callers should
 /// expect the AST to gain synthesized items after this returns.
-pub fn collect_module(
-    module: &mut Module,
-    global_names: &GlobalNames,
-    package: &str,
-) -> TypeContext {
-    synthesize::derive_debug(module);
-    collect::collect(module, global_names, package)
+pub fn collect_file(file: &mut Module, global_names: &GlobalNames, package: &str) -> TypeContext {
+    synthesize::derive_debug(file);
+    collect::collect(file, global_names, package)
 }
 
 /// Synthesizes default protocol methods for impls whose protocols were unknown
 /// during initial collection (e.g. after merging stdlib context).
-pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, package: &str) {
-    collect::synthesize_protocol_defaults(module, ctx, package);
+pub fn synthesize_protocol_defaults(file: &Module, ctx: &mut TypeContext, package: &str) {
+    collect::synthesize_protocol_defaults(file, ctx, package);
 }
 
 /// Detects recursive struct/enum fields and wraps them in [`types::Type::Indirect`]
@@ -89,12 +85,12 @@ pub fn resolve_packages(ctx: &mut TypeContext) {
     resolve::resolve_packages(ctx);
 }
 
-/// Walks every expression in the module and emits an error for any
+/// Walks every expression in the file and emits an error for any
 /// `expr.resolved_type` that still carries `Package::Unresolved`. Call after
-/// [`check_module`] to enforce the invariant that all types reaching codegen
+/// [`check_file`] to enforce the invariant that all types reaching codegen
 /// are fully package-resolved.
-pub fn validate_resolved_types(module: &Module, ctx: &mut TypeContext) {
-    validate::validate_resolved_types(module, ctx);
+pub fn validate_resolved_types(file: &Module, ctx: &mut TypeContext) {
+    validate::validate_resolved_types(file, ctx);
 }
 
 #[cfg(test)]

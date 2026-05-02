@@ -1841,7 +1841,7 @@ fn infer_closure(
 
     let captured = collect_captures(&closure_env, &parent_var_names, &param_names, ce, span);
 
-    let site = (ctx.current_module_path.clone(), span);
+    let site = (ctx.current_file_path.clone(), span);
     ctx.closure_info.insert(
         site,
         ClosureInfo {
@@ -1899,7 +1899,7 @@ fn infer_short_closure(
 
     let captured = collect_captures(&closure_env, &parent_var_names, &param_names, ce, span);
 
-    let site = (ctx.current_module_path.clone(), span);
+    let site = (ctx.current_file_path.clone(), span);
     ctx.closure_info.insert(
         site,
         ClosureInfo {

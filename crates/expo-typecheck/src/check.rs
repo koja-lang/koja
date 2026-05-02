@@ -1,8 +1,9 @@
-//! Module and function-level type checking entry points.
+//! File and function-level type checking entry points.
 //!
-//! Contains [`check_module`], the public entry point that walks all function
+//! Contains [`check_file`], the public entry point that walks all function
 //! bodies and impl blocks, plus shared helper functions used across the
-//! type-checking modules.
+//! type-checking modules. (Here "modules" means Rust modules -- the Expo
+//! language has no module concept, only files within packages.)
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -108,17 +109,17 @@ fn classify_specialized_impl_target(
     Some((path[0].clone(), concrete_args))
 }
 
-/// Type-checks all function bodies and impl blocks in a module, emitting
+/// Type-checks all function bodies and impl blocks in a file, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
 ///
-/// `package` identifies which package the module belongs to (e.g. `"std"`,
+/// `package` identifies which package the file belongs to (e.g. `"std"`,
 /// `"alpha"`, or a synthetic name like `"__test__"` derived from the file
 /// stem). It is installed as the context's ambient scope so that bare-name
-/// type lookups prefer the module's own package over colliding definitions
+/// type lookups prefer the file's own package over colliding definitions
 /// in other packages.
-pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
-    let prev_path = ctx.current_module_path.clone();
-    ctx.current_module_path = module.path.clone();
+pub fn check_file(file: &mut Module, ctx: &mut TypeContext, package: &str) {
+    let prev_path = ctx.current_file_path.clone();
+    ctx.current_file_path = file.path.clone();
     let prev_package = ctx.current_package.clone();
     ctx.current_package = Some(package_from_str(package));
 
@@ -127,7 +128,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
     let enum_names = ctx.enum_names();
     let enum_name_refs: Vec<&str> = enum_names.iter().map(|s| s.as_str()).collect();
 
-    for item in &mut module.items {
+    for item in &mut file.items {
         match item {
             Item::Function(f) => {
                 if f.type_params.is_empty() {
@@ -172,7 +173,7 @@ pub fn check_module(module: &mut Module, ctx: &mut TypeContext, package: &str) {
     }
 
     ctx.current_package = prev_package;
-    ctx.current_module_path = prev_path;
+    ctx.current_file_path = prev_path;
 }
 
 /// Type-checks inline functions defined inside a struct or enum body.
@@ -372,7 +373,7 @@ fn check_function(
 }
 
 /// Looks up the already-collected [`FunctionSig`] for a function. Methods are
-/// found via the enclosing type's `TypeInfo`; module-level functions live in
+/// found via the enclosing type's `TypeInfo`; top-level functions live in
 /// `ctx.functions`. When `specialized_args` is provided, the per-
 /// specialization signatures in `ctx.specialized_methods` are consulted
 /// first so `impl Foo<Int>` methods resolve to their concrete sigs rather

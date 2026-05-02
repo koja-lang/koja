@@ -90,12 +90,12 @@ pub fn typecheck_graph(
         graph.order.iter().partition(|n| is_stdlib(n));
 
     // Auto-imported std modules: merge into stdlib_ctx directly.
-    // `collect_module` now runs the synthesize sub-pass internally
+    // `collect_file` now runs the synthesize sub-pass internally
     // (auto-derives `impl Debug for T`), so the AST gains synthesized
     // items as a side effect.
     for name in &stdlib_names {
         let rm = graph.modules.get_mut(*name).expect("module present");
-        let mut ctx = expo_typecheck::collect_module(&mut rm.module, &global_names, "std");
+        let mut ctx = expo_typecheck::collect_file(&mut rm.module, &global_names, "std");
         ctx.merge(&stdlib_ctx);
 
         stdlib_ctx.merge(&ctx);
@@ -106,12 +106,12 @@ pub fn typecheck_graph(
     for name in &project_names {
         let rm = graph.modules.get_mut(*name).expect("module present");
         let pkg = fqn_to_package(name);
-        let mut ctx = expo_typecheck::collect_module(&mut rm.module, &global_names, pkg);
+        let mut ctx = expo_typecheck::collect_file(&mut rm.module, &global_names, pkg);
         ctx.merge(&stdlib_ctx);
         // Other stdlib protocols (today: `Process` with `run` /
         // `handle_signal`) still rely on default-method synthesis for
         // user impls. `Debug` is auto-derived by the synthesize
-        // sub-pass inside `collect_module` and never touches this
+        // sub-pass inside `collect_file` and never touches this
         // codepath.
         expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx, pkg);
         expo_typecheck::mark_recursive_fields(&mut ctx);
@@ -136,9 +136,9 @@ pub fn typecheck_graph(
         ctx.merge(&unified_project_ctx);
         let rm = graph.modules.get_mut(&name).unwrap();
         let pkg = fqn_to_package(&name);
-        expo_typecheck::resolve_module_aliases(&rm.module, &mut ctx);
+        expo_typecheck::resolve_file_aliases(&rm.module, &mut ctx);
         expo_typecheck::resolve_packages(&mut ctx);
-        expo_typecheck::check_module(&mut rm.module, &mut ctx, pkg);
+        expo_typecheck::check_file(&mut rm.module, &mut ctx, pkg);
         expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
         module_contexts.insert(name, ctx);
     }

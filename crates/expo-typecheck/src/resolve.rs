@@ -7,7 +7,7 @@ use crate::types::{Package, Type, TypeIdentifier};
 /// identifiers with the real package found in the type registry's map keys.
 ///
 /// Must be called after collection and merging, before checking. At that point
-/// the map keys carry real packages (set by `collect_module`) while most
+/// the map keys carry real packages (set by `collect_file`) while most
 /// `Type::Named` identifiers still carry `Package::Unresolved` from the type
 /// expression resolver. This pass bridges that gap.
 ///
@@ -23,10 +23,10 @@ pub fn resolve_packages(ctx: &mut TypeContext) {
             index.insert(id.name.clone(), id.clone());
         }
     }
-    // Aliases let a module use a short local name for a type owned by another
+    // Aliases let a file use a short local name for a type owned by another
     // package (`alias json.StringBuilder` → `StringBuilder` ↦ `json.StringBuilder`).
     // Seed the resolution index with each alias so collected signatures whose
-    // bodies were never type-checked (embedded stdlib/lib modules) can still
+    // bodies were never type-checked (embedded stdlib/lib files) can still
     // upgrade their `Package::Unresolved` references to the right package.
     for (local_name, ty) in &ctx.type_aliases {
         if index.contains_key(local_name) {
@@ -59,7 +59,7 @@ pub fn resolve_packages(ctx: &mut TypeContext) {
         resolve_type(ty, &index);
     }
 
-    for ty in ctx.module_aliases.values_mut() {
+    for ty in ctx.file_aliases.values_mut() {
         resolve_type(ty, &index);
     }
 

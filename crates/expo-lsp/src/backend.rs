@@ -75,7 +75,7 @@ impl Backend {
         // package "std". Qualified modules (json, net, etc.) use their
         // package name as the identifier, making them accessible via
         // ctx.is_package_type() for alias resolution.
-        // `collect_module` is `&mut` because it runs the synthesize
+        // `collect_file` is `&mut` because it runs the synthesize
         // sub-pass internally (auto-derives `impl Debug`).
         for (i, module) in stdlib_modules.iter_mut().enumerate() {
             let name = source_names[i];
@@ -84,7 +84,7 @@ impl Backend {
             } else {
                 fqn_to_package(name)
             };
-            let mut mod_ctx = expo_typecheck::collect_module(module, &global_names, pkg);
+            let mut mod_ctx = expo_typecheck::collect_file(module, &global_names, pkg);
             mod_ctx.merge(&ctx);
             ctx.merge(&mod_ctx);
         }
