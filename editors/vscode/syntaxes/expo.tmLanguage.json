@@ -8,12 +8,12 @@
     { "include": "#numbers" },
     { "include": "#annotations" },
     { "include": "#function-definition" },
-    { "include": "#module-qualified-call" },
+    { "include": "#package-qualified-call" },
     { "include": "#function-call" },
     { "include": "#keywords" },
     { "include": "#operators" },
     { "include": "#primitive-types" },
-    { "include": "#module-constants" },
+    { "include": "#package-constants" },
     { "include": "#types" },
     { "include": "#import-path" },
     { "include": "#typed-assignment" },
@@ -214,7 +214,7 @@
         }
       ]
     },
-    "module-constants": {
+    "package-constants": {
       "patterns": [
         {
           "name": "constant.other.expo",
@@ -243,7 +243,7 @@
         }
       ]
     },
-    "module-qualified-call": {
+    "package-qualified-call": {
       "patterns": [
         {
           "match": "\\b([a-z_][a-z0-9_]*)\\.([a-z_][a-z0-9_]*\\??)\\s*(?:<[^>]*>)?\\s*(?=\\()",

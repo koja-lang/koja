@@ -19,10 +19,10 @@ use expo_typecheck::types::{Package, fqn_to_package};
 /// Cached state for a single open document, including the parsed AST
 /// and type-checking context.
 pub(crate) struct DocumentState {
-    pub(crate) module: Module,
+    pub(crate) file: Module,
     pub(crate) ctx: TypeContext,
     pub(crate) source: String,
-    pub(crate) project_modules: Vec<Module>,
+    pub(crate) project_files: Vec<Module>,
 }
 
 /// The Expo language server backend.
@@ -32,9 +32,9 @@ pub(crate) struct DocumentState {
 pub struct Backend {
     pub(crate) client: Client,
     pub(crate) documents: Arc<RwLock<HashMap<String, DocumentState>>>,
-    pub(crate) project_modules: Arc<RwLock<Vec<Module>>>,
+    pub(crate) project_files: Arc<RwLock<Vec<Module>>>,
     pub(crate) stdlib_ctx: TypeContext,
-    pub(crate) stdlib_modules: Vec<Module>,
+    pub(crate) stdlib_files: Vec<Module>,
 }
 
 impl std::fmt::Debug for Backend {
@@ -50,19 +50,19 @@ impl std::fmt::Debug for DocumentState {
 }
 
 impl Backend {
-    /// Creates a new backend, pre-loading all stdlib modules.
+    /// Creates a new backend, pre-loading all stdlib files.
     pub fn new(client: Client) -> Self {
         let mut ctx = expo_typecheck::context::TypeContext::new();
-        let mut stdlib_modules = Vec::new();
+        let mut stdlib_files = Vec::new();
         let mut source_names = Vec::new();
 
         for &(name, source) in expo_stdlib::SOURCES {
             let parsed = expo_parser::parse(source);
             source_names.push(name);
-            stdlib_modules.push(parsed.module);
+            stdlib_files.push(parsed.module);
         }
 
-        let stdlib_refs: Vec<&Module> = stdlib_modules.iter().collect();
+        let stdlib_refs: Vec<&Module> = stdlib_files.iter().collect();
         let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Std]);
         for name in &source_names {
             if !name.starts_with("std.") {
@@ -71,20 +71,20 @@ impl Backend {
         }
         let global_names = expo_typecheck::collect_all_names(&stdlib_refs, known_packages);
 
-        // Collect all stdlib modules. Auto-imported modules (std.*) use
-        // package "std". Qualified modules (json, net, etc.) use their
+        // Collect all stdlib files. Auto-imported files (std.*) use
+        // package "std". Qualified files (json, net, etc.) use their
         // package name as the identifier, making them accessible via
         // ctx.is_package_type() for alias resolution.
         // `collect_file` is `&mut` because it runs the synthesize
         // sub-pass internally (auto-derives `impl Debug`).
-        for (i, module) in stdlib_modules.iter_mut().enumerate() {
+        for (i, file) in stdlib_files.iter_mut().enumerate() {
             let name = source_names[i];
             let pkg = if name.starts_with("std.") {
                 "std"
             } else {
                 fqn_to_package(name)
             };
-            let mut mod_ctx = expo_typecheck::collect_file(module, &global_names, pkg);
+            let mut mod_ctx = expo_typecheck::collect_file(file, &global_names, pkg);
             mod_ctx.merge(&ctx);
             ctx.merge(&mod_ctx);
         }
@@ -94,9 +94,9 @@ impl Backend {
         Self {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
-            project_modules: Arc::new(RwLock::new(Vec::new())),
+            project_files: Arc::new(RwLock::new(Vec::new())),
             stdlib_ctx: ctx,
-            stdlib_modules,
+            stdlib_files,
         }
     }
 }

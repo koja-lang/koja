@@ -14,10 +14,10 @@ use crate::backend::Backend;
 use crate::convert::{path_to_uri, span_to_range};
 use crate::lookup::{self, SymbolInfo};
 
-/// Searches a module's items for the definition of `name`, returning
+/// Searches a file's items for the definition of `name`, returning
 /// its span if found.
-fn find_definition_in_module(module: &Module, name: &str) -> Option<Span> {
-    for item in &module.items {
+fn find_definition_in_file(file: &Module, name: &str) -> Option<Span> {
+    for item in &file.items {
         match item {
             Item::Alias(a) if a.local_name == name => return Some(a.span),
             Item::Function(f) if f.name == name => return Some(f.span),
@@ -86,7 +86,7 @@ impl Backend {
             None => return Ok(None),
         };
 
-        let symbol = match lookup::find_symbol_at(&state.module, line, col, &state.ctx) {
+        let symbol = match lookup::find_symbol_at(&state.file, line, col, &state.ctx) {
             Some(s) => s,
             None => return Ok(None),
         };
@@ -101,16 +101,16 @@ impl Backend {
             SymbolInfo::Variable { .. } => return Ok(None),
         };
 
-        if let Some(span) = find_definition_in_module(&state.module, name) {
+        if let Some(span) = find_definition_in_file(&state.file, name) {
             return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                 uri: uri.clone(),
                 range: span_to_range(&span),
             })));
         }
 
-        for module in &state.project_modules {
-            if let Some(span) = find_definition_in_module(module, name) {
-                let target_uri = module
+        for file in &state.project_files {
+            if let Some(span) = find_definition_in_file(file, name) {
+                let target_uri = file
                     .path
                     .as_deref()
                     .and_then(path_to_uri)
@@ -122,9 +122,9 @@ impl Backend {
             }
         }
 
-        for module in &self.stdlib_modules {
-            if let Some(span) = find_definition_in_module(module, name) {
-                let target_uri = module
+        for file in &self.stdlib_files {
+            if let Some(span) = find_definition_in_file(file, name) {
+                let target_uri = file
                     .path
                     .as_deref()
                     .and_then(path_to_uri)

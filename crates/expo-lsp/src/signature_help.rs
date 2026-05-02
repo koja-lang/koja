@@ -33,7 +33,7 @@ impl Backend {
 
         let line = pos.line + 1;
         let col = pos.character + 1;
-        let call_site = match find_enclosing_call(&state.module, line, col) {
+        let call_site = match find_enclosing_call(&state.file, line, col) {
             Some(c) => c,
             None => return Ok(None),
         };

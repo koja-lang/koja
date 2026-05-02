@@ -40,7 +40,7 @@ impl Backend {
 
         let line = pos.line + 1;
         let col = pos.character + 1;
-        if let Some(expr) = find_expr_at(&state.module, line, col)
+        if let Some(expr) = find_expr_at(&state.file, line, col)
             && let ExprKind::FieldAccess { receiver, .. } = &expr.kind
         {
             let (type_name, is_static) = resolve_dot_type(receiver, &state.ctx);

@@ -4,7 +4,7 @@
 //! of an open document into a hierarchical list of [`DocumentSymbol`]s,
 //! powering the editor's outline view, breadcrumbs, and `Cmd+Shift+O`.
 //!
-//! **Workspace symbols** (`workspace/symbol`): searches all project modules
+//! **Workspace symbols** (`workspace/symbol`): searches all project files
 //! for symbols matching a query string, powering `Cmd+T` / `#` search.
 
 use tower_lsp_server::jsonrpc::Result;
@@ -69,11 +69,11 @@ impl Backend {
             None => return Ok(None),
         };
 
-        let symbols = build_document_symbols(&state.module);
+        let symbols = build_document_symbols(&state.file);
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
-    /// Handles `workspace/symbol` requests by searching all project modules
+    /// Handles `workspace/symbol` requests by searching all project files
     /// and open documents for symbols matching the query.
     pub(crate) async fn handle_workspace_symbol(
         &self,
@@ -82,24 +82,24 @@ impl Backend {
         let query = params.query.to_ascii_lowercase();
         let mut results = Vec::new();
 
-        let project_mods = self.project_modules.read().await;
-        for module in project_mods.iter() {
-            collect_workspace_symbols(module, &query, &mut results);
+        let project_files = self.project_files.read().await;
+        for file in project_files.iter() {
+            collect_workspace_symbols(file, &query, &mut results);
         }
 
         let docs = self.documents.read().await;
         for state in docs.values() {
-            collect_workspace_symbols(&state.module, &query, &mut results);
+            collect_workspace_symbols(&state.file, &query, &mut results);
         }
 
         Ok(Some(WorkspaceSymbolResponse::Flat(results)))
     }
 }
 
-/// Collects workspace symbols from a module, filtering by query substring.
+/// Collects workspace symbols from a file, filtering by query substring.
 #[allow(deprecated)]
-fn collect_workspace_symbols(module: &Module, query: &str, results: &mut Vec<SymbolInformation>) {
-    let uri = module.path.as_deref().and_then(path_to_uri);
+fn collect_workspace_symbols(file: &Module, query: &str, results: &mut Vec<SymbolInformation>) {
+    let uri = file.path.as_deref().and_then(path_to_uri);
     let uri = match uri {
         Some(u) => u,
         None => return,
@@ -107,7 +107,7 @@ fn collect_workspace_symbols(module: &Module, query: &str, results: &mut Vec<Sym
 
     let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
 
-    for item in &module.items {
+    for item in &file.items {
         match item {
             Item::Alias(_) => {}
             Item::Function(f) => {
@@ -255,11 +255,11 @@ fn collect_workspace_symbols(module: &Module, query: &str, results: &mut Vec<Sym
     }
 }
 
-/// Converts a parsed module's top-level items into document symbols.
-fn build_document_symbols(module: &Module) -> Vec<DocumentSymbol> {
+/// Converts a parsed file's top-level items into document symbols.
+fn build_document_symbols(file: &Module) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
 
-    for item in &module.items {
+    for item in &file.items {
         match item {
             Item::Alias(_) => {}
             Item::Function(f) => symbols.push(function_symbol(f)),

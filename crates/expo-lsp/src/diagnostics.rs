@@ -43,10 +43,10 @@ fn default_src() -> Vec<String> {
     vec!["src".to_string()]
 }
 
-/// Derives a synthetic package name for an LSP-owned module from its on-disk
+/// Derives a synthetic package name for an LSP-owned file from its on-disk
 /// path. Untitled buffers (no path) fall back to `"__lsp_preview__"` so every
 /// call site passes a real, non-empty package to the type checker.
-fn package_for_module(path: Option<&Path>) -> String {
+fn package_for_file(path: Option<&Path>) -> String {
     package_for_path(path, "__lsp_preview__")
 }
 
@@ -88,16 +88,13 @@ fn read_project_name(project_root: &Path) -> Option<String> {
 }
 
 /// Parses all project source files (excluding `current_path`) and returns
-/// each module paired with its owning package name (from the project's
+/// each parsed file paired with its owning package name (from the project's
 /// `expo.toml`). Also scans local-path dependencies, using each dep's own
-/// `[project] name` for its modules. Enforces the duplicate-package-name
+/// `[project] name` for its files. Enforces the duplicate-package-name
 /// rule (project + implicit `std` + each dep): on collision, returns the
-/// modules collected so far without descending into the offending dep, so
+/// files collected so far without descending into the offending dep, so
 /// the driver-level error eventually surfaces in the editor as well.
-fn parse_sibling_modules(
-    project_root: &Path,
-    current_path: Option<&Path>,
-) -> Vec<(Module, String)> {
+fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<(Module, String)> {
     let toml_path = project_root.join("expo.toml");
     let source = match fs::read_to_string(&toml_path) {
         Ok(s) => s,
@@ -108,27 +105,27 @@ fn parse_sibling_modules(
         Err(_) => return Vec::new(),
     };
 
-    let mut modules: Vec<(Module, String)> = Vec::new();
+    let mut files: Vec<(Module, String)> = Vec::new();
 
     let scan_roots =
-        |src_dirs: &[String], root: &Path, pkg: &str, mods: &mut Vec<(Module, String)>| {
+        |src_dirs: &[String], root: &Path, pkg: &str, out: &mut Vec<(Module, String)>| {
             for src in src_dirs {
                 let dir = root.join(src);
                 if dir.is_dir() {
-                    for file in collect_expo_files(&dir) {
-                        if current_path.is_some_and(|cp| same_file(&file, cp)) {
+                    for file_path in collect_expo_files(&dir) {
+                        if current_path.is_some_and(|cp| same_file(&file_path, cp)) {
                             continue;
                         }
-                        if let Ok(text) = fs::read_to_string(&file) {
+                        if let Ok(text) = fs::read_to_string(&file_path) {
                             let pr = expo_parser::parse(&text);
                             if pr
                                 .errors
                                 .iter()
                                 .all(|d| !matches!(d.severity, ExpoSeverity::Error))
                             {
-                                let mut module = pr.module;
-                                module.path = Some(file.clone());
-                                mods.push((module, pkg.to_string()));
+                                let mut file = pr.module;
+                                file.path = Some(file_path.clone());
+                                out.push((file, pkg.to_string()));
                             }
                         }
                     }
@@ -143,12 +140,7 @@ fn parse_sibling_modules(
         seen_pkgs.insert("std".to_string());
     }
 
-    scan_roots(
-        &parsed.project.src,
-        project_root,
-        &project_pkg,
-        &mut modules,
-    );
+    scan_roots(&parsed.project.src, project_root, &project_pkg, &mut files);
 
     for dep in parsed.dependencies.values() {
         if let Some(ref rel) = dep.path {
@@ -164,12 +156,12 @@ fn parse_sibling_modules(
                     // project still type-checks.
                     continue;
                 }
-                scan_roots(&dep_toml.project.src, &dep_root, &dep_pkg, &mut modules);
+                scan_roots(&dep_toml.project.src, &dep_root, &dep_pkg, &mut files);
             }
         }
     }
 
-    modules
+    files
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -192,7 +184,7 @@ impl Backend {
 
         let mut all_diags: Vec<ExpoDiagnostic> = parse_result.errors;
 
-        let (ctx, project_modules) = if all_diags
+        let (ctx, project_files) = if all_diags
             .iter()
             .all(|d| !matches!(d.severity, ExpoSeverity::Error))
         {
@@ -201,13 +193,13 @@ impl Backend {
                 .and_then(|p| p.parent())
                 .and_then(find_project_root);
 
-            let mut sibling_modules: Vec<(Module, String)> = match (&project_root, &file_path) {
-                (Some(root), Some(fp)) => parse_sibling_modules(root, Some(fp)),
+            let mut sibling_files: Vec<(Module, String)> = match (&project_root, &file_path) {
+                (Some(root), Some(fp)) => parse_sibling_files(root, Some(fp)),
                 _ => Vec::new(),
             };
 
-            let mut all_for_names: Vec<&Module> = self.stdlib_modules.iter().collect();
-            for (m, _) in &sibling_modules {
+            let mut all_for_names: Vec<&Module> = self.stdlib_files.iter().collect();
+            for (m, _) in &sibling_files {
                 all_for_names.push(m);
             }
             all_for_names.push(&parse_result.module);
@@ -215,9 +207,9 @@ impl Backend {
             let current_pkg = project_root
                 .as_deref()
                 .and_then(read_project_name)
-                .unwrap_or_else(|| package_for_module(file_path.as_deref()));
+                .unwrap_or_else(|| package_for_file(file_path.as_deref()));
             let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Std]);
-            for (_, sibling_pkg) in &sibling_modules {
+            for (_, sibling_pkg) in &sibling_files {
                 known_packages.insert(package_from_str(sibling_pkg));
             }
             known_packages.insert(package_from_str(&current_pkg));
@@ -226,7 +218,7 @@ impl Backend {
             // `collect_file` is `&mut` because the synthesize sub-pass
             // (auto-derive `Debug`) runs inside it and mutates the AST.
             let mut unified_ctx = self.stdlib_ctx.clone();
-            for (m, sibling_pkg) in &mut sibling_modules {
+            for (m, sibling_pkg) in &mut sibling_files {
                 let mod_ctx = expo_typecheck::collect_file(m, &global_names, sibling_pkg);
                 unified_ctx.merge(&mod_ctx);
             }
@@ -244,29 +236,29 @@ impl Backend {
             expo_typecheck::resolve_packages(&mut ctx);
             expo_typecheck::check_file(&mut parse_result.module, &mut ctx, &current_pkg);
             all_diags.extend(ctx.diagnostics.clone());
-            let stored_modules: Vec<Module> = sibling_modules.into_iter().map(|(m, _)| m).collect();
-            (ctx, stored_modules)
+            let stored_files: Vec<Module> = sibling_files.into_iter().map(|(m, _)| m).collect();
+            (ctx, stored_files)
         } else {
             (TypeContext::new(), Vec::new())
         };
 
         {
-            let mut module = parse_result.module;
-            module.path = file_path;
+            let mut file = parse_result.module;
+            file.path = file_path;
 
-            if !project_modules.is_empty() {
-                let mut pm = self.project_modules.write().await;
-                *pm = project_modules.clone();
+            if !project_files.is_empty() {
+                let mut pf = self.project_files.write().await;
+                *pf = project_files.clone();
             }
 
             let mut docs = self.documents.write().await;
             docs.insert(
                 uri.as_str().to_string(),
                 DocumentState {
-                    module,
+                    file,
                     ctx,
                     source: text.to_string(),
-                    project_modules,
+                    project_files,
                 },
             );
         }

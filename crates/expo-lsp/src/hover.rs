@@ -1,7 +1,7 @@
 //! Hover information provider for the Expo LSP.
 //!
 //! Builds rich hover content (signatures and doc comments) for functions,
-//! structs, enums, constants, modules, and variables.
+//! structs, enums, constants, protocols, type aliases, and variables.
 
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
@@ -29,25 +29,19 @@ impl Backend {
             None => return Ok(None),
         };
 
-        let symbol = match lookup::find_symbol_at(&state.module, line, col, &state.ctx) {
+        let symbol = match lookup::find_symbol_at(&state.file, line, col, &state.ctx) {
             Some(s) => s,
             None => return Ok(None),
         };
 
         let hover_text = match &symbol {
-            SymbolInfo::Function { name } => {
-                build_function_hover(name, state, &self.stdlib_modules)
-            }
-            SymbolInfo::Struct { name } => build_struct_hover(name, state, &self.stdlib_modules),
-            SymbolInfo::Constant { name } => {
-                build_constant_hover(name, state, &self.stdlib_modules)
-            }
-            SymbolInfo::Enum { name } => build_enum_hover(name, state, &self.stdlib_modules),
-            SymbolInfo::Protocol { name } => {
-                build_protocol_hover(name, state, &self.stdlib_modules)
-            }
+            SymbolInfo::Function { name } => build_function_hover(name, state, &self.stdlib_files),
+            SymbolInfo::Struct { name } => build_struct_hover(name, state, &self.stdlib_files),
+            SymbolInfo::Constant { name } => build_constant_hover(name, state, &self.stdlib_files),
+            SymbolInfo::Enum { name } => build_enum_hover(name, state, &self.stdlib_files),
+            SymbolInfo::Protocol { name } => build_protocol_hover(name, state, &self.stdlib_files),
             SymbolInfo::TypeAlias { name } => {
-                build_type_alias_hover(name, state, &self.stdlib_modules)
+                build_type_alias_hover(name, state, &self.stdlib_files)
             }
             SymbolInfo::Variable { name, type_display } => {
                 let sig = match type_display {
@@ -71,18 +65,18 @@ impl Backend {
     }
 }
 
-/// Resolves a doc comment for `name` from the local module, sibling
-/// project modules, or stdlib.
-fn resolve_doc(name: &str, state: &DocumentState, stdlib_modules: &[Module]) -> Option<String> {
-    lookup::find_doc_for(&state.module, name)
+/// Resolves a doc comment for `name` from the local file, sibling
+/// project files, or stdlib.
+fn resolve_doc(name: &str, state: &DocumentState, stdlib_files: &[Module]) -> Option<String> {
+    lookup::find_doc_for(&state.file, name)
         .or_else(|| {
             state
-                .project_modules
+                .project_files
                 .iter()
                 .find_map(|m| lookup::find_doc_for(m, name))
         })
         .or_else(|| {
-            stdlib_modules
+            stdlib_files
                 .iter()
                 .find_map(|m| lookup::find_doc_for(m, name))
         })
@@ -91,7 +85,7 @@ fn resolve_doc(name: &str, state: &DocumentState, stdlib_modules: &[Module]) -> 
 fn build_function_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_modules: &[Module],
+    stdlib_files: &[Module],
 ) -> Option<String> {
     let sig = state.ctx.functions.get(name)?;
     let params_str: Vec<String> = sig
@@ -124,14 +118,14 @@ fn build_function_hover(
         params_str.join(", "),
         sig.return_type.display()
     );
-    let doc = resolve_doc(name, state, stdlib_modules);
+    let doc = resolve_doc(name, state, stdlib_files);
     Some(format_hover(&signature, doc.as_deref()))
 }
 
 fn build_struct_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_modules: &[Module],
+    stdlib_files: &[Module],
 ) -> Option<String> {
     let info = state.ctx.find_type(name)?;
     let fields: Vec<String> = info
@@ -152,14 +146,14 @@ fn build_struct_hover(
         )
     };
     let signature = format!("struct {}{}\n{}\nend", name, tp, fields.join("\n"));
-    let doc = resolve_doc(name, state, stdlib_modules);
+    let doc = resolve_doc(name, state, stdlib_files);
     Some(format_hover(&signature, doc.as_deref()))
 }
 
 fn build_constant_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_modules: &[Module],
+    stdlib_files: &[Module],
 ) -> Option<String> {
     let const_id = TypeIdentifier {
         package: state.ctx.current_package.clone()?,
@@ -167,15 +161,11 @@ fn build_constant_hover(
     };
     let ty = state.ctx.constants.get(&const_id)?;
     let signature = format!("const {}: {}", name, ty.display());
-    let doc = resolve_doc(name, state, stdlib_modules);
+    let doc = resolve_doc(name, state, stdlib_files);
     Some(format_hover(&signature, doc.as_deref()))
 }
 
-fn build_enum_hover(
-    name: &str,
-    state: &DocumentState,
-    stdlib_modules: &[Module],
-) -> Option<String> {
+fn build_enum_hover(name: &str, state: &DocumentState, stdlib_files: &[Module]) -> Option<String> {
     let info = state.ctx.find_type(name)?;
     let variants: Vec<String> = info
         .variants()?
@@ -196,14 +186,14 @@ fn build_enum_hover(
         })
         .collect();
     let signature = format!("enum {}\n{}\nend", name, variants.join("\n"));
-    let doc = resolve_doc(name, state, stdlib_modules);
+    let doc = resolve_doc(name, state, stdlib_files);
     Some(format_hover(&signature, doc.as_deref()))
 }
 
 fn build_protocol_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_modules: &[Module],
+    stdlib_files: &[Module],
 ) -> Option<String> {
     let info = state.ctx.protocols.get(name)?;
     let tp = if info.type_params.is_empty() {
@@ -236,18 +226,18 @@ fn build_protocol_hover(
         })
         .collect();
     let signature = format!("protocol {}{}\n{}\nend", name, tp, methods.join("\n"));
-    let doc = resolve_doc(name, state, stdlib_modules);
+    let doc = resolve_doc(name, state, stdlib_files);
     Some(format_hover(&signature, doc.as_deref()))
 }
 
 fn build_type_alias_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_modules: &[Module],
+    stdlib_files: &[Module],
 ) -> Option<String> {
     let ty = state.ctx.type_aliases.get(name)?;
     let signature = format!("type {} = {}", name, ty.display());
-    let doc = resolve_doc(name, state, stdlib_modules);
+    let doc = resolve_doc(name, state, stdlib_files);
     Some(format_hover(&signature, doc.as_deref()))
 }
 

@@ -27,8 +27,8 @@ impl Backend {
         };
 
         let mut ranges = Vec::new();
-        collect_item_folds(&state.module, &mut ranges);
-        collect_comment_folds(&state.module.comments, &mut ranges);
+        collect_item_folds(&state.file, &mut ranges);
+        collect_comment_folds(&state.file.comments, &mut ranges);
         Ok(Some(ranges))
     }
 }
@@ -49,8 +49,8 @@ fn span_fold(span: &Span, kind: Option<FoldingRangeKind>) -> Option<FoldingRange
     })
 }
 
-fn collect_item_folds(module: &Module, ranges: &mut Vec<FoldingRange>) {
-    for item in &module.items {
+fn collect_item_folds(file: &Module, ranges: &mut Vec<FoldingRange>) {
+    for item in &file.items {
         match item {
             Item::Alias(_) => {}
             Item::Function(f) => {

@@ -15,3 +15,14 @@ Language server over stdio (tower-lsp). Provides IDE features for .expo files.
 - `lookup/traverse.rs` -- AST walker to find expression/symbol at cursor position (~1046 lines, largest file)
 - `lookup/mod.rs` -- `SymbolInfo` classification API
 - `convert.rs` -- `Span` <-> LSP `Range` conversion, file URI helpers
+
+## Vocabulary
+
+A _package_ is a unit of distribution (your app, the stdlib, a dependency). A
+_file_ is a single `.expo` source file. The LSP holds parsed files in
+`Backend.stdlib_files`, `Backend.project_files`, and `DocumentState.file` /
+`DocumentState.project_files`. The Expo language has no "module" concept --
+when you see `module` in code below this point it is the Rust language item
+(`mod foo;`) or the AST type (`expo_ast::Module`, an unrelated holdover that a
+later refactor will rename to `File`). LSP-protocol enum values like
+`SymbolKind::MODULE` are also unrelated and stay untouched.
