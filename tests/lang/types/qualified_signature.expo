@@ -13,7 +13,7 @@ end
 
 fn main
   h = build()
-  print(header_value(h, "X-One"))
-  print(header_value(h, "X-Two"))
-  print(header_value(h, "X-Missing"))
+  header_value(h, "X-One").print()
+  header_value(h, "X-Two").print()
+  header_value(h, "X-Missing").print()
 end

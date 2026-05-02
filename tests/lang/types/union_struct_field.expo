@@ -23,7 +23,7 @@ impl Process<WorkerConfig, Tick | Sig, String> for Worker
       t: Tick ->
         match t
           Tick.Beat(n) ->
-            print("beat: #{n}")
+            "beat: #{n}".print()
             ReplyTo.reply(from, "ok")
             Step.Continue(self)
         end

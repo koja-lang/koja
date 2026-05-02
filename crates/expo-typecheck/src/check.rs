@@ -798,13 +798,15 @@ fn split_mangled_args(s: &str) -> Vec<String> {
     parts
 }
 
-/// Returns `true` when `expr` is a call to a diverging function (e.g. `panic`)
-/// whose return type should be treated as compatible with any declared type.
+/// Returns `true` when `expr` is a call to a diverging function (currently
+/// only `Kernel.panic`) whose return type should be treated as compatible
+/// with any declared type.
 pub(crate) fn is_diverging(expr: &Expr) -> bool {
     matches!(
         &expr.kind,
-        ExprKind::Call { callee, .. }
-            if matches!(&callee.kind, ExprKind::Ident { name, .. } if name == "panic")
+        ExprKind::MethodCall { receiver, method, .. }
+            if method == "panic"
+                && matches!(&receiver.kind, ExprKind::Ident { name, .. } if name == "Kernel")
     )
 }
 

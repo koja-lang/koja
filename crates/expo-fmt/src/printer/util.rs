@@ -159,12 +159,12 @@ pub(super) fn annotation_to_doc(ann: &Annotation) -> Doc {
                 concat(vec![
                     text(format!("@{} \"\"\"", ann.name)),
                     hardline(),
-                    text(val.trim()),
+                    text(escape_multiline_literal(val.trim())),
                     hardline(),
                     text("\"\"\""),
                 ])
             } else {
-                text(format!("@{} \"{}\"", ann.name, val))
+                text(format!("@{} \"{}\"", ann.name, escape_string_literal(val)))
             }
         }
         Some(AnnotationValue::False) => text(format!("@{} false", ann.name)),
@@ -800,6 +800,28 @@ pub(super) fn escape_string_literal(s: &str) -> String {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '#' if chars.peek() == Some(&'{') => out.push_str("\\#"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Escapes special characters in a multiline (`"""..."""`) string literal.
+///
+/// Unlike [`escape_string_literal`], we leave `\n` as a raw newline (the
+/// whole point of multiline literals) and we don't escape `"` (a single
+/// quote inside `"""..."""` is harmless; only the closing `"""` matters).
+/// We do escape `\\`, `\r`, `\t`, and `#{` so the formatted output
+/// re-parses to the same `String` value.
+pub(super) fn escape_multiline_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.push_str("\\\\"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             '#' if chars.peek() == Some(&'{') => out.push_str("\\#"),

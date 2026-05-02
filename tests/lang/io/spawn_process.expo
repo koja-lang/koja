@@ -22,16 +22,16 @@ impl Process<WorkerConfig, WorkerMsg, String> for Worker
 
     match msg
       WorkerMsg.Greet(name) ->
-        print("#{self.label}: Hello, #{name}!")
+        "#{self.label}: Hello, #{name}!".print()
         Step.Continue(self)
 
       WorkerMsg.Add(a, b) ->
         result = a + b
-        print("#{self.label}: Sum: #{result}")
+        "#{self.label}: Sum: #{result}".print()
         Step.Continue(self)
 
       WorkerMsg.Stop ->
-        print("#{self.label}: Stopped.")
+        "#{self.label}: Stopped.".print()
 
         match from
           Option.Some(r) -> r.send("done")

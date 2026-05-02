@@ -23,14 +23,14 @@ end
 
 fn main
   a = MyBox.new(42)
-  print(a.value)
+  a.value.print()
 
   b: MyBox<Int> = MyBox{value: 1}
   c = b.replace(99)
-  print(c.value)
+  c.value.print()
 
   d: MyBox<Int> = MyBox{value: 7}
   p = d.map_to_pair("hi")
-  print(p.first)
-  print(p.second)
+  p.first.print()
+  p.second.print()
 end

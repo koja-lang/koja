@@ -2,10 +2,10 @@ fn main
   double =
     fn (x: Int) -> Int x * 2 end
 
-  print(double(5))
+  double(5).print()
 
   add =
     fn (a: Int, b: Int) -> Int a + b end
 
-  print(add(3, 7))
+  add(3, 7).print()
 end

@@ -46,14 +46,14 @@ fn main
   c = Classifier{}
 
   none_opt: Option<TokenKind> = Option.None
-  print(c.classify(none_opt))
-  print(c.classify(Option.Some(TokenKind.Ident("and"))))
-  print(c.classify(Option.Some(TokenKind.Ident("xyz"))))
-  print(c.classify(Option.Some(TokenKind.Number(0))))
-  print(c.classify(Option.Some(TokenKind.Number(7))))
+  c.classify(none_opt).print()
+  c.classify(Option.Some(TokenKind.Ident("and"))).print()
+  c.classify(Option.Some(TokenKind.Ident("xyz"))).print()
+  c.classify(Option.Some(TokenKind.Number(0))).print()
+  c.classify(Option.Some(TokenKind.Number(7))).print()
 
-  print(c.pair_kind(IntPair.Nope))
-  print(c.pair_kind(IntPair.Just(0, 99)))
-  print(c.pair_kind(IntPair.Just(1, 2)))
-  print(c.pair_kind(IntPair.Just(3, 4)))
+  c.pair_kind(IntPair.Nope).print()
+  c.pair_kind(IntPair.Just(0, 99)).print()
+  c.pair_kind(IntPair.Just(1, 2)).print()
+  c.pair_kind(IntPair.Just(3, 4)).print()
 end

@@ -4,10 +4,9 @@ use expo_ast::ast::{
     EnumConstructionData, EnumVariantData, Expr, ExprKind, Function, ImplMember, Item, Literal,
     Module, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
 };
-use expo_ast::span::Span;
 
 use crate::context::{
-    FunctionKind, FunctionSig, ParamInfo, PassMode, ProtocolInfo, TypeContext, TypeInfo, TypeKind,
+    FunctionKind, FunctionSig, ParamInfo, ProtocolInfo, TypeContext, TypeInfo, TypeKind,
     VariantData, VariantInfo, Visibility,
 };
 use crate::types::package_from_str;
@@ -669,38 +668,6 @@ pub fn collect(module: &Module, global_names: &GlobalNames, package: &str) -> Ty
         }
     }
 
-    ctx.functions.insert(
-        "print".to_string(),
-        FunctionSig {
-            visibility: Visibility::Public,
-            params: vec![ParamInfo {
-                mode: PassMode::Borrow,
-                name: "value".to_string(),
-                ty: Type::Unknown,
-            }],
-            return_type: Type::Unit,
-            kind: FunctionKind::Static,
-            span: Span::zero(),
-            type_params: Vec::new(),
-        },
-    );
-
-    ctx.functions.insert(
-        "panic".to_string(),
-        FunctionSig {
-            visibility: Visibility::Public,
-            params: vec![ParamInfo {
-                mode: PassMode::Borrow,
-                name: "message".to_string(),
-                ty: Type::Primitive(crate::types::Primitive::String),
-            }],
-            return_type: Type::Unit,
-            kind: FunctionKind::Static,
-            span: Span::zero(),
-            type_params: Vec::new(),
-        },
-    );
-
     resolve_same_package_refs(&mut ctx, package);
 
     ctx
@@ -811,12 +778,13 @@ pub fn synthesize_protocol_defaults(module: &Module, ctx: &mut TypeContext, pack
 
     for item in &module.items {
         if let Item::Impl(impl_block) = item {
-            let target_name = if let TypeExpr::Named { path, .. } = &impl_block.target
-                && path.len() == 1
-            {
-                path[0].clone()
-            } else {
-                continue;
+            let target_name = match &impl_block.target {
+                TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. }
+                    if path.len() == 1 =>
+                {
+                    path[0].clone()
+                }
+                _ => continue,
             };
 
             let protocol_name = impl_block.trait_expr.as_ref().and_then(|te| match te {
@@ -1145,49 +1113,6 @@ fn build_protocol_method_sig(
         span: m.span,
         type_params: m.type_params.clone(),
     })
-}
-
-/// Auto-derives `Debug` protocol methods (`format`, `inspect`) on all struct
-/// and enum types that don't already have them. Must be called after merging
-/// the stdlib context so the `Debug` protocol definition is available.
-pub fn auto_derive_debug(ctx: &mut TypeContext) {
-    let type_ids: Vec<TypeIdentifier> = ctx
-        .types
-        .iter()
-        .filter(|(_, ti)| ti.is_struct() || ti.is_enum())
-        .map(|(id, _)| id.clone())
-        .collect();
-
-    let format_sig = FunctionSig {
-        visibility: Visibility::Public,
-        params: vec![],
-        return_type: Type::Primitive(Primitive::String),
-        kind: FunctionKind::Instance(PassMode::Borrow),
-        span: Span::zero(),
-        type_params: Vec::new(),
-    };
-
-    let inspect_sig = FunctionSig {
-        visibility: Visibility::Public,
-        params: vec![],
-        return_type: Type::Unknown,
-        kind: FunctionKind::Instance(PassMode::Move),
-        span: Span::zero(),
-        type_params: Vec::new(),
-    };
-
-    for id in &type_ids {
-        if let Some(ti) = ctx.get_type_mut(id) {
-            if !ti.functions.contains_key("format") {
-                ti.functions
-                    .insert("format".to_string(), format_sig.clone());
-            }
-            if !ti.functions.contains_key("inspect") {
-                ti.functions
-                    .insert("inspect".to_string(), inspect_sig.clone());
-            }
-        }
-    }
 }
 
 /// Converts a `ProtocolMethod` with a default body into a `Function` AST node

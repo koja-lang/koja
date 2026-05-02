@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use expo_ast::ast::{Arg, FieldInit};
 use expo_ast::identifier::TypeIdentifier;
 use expo_ir::lower::calls::resolve_call;
-use expo_ir::resolved::calls::{BuiltinCall, ResolvedCall};
+use expo_ir::resolved::calls::ResolvedCall;
 use expo_typecheck::context::FnParam;
 use expo_typecheck::types::{Type, mangle_method_suffix, substitute, unify};
 use inkwell::AddressSpace;
@@ -15,7 +15,6 @@ use inkwell::values::{BasicMetadataValueEnum, FunctionValue, StructValue};
 
 use crate::compiler::{Compiler, ExprResult, TypedValue};
 use crate::control::{LiftOutcome, lift_at_current};
-use crate::debug::call_format;
 use crate::expr::{compile_expr, compile_expr_coerced};
 use crate::generics::monomorphize_function;
 use crate::stmt::coerce_numeric;
@@ -77,9 +76,8 @@ pub fn invoke_closure_fat_ptr<'ctx>(
         .map(|v| TypedValue::new(v, return_type.clone())))
 }
 
-/// Compiles a function call by name. Handles struct constructors, builtins
-/// (`print`), direct function calls, and indirect calls through function
-/// pointer variables.
+/// Compiles a function call by name. Handles struct constructors, direct
+/// function calls, and indirect calls through function pointer variables.
 pub fn compile_call<'ctx>(
     c: &mut Compiler<'ctx>,
     name: &str,
@@ -87,8 +85,8 @@ pub fn compile_call<'ctx>(
     function: FunctionValue<'ctx>,
 ) -> ExprResult<'ctx> {
     // Try the IR lift first; falls through to the legacy ResolvedCall
-    // dispatch below for Builtin / Closure / Generic / StructConstructor
-    // cases the lift helper deliberately defers to Stub.
+    // dispatch below for Closure / Generic / StructConstructor cases the
+    // lift helper deliberately defers to Stub.
     if let LiftOutcome::Emitted(value) = lift_at_current(c, function, |lowerer, builder, open| {
         lowerer.lower_call_or_stub(builder, open, name, args, false)
     })? {
@@ -114,8 +112,6 @@ pub fn compile_call<'ctx>(
     )?;
 
     match resolved {
-        ResolvedCall::Builtin(BuiltinCall::Panic) => compile_panic(c, args, function),
-        ResolvedCall::Builtin(BuiltinCall::Print) => compile_print(c, args, function),
         ResolvedCall::ClosureVariable {
             params,
             return_type,
@@ -294,53 +290,4 @@ fn compile_call_as_struct<'ctx>(
         .collect();
 
     compile_struct_construction(c, &[name.to_string()], &fields, resolved_type, function)
-}
-
-fn compile_print<'ctx>(
-    c: &mut Compiler<'ctx>,
-    args: &[Arg],
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    if args.len() != 1 {
-        return Err("print expects exactly 1 argument".to_string());
-    }
-
-    let tv =
-        compile_expr(c, &args[0].value, function)?.ok_or("argument to print produced no value")?;
-
-    let str_ptr = call_format(c, tv.value, &tv.expo_type)?;
-
-    let printf = *c
-        .functions
-        .get(&FunctionIdentifier::new("printf"))
-        .ok_or("printf not declared")?;
-    let fmt = c
-        .builder
-        .build_global_string_ptr("%s\n", "fmt_print")
-        .unwrap();
-    c.call_void(
-        printf,
-        &[fmt.as_pointer_value().into(), str_ptr.into()],
-        "printf_call",
-    );
-
-    Ok(None)
-}
-
-fn compile_panic<'ctx>(
-    c: &mut Compiler<'ctx>,
-    args: &[Arg],
-    function: FunctionValue<'ctx>,
-) -> ExprResult<'ctx> {
-    if args.len() != 1 {
-        return Err("panic expects exactly 1 argument".to_string());
-    }
-
-    let val = compile_expr(c, &args[0].value, function)?
-        .ok_or("argument to panic produced no value")?
-        .value;
-
-    c.emit_panic("%s", &[val]);
-
-    Ok(None)
 }

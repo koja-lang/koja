@@ -196,6 +196,29 @@ impl String
   end
 
   @doc """
+  Returns a copy with characters escaped for safe inclusion in a
+  quoted string literal. Escapes `\\\\`, `"`, `\\n`, `\\r`, `\\t` to their
+  two-character escape sequences. Used by `Debug.format` for `String`
+  to produce round-trippable output.
+  """
+  fn escape_debug(self) -> String
+    result = ""
+
+    for c in self
+      match c
+        "\\" -> result = result <> "\\\\"
+        "\"" -> result = result <> "\\\""
+        "\n" -> result = result <> "\\n"
+        "\r" -> result = result <> "\\r"
+        "\t" -> result = result <> "\\t"
+        _ -> result = result <> c
+      end
+    end
+
+    result
+  end
+
+  @doc """
   Returns each grapheme cluster as a string in a list. Currently
   equivalent to `codepoints()` -- true grapheme segmentation is
   deferred until the runtime embeds Unicode segmentation tables.

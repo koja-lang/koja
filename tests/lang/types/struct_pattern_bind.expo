@@ -27,7 +27,7 @@ end
 
 fn main
   d = Describer{}
-  print(d.describe(Point{x: 0, y: 0}))
-  print(d.describe(Point{x: 3, y: 4}))
-  print(d.x_only(Point{x: 42, y: 99}))
+  d.describe(Point{x: 0, y: 0}).print()
+  d.describe(Point{x: 3, y: 4}).print()
+  d.x_only(Point{x: 42, y: 99}).print()
 end

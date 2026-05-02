@@ -31,10 +31,10 @@ end
 
 fn main
   g = HelloGreeter{}
-  print(g.greet("world"))
-  print(g.greet_twice("Expo"))
+  g.greet("world").print()
+  g.greet_twice("Expo").print()
 
   f = FancyGreeter{}
-  print(f.greet("world"))
-  print(f.greet_twice("Expo"))
+  f.greet("world").print()
+  f.greet_twice("Expo").print()
 end

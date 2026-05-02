@@ -10,6 +10,13 @@ struct Kernel
     expo_kernel_exit(code)
   end
 
+  @doc """
+  Aborts the process with the given message and a symbolicated stack
+  trace. Never returns.
+  """
+  @intrinsic
+  fn panic(message: String)
+
   @extern "C"
   priv fn expo_kernel_exit(code: Int64)
 end
@@ -112,7 +119,7 @@ impl Option<T>
   fn unwrap(self) -> T
     match self
       Option.Some(val) -> val
-      Option.None -> panic("called unwrap on None")
+      Option.None -> Kernel.panic("called unwrap on None")
     end
   end
 end
@@ -175,7 +182,7 @@ impl Result<T, E>
   fn unwrap(self) -> T
     match self
       Result.Ok(val) -> val
-      Result.Err(_) -> panic("called unwrap on Err")
+      Result.Err(_) -> Kernel.panic("called unwrap on Err")
     end
   end
 end

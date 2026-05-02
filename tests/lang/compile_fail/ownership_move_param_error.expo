@@ -9,5 +9,5 @@ end
 fn main
   c = Config{name: "test"}
   consume(c)
-  print(c.name)
+  c.name.print()
 end

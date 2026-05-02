@@ -8,18 +8,18 @@ fn main
   mid = Node{value: 2, next: Option.Some(leaf)}
   head = Node{value: 1, next: Option.Some(mid)}
 
-  print(head.value)
+  head.value.print()
 
   match head.next
     Option.Some(n) ->
-      print(n.value)
+      n.value.print()
 
       match n.next
-        Option.Some(n2) -> print(n2.value)
-        Option.None -> print("none")
+        Option.Some(n2) -> n2.value.print()
+        Option.None -> "none".print()
       end
 
     Option.None ->
-      print("none")
+      "none".print()
   end
 end

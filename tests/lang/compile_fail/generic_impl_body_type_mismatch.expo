@@ -10,5 +10,5 @@ end
 
 fn main
   b = Box{value: 1}
-  print(b.typo())
+  b.typo().print()
 end

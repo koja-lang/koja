@@ -49,7 +49,7 @@ fn add(a: Int32, b: Int32) -> Int32
 end
 
 fn main
-  print(add(2, 3))
+  add(2, 3).print()
 end
 ```
 
@@ -69,7 +69,7 @@ end
 
 fn main
   p = Point{x: 3, y: 4}
-  print(p.distance_squared())
+  p.distance_squared().print()
 end
 ```
 
@@ -97,8 +97,8 @@ fn identity<T>(x: T) -> T
 end
 
 fn main
-  print(identity(42))
-  print(identity("hello"))
+  identity(42).print()
+  identity("hello").print()
 end
 ```
 
@@ -120,7 +120,7 @@ end
 fn main
   c = Config{name: "test"}
   borrow(c)         # borrows -- c is still live
-  print(c.name)
+  c.name.print()
   consume(c)         # moves -- c is consumed
 end
 ```
@@ -148,7 +148,7 @@ end
 
 fn main
   double = fn (n: Int32) -> Int32 n * 2 end
-  print(apply(5, double))
+  apply(5, double).print()
 end
 ```
 
@@ -159,7 +159,7 @@ fn main
   list: List<Int32> = List.new().append(1).append(2).append(3)
 
   for item in list
-    print(item)
+    item.print()
   end
 end
 ```
@@ -178,8 +178,8 @@ end
 fn main
   x = 5
   y = x > 2 ? "big" : "small"
-  print(y)
-  print(classify(200))
+  y.print()
+  classify(200).print()
 end
 ```
 

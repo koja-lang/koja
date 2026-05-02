@@ -3,5 +3,5 @@ fn apply(x: Int, f: fn (Int) -> String) -> String
 end
 
 fn main
-  print(apply(5, x -> x + 1))
+  apply(5, x -> x + 1).print()
 end

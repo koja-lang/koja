@@ -1,11 +1,11 @@
 fn main
   x = 5
   if x > 10
-    print("big")
+    "big".print()
   else if x > 3
-    print("medium")
+    "medium".print()
   else
-    print("small")
+    "small".print()
   end
   end
 end

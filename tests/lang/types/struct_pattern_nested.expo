@@ -24,9 +24,9 @@ end
 fn main
   i = Inspector{}
   none_p: Option<Point> = Option.None
-  print(i.label(none_p))
-  print(i.label(Option.Some(Point{x: 0, y: 0})))
-  print(i.label(Option.Some(Point{x: 5, y: 1})))
-  print(i.label(Option.Some(Point{x: 5, y: 9})))
-  print(i.label(Option.Some(Point{x: 7, y: 8})))
+  i.label(none_p).print()
+  i.label(Option.Some(Point{x: 0, y: 0})).print()
+  i.label(Option.Some(Point{x: 5, y: 1})).print()
+  i.label(Option.Some(Point{x: 5, y: 9})).print()
+  i.label(Option.Some(Point{x: 7, y: 8})).print()
 end

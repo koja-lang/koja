@@ -222,9 +222,9 @@ end
 
 ```expo
 if x > 3
-  print("greater")
+  "greater".print()
 else
-  print("not greater")
+  "not greater".print()
 end
 ```
 
@@ -237,7 +237,7 @@ There is no `else if`. For multi-way branching, use [`cond`](#cond).
 ```expo
 i = 0
 while i < 10
-  print(i)
+  i.print()
   i += 1
 end
 ```
@@ -265,7 +265,7 @@ list = list.append(2)
 list = list.append(3)
 
 for item in list
-  print(item)
+  item.print()
 end
 ```
 
@@ -326,8 +326,8 @@ Escape sequences: `\"`, `\\`, `\n`, `\r`, `\t`, `\#`.
 
 ```expo
 name = "expo"
-print("hello #{name}")
-print("1 + 2 = #{1 + 2}")
+"hello #{name}".print()
+"1 + 2 = #{1 + 2}".print()
 ```
 
 Interpolation expressions are enclosed in `#{}` and can contain any expression.
@@ -375,8 +375,8 @@ config = Config{
 #### Field Access
 
 ```expo
-print(p.x)
-print(p.y)
+p.x.print()
+p.y.print()
 ```
 
 #### Inline Functions
@@ -398,8 +398,8 @@ struct Point
 end
 
 p = Point{x: 3, y: 4}
-print(p.distance_squared())
-print(Point.origin().x)
+p.distance_squared().print()
+Point.origin().x.print()
 ```
 
 `self` borrows by default (read-only). Use `move self` for mutating functions that return the modified value:
@@ -581,8 +581,8 @@ fn identity<T>(x: T) -> T
   x
 end
 
-print(identity(42))
-print(identity("hello"))
+identity(42).print()
+identity("hello").print()
 ```
 
 Type arguments are inferred at call sites from arguments and type annotations.
@@ -786,7 +786,7 @@ fn apply(x: Int32, f: fn (Int32) -> Int32) -> Int32
   f(x)
 end
 
-print(apply(5, fn (n: Int32) -> Int32 n * 2 end))
+apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 ```
 
 #### `move` in Function Types
@@ -820,7 +820,7 @@ Expo uses single-owner move semantics with borrow-by-default function parameters
 p = Point{x: 10, y: 20}
 q = p.clone()
 consume(q)    # q is moved
-print(p.x)    # p is still live
+p.x.print()    # p is still live
 ```
 
 ### Drop Insertion
@@ -847,9 +847,9 @@ struct Wrapper
 end
 
 w = Wrapper{name: "hello", count: 1}
-print(w.name)    # borrows name
-print(w.count)   # borrows count
-print(w.name)    # w is still live -- no move occurred
+w.name.print()    # borrows name
+w.count.print()   # borrows count
+w.name.print()    # w is still live -- no move occurred
 ```
 
 This extends to chained access and method calls. Calling a borrow-`self` method through a field borrows the field through the struct:
@@ -862,7 +862,7 @@ To mutate a field, use reassignment. The right-hand side borrows the field, tran
 
 ```expo
 w.name = w.name.upcase()
-print(w.name)              # "HELLO"
+w.name.print()              # "HELLO"
 ```
 
 ---
@@ -936,7 +936,7 @@ end
 
 # src/main.expo
 fn main
-  print(Helper.add(3, 4))
+  Helper.add(3, 4).print()
 end
 ```
 
@@ -1149,32 +1149,32 @@ The following types and functions are available in every module.
 
 ### Built-in Functions
 
-#### `print()`
-
-Polymorphic print function. Supports all primitive types. Outputs to stdout with a trailing newline.
-
-```expo
-print(42)
-print("hello")
-print(true)       # prints "true", not "1"
-```
-
-#### `panic()`
-
-Prints a message to stderr and aborts the process:
-
-```expo
-panic("something went wrong")
-```
-
-Used internally by `unwrap()` on `Option.None` and `Result.Err`.
-
 #### `clone()`
 
 Available on all types. Produces a new owned value:
 
 ```expo
 copy = original.clone()
+```
+
+### `Kernel`
+
+Core runtime operations.
+
+#### `Kernel.exit(code: Int)`
+
+Terminates the process immediately with the given exit code. `0` indicates success; any non-zero value indicates failure.
+
+```expo
+Kernel.exit(0)
+```
+
+#### `Kernel.panic(message: String)`
+
+Aborts the process with the given message and a symbolicated stack trace. Never returns. Used internally by `unwrap()` on `Option.None` and `Result.Err`.
+
+```expo
+Kernel.panic("something went wrong")
 ```
 
 ### `Option<T>`
@@ -1190,15 +1190,15 @@ Functions: `unwrap()`, `or(default)`, `some?()`, `none?()`, `map(fn (T) -> U)`, 
 
 ```expo
 x = Option.Some(42)
-print(x.unwrap())       # 42
-print(x.or(0))          # 42
-print(x.some?())        # true
+x.unwrap().print()       # 42
+x.or(0).print()          # 42
+x.some?().print()        # true
 
 y: Option<Int> = Option.None
-print(y.or(99))          # 99
+y.or(99).print()          # 99
 
 mapped = x.map(fn (v: Int) -> Int v * 10 end)
-print(mapped.unwrap())   # 420
+mapped.unwrap().print()   # 420
 ```
 
 ### `Result<T, E>`
@@ -1214,10 +1214,10 @@ Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `map(fn (T) -> U)`, `th
 
 ```expo
 ok: Result<Int32, Int32> = Result.Ok(42)
-print(ok.unwrap())       # 42
+ok.unwrap().print()       # 42
 
 err: Result<Int32, Int32> = Result.Err(1)
-print(err.or(99))        # 99
+err.or(99).print()        # 99
 ```
 
 ### `Pair<A, B>`
@@ -1233,8 +1233,8 @@ Fields: `first`, `second`.
 
 ```expo
 p: Pair<Int, String> = Pair{first: 10, second: "hello"}
-print(p.first)    # 10
-print(p.second)   # hello
+p.first.print()    # 10
+p.second.print()   # hello
 ```
 
 Generic struct literals like `Pair{first: x, second: y}` require a type annotation on the binding — the compiler does not infer generic parameters from field values alone.
@@ -1255,7 +1255,7 @@ Used by `String.slice` for substring extraction:
 ```expo
 greeting = "hello world"
 hello = greeting.slice(Range{start: 0, stop: 4})
-print(hello)  # "hello"
+hello.print()  # "hello"
 ```
 
 ### `List<T>`
@@ -1267,9 +1267,9 @@ list: List<Int32> = List.new()
 list = list.append(10)
 list = list.append(20)
 
-print(list.length())   # 2
-print(list.get(0).unwrap())  # 10
-print(list.empty?())   # false
+list.length().print()   # 2
+list.get(0).unwrap().print()  # 10
+list.empty?().print()   # false
 ```
 
 `append` uses `move self` semantics -- it returns the updated list. `get` returns `Option<T>` (`None` for out-of-bounds).
@@ -1306,9 +1306,9 @@ m: Map<String, Int> = Map.new()
 m = m.put("a", 1)
 m = m.put("b", 2)
 
-print(m.get("a").unwrap())  # 1
-print(m.has?("b"))          # true
-print(m.length())           # 2
+m.get("a").unwrap().print()  # 1
+m.has?("b").print()          # true
+m.length().print()           # 2
 ```
 
 Functions:
@@ -1335,8 +1335,8 @@ s = s.insert(1)
 s = s.insert(2)
 s = s.insert(1)
 
-print(s.length())   # 2
-print(s.has?(1))     # true
+s.length().print()   # 2
+s.has?(1).print()     # true
 ```
 
 Functions:
@@ -1360,7 +1360,7 @@ names: Set<String> = ["alice", "bob", "alice"]  # Set with 2 elements
 
 ```expo
 for c in "hello"
-  print(c)
+  c.print()
 end
 ```
 
@@ -1395,14 +1395,14 @@ Functions:
 
 ```expo
 s = "hello world"
-print(s.length())                            # 11
-print(s.get(0).unwrap())                     # "h"
-print(s.contains?("world"))                  # true
-print(s.starts_with?("hello"))               # true
-print(s.split(" ").length())                 # 2
-print(s.upcase())                            # "HELLO WORLD"
-print(s.slice(Range{start: 0, stop: 4}))     # "hello"
-print("  hello  ".trim())                    # "hello"
+s.length().print()                            # 11
+s.get(0).unwrap().print()                     # "h"
+s.contains?("world").print()                  # true
+s.starts_with?("hello").print()               # true
+s.split(" ").length().print()                 # 2
+s.upcase().print()                            # "HELLO WORLD"
+s.slice(Range{start: 0, stop: 4}).print()     # "hello"
+"  hello  ".trim().print()                    # "hello"
 ```
 
 `String` also implements `Equality` (content comparison via `==`) and `Hash` (FNV-1a).
@@ -1432,7 +1432,7 @@ Binary patterns destructure byte sequences in `match`:
 ```expo
 match packet
   <<tag::8, length::16, rest: Binary>> -> handle(tag, rest)
-  _ -> print("no match")
+  _ -> "no match".print()
 end
 ```
 
@@ -1455,7 +1455,7 @@ Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns t
 bin = "hello".to_binary()
 bits = bin.to_bits()
 roundtrip = bits.to_binary().unwrap().to_string().unwrap()
-print(roundtrip)  # "hello"
+roundtrip.print()  # "hello"
 ```
 
 ### File I/O
@@ -1498,7 +1498,7 @@ Functions:
 
 ```expo
 content = File.read("config.txt").unwrap()
-print(content)
+content.print()
 ```
 
 ### Console I/O
@@ -1527,13 +1527,13 @@ Static functions on `Int` and `Float` for parsing strings:
 
 ```expo
 x = Int.parse("42").unwrap()
-print(x)  # 42
+x.print()  # 42
 
 y = Float.parse("3.14").unwrap()
-print(y)  # 3.14
+y.print()  # 3.14
 
 err = Int.parse("nope")
-print(err.err?())  # true
+err.err?().print()  # true
 ```
 
 ### `Enumeration<T>` Protocol
@@ -1584,10 +1584,10 @@ Bitwise operations are methods rather than symbolic operators. Expo reserves `<<
 
 ```expo
 flags = 0b1010
-print(flags.band(0b1100))  # 8  (0b1000)
-print(flags.bor(0b0001))   # 11 (0b1011)
-print(1.bsl(4))             # 16
-print(16.bsr(4))            # 1
+(flags.band(0b1100)).print()  # 8  (0b1000)
+flags.bor(0b0001).print()   # 11 (0b1011)
+1.bsl(4).print()             # 16
+16.bsr(4).print()            # 1
 ```
 
 ### `Debug` Protocol
@@ -1595,19 +1595,29 @@ print(16.bsr(4))            # 1
 ```expo
 protocol Debug
   fn format(self) -> String
-  fn inspect(move self) -> Self
+  fn print(self)                # default: IO.puts(self.format())
+  fn inspect(move self) -> Self # default: self.print(); self
 end
 ```
 
-`format` returns a string representation of the value. `inspect` prints the value and returns it for tap-style debugging chains. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`); the receiver is borrowed and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Implementing `format` is enough to get `print` and `inspect` for free; custom implementations can override the derived one via `impl Debug for MyType`.
 
-`print()` and string interpolation (`"#{value}"`) dispatch through `Debug.format()`. Any type can be printed or interpolated:
+`Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 
 ```expo
 p = Point{x: 1, y: 2}
-print(p)                  # Point{x: 1, y: 2}
-print("point is #{p}")    # point is Point{x: 1, y: 2}
-print("n = #{42}")        # n = 42
+p.print()                       # Point{x: 1, y: 2}
+"point is #{p}".print()         # "point is Point{x: 1, y: 2}"
+"n = #{42}".print()             # "n = 42"
+"hello".print()                 # "hello"
+User{name: "alice"}.print()     # User{name: "alice"}
+```
+
+For raw, unquoted output use `IO.puts` directly (it writes its `String` argument verbatim and adds a newline):
+
+```expo
+IO.puts("hello")                # hello
+IO.puts(p.format())             # Point{x: 1, y: 2}
 ```
 
 ### Literal Protocols
@@ -1654,7 +1664,7 @@ struct FFI
 end
 
 result = FFI.add_numbers(3, 4)
-print(result)
+result.print()
 ```
 
 Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Expo functions in the same struct -- use `priv fn` on the extern declarations and expose safe public wrappers.
@@ -1696,11 +1706,11 @@ end
 ```expo
 buf: CPtr<Int32> = CPtr.alloc(4)
 buf.write(42)
-print(buf.read())
+buf.read().print()
 buf.free()
 
 null_ptr: CPtr<Int32> = CPtr.null()
-print(null_ptr.null?())
+null_ptr.null?().print()
 ```
 
 Type annotations on the variable drive generic inference for static methods like `CPtr.alloc()` and `CPtr.null()`.
@@ -1721,10 +1731,10 @@ Convert between Expo strings and C strings:
 ```expo
 name = "hello"
 cs = name.to_cstring()
-print(cs.len)
+cs.len.print()
 
 back = cs.to_string()
-print(back == name)
+(back == name).print()
 
 cs.free()
 ```
@@ -1747,7 +1757,7 @@ end
 buf: CPtr<Int32> = CPtr.alloc(4)
 FFI.fill_array(buf, 4, 10)
 total = FFI.sum_array(buf, 4)
-print(total)
+total.print()
 buf.free()
 ```
 

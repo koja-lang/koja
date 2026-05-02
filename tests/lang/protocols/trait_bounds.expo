@@ -44,9 +44,9 @@ fn main
   dog = Dog{name: "Rex"}
   cat = Cat{name: "Whiskers"}
 
-  print(say_hello(dog))
-  print(say_hello(cat))
+  say_hello(dog).print()
+  say_hello(cat).print()
 
   dog2 = Dog{name: "Buddy"}
-  print(describe_and_greet(dog2))
+  describe_and_greet(dog2).print()
 end

@@ -4,7 +4,7 @@ fn main
     .set("Connection", "close")
 
   match h.get("Content-Type")
-    Option.Some(v) -> print(v)
-    Option.None -> print("missing")
+    Option.Some(v) -> v.print()
+    Option.None -> "missing".print()
   end
 end

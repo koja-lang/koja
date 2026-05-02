@@ -13,7 +13,7 @@ fn main
   if flag
     q = p
   else
-    print(42)
+    42.print()
   end
-  print(p.x)
+  p.x.print()
 end

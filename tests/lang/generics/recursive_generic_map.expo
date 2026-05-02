@@ -20,15 +20,15 @@ fn main
       match result
         Option.Some(name) ->
           match name
-            JsonValue.JStr(s) -> print(s)
-            _ -> print("not a string")
+            JsonValue.JStr(s) -> s.print()
+            _ -> "not a string".print()
           end
 
         Option.None ->
-          print("missing")
+          "missing".print()
       end
 
     _ ->
-      print("not an object")
+      "not an object".print()
   end
 end

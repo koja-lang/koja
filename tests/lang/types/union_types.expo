@@ -30,8 +30,8 @@ end
 fn main
   p = Post{title: "Hello"}
   item: Post | Comment | Ad = p
-  print(display_item(item))
+  display_item(item).print()
 
   result = widen_post(Post{title: "Test"})
-  print(accept_union(result))
+  accept_union(result).print()
 end

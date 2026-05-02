@@ -13,5 +13,5 @@ end
 fn main
   c = Counter{n: 100000}
   result = c.count_down()
-  print(result.n)
+  result.n.print()
 end

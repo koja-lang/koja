@@ -13,6 +13,6 @@ fn main
   transform =
     fn (x: Int) -> Int x * c.scale + c.offset end
 
-  print(transform(5))
-  print(apply(10, transform))
+  transform(5).print()
+  apply(10, transform).print()
 end

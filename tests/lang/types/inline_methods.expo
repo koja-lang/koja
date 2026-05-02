@@ -41,21 +41,21 @@ end
 
 fn main
   p = Point{x: 3, y: 4}
-  print(p.distance_squared())
+  p.distance_squared().print()
 
   p2 = p.translate(1, 2)
-  print(p2.x)
-  print(p2.y)
+  p2.x.print()
+  p2.y.print()
 
   o = Point.origin()
-  print(o.x)
-  print(o.y)
+  o.x.print()
+  o.y.print()
 
   d = Direction.North
-  print(d.label())
-  print(d.is_vertical?())
+  d.label().print()
+  (d.is_vertical?()).print()
 
   d2 = Direction.East
-  print(d2.label())
-  print(d2.is_vertical?())
+  d2.label().print()
+  (d2.is_vertical?()).print()
 end

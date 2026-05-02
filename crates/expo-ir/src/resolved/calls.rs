@@ -16,20 +16,10 @@ use expo_typecheck::types::Type;
 
 use crate::identity::FunctionIdentifier;
 
-/// Builtin call kinds that lowering distinguishes by name (`panic`,
-/// `print`, `print_<Primitive>`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BuiltinCall {
-    Panic,
-    Print,
-}
-
 /// Outcome of resolving a bare-name function call. Each variant carries
 /// only pure-semantic data; LLVM handles (`FunctionValue<'ctx>`,
 /// `PointerValue<'ctx>`) are looked up by the caller after dispatch.
 pub enum ResolvedCall {
-    /// Compiler builtin (`panic`, `print`).
-    Builtin(BuiltinCall),
     /// Indirect call through a closure-typed local variable. The caller
     /// re-fetches the variable's `PointerValue` from its own variables
     /// map after dispatch.

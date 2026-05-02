@@ -3,7 +3,7 @@ struct Counter
 
   fn count_down(move self)
     if self.n <= 0
-      print(self.n)
+      self.n.print()
       return
     end
 

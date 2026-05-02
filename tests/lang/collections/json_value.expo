@@ -10,23 +10,23 @@ end
 fn print_json(v: JsonValue)
   match v
     JsonValue.Null ->
-      print("null")
+      "null".print()
 
     JsonValue.JBool(b) ->
       if b
-        print("true")
+        "true".print()
       else
-        print("false")
+        "false".print()
       end
 
     JsonValue.JInt(n) ->
-      print(n)
+      n.print()
 
     JsonValue.JStr(s) ->
-      print(s)
+      s.print()
 
     JsonValue.JArr(items) ->
-      print("[")
+      "[".print()
       i = 0
 
       while i < items.length()
@@ -38,10 +38,10 @@ fn print_json(v: JsonValue)
         i += 1
       end
 
-      print("]")
+      "]".print()
 
     JsonValue.JObj(m) ->
-      print("{object}")
+      "{object}".print()
   end
 end
 

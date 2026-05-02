@@ -11,6 +11,6 @@ end
 
 fn main
   p = Point{x: 3, y: 4}
-  print(p.distance_squared())
-  print("x = #{p.x}, y = #{p.y}")
+  p.distance_squared().print()
+  "x = #{p.x}, y = #{p.y}".print()
 end

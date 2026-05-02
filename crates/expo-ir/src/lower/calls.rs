@@ -1,18 +1,18 @@
 //! Lowering for bare-name function calls.
 //!
 //! Decides which `ResolvedCall` variant a call expression resolves to:
-//! struct constructor, builtin (`panic`/`print`), direct call to a
-//! defined symbol, indirect call through a closure-typed variable, or
-//! generic that needs monomorphization. Mangled-symbol selection
-//! (package-qualifying user methods, leaving stdlib symbols bare) and
-//! signature lookup happen here. Callable-symbol existence is queried
-//! through `program.contains_function(...)` on [`IRProgram`] (the
-//! canonical registry); the remaining `impl Fn(...)` parameters bridge
-//! to LLVM-bound caches in `expo-codegen` (`fn_state.variables`,
-//! `llvm_types`, `generic_fn_asts`) without coupling `expo-ir` to a
-//! backend. Emission uses the chosen mangled name (and the variable
-//! name from the call site) to fetch the actual
-//! `FunctionValue`/`PointerValue` post-dispatch.
+//! struct constructor, direct call to a defined symbol, indirect call
+//! through a closure-typed variable, or generic that needs
+//! monomorphization. Mangled-symbol selection (package-qualifying user
+//! methods, leaving stdlib symbols bare) and signature lookup happen
+//! here. Callable-symbol existence is queried through
+//! `program.contains_function(...)` on [`IRProgram`] (the canonical
+//! registry); the remaining `impl Fn(...)` parameters bridge to LLVM-
+//! bound caches in `expo-codegen` (`fn_state.variables`, `llvm_types`,
+//! `generic_fn_asts`) without coupling `expo-ir` to a backend.
+//! Emission uses the chosen mangled name (and the variable name from
+//! the call site) to fetch the actual `FunctionValue`/`PointerValue`
+//! post-dispatch.
 
 use std::collections::HashMap;
 
@@ -24,7 +24,7 @@ use expo_typecheck::types::{
 };
 
 use crate::Lowerer;
-use crate::blocks::IRBlockId;
+use crate::blocks::{IRBlockId, IRTerminator};
 use crate::cfg::CFGBuilder;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::ctx::LowerCtx;
@@ -34,7 +34,7 @@ use crate::lower::stmt::resolve_coercion;
 use crate::lower::types::{id_for, resolve_name_current};
 use crate::program::IRProgram;
 use crate::resolved::calls::{
-    BuiltinCall, PendingMethodMono, PendingTypeMono, ResolvedCall, ResolvedStaticCall,
+    PendingMethodMono, PendingTypeMono, ResolvedCall, ResolvedStaticCall,
 };
 use crate::values::{IRInstruction, IROperand};
 
@@ -58,14 +58,6 @@ pub fn resolve_call(
         return Ok(ResolvedCall::StructConstructor {
             identifier: resolved_id,
         });
-    }
-
-    match name {
-        "panic" => return Ok(ResolvedCall::Builtin(BuiltinCall::Panic)),
-        "print" | "print_Bool" | "print_Float" | "print_Int" | "print_Int32" | "print_String" => {
-            return Ok(ResolvedCall::Builtin(BuiltinCall::Print));
-        }
-        _ => {}
     }
 
     // When we're inside a method body, the unqualified call `foo(..)` can also
@@ -331,13 +323,12 @@ impl<'a> Lowerer<'a> {
     /// `None` when the call falls through to [`IRInstruction::Stub`].
     ///
     /// The lift only fires for [`ResolvedCall::Direct`] whose mangled
-    /// target is registered in [`IRProgram`]. Builtin (`panic` /
-    /// `print*`), closure-variable, generic, and struct-constructor
-    /// calls all defer to Stub:
+    /// target is registered in [`IRProgram`]. Builtin (`print*`),
+    /// closure-variable, generic, and struct-constructor calls all
+    /// defer to Stub:
     ///
     /// - Builtins emit through their own LLVM-bound paths
-    ///   (`compile_panic` / `compile_print`) that the IR vocabulary
-    ///   does not yet model.
+    ///   (`compile_print`) that the IR vocabulary does not yet model.
     /// - Closure-variable calls require the receiver-side
     ///   `fn_state.variables` map, which is codegen-bound.
     /// - Generic calls require monomorphization-driver state in
@@ -512,6 +503,15 @@ impl<'a> Lowerer<'a> {
                 tail,
             },
         );
+        // `Kernel.panic` never returns. Terminating the block with
+        // `Unreachable` prevents downstream constructs (match arm phi
+        // staging, implicit-return tail join, etc.) from threading a
+        // continuation past the call. Mirrors typecheck's `is_diverging`
+        // name-pattern check.
+        if type_name == "Kernel" && method == "panic" {
+            builder.set_terminator(open, IRTerminator::Unreachable);
+            return Ok(Some((None, IROperand::Unit, return_type)));
+        }
         Ok(Some((Some(open), IROperand::Local(dest), return_type)))
     }
 }

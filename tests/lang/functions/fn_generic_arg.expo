@@ -12,5 +12,5 @@ fn main
 
   w = Wrapper{value: double}
   result = apply(w.value, 21)
-  print("result: #{result}")
+  "result: #{result}".print()
 end

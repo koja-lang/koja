@@ -1,4 +1,4 @@
 fn main
   h = Headers{}
-  print(h)
+  h.print()
 end

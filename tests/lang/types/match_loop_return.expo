@@ -52,11 +52,11 @@ end
 
 fn main
   w = Walker{data: [1, 2, 3]}
-  print(w.doubled_sum())
+  w.doubled_sum().print()
 
   marker = Walker{data: [10, 20, 0, 30]}
-  print(marker.first_marker())
+  marker.first_marker().print()
 
   no_marker = Walker{data: [1, 2, 3]}
-  print(no_marker.first_marker())
+  no_marker.first_marker().print()
 end

@@ -127,6 +127,7 @@ fn parse_sibling_modules(
                                 .all(|d| !matches!(d.severity, ExpoSeverity::Error))
                             {
                                 let mut module = pr.module;
+                                expo_preprocess::preprocess_module(&mut module);
                                 module.path = Some(file.clone());
                                 mods.push((module, pkg.to_string()));
                             }
@@ -188,6 +189,7 @@ impl Backend {
     /// resolve correctly.
     pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
         let mut parse_result = expo_parser::parse(text);
+        expo_preprocess::preprocess_module(&mut parse_result.module);
         let file_path = uri_to_path(uri.as_str());
 
         let mut all_diags: Vec<ExpoDiagnostic> = parse_result.errors;
@@ -232,7 +234,11 @@ impl Backend {
             let mut ctx =
                 expo_typecheck::collect_module(&parse_result.module, &global_names, &current_pkg);
             ctx.merge(&unified_ctx);
-            expo_typecheck::auto_derive_debug(&mut ctx);
+            expo_typecheck::synthesize_protocol_defaults(
+                &parse_result.module,
+                &mut ctx,
+                &current_pkg,
+            );
             expo_typecheck::mark_recursive_fields(&mut ctx);
             expo_typecheck::resolve_module_aliases(&parse_result.module, &mut ctx);
             expo_typecheck::resolve_packages(&mut ctx);

@@ -13,9 +13,9 @@ end
 fn main
   c1 = Config{name: "test"}
   borrow(c1)
-  print(c1.name)
+  c1.name.print()
 
   c2 = Config{name: "test2"}
   consume(c2)
-  print("done")
+  "done".print()
 end

@@ -27,24 +27,24 @@ end
 
 fn main
   p = Point{x: 3, y: 4}
-  print("distance²: #{p.distance_squared()}")
-  print("circle area: #{area(Shape.Circle(5))}")
+  "distance²: #{p.distance_squared()}".print()
+  "circle area: #{area(Shape.Circle(5))}".print()
 
   for name in ["Alice", "Bob", "Charlie"]
-    print("Hello, #{name}!")
+    "Hello, #{name}!".print()
   end
 
   scores: Map<String, Int32> = ["Alice": 95, "Bob": 87]
-  print("has Alice? #{scores.has?("Alice")}")
+  "has Alice? #{scores.has?("Alice")}".print()
 
   score = Option.Some(42)
-  print("doubled: #{score.map(fn (n: Int32) -> Int32 n * 2 end).or(0)}")
+  "doubled: #{score.map(fn (n: Int32) -> Int32 n * 2 end).or(0)}".print()
 
   threshold = 80
 
   passing =
     fn (s: Int32) -> Bool s >= threshold end
 
-  print("87 passing? #{passing(87)}")
-  print("applied: #{apply(5, fn (n: Int32) -> Int32 n * n end)}")
+  "87 passing? #{passing(87)}".print()
+  "applied: #{apply(5, fn (n: Int32) -> Int32 n * n end)}".print()
 end

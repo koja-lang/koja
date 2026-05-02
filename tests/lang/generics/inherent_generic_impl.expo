@@ -10,11 +10,11 @@ end
 
 fn main
   b = MyBox{value: 42}
-  print(b.get())
+  b.get().print()
 
   s = MyBox{value: "hello"}
-  print(s.get())
+  s.get().print()
 
   nested = MyBox{value: MyBox{value: 7}}
-  print(nested.get().get())
+  nested.get().get().print()
 end

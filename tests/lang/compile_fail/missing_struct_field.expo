@@ -5,5 +5,5 @@ end
 
 fn main
   u = User{age: 30}
-  print(u.age)
+  u.age.print()
 end
