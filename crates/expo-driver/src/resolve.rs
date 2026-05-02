@@ -1,9 +1,11 @@
-//! Module graph resolution.
+//! Source set resolution.
 //!
 //! Two resolution modes:
-//! - **Single-file** ([`resolve_modules`]): parse one entry file into a single-module graph
-//! - **Project** ([`resolve_project_modules`]): uses [`ProjectConfig`] to scan directories
-//!   for `.expo` files, building a flat namespace with stdlib auto-imported
+//! - **Single-file** ([`resolve_sources`]): parse one entry file into a
+//!   single-file source set
+//! - **Project** ([`resolve_project_sources`]): uses [`ProjectConfig`] to scan
+//!   directories for `.expo` files, building a flat namespace with stdlib
+//!   auto-imported
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -13,20 +15,20 @@ use expo_ast::ast::Module;
 
 use crate::project::{self, ProjectConfig};
 
-/// A single resolved module: its source text, parsed AST, and any parse errors.
-pub struct ResolvedModule {
+/// A single resolved file: its source text, parsed AST, and any parse errors.
+pub struct ResolvedFile {
     pub name: String,
     pub path: PathBuf,
     pub source: String,
-    pub module: Module,
+    pub ast: Module,
     pub errors: Vec<expo_ast::ast::Diagnostic>,
 }
 
-/// All modules in a compilation unit: stdlib + project files.
-pub struct ModuleGraph {
+/// All files visible to one build: stdlib + project files + dep packages.
+pub struct SourceSet {
     pub entry: String,
-    pub modules: HashMap<String, ResolvedModule>,
-    /// Module names in processing order (stdlib first, then project files).
+    pub files: HashMap<String, ResolvedFile>,
+    /// File FQNs in processing order (stdlib first, then project files).
     pub order: Vec<String>,
     /// Package names loaded as dependencies (e.g. "json", "http").
     pub dep_packages: Vec<String>,
@@ -39,8 +41,8 @@ pub struct ModuleGraph {
 // Single-file resolution
 // =============================================================================
 
-/// Builds a [`ModuleGraph`] containing just the entry file.
-pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
+/// Builds a [`SourceSet`] containing just the entry file.
+pub fn resolve_sources(entry_path: &Path) -> Result<SourceSet, String> {
     let entry_name = entry_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -50,45 +52,45 @@ pub fn resolve_modules(entry_path: &Path) -> Result<ModuleGraph, String> {
     let source = fs::read_to_string(entry_path)
         .map_err(|e| format!("error reading {}: {e}", entry_path.display()))?;
     let parse_result = expo_parser::parse(&source);
-    let mut module = parse_result.module;
-    module.path = Some(entry_path.to_path_buf());
+    let mut ast = parse_result.module;
+    ast.path = Some(entry_path.to_path_buf());
 
-    let mut graph = ModuleGraph {
+    let mut sources = SourceSet {
         entry: entry_name.clone(),
-        modules: HashMap::new(),
+        files: HashMap::new(),
         order: Vec::new(),
         dep_packages: Vec::new(),
         entry_type: None,
     };
 
-    graph.order.push(entry_name.clone());
-    graph.modules.insert(
+    sources.order.push(entry_name.clone());
+    sources.files.insert(
         entry_name.clone(),
-        ResolvedModule {
+        ResolvedFile {
             name: entry_name,
             path: entry_path.to_path_buf(),
             source,
-            module,
+            ast,
             errors: parse_result.errors,
         },
     );
 
-    Ok(graph)
+    Ok(sources)
 }
 
 // =============================================================================
 // Project-mode resolution
 // =============================================================================
 
-/// Builds a [`ModuleGraph`] for a project with `expo.toml`.
+/// Builds a [`SourceSet`] for a project with `expo.toml`.
 ///
-/// Scans all `src` directories for `.expo` files and adds them to the graph.
-/// Stdlib modules are inserted first. No import-following or topological
+/// Scans all `src` directories for `.expo` files and adds them to the source
+/// set. Stdlib files are inserted first. No import-following or topological
 /// sorting -- all project files form a flat namespace.
-pub fn resolve_project_modules(
+pub fn resolve_project_sources(
     config: &ProjectConfig,
     project_root: &Path,
-) -> Result<ModuleGraph, String> {
+) -> Result<SourceSet, String> {
     let src_roots: Vec<PathBuf> = config.src.iter().map(|s| project_root.join(s)).collect();
 
     let entry = config
@@ -104,74 +106,72 @@ pub fn resolve_project_modules(
         format!("{}.{}", config.name, entry)
     };
 
-    let mut graph = ModuleGraph {
+    let mut sources = SourceSet {
         entry: entry_fqn.clone(),
-        modules: HashMap::new(),
+        files: HashMap::new(),
         order: Vec::new(),
         dep_packages: Vec::new(),
         entry_type: config.entry_type_name().map(|s| s.to_string()),
     };
 
     if config.name != "std" {
-        insert_stdlib(&mut graph);
+        insert_stdlib(&mut sources);
     }
-    scan_directories(&config.name, &src_roots, &mut graph)?;
-    resolve_dependencies(config, project_root, &mut graph)?;
+    scan_directories(&config.name, &src_roots, &mut sources)?;
+    resolve_dependencies(config, project_root, &mut sources)?;
 
     let project_prefix = format!("{}.", config.name);
     if is_type_entry {
-        if !graph
+        if !sources
             .order
             .iter()
             .any(|n| n.starts_with(&project_prefix) || n == &config.name)
         {
             return Err("no source files found in src directories".to_string());
         }
-        if !graph.modules.contains_key(&entry_fqn) {
-            let first_project = graph
+        if !sources.files.contains_key(&entry_fqn) {
+            let first_project = sources
                 .order
                 .iter()
                 .find(|n| n.starts_with(&project_prefix) || *n == &config.name)
                 .cloned();
             if let Some(name) = first_project {
-                graph.entry = name;
+                sources.entry = name;
             }
         }
-    } else if !graph.modules.contains_key(&entry_fqn) {
-        return Err(format!(
-            "entry module `{entry}` not found in src directories"
-        ));
+    } else if !sources.files.contains_key(&entry_fqn) {
+        return Err(format!("entry file `{entry}` not found in src directories"));
     }
 
-    Ok(graph)
+    Ok(sources)
 }
 
-/// Parses all embedded stdlib modules and inserts them into the graph.
-pub fn insert_stdlib(graph: &mut ModuleGraph) {
+/// Parses all embedded stdlib files and inserts them into the source set.
+pub fn insert_stdlib(sources: &mut SourceSet) {
     for &(name, source) in expo_stdlib::SOURCES {
         let parse_result = expo_parser::parse(source);
-        graph.order.push(name.to_string());
-        graph.modules.insert(
+        sources.order.push(name.to_string());
+        sources.files.insert(
             name.to_string(),
-            ResolvedModule {
+            ResolvedFile {
                 name: name.to_string(),
                 path: PathBuf::from(format!("<{name}>")),
                 source: source.to_string(),
-                module: parse_result.module,
+                ast: parse_result.module,
                 errors: parse_result.errors,
             },
         );
     }
 }
 
-/// Scans directories for `.expo` files and adds each as a module to the graph.
-/// The fully qualified name is `{project_name}.{relative_path}` where
+/// Scans directories for `.expo` files and adds each as a file to the source
+/// set. The fully qualified name is `{project_name}.{relative_path}` where
 /// `relative_path` is the file path relative to the src root with `.expo`
 /// stripped and `/` replaced by `.`.
 fn scan_directories(
     project_name: &str,
     roots: &[PathBuf],
-    graph: &mut ModuleGraph,
+    sources: &mut SourceSet,
 ) -> Result<(), String> {
     for root in roots {
         if !root.is_dir() {
@@ -179,7 +179,7 @@ fn scan_directories(
         }
         let files = collect_expo_files_recursive(root);
         for file_path in files {
-            let relative_module = file_path
+            let relative_fqn = file_path
                 .strip_prefix(root)
                 .unwrap_or(&file_path)
                 .with_extension("")
@@ -187,25 +187,25 @@ fn scan_directories(
                 .filter_map(|c| c.as_os_str().to_str())
                 .collect::<Vec<_>>()
                 .join(".");
-            let fqn = format!("{project_name}.{relative_module}");
-            if graph.modules.contains_key(&fqn) {
+            let fqn = format!("{project_name}.{relative_fqn}");
+            if sources.files.contains_key(&fqn) {
                 continue;
             }
 
             let source = fs::read_to_string(&file_path)
                 .map_err(|e| format!("error reading {}: {e}", file_path.display()))?;
             let parse_result = expo_parser::parse(&source);
-            let mut module = parse_result.module;
-            module.path = Some(file_path.clone());
+            let mut ast = parse_result.module;
+            ast.path = Some(file_path.clone());
 
-            graph.order.push(fqn.clone());
-            graph.modules.insert(
+            sources.order.push(fqn.clone());
+            sources.files.insert(
                 fqn,
-                ResolvedModule {
-                    name: format!("{project_name}.{relative_module}"),
+                ResolvedFile {
+                    name: format!("{project_name}.{relative_fqn}"),
                     path: file_path,
                     source,
-                    module,
+                    ast,
                     errors: parse_result.errors,
                 },
             );
@@ -214,61 +214,62 @@ fn scan_directories(
     Ok(())
 }
 
-/// Builds a [`ModuleGraph`] for running tests.
+/// Builds a [`SourceSet`] for running tests.
 ///
-/// Like [`resolve_project_modules`], but also scans `test` directories and
-/// includes all source + test files in the graph. The project's entry module
-/// (which contains `fn main`) is excluded since the test harness replaces it.
-/// The `entry` field is left empty -- the caller inserts a generated harness.
-pub fn resolve_test_project_modules(
+/// Like [`resolve_project_sources`], but also scans `test` directories and
+/// includes all source + test files in the source set. The project's entry
+/// file (which contains `fn main`) is excluded since the test harness
+/// replaces it. The `entry` field is left empty -- the caller inserts a
+/// generated harness.
+pub fn resolve_test_project_sources(
     config: &ProjectConfig,
     project_root: &Path,
-) -> Result<ModuleGraph, String> {
+) -> Result<SourceSet, String> {
     let src_roots: Vec<PathBuf> = config.src.iter().map(|s| project_root.join(s)).collect();
     let test_roots: Vec<PathBuf> = config.test.iter().map(|s| project_root.join(s)).collect();
 
     let all_roots: Vec<PathBuf> = src_roots.iter().chain(test_roots.iter()).cloned().collect();
 
-    let mut graph = ModuleGraph {
+    let mut sources = SourceSet {
         entry: String::new(),
-        modules: HashMap::new(),
+        files: HashMap::new(),
         order: Vec::new(),
         dep_packages: Vec::new(),
         entry_type: None,
     };
 
     if config.name != "std" {
-        insert_stdlib(&mut graph);
+        insert_stdlib(&mut sources);
     }
-    scan_directories(&config.name, &all_roots, &mut graph)?;
-    resolve_dependencies(config, project_root, &mut graph)?;
+    scan_directories(&config.name, &all_roots, &mut sources)?;
+    resolve_dependencies(config, project_root, &mut sources)?;
 
     if let Some(ref entry) = config.entry
         && config.entry_type_name().is_none()
     {
         let entry_fqn = format!("{}.{}", config.name, entry);
-        if let Some(pos) = graph.order.iter().position(|n| n == &entry_fqn) {
-            graph.order.remove(pos);
+        if let Some(pos) = sources.order.iter().position(|n| n == &entry_fqn) {
+            sources.order.remove(pos);
         }
-        graph.modules.remove(&entry_fqn);
+        sources.files.remove(&entry_fqn);
     }
 
-    Ok(graph)
+    Ok(sources)
 }
 
 /// Scans each dependency declared in `[dependencies]` and adds its source
-/// modules to the graph. The dep's entry module is skipped to avoid `fn main`
-/// conflicts with the consuming project.
+/// files to the source set. The dep's entry file is skipped to avoid
+/// `fn main` conflicts with the consuming project.
 ///
 /// Enforces the duplicate-package-name rule: every project implicitly imports
-/// `std`, and no two packages in the dep graph (project + implicit `std` +
-/// each declared dep's `[project] name`) may share a name. The real stdlib
-/// (the lone project with `name = "std"`) is the one project that doesn't get
-/// the implicit `std` entry, so its self-build does not collide.
+/// `std`, and no two packages in the dependency graph (project + implicit
+/// `std` + each declared dep's `[project] name`) may share a name. The real
+/// stdlib (the lone project with `name = "std"`) is the one project that
+/// doesn't get the implicit `std` entry, so its self-build does not collide.
 fn resolve_dependencies(
     config: &ProjectConfig,
     project_root: &Path,
-    graph: &mut ModuleGraph,
+    sources: &mut SourceSet,
 ) -> Result<(), String> {
     let mut seen_pkgs: BTreeSet<String> = BTreeSet::new();
     seen_pkgs.insert(config.name.clone());
@@ -294,21 +295,21 @@ fn resolve_dependencies(
 
         if !seen_pkgs.insert(dep_config.name.clone()) {
             return Err(format!(
-                "duplicate package name `{}` in dep graph (declared by project, dependency `{alias}`, or implicit `std` import)",
+                "duplicate package name `{}` in dependency graph (declared by project, dependency `{alias}`, or implicit `std` import)",
                 dep_config.name
             ));
         }
 
         let dep_src_roots: Vec<PathBuf> = dep_config.src.iter().map(|s| dep_path.join(s)).collect();
-        scan_directories(&dep_config.name, &dep_src_roots, graph)?;
-        graph.dep_packages.push(dep_config.name.clone());
+        scan_directories(&dep_config.name, &dep_src_roots, sources)?;
+        sources.dep_packages.push(dep_config.name.clone());
 
         if let Some(ref entry) = dep_config.entry {
             let entry_fqn = format!("{}.{}", dep_config.name, entry);
-            if let Some(pos) = graph.order.iter().position(|n| n == &entry_fqn) {
-                graph.order.remove(pos);
+            if let Some(pos) = sources.order.iter().position(|n| n == &entry_fqn) {
+                sources.order.remove(pos);
             }
-            graph.modules.remove(&entry_fqn);
+            sources.files.remove(&entry_fqn);
         }
     }
     Ok(())

@@ -16,14 +16,14 @@ use expo_typecheck::types::{Package, fqn_to_package};
 
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
-use crate::resolve::{self, ModuleGraph};
+use crate::resolve::{self, SourceSet};
 
-/// Builds the set of [`Package`]s visible to the resolver from a module
-/// graph's FQNs. `std.*` modules collapse to a single [`Package::Std`];
-/// every other module's leading segment becomes a [`Package::Named`] so the
-/// type resolver can validate qualified `pkg.Type` paths during signature
+/// Builds the set of [`Package`]s visible to the resolver from a source
+/// set's FQNs. `std.*` files collapse to a single [`Package::Std`]; every
+/// other file's leading segment becomes a [`Package::Named`] so the type
+/// resolver can validate qualified `pkg.Type` paths during signature
 /// collection without waiting for the full type tables to be merged.
-fn packages_from_module_names<I, S>(names: I) -> BTreeSet<Package>
+fn packages_from_file_names<I, S>(names: I) -> BTreeSet<Package>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -40,26 +40,25 @@ where
     packages
 }
 
-/// Runs the type-checking pipeline for every module in a graph.
+/// Runs the type-checking pipeline for every file in a source set.
 ///
-/// Stdlib modules are processed sequentially (they have a defined dependency
-/// order). Project modules use a gather-unify-check pipeline:
-///   1. **Gather** – collect type signatures from every project module.
+/// Stdlib files are processed sequentially (they have a defined dependency
+/// order). Project files use a gather-unify-check pipeline:
+///   1. **Gather** – collect type signatures from every project file.
 ///   2. **Unify** – merge all project contexts into a single shared context
-///      so every module sees every other module's types without imports.
-///   3. **Check** – type-check each project module against the unified context.
+///      so every file sees every other file's types without imports.
+///   3. **Check** – type-check each project file against the unified context.
 ///
-/// Returns the per-module type contexts and whether any errors were found.
-pub fn typecheck_graph(
-    graph: &mut ModuleGraph,
+/// Returns the per-file type contexts and whether any errors were found.
+pub fn typecheck_sources(
+    sources: &mut SourceSet,
     color: bool,
 ) -> (BTreeMap<String, expo_typecheck::context::TypeContext>, bool) {
-    let mut module_contexts: BTreeMap<String, expo_typecheck::context::TypeContext> =
-        BTreeMap::new();
+    let mut file_contexts: BTreeMap<String, expo_typecheck::context::TypeContext> = BTreeMap::new();
     let mut has_errors = false;
 
-    for name in &graph.order {
-        let rm = &graph.modules[name];
+    for name in &sources.order {
+        let rm = &sources.files[name];
         if !rm.errors.is_empty() {
             render_diagnostics(
                 rm.path.to_str().unwrap_or(&rm.name),
@@ -71,81 +70,81 @@ pub fn typecheck_graph(
         }
     }
     if has_errors {
-        return (module_contexts, true);
+        return (file_contexts, true);
     }
 
-    let all_modules: Vec<&Module> = graph
+    let all_files: Vec<&Module> = sources
         .order
         .iter()
-        .map(|n| &graph.modules[n].module)
+        .map(|n| &sources.files[n].ast)
         .collect();
-    let known_packages = packages_from_module_names(&graph.order);
-    let global_names = expo_typecheck::collect_all_names(&all_modules, known_packages);
+    let known_packages = packages_from_file_names(&sources.order);
+    let global_names = expo_typecheck::collect_all_names(&all_files, known_packages);
 
     let mut stdlib_ctx = expo_typecheck::context::TypeContext::new();
 
     let is_stdlib = |n: &str| n.starts_with("std.");
 
     let (stdlib_names, project_names): (Vec<&String>, Vec<&String>) =
-        graph.order.iter().partition(|n| is_stdlib(n));
+        sources.order.iter().partition(|n| is_stdlib(n));
 
-    // Auto-imported std modules: merge into stdlib_ctx directly.
+    // Auto-imported std files: merge into stdlib_ctx directly.
     // `collect_file` now runs the synthesize sub-pass internally
     // (auto-derives `impl Debug for T`), so the AST gains synthesized
     // items as a side effect.
     for name in &stdlib_names {
-        let rm = graph.modules.get_mut(*name).expect("module present");
-        let mut ctx = expo_typecheck::collect_file(&mut rm.module, &global_names, "std");
+        let rm = sources.files.get_mut(*name).expect("file present");
+        let mut ctx = expo_typecheck::collect_file(&mut rm.ast, &global_names, "std");
         ctx.merge(&stdlib_ctx);
 
         stdlib_ctx.merge(&ctx);
-        module_contexts.insert((*name).clone(), ctx);
+        file_contexts.insert((*name).clone(), ctx);
     }
 
-    // Gather: collect signatures from every project module.
+    // Gather: collect signatures from every project file.
     for name in &project_names {
-        let rm = graph.modules.get_mut(*name).expect("module present");
+        let rm = sources.files.get_mut(*name).expect("file present");
         let pkg = fqn_to_package(name);
-        let mut ctx = expo_typecheck::collect_file(&mut rm.module, &global_names, pkg);
+        let mut ctx = expo_typecheck::collect_file(&mut rm.ast, &global_names, pkg);
         ctx.merge(&stdlib_ctx);
         // Other stdlib protocols (today: `Process` with `run` /
         // `handle_signal`) still rely on default-method synthesis for
         // user impls. `Debug` is auto-derived by the synthesize
         // sub-pass inside `collect_file` and never touches this
         // codepath.
-        expo_typecheck::synthesize_protocol_defaults(&rm.module, &mut ctx, pkg);
+        expo_typecheck::synthesize_protocol_defaults(&rm.ast, &mut ctx, pkg);
         expo_typecheck::mark_recursive_fields(&mut ctx);
-        module_contexts.insert((*name).clone(), ctx);
+        file_contexts.insert((*name).clone(), ctx);
     }
 
     // Unify: build a shared context containing all project definitions.
     let mut unified_project_ctx = stdlib_ctx.clone();
     for name in &project_names {
-        unified_project_ctx.merge(&module_contexts[*name]);
+        unified_project_ctx.merge(&file_contexts[*name]);
     }
 
-    // Check: every module needs alias resolution, package resolution, and
-    // body typechecking. Embedded stdlib modules (synthetic `<std.x>` paths)
+    // Check: every file needs alias resolution, package resolution, and
+    // body typechecking. Embedded stdlib files (synthetic `<std.x>` paths)
     // are checked alongside workspace sources so every expression carries a
     // populated `resolved_type` -- downstream codegen / IR lowering relies on
     // this invariant rather than re-deriving types from emission output.
-    for name in graph.order.clone() {
-        let Some(mut ctx) = module_contexts.remove(&name) else {
+    for name in sources.order.clone() {
+        let Some(mut ctx) = file_contexts.remove(&name) else {
             continue;
         };
         ctx.merge(&unified_project_ctx);
-        let rm = graph.modules.get_mut(&name).unwrap();
+        let rm = sources.files.get_mut(&name).unwrap();
         let pkg = fqn_to_package(&name);
-        expo_typecheck::resolve_file_aliases(&rm.module, &mut ctx);
+        expo_typecheck::resolve_file_aliases(&rm.ast, &mut ctx);
         expo_typecheck::resolve_packages(&mut ctx);
-        expo_typecheck::check_file(&mut rm.module, &mut ctx, pkg);
-        expo_typecheck::validate_resolved_types(&rm.module, &mut ctx);
-        module_contexts.insert(name, ctx);
+        expo_typecheck::check_file(&mut rm.ast, &mut ctx, pkg);
+        expo_typecheck::validate_resolved_types(&rm.ast, &mut ctx);
+        file_contexts.insert(name, ctx);
     }
 
-    for name in &graph.order {
-        let rm = &graph.modules[name];
-        let ctx = &module_contexts[name];
+    for name in &sources.order {
+        let rm = &sources.files[name];
+        let ctx = &file_contexts[name];
         if !ctx.diagnostics.is_empty() {
             render_diagnostics(
                 rm.path.to_str().unwrap_or(&rm.name),
@@ -163,65 +162,65 @@ pub fn typecheck_graph(
         }
     }
 
-    (module_contexts, has_errors)
+    (file_contexts, has_errors)
 }
 
-/// Compiles a fully resolved module graph into an executable.
+/// Compiles a fully resolved source set into an executable.
 ///
-/// Type-checks all modules, merges contexts, emits LLVM IR, and links.
-/// The graph must include stdlib modules (via [`resolve::insert_stdlib`]).
+/// Type-checks all files, merges contexts, emits LLVM IR, and links.
+/// The source set must include stdlib files (via [`resolve::insert_stdlib`]).
 /// When `emit_llvm` is true, prints LLVM IR to stdout instead of linking.
-pub fn build_from_graph(
-    graph: &mut ModuleGraph,
+pub fn build_from_sources(
+    sources: &mut SourceSet,
     output: &str,
     quiet: bool,
     color: bool,
     emit_llvm: bool,
     release: bool,
 ) {
-    let (module_contexts, has_errors) = typecheck_graph(graph, color);
+    let (file_contexts, has_errors) = typecheck_sources(sources, color);
     if has_errors {
         process::exit(1);
     }
 
     let mut merged_ctx = TypeContext::new();
-    for name in &graph.order {
-        merged_ctx.merge(&module_contexts[name]);
+    for name in &sources.order {
+        merged_ctx.merge(&file_contexts[name]);
     }
     expo_typecheck::resolve_packages(&mut merged_ctx);
 
-    let modules_ast: Vec<&Module> = graph
+    let files_ast: Vec<&Module> = sources
         .order
         .iter()
-        .map(|name| &graph.modules[name].module)
+        .map(|name| &sources.files[name].ast)
         .collect();
-    let module_packages: Vec<String> = graph
+    let file_packages: Vec<String> = sources
         .order
         .iter()
         .map(|name| fqn_to_package(name).to_string())
         .collect();
-    let module_packages_refs: Vec<&str> = module_packages.iter().map(String::as_str).collect();
+    let file_packages_refs: Vec<&str> = file_packages.iter().map(String::as_str).collect();
 
-    let app_name = graph
+    let app_name = sources
         .entry
         .split('.')
         .next()
-        .unwrap_or(&graph.entry)
+        .unwrap_or(&sources.entry)
         .to_string();
 
-    let entry_type = graph.entry_type.as_deref();
+    let entry_type = sources.entry_type.as_deref();
 
     if emit_llvm {
         match expo_codegen::emit_llvm_ir(
-            &modules_ast,
-            &module_packages_refs,
+            &files_ast,
+            &file_packages_refs,
             &merged_ctx,
             &app_name,
             entry_type,
         ) {
             Ok(ir) => print!("{ir}"),
             Err(diagnostics) => {
-                let entry_rm = &graph.modules[&graph.entry];
+                let entry_rm = &sources.files[&sources.entry];
                 render_diagnostics(
                     entry_rm.path.to_str().unwrap_or(&entry_rm.name),
                     &entry_rm.source,
@@ -236,15 +235,15 @@ pub fn build_from_graph(
 
     let obj_path = format!("{output}.o");
     if let Err(diagnostics) = expo_codegen::compile_modules(
-        &modules_ast,
-        &module_packages_refs,
+        &files_ast,
+        &file_packages_refs,
         &merged_ctx,
         Path::new(&obj_path),
         release,
         &app_name,
         entry_type,
     ) {
-        let entry_rm = &graph.modules[&graph.entry];
+        let entry_rm = &sources.files[&sources.entry];
         render_diagnostics(
             entry_rm.path.to_str().unwrap_or(&entry_rm.name),
             &entry_rm.source,
@@ -254,13 +253,13 @@ pub fn build_from_graph(
         process::exit(1);
     }
 
-    let link_libs = collect_link_libraries(&modules_ast);
+    let link_libs = collect_link_libraries(&files_ast);
     link(&obj_path, output, quiet, release, &link_libs);
 }
 
-/// Walks all modules and collects unique `@link` library names from
-/// function annotations across structs, enums, impl blocks, and top-level items.
-fn collect_link_libraries(modules: &[&Module]) -> Vec<String> {
+/// Walks all files and collects unique `@link` library names from function
+/// annotations across structs, enums, impl blocks, and top-level items.
+fn collect_link_libraries(files: &[&Module]) -> Vec<String> {
     fn collect_from(annotations: &[Annotation], libs: &mut BTreeSet<String>) {
         for ann in annotations {
             if ann.name == "link"
@@ -273,8 +272,8 @@ fn collect_link_libraries(modules: &[&Module]) -> Vec<String> {
     }
 
     let mut libs = BTreeSet::new();
-    for module in modules {
-        for item in &module.items {
+    for file in files {
+        for item in &file.items {
             match item {
                 Item::Function(f) => collect_from(&f.annotations, &mut libs),
                 Item::Struct(s) => {
@@ -301,7 +300,7 @@ fn collect_link_libraries(modules: &[&Module]) -> Vec<String> {
     libs.into_iter().collect()
 }
 
-/// Builds a project from its config: resolves modules, type-checks, compiles, links.
+/// Builds a project from its config: resolves files, type-checks, compiles, links.
 pub fn build_project(
     config: &ProjectConfig,
     project_root: &Path,
@@ -311,7 +310,7 @@ pub fn build_project(
     emit_llvm: bool,
     release: bool,
 ) {
-    let mut graph = match resolve::resolve_project_modules(config, project_root) {
+    let mut sources = match resolve::resolve_project_sources(config, project_root) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: {e}");
@@ -336,10 +335,10 @@ pub fn build_project(
             default_output.to_str().unwrap()
         }
     };
-    build_from_graph(&mut graph, output, quiet, color, emit_llvm, release);
+    build_from_sources(&mut sources, output, quiet, color, emit_llvm, release);
 }
 
-/// Full single-file build pipeline: resolve modules from an entry file,
+/// Full single-file build pipeline: resolve sources from an entry file,
 /// type-check, merge contexts, codegen, and link into an executable.
 ///
 /// When `quiet` is true, the "compiled: <output>" message is suppressed
@@ -363,7 +362,7 @@ pub fn build(args: BuildArgs, quiet: bool, color: bool) {
         process::exit(1);
     });
 
-    let mut graph = match resolve::resolve_modules(&entry_path) {
+    let mut sources = match resolve::resolve_sources(&entry_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: {e}");
@@ -371,9 +370,9 @@ pub fn build(args: BuildArgs, quiet: bool, color: bool) {
         }
     };
 
-    prepend_stdlib(&mut graph);
-    build_from_graph(
-        &mut graph,
+    prepend_stdlib(&mut sources);
+    build_from_sources(
+        &mut sources,
         &output,
         quiet,
         color,
@@ -382,13 +381,13 @@ pub fn build(args: BuildArgs, quiet: bool, color: bool) {
     );
 }
 
-/// Type-checks a single-file module graph (without compiling).
+/// Type-checks a single-file source set (without compiling).
 ///
-/// When `emit_ast` is true, dumps every module's post-typecheck AST to stdout
+/// When `emit_ast` is true, dumps every file's post-typecheck AST to stdout
 /// after diagnostics run. Errors still gate the returned `has_errors` bool;
 /// the dump happens either way (callers gate the OK-line on `!emit_ast`).
 pub fn check_single_file(entry_path: &Path, color: bool, emit_ast: bool) -> bool {
-    let mut graph = match resolve::resolve_modules(entry_path) {
+    let mut sources = match resolve::resolve_sources(entry_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: {e}");
@@ -396,15 +395,15 @@ pub fn check_single_file(entry_path: &Path, color: bool, emit_ast: bool) -> bool
         }
     };
 
-    prepend_stdlib(&mut graph);
-    let (_, has_errors) = typecheck_graph(&mut graph, color);
+    prepend_stdlib(&mut sources);
+    let (_, has_errors) = typecheck_sources(&mut sources, color);
     if emit_ast {
-        emit_graph_ast(&graph);
+        emit_sources_ast(&sources);
     }
     has_errors
 }
 
-/// Type-checks a project module graph (without compiling).
+/// Type-checks a project source set (without compiling).
 ///
 /// See [`check_single_file`] for `emit_ast` semantics.
 pub fn check_project(
@@ -413,7 +412,7 @@ pub fn check_project(
     color: bool,
     emit_ast: bool,
 ) -> bool {
-    let mut graph = match resolve::resolve_project_modules(config, project_root) {
+    let mut sources = match resolve::resolve_project_sources(config, project_root) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: {e}");
@@ -421,31 +420,31 @@ pub fn check_project(
         }
     };
 
-    let (_, has_errors) = typecheck_graph(&mut graph, color);
+    let (_, has_errors) = typecheck_sources(&mut sources, color);
     if emit_ast {
-        emit_graph_ast(&graph);
+        emit_sources_ast(&sources);
     }
     has_errors
 }
 
-/// Prints every module in `graph.order` to stdout as a pretty-Debug dump,
+/// Prints every file in `sources.order` to stdout as a pretty-Debug dump,
 /// preceded by a `// === <name> ===` header. Used by `expo check --emit-ast`.
 /// Pretty-Debug is intentional for now; a proper S-expression printer is a
 /// separate slice (see `design/COMPILER-NORTHSTAR.md` "Per-phase debug emitters").
-fn emit_graph_ast(graph: &ModuleGraph) {
-    for name in &graph.order {
-        let rm = &graph.modules[name];
+fn emit_sources_ast(sources: &SourceSet) {
+    for name in &sources.order {
+        let rm = &sources.files[name];
         println!("// === {name} ===");
-        println!("{:#?}", rm.module);
+        println!("{:#?}", rm.ast);
     }
 }
 
-/// Inserts stdlib modules at the front of an existing graph's order.
-/// Used for single-file mode where the graph is built without stdlib.
-fn prepend_stdlib(graph: &mut ModuleGraph) {
-    let user_order = mem::take(&mut graph.order);
-    resolve::insert_stdlib(graph);
-    graph.order.extend(user_order);
+/// Inserts stdlib files at the front of an existing source set's order.
+/// Used for single-file mode where the source set is built without stdlib.
+fn prepend_stdlib(sources: &mut SourceSet) {
+    let user_order = mem::take(&mut sources.order);
+    resolve::insert_stdlib(sources);
+    sources.order.extend(user_order);
 }
 
 /// A discovered `@test` function inside a struct, called as `StructName.fn_name()`.
@@ -457,7 +456,7 @@ struct TestCase {
 
 /// Discovers `@test` functions, generates a test harness, compiles and runs it.
 pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
-    let mut graph = match resolve::resolve_test_project_modules(config, project_root) {
+    let mut sources = match resolve::resolve_test_project_sources(config, project_root) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("error: {e}");
@@ -465,14 +464,14 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
         }
     };
 
-    let tests = discover_tests(&graph, &config.name);
+    let tests = discover_tests(&sources, &config.name);
 
     if tests.is_empty() {
         println!("no tests found");
         return;
     }
 
-    let harness_source = generate_harness(&tests, &graph);
+    let harness_source = generate_harness(&tests, &sources);
     let harness_name = format!("{}.__test_harness__", config.name);
 
     let parse_result = expo_parser::parse(&harness_source);
@@ -484,18 +483,18 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
         process::exit(1);
     }
 
-    graph.order.push(harness_name.clone());
-    graph.modules.insert(
+    sources.order.push(harness_name.clone());
+    sources.files.insert(
         harness_name.clone(),
-        resolve::ResolvedModule {
+        resolve::ResolvedFile {
             name: harness_name.clone(),
             path: PathBuf::from("<test_harness>"),
             source: harness_source,
-            module: parse_result.module,
+            ast: parse_result.module,
             errors: parse_result.errors,
         },
     );
-    graph.entry = harness_name;
+    sources.entry = harness_name;
 
     let target_dir = project_root.join("target").join("debug");
     fs::create_dir_all(&target_dir).unwrap_or_else(|e| {
@@ -505,7 +504,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     let binary = target_dir.join(format!("{}_test", config.name));
     let output = binary.to_str().unwrap().to_string();
 
-    build_from_graph(&mut graph, &output, true, color, false, false);
+    build_from_sources(&mut sources, &output, true, color, false, false);
 
     let status = process::Command::new(&binary).status();
     let _ = fs::remove_file(&binary);
@@ -519,19 +518,19 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     }
 }
 
-/// Walks the module graph and collects `@test`-annotated functions inside structs.
-/// Only scans modules belonging to the current project (by name prefix).
-fn discover_tests(graph: &ModuleGraph, project_name: &str) -> Vec<TestCase> {
+/// Walks the source set and collects `@test`-annotated functions inside
+/// structs. Only scans files belonging to the current project (by name prefix).
+fn discover_tests(sources: &SourceSet, project_name: &str) -> Vec<TestCase> {
     let mut tests = Vec::new();
     let prefix = format!("{project_name}.");
 
-    for name in &graph.order {
+    for name in &sources.order {
         if name != project_name && !name.starts_with(&prefix) {
             continue;
         }
 
-        let rm = &graph.modules[name];
-        for item in &rm.module.items {
+        let rm = &sources.files[name];
+        for item in &rm.ast.items {
             if let Item::Struct(s) = item {
                 for func in &s.functions {
                     if let Some(ann) = func.annotations.iter().find(|a| a.name == "test") {
@@ -553,7 +552,7 @@ fn discover_tests(graph: &ModuleGraph, project_name: &str) -> Vec<TestCase> {
     tests
 }
 
-/// Generates the Expo source for a test harness module.
+/// Generates the Expo source for a test harness file.
 ///
 /// Each `@test` function must return `Result<Bool, String>`. The harness
 /// calls each test as `StructName.fn_name()`, matches on the result to
@@ -561,8 +560,8 @@ fn discover_tests(graph: &ModuleGraph, project_name: &str) -> Vec<TestCase> {
 /// fail. A final non-zero exit (via panic) is triggered when any test failed.
 ///
 /// No imports are needed -- the gather-then-check pipeline makes all project
-/// types visible to every module automatically.
-fn generate_harness(tests: &[TestCase], _graph: &ModuleGraph) -> String {
+/// types visible to every file automatically.
+fn generate_harness(tests: &[TestCase], _sources: &SourceSet) -> String {
     let green = "\x1b[32m";
     let red = "\x1b[31m";
     let reset = "\x1b[0m";

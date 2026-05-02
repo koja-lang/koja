@@ -161,7 +161,7 @@ pub fn cmd_run(file: Option<String>, release: bool, run_args: Vec<String>, color
 /// `expo check [file.expo ...] [--emit-ast]` -- type-checks without producing an executable.
 ///
 /// With no arguments, looks for `expo.toml` in the current directory.
-/// With `--emit-ast`, prints each type-checked module's AST (`{:#?}`) to stdout
+/// With `--emit-ast`, prints each type-checked file's AST (`{:#?}`) to stdout
 /// instead of the per-file/project OK line. The dump runs even when typecheck
 /// reports diagnostics, but a non-zero exit is still gated on errors -- mirrors
 /// how `--emit-llvm` works on `expo build`.
@@ -301,7 +301,7 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
         structs: Vec::new(),
     };
 
-    for (path, _module_name) in &collected {
+    for (path, _file_fqn) in &collected {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -366,8 +366,8 @@ fn write_doc_file(path: &Path, content: &str) {
     println!("  {}", path.display());
 }
 
-/// Recursively collects `.expo` files from a directory, building module names
-/// from relative paths (e.g. `foo/bar.expo` becomes module `foo.bar`).
+/// Recursively collects `.expo` files from a directory, building file FQNs
+/// from relative paths (e.g. `foo/bar.expo` becomes file FQN `foo.bar`).
 fn collect_expo_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
@@ -381,7 +381,7 @@ fn collect_expo_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) 
         if path.is_dir() {
             collect_expo_files(&path, root, out);
         } else if path.extension().is_some_and(|ext| ext == "expo") {
-            let module_name = path
+            let file_fqn = path
                 .strip_prefix(root)
                 .unwrap_or(&path)
                 .with_extension("")
@@ -390,13 +390,13 @@ fn collect_expo_files(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) 
                 .collect::<Vec<_>>()
                 .join(".");
             if let Some(s) = path.to_str() {
-                out.push((s.to_string(), module_name));
+                out.push((s.to_string(), file_fqn));
             }
         }
     }
 }
 
-/// Like [`collect_expo_files`], but prefixes each module name with a project name
+/// Like [`collect_expo_files`], but prefixes each file FQN with a project name
 /// (e.g. `src/lexer.expo` becomes `myproject.lexer`).
 fn collect_expo_files_with_prefix(
     dir: &Path,
@@ -424,9 +424,9 @@ fn collect_expo_files_with_prefix(
                 .filter_map(|c| c.as_os_str().to_str())
                 .collect::<Vec<_>>()
                 .join(".");
-            let module_name = format!("{prefix}.{relative}");
+            let file_fqn = format!("{prefix}.{relative}");
             if let Some(s) = path.to_str() {
-                out.push((s.to_string(), module_name));
+                out.push((s.to_string(), file_fqn));
             }
         }
     }

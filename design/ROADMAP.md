@@ -181,7 +181,7 @@ The litmus test: does the compiler or language runtime need it to function, or i
 
 - ~~`expo.toml` extended with dependency declarations~~ **Done.** `[dependencies]` table with local path support (`json = { path = "../json" }`). Dependency sources are scanned and merged into the module graph.
 - Git dependencies: `expo.toml` extended with git URLs, tags, and branches. Dependency resolution: fetch from git, lock file generation for reproducible builds.
-- ~~`alias` keyword~~ -- **Done.** File-private shorthand for qualified package types. `alias json.Encoder` or `alias json.Decoder as JSONDecoder`. Scoped to the declaring file, doesn't pollute the flat project namespace. Parser, type checker, formatter, LSP, and doc extractor all handle `Item::Alias`. Package types tracked via `ModuleGraph.dep_packages` and `TypeContext.package_types`.
+- ~~`alias` keyword~~ -- **Done.** File-private shorthand for qualified package types. `alias json.Encoder` or `alias json.Decoder as JSONDecoder`. Scoped to the declaring file, doesn't pollute the flat project namespace. Parser, type checker, formatter, LSP, and doc extractor all handle `Item::Alias`. Package types tracked via `SourceSet.dep_packages` and `TypeContext.package_types`.
 - **Done when**: `expo.toml` resolves git dependencies and builds the project
 
 #### C FFI -- started
