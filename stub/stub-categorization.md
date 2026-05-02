@@ -24,19 +24,25 @@ Trend (lower is better; baseline = pre-Slice-1):
 | ------------ | ------------------ | ------------- |
 | Pre-Slice-1  | 16 / 28            | 3009          |
 | Post-Slice-1 | 16 / 28            | 2426          |
+| Post-Slice-2 | 16 / 28            | 2420          |
 
-Total triples dropped by 583 (~19%) without retiring an `ExprKind`:
-the entire delta is the Phase-1 attribution fix collapsing previously
-distinct `<unknown>` entries into the same source-attributed function.
-Slice 1 also cut MethodCall-specific triples by 47 (378 → 331) by
-folding the `args-need-coercion` and `receiver-coercion` bails into
-typed [`IRInstruction::UnionWrap`](../crates/expo-ir/src/values.rs)
-emission via the new
+Slice 1 cut 583 triples (~19%) via the Phase-1 attribution fix
+collapsing distinct `<unknown>` entries plus 47 `MethodCall` triples
+via the receiver/arg `Coercion::UnionWiden` lift through
 [`Lowerer::stage_union_widen`](../crates/expo-ir/src/lower/coercion.rs).
+Slice 2 cut 6 more triples (the entire `lower_call_or_stub`
+`args-need-coercion` cohort) by lifting the same coercion across the
+rest of the call family via the shared
+[`Lowerer::stage_arg_coercions`](../crates/expo-ir/src/lower/coercion.rs)
+helper. The `MethodCall` count stays at 331 because the 1378
+method-call -> static-call delegations log a parent
+`static-call-route` bail before the (now finer-grained) static-call
+outcome -- the slice's leverage is in the new diagnostic split, not
+in shrinking the inventory.
 
 ## Volume snapshot
 
-2426 unique `(kind, function, span)` triples. Per-`ExprKind`:
+2420 unique `(kind, function, span)` triples. Per-`ExprKind`:
 
 | Rank | ExprKind             | Count | Routing today                                                           |
 | ---- | -------------------- | ----- | ----------------------------------------------------------------------- |
@@ -44,7 +50,7 @@ emission via the new
 | 2    | `Match`              | 558   | typed only when `arms_are_minimal`                                      |
 | 3    | `MethodCall`         | 331   | helper exists, returns `None` (8 remaining branches, see below)         |
 | 4    | `Ident`              | 248   | helper exists, returns `None`                                           |
-| 5    | `Call`               | 70    | helper exists, returns `None` (or non-`Ident` callee)                   |
+| 5    | `Call`               | 64    | helper exists, returns `None` (or non-`Ident` callee)                   |
 | 6    | `Literal`            | 34    | `resolve_const_inline` returns `None` for some literal shapes           |
 | 7    | `Closure`            | 30    | no arm                                                                  |
 | 8    | `List`               | 29    | no arm                                                                  |
@@ -114,34 +120,102 @@ landed:
   emit paths. The helper carries a doc-comment marking the
   remaining seam.
 
+## Slice 2 closeout
+
+[Plan](../../.cursor/plans/slice_2_call_coercion_mirror_cb3622cf.plan.md)
+landed:
+
+- **Phase 1 -- `lower_static_call_or_stub` instrumentation.**
+  [`expo-ir/src/lower/diag.rs`](../crates/expo-ir/src/lower/diag.rs)
+  gained `HELPER_STATIC_CALL` and 4 alpha-sorted
+  `REASON_STATIC_CALL_*` constants
+  (`pending-method-mono`, `pending-type-mono`,
+  `resolve-static-call-failed`, `unregistered-mangled-name`).
+  [`lower_static_call_or_stub`](../crates/expo-ir/src/lower/calls.rs)
+  takes a new `call_span: Span` parameter (threaded from
+  `methods.rs:426` and `structs.rs compile_static_call`); the
+  combined `pending_type_mono || pending_mono` early-bail split
+  into two distinct branches; all 4 surviving `Ok(None)` paths
+  tag through the new `note_static_call_bail` helper. Net data:
+  for the first time the 1378-hit `static-call-route` parent
+  count from Slice 1 is broken down by reason -- 63 instances
+  bail at `pending-type-mono`, the other three reasons currently
+  hit zero (clean signal for slice planning).
+- **Phase 2 -- typed coercion lift across the rest of the call
+  family.** Added
+  [`Lowerer::stage_arg_coercions`](../crates/expo-ir/src/lower/coercion.rs)
+  as the shared per-arg
+  [`Coercion::UnionWiden`](../crates/expo-typecheck/src/context.rs)
+  staging seam used by all three call lifters
+  (`emit_call_instruction`, `emit_static_call_instruction`,
+  `emit_method_call_instruction`). Dropped the
+  `args_need_coercion` early-bail in both
+  [`lower_call_or_stub`](../crates/expo-ir/src/lower/calls.rs)
+  and `lower_static_call_or_stub`; extracted
+  `emit_call_instruction` and `emit_static_call_instruction` to
+  keep the dispatch helpers under build.mdc's 40-line guideline
+  (`emit_static_call_instruction` preserves the
+  `Kernel.panic` `Unreachable` terminator special-case).
+  Retrofitted Slice 1's `emit_method_call_instruction` to call
+  `stage_arg_coercions` instead of an inline per-arg loop so all
+  three lifters share one code path. Retired
+  `REASON_CALL_ARGS_NEED_COERCION` from `diag.rs` and deleted
+  the now-unused `args_need_coercion` free function.
+- **Net inventory delta.** Total triples 2426 -> 2420 (-6,
+  exactly the retired `lower_call_or_stub args-need-coercion`
+  cohort). `Call` count 70 -> 64 for the same reason.
+  `MethodCall` count holds at 331 (the parent
+  `static-call-route` tag still fires; the leverage is in the
+  new diagnostic split, not in shrinking the inventory).
+- **Sealing-progress.** Still 16/28 -- no `ExprKind` retired
+  this slice, expected since this slice deepened coverage on
+  active kinds rather than completing one. The new
+  `pending-type-mono` data point is the most actionable signal
+  for ranking the next slice (see "Recommended slice order"
+  below).
+
 ## Per-helper bail breakdown
 
 `[HELPER-BAIL]` lines from `regenerate.sh`:
 
-| Helper                      | Reason                      | Count |
-| --------------------------- | --------------------------- | ----- |
-| `lower_method_call_or_stub` | `static-call-route`         | 1378  |
-| `lower_method_call_or_stub` | `no-resolved-receiver-type` | 186   |
-| `lower_method_call_or_stub` | `pending-mono`              | 127   |
-| `lower_method_call_or_stub` | `no-impl-method`            | 25    |
-| `lower_method_call_or_stub` | `clone-shortcut`            | 17    |
-| `lower_ident_or_stub`       | `no-binding`                | 248   |
-| `lower_call_or_stub`        | `no-resolved-function`      | 61    |
-| `lower_call_or_stub`        | `args-need-coercion`        | 6     |
+| Helper                       | Reason                      | Count |
+| ---------------------------- | --------------------------- | ----- |
+| `lower_method_call_or_stub`  | `static-call-route`         | 1378  |
+| `lower_ident_or_stub`        | `no-binding`                | 248   |
+| `lower_method_call_or_stub`  | `no-resolved-receiver-type` | 186   |
+| `lower_method_call_or_stub`  | `pending-mono`              | 118   |
+| `lower_static_call_or_stub`  | `pending-type-mono`         | 63    |
+| `lower_call_or_stub`         | `no-resolved-function`      | 61    |
+| `lower_method_call_or_stub`  | `no-impl-method`            | 25    |
+| `lower_method_call_or_stub`  | `clone-shortcut`            | 17    |
+| `lower_call_or_stub`         | `pending-mono`              | 9     |
+
+Three `lower_static_call_or_stub` reasons currently log zero
+hits (kept for completeness because the lifter does tag them):
+
+| Helper                      | Reason                       | Count |
+| --------------------------- | ---------------------------- | ----- |
+| `lower_static_call_or_stub` | `pending-method-mono`        | 0     |
+| `lower_static_call_or_stub` | `resolve-static-call-failed` | 0     |
+| `lower_static_call_or_stub` | `unregistered-mangled-name`  | 0     |
 
 Reading the `MethodCall` row: out of 331 distinct
 `(MethodCall, function, span)` Stub triples, the lion's share
-delegate into `lower_static_call_or_stub` (instrumenting that
-helper's own bail set is the next-highest-leverage diagnostic
-expansion). The remaining branches break down as a long tail
-roughly proportional to the counts above; `pending-mono` (127)
-specifically tracks the "closure pass missed N generic
-instantiations" warning visible during stdlib runs.
+fire `static-call-route` first and then either lift cleanly or
+bail in `lower_static_call_or_stub`. With Slice 2's new
+instrumentation that downstream bail is now visible: 63 of those
+delegations land at `pending-type-mono` (the receiver type
+itself isn't yet monomorphized -- closure-pass / symbol
+registration territory). The other static-call reasons hit zero
+in our test corpus, so any future inventory-driven work targets
+`pending-type-mono` first.
 
-The `Call` row's six `args-need-coercion` survivors are the
-free-function analogue to the `MethodCall` lift Slice 1 just
-landed; closing that gap is a near-trivial follow-up that mirrors
-`emit_method_call_instruction` for `lower_call_or_stub`.
+The `lower_call_or_stub` rows now show 9 `pending-mono` bails
+(was previously not surfaced separately) on top of the
+pre-Slice-2 `no-resolved-function` count. The
+`args-need-coercion` row is gone; both call lifters route
+[`Coercion::UnionWiden`](../crates/expo-typecheck/src/context.rs)
+through `stage_arg_coercions` now.
 
 ## Categorization
 
@@ -160,7 +234,7 @@ the helper bails on a particular shape that needs typed handling.
 | `Match`              | 558   | `Lowerer::lower_match_arm` (gated by `arms_are_minimal`)         |
 | `MethodCall`         | 331   | `Lowerer::lower_method_call_or_stub` (8 remaining bail branches) |
 | `Ident`              | 248   | `Lowerer::lower_ident_or_stub`                                   |
-| `Call`               | 70    | `Lowerer::lower_call_or_stub`                                    |
+| `Call`               | 64    | `Lowerer::lower_call_or_stub`                                    |
 | `Binary`             | 7     | `Lowerer::lower_binary_op_or_stub`                               |
 | `StructConstruction` | 4     | `Lowerer::lower_struct_construction_or_stub`                     |
 | `FieldAccess`        | 3     | `Lowerer::lower_field_access_or_stub`                            |
@@ -182,9 +256,11 @@ appeared at this position pre-Slice-1 were retired by the typed
 [`IRInstruction::UnionWrap`](../crates/expo-ir/src/values.rs)
 staging.)
 
-`Ident` (248) and `Call` (70) now publish bail-reason data via
+`Ident` (248) and `Call` (64) now publish bail-reason data via
 `[HELPER-BAIL]` so the next slice can target the heaviest reason
-without manual triage.
+without manual triage. `lower_static_call_or_stub` joined the
+instrumented set in Slice 2 (4 reason tags, 63 hits on
+`pending-type-mono` -- the rest at zero).
 
 ### Category B: no dispatch arm yet -- structural lowering missing
 
@@ -209,43 +285,55 @@ codegen executor arm.
 | --------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Literal` | 34    | `resolve_const_inline` rejects some literal shapes (likely string-with-interpolation, or numeric literals whose `Type` slot needs the surrounding context). Inspect [crates/expo-ir/src/lower/constants.rs](../crates/expo-ir/src/lower/constants.rs) to enumerate what `resolve_const_inline` returns `None` for. |
 
-## Recommended slice order (re-ranked post-Slice-1)
+## Recommended slice order (re-ranked post-Slice-2)
 
-Ranked by leverage (count \* unblocks-other-slices weight). The
-new `[HELPER-BAIL]` data above shifts the priorities:
+Ranked by leverage (count \* unblocks-other-slices weight). Slice 2's
+new `[HELPER-BAIL]` split for `lower_static_call_or_stub` collapsed
+the previous #1 (1378-hit static-call instrumentation) into a single
+actionable target -- `pending-type-mono` (63 hits) -- which feeds
+directly into the closure-pass / symbol-registration work below.
 
-1. **`lower_static_call_or_stub` instrumentation + typed lowering**
-   (1378 hits, dwarfs everything else). The Slice-1 plan flagged
-   this as a Phase-2.5 follow-up; the data confirms it as the
-   single highest-leverage target. Mirror Phase 2's tagging
-   pattern, then drain the bails per-reason.
-2. **`MethodCall` mangled-symbol registration (`pending-mono` /
-   `unregistered-mangled-name`, 127+ hits)** -- driven by the
+1. **Closure-pass / symbol-registration drain
+   (`lower_static_call_or_stub pending-type-mono` 63 +
+   `lower_method_call_or_stub pending-mono` 118 +
+   `lower_call_or_stub pending-mono` 9, ~190 hits)** -- driven by the
    "closure pass missed N generic instantiations" warning visible
-   during stdlib runs; resolved by registering the missed symbols
-   in `IRProgram` before `populate_ir_blocks`. Same shape as
-   Slice 1's typed lift: drop the bail, stage the symbol, retire
-   the legacy fallback.
-3. **Free-function `Call` arg coercion (mirror of Slice 1)** --
-   six survivors of `args-need-coercion` in `lower_call_or_stub`;
-   port the `MethodCall` arg coercion staging to free-function
-   args. ~half a slice.
-4. **`EnumConstruction` helper bail breakdown + lift** -- 1056 hits,
+   during every stdlib run. Resolved by registering the missed
+   monomorphizations in
+   [`IRProgram`](../crates/expo-ir/src/program.rs) before
+   `populate_ir_blocks` so all three pending-mono bails drain at
+   once. Same shape as Slice 1's typed lift: drop the bail, stage
+   the symbol, retire the legacy lazy-backfill fallback. Also
+   eliminates the warnings in CI output.
+2. **`EnumConstruction` helper bail breakdown + lift** -- 1056 hits,
    single helper. Add `[HELPER-BAIL]` instrumentation for
-   `lower_enum_construction_or_stub` (Phase 2 pattern), then drain
-   the heaviest reason.
-5. **`Match` non-minimal arm support** -- extend `lower_match_arm`
+   `lower_enum_construction_or_stub` (Slice-1 Phase-2 pattern), then
+   drain the heaviest reason. Largest single `ExprKind` cohort
+   remaining.
+3. **`Match` non-minimal arm support** -- extend `lower_match_arm`
    beyond `arms_are_minimal`. Substantial: needs the same
    `LoweredMatchArm.body_blocks` machinery the operand-routing
-   helper uses, generalized for arbitrary arm bodies.
-6. **`Ident` bail breakdown (248)** -- single bail (`no-binding`)
+   helper uses, generalized for arbitrary arm bodies. 558 hits on a
+   single helper.
+4. **`Ident` bail breakdown (248)** -- single bail (`no-binding`)
    today; investigate whether typecheck-rejected idents are the
-   bulk of the count or whether sub-cases warrant additional tags.
+   bulk of the count or whether sub-cases warrant additional tags
+   before draining.
+5. **`MethodCall` non-pending bails (~228 hits across 4 reasons:
+   `no-resolved-receiver-type` 186, `no-impl-method` 25,
+   `clone-shortcut` 17 -- excluding the static-call delegations now
+   diagnosed in #1)** -- each has its own typecheck/resolution
+   shape; bring them into IR resolution one reason at a time, in
+   count order.
+6. **`Call` non-pending bails (`no-resolved-function` 61)** --
+   investigate the unresolved-symbol shape. May overlap with #1
+   once symbol registration tightens.
 7. **`apply_coercion` retirement (Slice 1 carry-over)** -- close
-   the AST escape hatch for `UnionWiden` once the
-   free-function-args lift (#3 above) plus the planned legacy
-   `compile_function_body`-tail-return / `compile_assignment` IR
-   migrations land.
+   the AST escape hatch for `UnionWiden` once the legacy
+   `compile_function_body`-tail-return / `compile_assignment` /
+   `compile_expr_coerced` paths migrate to the IR-staged
+   `stage_union_widen` seam (free-function args already done in
+   Slice 2; assignment/return remain).
 8. **Category B structural slices** in roadmap order: Slice 8
    (Closure / ShortClosure / Receive), then List/Map elaboration,
    then For (Slice 3c), then Spawn.

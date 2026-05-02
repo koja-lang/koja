@@ -431,6 +431,7 @@ impl<'a> Lowerer<'a> {
                     method,
                     args,
                     tail,
+                    receiver.span,
                 );
             }
         }
@@ -535,9 +536,7 @@ impl<'a> Lowerer<'a> {
         let Some(open) = open else {
             return Ok(Some((None, IROperand::Unit, return_type)));
         };
-        for (arg, slot) in args.iter().zip(lowered_args.iter_mut()) {
-            *slot = self.stage_union_widen(builder, open, arg.value.span, slot.clone());
-        }
+        self.stage_arg_coercions(builder, open, args, &mut lowered_args);
 
         let dest = self.next_value_id();
         builder.append(

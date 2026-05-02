@@ -42,9 +42,15 @@ const FALLBACK_FUNCTION: &str = "<unknown>";
 pub const HELPER_CALL: &str = "lower_call_or_stub";
 pub const HELPER_IDENT: &str = "lower_ident_or_stub";
 pub const HELPER_METHOD_CALL: &str = "lower_method_call_or_stub";
+pub const HELPER_STATIC_CALL: &str = "lower_static_call_or_stub";
 
 /// Bail reasons for [`HELPER_CALL`]. Alpha-sorted.
-pub const REASON_CALL_ARGS_NEED_COERCION: &str = "args-need-coercion";
+///
+/// Slice 2 retired `args-need-coercion` by lifting it into
+/// [`crate::values::IRInstruction::UnionWrap`] via
+/// [`crate::Lowerer::stage_arg_coercions`], same shape as the Slice 1
+/// `MethodCall` lift; future `Coercion` variants add their own reason
+/// constants only if they re-introduce a bail.
 pub const REASON_CALL_NON_DIRECT_ROUTE: &str = "non-direct-route";
 pub const REASON_CALL_NON_IDENT_CALLEE: &str = "non-ident-callee";
 pub const REASON_CALL_NO_RESOLVED_FUNCTION: &str = "no-resolved-function";
@@ -69,6 +75,12 @@ pub const REASON_METHOD_CALL_RESOLVE_METHOD_CALL_FAILED: &str = "resolve-method-
 pub const REASON_METHOD_CALL_RESOLVE_STRUCT_NAME_FAILED: &str = "resolve-struct-name-failed";
 pub const REASON_METHOD_CALL_STATIC_CALL_ROUTE: &str = "static-call-route";
 pub const REASON_METHOD_CALL_UNREGISTERED_MANGLED_NAME: &str = "unregistered-mangled-name";
+
+/// Bail reasons for [`HELPER_STATIC_CALL`]. Alpha-sorted.
+pub const REASON_STATIC_CALL_PENDING_METHOD_MONO: &str = "pending-method-mono";
+pub const REASON_STATIC_CALL_PENDING_TYPE_MONO: &str = "pending-type-mono";
+pub const REASON_STATIC_CALL_RESOLVE_FAILED: &str = "resolve-static-call-failed";
+pub const REASON_STATIC_CALL_UNREGISTERED_MANGLED_NAME: &str = "unregistered-mangled-name";
 
 /// Dedupe key for the [`STUB-FALLTHROUGH`] inventory:
 /// `(expr_kind_name, function-being-lowered, span debug repr)`.

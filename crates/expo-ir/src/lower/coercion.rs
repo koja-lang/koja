@@ -16,6 +16,7 @@
 //! `stage_*` helpers and the same call-sites pick them up via the
 //! shared [`Lowerer::stage_coercion`] dispatch.
 
+use expo_ast::ast::Arg;
 use expo_ast::span::Span;
 use expo_typecheck::context::Coercion;
 
@@ -58,5 +59,27 @@ impl<'a> Lowerer<'a> {
             },
         );
         IROperand::Local(dest)
+    }
+
+    /// Stage [`stage_union_widen`] for every arg slot whose source span
+    /// has a registered [`Coercion::UnionWiden`]. Shared by all three
+    /// call lifters (`emit_call_instruction`,
+    /// `emit_static_call_instruction`, `emit_method_call_instruction`)
+    /// so the per-arg coercion seam lives in one place.
+    ///
+    /// `lowered_args[i]` is updated in-place to the wrapped operand
+    /// when arg `i` needs widening; otherwise it stays unchanged.
+    /// Length must match `args` (callers always lower one operand per
+    /// arg via `lower_expr_sequence`).
+    pub fn stage_arg_coercions(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        args: &[Arg],
+        lowered_args: &mut [IROperand],
+    ) {
+        for (arg, slot) in args.iter().zip(lowered_args.iter_mut()) {
+            *slot = self.stage_union_widen(builder, open, arg.value.span, slot.clone());
+        }
     }
 }

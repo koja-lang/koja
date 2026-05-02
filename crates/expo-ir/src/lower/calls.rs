@@ -30,13 +30,14 @@ use crate::cfg::CFGBuilder;
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
 use crate::lower::ctx::LowerCtx;
 use crate::lower::diag::{
-    HELPER_CALL, REASON_CALL_ARGS_NEED_COERCION, REASON_CALL_NO_RESOLVED_FUNCTION,
+    HELPER_CALL, HELPER_STATIC_CALL, REASON_CALL_NO_RESOLVED_FUNCTION,
     REASON_CALL_NON_DIRECT_ROUTE, REASON_CALL_PENDING_MONO, REASON_CALL_STRUCT_OR_ENUM_CTOR,
+    REASON_STATIC_CALL_PENDING_METHOD_MONO, REASON_STATIC_CALL_PENDING_TYPE_MONO,
+    REASON_STATIC_CALL_RESOLVE_FAILED, REASON_STATIC_CALL_UNREGISTERED_MANGLED_NAME,
     log_helper_bail,
 };
 use crate::lower::inference::infer_static_struct_type_args_from_args;
 use crate::lower::naming::{current_method_symbol_prefix, method_symbol_prefix};
-use crate::lower::stmt::resolve_coercion;
 use crate::lower::types::{id_for, resolve_name_current};
 use crate::program::IRProgram;
 use crate::resolved::calls::{
@@ -49,6 +50,19 @@ use crate::values::{IRInstruction, IROperand};
 /// resulting `[HELPER-BAIL]` lines feed slice planning.
 fn note_call_bail(lowerer: &Lowerer<'_>, reason: &'static str, span: &Span) {
     log_helper_bail(HELPER_CALL, reason, lowerer.fn_state.current_fn(), span);
+}
+
+/// Routes a `lower_static_call_or_stub` bail through [`log_helper_bail`]
+/// with the [`HELPER_STATIC_CALL`] tag. Mirrors [`note_call_bail`] /
+/// `note_method_call_bail` so all three call lifters share one
+/// instrumentation shape.
+fn note_static_call_bail(lowerer: &Lowerer<'_>, reason: &'static str, span: &Span) {
+    log_helper_bail(
+        HELPER_STATIC_CALL,
+        reason,
+        lowerer.fn_state.current_fn(),
+        span,
+    );
 }
 
 /// Resolves a bare-name function call to a [`ResolvedCall`].
@@ -369,10 +383,6 @@ impl<'a> Lowerer<'a> {
             note_call_bail(self, REASON_CALL_STRUCT_OR_ENUM_CTOR, &call_span);
             return Ok(None);
         }
-        if args_need_coercion(self, args) {
-            note_call_bail(self, REASON_CALL_ARGS_NEED_COERCION, &call_span);
-            return Ok(None);
-        }
 
         let type_ctx = self.ctx().type_ctx;
         let Ok(resolved) = resolve_call(
@@ -410,14 +420,34 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        let (open, lowered_args) =
+        self.emit_call_instruction(builder, open, args, direct, tail)
+    }
+
+    /// Lower the arg sequence, stage per-arg coercions, and append the
+    /// [`IRInstruction::Call`]. Splits the dispatch helper
+    /// ([`Self::lower_call_or_stub`]) from the operand-materialization
+    /// sequence so the former stays focused on routing + bail tagging
+    /// and the latter stays under build.mdc's 40-line guideline.
+    /// Per-arg coercion flows through [`Self::stage_arg_coercions`] --
+    /// the single seam shared with `emit_static_call_instruction` and
+    /// `emit_method_call_instruction`.
+    fn emit_call_instruction(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        args: &[Arg],
+        direct: Direct,
+        tail: bool,
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
+        let return_type = direct.return_type.clone();
+        let (open, mut lowered_args) =
             self.lower_expr_sequence(builder, open, args.iter().map(|a| &a.value))?;
         let Some(open) = open else {
-            return Ok(Some((None, IROperand::Unit, direct.return_type)));
+            return Ok(Some((None, IROperand::Unit, return_type)));
         };
+        self.stage_arg_coercions(builder, open, args, &mut lowered_args);
 
         let dest = self.next_value_id();
-        let return_type = direct.return_type.clone();
         builder.append(
             open,
             IRInstruction::Call {
@@ -483,10 +513,8 @@ impl<'a> Lowerer<'a> {
         method: &str,
         args: &[Arg],
         tail: bool,
+        call_span: Span,
     ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
-        if args_need_coercion(self, args) {
-            return Ok(None);
-        }
         let Ok(resolved) = resolve_static_call(
             &self.ctx(),
             self.program,
@@ -497,22 +525,62 @@ impl<'a> Lowerer<'a> {
             method,
             args,
         ) else {
+            note_static_call_bail(self, REASON_STATIC_CALL_RESOLVE_FAILED, &call_span);
             return Ok(None);
         };
 
-        if resolved.pending_type_mono.is_some() || resolved.pending_mono.is_some() {
+        if resolved.pending_type_mono.is_some() {
+            note_static_call_bail(self, REASON_STATIC_CALL_PENDING_TYPE_MONO, &call_span);
+            return Ok(None);
+        }
+        if resolved.pending_mono.is_some() {
+            note_static_call_bail(self, REASON_STATIC_CALL_PENDING_METHOD_MONO, &call_span);
             return Ok(None);
         }
         if !self.program.contains_function(&resolved.mangled_name) {
+            note_static_call_bail(
+                self,
+                REASON_STATIC_CALL_UNREGISTERED_MANGLED_NAME,
+                &call_span,
+            );
             return Ok(None);
         }
 
+        self.emit_static_call_instruction(builder, open, type_name, method, args, resolved, tail)
+    }
+
+    /// Lower the arg sequence, stage per-arg coercions, and append the
+    /// [`IRInstruction::Call`]. Splits the dispatch helper
+    /// ([`Self::lower_static_call_or_stub`]) from the operand-
+    /// materialization sequence so the former stays focused on routing
+    /// and bail tagging while the latter stays under build.mdc's
+    /// 40-line guideline. Per-arg coercion flows through
+    /// [`Self::stage_arg_coercions`] -- the single seam future
+    /// `Coercion` variants extend, shared with `emit_call_instruction`
+    /// and `emit_method_call_instruction`.
+    ///
+    /// `Kernel.panic` is special-cased: the call never returns, so the
+    /// block is terminated with [`IRTerminator::Unreachable`] to keep
+    /// downstream constructs from threading a continuation past it
+    /// (mirrors typecheck's `is_diverging` name-pattern check).
+    #[allow(clippy::too_many_arguments)]
+    fn emit_static_call_instruction(
+        &mut self,
+        builder: &mut CFGBuilder,
+        open: IRBlockId,
+        type_name: &str,
+        method: &str,
+        args: &[Arg],
+        resolved: ResolvedStaticCall,
+        tail: bool,
+    ) -> Result<Option<(Option<IRBlockId>, IROperand, Type)>, String> {
         let return_type = resolved.return_type.clone();
-        let (open, lowered_args) =
+        let (open, mut lowered_args) =
             self.lower_expr_sequence(builder, open, args.iter().map(|a| &a.value))?;
         let Some(open) = open else {
             return Ok(Some((None, IROperand::Unit, return_type)));
         };
+        self.stage_arg_coercions(builder, open, args, &mut lowered_args);
 
         let dest = self.next_value_id();
         builder.append(
@@ -526,11 +594,6 @@ impl<'a> Lowerer<'a> {
                 tail,
             },
         );
-        // `Kernel.panic` never returns. Terminating the block with
-        // `Unreachable` prevents downstream constructs (match arm phi
-        // staging, implicit-return tail join, etc.) from threading a
-        // continuation past the call. Mirrors typecheck's `is_diverging`
-        // name-pattern check.
         if type_name == "Kernel" && method == "panic" {
             builder.set_terminator(open, IRTerminator::Unreachable);
             return Ok(Some((None, IROperand::Unit, return_type)));
@@ -551,16 +614,4 @@ pub fn receiver_variable_name(receiver: &Expr) -> Option<String> {
         ExprKind::Self_ => Some("self".to_string()),
         _ => None,
     }
-}
-
-/// Returns `true` if any call argument has a recorded coercion
-/// (today: union widening) at its source span. The IR `Call` /
-/// `MethodCall` lift skips the typed arg-time `apply_coercion` step
-/// the legacy `compile_expr_coerced` performs, so calls with coerced
-/// args must defer to [`crate::values::IRInstruction::Stub`] until
-/// the IR vocabulary models coercions explicitly.
-pub(crate) fn args_need_coercion(lowerer: &Lowerer<'_>, args: &[Arg]) -> bool {
-    let ctx = lowerer.ctx();
-    args.iter()
-        .any(|arg| resolve_coercion(&ctx, arg.value.span).is_some())
 }
