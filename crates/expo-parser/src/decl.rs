@@ -468,8 +468,10 @@ impl Parser {
         };
 
         self.skip_newlines();
-        let has_extern = annotations.iter().any(|a| a.name == "extern");
-        let body = if has_extern
+        let bodyless_marker = annotations
+            .iter()
+            .any(|a| a.name == "extern" || a.name == "intrinsic");
+        let body = if bodyless_marker
             || self.at(&TokenKind::Fn)
             || self.at(&TokenKind::At)
             || (self.at(&TokenKind::Priv) && matches!(self.peek_nth(1), TokenKind::Fn))

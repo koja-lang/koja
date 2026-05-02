@@ -75,9 +75,8 @@ impl ReplyTo<R>
   @doc """
   Sends a reply of type `R` to the caller that initiated a synchronous call.
   """
+  @intrinsic
   fn send(self, reply: R)
-    panic("intrinsic")
-  end
 
   @doc """
   Sends `value` to the caller if `from` is present, does nothing otherwise.
@@ -106,17 +105,15 @@ impl Ref<M, R>
   a running process (inside `start`, `handle`, or `handle_signal`).
   The type parameters are inferred from the annotation on the binding.
   """
+  @intrinsic
   fn self_ref -> Ref<M, R>
-    panic("intrinsic")
-  end
 
   @doc """
   Sends a message to the process without waiting for a reply (fire and forget).
   The handler receives `from = Option.None`.
   """
+  @intrinsic
   fn cast(self, msg: M)
-    panic("intrinsic")
-  end
 
   @doc """
   Sends a message and waits up to `timeout` milliseconds for a reply.
@@ -124,32 +121,28 @@ impl Ref<M, R>
   if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)`
   if the process is no longer running.
   """
+  @intrinsic
   fn call(self, msg: M, timeout: Int) -> Result<R, CallError>
-    panic("intrinsic")
-  end
 
   @doc """
   Sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`).
   The signal is delivered to the process's `handle_signal` method.
   """
+  @intrinsic
   fn signal(self, event: Lifecycle)
-    panic("intrinsic")
-  end
 
   @doc """
   Immediately terminates the process. No signal is sent -- the process
   is destroyed without a chance to run cleanup.
   """
+  @intrinsic
   fn kill(self)
-    panic("intrinsic")
-  end
 
   @doc """
   Returns `true` if the process is still running.
   """
+  @intrinsic
   fn alive?(self) -> Bool
-    panic("intrinsic")
-  end
 
   @doc """
   Schedules a message to be delivered to the process after `delay_ms`
@@ -157,9 +150,8 @@ impl Ref<M, R>
   asynchronously when the timer fires. Useful for periodic tasks
   and timeouts within a process loop.
   """
+  @intrinsic
   fn send_after(self, msg: M, delay_ms: Int)
-    panic("intrinsic")
-  end
 end
 
 @doc """

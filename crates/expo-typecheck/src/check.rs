@@ -489,11 +489,17 @@ fn check_function_with_msg(
             .unwrap_or(Type::Unit)
     });
 
-    let is_extern_c = f.annotations.iter().any(|a| {
-        a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")
-    });
+    let extern_c = is_extern_c(&f.annotations);
+    let intrinsic = is_intrinsic(&f.annotations);
 
-    if is_extern_c {
+    if extern_c && intrinsic {
+        ctx.error(
+            "`@extern \"C\"` and `@intrinsic` are mutually exclusive".to_string(),
+            f.span,
+        );
+    }
+
+    if extern_c {
         if f.body.is_some() {
             ctx.error(
                 "`@extern \"C\"` functions must not have a body".to_string(),
@@ -504,9 +510,20 @@ fn check_function_with_msg(
         return;
     }
 
+    if intrinsic {
+        if f.body.is_some() {
+            ctx.error(
+                "`@intrinsic` functions must not have a body".to_string(),
+                f.span,
+            );
+        }
+        return;
+    }
+
     if f.body.is_none() {
         ctx.error(
-            "function has no body — did you mean to add `@extern \"C\"`?".to_string(),
+            "function has no body — did you mean to add `@extern \"C\"` or `@intrinsic`?"
+                .to_string(),
             f.span,
         );
         return;

@@ -2,51 +2,44 @@ struct CPtr<T>
   @doc """
   Allocates memory for `count` elements of type T using C's malloc.
   """
+  @intrinsic
   fn alloc(count: Int) -> CPtr<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Returns a null pointer.
   """
+  @intrinsic
   fn null -> CPtr<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Frees the memory at this pointer using C's free.
   """
+  @intrinsic
   fn free(move self)
-    panic("intrinsic")
-  end
 
   @doc """
   Returns a pointer offset by `n` elements from this pointer.
   """
+  @intrinsic
   fn offset(self, n: Int) -> CPtr<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Reads the value at this pointer.
   """
+  @intrinsic
   fn read(self) -> T
-    panic("intrinsic")
-  end
 
   @doc """
   Writes a value to this pointer.
   """
+  @intrinsic
   fn write(self, value: T)
-    panic("intrinsic")
-  end
 
   @doc """
   Returns `true` if this pointer is null.
   """
+  @intrinsic
   fn null?(self) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl CPtr<UInt8>
@@ -55,18 +48,16 @@ impl CPtr<UInt8>
 
   The caller retains ownership of the pointer.
   """
+  @intrinsic
   fn to_binary(self, len: Int) -> Binary
-    panic("intrinsic")
-  end
 
   @doc """
   Reinterprets this pointer as an Expo `String`. The pointer must already
   point to a valid length-prefixed Expo string payload (as allocated by
   the runtime). This is a zero-cost operation.
   """
+  @intrinsic
   fn to_string(move self) -> String
-    panic("intrinsic")
-  end
 
   @doc """
   Wraps this pointer in a `CString` by computing the length with `strlen`.

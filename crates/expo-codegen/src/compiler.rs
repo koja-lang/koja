@@ -1001,6 +1001,8 @@ impl<'ctx> Compiler<'ctx> {
             if is_extern_c_decl(&func.annotations) {
                 let attrs = extract_extern_attrs(&func.annotations, false);
                 self.register_extern(mangled, fn_value, attrs);
+            } else if is_intrinsic_decl(&func.annotations) {
+                self.register_intrinsic(mangled, fn_value, type_name, &func.name);
             } else {
                 let is_static = !matches!(func.params.first(), Some(Param::Self_ { .. }));
                 let self_type = if is_static {
@@ -1092,6 +1094,10 @@ impl<'ctx> Compiler<'ctx> {
                     if is_extern_c_decl(&func.annotations) {
                         let attrs = extract_extern_attrs(&func.annotations, false);
                         self.register_extern(mangled, fn_value, attrs);
+                    } else if is_intrinsic_decl(&func.annotations) {
+                        // Free intrinsics carry an empty base type;
+                        // dispatch is keyed off the mangled name alone.
+                        self.register_intrinsic(mangled, fn_value, "", &func.name);
                     } else if func.name == "main" {
                         // The LLVM `main` declared here is the synthetic
                         // C entry that wraps the user's body. The body
@@ -1157,9 +1163,6 @@ impl<'ctx> Compiler<'ctx> {
         mangling_prefix: Option<&str>,
         type_bare_name: Option<&str>,
     ) -> Result<(), String> {
-        if func.body.is_none() {
-            return Ok(());
-        }
         self.fn_lower.self_type_name = type_bare_name.map(|s| s.to_string());
 
         let mangled = match mangling_prefix {
@@ -1167,9 +1170,14 @@ impl<'ctx> Compiler<'ctx> {
             None => func.name.clone(),
         };
 
-        if crate::intrinsics::is_primitive_intrinsic(&mangled) {
+        if is_intrinsic_decl(&func.annotations) {
             self.fn_lower.self_type_name = None;
             return crate::intrinsics::emit_primitive_intrinsic(self, &mangled);
+        }
+
+        if func.body.is_none() {
+            self.fn_lower.self_type_name = None;
+            return Ok(());
         }
 
         let fn_value = *self
@@ -2188,12 +2196,10 @@ pub(crate) fn llvm_field_byte_size(ty: inkwell::types::BasicTypeEnum) -> u32 {
     }
 }
 
-/// Returns `true` when `annotations` contains an `@extern "C"` marker.
-pub(crate) fn is_extern_c_decl(annotations: &[expo_ast::ast::Annotation]) -> bool {
-    annotations.iter().any(|a| {
-        a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")
-    })
-}
+/// Re-exports for the legacy codegen call sites that still use the
+/// `*_decl` names; the canonical helpers live in [`expo_ast::ast`].
+pub(crate) use expo_ast::ast::is_extern_c as is_extern_c_decl;
+pub(crate) use expo_ast::ast::is_intrinsic as is_intrinsic_decl;
 
 /// Builds the [`ExternAttrs`] payload for a user-source `@extern "C"`
 /// declaration from its annotations.

@@ -62,256 +62,208 @@ end
 
 impl Bitwise for Int
   @doc "Returns the bitwise AND of two 64-bit integers."
+  @intrinsic
   fn band(self, other: Int) -> Int
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise OR of two 64-bit integers."
+  @intrinsic
   fn bor(self, other: Int) -> Int
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise XOR of two 64-bit integers."
+  @intrinsic
   fn bxor(self, other: Int) -> Int
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise NOT of a 64-bit integer."
+  @intrinsic
   fn bnot(self) -> Int
-    panic("intrinsic")
-  end
 
   @doc "Shifts a 64-bit integer left by `n` positions."
+  @intrinsic
   fn bsl(self, n: Int) -> Int
-    panic("intrinsic")
-  end
 
   @doc "Arithmetically shifts a 64-bit integer right by `n` positions."
+  @intrinsic
   fn bsr(self, n: Int) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Bitwise for Int8
   @doc "Returns the bitwise AND of two 8-bit integers."
+  @intrinsic
   fn band(self, other: Int8) -> Int8
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise OR of two 8-bit integers."
+  @intrinsic
   fn bor(self, other: Int8) -> Int8
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise XOR of two 8-bit integers."
+  @intrinsic
   fn bxor(self, other: Int8) -> Int8
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise NOT of an 8-bit integer."
+  @intrinsic
   fn bnot(self) -> Int8
-    panic("intrinsic")
-  end
 
   @doc "Shifts an 8-bit integer left by `n` positions."
+  @intrinsic
   fn bsl(self, n: Int) -> Int8
-    panic("intrinsic")
-  end
 
   @doc "Arithmetically shifts an 8-bit integer right by `n` positions."
+  @intrinsic
   fn bsr(self, n: Int) -> Int8
-    panic("intrinsic")
-  end
 end
 
 impl Bitwise for Int16
   @doc "Returns the bitwise AND of two 16-bit integers."
+  @intrinsic
   fn band(self, other: Int16) -> Int16
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise OR of two 16-bit integers."
+  @intrinsic
   fn bor(self, other: Int16) -> Int16
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise XOR of two 16-bit integers."
+  @intrinsic
   fn bxor(self, other: Int16) -> Int16
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise NOT of a 16-bit integer."
+  @intrinsic
   fn bnot(self) -> Int16
-    panic("intrinsic")
-  end
 
   @doc "Shifts a 16-bit integer left by `n` positions."
+  @intrinsic
   fn bsl(self, n: Int) -> Int16
-    panic("intrinsic")
-  end
 
   @doc "Arithmetically shifts a 16-bit integer right by `n` positions."
+  @intrinsic
   fn bsr(self, n: Int) -> Int16
-    panic("intrinsic")
-  end
 end
 
 impl Bitwise for Int32
   @doc "Returns the bitwise AND of two 32-bit integers."
+  @intrinsic
   fn band(self, other: Int32) -> Int32
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise OR of two 32-bit integers."
+  @intrinsic
   fn bor(self, other: Int32) -> Int32
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise XOR of two 32-bit integers."
+  @intrinsic
   fn bxor(self, other: Int32) -> Int32
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise NOT of a 32-bit integer."
+  @intrinsic
   fn bnot(self) -> Int32
-    panic("intrinsic")
-  end
 
   @doc "Shifts a 32-bit integer left by `n` positions."
+  @intrinsic
   fn bsl(self, n: Int) -> Int32
-    panic("intrinsic")
-  end
 
   @doc "Arithmetically shifts a 32-bit integer right by `n` positions."
+  @intrinsic
   fn bsr(self, n: Int) -> Int32
-    panic("intrinsic")
-  end
 end
 
 impl Bitwise for UInt8
   @doc "Returns the bitwise AND of two 8-bit unsigned integers."
+  @intrinsic
   fn band(self, other: UInt8) -> UInt8
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise OR of two 8-bit unsigned integers."
+  @intrinsic
   fn bor(self, other: UInt8) -> UInt8
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise XOR of two 8-bit unsigned integers."
+  @intrinsic
   fn bxor(self, other: UInt8) -> UInt8
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise NOT of an 8-bit unsigned integer."
+  @intrinsic
   fn bnot(self) -> UInt8
-    panic("intrinsic")
-  end
 
   @doc "Shifts an 8-bit unsigned integer left by `n` positions."
+  @intrinsic
   fn bsl(self, n: Int) -> UInt8
-    panic("intrinsic")
-  end
 
   @doc "Logically shifts an 8-bit unsigned integer right by `n` positions."
+  @intrinsic
   fn bsr(self, n: Int) -> UInt8
-    panic("intrinsic")
-  end
 end
 
 impl Bitwise for UInt16
   @doc "Returns the bitwise AND of two 16-bit unsigned integers."
+  @intrinsic
   fn band(self, other: UInt16) -> UInt16
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise OR of two 16-bit unsigned integers."
+  @intrinsic
   fn bor(self, other: UInt16) -> UInt16
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise XOR of two 16-bit unsigned integers."
+  @intrinsic
   fn bxor(self, other: UInt16) -> UInt16
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise NOT of a 16-bit unsigned integer."
+  @intrinsic
   fn bnot(self) -> UInt16
-    panic("intrinsic")
-  end
 
   @doc "Shifts a 16-bit unsigned integer left by `n` positions."
+  @intrinsic
   fn bsl(self, n: Int) -> UInt16
-    panic("intrinsic")
-  end
 
   @doc "Logically shifts a 16-bit unsigned integer right by `n` positions."
+  @intrinsic
   fn bsr(self, n: Int) -> UInt16
-    panic("intrinsic")
-  end
 end
 
 impl Bitwise for UInt32
   @doc "Returns the bitwise AND of two 32-bit unsigned integers."
+  @intrinsic
   fn band(self, other: UInt32) -> UInt32
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise OR of two 32-bit unsigned integers."
+  @intrinsic
   fn bor(self, other: UInt32) -> UInt32
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise XOR of two 32-bit unsigned integers."
+  @intrinsic
   fn bxor(self, other: UInt32) -> UInt32
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise NOT of a 32-bit unsigned integer."
+  @intrinsic
   fn bnot(self) -> UInt32
-    panic("intrinsic")
-  end
 
   @doc "Shifts a 32-bit unsigned integer left by `n` positions."
+  @intrinsic
   fn bsl(self, n: Int) -> UInt32
-    panic("intrinsic")
-  end
 
   @doc "Logically shifts a 32-bit unsigned integer right by `n` positions."
+  @intrinsic
   fn bsr(self, n: Int) -> UInt32
-    panic("intrinsic")
-  end
 end
 
 impl Bitwise for UInt64
   @doc "Returns the bitwise AND of two 64-bit unsigned integers."
+  @intrinsic
   fn band(self, other: UInt64) -> UInt64
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise OR of two 64-bit unsigned integers."
+  @intrinsic
   fn bor(self, other: UInt64) -> UInt64
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise XOR of two 64-bit unsigned integers."
+  @intrinsic
   fn bxor(self, other: UInt64) -> UInt64
-    panic("intrinsic")
-  end
 
   @doc "Returns the bitwise NOT of a 64-bit unsigned integer."
+  @intrinsic
   fn bnot(self) -> UInt64
-    panic("intrinsic")
-  end
 
   @doc "Shifts a 64-bit unsigned integer left by `n` positions."
+  @intrinsic
   fn bsl(self, n: Int) -> UInt64
-    panic("intrinsic")
-  end
 
   @doc "Logically shifts a 64-bit unsigned integer right by `n` positions."
+  @intrinsic
   fn bsr(self, n: Int) -> UInt64
-    panic("intrinsic")
-  end
 end

@@ -201,81 +201,72 @@ impl Equality for Bool
   @doc """
   Returns `true` if both boolean values are the same.
   """
+  @intrinsic
   fn eq(self, other: Bool) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Equality for Int
   @doc """
   Returns `true` if both 64-bit integers are equal.
   """
+  @intrinsic
   fn eq(self, other: Int) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Equality for Int8
   @doc """
   Returns `true` if both 8-bit integers are equal.
   """
+  @intrinsic
   fn eq(self, other: Int8) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Equality for Int16
   @doc """
   Returns `true` if both 16-bit integers are equal.
   """
+  @intrinsic
   fn eq(self, other: Int16) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Equality for Int32
   @doc """
   Returns `true` if both 32-bit integers are equal.
   """
+  @intrinsic
   fn eq(self, other: Int32) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Equality for UInt8
   @doc """
   Returns `true` if both 8-bit unsigned integers are equal.
   """
+  @intrinsic
   fn eq(self, other: UInt8) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Equality for UInt16
   @doc """
   Returns `true` if both 16-bit unsigned integers are equal.
   """
+  @intrinsic
   fn eq(self, other: UInt16) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Equality for UInt32
   @doc """
   Returns `true` if both 32-bit unsigned integers are equal.
   """
+  @intrinsic
   fn eq(self, other: UInt32) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Equality for UInt64
   @doc """
   Returns `true` if both 64-bit unsigned integers are equal.
   """
+  @intrinsic
   fn eq(self, other: UInt64) -> Bool
-    panic("intrinsic")
-  end
 end
 
 @doc """
@@ -290,81 +281,72 @@ impl Hash for Bool
   @doc """
   Returns `0` for `false` and `1` for `true`.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Hash for Int
   @doc """
   Returns a hash of this 64-bit integer using SplitMix64.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Hash for Int8
   @doc """
   Returns a hash of this 8-bit integer using SplitMix64.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Hash for Int16
   @doc """
   Returns a hash of this 16-bit integer using SplitMix64.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Hash for Int32
   @doc """
   Returns a hash of this 32-bit integer using SplitMix64.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Hash for UInt8
   @doc """
   Returns a hash of this 8-bit unsigned integer using SplitMix64.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Hash for UInt16
   @doc """
   Returns a hash of this 16-bit unsigned integer using SplitMix64.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Hash for UInt32
   @doc """
   Returns a hash of this 32-bit unsigned integer using SplitMix64.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Hash for UInt64
   @doc """
   Returns a hash of this 64-bit unsigned integer using SplitMix64.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 @doc """
@@ -397,9 +379,8 @@ impl Int
   Parses a string as a 64-bit signed integer. Returns `Result.Ok(value)` on
   success, or `Result.Err(message)` if the string is not a valid integer.
   """
+  @intrinsic
   fn parse(input: String) -> Result<Int, String>
-    panic("intrinsic")
-  end
 end
 
 impl Float
@@ -407,42 +388,37 @@ impl Float
   Parses a string as a 64-bit floating-point number. Returns `Result.Ok(value)`
   on success, or `Result.Err(message)` if the string is not a valid float.
   """
+  @intrinsic
   fn parse(input: String) -> Result<Float, String>
-    panic("intrinsic")
-  end
 end
 
 impl Binary
   @doc """
   Returns the number of bytes in the binary.
   """
+  @intrinsic
   fn byte_size(self) -> Int
-    panic("intrinsic")
-  end
 
   @doc """
   Returns a raw pointer to the underlying byte data.
   """
+  @intrinsic
   fn ptr(self) -> CPtr<UInt8>
-    panic("intrinsic")
-  end
 
   @doc """
   Converts a `Binary` to `Bits`. This is a zero-cost widening conversion:
   every byte-aligned binary is also a valid bitstring.
   """
+  @intrinsic
   fn to_bits(self) -> Bits
-    panic("intrinsic")
-  end
 
   @doc """
   Attempts to interpret the binary as a UTF-8 string. Returns `Result.Ok`
   with the string if the bytes are valid UTF-8, or `Result.Err` with a
   diagnostic message otherwise.
   """
+  @intrinsic
   fn to_string(self) -> Result<String, String>
-    panic("intrinsic")
-  end
 end
 
 impl Bits
@@ -451,7 +427,6 @@ impl Bits
   the bit length is byte-aligned (divisible by 8), or `Result.Err` with
   a diagnostic message otherwise.
   """
+  @intrinsic
   fn to_binary(self) -> Result<Binary, String>
-    panic("intrinsic")
-  end
 end

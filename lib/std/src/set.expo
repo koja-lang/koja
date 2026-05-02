@@ -7,46 +7,40 @@ struct Set<T>
   @doc """
   Returns `true` if the set contains no elements.
   """
+  @intrinsic
   fn empty?(self) -> Bool
-    panic("intrinsic")
-  end
 
   @doc """
   Returns `true` if the set contains the given item.
   """
+  @intrinsic
   fn has?(self, item: T) -> Bool
-    panic("intrinsic")
-  end
 
   @doc """
   Adds the given item to the set and returns the updated set.
   If the item is already present, the set is returned unchanged.
   """
+  @intrinsic
   fn insert(move self, item: T) -> Set<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Returns the number of elements in the set.
   """
+  @intrinsic
   fn length(self) -> Int
-    panic("intrinsic")
-  end
 
   @doc """
   Creates a new empty set with an initial capacity of 8.
   """
+  @intrinsic
   fn new -> Set<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Removes the given item from the set and returns the updated set.
   If the item is not present, the set is returned unchanged.
   """
+  @intrinsic
   fn remove(move self, item: T) -> Set<T>
-    panic("intrinsic")
-  end
 end
 
 impl ListLiteral<T> for Set<T>
@@ -54,7 +48,6 @@ impl ListLiteral<T> for Set<T>
   Constructs a set from a list literal by inserting each element,
   naturally deduplicating.
   """
+  @intrinsic
   fn from_list(move list: List<T>) -> Self
-    panic("intrinsic")
-  end
 end

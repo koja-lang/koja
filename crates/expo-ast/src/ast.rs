@@ -79,6 +79,22 @@ pub struct Annotation {
     pub span: Span,
 }
 
+/// Returns `true` when `annotations` contains an `@extern "C"` marker
+/// (FFI-linked function with no source body).
+pub fn is_extern_c(annotations: &[Annotation]) -> bool {
+    annotations.iter().any(|a| {
+        a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")
+    })
+}
+
+/// Returns `true` when `annotations` contains an `@intrinsic` marker
+/// (compiler-emitted body, no source body, no FFI symbol).
+pub fn is_intrinsic(annotations: &[Annotation]) -> bool {
+    annotations
+        .iter()
+        .any(|a| a.name == "intrinsic" && a.value.is_none())
+}
+
 /// A source comment preserved for formatting and documentation tooling.
 #[derive(Debug, Clone)]
 pub struct Comment {

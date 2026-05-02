@@ -15,69 +15,58 @@ protocol Debug
 end
 
 impl Debug for Int
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for Int8
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for Int16
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for Int32
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for UInt8
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for UInt16
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for UInt32
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for UInt64
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for Float
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for Float32
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for Bool
+  @intrinsic
   fn format(self) -> String
-    panic("intrinsic")
-  end
 end
 
 impl Debug for String

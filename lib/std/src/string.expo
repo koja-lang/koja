@@ -2,35 +2,31 @@ impl Equality for String
   @doc """
   Returns `true` if both strings have the same content.
   """
+  @intrinsic
   fn eq(self, other: String) -> Bool
-    panic("intrinsic")
-  end
 end
 
 impl Hash for String
   @doc """
   Returns a hash of the string content using FNV-1a.
   """
+  @intrinsic
   fn hash(self) -> Int
-    panic("intrinsic")
-  end
 end
 
 impl Enumeration<String> for String
   @doc """
   Returns the number of Unicode codepoints in the string.
   """
+  @intrinsic
   fn length(self) -> Int
-    panic("intrinsic")
-  end
 
   @doc """
   Returns the single-character string at the given index. Panics if the
   index is out of bounds.
   """
+  @intrinsic
   fn get(self, index: Int) -> Option<String>
-    panic("intrinsic")
-  end
 end
 
 impl String
@@ -79,9 +75,8 @@ impl String
   @doc """
   Returns the number of bytes in the string's UTF-8 encoding.
   """
+  @intrinsic
   fn byte_length(self) -> Int
-    panic("intrinsic")
-  end
 
   @doc """
   Returns each Unicode codepoint as a single-character string in a list.
@@ -276,9 +271,8 @@ impl String
   Returns a substring spanning the given inclusive range of character
   indices. Clamps out-of-bounds endpoints to the string boundaries.
   """
+  @intrinsic
   fn slice(self, range: Range) -> String
-    panic("intrinsic")
-  end
 
   @doc """
   Splits the string on each occurrence of `separator` and returns
@@ -336,9 +330,8 @@ impl String
   Converts a `String` to `Binary`. This is a zero-cost widening conversion:
   every valid UTF-8 string is also a valid byte sequence.
   """
+  @intrinsic
   fn to_binary(self) -> Binary
-    panic("intrinsic")
-  end
 
   @doc """
   Parses the string as a 64-bit floating-point number.
@@ -458,7 +451,6 @@ impl String
   Allocates a null-terminated C string copy of this string using `malloc`.
   The caller is responsible for calling `free()` on the returned `CString`.
   """
+  @intrinsic
   fn to_cstring(self) -> CString
-    panic("intrinsic")
-  end
 end

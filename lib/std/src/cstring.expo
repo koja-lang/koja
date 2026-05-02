@@ -17,7 +17,6 @@ struct CString
   @doc """
   Converts this C string to an Expo String by copying the bytes.
   """
+  @intrinsic
   fn to_string(self) -> String
-    panic("intrinsic")
-  end
 end

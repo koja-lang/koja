@@ -9,16 +9,14 @@ impl Enumeration<T> for List<T>
   @doc """
   Returns the number of elements in the list.
   """
+  @intrinsic
   fn length(self) -> Int
-    panic("intrinsic")
-  end
 
   @doc """
   Returns the element at the given index, or `None` if out of bounds.
   """
+  @intrinsic
   fn get(self, index: Int) -> Option<T>
-    panic("intrinsic")
-  end
 end
 
 impl List<T>
@@ -56,24 +54,21 @@ impl List<T>
   @doc """
   Appends an element to the end of the list and returns the updated list.
   """
+  @intrinsic
   fn append(move self, item: T) -> List<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Appends all elements of `other` to the end of this list and returns the
   combined list.
   """
+  @intrinsic
   fn concat(move self, other: List<T>) -> List<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Returns `true` if the list contains no elements.
   """
+  @intrinsic
   fn empty?(self) -> Bool
-    panic("intrinsic")
-  end
 
   @doc """
   Returns a new list containing only the elements for which `f` returns `true`.
@@ -134,17 +129,15 @@ impl List<T>
   @doc """
   Creates a new empty list.
   """
+  @intrinsic
   fn new -> List<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Removes the last element. Returns a pair of the removed element (or `None`
   if empty) and the remaining list.
   """
+  @intrinsic
   fn pop(move self) -> Pair<Option<T>, List<T>>
-    panic("intrinsic")
-  end
 
   @doc """
   Reduces the list to a single value by applying `f` to the accumulator
@@ -164,9 +157,8 @@ impl List<T>
   Replaces the element at `index` with `value` and returns the updated list.
   Out-of-bounds indices are a no-op (returns the list unchanged).
   """
+  @intrinsic
   fn replace_at(move self, index: Int, value: T) -> List<T>
-    panic("intrinsic")
-  end
 
   @doc """
   Returns a new list with the elements in reverse order.
@@ -191,9 +183,8 @@ impl List<T>
   Returns a new list containing `count` elements starting at `start`.
   Clamps to bounds -- never panics.
   """
+  @intrinsic
   fn slice(self, start: Int, count: Int) -> List<T>
-    panic("intrinsic")
-  end
 end
 
 @doc """
@@ -210,7 +201,6 @@ impl ListLiteral<T> for List<T>
   @doc """
   Returns the list unchanged. `List<T>` is the default type for list literals.
   """
+  @intrinsic
   fn from_list(move list: List<T>) -> Self
-    panic("intrinsic")
-  end
 end

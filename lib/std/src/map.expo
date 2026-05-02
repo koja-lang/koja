@@ -10,52 +10,45 @@ impl Map<K, V>
   @doc """
   Returns `true` if the map contains no entries.
   """
+  @intrinsic
   fn empty?(self) -> Bool
-    panic("intrinsic")
-  end
 
   @doc """
   Returns `Option.Some(value)` if the key exists, or `Option.None` otherwise.
   """
+  @intrinsic
   fn get(self, key: K) -> Option<V>
-    panic("intrinsic")
-  end
 
   @doc """
   Returns `true` if the map contains the given key.
   """
+  @intrinsic
   fn has?(self, key: K) -> Bool
-    panic("intrinsic")
-  end
 
   @doc """
   Returns the number of entries in the map.
   """
+  @intrinsic
   fn length(self) -> Int
-    panic("intrinsic")
-  end
 
   @doc """
   Creates a new empty map with an initial capacity of 8.
   """
+  @intrinsic
   fn new -> Map<K, V>
-    panic("intrinsic")
-  end
 
   @doc """
   Inserts or updates the given key-value pair and returns the updated map.
   """
+  @intrinsic
   fn put(move self, key: K, value: V) -> Map<K, V>
-    panic("intrinsic")
-  end
 
   @doc """
   Removes the entry for the given key and returns the updated map.
   If the key is not present, the map is returned unchanged.
   """
+  @intrinsic
   fn remove(move self, key: K) -> Map<K, V>
-    panic("intrinsic")
-  end
 end
 
 @doc """
@@ -71,7 +64,6 @@ impl MapLiteral<K, V> for Map<K, V>
   @doc """
   Returns the map unchanged. `Map<K, V>` is the default type for map literals.
   """
+  @intrinsic
   fn from_map(move map: Map<K, V>) -> Self
-    panic("intrinsic")
-  end
 end
