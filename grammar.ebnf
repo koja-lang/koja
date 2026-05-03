@@ -61,7 +61,14 @@ type_param = TYPE_IDENT , [ ":" , TYPE_IDENT , { "&" , TYPE_IDENT } ] ;
 
 type_alias_decl = { annotation } , "type" , TYPE_IDENT , "=" , type_expr ;
 
-alias_decl = "alias" , IDENT , "." , TYPE_IDENT , [ "as" , TYPE_IDENT ] ;
+alias_decl = "alias" , alias_path , [ "as" , TYPE_IDENT ] ;
+
+alias_path = { ( IDENT | TYPE_IDENT ) , "." } , TYPE_IDENT ;
+(* Packages are PascalCase TYPE_IDENTs (e.g. `alias Net.TCPSocket`,        *)
+(* `alias HTTP.Headers`). Lowercase IDENT segments are still accepted in   *)
+(* leading positions for dotted paths that route through a non-package     *)
+(* name, but every alias path must end with a TYPE_IDENT. The optional    *)
+(* `as TYPE_IDENT` introduces a local rename.                              *)
 
 
 (* ========================================================================== *)
@@ -485,10 +492,11 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, arena, break, cond, const, else, end, enum, false, fn,         *)
-(* for, if, impl, in, loop, match, move, not, priv, protocol, receive,  *)
+(* after, alias, arena, break, cond, const, else, end, enum, false, fn,  *)
+(* for, if, impl, in, loop, match, move, not, priv, protocol, receive,   *)
 (* return, self, shared, spawn, struct, true, type, unless, when, while  *)
 (*                                                                       *)
-(* Note: `and`, `or` are operator-identifiers, not reserved keywords.    *)
-(* They are recognized as infix operators by the parser in expression    *)
-(* context but can be used as method/function names without restriction. *)
+(* Note: `and`, `or`, and `as` are contextual identifiers, not reserved  *)
+(* keywords. `and`/`or` are recognized as infix operators by the parser  *)
+(* in expression context; `as` is recognized only inside `alias` decls.  *)
+(* All three can be used as method/function names without restriction.   *)
