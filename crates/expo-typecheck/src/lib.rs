@@ -19,7 +19,7 @@ use context::TypeContext;
 use expo_ast::ast::File;
 
 pub use aliases::resolve_file_aliases;
-pub use collect::{GlobalNames, collect_all_names};
+pub use collect::{GlobalNames, collect_all_names, scan_globals};
 pub use registry::{GlobalEntry, GlobalRegistry};
 pub use types::{Package, fqn_to_package, package_for_path, package_from_str};
 
@@ -202,6 +202,85 @@ mod tests {
                 .any(|e| e.contains("`Foo` is already defined")),
             "expected duplicate-definition error, got: {:?}",
             errors(&ctx)
+        );
+    }
+
+    #[test]
+    fn scan_globals_registers_all_top_level_kinds() {
+        use expo_ast::identifier::Identifier;
+        use registry::GlobalRegistry;
+
+        let parse_result = expo_parser::parse(&dedent(
+            r#"
+            struct User
+              name: String
+            end
+
+            enum Color
+              Red
+            end
+
+            protocol Greet
+              fn greet -> String
+            end
+
+            fn main
+              42
+            end
+        "#,
+        ));
+        let mut registry = GlobalRegistry::new();
+        let diagnostics = collect::scan_globals(&parse_result.ast, "alpha", &mut registry);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        assert_eq!(registry.len(), 4);
+        assert!(matches!(
+            registry.get(&Identifier::new("alpha", vec!["User".to_string()])),
+            Some(GlobalEntry::Struct { .. })
+        ));
+        assert!(matches!(
+            registry.get(&Identifier::new("alpha", vec!["Color".to_string()])),
+            Some(GlobalEntry::Enum { .. })
+        ));
+        assert!(matches!(
+            registry.get(&Identifier::new("alpha", vec!["Greet".to_string()])),
+            Some(GlobalEntry::Protocol { .. })
+        ));
+        assert!(matches!(
+            registry.get(&Identifier::new("alpha", vec!["main".to_string()])),
+            Some(GlobalEntry::Function { .. })
+        ));
+    }
+
+    #[test]
+    fn scan_globals_reports_duplicates_as_diagnostics() {
+        use registry::GlobalRegistry;
+
+        let parse_result = expo_parser::parse(&dedent(
+            r#"
+            struct Foo
+              x: Int
+            end
+
+            protocol Foo
+              fn ping
+            end
+        "#,
+        ));
+        let mut registry = GlobalRegistry::new();
+        let diagnostics = collect::scan_globals(&parse_result.ast, "alpha", &mut registry);
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("`Foo` is already defined"),
+            "unexpected message: {}",
+            diagnostics[0].message
+        );
+        assert!(
+            diagnostics[0]
+                .hint
+                .as_ref()
+                .is_some_and(|h| h.contains("previous struct definition")),
+            "missing or wrong hint: {:?}",
+            diagnostics[0].hint
         );
     }
 

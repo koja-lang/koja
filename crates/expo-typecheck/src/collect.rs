@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use expo_ast::ast::{
-    EnumConstructionData, EnumVariantData, Expr, ExprKind, File, Function, ImplMember, Item,
-    Literal, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
+    Diagnostic, EnumConstructionData, EnumVariantData, Expr, ExprKind, File, Function, ImplMember,
+    Item, Literal, Param, Pattern, ProtocolMethod, Severity, Statement, StringPart, TypeExpr,
 };
 use expo_ast::identifier::Identifier;
 use expo_ast::span::Span;
+
+use crate::registry::GlobalRegistry;
 
 use crate::context::{
     FunctionKind, FunctionSig, ParamInfo, ProtocolInfo, TypeContext, TypeInfo, TypeKind,
@@ -621,6 +623,7 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                         type_params: p.type_params.clone(),
                     },
                 );
+                register_global(&mut ctx, package, &p.name, p.span, GlobalKind::Protocol);
             }
             Item::Struct(s) => {
                 let tp_refs: Vec<&str> = s.type_params.iter().map(|s| s.name.as_str()).collect();
@@ -684,6 +687,7 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
 enum GlobalKind {
     Enum,
     Function,
+    Protocol,
     Struct,
 }
 
@@ -697,6 +701,7 @@ fn register_global(ctx: &mut TypeContext, package: &str, name: &str, span: Span,
     let existing = match kind {
         GlobalKind::Enum => ctx.registry.insert_enum(id, span),
         GlobalKind::Function => ctx.registry.insert_function(id, span),
+        GlobalKind::Protocol => ctx.registry.insert_protocol(id, span),
         GlobalKind::Struct => ctx.registry.insert_struct(id, span),
     };
     if let Some(prev) = existing {
@@ -708,6 +713,52 @@ fn register_global(ctx: &mut TypeContext, package: &str, name: &str, span: Span,
             span,
         );
     }
+}
+
+/// Walks one file's top-level items and registers each surviving
+/// declaration (struct, enum, function, protocol) into `registry` as a
+/// path-based [`Identifier`]. Returns one [`Diagnostic`] per duplicate
+/// definition; the caller chooses what to do with them.
+///
+/// Pure registration: no field types resolved, no function signatures
+/// built, no internal references touched. The output of this pass is
+/// the authoritative "what globally-named decls exist in the program"
+/// view that subsequent passes (resolve, check, seal) consume.
+///
+/// To populate a registry across the whole program, call this once per
+/// file with the file's own package, then thread the populated registry
+/// into the heavier resolution passes.
+pub fn scan_globals(file: &File, package: &str, registry: &mut GlobalRegistry) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for item in &file.items {
+        let (name, span, kind) = match item {
+            Item::Enum(e) => (e.name.as_str(), e.span, GlobalKind::Enum),
+            Item::Function(f) => (f.name.as_str(), f.span, GlobalKind::Function),
+            Item::Protocol(p) => (p.name.as_str(), p.span, GlobalKind::Protocol),
+            Item::Struct(s) => (s.name.as_str(), s.span, GlobalKind::Struct),
+            _ => continue,
+        };
+        let id = Identifier::new(package, vec![name.to_string()]);
+        let existing = match kind {
+            GlobalKind::Enum => registry.insert_enum(id, span),
+            GlobalKind::Function => registry.insert_function(id, span),
+            GlobalKind::Protocol => registry.insert_protocol(id, span),
+            GlobalKind::Struct => registry.insert_struct(id, span),
+        };
+        if let Some(prev) = existing {
+            let prev_kind = prev.kind_label();
+            let prev_line = prev.span().start.line;
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!("`{name}` is already defined"),
+                hint: Some(format!(
+                    "previous {prev_kind} definition is at line {prev_line}"
+                )),
+                span,
+            });
+        }
+    }
+    diagnostics
 }
 
 /// Final pass of [`collect`]: rewrites `Package::Unresolved` identifiers that

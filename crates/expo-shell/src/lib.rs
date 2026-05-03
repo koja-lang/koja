@@ -298,17 +298,24 @@ fn erase_lines(n: usize) {
 pub fn eval_file(path: &Path, entry: Option<&str>) -> Result<Option<Value>, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
-    let mut module = parse_file(&source)?;
-    module.path = Some(path.to_path_buf());
-    let entry_name = match entry {
-        Some(name) => name.to_string(),
-        None => rename_main_for_eval(&mut module).unwrap_or_else(|| "main".to_string()),
-    };
     let package = path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("__eval__")
         .to_string();
+    let parsed = expo_parser::parse_file(expo_parser::SourceFile {
+        package: package.clone(),
+        path: path.to_path_buf(),
+        source,
+    });
+    if !parsed.diagnostics.is_empty() {
+        return Err(format_parse_diagnostics(&parsed.diagnostics));
+    }
+    let mut module = parsed.ast;
+    let entry_name = match entry {
+        Some(name) => name.to_string(),
+        None => rename_main_for_eval(&mut module).unwrap_or_else(|| "main".to_string()),
+    };
     let type_ctx = expo_typecheck::check(&mut module);
     let modules = vec![&module];
     let packages = vec![package.as_str()];
@@ -406,19 +413,26 @@ pub fn is_input_complete(source: &str) -> bool {
 
 /// Parse `source` into an [`expo_ast::ast::File`], returning a
 /// formatted multi-line error string when the parser produces
-/// diagnostics. Shared between [`eval_file`] and the session
-/// pipeline.
+/// diagnostics. Used by the REPL session pipeline, which feeds
+/// arbitrary input strings with no associated path or package; for
+/// file-on-disk paths see [`eval_file`] which goes through
+/// [`expo_parser::parse_file`].
 pub(crate) fn parse_file(source: &str) -> Result<File, String> {
     let parsed = expo_parser::parse(source);
     if !parsed.errors.is_empty() {
-        let messages: Vec<String> = parsed
-            .errors
-            .iter()
-            .map(|error| format!("  {}", error.message))
-            .collect();
-        return Err(format!("parse error:\n{}", messages.join("\n")));
+        return Err(format_parse_diagnostics(&parsed.errors));
     }
     Ok(parsed.ast)
+}
+
+/// Render parser diagnostics as a `parse error:\n  ...\n  ...` block
+/// matching the existing REPL / eval CLI conventions.
+fn format_parse_diagnostics(diagnostics: &[expo_ast::ast::Diagnostic]) -> String {
+    let messages: Vec<String> = diagnostics
+        .iter()
+        .map(|d| format!("  {}", d.message))
+        .collect();
+    format!("parse error:\n{}", messages.join("\n"))
 }
 
 /// Format codegen / typecheck diagnostics into a multi-line error

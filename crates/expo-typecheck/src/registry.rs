@@ -22,27 +22,30 @@ use expo_ast::span::Span;
 /// diagnostic notes).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalEntry {
-    Struct { span: Span },
     Enum { span: Span },
     Function { span: Span },
+    Protocol { span: Span },
+    Struct { span: Span },
 }
 
 impl GlobalEntry {
     /// Span of the source-level declaration that produced this entry.
     pub fn span(&self) -> Span {
         match self {
-            GlobalEntry::Struct { span }
-            | GlobalEntry::Enum { span }
-            | GlobalEntry::Function { span } => *span,
+            GlobalEntry::Enum { span }
+            | GlobalEntry::Function { span }
+            | GlobalEntry::Protocol { span }
+            | GlobalEntry::Struct { span } => *span,
         }
     }
 
     /// Human-readable kind label for diagnostics ("struct", "enum", ...).
     pub fn kind_label(&self) -> &'static str {
         match self {
-            GlobalEntry::Struct { .. } => "struct",
             GlobalEntry::Enum { .. } => "enum",
             GlobalEntry::Function { .. } => "function",
+            GlobalEntry::Protocol { .. } => "protocol",
+            GlobalEntry::Struct { .. } => "struct",
         }
     }
 }
@@ -61,16 +64,20 @@ impl GlobalRegistry {
     /// Registers a struct decl. Returns the existing entry on collision so
     /// the caller can emit a "`X` is already defined" diagnostic with both
     /// spans. On success returns `None` and the new entry is stored.
-    pub fn insert_struct(&mut self, id: Identifier, span: Span) -> Option<&GlobalEntry> {
-        self.insert(id, GlobalEntry::Struct { span })
-    }
-
     pub fn insert_enum(&mut self, id: Identifier, span: Span) -> Option<&GlobalEntry> {
         self.insert(id, GlobalEntry::Enum { span })
     }
 
     pub fn insert_function(&mut self, id: Identifier, span: Span) -> Option<&GlobalEntry> {
         self.insert(id, GlobalEntry::Function { span })
+    }
+
+    pub fn insert_protocol(&mut self, id: Identifier, span: Span) -> Option<&GlobalEntry> {
+        self.insert(id, GlobalEntry::Protocol { span })
+    }
+
+    pub fn insert_struct(&mut self, id: Identifier, span: Span) -> Option<&GlobalEntry> {
+        self.insert(id, GlobalEntry::Struct { span })
     }
 
     fn insert(&mut self, id: Identifier, entry: GlobalEntry) -> Option<&GlobalEntry> {
