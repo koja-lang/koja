@@ -370,6 +370,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "expo-alpha-ir"
+version = "0.9.0"
+dependencies = [
+ "expo-alpha-typecheck",
+ "expo-ast",
+ "expo-parser",
+]
+
+[[package]]
+name = "expo-alpha-ir-eval"
+version = "0.9.0"
+dependencies = [
+ "expo-alpha-ir",
+ "expo-alpha-typecheck",
+ "expo-ast",
+ "expo-parser",
+]
+
+[[package]]
+name = "expo-alpha-shell"
+version = "0.9.0"
+dependencies = [
+ "expo-alpha-ir",
+ "expo-alpha-ir-eval",
+ "expo-alpha-typecheck",
+ "expo-ast",
+ "expo-lexer",
+ "expo-parser",
+]
+
+[[package]]
+name = "expo-alpha-typecheck"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-parser",
+]
+
+[[package]]
 name = "expo-ast"
 version = "0.9.0"
 
@@ -398,19 +437,20 @@ version = "0.9.0"
 dependencies = [
  "boring-sys",
  "clap",
+ "expo-alpha-ir",
+ "expo-alpha-ir-eval",
+ "expo-alpha-shell",
+ "expo-alpha-typecheck",
  "expo-ast",
  "expo-codegen",
  "expo-doc",
  "expo-fmt",
- "expo-ir-eval-v2",
- "expo-ir-v2",
  "expo-lexer",
  "expo-parser",
  "expo-runtime",
  "expo-shell",
  "expo-stdlib",
  "expo-typecheck",
- "expo-typecheck-v2",
  "libc",
  "serde",
  "toml",
@@ -444,25 +484,6 @@ dependencies = [
  "expo-parser",
  "expo-stdlib",
  "expo-typecheck",
-]
-
-[[package]]
-name = "expo-ir-eval-v2"
-version = "0.9.0"
-dependencies = [
- "expo-ast",
- "expo-ir-v2",
- "expo-parser",
- "expo-typecheck-v2",
-]
-
-[[package]]
-name = "expo-ir-v2"
-version = "0.9.0"
-dependencies = [
- "expo-ast",
- "expo-parser",
- "expo-typecheck-v2",
 ]
 
 [[package]]
@@ -527,14 +548,6 @@ version = "0.9.0"
 
 [[package]]
 name = "expo-typecheck"
-version = "0.9.0"
-dependencies = [
- "expo-ast",
- "expo-parser",
-]
-
-[[package]]
-name = "expo-typecheck-v2"
 version = "0.9.0"
 dependencies = [
  "expo-ast",

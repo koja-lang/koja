@@ -28,7 +28,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Experimental v2-pipeline subcommands (subject to breaking changes)
+    /// Experimental alpha-pipeline subcommands (subject to breaking changes)
     Alpha {
         #[command(subcommand)]
         command: AlphaCommand,
@@ -135,14 +135,14 @@ enum Command {
     Test,
 }
 
-/// Subcommands under `expo alpha`. These drive the v2 compiler
-/// pipeline (`expo-typecheck-v2 → expo-ir-v2 → expo-ir-eval-v2`) and
+/// Subcommands under `expo alpha`. These drive the alpha compiler
+/// pipeline (`expo-alpha-typecheck → expo-alpha-ir → expo-alpha-ir-eval`) and
 /// are intentionally namespaced so the production `expo eval` /
 /// `expo shell` paths can keep their full v1 feature set during the
-/// v2 build-out.
+/// alpha build-out.
 #[derive(Subcommand)]
 enum AlphaCommand {
-    /// Run a source file through the v2 pipeline (POC scope: integer arithmetic only)
+    /// Run a source file through the alpha pipeline (POC scope: integer arithmetic only)
     Eval {
         /// Source file
         file: String,
@@ -151,7 +151,7 @@ enum AlphaCommand {
         #[arg(long)]
         entry: Option<String>,
     },
-    /// Start an interactive REPL backed by the v2 pipeline (POC scope: integer arithmetic only)
+    /// Start an interactive REPL backed by the alpha pipeline (POC scope: integer arithmetic only)
     Shell,
 }
 

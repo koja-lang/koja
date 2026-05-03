@@ -13,7 +13,7 @@ use expo_lexer::{LexResult, lex};
 /// `ParseMode::Script` additionally accepts top-level statements (bare
 /// expressions, assignments, etc.) interleaved with declarations.
 /// Statements collect into `File.body = Some(...)` for later hoisting
-/// into a synthetic `fn main` item by typecheck-v2's `lift_script`
+/// into a synthetic `fn main` item by `expo-alpha-typecheck`'s `lift_script`
 /// sub-pass.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ParseMode {

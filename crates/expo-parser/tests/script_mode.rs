@@ -5,7 +5,7 @@
 //! regression-safety guarantee that file-mode behavior is unchanged.
 //!
 //! Higher-level coverage of the lift pass lives in
-//! `expo-typecheck-v2/src/lift_script.rs`.
+//! `expo-alpha-typecheck/src/lift_script.rs`.
 
 use expo_ast::ast::{ExprKind, Item, Literal, Statement};
 use expo_parser::{ParseMode, parse};

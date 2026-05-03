@@ -1,64 +1,36 @@
 //! `expo alpha {eval,shell}` subcommand handlers.
 //!
 //! The `alpha` namespace hosts experimental subcommands that drive the
-//! v2 compiler pipeline (`expo-typecheck-v2 → expo-ir-v2 →
-//! expo-ir-eval-v2`). Production users keep using `expo eval` /
-//! `expo shell` (the v1 path); `expo alpha *` lets us iterate on v2
-//! end-to-end without touching the v1 surface.
+//! alpha compiler pipeline (`expo-alpha-typecheck → expo-alpha-ir →
+//! expo-alpha-ir-eval`). Production users keep using `expo eval` /
+//! `expo shell` (the v1 path); `expo alpha *` lets us iterate on the
+//! alpha track end-to-end without touching the v1 surface.
 //!
-//! Promotion plan: when v2 reaches feature parity with v1 we move
-//! these handlers up to `commands::cmd_eval` / `commands::cmd_shell`
-//! and retire this module along with the v1 `expo-shell` /
-//! `expo-ir-eval` crates.
+//! `cmd_eval` carries its own copy of the pipeline driver since it
+//! runs a single source file and has no REPL state to thread. The
+//! REPL itself lives in [`expo_alpha_shell`]; `cmd_shell` is just a
+//! thin entry point that hands control off to it. When the alpha
+//! shell grows file-input support both handlers will collapse into
+//! `expo_alpha_shell` and this module will retire alongside the v1
+//! `expo-shell` / `expo-ir-eval` crates.
 //!
-//! POC scope today (mirrors `expo-typecheck-v2` / `expo-ir-v2`):
+//! POC scope today (mirrors `expo-alpha-typecheck` / `expo-alpha-ir`):
 //! integer literals, integer arithmetic (`+ - * / %`), parenthesized
 //! groups. Anything richer typecheck-errors with a precise diagnostic.
 
 use std::fs;
-use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
+use expo_alpha_ir::lower_program;
+use expo_alpha_ir_eval::{Interpreter, Value};
+use expo_alpha_typecheck::{CheckFailure, check_program};
 use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::Identifier;
-use expo_ast::token::TokenKind;
-use expo_ir_eval_v2::{Interpreter, Value};
-use expo_ir_v2::lower_program;
 use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
-use expo_typecheck_v2::{CheckFailure, check_program};
 
-/// Synthetic package name for the REPL session. The session
-/// re-runs the entire concatenated input history through the v2
-/// pipeline on every step; lowering uses the same name when
-/// constructing the entry-point [`Identifier`].
-const SESSION_PACKAGE: &str = "REPL";
-
-/// Both alpha commands resolve their entry function under this name.
-/// In script-mode parsing, [`expo_typecheck_v2::lift_script`] hoists
-/// any top-level statements (the REPL's accumulated input, or a
-/// statements-only `.expo` file) into a synthesized `fn main`. Files
-/// that already declare an explicit `fn main` use that one directly.
-const SESSION_ENTRY: &str = "main";
-
-const BANNER: &str = "expo alpha shell -- v2 IR interpreter (POC: integer arithmetic only)\n\
-    Type :help for commands, :quit (or Ctrl-D) to exit\n";
-
-const HELP: &str = "Commands:\n  \
-    :help    show this message\n  \
-    :quit    exit the shell\n  \
-    :reset   clear session state and discard the current multiline buffer\n  \
-    :state   print how many statement blocks the session is holding\n\
-\n\
-Notes:\n  \
-    - State accumulates across inputs: each new input runs the whole\n    \
-      session (today's pipeline is whole-program; incremental support\n    \
-      lands later).\n  \
-    - POC scope: integer literals, integer arithmetic (+, -, *, /, %),\n    \
-      and parenthesized groups. Other constructs typecheck-error.\n";
-
-/// `expo alpha eval <file>` — run a single source file through the v2
-/// pipeline and print the entry function's [`Value`].
+/// `expo alpha eval <file>` — run a single source file through the
+/// alpha pipeline and print the entry function's [`Value`].
 ///
 /// Mirrors `expo eval`'s contract for the print rule: `Value::Unit`
 /// suppresses the trailing line so void entries don't print `()` (the
@@ -86,173 +58,23 @@ pub fn cmd_eval(file: String, entry: Option<String>) {
     }
 }
 
-/// `expo alpha shell` — interactive REPL on top of the v2 pipeline.
+/// `expo alpha shell` — interactive REPL on top of the alpha pipeline.
 ///
-/// Reads stdin until `:quit` or EOF, accumulating each evaluated input
-/// into a [`Session`] that re-runs the whole history every step. The
-/// trailing expression's value (if any) gets printed; [`Value::Unit`]
-/// suppresses the print line. Pipeline errors print `error: …` and
-/// roll the session back to its pre-input state.
+/// Delegates entirely to [`expo_alpha_shell::run`]; the REPL crate
+/// owns Session state, multiline detection, command parsing, and its
+/// own pipeline driver.
 pub fn cmd_shell() {
-    print!("{BANNER}");
-    let _ = io::stdout().flush();
-    let stdin = io::stdin();
-    let mut handle = stdin.lock();
-    let mut session = Session::new();
-    let mut buffer = String::new();
-    loop {
-        if io::stdin().is_terminal() {
-            let prompt = if buffer.is_empty() {
-                format!("expo({})> ", session.counter())
-            } else {
-                format!("....({})> ", session.counter())
-            };
-            print!("{prompt}");
-            let _ = io::stdout().flush();
-        }
-        let mut line = String::new();
-        match handle.read_line(&mut line) {
-            Ok(0) => {
-                if !buffer.is_empty() {
-                    eprintln!("\nerror: unterminated input discarded at EOF");
-                }
-                println!();
-                break;
-            }
-            Ok(_) => {}
-            Err(error) => {
-                eprintln!("error reading input: {error}");
-                process::exit(1);
-            }
-        }
-        let trimmed = line.trim();
-        if buffer.is_empty() {
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed == ":quit" {
-                break;
-            }
-            if trimmed == ":help" {
-                print!("{HELP}");
-                continue;
-            }
-            if trimmed == ":reset" {
-                session.clear();
-                continue;
-            }
-            if trimmed == ":state" {
-                println!("session: {} statement block(s)", session.statement_count());
-                continue;
-            }
-        } else if trimmed == ":reset" {
-            buffer.clear();
-            continue;
-        }
-        buffer.push_str(&line);
-        if !is_input_complete(&buffer) {
-            continue;
-        }
-        let input = std::mem::take(&mut buffer);
-        match session.try_eval(input.trim()) {
-            Ok(Some(value)) => {
-                println!("{value}");
-                session.bump_counter();
-            }
-            Ok(None) => {
-                session.bump_counter();
-            }
-            Err(error) => eprintln!("error: {error}"),
-        }
-    }
+    expo_alpha_shell::run();
 }
 
-/// Accumulating REPL state. Each new input pushes one statement-text
-/// block; [`Session::try_eval`] concatenates the entire history into
-/// a single source string, parses it in [`ParseMode::Script`], and
-/// drives it through the v2 pipeline. `lift_script` hoists the
-/// top-level statements into a synthetic `fn main`; the pipeline
-/// then resolves the trailing-expression value.
-///
-/// The pipeline is whole-program today (no incremental typecheck or
-/// IR delta), so re-running the whole history is the simplest way to
-/// make state "just work" — perf is fine for the first few hundred
-/// lines. Future incremental work would split this into a chunk-based
-/// representation; today's session is the reference shape.
-struct Session {
-    counter: u32,
-    statements: Vec<String>,
-}
-
-impl Session {
-    fn new() -> Self {
-        Self {
-            counter: 1,
-            statements: Vec::new(),
-        }
-    }
-
-    fn bump_counter(&mut self) {
-        self.counter += 1;
-    }
-
-    fn clear(&mut self) {
-        self.counter = 1;
-        self.statements.clear();
-    }
-
-    fn counter(&self) -> u32 {
-        self.counter
-    }
-
-    fn statement_count(&self) -> usize {
-        self.statements.len()
-    }
-
-    /// Evaluate `input` against this session, mutating it on success
-    /// (the input gets appended to the statement list) and rolling
-    /// back on failure (the session is left exactly as it was before
-    /// the call). `Ok(Some(value))` carries the trailing expression's
-    /// value; `Ok(None)` covers `Value::Unit` so the REPL can
-    /// suppress the trailing print line for void inputs.
-    fn try_eval(&mut self, input: &str) -> Result<Option<Value>, String> {
-        let snapshot = self.statements.len();
-        self.statements.push(input.to_string());
-        match self.run() {
-            Ok(Value::Unit) => Ok(None),
-            Ok(value) => Ok(Some(value)),
-            Err(error) => {
-                self.statements.truncate(snapshot);
-                Err(error)
-            }
-        }
-    }
-
-    /// Synthesize the full session source and drive it through the
-    /// v2 pipeline.
-    fn run(&self) -> Result<Value, String> {
-        let source = self.synthesize();
-        let path = PathBuf::from(format!("{SESSION_PACKAGE}.expo"));
-        run_pipeline(source, SESSION_PACKAGE, path, SESSION_ENTRY)
-    }
-
-    /// Concatenate all statement blocks into the script source the
-    /// pipeline will parse. Blocks are joined with newlines so each
-    /// input remains its own logical line group; `ParseMode::Script`
-    /// + `lift_script` handle the rest.
-    fn synthesize(&self) -> String {
-        self.statements.join("\n")
-    }
-}
-
-/// Run one source file end-to-end through the v2 pipeline. Returns
+/// Run one source file end-to-end through the alpha pipeline. Returns
 /// the entry function's value on success, or a formatted error string
 /// covering parse / typecheck / lower / runtime failures.
 ///
-/// Always parses in [`ParseMode::Script`]: alpha is the v2 surface,
-/// and v2 treats top-level statements as first-class. Files that
-/// already have an explicit `fn main` parse identically in either
-/// mode, so this is strictly a superset.
+/// Parses in [`ParseMode::Script`] so `cmd_eval` accepts both the
+/// legacy `fn main` shape and bare-statement script files; the
+/// `lift_script` typecheck pass hoists script statements into a
+/// synthetic entry point.
 fn run_pipeline(
     source: String,
     package: &str,
@@ -283,62 +105,6 @@ fn derive_package(path: &Path) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or("App")
         .to_string()
-}
-
-/// True when `source` (the accumulated multiline buffer) is a
-/// well-formed-enough Expo fragment to hand to the parser: every
-/// block-opener has its `end`, every bracket pair is closed, and no
-/// string literal is left dangling. Implemented over the lexer rather
-/// than the parser because the lexer is cheap to re-run on every
-/// keystroke and gives precise token-level state.
-///
-/// Conservative on ambiguity: an input that looks complete by token
-/// counting but actually fails to parse will still be handed to
-/// [`Session::try_eval`] and produce a parse error — the user can
-/// retry.
-fn is_input_complete(source: &str) -> bool {
-    let mut block_depth: i32 = 0;
-    let mut paren_depth: i32 = 0;
-    let mut brace_depth: i32 = 0;
-    let mut bracket_depth: i32 = 0;
-    let mut string_depth: i32 = 0;
-    let mut interpol_depth: i32 = 0;
-    for token in expo_lexer::lex(source).tokens {
-        match token.kind {
-            TokenKind::Arena
-            | TokenKind::Cond
-            | TokenKind::Enum
-            | TokenKind::Fn
-            | TokenKind::For
-            | TokenKind::If
-            | TokenKind::Impl
-            | TokenKind::Loop
-            | TokenKind::Match
-            | TokenKind::Protocol
-            | TokenKind::Receive
-            | TokenKind::Struct
-            | TokenKind::Unless
-            | TokenKind::While => block_depth += 1,
-            TokenKind::End => block_depth -= 1,
-            TokenKind::LParen => paren_depth += 1,
-            TokenKind::RParen => paren_depth -= 1,
-            TokenKind::LBrace => brace_depth += 1,
-            TokenKind::RBrace => brace_depth -= 1,
-            TokenKind::LBracket => bracket_depth += 1,
-            TokenKind::RBracket => bracket_depth -= 1,
-            TokenKind::StringStart | TokenKind::MultilineStringStart => string_depth += 1,
-            TokenKind::StringEnd | TokenKind::MultilineStringEnd => string_depth -= 1,
-            TokenKind::InterpolStart => interpol_depth += 1,
-            TokenKind::InterpolEnd => interpol_depth -= 1,
-            _ => {}
-        }
-    }
-    block_depth <= 0
-        && paren_depth <= 0
-        && brace_depth <= 0
-        && bracket_depth <= 0
-        && string_depth <= 0
-        && interpol_depth <= 0
 }
 
 /// Render a [`CheckFailure`] as the multi-line error string the

@@ -176,7 +176,7 @@ pub enum Item {
 /// `body` is `Some(_)` only when the source was parsed in
 /// `ParseMode::Script` -- it carries top-level statements (e.g. the
 /// REPL's accumulated input) before they are hoisted into a synthetic
-/// `fn main` item. After typecheck-v2's `lift_script` sub-pass runs,
+/// `fn main` item. After `expo-alpha-typecheck`'s `lift_script` sub-pass runs,
 /// `body` is always `None`; the sealed AST has no surviving
 /// script-level statement bodies.
 #[derive(Debug, Clone)]
