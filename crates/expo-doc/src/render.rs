@@ -49,6 +49,7 @@ struct IndexTemplate<'a> {
     all_items: &'a [DocItem],
     css: &'a str,
     items: &'a [DocItem],
+    project_name: &'a str,
 }
 
 #[derive(Template)]
@@ -57,6 +58,7 @@ struct StructTemplate<'a> {
     active_item: Option<&'a str>,
     all_items: &'a [DocItem],
     css: &'a str,
+    project_name: &'a str,
     s: &'a DocStruct,
 }
 
@@ -67,6 +69,7 @@ struct EnumTemplate<'a> {
     all_items: &'a [DocItem],
     css: &'a str,
     e: &'a DocEnum,
+    project_name: &'a str,
 }
 
 #[derive(Template)]
@@ -76,6 +79,7 @@ struct ProtocolTemplate<'a> {
     all_items: &'a [DocItem],
     css: &'a str,
     p: &'a DocProtocol,
+    project_name: &'a str,
 }
 
 #[derive(Template)]
@@ -85,6 +89,7 @@ struct FunctionTemplate<'a> {
     all_items: &'a [DocItem],
     css: &'a str,
     f: &'a DocFunction,
+    project_name: &'a str,
 }
 
 #[derive(Template)]
@@ -94,6 +99,7 @@ struct ConstantTemplate<'a> {
     all_items: &'a [DocItem],
     c: &'a DocConstant,
     css: &'a str,
+    project_name: &'a str,
 }
 
 /// Render the main index page listing all items.
@@ -103,6 +109,7 @@ pub fn render_index(project: &DocProject) -> String {
         all_items: &project.items,
         css: CSS,
         items: &project.items,
+        project_name: &project.name,
     };
     tmpl.render().expect("failed to render index template")
 }
@@ -113,6 +120,7 @@ pub fn render_struct(s: &DocStruct, project: &DocProject) -> String {
         s,
         all_items: &project.items,
         active_item: Some(&s.name),
+        project_name: &project.name,
     };
     tmpl.render().expect("failed to render struct template")
 }
@@ -123,6 +131,7 @@ pub fn render_constant(c: &DocConstant, project: &DocProject) -> String {
         c,
         all_items: &project.items,
         active_item: Some(&c.name),
+        project_name: &project.name,
     };
     tmpl.render().expect("failed to render constant template")
 }
@@ -133,6 +142,7 @@ pub fn render_enum(e: &DocEnum, project: &DocProject) -> String {
         e,
         all_items: &project.items,
         active_item: Some(&e.name),
+        project_name: &project.name,
     };
     tmpl.render().expect("failed to render enum template")
 }
@@ -143,6 +153,7 @@ pub fn render_function(f: &DocFunction, project: &DocProject) -> String {
         f,
         all_items: &project.items,
         active_item: Some(&f.name),
+        project_name: &project.name,
     };
     tmpl.render().expect("failed to render function template")
 }
@@ -153,6 +164,7 @@ pub fn render_protocol(p: &DocProtocol, project: &DocProject) -> String {
         p,
         all_items: &project.items,
         active_item: Some(&p.name),
+        project_name: &project.name,
     };
     tmpl.render().expect("failed to render protocol template")
 }

@@ -211,10 +211,10 @@ pub fn cmd_check(files: Vec<String>, color: bool, emit_ast: bool) {
 ///
 /// With no arguments, looks for `expo.toml` in the current directory.
 pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
-    let mut inputs = discover_doc_inputs(&files);
+    let (mut inputs, project_name) = discover_doc_inputs(&files);
     inputs.sort_by(|a, b| a.1.cmp(&b.1));
 
-    let project = extract_doc_project(&inputs, color);
+    let project = extract_doc_project(&inputs, &project_name, color);
     if project.items.is_empty() {
         println!("no items to document");
         return;
@@ -231,10 +231,11 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
 }
 
 /// Resolves the list of source files `expo doc` will process, as
-/// `(path, file_fqn)` pairs. Empty `files` means project mode (walk `src`
-/// from `expo.toml` and every dep's `src`); otherwise treat each entry as a
-/// path or a directory of `.expo` files.
-fn discover_doc_inputs(files: &[String]) -> Vec<(String, String)> {
+/// `(path, file_fqn)` pairs, plus the display name shown in the sidebar.
+/// Empty `files` means project mode (walk `src` from `expo.toml` and every
+/// dep's `src`) and uses `expo.toml`'s `name`; otherwise treat each entry
+/// as a path or a directory of `.expo` files and fall back to "Docs".
+fn discover_doc_inputs(files: &[String]) -> (Vec<(String, String)>, String) {
     let mut inputs = Vec::new();
 
     if files.is_empty() {
@@ -251,7 +252,7 @@ fn discover_doc_inputs(files: &[String]) -> Vec<(String, String)> {
             }
         }
         discover_dep_doc_inputs(&config, &cwd, &mut inputs);
-        return inputs;
+        return (inputs, config.name);
     }
 
     for input in files {
@@ -267,7 +268,7 @@ fn discover_doc_inputs(files: &[String]) -> Vec<(String, String)> {
             inputs.push((input.clone(), name));
         }
     }
-    inputs
+    (inputs, "Docs".to_string())
 }
 
 /// Walks every dependency declared in `[dependencies]` and appends its source
@@ -307,12 +308,17 @@ fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<(St
 
 /// Parses every input file and extracts doc-renderable items into a
 /// [`expo_doc::DocProject`]. Files with parse errors are reported and skipped.
-fn extract_doc_project(inputs: &[(String, String)], color: bool) -> expo_doc::DocProject {
+fn extract_doc_project(
+    inputs: &[(String, String)],
+    project_name: &str,
+    color: bool,
+) -> expo_doc::DocProject {
     let mut project = expo_doc::DocProject {
         constants: Vec::new(),
         enums: Vec::new(),
         functions: Vec::new(),
         items: Vec::new(),
+        name: project_name.to_string(),
         protocols: Vec::new(),
         structs: Vec::new(),
     };
