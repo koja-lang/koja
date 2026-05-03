@@ -353,7 +353,7 @@ fn binary_segment_pat_to_doc(seg: &BinarySegment) -> Doc {
 
 fn expr_value_to_doc(expr: &Expr) -> Doc {
     match &expr.kind {
-        ExprKind::Ident { name } => text(name.clone()),
+        ExprKind::Ident { name, .. } => text(name.clone()),
         ExprKind::Literal { value } => literal_to_doc(value),
         ExprKind::String { parts, .. } => {
             let mut doc_parts = vec![text("\"")];
@@ -602,7 +602,7 @@ fn expr_text_len(expr: &Expr) -> usize {
             }
             Literal::Unit => 2,
         },
-        ExprKind::Ident { name } => name.len(),
+        ExprKind::Ident { name, .. } => name.len(),
         ExprKind::Binary { op, left, right } => {
             expr_text_len(left) + expr_text_len(right) + binop_str(op).len() + 2
         }

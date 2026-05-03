@@ -258,7 +258,7 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Opt
 /// position, descending into sub-expressions and statement bodies.
 fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
     match &expr.kind {
-        ExprKind::Ident { name } => {
+        ExprKind::Ident { name, .. } => {
             if span_contains(&expr.span, line, col) {
                 let mut info = classify_name(name, ctx);
                 if let Some(SymbolInfo::Variable { type_display, .. }) = &mut info {

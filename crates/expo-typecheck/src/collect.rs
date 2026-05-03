@@ -4,6 +4,8 @@ use expo_ast::ast::{
     EnumConstructionData, EnumVariantData, Expr, ExprKind, File, Function, ImplMember, Item,
     Literal, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
 };
+use expo_ast::identifier::Identifier;
+use expo_ast::span::Span;
 
 use crate::context::{
     FunctionKind, FunctionSig, ParamInfo, ProtocolInfo, TypeContext, TypeInfo, TypeKind,
@@ -188,6 +190,7 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                         type_params: e.type_params.clone(),
                     },
                 );
+                register_global(&mut ctx, package, &e.name, e.span, GlobalKind::Enum);
                 let self_type = named(&e.name);
                 let resolve = ResolveCtx {
                     enum_names: &enum_names,
@@ -208,6 +211,7 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                         ctx.generic_function_asts.insert(f.name.clone(), f.clone());
                     }
                     ctx.functions.insert(f.name.clone(), sig);
+                    register_global(&mut ctx, package, &f.name, f.span, GlobalKind::Function);
                 }
             }
             Item::Impl(impl_block) => {
@@ -651,6 +655,7 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                         type_params: s.type_params.clone(),
                     },
                 );
+                register_global(&mut ctx, package, &s.name, s.span, GlobalKind::Struct);
                 let self_type = named(&s.name);
                 let resolve = ResolveCtx {
                     enum_names: &enum_names,
@@ -671,6 +676,38 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
     resolve_same_package_refs(&mut ctx, package);
 
     ctx
+}
+
+/// Which kind of top-level decl is being registered into the
+/// [`crate::registry::GlobalRegistry`].
+#[derive(Clone, Copy)]
+enum GlobalKind {
+    Enum,
+    Function,
+    Struct,
+}
+
+/// Registers a top-level decl into [`TypeContext::registry`] and emits a
+/// "`X` is already defined" diagnostic on collision (pointing at the
+/// previously-registered span as a hint). The legacy `types`/`functions`
+/// maps are populated separately by the caller -- this is purely the
+/// new-identifier shadow registration.
+fn register_global(ctx: &mut TypeContext, package: &str, name: &str, span: Span, kind: GlobalKind) {
+    let id = Identifier::new(package, vec![name.to_string()]);
+    let existing = match kind {
+        GlobalKind::Enum => ctx.registry.insert_enum(id, span),
+        GlobalKind::Function => ctx.registry.insert_function(id, span),
+        GlobalKind::Struct => ctx.registry.insert_struct(id, span),
+    };
+    if let Some(prev) = existing {
+        let prev_kind = prev.kind_label();
+        let prev_line = prev.span().start.line;
+        ctx.error_with_hint(
+            format!("`{name}` is already defined"),
+            format!("previous {prev_kind} definition is at line {prev_line}"),
+            span,
+        );
+    }
 }
 
 /// Final pass of [`collect`]: rewrites `Package::Unresolved` identifiers that

@@ -1,4 +1,5 @@
 use expo_ast::ast::*;
+use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
 use expo_ast::token::TokenKind;
 
@@ -144,6 +145,7 @@ impl Parser {
             let callee = Expr::new(
                 ExprKind::Ident {
                     name: path.into_iter().collect::<Vec<_>>().join("."),
+                    resolution: Resolution::Unresolved,
                 },
                 self.span_from(start),
             );
@@ -158,6 +160,7 @@ impl Parser {
             Expr::new(
                 ExprKind::Ident {
                     name: path.join("."),
+                    resolution: Resolution::Unresolved,
                 },
                 self.span_from(start),
             )
@@ -470,10 +473,10 @@ impl Parser {
 
     pub(crate) fn expr_to_closure_params(&mut self, expr: &Expr, span: Span) -> Vec<ClosureParam> {
         match &expr.kind {
-            ExprKind::Ident { name } if name == "_" => {
+            ExprKind::Ident { name, .. } if name == "_" => {
                 vec![ClosureParam::Wildcard { span: expr.span }]
             }
-            ExprKind::Ident { name } => {
+            ExprKind::Ident { name, .. } => {
                 vec![ClosureParam::Name {
                     mode: PassMode::Borrow,
                     name: name.clone(),

@@ -204,7 +204,7 @@ fn collect_from_static_call(
     pending: &mut Vec<Pending>,
     seen: &mut HashSet<MonomorphizedTypeIdentifier>,
 ) {
-    let ExprKind::Ident { name } = &receiver.kind else {
+    let ExprKind::Ident { name, .. } = &receiver.kind else {
         return;
     };
     let ctx = empty_lower_ctx(type_ctx);

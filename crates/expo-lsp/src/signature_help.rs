@@ -40,7 +40,7 @@ impl Backend {
 
         let (function_name, sig) = match &call_site.expr.kind {
             ExprKind::Call { callee, .. } => {
-                let ExprKind::Ident { name } = &callee.kind else {
+                let ExprKind::Ident { name, .. } = &callee.kind else {
                     return Ok(None);
                 };
                 let sig = find_function_sig(name, &state.ctx, &self.stdlib_ctx);
@@ -145,7 +145,7 @@ fn receiver_type_name(receiver: &expo_ast::ast::Expr, ctx: &TypeContext) -> Opti
             _ => None,
         };
     }
-    if let ExprKind::Ident { name } = &receiver.kind
+    if let ExprKind::Ident { name, .. } = &receiver.kind
         && (ctx.is_struct(name) || ctx.is_enum(name))
     {
         return Some(name.clone());

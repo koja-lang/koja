@@ -159,7 +159,7 @@ impl<'a> Lowerer<'a> {
                 return Ok((out, operand, Type::Primitive(Primitive::Binary)));
             }
             ExprKind::Call { callee, args } => {
-                if let ExprKind::Ident { name } = &callee.kind {
+                if let ExprKind::Ident { name, .. } = &callee.kind {
                     if let Some((open, operand, ty)) =
                         self.lower_call_or_stub(builder, open, name, args, tail, expr.span)?
                     {
@@ -184,7 +184,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Group { expr: inner } => {
                 return self.lower_expr_to_operand_with_tail(builder, open, inner, tail);
             }
-            ExprKind::Ident { name } => {
+            ExprKind::Ident { name, .. } => {
                 if let Some((operand, ty)) = self.lower_ident_or_stub(builder, open, name) {
                     return Ok((Some(open), operand, ty));
                 }

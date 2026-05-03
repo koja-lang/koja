@@ -145,8 +145,10 @@ impl Parser {
 
     fn try_expr_to_pattern(&mut self, expr: &Expr) -> Option<Pattern> {
         match &expr.kind {
-            ExprKind::Ident { name } if name == "_" => Some(Pattern::Wildcard { span: expr.span }),
-            ExprKind::Ident { name } => Some(Pattern::Binding {
+            ExprKind::Ident { name, .. } if name == "_" => {
+                Some(Pattern::Wildcard { span: expr.span })
+            }
+            ExprKind::Ident { name, .. } => Some(Pattern::Binding {
                 name: name.clone(),
                 span: expr.span,
             }),
@@ -157,7 +159,7 @@ impl Parser {
 
 fn try_expr_to_lvalue(expr: &Expr) -> Option<LValue> {
     match &expr.kind {
-        ExprKind::Ident { name } => Some(LValue {
+        ExprKind::Ident { name, .. } => Some(LValue {
             segments: vec![name.clone()],
             span: expr.span,
         }),

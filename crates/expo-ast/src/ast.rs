@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use crate::identifier::TypeIdentifier;
+use crate::identifier::{Resolution, TypeIdentifier};
 use crate::span::Span;
 use crate::types::Type;
 
@@ -528,7 +528,10 @@ pub enum ExprKind {
     /// A parenthesized grouping: `(expr)`.
     Group { expr: Box<Expr> },
     /// A variable reference: `x`, `my_var`.
-    Ident { name: String },
+    Ident {
+        name: String,
+        resolution: Resolution,
+    },
     /// An if/else expression: `if cond ... end`.
     If {
         condition: Box<Expr>,

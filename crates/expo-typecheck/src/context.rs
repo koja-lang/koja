@@ -8,6 +8,7 @@ use expo_ast::ast::{
 pub use expo_ast::ast::{PassMode, Visibility};
 use expo_ast::span::Span;
 
+use crate::registry::GlobalRegistry;
 use crate::types::resolve_type_expr_full;
 pub use crate::types::{FnParam, Package, Type, TypeIdentifier};
 
@@ -54,6 +55,13 @@ pub struct TypeContext {
     /// Package-to-type-names index for resolving qualified type paths like
     /// `http.Request`. Populated by the resolution pass alongside `name_index`.
     pub package_types: BTreeMap<Package, BTreeSet<String>>,
+    /// Identifier-keyed registry of every globally-named decl (top-level
+    /// structs, enums, functions today; methods/variants/etc. as the
+    /// pipeline migrates onto path-based identifiers). Populated alongside
+    /// the legacy `types`/`functions` maps during collection. Nothing reads
+    /// from it yet -- it exists to exercise the new
+    /// [`expo_ast::identifier::Identifier`] surface end-to-end.
+    pub registry: GlobalRegistry,
 }
 
 /// Whether a function in an impl block takes a `self` receiver or is static.
@@ -466,6 +474,7 @@ impl TypeContext {
             file_aliases: BTreeMap::new(),
             name_index: BTreeMap::new(),
             package_types: BTreeMap::new(),
+            registry: GlobalRegistry::new(),
         }
     }
 
