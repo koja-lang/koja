@@ -270,8 +270,7 @@ fn is_input_complete(source: &str) -> bool {
     let mut interpol_depth: i32 = 0;
     for token in expo_lexer::lex(source).tokens {
         match token.kind {
-            TokenKind::Arena
-            | TokenKind::Cond
+            TokenKind::Cond
             | TokenKind::Enum
             | TokenKind::Fn
             | TokenKind::For

@@ -456,7 +456,7 @@ pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
 }
 
 /// Returns `true` if the expression is a multi-line block construct
-/// (if, match, cond, for, loop, unless, while, closure, receive, arena).
+/// (if, match, cond, for, loop, unless, while, closure, receive).
 pub(super) fn is_block_expr(expr: &Expr) -> bool {
     matches!(
         expr.kind,
@@ -469,7 +469,6 @@ pub(super) fn is_block_expr(expr: &Expr) -> bool {
             | ExprKind::While { .. }
             | ExprKind::Closure { .. }
             | ExprKind::Receive { .. }
-            | ExprKind::Arena { .. }
     )
 }
 

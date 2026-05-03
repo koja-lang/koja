@@ -224,13 +224,6 @@ impl<'a> Printer<'a> {
                 text("end"),
             ]),
 
-            ExprKind::Arena { body } => concat(vec![
-                text("arena"),
-                self.body_to_doc(body, expr.span.end.line),
-                hardline(),
-                text("end"),
-            ]),
-
             ExprKind::Closure {
                 params,
                 return_type,

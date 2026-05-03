@@ -344,7 +344,6 @@ impl Parser {
             TokenKind::For => self.parse_for_expr(),
             TokenKind::Loop => self.parse_loop_expr(),
             TokenKind::While => self.parse_while_expr(),
-            TokenKind::Arena => self.parse_arena_expr(),
             TokenKind::Receive => self.parse_receive_expr(),
             TokenKind::Spawn => self.parse_spawn_expr(),
             TokenKind::Fn => self.parse_closure_expr(),

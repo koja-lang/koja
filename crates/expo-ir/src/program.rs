@@ -187,7 +187,6 @@ fn check_instruction_invariant(
 pub fn expr_kind_name(kind: &expo_ast::ast::ExprKind) -> &'static str {
     use expo_ast::ast::ExprKind;
     match kind {
-        ExprKind::Arena { .. } => "Arena",
         ExprKind::Binary { .. } => "Binary",
         ExprKind::BinaryLiteral { .. } => "BinaryLiteral",
         ExprKind::Call { .. } => "Call",

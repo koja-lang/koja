@@ -20,7 +20,7 @@ Expo is a statically typed, compiled language targeting native binaries via LLVM
 - [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
 - [C FFI](#c-ffi) -- `@extern "C"`, `CPtr<T>`, `CString`
 - [Annotations](#annotations) -- `@doc`
-- [Planned Features](#planned-features) -- Arena Blocks, Display, Struct Destructuring, `command`
+- [Planned Features](#planned-features) -- Arena Blocks, Struct Destructuring, `command`
 - [Tooling](#tooling) -- CLI Commands, LSP, Formatter
 
 ---
@@ -45,7 +45,7 @@ x = 42  # inline comment
 ### Keywords
 
 ```
-alias, arena, break, cond, const, else, end, enum, false, fn, for,
+alias, break, cond, const, else, end, enum, false, fn, for,
 if, impl, in, loop, match, move, not, priv, protocol,
 receive, return, self, shared, spawn, struct, true, type, unless, when
 ```
@@ -1816,7 +1816,7 @@ The following features are designed but not yet compiled to native code. They ar
 
 ### `arena` Blocks
 
-Bump-allocated regions with bulk-free semantics:
+Bump-allocated regions with bulk-free semantics. Designed but not implemented -- `arena` is not a reserved keyword today, and the surface syntax will be reintroduced when the runtime allocator work lands. See the "Future: Arena blocks (post-v1)" section in `design/ROADMAP.md`:
 
 ```expo
 result = arena

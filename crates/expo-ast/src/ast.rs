@@ -540,8 +540,6 @@ impl Expr {
 /// The specific kind of an expression node.
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    /// An arena allocation block: `arena ... end`.
-    Arena { body: Vec<Statement> },
     /// A binary operation: `a + b`, `x * y`.
     Binary {
         op: BinOp,

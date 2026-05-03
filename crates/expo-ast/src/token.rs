@@ -29,7 +29,6 @@ pub enum TokenKind {
 
     // Keywords
     After,
-    Arena,
     Break,
     Cond,
     Const,
@@ -109,7 +108,6 @@ impl TokenKind {
             self,
             TokenKind::After
                 | TokenKind::Alias
-                | TokenKind::Arena
                 | TokenKind::Break
                 | TokenKind::Cond
                 | TokenKind::Const

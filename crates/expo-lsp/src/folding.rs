@@ -194,12 +194,6 @@ fn collect_expr_folds(expr: &Expr, ranges: &mut Vec<FoldingRange>) {
             }
             collect_statement_folds(body, ranges);
         }
-        ExprKind::Arena { body, .. } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            collect_statement_folds(body, ranges);
-        }
         _ => {}
     }
 }

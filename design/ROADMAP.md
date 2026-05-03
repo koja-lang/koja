@@ -70,10 +70,6 @@ Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, 
 - `alias` keyword for file-private package type shorthands (`alias JSON.Decoder`, `alias JSON.Decoder as JSONDecoder`) -- qualified type resolution via `package.Type` syntax
 - C FFI Phase 1 (primitives) and Phase 2 (pointers and strings): `@extern "C"` and `@link "libname"` annotations for calling C functions. `CPtr<T>` raw pointer type (`Copy`, backed by `malloc`/`free`). `CString` null-terminated string type with `String.to_cstring()` and `CString.to_string()` conversions. `CPtr<T>` accepted in `@extern "C"` signatures for pointer-passing FFI.
 
-### Parsed and type-checked but NOT yet in codegen
-
-- `arena` blocks (deferred post-v1)
-
 ### Design notes
 
 - **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `PairLiteral<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
@@ -449,7 +445,7 @@ Deferred because the design depends on runtime decisions not yet made:
 - **Multi-threaded scheduler**: thread-local vs. shared arenas have very different implementation shapes.
 - **LLVM allocation patterns**: real-world profiling may reveal that LLVM's optimizer eliminates enough allocations to reduce the need for manual arena control.
 
-The `arena...end` syntax is already parsed and type-checked. Codegen is deferred until allocation pressure is observed in real Expo programs.
+The `arena...end` syntax was removed from the bootstrap compiler (parser, AST, lexer, typecheck, grammar) in May 2026 since it never reached codegen and was dead weight across the pipeline. The keyword and grammar rule will be reintroduced as a single commit when the runtime allocator work begins and the codegen path is ready to land alongside.
 
 ---
 

@@ -63,10 +63,10 @@ in shrinking the inventory.
 | 15   | `Spawn`              | 3     | no arm                                                                  |
 | 16   | `FieldAccess`        | 3     | helper exists, returns `None`                                           |
 
-Twelve of the 28 `ExprKind` variants are fully covered (no
-inventory entries): `Arena`, `BinaryLiteral`, `Cond`, `Group`,
-`If`, `Loop`, `Self_`, `String`, `Ternary`, `Unary`, `Unless`,
-`While`.
+Eleven of the 27 `ExprKind` variants are fully covered (no
+inventory entries): `BinaryLiteral`, `Cond`, `Group`, `If`,
+`Loop`, `Self_`, `String`, `Ternary`, `Unary`, `Unless`, `While`.
+(`Arena` was removed from `ExprKind` in May 2026.)
 
 ## Slice 1 closeout
 

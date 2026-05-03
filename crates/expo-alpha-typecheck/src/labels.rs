@@ -6,7 +6,6 @@ use expo_ast::ast::{ExprKind, Item};
 
 pub(crate) fn expr_kind_label(kind: &ExprKind) -> &'static str {
     match kind {
-        ExprKind::Arena { .. } => "arena",
         ExprKind::Binary { .. } => "binary",
         ExprKind::BinaryLiteral { .. } => "binary-literal",
         ExprKind::Call { .. } => "call",

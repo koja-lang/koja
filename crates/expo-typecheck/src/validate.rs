@@ -92,7 +92,7 @@ fn validate_expr(expr: &Expr, ctx: &mut TypeContext) {
     }
 
     match &expr.kind {
-        ExprKind::Arena { body } | ExprKind::Closure { body, .. } | ExprKind::Loop { body } => {
+        ExprKind::Closure { body, .. } | ExprKind::Loop { body } => {
             validate_body(body, ctx);
         }
         ExprKind::For { iterable, body, .. } => {
