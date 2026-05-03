@@ -7,7 +7,7 @@
 //! check) needs no special-casing.
 //!
 //! Runs as the first step inside [`crate::collect_file`]. Mutates the
-//! `Module` in place. Purely syntactic -- no `TypeContext`, no resolution
+//! `File` in place. Purely syntactic -- no `TypeContext`, no resolution
 //! data is required, so this can run before any name binding has happened.
 //!
 //! ## Generic types: degraded body
@@ -33,8 +33,8 @@
 //! - `expand_command` -- desugar the planned `command` construct.
 
 use expo_ast::ast::{
-    Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern,
-    Function, ImplBlock, ImplMember, Item, MatchArm, Module, Param, PassMode, Pattern, Statement,
+    Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern, File,
+    Function, ImplBlock, ImplMember, Item, MatchArm, Param, PassMode, Pattern, Statement,
     StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use expo_ast::span::Span;
@@ -50,7 +50,7 @@ const STRING_TYPE: &str = "String";
 /// Synthesizes `impl Debug for T` for every struct / enum that doesn't
 /// already have one. Mutates `file.items` in place by appending the
 /// synthetic impl blocks.
-pub(crate) fn derive_debug(file: &mut Module) {
+pub(crate) fn derive_debug(file: &mut File) {
     let existing = collect_existing_debug_impls(file);
     let mut synthesized: Vec<Item> = Vec::new();
 
@@ -73,7 +73,7 @@ pub(crate) fn derive_debug(file: &mut Module) {
 /// explicit `impl Debug for T` block in this file. Names are bare --
 /// generic args on the target are intentionally ignored so
 /// `impl Debug for List<T>` matches a struct named `List`.
-fn collect_existing_debug_impls(file: &Module) -> Vec<String> {
+fn collect_existing_debug_impls(file: &File) -> Vec<String> {
     file.items
         .iter()
         .filter_map(|item| match item {
@@ -536,17 +536,17 @@ mod tests {
     use super::*;
     use expo_parser::parse;
 
-    fn parse_file(source: &str) -> Module {
+    fn parse_file(source: &str) -> File {
         let result = parse(source);
         assert!(
             result.errors.is_empty(),
             "parse errors: {:?}",
             result.errors
         );
-        result.module
+        result.ast
     }
 
-    fn count_impl_debug(file: &Module, target: &str) -> usize {
+    fn count_impl_debug(file: &File, target: &str) -> usize {
         file.items
             .iter()
             .filter(|item| match item {

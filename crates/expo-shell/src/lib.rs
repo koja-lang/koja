@@ -57,7 +57,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
 
-use expo_ast::ast::{Item, Module};
+use expo_ast::ast::{File, Item};
 use expo_ast::token::TokenKind;
 use expo_ir::{Backend, FunctionIdentifier};
 use expo_ir_eval::{Interp, Value};
@@ -298,7 +298,7 @@ fn erase_lines(n: usize) {
 pub fn eval_file(path: &Path, entry: Option<&str>) -> Result<Option<Value>, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
-    let mut module = parse_module(&source)?;
+    let mut module = parse_file(&source)?;
     module.path = Some(path.to_path_buf());
     let entry_name = match entry {
         Some(name) => name.to_string(),
@@ -336,7 +336,7 @@ pub fn eval_file(path: &Path, entry: Option<&str>) -> Result<Option<Value>, Stri
 ///
 /// Skipped when the caller supplied an explicit `--entry`; that
 /// function is dispatched by its source name.
-fn rename_main_for_eval(module: &mut Module) -> Option<String> {
+fn rename_main_for_eval(module: &mut File) -> Option<String> {
     for item in &mut module.items {
         if let Item::Function(function) = item
             && function.name == "main"
@@ -404,11 +404,11 @@ pub fn is_input_complete(source: &str) -> bool {
         && interpol_depth <= 0
 }
 
-/// Parse `source` into an [`expo_ast::ast::Module`], returning a
+/// Parse `source` into an [`expo_ast::ast::File`], returning a
 /// formatted multi-line error string when the parser produces
 /// diagnostics. Shared between [`eval_file`] and the session
 /// pipeline.
-pub(crate) fn parse_module(source: &str) -> Result<Module, String> {
+pub(crate) fn parse_file(source: &str) -> Result<File, String> {
     let parsed = expo_parser::parse(source);
     if !parsed.errors.is_empty() {
         let messages: Vec<String> = parsed
@@ -418,7 +418,7 @@ pub(crate) fn parse_module(source: &str) -> Result<Module, String> {
             .collect();
         return Err(format!("parse error:\n{}", messages.join("\n")));
     }
-    Ok(parsed.module)
+    Ok(parsed.ast)
 }
 
 /// Format codegen / typecheck diagnostics into a multi-line error

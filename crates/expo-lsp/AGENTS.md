@@ -23,6 +23,5 @@ _file_ is a single `.expo` source file. The LSP holds parsed files in
 `Backend.stdlib_files`, `Backend.project_files`, and `DocumentState.file` /
 `DocumentState.project_files`. The Expo language has no "module" concept --
 when you see `module` in code below this point it is the Rust language item
-(`mod foo;`) or the AST type (`expo_ast::Module`, an unrelated holdover that a
-later refactor will rename to `File`). LSP-protocol enum values like
-`SymbolKind::MODULE` are also unrelated and stay untouched.
+(`mod foo;`). LSP-protocol enum values like `SymbolKind::MODULE` are unrelated
+and stay untouched.

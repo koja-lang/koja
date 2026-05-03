@@ -21,8 +21,7 @@ project's files plus every dep package's files -- keyed by FQN. There is no
 dependency graph between files: `SourceSet.order` is just "stdlib first, then
 project files" for processing convenience. The Expo language has no "module"
 concept; when you see `module` in code below this point it is the Rust
-language item (`mod foo;`) or the AST type (`expo_ast::Module`, an unrelated
-holdover that a later refactor will rename to `File`).
+language item (`mod foo;`).
 
 ## Tests
 

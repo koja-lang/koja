@@ -1,7 +1,7 @@
 //! Walk the parsed AST and extract documentation items.
 
 use expo_ast::ast::{
-    AnnotationValue, EnumDecl, Function, ImplBlock, ImplMember, Item, Module, Param, ProtocolDecl,
+    AnnotationValue, EnumDecl, File, Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl,
     ProtocolMethod, StructDecl, TypeExpr, Visibility,
 };
 
@@ -86,7 +86,7 @@ pub struct DocProject {
 /// Extract documentation items from a parsed file into the running project.
 ///
 /// Items with `@doc false` are excluded.
-pub fn extract_items(file: &Module, project: &mut DocProject) {
+pub fn extract_items(file: &File, project: &mut DocProject) {
     let mut local_structs: Vec<DocStruct> = Vec::new();
     let mut local_enums: Vec<DocEnum> = Vec::new();
 

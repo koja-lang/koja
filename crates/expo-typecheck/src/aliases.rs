@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use expo_ast::ast::{Item, Module};
+use expo_ast::ast::{File, Item};
 use expo_ast::span::Span;
 
 use crate::context::TypeContext;
@@ -18,7 +18,7 @@ use crate::types::{Type, TypeIdentifier};
 /// visible during type checking of this file. Duplicate `local_name` entries
 /// within the same file are reported as errors so two `alias`es never
 /// silently shadow each other (e.g. `alias alpha.Config` + `alias beta.Config`).
-pub fn resolve_file_aliases(file: &Module, ctx: &mut TypeContext) {
+pub fn resolve_file_aliases(file: &File, ctx: &mut TypeContext) {
     let mut seen: BTreeMap<String, Span> = BTreeMap::new();
     for item in &file.items {
         if let Item::Alias(a) = item {

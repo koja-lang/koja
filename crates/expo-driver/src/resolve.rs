@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use expo_ast::ast::Module;
+use expo_ast::ast::File;
 
 use crate::project::{self, ProjectConfig};
 
@@ -20,7 +20,7 @@ pub struct ResolvedFile {
     pub name: String,
     pub path: PathBuf,
     pub source: String,
-    pub ast: Module,
+    pub ast: File,
     pub errors: Vec<expo_ast::ast::Diagnostic>,
 }
 
@@ -52,7 +52,7 @@ pub fn resolve_sources(entry_path: &Path) -> Result<SourceSet, String> {
     let source = fs::read_to_string(entry_path)
         .map_err(|e| format!("error reading {}: {e}", entry_path.display()))?;
     let parse_result = expo_parser::parse(&source);
-    let mut ast = parse_result.module;
+    let mut ast = parse_result.ast;
     ast.path = Some(entry_path.to_path_buf());
 
     let mut sources = SourceSet {
@@ -157,7 +157,7 @@ pub fn insert_stdlib(sources: &mut SourceSet) {
                 name: name.to_string(),
                 path: PathBuf::from(format!("<{name}>")),
                 source: source.to_string(),
-                ast: parse_result.module,
+                ast: parse_result.ast,
                 errors: parse_result.errors,
             },
         );
@@ -195,7 +195,7 @@ fn scan_directories(
             let source = fs::read_to_string(&file_path)
                 .map_err(|e| format!("error reading {}: {e}", file_path.display()))?;
             let parse_result = expo_parser::parse(&source);
-            let mut ast = parse_result.module;
+            let mut ast = parse_result.ast;
             ast.path = Some(file_path.clone());
 
             sources.order.push(fqn.clone());

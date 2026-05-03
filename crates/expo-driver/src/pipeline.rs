@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{env, fs, mem, process};
 
-use expo_ast::ast::{Annotation, AnnotationValue, Diagnostic, ImplMember, Item, Module, Severity};
+use expo_ast::ast::{Annotation, AnnotationValue, Diagnostic, File, ImplMember, Item, Severity};
 
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{Package, fqn_to_package};
@@ -111,7 +111,7 @@ pub fn typecheck_sources(
         return (file_contexts, true);
     }
 
-    let all_files: Vec<&Module> = sources
+    let all_files: Vec<&File> = sources
         .order
         .iter()
         .map(|n| &sources.files[n].ast)
@@ -220,7 +220,7 @@ pub fn build_from_sources(sources: &mut SourceSet, output: &str, options: BuildO
     }
     expo_typecheck::resolve_packages(&mut merged_ctx);
 
-    let files_ast: Vec<&Module> = sources
+    let files_ast: Vec<&File> = sources
         .order
         .iter()
         .map(|name| &sources.files[name].ast)
@@ -274,7 +274,7 @@ pub fn build_from_sources(sources: &mut SourceSet, output: &str, options: BuildO
 
 /// Walks all files and collects unique `@link` library names from function
 /// annotations across structs, enums, impl blocks, and top-level items.
-fn collect_link_libraries(files: &[&Module]) -> Vec<String> {
+fn collect_link_libraries(files: &[&File]) -> Vec<String> {
     fn collect_from(annotations: &[Annotation], libs: &mut BTreeSet<String>) {
         for ann in annotations {
             if ann.name == "link"
@@ -473,7 +473,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     sources.files.insert(
         harness_name.clone(),
         resolve::ResolvedFile {
-            ast: parse_result.module,
+            ast: parse_result.ast,
             errors: parse_result.errors,
             name: harness_name.clone(),
             path: PathBuf::from("<test_harness>"),

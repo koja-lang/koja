@@ -46,7 +46,7 @@ pub(crate) enum SymbolInfo {
 /// Finds the symbol at the given 1-indexed `(line, col)` position in
 /// a parsed file.
 pub(crate) fn find_symbol_at(
-    file: &Module,
+    file: &File,
     line: u32,
     col: u32,
     ctx: &TypeContext,
@@ -218,7 +218,7 @@ fn find_in_inline_functions(
 
 /// Searches a file's items for the `@doc` annotation on the item
 /// named `name`.
-pub(crate) fn find_doc_for(file: &Module, name: &str) -> Option<String> {
+pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
     for item in &file.items {
         match item {
             Item::Alias(_) => {}

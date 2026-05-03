@@ -8,12 +8,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use expo_ast::ast::{Item, Module, Statement};
+use expo_ast::ast::{File, Item, Statement};
 use expo_ir::{Backend, FunctionIdentifier};
 use expo_ir_eval::{Interp, Value};
 use expo_typecheck::types::Type;
 
-use crate::{format_diagnostics, parse_module};
+use crate::{format_diagnostics, parse_file};
 
 /// Synthetic name the [`Session`] re-execution loop wraps the
 /// accumulated statement blocks in, so the interpreter has a callable
@@ -162,7 +162,7 @@ impl Session {
     /// crash.
     fn infer_tail_type(&self) -> Result<Option<Type>, String> {
         let probe_source = self.synthesize(None);
-        let mut probe_module = parse_module(&probe_source)?;
+        let mut probe_module = parse_file(&probe_source)?;
         probe_module.path = Some(session_module_path());
         let probe_ctx = expo_typecheck::check(&mut probe_module);
         if !probe_ctx.diagnostics.is_empty() {
@@ -177,7 +177,7 @@ impl Session {
     /// `__expo_session_main__` through the interpreter.
     fn run(&self, return_type_text: Option<&str>) -> Result<Value, String> {
         let source = self.synthesize(return_type_text);
-        let mut module = parse_module(&source)?;
+        let mut module = parse_file(&source)?;
         module.path = Some(session_module_path());
         let type_ctx = expo_typecheck::check(&mut module);
         if !type_ctx.diagnostics.is_empty() {
@@ -289,11 +289,11 @@ enum InputShape {
 /// Genuine parse errors surface from the wrapped parse.
 fn classify_input(input: &str) -> Result<InputShape, String> {
     let raw = expo_parser::parse(input);
-    if raw.errors.is_empty() && !raw.module.items.is_empty() {
+    if raw.errors.is_empty() && !raw.ast.items.is_empty() {
         return Ok(InputShape::Items(input.to_string()));
     }
     let wrapped = format!("fn __probe\n  {input}\nend\n");
-    let parsed = parse_module(&wrapped)?;
+    let parsed = parse_file(&wrapped)?;
     let tail_is_expr = wrapped_function_tail_is_expr(&parsed, "__probe");
     Ok(InputShape::Statements {
         source: input.to_string(),
@@ -304,7 +304,7 @@ fn classify_input(input: &str) -> Result<InputShape, String> {
 /// True when the named function's body ends in [`Statement::Expr`].
 /// Drives the REPL's print rule: only inputs whose last statement is
 /// a value-producing expression show a result line.
-fn wrapped_function_tail_is_expr(module: &Module, name: &str) -> bool {
+fn wrapped_function_tail_is_expr(module: &File, name: &str) -> bool {
     for item in &module.items {
         let Item::Function(function) = item else {
             continue;
@@ -331,7 +331,7 @@ fn session_module_path() -> PathBuf {
     PathBuf::from(format!("{SESSION_PACKAGE}.expo"))
 }
 
-fn session_tail_type(module: &Module) -> Option<Type> {
+fn session_tail_type(module: &File) -> Option<Type> {
     for item in &module.items {
         let Item::Function(function) = item else {
             continue;

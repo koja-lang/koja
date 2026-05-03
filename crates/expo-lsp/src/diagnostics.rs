@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::{Diagnostic as ExpoDiagnostic, Module, Severity as ExpoSeverity};
+use expo_ast::ast::{Diagnostic as ExpoDiagnostic, File, Severity as ExpoSeverity};
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{Package, package_for_path, package_from_str};
 
@@ -94,7 +94,7 @@ fn read_project_name(project_root: &Path) -> Option<String> {
 /// rule (project + implicit `std` + each dep): on collision, returns the
 /// files collected so far without descending into the offending dep, so
 /// the driver-level error eventually surfaces in the editor as well.
-fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<(Module, String)> {
+fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<(File, String)> {
     let toml_path = project_root.join("expo.toml");
     let source = match fs::read_to_string(&toml_path) {
         Ok(s) => s,
@@ -105,10 +105,10 @@ fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<
         Err(_) => return Vec::new(),
     };
 
-    let mut files: Vec<(Module, String)> = Vec::new();
+    let mut files: Vec<(File, String)> = Vec::new();
 
     let scan_roots =
-        |src_dirs: &[String], root: &Path, pkg: &str, out: &mut Vec<(Module, String)>| {
+        |src_dirs: &[String], root: &Path, pkg: &str, out: &mut Vec<(File, String)>| {
             for src in src_dirs {
                 let dir = root.join(src);
                 if dir.is_dir() {
@@ -123,7 +123,7 @@ fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<
                                 .iter()
                                 .all(|d| !matches!(d.severity, ExpoSeverity::Error))
                             {
-                                let mut file = pr.module;
+                                let mut file = pr.ast;
                                 file.path = Some(file_path.clone());
                                 out.push((file, pkg.to_string()));
                             }
@@ -193,16 +193,16 @@ impl Backend {
                 .and_then(|p| p.parent())
                 .and_then(find_project_root);
 
-            let mut sibling_files: Vec<(Module, String)> = match (&project_root, &file_path) {
+            let mut sibling_files: Vec<(File, String)> = match (&project_root, &file_path) {
                 (Some(root), Some(fp)) => parse_sibling_files(root, Some(fp)),
                 _ => Vec::new(),
             };
 
-            let mut all_for_names: Vec<&Module> = self.stdlib_files.iter().collect();
+            let mut all_for_names: Vec<&File> = self.stdlib_files.iter().collect();
             for (m, _) in &sibling_files {
                 all_for_names.push(m);
             }
-            all_for_names.push(&parse_result.module);
+            all_for_names.push(&parse_result.ast);
 
             let current_pkg = project_root
                 .as_deref()
@@ -224,26 +224,22 @@ impl Backend {
             }
 
             let mut ctx =
-                expo_typecheck::collect_file(&mut parse_result.module, &global_names, &current_pkg);
+                expo_typecheck::collect_file(&mut parse_result.ast, &global_names, &current_pkg);
             ctx.merge(&unified_ctx);
-            expo_typecheck::synthesize_protocol_defaults(
-                &parse_result.module,
-                &mut ctx,
-                &current_pkg,
-            );
+            expo_typecheck::synthesize_protocol_defaults(&parse_result.ast, &mut ctx, &current_pkg);
             expo_typecheck::mark_recursive_fields(&mut ctx);
-            expo_typecheck::resolve_file_aliases(&parse_result.module, &mut ctx);
+            expo_typecheck::resolve_file_aliases(&parse_result.ast, &mut ctx);
             expo_typecheck::resolve_packages(&mut ctx);
-            expo_typecheck::check_file(&mut parse_result.module, &mut ctx, &current_pkg);
+            expo_typecheck::check_file(&mut parse_result.ast, &mut ctx, &current_pkg);
             all_diags.extend(ctx.diagnostics.clone());
-            let stored_files: Vec<Module> = sibling_files.into_iter().map(|(m, _)| m).collect();
+            let stored_files: Vec<File> = sibling_files.into_iter().map(|(m, _)| m).collect();
             (ctx, stored_files)
         } else {
             (TypeContext::new(), Vec::new())
         };
 
         {
-            let mut file = parse_result.module;
+            let mut file = parse_result.ast;
             file.path = file_path;
 
             if !project_files.is_empty() {

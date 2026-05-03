@@ -24,8 +24,7 @@ _file_ is a single `.expo` source file. Multiple files come together to form a
 package; all top-level types in a package can be referenced from any file in
 that package without imports. The Expo language has no "module" concept --
 when you see `module` in code below this point it is the Rust language item
-(`mod foo;`) or the AST type (`expo_ast::Module`, an unrelated holdover that a
-later refactor will rename to `File`).
+(`mod foo;`).
 
 ## Pipeline
 

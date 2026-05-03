@@ -24,7 +24,7 @@ pub fn format_width(source: &str, width: u32) -> FormatResult {
         return FormatResult::ParseErrors(result.errors);
     }
 
-    let doc = printer::file_to_doc(&result.module);
+    let doc = printer::file_to_doc(&result.ast);
     let rendered = render(&doc, width);
     let mut out: String = rendered
         .lines()

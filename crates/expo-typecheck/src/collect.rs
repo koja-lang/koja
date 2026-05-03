@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use expo_ast::ast::{
-    EnumConstructionData, EnumVariantData, Expr, ExprKind, Function, ImplMember, Item, Literal,
-    Module, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
+    EnumConstructionData, EnumVariantData, Expr, ExprKind, File, Function, ImplMember, Item,
+    Literal, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr,
 };
 
 use crate::context::{
@@ -49,7 +49,7 @@ pub struct GlobalNames {
 /// first phase of a two-phase collection: names and packages are gathered
 /// globally, then passed into [`collect`] so cross-file type references
 /// resolve correctly on the first pass.
-pub fn collect_all_names(files: &[&Module], packages: BTreeSet<Package>) -> GlobalNames {
+pub fn collect_all_names(files: &[&File], packages: BTreeSet<Package>) -> GlobalNames {
     let mut names = GlobalNames {
         enum_names: HashSet::new(),
         packages,
@@ -79,7 +79,7 @@ pub fn collect_all_names(files: &[&Module], packages: BTreeSet<Package>) -> Glob
 /// The `package` parameter identifies which package this file belongs to
 /// (e.g. `"std"`, `"json"`, or the project name). It's stored on each
 /// [`TypeInfo`]'s [`TypeIdentifier`] for package-aware collision detection.
-pub fn collect(file: &Module, global_names: &GlobalNames, package: &str) -> TypeContext {
+pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeContext {
     let mut ctx = TypeContext::new();
     ctx.current_package = Some(package_from_str(package));
 
@@ -757,7 +757,7 @@ fn resolve_type_locally(ty: &mut Type, local_names: &HashSet<String>, scope: &Pa
 /// Synthesizes default protocol method implementations for impl blocks whose
 /// protocol info wasn't available during initial collection (e.g. stdlib
 /// protocols like `Process`). Must be called after merging the stdlib context.
-pub fn synthesize_protocol_defaults(file: &Module, ctx: &mut TypeContext, package: &str) {
+pub fn synthesize_protocol_defaults(file: &File, ctx: &mut TypeContext, package: &str) {
     let struct_names: Vec<String> = ctx
         .types
         .values()

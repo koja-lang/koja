@@ -6,7 +6,7 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::Module;
+use expo_ast::ast::File;
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::VariantData;
 
@@ -67,7 +67,7 @@ impl Backend {
 
 /// Resolves a doc comment for `name` from the local file, sibling
 /// project files, or stdlib.
-fn resolve_doc(name: &str, state: &DocumentState, stdlib_files: &[Module]) -> Option<String> {
+fn resolve_doc(name: &str, state: &DocumentState, stdlib_files: &[File]) -> Option<String> {
     lookup::find_doc_for(&state.file, name)
         .or_else(|| {
             state
@@ -85,7 +85,7 @@ fn resolve_doc(name: &str, state: &DocumentState, stdlib_files: &[Module]) -> Op
 fn build_function_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_files: &[Module],
+    stdlib_files: &[File],
 ) -> Option<String> {
     let sig = state.ctx.functions.get(name)?;
     let params_str: Vec<String> = sig
@@ -122,11 +122,7 @@ fn build_function_hover(
     Some(format_hover(&signature, doc.as_deref()))
 }
 
-fn build_struct_hover(
-    name: &str,
-    state: &DocumentState,
-    stdlib_files: &[Module],
-) -> Option<String> {
+fn build_struct_hover(name: &str, state: &DocumentState, stdlib_files: &[File]) -> Option<String> {
     let info = state.ctx.find_type(name)?;
     let fields: Vec<String> = info
         .fields()?
@@ -153,7 +149,7 @@ fn build_struct_hover(
 fn build_constant_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_files: &[Module],
+    stdlib_files: &[File],
 ) -> Option<String> {
     let const_id = TypeIdentifier {
         package: state.ctx.current_package.clone()?,
@@ -165,7 +161,7 @@ fn build_constant_hover(
     Some(format_hover(&signature, doc.as_deref()))
 }
 
-fn build_enum_hover(name: &str, state: &DocumentState, stdlib_files: &[Module]) -> Option<String> {
+fn build_enum_hover(name: &str, state: &DocumentState, stdlib_files: &[File]) -> Option<String> {
     let info = state.ctx.find_type(name)?;
     let variants: Vec<String> = info
         .variants()?
@@ -193,7 +189,7 @@ fn build_enum_hover(name: &str, state: &DocumentState, stdlib_files: &[Module]) 
 fn build_protocol_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_files: &[Module],
+    stdlib_files: &[File],
 ) -> Option<String> {
     let info = state.ctx.protocols.get(name)?;
     let tp = if info.type_params.is_empty() {
@@ -233,7 +229,7 @@ fn build_protocol_hover(
 fn build_type_alias_hover(
     name: &str,
     state: &DocumentState,
-    stdlib_files: &[Module],
+    stdlib_files: &[File],
 ) -> Option<String> {
     let ty = state.ctx.type_aliases.get(name)?;
     let signature = format!("type {} = {}", name, ty.display());

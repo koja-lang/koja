@@ -21,7 +21,7 @@ use comments::CommentCursor;
 use util::*;
 
 /// Converts a parsed file into a `Doc` tree ready for rendering.
-pub fn file_to_doc(file: &Module) -> Doc {
+pub fn file_to_doc(file: &File) -> Doc {
     let mut p = Printer::new(&file.comments);
     p.print_file(file)
 }
@@ -41,7 +41,7 @@ impl<'a> Printer<'a> {
     }
 
     /// Formats an entire file: items with interleaved comments.
-    fn print_file(&mut self, file: &Module) -> Doc {
+    fn print_file(&mut self, file: &File) -> Doc {
         let mut parts: Vec<Doc> = Vec::new();
         let mut emitted = false;
 

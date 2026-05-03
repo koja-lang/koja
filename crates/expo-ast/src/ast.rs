@@ -1,6 +1,6 @@
 //! The Expo abstract syntax tree.
 //!
-//! A single source file parses into a [`Module`], which contains a list of
+//! A single source file parses into a [`File`], which contains a list of
 //! top-level [`Item`]s (functions, structs, enums, imports, constants, impls).
 //! Functions hold a body of [`Statement`]s, which in turn contain [`Expr`]
 //! nodes. [`Pattern`]s appear in `match` arms, `for` loops, and destructuring
@@ -41,7 +41,10 @@ pub enum PassMode {
     Borrow,
 }
 
-/// Access control for functions: public by default, `priv` for module-private.
+/// Visibility marker on functions: `Public` (default) or `Private` (from the
+/// `priv` keyword). The enforcement scope of `Private` depends on where the
+/// function is declared -- type-internal for impl methods, file-private for
+/// top-level functions.
 ///
 /// ```expo
 /// fn public_function         # Visibility::Public (the default)
@@ -54,9 +57,9 @@ pub enum PassMode {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
-    /// Accessible from other modules.
+    /// Callable from anywhere the function can be named.
     Public,
-    /// Accessible only within the declaring module.
+    /// Callable only from within the function's declaration scope.
     Private,
 }
 
@@ -71,7 +74,7 @@ pub enum AnnotationValue {
     False,
 }
 
-/// A metadata annotation such as `@doc` or `@moduledoc`.
+/// A metadata annotation such as `@doc` or `@extern`.
 #[derive(Debug, Clone)]
 pub struct Annotation {
     pub name: String,
@@ -111,7 +114,7 @@ pub struct Diagnostic {
     pub span: Span,
 }
 
-/// A top-level declaration within a module.
+/// A top-level declaration within a file.
 #[derive(Debug, Clone)]
 pub enum Item {
     Alias(AliasDecl),
@@ -127,7 +130,7 @@ pub enum Item {
 
 /// The root AST node representing a single Expo source file.
 #[derive(Debug, Clone)]
-pub struct Module {
+pub struct File {
     pub items: Vec<Item>,
     pub comments: Vec<Comment>,
     pub span: Span,
@@ -158,7 +161,7 @@ pub struct TypeParam {
     pub span: Span,
 }
 
-/// A module-level constant: `const NAME = expr` or `const NAME: Type = expr`.
+/// A package-level constant: `const NAME = expr` or `const NAME: Type = expr`.
 #[derive(Debug, Clone)]
 pub struct Constant {
     pub annotations: Vec<Annotation>,

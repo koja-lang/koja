@@ -12,17 +12,17 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
-use expo_ast::ast::Module;
+use expo_ast::ast::File;
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{Package, fqn_to_package};
 
 /// Cached state for a single open document, including the parsed AST
 /// and type-checking context.
 pub(crate) struct DocumentState {
-    pub(crate) file: Module,
+    pub(crate) file: File,
     pub(crate) ctx: TypeContext,
     pub(crate) source: String,
-    pub(crate) project_files: Vec<Module>,
+    pub(crate) project_files: Vec<File>,
 }
 
 /// The Expo language server backend.
@@ -32,9 +32,9 @@ pub(crate) struct DocumentState {
 pub struct Backend {
     pub(crate) client: Client,
     pub(crate) documents: Arc<RwLock<HashMap<String, DocumentState>>>,
-    pub(crate) project_files: Arc<RwLock<Vec<Module>>>,
+    pub(crate) project_files: Arc<RwLock<Vec<File>>>,
     pub(crate) stdlib_ctx: TypeContext,
-    pub(crate) stdlib_files: Vec<Module>,
+    pub(crate) stdlib_files: Vec<File>,
 }
 
 impl std::fmt::Debug for Backend {
@@ -59,10 +59,10 @@ impl Backend {
         for &(name, source) in expo_stdlib::SOURCES {
             let parsed = expo_parser::parse(source);
             source_names.push(name);
-            stdlib_files.push(parsed.module);
+            stdlib_files.push(parsed.ast);
         }
 
-        let stdlib_refs: Vec<&Module> = stdlib_files.iter().collect();
+        let stdlib_refs: Vec<&File> = stdlib_files.iter().collect();
         let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Std]);
         for name in &source_names {
             if !name.starts_with("std.") {

@@ -8,7 +8,7 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::{Comment, Expr, ExprKind, ImplMember, Item, Module, Statement};
+use expo_ast::ast::{Comment, Expr, ExprKind, File, ImplMember, Item, Statement};
 use expo_ast::span::Span;
 
 use crate::backend::Backend;
@@ -49,7 +49,7 @@ fn span_fold(span: &Span, kind: Option<FoldingRangeKind>) -> Option<FoldingRange
     })
 }
 
-fn collect_item_folds(file: &Module, ranges: &mut Vec<FoldingRange>) {
+fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
     for item in &file.items {
         match item {
             Item::Alias(_) => {}

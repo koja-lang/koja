@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use expo_ast::ast::{EnumConstructionData, ExprKind, FieldInit, Item, Literal, Module, StringPart};
+use expo_ast::ast::{EnumConstructionData, ExprKind, FieldInit, File, Item, Literal, StringPart};
 use expo_ast::identifier::TypeIdentifier;
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::package_from_str;
@@ -41,7 +41,7 @@ pub struct ConstantTables {
 /// the id mirrored into [`ConstantTables::compounds`]). Unfoldable
 /// initializers are skipped.
 pub fn populate_constants(
-    files: &[&Module],
+    files: &[&File],
     packages: &[&str],
     program: &mut IRProgram,
     type_ctx: &TypeContext,

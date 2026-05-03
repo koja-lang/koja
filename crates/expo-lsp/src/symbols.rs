@@ -11,7 +11,7 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use expo_ast::ast::{
-    Function, ImplMember, Item, Module, Param, PassMode, TypeExpr, TypeParam, Visibility,
+    File, Function, ImplMember, Item, Param, PassMode, TypeExpr, TypeParam, Visibility,
 };
 
 use crate::backend::Backend;
@@ -98,7 +98,7 @@ impl Backend {
 
 /// Collects workspace symbols from a file, filtering by query substring.
 #[allow(deprecated)]
-fn collect_workspace_symbols(file: &Module, query: &str, results: &mut Vec<SymbolInformation>) {
+fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolInformation>) {
     let uri = file.path.as_deref().and_then(path_to_uri);
     let uri = match uri {
         Some(u) => u,
@@ -256,7 +256,7 @@ fn collect_workspace_symbols(file: &Module, query: &str, results: &mut Vec<Symbo
 }
 
 /// Converts a parsed file's top-level items into document symbols.
-fn build_document_symbols(file: &Module) -> Vec<DocumentSymbol> {
+fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
 
     for item in &file.items {

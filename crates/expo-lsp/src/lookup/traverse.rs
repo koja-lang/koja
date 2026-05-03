@@ -572,7 +572,7 @@ pub(crate) struct CallSite<'a> {
 
 /// Returns a reference to the innermost `Expr` node whose span contains the
 /// given cursor position, walking through all items in the file.
-pub(crate) fn find_expr_at(file: &Module, line: u32, col: u32) -> Option<&Expr> {
+pub(crate) fn find_expr_at(file: &File, line: u32, col: u32) -> Option<&Expr> {
     for item in &file.items {
         let result = match item {
             Item::Function(f) => {
@@ -789,7 +789,7 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
 
 /// Returns the innermost `Call` or `MethodCall` expression enclosing the
 /// cursor, along with the index of the argument the cursor falls within.
-pub(crate) fn find_enclosing_call(file: &Module, line: u32, col: u32) -> Option<CallSite<'_>> {
+pub(crate) fn find_enclosing_call(file: &File, line: u32, col: u32) -> Option<CallSite<'_>> {
     for item in &file.items {
         let result = match item {
             Item::Function(f) => {

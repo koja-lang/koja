@@ -332,7 +332,7 @@ fn extract_doc_project(inputs: &[(String, String)], color: bool) -> expo_doc::Do
             continue;
         }
 
-        expo_doc::extract_items(&parse_result.module, &mut project);
+        expo_doc::extract_items(&parse_result.ast, &mut project);
     }
 
     expo_doc::finalize_project(&mut project);
@@ -625,9 +625,9 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
 
         if emit_ast {
             println!("// === {path} ===");
-            println!("{:#?}", result.module);
+            println!("{:#?}", result.ast);
         } else {
-            println!("{path}: OK ({} items)", result.module.items.len());
+            println!("{path}: OK ({} items)", result.ast.items.len());
         }
     }
 }

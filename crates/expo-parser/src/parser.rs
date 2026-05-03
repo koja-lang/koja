@@ -1,10 +1,10 @@
-use expo_ast::ast::{Comment, Diagnostic, Item, Module, Severity, Visibility};
+use expo_ast::ast::{Comment, Diagnostic, File, Item, Severity, Visibility};
 use expo_ast::span::{Position, Span};
 use expo_ast::token::{Token, TokenKind};
 use expo_lexer::{LexResult, lex};
 
 pub struct ParseResult {
-    pub module: Module,
+    pub ast: File,
     pub errors: Vec<Diagnostic>,
 }
 
@@ -210,7 +210,7 @@ impl Parser {
     // Top-level parsing
     // =========================================================================
 
-    pub(crate) fn parse_module(&mut self) -> Module {
+    pub(crate) fn parse_file(&mut self) -> File {
         let start = self.current_span();
         let mut items = Vec::new();
 
@@ -222,7 +222,7 @@ impl Parser {
             self.skip_newlines();
         }
 
-        Module {
+        File {
             items,
             comments: self.comments.clone(),
             span: self.span_from(start),
@@ -287,9 +287,9 @@ impl Parser {
 pub fn parse(source: &str) -> ParseResult {
     let lex_result = lex(source);
     let mut parser = Parser::new(lex_result);
-    let module = parser.parse_module();
+    let ast = parser.parse_file();
     ParseResult {
-        module,
+        ast,
         errors: parser.errors,
     }
 }

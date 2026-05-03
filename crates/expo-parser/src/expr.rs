@@ -485,7 +485,7 @@ mod tests {
     fn parse_first_expr(src: &str) -> Expr {
         let wrapped = format!("fn main\n  {}\nend\n", src);
         let result = parse(&wrapped);
-        for item in result.module.items {
+        for item in result.ast.items {
             if let Item::Function(f) = item {
                 for stmt in f.body.unwrap_or_default() {
                     if let Statement::Expr(e) = stmt {
@@ -734,7 +734,7 @@ mod tests {
     fn short_closure_in_parenthesized_context() {
         let wrapped = "fn main\n  apply(5, x -> x + 1)\nend\n";
         let result = parse(wrapped);
-        let func = result.module.items.into_iter().find_map(|item| {
+        let func = result.ast.items.into_iter().find_map(|item| {
             if let Item::Function(f) = item {
                 Some(f)
             } else {

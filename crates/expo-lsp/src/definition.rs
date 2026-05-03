@@ -7,7 +7,7 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::{ImplMember, Item, Module, TypeExpr};
+use expo_ast::ast::{File, ImplMember, Item, TypeExpr};
 use expo_ast::span::Span;
 
 use crate::backend::Backend;
@@ -16,7 +16,7 @@ use crate::lookup::{self, SymbolInfo};
 
 /// Searches a file's items for the definition of `name`, returning
 /// its span if found.
-fn find_definition_in_file(file: &Module, name: &str) -> Option<Span> {
+fn find_definition_in_file(file: &File, name: &str) -> Option<Span> {
     for item in &file.items {
         match item {
             Item::Alias(a) if a.local_name == name => return Some(a.span),

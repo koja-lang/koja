@@ -117,7 +117,7 @@ fn classify_specialized_impl_target(
 /// stem). It is installed as the context's ambient scope so that bare-name
 /// type lookups prefer the file's own package over colliding definitions
 /// in other packages.
-pub fn check_file(file: &mut Module, ctx: &mut TypeContext, package: &str) {
+pub fn check_file(file: &mut File, ctx: &mut TypeContext, package: &str) {
     let prev_path = ctx.current_file_path.clone();
     ctx.current_file_path = file.path.clone();
     let prev_package = ctx.current_package.clone();

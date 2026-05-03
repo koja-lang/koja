@@ -30,7 +30,7 @@ pub enum EmitResult {
 }
 
 use expo_ast::ast::{
-    AnnotationValue, Diagnostic, Function, ImplMember, Item, Module, Param, Severity,
+    AnnotationValue, Diagnostic, File, Function, ImplMember, Item, Param, Severity,
 };
 use expo_ast::identifier::TypeIdentifier;
 use expo_ast::span::Span;
@@ -1044,7 +1044,7 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
-    fn declare_functions(&mut self, file: &Module) -> Result<(), String> {
+    fn declare_functions(&mut self, file: &File) -> Result<(), String> {
         for item in &file.items {
             match item {
                 Item::Impl(impl_block) => {
@@ -1300,7 +1300,7 @@ impl<'ctx> Compiler<'ctx> {
         result
     }
 
-    fn define_functions(&mut self, file: &Module) -> Result<(), String> {
+    fn define_functions(&mut self, file: &File) -> Result<(), String> {
         let prev_site = self.closure_site_path.clone();
         self.closure_site_path = file.path.clone();
         let result = self.define_functions_inner(file);
@@ -1308,7 +1308,7 @@ impl<'ctx> Compiler<'ctx> {
         result
     }
 
-    fn define_functions_inner(&mut self, file: &Module) -> Result<(), String> {
+    fn define_functions_inner(&mut self, file: &File) -> Result<(), String> {
         if let Some(path) = &file.path {
             self.debug.set_current_file(path);
         }
@@ -1586,7 +1586,7 @@ impl<'ctx> Compiler<'ctx> {
 
 /// Compiles a single Expo file to a native object file.
 pub fn compile(
-    file: &Module,
+    file: &File,
     type_ctx: &TypeContext,
     output_path: &Path,
     release: bool,
@@ -1620,7 +1620,7 @@ fn codegen_error(message: String, span: Span) -> Vec<Diagnostic> {
 /// Every entry must be a real, non-empty package name (the typecheck-side
 /// `package_from_str` panics on `""`).
 fn run_codegen<'ctx>(
-    files: &[&Module],
+    files: &[&File],
     packages: &[&str],
     type_ctx: &'ctx TypeContext,
     context: &'ctx Context,
@@ -1799,7 +1799,7 @@ fn drain_pending_ir_decls<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(), Str
 /// are left empty. Backends that walk blocks
 /// (e.g. [`crate::lower_files`]'s consumers) treat an empty `blocks`
 /// field as "unsupported" and surface a structured error.
-fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, files: &[&Module], packages: &[&str]) {
+fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, files: &[&File], packages: &[&str]) {
     let fn_packages = build_fn_package_map(files, packages);
     let plans: Vec<LowerPlan> = compiler
         .ir
@@ -1844,7 +1844,7 @@ fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, files: &[&Module], pa
 /// (closure pass, intrinsics, etc.) aren't in any file's items and
 /// fall through with no package — same as before this map existed.
 fn build_fn_package_map(
-    files: &[&Module],
+    files: &[&File],
     packages: &[&str],
 ) -> HashMap<FunctionIdentifier, Package> {
     let mut map: HashMap<FunctionIdentifier, Package> = HashMap::new();
@@ -2056,7 +2056,7 @@ fn store_ir_blocks(
 /// symbols are prefixed (e.g. `alpha.Config_new`). Empty strings are
 /// rejected by the typecheck-side `package_from_str`.
 pub fn compile_files(
-    files: &[&Module],
+    files: &[&File],
     packages: &[&str],
     type_ctx: &TypeContext,
     output_path: &Path,
@@ -2100,7 +2100,7 @@ pub fn compile_files(
 ///
 /// See [`compile_files`] for the `packages` parameter semantics.
 pub fn emit_llvm_ir(
-    files: &[&Module],
+    files: &[&File],
     packages: &[&str],
     type_ctx: &TypeContext,
     app_name: &str,
@@ -2128,7 +2128,7 @@ pub fn emit_llvm_ir(
 ///
 /// See [`compile_files`] for the `packages` parameter semantics.
 pub fn lower_files(
-    files: &[&Module],
+    files: &[&File],
     packages: &[&str],
     type_ctx: &TypeContext,
     app_name: &str,

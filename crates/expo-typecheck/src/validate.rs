@@ -2,8 +2,8 @@
 //! remain in `expr.resolved_type` before the AST reaches codegen.
 
 use expo_ast::ast::{
-    BinarySegment, CondArm, EnumConstructionData, Expr, ExprKind, FieldInit, Function, Item,
-    MatchArm, Module, Statement, StringPart,
+    BinarySegment, CondArm, EnumConstructionData, Expr, ExprKind, FieldInit, File, Function, Item,
+    MatchArm, Statement, StringPart,
 };
 use expo_ast::identifier::{Package, TypeIdentifier};
 use expo_ast::types::Type;
@@ -15,7 +15,7 @@ use crate::context::TypeContext;
 ///
 /// Call after `check_file` to enforce the invariant that all types reaching
 /// codegen are fully package-resolved.
-pub fn validate_resolved_types(file: &Module, ctx: &mut TypeContext) {
+pub fn validate_resolved_types(file: &File, ctx: &mut TypeContext) {
     for item in &file.items {
         validate_item(item, ctx);
     }

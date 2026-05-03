@@ -4,7 +4,7 @@ Shared AST definitions used by every other crate. No logic -- just data types.
 
 ## Key files
 
-- `ast.rs` -- Core AST nodes: `Module`, `Item`, `Expr`, `Statement`, `Pattern`, `PassMode`, comments
+- `ast.rs` -- Core AST nodes: `File`, `Item`, `Expr`, `Statement`, `Pattern`, `PassMode`, comments
 - `types.rs` -- Resolved `Type` enum, `FnParam`, `Primitive`. Every `Expr` carries `resolved_type: Option<Type>` populated by the type checker
 - `token.rs` -- `Token` and `TokenKind` for the lexer
 - `identifier.rs` -- `Package` and `TypeIdentifier` for package-qualified type names

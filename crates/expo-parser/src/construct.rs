@@ -650,7 +650,7 @@ mod tests {
 
     fn parse_string_parts(source: &str) -> Vec<StringPart> {
         let result = parse(source);
-        for item in &result.module.items {
+        for item in &result.ast.items {
             if let expo_ast::ast::Item::Function(func) = item {
                 for stmt in func.body.as_ref().unwrap() {
                     if let Statement::Assignment {
@@ -744,7 +744,7 @@ mod tests {
     fn test_binary_literal_empty() {
         let result = parse("fn main\n  x = <<>>\nend\n");
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let func = match &result.module.items[0] {
+        let func = match &result.ast.items[0] {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
@@ -765,7 +765,7 @@ mod tests {
     fn test_binary_literal_segments() {
         let result = parse("fn main\n  x = <<0xFF, 0x00>>\nend\n");
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let func = match &result.module.items[0] {
+        let func = match &result.ast.items[0] {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
@@ -786,7 +786,7 @@ mod tests {
     fn test_binary_literal_with_size() {
         let result = parse("fn main\n  x = <<header::8, length::16 big>>\nend\n");
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let func = match &result.module.items[0] {
+        let func = match &result.ast.items[0] {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
@@ -815,7 +815,7 @@ mod tests {
     fn test_binary_literal_with_type() {
         let result = parse("fn main\n  x = <<value: Int>>\nend\n");
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let func = match &result.module.items[0] {
+        let func = match &result.ast.items[0] {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
@@ -840,7 +840,7 @@ mod tests {
     fn test_binary_literal_byte_modifier() {
         let result = parse("fn main\n  x = <<data::32 byte unsigned little>>\nend\n");
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let func = match &result.module.items[0] {
+        let func = match &result.ast.items[0] {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
@@ -886,7 +886,7 @@ mod tests {
     fn test_extern_c_bodyless_function() {
         let result = parse("@extern \"C\"\nfn argon2id_hash(t: UInt32, m: UInt32) -> Int32\n");
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let func = match &result.module.items[0] {
+        let func = match &result.ast.items[0] {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };
@@ -902,7 +902,7 @@ mod tests {
             "struct Argon2C\n  @extern \"C\" @link \"argon2\"\n  fn hash(t: UInt32) -> Int32\n  @extern \"C\" @link \"argon2\"\n  fn verify(e: UInt32) -> Int32\nend\n",
         );
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let s = match &result.module.items[0] {
+        let s = match &result.ast.items[0] {
             expo_ast::ast::Item::Struct(s) => s,
             _ => panic!("expected struct"),
         };
@@ -918,7 +918,7 @@ mod tests {
     fn test_regular_function_still_has_body() {
         let result = parse("fn add(a: Int32, b: Int32) -> Int32\n  a + b\nend\n");
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let func = match &result.module.items[0] {
+        let func = match &result.ast.items[0] {
             expo_ast::ast::Item::Function(f) => f,
             _ => panic!("expected function"),
         };

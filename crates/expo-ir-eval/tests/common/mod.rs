@@ -12,14 +12,14 @@ use expo_ir::Backend;
 use expo_ir_eval::{Interp, Value};
 
 /// Parse `source` into an AST file, asserting no parser errors.
-pub fn parse_file(source: &str) -> expo_ast::ast::Module {
+pub fn parse_file(source: &str) -> expo_ast::ast::File {
     let parsed = expo_parser::parse(source);
     assert!(
         parsed.errors.is_empty(),
         "parser errors: {:?}",
         parsed.errors
     );
-    parsed.module
+    parsed.ast
 }
 
 /// Strip leading newline + uniform indent from a raw multiline source
