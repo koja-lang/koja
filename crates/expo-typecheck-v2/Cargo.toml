@@ -1,0 +1,10 @@
+[package]
+name = "expo-typecheck-v2"
+description = "Sealed-AST typechecker (v2 northstar pipeline)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+expo-ast = { path = "../expo-ast" }
+expo-parser = { path = "../expo-parser" }

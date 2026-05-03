@@ -1,0 +1,9 @@
+@doc """
+Smallest end-to-end program for the v2 pipeline:
+parse -> typecheck-v2 -> ir-v2 -> ir-eval interpreter.
+
+Run with `expo eval expo/examples/two_plus_two.expo`; should print `4`.
+"""
+fn main
+  2 + 2
+end

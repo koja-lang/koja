@@ -114,6 +114,42 @@ pub struct Diagnostic {
     pub span: Span,
 }
 
+impl Diagnostic {
+    /// Build an `Error`-severity diagnostic with no hint.
+    pub fn error(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            severity: Severity::Error,
+            message: message.into(),
+            hint: None,
+            span,
+        }
+    }
+
+    /// Build an `Error`-severity diagnostic carrying a hint.
+    pub fn error_with_hint(
+        message: impl Into<String>,
+        hint: impl Into<String>,
+        span: Span,
+    ) -> Self {
+        Self {
+            severity: Severity::Error,
+            message: message.into(),
+            hint: Some(hint.into()),
+            span,
+        }
+    }
+
+    /// Build a `Warning`-severity diagnostic with no hint.
+    pub fn warning(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            severity: Severity::Warning,
+            message: message.into(),
+            hint: None,
+            span,
+        }
+    }
+}
+
 /// A top-level declaration within a file.
 #[derive(Debug, Clone)]
 pub enum Item {

@@ -8,6 +8,8 @@ members = [
     "crates/expo-fmt",
     "crates/expo-ir",
     "crates/expo-ir-eval",
+    "crates/expo-ir-eval-v2",
+    "crates/expo-ir-v2",
     "crates/expo-lexer",
     "crates/expo-lsp",
     "crates/expo-parser",
@@ -15,6 +17,7 @@ members = [
     "crates/expo-shell",
     "crates/expo-stdlib",
     "crates/expo-typecheck",
+    "crates/expo-typecheck-v2",
 ]
 
 [workspace.package]

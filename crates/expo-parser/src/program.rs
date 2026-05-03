@@ -24,6 +24,7 @@ use expo_ast::ast::{Diagnostic, File, Severity};
 use crate::parse;
 
 /// A single source file ready to be parsed.
+#[derive(Debug)]
 pub struct SourceFile {
     /// The package this file belongs to. For project files this is the
     /// declared project name; for stdlib files this is `"Global"`; for
@@ -38,6 +39,7 @@ pub struct SourceFile {
 }
 
 /// The result of parsing a single [`SourceFile`].
+#[derive(Debug)]
 pub struct ParsedFile {
     pub package: String,
     pub path: PathBuf,
@@ -80,6 +82,7 @@ pub fn parse_file(source: SourceFile) -> ParsedFile {
 /// preserves the input order so downstream stages walk files
 /// deterministically (today's convention: stdlib first, then project
 /// files in scan order).
+#[derive(Debug)]
 pub struct ParsedProgram {
     pub files: BTreeMap<PathBuf, ParsedFile>,
     pub order: Vec<PathBuf>,
