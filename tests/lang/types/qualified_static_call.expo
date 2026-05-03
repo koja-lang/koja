@@ -1,5 +1,5 @@
 fn main
-  h = http.Headers.new()
+  h = HTTP.Headers.new()
     .set("Content-Type", "text/plain")
     .set("Connection", "close")
 

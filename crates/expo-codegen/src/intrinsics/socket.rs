@@ -70,9 +70,9 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .unwrap()
                 .into_int_value();
 
-            let ip_id = TypeIdentifier::new("net", "IPAddress");
+            let ip_id = TypeIdentifier::new("Net", "IPAddress");
             let list_type_name = mangle_name(
-                &TypeIdentifier::std("List"),
+                &TypeIdentifier::global("List"),
                 &[Type::Named {
                     identifier: ip_id.clone(),
                     type_args: vec![],
@@ -251,7 +251,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let ip_struct_ty = c
                 .llvm_types
-                .get_concrete(&TypeIdentifier::new("net", "IPAddress"))
+                .get_concrete(&TypeIdentifier::new("Net", "IPAddress"))
                 .ok_or("IPAddress struct type not found")?;
             let ip_val = ip_struct_ty.get_undef();
             let ip_val = c
@@ -262,7 +262,7 @@ pub fn emit_socket_intrinsic<'ctx>(
 
             let sa_struct_ty = c
                 .llvm_types
-                .get_concrete(&TypeIdentifier::new("net", "SocketAddress"))
+                .get_concrete(&TypeIdentifier::new("Net", "SocketAddress"))
                 .ok_or("SocketAddress struct type not found")?;
             let sa_val = sa_struct_ty.get_undef();
             let sa_val = c
@@ -276,9 +276,9 @@ pub fn emit_socket_intrinsic<'ctx>(
                 .unwrap()
                 .into_struct_value();
 
-            let sa_id = TypeIdentifier::new("net", "SocketAddress");
+            let sa_id = TypeIdentifier::new("Net", "SocketAddress");
             let pair_type_name = mangle_name(
-                &TypeIdentifier::std("Pair"),
+                &TypeIdentifier::global("Pair"),
                 &[
                     Type::Primitive(Primitive::String),
                     Type::Named {

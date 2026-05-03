@@ -623,7 +623,7 @@ pub enum IRInstruction {
         dest: IRValueId,
         /// Pointer-typed operand referencing the enum subject's storage.
         subject_ptr: IROperand,
-        /// Resolved enum cache key (e.g. `"std.Option_$Int$"`).
+        /// Resolved enum cache key (e.g. `"Global.Option_$Int$"`).
         enum_key: String,
         /// Variant name (e.g. `"Some"`).
         variant: String,
@@ -653,7 +653,7 @@ pub enum IRInstruction {
         dest: IRValueId,
         /// Pointer-typed operand referencing the struct subject's storage.
         subject_ptr: IROperand,
-        /// Resolved struct cache key (e.g. `"std.Point"`, `"alpha.Pair_$Int$"`).
+        /// Resolved struct cache key (e.g. `"Global.Point"`, `"Alpha.Pair_$Int$"`).
         struct_key: String,
         /// Index of the field within the struct.
         field_index: u32,

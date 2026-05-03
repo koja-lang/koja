@@ -320,7 +320,7 @@ pub(crate) fn build_ref_value<'ctx>(
         .contains_monomorphized(&resolved.mangled_name)
     {
         let type_args = vec![resolved.msg_type, resolved.reply_type];
-        monomorphize_struct(compiler, &TypeIdentifier::std("Ref"), &type_args)?;
+        monomorphize_struct(compiler, &TypeIdentifier::global("Ref"), &type_args)?;
     }
     let ref_struct = compiler
         .llvm_types

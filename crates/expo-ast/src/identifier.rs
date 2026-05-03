@@ -5,8 +5,8 @@ use std::fmt;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Package {
     /// The built-in standard library (auto-imported).
-    Std,
-    /// A named package (e.g. `json`, `net`, or the user's project name).
+    Global,
+    /// A named package (e.g. `JSON`, `Net`, or the user's project name).
     Named(String),
     /// Package not yet determined. Present only during early pipeline stages;
     /// resolved to a concrete package before codegen.
@@ -14,13 +14,13 @@ pub enum Package {
 }
 
 impl Package {
-    /// Builds a package-qualified key (e.g. `"std.List"` or `"alpha.Config"`)
+    /// Builds a package-qualified key (e.g. `"Global.List"` or `"Alpha.Config"`)
     /// suitable for the `name_index` reverse lookup. Returns `None` for
     /// [`Package::Unresolved`] since unresolved packages have no scope to
     /// qualify against.
     pub fn qualify(&self, name: &str) -> Option<String> {
         match self {
-            Package::Std => Some(format!("std.{name}")),
+            Package::Global => Some(format!("Global.{name}")),
             Package::Named(p) => Some(format!("{p}.{name}")),
             Package::Unresolved => None,
         }
@@ -30,7 +30,7 @@ impl Package {
 impl fmt::Display for Package {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Package::Std => write!(f, "std"),
+            Package::Global => write!(f, "Global"),
             Package::Named(name) => write!(f, "{name}"),
             Package::Unresolved => Ok(()),
         }
@@ -43,7 +43,7 @@ impl fmt::Display for Package {
 /// method on `User`).
 ///
 /// Opaque by design: callers never reach inside, they ask via contract
-/// methods (`is_in_package`, `is_in_std`, `qualified_name`, ...). Internal
+/// methods (`is_in_package`, `is_in_global`, `qualified_name`, ...). Internal
 /// representation can evolve without breaking consumers.
 ///
 /// An `Identifier` is by construction a *resolved* global -- there is no
@@ -90,8 +90,8 @@ impl Identifier {
         self.package == pkg
     }
 
-    pub fn is_in_std(&self) -> bool {
-        self.package == "std"
+    pub fn is_in_global(&self) -> bool {
+        self.package == "Global"
     }
 }
 
@@ -129,10 +129,10 @@ pub struct TypeIdentifier {
 }
 
 impl TypeIdentifier {
-    /// Creates a TypeIdentifier for a type in the `std` package.
-    pub fn std(name: &str) -> Self {
+    /// Creates a TypeIdentifier for a type in the auto-imported `Global` package.
+    pub fn global(name: &str) -> Self {
         Self {
-            package: Package::Std,
+            package: Package::Global,
             name: name.to_string(),
         }
     }
@@ -162,16 +162,16 @@ impl TypeIdentifier {
         }
     }
 
-    pub fn is_std(&self) -> bool {
-        self.package == Package::Std
+    pub fn is_global(&self) -> bool {
+        self.package == Package::Global
     }
 
     /// Returns a package-qualified name that is always unique across packages.
-    /// Unlike `Display`, this prefixes `std.` for stdlib types so they never
+    /// Unlike `Display`, this prefixes `Global.` for stdlib types so they never
     /// collide with user-defined types of the same name.
     pub fn qualified_name(&self) -> String {
         match &self.package {
-            Package::Std => format!("std.{}", self.name),
+            Package::Global => format!("Global.{}", self.name),
             Package::Named(pkg) => format!("{pkg}.{}", self.name),
             Package::Unresolved => self.name.clone(),
         }
@@ -182,7 +182,7 @@ impl TypeIdentifier {
     /// to [`Self::unresolved`], which the caller may prefer to resolve explicitly.
     pub fn from_qualified_name(qualified: &str) -> Self {
         match qualified.split_once('.') {
-            Some(("std", name)) => Self::std(name),
+            Some(("Global", name)) => Self::global(name),
             Some((pkg, name)) if !pkg.is_empty() => Self::new(pkg, name),
             _ => Self::unresolved(qualified),
         }
@@ -192,7 +192,7 @@ impl TypeIdentifier {
 impl fmt::Display for TypeIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.package {
-            Package::Std | Package::Unresolved => write!(f, "{}", self.name),
+            Package::Global | Package::Unresolved => write!(f, "{}", self.name),
             Package::Named(pkg) => write!(f, "{pkg}.{}", self.name),
         }
     }

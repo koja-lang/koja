@@ -1,5 +1,5 @@
-alias net.TCPSocket
-alias json.StringBuilder
+alias Net.TCPSocket
+alias JSON.StringBuilder
 
 @doc """
 One-shot HTTP/1.1 client. Each request opens a new TCP

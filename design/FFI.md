@@ -162,7 +162,7 @@ expo_str = c_result.to_string() # CString -> Expo String
   `CPtr.free()` on the underlying pointer).
 - C-returned pointers: wrap in a `CString` struct and call `.free()`
   when done, or call `ptr.free()` directly on the `CPtr<UInt8>`.
-- `CString` lives in auto-imported stdlib (`std.cstring`). Always
+- `CString` lives in auto-imported stdlib (`Global.CString`). Always
   available, since it's a type like any other.
 
 ---

@@ -558,14 +558,14 @@ fn lang_project_check_test() {
         "expo check failed in project dir\nstderr:\n{stderr}"
     );
     assert!(
-        stdout.contains("test_project: OK"),
-        "expected 'test_project: OK' in stdout, got: {stdout}"
+        stdout.contains("Project: OK"),
+        "expected 'Project: OK' in stdout, got: {stdout}"
     );
 }
 
 /// Locks in the duplicate-package-name rule: a project that names itself
-/// `greeter` and also depends on a `greeter` package must fail to build with
-/// a clear error message. Same rule catches `name = "std"` collisions and
+/// `Greeter` and also depends on a `Greeter` package must fail to build with
+/// a clear error message. Same rule catches `name = "Global"` collisions and
 /// duplicate transitive deps.
 #[test]
 fn lang_dup_pkg_name() {
@@ -585,8 +585,8 @@ fn lang_dup_pkg_name() {
         "expected expo check to fail for duplicate package name, but it succeeded\nstderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("duplicate package name `greeter`"),
-        "expected stderr to mention duplicate package name `greeter`, got:\n{stderr}"
+        stderr.contains("duplicate package name `Greeter`"),
+        "expected stderr to mention duplicate package name `Greeter`, got:\n{stderr}"
     );
 }
 

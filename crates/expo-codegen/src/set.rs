@@ -782,7 +782,7 @@ pub fn emit_set_method<'ctx>(
         }
 
         "from_list" => {
-            let list_id = TypeIdentifier::std("List");
+            let list_id = TypeIdentifier::global("List");
             let list_mangled = mangle_name(&list_id, std::slice::from_ref(elem_type));
             monomorphize_struct(c, &list_id, std::slice::from_ref(elem_type))?;
             let list_struct = c

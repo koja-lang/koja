@@ -1,4 +1,4 @@
-alias greeter.Greeter
+alias Greeter.Greeter
 
 fn main
   g = Greeter.new("World")

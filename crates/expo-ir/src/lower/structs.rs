@@ -133,7 +133,7 @@ fn struct_name_from_type(ty: &Type) -> Option<ResolvedStructName> {
     match ty {
         Type::Indirect(inner) => struct_name_from_type(inner),
         Type::Pointer(inner) => {
-            let cptr_id = TypeIdentifier::std("CPtr");
+            let cptr_id = TypeIdentifier::global("CPtr");
             let mangled =
                 MonomorphizedTypeIdentifier::new(mangle_name(&cptr_id, &[*inner.clone()]));
             Some(ResolvedStructName {

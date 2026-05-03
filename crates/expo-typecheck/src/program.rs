@@ -151,15 +151,15 @@ fn scan_globals_pass(parsed: &ParsedProgram, sink: &mut dyn DiagnosticSink) -> b
 }
 
 /// Collect program-wide [`GlobalNames`] for collection-phase lookups.
-/// Stdlib files collapse to a single [`Package::Std`]; every other
+/// Stdlib files collapse to a single [`Package::Global`]; every other
 /// file's package becomes a [`Package::Named`] so the type resolver
 /// can validate qualified `pkg.Type` paths during signature collection.
 fn build_global_names(parsed: &ParsedProgram) -> GlobalNames {
     let all_files: Vec<&File> = parsed.iter().map(|f| &f.ast).collect();
     let mut packages: BTreeSet<Package> = BTreeSet::new();
     for file in parsed.iter() {
-        if file.package == "std" {
-            packages.insert(Package::Std);
+        if file.package == "Global" {
+            packages.insert(Package::Global);
         } else {
             packages.insert(Package::Named(file.package.clone()));
         }
@@ -182,12 +182,12 @@ fn gather_stdlib(
     let stdlib_paths: Vec<PathBuf> = parsed
         .order
         .iter()
-        .filter(|p| parsed.files[*p].package == "std")
+        .filter(|p| parsed.files[*p].package == "Global")
         .cloned()
         .collect();
     for path in &stdlib_paths {
         let file = parsed.files.get_mut(path).expect("file present");
-        let mut ctx = collect_file(&mut file.ast, global_names, "std");
+        let mut ctx = collect_file(&mut file.ast, global_names, "Global");
         ctx.merge(&stdlib_ctx);
         stdlib_ctx.merge(&ctx);
         file_contexts.insert(path.clone(), ctx);
@@ -211,7 +211,7 @@ fn gather_project(
     let project_paths: Vec<PathBuf> = parsed
         .order
         .iter()
-        .filter(|p| parsed.files[*p].package != "std")
+        .filter(|p| parsed.files[*p].package != "Global")
         .cloned()
         .collect();
     for path in &project_paths {
@@ -237,7 +237,7 @@ fn unify_project_contexts(
     let mut unified = stdlib_ctx.clone();
     for path in &parsed.order {
         let file = &parsed.files[path];
-        if file.package == "std" {
+        if file.package == "Global" {
             continue;
         }
         if let Some(ctx) = file_contexts.get(path) {

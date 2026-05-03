@@ -25,6 +25,6 @@ pub fn current_method_symbol_prefix(ctx: &LowerCtx<'_>, type_name: &str) -> Stri
 pub fn method_symbol_prefix(pkg: &Package, type_name: &str) -> String {
     match pkg {
         Package::Named(name) => format!("{name}.{type_name}"),
-        Package::Std | Package::Unresolved => type_name.to_string(),
+        Package::Global | Package::Unresolved => type_name.to_string(),
     }
 }

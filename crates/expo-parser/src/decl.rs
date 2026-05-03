@@ -380,12 +380,13 @@ impl Parser {
         self.advance(); // alias
 
         let mut path = Vec::new();
-        // Parse dotted path: lowercase.segments.TypeName
+        let mut last_was_type_ident = false;
         loop {
             match self.peek().clone() {
                 TokenKind::Ident(name) => {
                     self.advance();
                     path.push(name);
+                    last_was_type_ident = false;
                     if self.eat(&TokenKind::Dot).is_none() {
                         let span = self.current_span();
                         self.error(
@@ -398,7 +399,10 @@ impl Parser {
                 TokenKind::TypeIdent(name) => {
                     self.advance();
                     path.push(name);
-                    break;
+                    last_was_type_ident = true;
+                    if self.eat(&TokenKind::Dot).is_none() {
+                        break;
+                    }
                 }
                 _ => {
                     let span = self.current_span();
@@ -409,6 +413,13 @@ impl Parser {
                     break;
                 }
             }
+        }
+        if !last_was_type_ident {
+            let span = self.current_span();
+            self.error(
+                "alias path must end with a type name (PascalCase)".to_string(),
+                span,
+            );
         }
 
         let local_name = if self.eat(&TokenKind::Ident("as".to_string())).is_some() {

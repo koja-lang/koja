@@ -91,7 +91,7 @@ expo-cookbook/
 ### What's in the cookbook vs. what's in stdlib
 
 **Stdlib** -- primitives that are exact and universal. `net`,
-`std.file`, `std.time`. Building blocks that the runtime provides and
+`Global.File`, `Global.DateTime`. Building blocks that the runtime provides and
 every program may need. Stable API, ships with the compiler.
 
 **Cookbook** -- compositions of stdlib primitives for specific tasks.
@@ -126,7 +126,7 @@ purposes:
 
 | Mechanism        | Purpose                          | Ships with compiler | Versioned           |
 | ---------------- | -------------------------------- | ------------------- | ------------------- |
-| `std.*`          | Language primitives              | Yes                 | Yes (with compiler) |
+| `Global.*`          | Language primitives              | Yes                 | Yes (with compiler) |
 | Cookbook         | Reference implementations        | No (separate repo)  | No                  |
 | `expo.toml` deps | Shared code between own projects | N/A                 | By git ref          |
 

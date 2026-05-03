@@ -8,10 +8,11 @@ cryptographic primitives, and the 20-year rule for stdlib inclusion.
 
 ## The problem
 
-`std.*` is flat and overloaded. Adding networking, HTTP, TLS, and JSON to
-the same flat namespace doesn't scale. `std.http`, `std.tls`, `std.json`
-all at the same level implies they're equally fundamental, but they're not
--- `IO.puts` is used in every program while `TCPSocket` is domain-specific.
+`Global.*` is flat and overloaded. Adding networking, HTTP, TLS, and JSON to
+the same auto-imported package doesn't scale. Folding `HTTP`, `TLS`, `JSON`
+into `Global` would imply they're as fundamental as `Option` or `IO`, but
+they're not -- `IO.puts` is used in every program while `TCPSocket` is
+domain-specific.
 
 ---
 
@@ -36,13 +37,13 @@ The compiler auto-imports them into every module -- no prefix needed:
 These types require a package-qualified path. Use `alias` to shorten:
 
 ```expo
-alias net.TCPSocket
-alias http.Request
+alias Net.TCPSocket
+alias HTTP.Request
 
 conn = TCPSocket.connect("example.com", 443)
 ```
 
-Without alias: `net.TCPSocket.connect(...)`, `http.Request`, `json.Decoder`.
+Without alias: `Net.TCPSocket.connect(...)`, `HTTP.Request`, `JSON.Decoder`.
 
 This means the auto-import list is the "things that feel like the language"
 list. Everything else uses the package-qualified path. The compiler knows
@@ -57,21 +58,21 @@ Networking with TLS as a capability on `TCPSocket`, not a separate type.
 
 ### Types
 
-- **`net.TCPSocket`** -- **implemented** (in `net.expo`).
+- **`Net.TCPSocket`** -- **implemented** (in `Net.expo`).
   `connect(host, port)` resolves DNS and connects, `connect_addr(addr)`
   for direct connections, `read(count)`, `write(data)`, `close()`.
   TLS via `upgrade_tls(config)` (`move self -> Self`) or the
   convenience factory `connect_tls(host, port, config)` (pending).
   One type handles both plain and encrypted connections.
-- **`net.TCPListener`** -- **implemented** (in `net.expo`).
+- **`Net.TCPListener`** -- **implemented** (in `Net.expo`).
   `bind(port)` or `bind_addr(addr)`, `accept()` (returns `TCPSocket`).
   Sets `SO_REUSEADDR` and listens with backlog 128 automatically.
-- **`net.UDPSocket`** -- **implemented** (in `net.expo`).
+- **`Net.UDPSocket`** -- **implemented** (in `Net.expo`).
   `bind(port)` or `bind_addr(addr)`, `send_to(data, addr)`,
   `recv_from(count)`. Datagram-oriented, no connection ceremony.
-- **`net.TLSConfig`** -- certificate options, verification settings. Passed
+- **`Net.TLSConfig`** -- certificate options, verification settings. Passed
   to `upgrade_tls` or `connect_tls`. Pending implementation.
-- **`net.Socket`** -- raw POSIX socket primitives (in `net.expo`).
+- **`Net.Socket`** -- raw POSIX socket primitives (in `Net.expo`).
   Rarely used directly -- `TCPSocket` and `UDPSocket` wrap it.
 
 ### TLS as upgrade, not separate type
@@ -83,8 +84,8 @@ require every socket-accepting function to handle `TCPSocket | TLSSocket`.
 Instead, TLS is a capability added to `TCPSocket`:
 
 ```expo
-alias net.TCPSocket
-alias net.TLSConfig
+alias Net.TCPSocket
+alias Net.TLSConfig
 
 conn = TCPSocket.connect("api.example.com", 443)
 conn = conn.upgrade_tls(TLSConfig.default())
@@ -98,8 +99,8 @@ makes this feel natural in Expo.
 ### Implementation
 
 `TCPSocket`, `TCPListener`, and `UDPSocket` are implemented in pure Expo
-in `net.expo`, wrapping the raw `Socket` primitives. Access requires
-qualified names (`net.TCPSocket`) or `alias net.TCPSocket`. TLS wraps a system library
+in `Net.expo`, wrapping the raw `Socket` primitives. Access requires
+qualified names (`Net.TCPSocket`) or `alias Net.TCPSocket`. TLS wraps a system library
 (LibreSSL/OpenSSL/BoringSSL) via C FFI (see [FFI.md](FFI.md)). Programs
 that don't call `upgrade_tls` don't pull in TLS dependencies.
 
@@ -117,13 +118,13 @@ request/response types.
 These are protocol-version-agnostic. A `Request` looks the same whether
 it came over HTTP/1.1, HTTP/2, or HTTP/3:
 
-- **`http.Request`** -- method, path, headers, body
-- **`http.Response`** -- status code, headers, body
-- **`http.Method`** -- enum: `Get`, `Post`, `Put`, `Delete`, `Patch`,
+- **`HTTP.Request`** -- method, path, headers, body
+- **`HTTP.Response`** -- status code, headers, body
+- **`HTTP.Method`** -- enum: `Get`, `Post`, `Put`, `Delete`, `Patch`,
   `Head`, `Options`
-- **`http.Status`** -- enum or int with named constants (`Ok`, `NotFound`,
+- **`HTTP.Status`** -- enum or int with named constants (`Ok`, `NotFound`,
   `InternalServerError`, etc.)
-- **`http.Headers`** -- header collection (likely `Map<String, List<String>>` or
+- **`HTTP.Headers`** -- header collection (likely `Map<String, List<String>>` or
   a dedicated type)
 
 If every HTTP package in the ecosystem shares these types, a router
@@ -155,24 +156,25 @@ naturally.
 ## `json` package -- **DONE** (qualified stdlib package)
 
 Promoted from standalone package to stdlib. Ships with the compiler,
-accessed via qualified names (`json.Value`) or `alias json.Value`.
+accessed via qualified names (`JSON.Value`) or `alias JSON.Value`.
 Implemented in pure Expo with 17 tests covering encoder and decoder.
 
-- `json.Value` enum -- `Null`, `Bool`, `Int`, `Float`, `String`, `Array`, `Object`.
+- `JSON.Value` enum -- `Null`, `Bool`, `Int`, `Float`, `String`, `Array`, `Object`.
   Convenience constructors: `Value.string(s)`, `Value.int(n)`, `Value.object(entries)`, etc.
-- `json.Encoder` -- compact (`encode`) and pretty-printed (`encode_pretty`) output.
-- `json.Decoder` -- recursive descent parser. `Decoder.decode(input)` returns `Result<Value, String>`.
-- `json.StringBuilder` -- efficient string builder used internally by the encoder.
+- `JSON.Encoder` -- compact (`encode`) and pretty-printed (`encode_pretty`) output.
+- `JSON.Decoder` -- recursive descent parser. `Decoder.decode(input)` returns `Result<Value, String>`.
+- `JSON.StringBuilder` -- efficient string builder used internally by the encoder.
 
 ---
 
-## `Random` (implemented -- in `std.kernel`)
+## `Random` (implemented -- in `lib/global/src/kernel.expo`)
 
 OS-level randomness. Not crypto-specific -- random numbers are used for games,
 tests, shuffling, UUID generation, and any non-deterministic behavior.
 
-Decided against a separate `random` package -- too small (two functions), too
-fundamental. Lives in `std.kernel`, auto-imported into every module.
+Decided against a separate `Random` package -- too small (two functions), too
+fundamental. Lives in `lib/global/src/kernel.expo`, auto-imported into every
+module.
 
 ### API
 
@@ -197,10 +199,10 @@ and standardized.
 
 ### Types
 
-- **`crypto.Hash`** -- `sha256(data) -> Binary`, `sha384(data) -> Binary`,
+- **`Crypto.Hash`** -- `sha256(data) -> Binary`, `sha384(data) -> Binary`,
   `sha512(data) -> Binary`. One-shot hashing. Streaming/incremental hashing
   can be added later if needed.
-- **`crypto.HMAC`** -- `sign(algorithm, key, data) -> Binary`,
+- **`Crypto.HMAC`** -- `sign(algorithm, key, data) -> Binary`,
   `verify(algorithm, key, data, signature) -> Bool`. Keyed message
   authentication.
 
@@ -268,7 +270,7 @@ we only commit to things that will still make sense in another 20 years.
 ## Layer diagram
 
 ```
-Random             OS entropy (bytes, int)    ← std.kernel, auto-imported
+Random             OS entropy (bytes, int)    ← Global package, auto-imported
 crypto.Hash        SHA-2 family          ← application-level crypto
 crypto.HMAC        keyed message auth
 
@@ -291,8 +293,8 @@ net.TCPSocket      same type, now encrypted
 (OpenSSL's `libcrypto` and `libssl` respectively) but have no dependency
 on each other at the Expo level.
 
-Each layer builds on the one below. `http.Server` uses `net.TCPListener`;
-`http.Client` opens a `net.TCPSocket`. The raw `net.Socket` stays available
+Each layer builds on the one below. `HTTP.Server` uses `Net.TCPListener`;
+`HTTP.Client` opens a `Net.TCPSocket`. The raw `Net.Socket` stays available
 for exotic use cases but most code never touches it.
 
 ---

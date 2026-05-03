@@ -91,7 +91,7 @@ fn read_project_name(project_root: &Path) -> Option<String> {
 /// each parsed file paired with its owning package name (from the project's
 /// `expo.toml`). Also scans local-path dependencies, using each dep's own
 /// `[project] name` for its files. Enforces the duplicate-package-name
-/// rule (project + implicit `std` + each dep): on collision, returns the
+/// rule (project + implicit `Global` + each dep): on collision, returns the
 /// files collected so far without descending into the offending dep, so
 /// the driver-level error eventually surfaces in the editor as well.
 fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<(File, String)> {
@@ -136,8 +136,8 @@ fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<
     let project_pkg = parsed.project.name.clone();
     let mut seen_pkgs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     seen_pkgs.insert(project_pkg.clone());
-    if project_pkg != "std" {
-        seen_pkgs.insert("std".to_string());
+    if project_pkg != "Global" {
+        seen_pkgs.insert("Global".to_string());
     }
 
     scan_roots(&parsed.project.src, project_root, &project_pkg, &mut files);
@@ -208,7 +208,7 @@ impl Backend {
                 .as_deref()
                 .and_then(read_project_name)
                 .unwrap_or_else(|| package_for_file(file_path.as_deref()));
-            let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Std]);
+            let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Global]);
             for (_, sibling_pkg) in &sibling_files {
                 known_packages.insert(package_from_str(sibling_pkg));
             }

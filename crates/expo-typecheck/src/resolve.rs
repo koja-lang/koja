@@ -11,15 +11,15 @@ use crate::types::{Package, Type, TypeIdentifier};
 /// `Type::Named` identifiers still carry `Package::Unresolved` from the type
 /// expression resolver. This pass bridges that gap.
 ///
-/// Bare entries in `name_index` are restricted to `std` types so a bare
+/// Bare entries in `name_index` are restricted to `Global` types so a bare
 /// reference to `X` resolves only to `{current_package}.X` (via the qualified
-/// entry) or `std.X` (via the bare entry). Cross-package bare references to
+/// entry) or `Global.X` (via the bare entry). Cross-package bare references to
 /// dependency types must be qualified (`dep.X`) or imported via `alias`.
 pub fn resolve_packages(ctx: &mut TypeContext) {
     let mut index: BTreeMap<String, TypeIdentifier> = BTreeMap::new();
     for id in ctx.types.keys() {
         index.insert(id.qualified_name(), id.clone());
-        if id.package == Package::Std {
+        if id.package == Package::Global {
             index.insert(id.name.clone(), id.clone());
         }
     }
@@ -85,16 +85,16 @@ pub fn resolve_packages(ctx: &mut TypeContext) {
 
     resolve_specialized_keys(&mut ctx.specialized_impl_asts, &index, |_, _, _| {});
 
-    let std_names: BTreeSet<&str> = ctx
+    let global_names: BTreeSet<&str> = ctx
         .types
         .keys()
-        .filter(|id| id.package == Package::Std)
+        .filter(|id| id.package == Package::Global)
         .map(|id| id.name.as_str())
         .collect();
     let shadow_errors: Vec<_> = ctx
         .types
         .iter()
-        .filter(|(id, _)| id.package != Package::Std && std_names.contains(id.name.as_str()))
+        .filter(|(id, _)| id.package != Package::Global && global_names.contains(id.name.as_str()))
         .map(|(id, ti)| {
             (
                 format!(

@@ -27,7 +27,7 @@ use crate::project::{self, ProjectConfig};
 /// itself only carries what the driver needs to keep around for
 /// codegen / linking after typecheck consumes the parsed program.
 pub struct SourceSet {
-    /// Package names loaded as dependencies (e.g. "json", "http").
+    /// Package names loaded as dependencies (e.g. "JSON", "HTTP").
     pub dep_packages: Vec<String>,
     /// Path of the entry file (the one whose `fn main` / type entry
     /// drives the program). Empty until the test harness pipeline
@@ -117,7 +117,7 @@ pub fn resolve_project_sources(
 
     let mut source_files: Vec<SourceFile> = Vec::new();
 
-    if config.name != "std" {
+    if config.name != "Global" {
         insert_stdlib(&mut source_files, Some(&config.name));
     }
     scan_directories(&config.name, &src_roots, &mut source_files)?;
@@ -157,10 +157,10 @@ pub fn resolve_project_sources(
 }
 
 /// Inserts every embedded stdlib source file into `source_files`, with
-/// synthetic paths like `<std.io>` so they're stably keyed even though
+/// synthetic paths like `<Global.io>` so they're stably keyed even though
 /// they have no on-disk location. The package is derived from the
 /// leading segment of the source name, so e.g. `<json.StringBuilder>`
-/// joins the `json` package alongside the auto-imported `std` package.
+/// joins the `json` package alongside the auto-imported `Global` package.
 ///
 /// `skip_package` lets a project that *is* a stdlib package (e.g.
 /// building or testing `lib/json`) bypass loading its own embedded
@@ -231,7 +231,7 @@ pub fn resolve_test_project_sources(
     let mut sources = SourceSet::new();
     let mut source_files: Vec<SourceFile> = Vec::new();
 
-    if config.name != "std" {
+    if config.name != "Global" {
         insert_stdlib(&mut source_files, Some(&config.name));
     }
     scan_directories(&config.name, &all_roots, &mut source_files)?;
@@ -255,10 +255,10 @@ pub fn resolve_test_project_sources(
 /// `fn main` conflicts with the consuming project.
 ///
 /// Enforces the duplicate-package-name rule: every project implicitly imports
-/// `std`, and no two packages in the dependency graph (project + implicit
-/// `std` + each declared dep's `[project] name`) may share a name. The real
-/// stdlib (the lone project with `name = "std"`) is the one project that
-/// doesn't get the implicit `std` entry, so its self-build does not collide.
+/// `Global`, and no two packages in the dependency graph (project + implicit
+/// `Global` + each declared dep's `[project] name`) may share a name. The real
+/// stdlib (the lone project with `name = "Global"`) is the one project that
+/// doesn't get the implicit `Global` entry, so its self-build does not collide.
 fn resolve_dependencies(
     config: &ProjectConfig,
     project_root: &Path,
@@ -267,8 +267,8 @@ fn resolve_dependencies(
 ) -> Result<(), String> {
     let mut seen_pkgs: BTreeSet<String> = BTreeSet::new();
     seen_pkgs.insert(config.name.clone());
-    if config.name != "std" {
-        seen_pkgs.insert("std".to_string());
+    if config.name != "Global" {
+        seen_pkgs.insert("Global".to_string());
     }
     for (alias, dep) in &config.dependencies {
         let dep_path = match &dep.path {
@@ -289,7 +289,7 @@ fn resolve_dependencies(
 
         if !seen_pkgs.insert(dep_config.name.clone()) {
             return Err(format!(
-                "duplicate package name `{}` in dependency graph (declared by project, dependency `{alias}`, or implicit `std` import)",
+                "duplicate package name `{}` in dependency graph (declared by project, dependency `{alias}`, or implicit `Global` import)",
                 dep_config.name
             ));
         }

@@ -7,7 +7,7 @@
 
 use expo_ast::ast::{Expr, MatchArm, Pattern};
 use expo_ast::identifier::TypeIdentifier;
-use expo_ast::types::{named_generic_std, process_envelope_type};
+use expo_ast::types::{named_generic_global, process_envelope_type};
 use expo_typecheck::types::{Primitive, Type, build_substitution, mangle_name, substitute};
 
 use crate::identity::{FunctionIdentifier, MonomorphizedTypeIdentifier};
@@ -104,8 +104,8 @@ pub fn resolve_process_msg_reply(
 pub fn resolve_ref_type(msg_type: Type, reply_type: Type) -> ResolvedRefType {
     let type_args = vec![msg_type.clone(), reply_type.clone()];
     let mangled_name =
-        MonomorphizedTypeIdentifier::new(mangle_name(&TypeIdentifier::std("Ref"), &type_args));
-    let expo_type = named_generic_std("Ref", type_args);
+        MonomorphizedTypeIdentifier::new(mangle_name(&TypeIdentifier::global("Ref"), &type_args));
+    let expo_type = named_generic_global("Ref", type_args);
     ResolvedRefType {
         expo_type,
         mangled_name,

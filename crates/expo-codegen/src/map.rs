@@ -5,7 +5,7 @@
 //! `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`
 
 use expo_ast::identifier::TypeIdentifier;
-use expo_ast::types::named_generic_std;
+use expo_ast::types::named_generic_global;
 use expo_typecheck::types::{Type, mangle_name};
 
 use crate::compiler::{Compiler, EmitResult};
@@ -538,8 +538,8 @@ pub fn emit_map_method<'ctx>(
 
         "get" => {
             let option_type_args = vec![val_type.clone()];
-            let option_mangled = mangle_name(&TypeIdentifier::std("Option"), &option_type_args);
-            ensure_types_exist(c, &named_generic_std("Option", option_type_args.clone()))?;
+            let option_mangled = mangle_name(&TypeIdentifier::global("Option"), &option_type_args);
+            ensure_types_exist(c, &named_generic_global("Option", option_type_args.clone()))?;
             let option_struct = c
                 .llvm_types
                 .get_monomorphized(&MonomorphizedTypeIdentifier::new(&option_mangled))

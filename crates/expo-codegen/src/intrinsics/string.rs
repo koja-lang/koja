@@ -1,5 +1,5 @@
 use expo_ast::identifier::TypeIdentifier;
-use expo_ast::types::named_generic_std;
+use expo_ast::types::named_generic_global;
 use expo_typecheck::types::{Primitive, Type, mangle_name};
 use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
@@ -255,11 +255,11 @@ pub fn emit_string_intrinsic<'ctx>(
             c.builder.build_return(Some(&result)).unwrap();
         }
         "String_get" => {
-            let option_id = TypeIdentifier::std("Option");
+            let option_id = TypeIdentifier::global("Option");
             let option_mangled = mangle_name(&option_id, &[Type::Primitive(Primitive::String)]);
             ensure_types_exist(
                 c,
-                &named_generic_std("Option", vec![Type::Primitive(Primitive::String)]),
+                &named_generic_global("Option", vec![Type::Primitive(Primitive::String)]),
             )?;
             let option_struct = c
                 .llvm_types

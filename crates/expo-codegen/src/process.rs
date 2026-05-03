@@ -4,7 +4,7 @@
 //! `Ref<M, R>` supports `cast` and `call`; `ReplyTo<R>` supports `send`.
 
 use expo_ast::identifier::TypeIdentifier;
-use expo_ast::types::{named_generic_std, named_std};
+use expo_ast::types::{named_generic_global, named_global};
 use expo_typecheck::types::{Primitive, Type, mangle_name, process_envelope_type};
 use inkwell::AddressSpace;
 use inkwell::types::BasicType;
@@ -254,9 +254,9 @@ pub fn emit_ref_method<'ctx>(
 
             let msg_val = fn_val.get_nth_param(1).unwrap();
 
-            let option_reply_type = named_generic_std(
+            let option_reply_type = named_generic_global(
                 "Option",
-                vec![named_generic_std("ReplyTo", vec![reply_type.clone()])],
+                vec![named_generic_global("ReplyTo", vec![reply_type.clone()])],
             );
             ensure_types_exist(c, &option_reply_type)?;
             let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.llvm_types)
@@ -351,9 +351,9 @@ pub fn emit_ref_method<'ctx>(
             };
 
             // Monomorphize Result<R, CallError> as return type.
-            let callerror_type = named_std("CallError");
+            let callerror_type = named_global("CallError");
             let result_type_args = vec![reply_type.clone(), callerror_type.clone()];
-            let result_id = TypeIdentifier::std("Result");
+            let result_id = TypeIdentifier::global("Result");
             let result_mangled = mangle_name(&result_id, &result_type_args);
             if !c
                 .llvm_types
@@ -368,10 +368,10 @@ pub fn emit_ref_method<'ctx>(
 
             // Ensure CallError enum exists in LLVM.
             if c.llvm_types
-                .get_concrete(&TypeIdentifier::std("CallError"))
+                .get_concrete(&TypeIdentifier::global("CallError"))
                 .is_none()
             {
-                monomorphize_enum(c, &TypeIdentifier::std("CallError"), &[])?;
+                monomorphize_enum(c, &TypeIdentifier::global("CallError"), &[])?;
             }
 
             let envelope_type = process_envelope_type(msg_type, reply_type);
@@ -380,13 +380,13 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or("no LLVM type for Pair envelope")?
                 .into_struct_type();
 
-            let reply_to_type = named_generic_std("ReplyTo", vec![reply_type.clone()]);
+            let reply_to_type = named_generic_global("ReplyTo", vec![reply_type.clone()]);
             ensure_types_exist(c, &reply_to_type)?;
             let reply_to_llvm = to_llvm_type(&reply_to_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for ReplyTo<R>")?
                 .into_struct_type();
 
-            let option_from_type = named_generic_std("Option", vec![reply_to_type]);
+            let option_from_type = named_generic_global("Option", vec![reply_to_type]);
             ensure_types_exist(c, &option_from_type)?;
             let option_from_llvm = to_llvm_type(&option_from_type, c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Option<ReplyTo<R>>")?
@@ -637,7 +637,7 @@ pub fn emit_ref_method<'ctx>(
                 .ok_or_else(|| format!("no LLVM type for `{mangled_type}`"))?;
 
             // Lifecycle is an enum with unit variants; its LLVM repr is { i8 }.
-            let lifecycle_llvm = to_llvm_type(&named_std("Lifecycle"), c.context, &c.llvm_types)
+            let lifecycle_llvm = to_llvm_type(&named_global("Lifecycle"), c.context, &c.llvm_types)
                 .ok_or("no LLVM type for Lifecycle enum")?;
 
             let fn_type = c
@@ -847,9 +847,9 @@ pub fn emit_ref_method<'ctx>(
             let msg_val = fn_val.get_nth_param(1).unwrap();
             let delay_ms = fn_val.get_nth_param(2).unwrap();
 
-            let option_reply_type = named_generic_std(
+            let option_reply_type = named_generic_global(
                 "Option",
-                vec![named_generic_std("ReplyTo", vec![reply_type.clone()])],
+                vec![named_generic_global("ReplyTo", vec![reply_type.clone()])],
             );
             ensure_types_exist(c, &option_reply_type)?;
             let option_llvm = to_llvm_type(&option_reply_type, c.context, &c.llvm_types)

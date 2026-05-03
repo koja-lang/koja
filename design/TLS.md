@@ -12,7 +12,7 @@ TLS is built from four independent changes:
 
 1. **Build system** -- embed `libssl.a` alongside `libcrypto.a`
 2. **Runtime** -- export one new C function: `expo_io_block`
-3. **Stdlib (`std`)** -- add `Fd.block` so Expo code can suspend on I/O
+3. **Stdlib (`Global`)** -- add `Fd.block` so Expo code can suspend on I/O
 4. **Stdlib (`net`)** -- add `tls.expo` with BoringSSL FFI bindings,
    and modify `tcp.expo` to integrate TLS into `TCPSocket`
 
@@ -92,7 +92,7 @@ This is a thin C ABI wrapper around the existing `io_block`. Since
 
 ## 3. Stdlib: `Fd.block`
 
-### `expo/lib/std/src/fd.expo`
+### `expo/lib/global/src/fd.expo`
 
 Add to the `impl Fd` block (after `unwatch`):
 
@@ -432,7 +432,7 @@ After implementation, run:
 | `expo/crates/expo-driver/build.rs`        | Find `libssl.a`, set env var                                      |
 | `expo/crates/expo-driver/src/pipeline.rs` | Embed + write `libssl.a`                                          |
 | `expo/crates/expo-runtime/src/fs.rs`      | Add `expo_io_block` (4 lines)                                     |
-| `expo/lib/std/src/fd.expo`                | Add `Fd.block` + extern decl                                      |
+| `expo/lib/global/src/fd.expo`                | Add `Fd.block` + extern decl                                      |
 | `expo/lib/net/src/tls.expo`               | **New file**: TLSConfig, FFI bindings, TLS operations             |
 | `expo/lib/net/src/tcp.expo`               | Add ssl/ssl_ctx fields, TLS methods, dispatch in read/write/close |
 | `expo/lib/http/src/client.expo`           | Use `connect_tls` for https:// URLs                               |

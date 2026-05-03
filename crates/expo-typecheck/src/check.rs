@@ -112,8 +112,8 @@ fn classify_specialized_impl_target(
 /// Type-checks all function bodies and impl blocks in a file, emitting
 /// diagnostics for type mismatches, undefined variables, and exhaustiveness errors.
 ///
-/// `package` identifies which package the file belongs to (e.g. `"std"`,
-/// `"alpha"`, or a synthetic name like `"__test__"` derived from the file
+/// `package` identifies which package the file belongs to (e.g. `"Global"`,
+/// `"Alpha"`, or a synthetic name like `"__test__"` derived from the file
 /// stem). It is installed as the context's ambient scope so that bare-name
 /// type lookups prefer the file's own package over colliding definitions
 /// in other packages.

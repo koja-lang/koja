@@ -1,7 +1,7 @@
-alias alpha.Config as AlphaConfig
-alias beta.Config as BetaConfig
-alias alpha.Status as AlphaStatus
-alias beta.Status as BetaStatus
+alias Alpha.Config as AlphaConfig
+alias Beta.Config as BetaConfig
+alias Alpha.Status as AlphaStatus
+alias Beta.Status as BetaStatus
 
 fn main
   a = AlphaConfig.new(42)

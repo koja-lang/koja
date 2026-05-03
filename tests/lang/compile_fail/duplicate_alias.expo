@@ -1,5 +1,5 @@
-alias http.Headers
-alias json.Encoder as Headers
+alias HTTP.Headers
+alias JSON.Encoder as Headers
 
 fn main
   "unreachable".print()

@@ -1,7 +1,7 @@
 [project]
-name = "alias_dep"
+name = "AliasDep"
 version = "0.1.0"
 entry = "main"
 
 [dependencies]
-greeter = { path = "libs/greeter" }
+Greeter = { path = "libs/greeter" }

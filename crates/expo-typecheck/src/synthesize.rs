@@ -145,7 +145,7 @@ fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
 /// (`format`, `print`, `inspect`). `format_body` is supplied; `print`
 /// and `inspect` come from [`print_function`] / [`inspect_function`]
 /// and inline the same bodies the `Debug` protocol declares as
-/// defaults in `std/debug.expo`.
+/// defaults in `global/debug.expo`.
 fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
     Item::Impl(ImplBlock {
         target,
@@ -214,7 +214,7 @@ fn format_function(body_expr: Expr, span: Span) -> Function {
 }
 
 /// Builds `fn print(self) IO.puts(self.format()) end`. Mirrors the
-/// default body declared on `Debug.print` in `std/debug.expo`.
+/// default body declared on `Debug.print` in `global/debug.expo`.
 fn print_function(span: Span) -> Function {
     let format_call = method_call_no_args(self_expr(span), FORMAT_METHOD, span);
     let puts_call = Expr::new(
@@ -246,7 +246,7 @@ fn print_function(span: Span) -> Function {
 
 /// Builds `fn inspect(move self) -> Self self.print(); self end`.
 /// Mirrors the default body declared on `Debug.inspect` in
-/// `std/debug.expo`.
+/// `global/debug.expo`.
 fn inspect_function(span: Span) -> Function {
     let print_call = method_call_no_args(self_expr(span), PRINT_METHOD, span);
     Function {

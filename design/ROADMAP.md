@@ -55,19 +55,19 @@ Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, 
 - `print` builtin (dispatches through `Debug.format()` for all types)
 - `panic` builtin (prints to stderr, aborts)
 - Lightweight processes -- structs implement `Process<C, M, R>` protocol. `spawn T.start(config)` creates a process and returns `Ref<M, R>`. `receive` blocks for messages with optional `after timeout` clause. Message type `M` can be any type (primitives, structs, enums). Backed by `expo-runtime` cooperative scheduler.
-- **`Task<R>`** -- `Task.async(fn () -> R)` / `Task.await` for one-off async work on top of processes (`Ref<(), R>` + `call`); see `std.kernel` and `tests/lang/task.expo`.
+- **`Task<R>`** -- `Task.async(fn () -> R)` / `Task.await` for one-off async work on top of processes (`Ref<(), R>` + `call`); see `lib/global/src/kernel.expo` and `tests/lang/task.expo`.
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
 - `Self` type expression in `protocol` and `impl` blocks
 - `Hash` and `Equality` protocols with intrinsic implementations for all primitives
-- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from `std.kernel`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Step<S>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `std.process`); `CPtr<T>`, `CString` (auto-imported from `std.cptr`, `std.cstring`)
-- `List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) implemented as pure Expo code in `std.kernel`
+- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from the `Global` package's `kernel.expo`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Step<S>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `process.expo`); `CPtr<T>`, `CString` (auto-imported from `cptr.expo`, `cstring.expo`)
+- `List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) implemented as pure Expo code in `lib/global/src/kernel.expo`
 - Bare function names as references (`f = double; f(5)`, `list.map(double)`) -- top-level functions produce closure-compatible fat pointers via thunk wrappers
 - Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support with typed binding patterns (`p: Post -> p.title`)
 - Named union aliases (`type FeedItem = Post | Comment | Ad`) -- `type` keyword declarations resolved in the type context
 - Trait bounds on generic type parameters (`<T: Protocol>`, `<T: Proto1 & Proto2>`) -- bounds verified at call sites, protocol method resolution on bounded type vars in function bodies, `&` as protocol composition operator
-- `alias` keyword for file-private package type shorthands (`alias json.Decoder`, `alias json.Decoder as JSONDecoder`) -- qualified type resolution via `package.Type` syntax
+- `alias` keyword for file-private package type shorthands (`alias JSON.Decoder`, `alias JSON.Decoder as JSONDecoder`) -- qualified type resolution via `package.Type` syntax
 - C FFI Phase 1 (primitives) and Phase 2 (pointers and strings): `@extern "C"` and `@link "libname"` annotations for calling C functions. `CPtr<T>` raw pointer type (`Copy`, backed by `malloc`/`free`). `CString` null-terminated string type with `String.to_cstring()` and `CString.to_string()` conversions. `CPtr<T>` accepted in `@extern "C"` signatures for pointer-passing FFI.
 
 ### Parsed and type-checked but NOT yet in codegen
@@ -151,27 +151,27 @@ For detailed sub-milestone breakdowns (A1a-A1e, A2a-A2c, A3a-A3b, A4, B1-B3), se
 
 ## Phase 4: Stdlib + Ecosystem / Runtime + Reliability
 
-Two independent tracks. Track A makes the language useful for real programs. Track B makes concurrency production-grade. The convergence point is an HTTP server handling real traffic -- it needs both `net.tcp` (Track A) and the multi-threaded scheduler (Track B).
+Two independent tracks. Track A makes the language useful for real programs. Track B makes concurrency production-grade. The convergence point is an HTTP server handling real traffic -- it needs both `Net.tcp` (Track A) and the multi-threaded scheduler (Track B).
 
 ### Track A: Stdlib + Ecosystem
 
 #### Test runner -- **DONE**
 
-`expo test` discovers `@test`-annotated functions across `src/` and `test/` directories, generates a synthetic test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure -- the test name is printed before each call so you always know which one failed. `expo.toml` has an optional `test` field (default `["test"]`). Validated with 17 tests in the `json` package (encoder and decoder coverage).
+`expo test` discovers `@test`-annotated functions across `src/` and `test/` directories, generates a synthetic test harness, compiles and runs it. `@test` accepts an optional string description (`@test "adds two numbers"`). Abort-on-first-failure -- the test name is printed before each call so you always know which one failed. `expo.toml` has an optional `test` field (default `["test"]`). Validated with 17 tests in the `JSON` package (encoder and decoder coverage).
 
 #### Stdlib -- **DONE**
 
 Stdlib contains primitives that are as fundamental as integers -- things the compiler or language runtime needs to function, or that virtually every program needs and whose API is stable for decades.
 
-- `std.fd` -- **DONE** shipped in Phase 3 A3a (basic `read`, `write`, `close`). `Fd`, `FileMode`, `File` remain here.
-- `net` -- **DONE** (qualified stdlib package). POSIX socket primitives. `SocketKind` enum (`Stream`, `Datagram`), `IPAddress` struct (Binary-backed with `v4`, `loopback`, `any`, `v4?`, `v6?` helpers), `SocketAddress` struct. `Socket` with full POSIX surface: `create`, `bind`, `connect`, `resolve` (DNS via `getaddrinfo`), `send_to`, `recv_from`, `listen`, `accept`, `set_reuse_addr`, `close`. Ergonomic wrappers: `TCPSocket` (client connections with DNS resolution), `TCPListener` (server-side bind/accept returning `TCPSocket`), `UDPSocket` (connectionless datagram I/O). All wrappers are pure Expo on top of `Socket` -- no additional intrinsics. Accessed via `alias net.TCPSocket` or `net.TCPSocket.connect(...)`.
-- `std.file` -- **DONE** `FileMode` enum (`Read`, `Write`, `Append`). `File.open(path, mode)` opens with explicit mode. `File.write(path, content)` for one-shot writes. `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)` for path-based operations. Handle-level writes via `file.fd.write(data)`. `seek` deferred until embedded database work.
-- `std.mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space -- reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases, large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
-- `std.io` -- **DONE** `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
-- `std.process` -- **DONE** process lifecycle types and the `Process` protocol. `ReplyTo<R>`, `Ref<M, R>`, `Task<R>` (moved from `std.kernel`). New types: `Step<S>` (`Continue(S)`, `Done(StopReason)`), `Lifecycle` (`Shutdown`, `Interrupt`, `Reload`), `StopReason` (`Normal`, `Shutdown`), `ExitStatus` protocol, `ExitReason` (`Normal`, `Shutdown`, `Crashed(String)`). `Process<C, M, R>` protocol: `start(move config) -> Result<Self, StopReason>` runs in child context, `handle` and `handle_signal` return `Step<Self>`, `run` returns `StopReason`, `handle_signal` has a default implementation.
-- `std.debug` -- **DONE** `Debug` protocol with `format(self) -> String` and `inspect(move self) -> Self` (tap-style). Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation dispatch through `Debug.format()`.
-- `std.system` -- **DONE** `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Genuinely global OS state operations not tied to any process's C/M/R types. Thin wrappers over C stdlib calls via runtime intrinsics.
-- `std.time` -- **DONE** `DateTime.now() -> DateTime`, `DateTime.timestamp_millis(self) -> Int` for wall-clock time. `Duration.from_secs(Int) -> Duration`, `Duration.from_millis(Int) -> Duration`, `Duration.millis(self) -> Int` for time spans. `Duration` is pure Expo (no intrinsics). Only `DateTime.now()` requires a runtime shim.
+- `Global.Fd` -- **DONE** shipped in Phase 3 A3a (basic `read`, `write`, `close`). `Fd`, `FileMode`, `File` are all auto-imported from the `Global` package.
+- `Net` -- **DONE** (qualified stdlib package). POSIX socket primitives. `SocketKind` enum (`Stream`, `Datagram`), `IPAddress` struct (Binary-backed with `v4`, `loopback`, `any`, `v4?`, `v6?` helpers), `SocketAddress` struct. `Socket` with full POSIX surface: `create`, `bind`, `connect`, `resolve` (DNS via `getaddrinfo`), `send_to`, `recv_from`, `listen`, `accept`, `set_reuse_addr`, `close`. Ergonomic wrappers: `TCPSocket` (client connections with DNS resolution), `TCPListener` (server-side bind/accept returning `TCPSocket`), `UDPSocket` (connectionless datagram I/O). All wrappers are pure Expo on top of `Socket` -- no additional intrinsics. Accessed via `alias Net.TCPSocket` or `Net.TCPSocket.connect(...)`.
+- `Global.File` -- **DONE** `FileMode` enum (`Read`, `Write`, `Append`). `File.open(path, mode)` opens with explicit mode. `File.write(path, content)` for one-shot writes. `File.exists?(path)`, `File.delete(path)`, `File.rename(src, dst)` for path-based operations. Handle-level writes via `file.fd.write(data)`. `seek` deferred until embedded database work.
+- `Global.Mmap` -- `Mmap` struct for memory-mapped files. Wraps `mmap`/`munmap` syscalls. Maps a file directly into the process's address space -- reads are pointer dereferences (zero copy), the OS manages paging data in/out. Essential for embedded databases, large file processing, and any workload where explicit `read` calls are too slow. `Mmap` is a move type; `close` unmaps. Runtime C shim wraps `mmap(fd, length, PROT_READ|PROT_WRITE, MAP_SHARED, ...)`.
+- `Global.IO` -- **DONE** `IO.puts`, `IO.warn`, `IO.write`, `IO.gets` for ergonomic console I/O. `STDIN`, `STDOUT`, `STDERR` as `Fd` constants. `IO.gets` implemented in pure Expo via recursive `STDIN.read(1)`.
+- `Global.Process` -- **DONE** process lifecycle types and the `Process` protocol. `ReplyTo<R>`, `Ref<M, R>`, `Task<R>` (moved out of `kernel.expo` into `process.expo`). New types: `Step<S>` (`Continue(S)`, `Done(StopReason)`), `Lifecycle` (`Shutdown`, `Interrupt`, `Reload`), `StopReason` (`Normal`, `Shutdown`), `ExitStatus` protocol, `ExitReason` (`Normal`, `Shutdown`, `Crashed(String)`). `Process<C, M, R>` protocol: `start(move config) -> Result<Self, StopReason>` runs in child context, `handle` and `handle_signal` return `Step<Self>`, `run` returns `StopReason`, `handle_signal` has a default implementation.
+- `Global.Debug` -- **DONE** `Debug` protocol with `format(self) -> String` and `inspect(move self) -> Self` (tap-style). Compiler-derived implementations for all types: primitives via intrinsics, enums as `VariantName` / `VariantName(payload)`, structs as `StructName{field: value, ...}`. `print` and string interpolation dispatch through `Debug.format()`.
+- `Global.System` -- **DONE** `System.get_env(key) -> Option<String>`, `System.set_env(key, value)`, `System.cwd() -> Result<String, String>`, `System.hostname() -> String`. Genuinely global OS state operations not tied to any process's C/M/R types. Thin wrappers over C stdlib calls via runtime intrinsics.
+- `Global.DateTime` / `Global.Duration` -- **DONE** `DateTime.now() -> DateTime`, `DateTime.timestamp_millis(self) -> Int` for wall-clock time. `Duration.from_secs(Int) -> Duration`, `Duration.from_millis(Int) -> Duration`, `Duration.millis(self) -> Int` for time spans. `Duration` is pure Expo (no intrinsics). Only `DateTime.now()` requires a runtime shim.
 
 The litmus test: does the compiler or language runtime need it to function, or is it a stable capability every program needs with an API that won't evolve? If yes, stdlib. If the API surface will evolve (protocols, connection management, serialization formats), it's a first-party package.
 
@@ -181,7 +181,7 @@ The litmus test: does the compiler or language runtime need it to function, or i
 
 - ~~`expo.toml` extended with dependency declarations~~ **Done.** `[dependencies]` table with local path support (`json = { path = "../json" }`). Dependency sources are scanned and merged into the module graph.
 - Git dependencies: `expo.toml` extended with git URLs, tags, and branches. Dependency resolution: fetch from git, lock file generation for reproducible builds.
-- ~~`alias` keyword~~ -- **Done.** File-private shorthand for qualified package types. `alias json.Encoder` or `alias json.Decoder as JSONDecoder`. Scoped to the declaring file, doesn't pollute the flat project namespace. Parser, type checker, formatter, LSP, and doc extractor all handle `Item::Alias`. Package types tracked via `SourceSet.dep_packages` and `TypeContext.package_types`.
+- ~~`alias` keyword~~ -- **Done.** File-private shorthand for qualified package types. `alias JSON.Encoder` or `alias JSON.Decoder as JSONDecoder`. Scoped to the declaring file, doesn't pollute the flat project namespace. Parser, type checker, formatter, LSP, and doc extractor all handle `Item::Alias`. Package types tracked via `SourceSet.dep_packages` and `TypeContext.package_types`.
 - **Done when**: `expo.toml` resolves git dependencies and builds the project
 
 #### C FFI -- started
@@ -200,20 +200,20 @@ User-facing foreign function interface for calling C libraries. Expo already cal
 
 #### Standard library packages
 
-`net`, `http`, `json`, `random`, and `crypto` are stdlib packages -- they ship with the compiler, are always available, and use qualified imports (`net.TCPSocket`, `http.Request`). See [STDLIB.md](STDLIB.md) for the full package hierarchy design.
+`Net`, `HTTP`, `JSON`, `Random`, and `Crypto` are stdlib packages -- they ship with the compiler, are always available, and use qualified imports (`Net.TCPSocket`, `HTTP.Request`). See [STDLIB.md](STDLIB.md) for the full package hierarchy design.
 
-- `net` -- **DONE** `TCPSocket`, `TCPListener`, `UDPSocket` implemented as the `net` qualified stdlib package (`net.expo`). TLS support (`upgrade_tls`, `TLSConfig`) pending.
-- `http` -- shared vocabulary types (`Request`, `Response`, `Method`, `Status`, `Headers`), HTTP/1.1 parser, one-shot client, spawn-per-connection server.
-- `json` -- **DONE** (qualified stdlib package). `json.Value` (renamed from `JSONValue`), `json.Encoder`, `json.Decoder`, `json.StringBuilder`. Pure Expo, 17 tests. Accessed via `alias json.Value` or `json.Value.object(...)`.
-- ~~`random`~~ -- **Done.** `Random.bytes(n)` and `Random.int(min, max)` landed in `std.kernel` (auto-imported, no package qualifier needed). OS entropy via `getrandom(2)` / `getentropy(2)`, no OpenSSL dependency. Decided against a separate package -- too small, too fundamental.
-- `crypto` -- **DONE** (qualified stdlib package). Direct BoringSSL C FFI via `@extern "C"` + `@link "crypto:symbol"`. Full SHA family: `crypto.SHA1`, `crypto.SHA256`, `crypto.SHA384`, `crypto.SHA512` -- each with one-shot `digest(data)` and streaming (`new`, `update`, `finalize`) APIs. `crypto.HMAC` with `sha1`, `sha256`, `sha384`, `sha512` methods. All functions accept and return `Binary`. Expo function names follow `snake_case`; C symbols specified via `@link "crypto:EVP_sha256"` convention. `libcrypto.a` is embedded in the compiler and written to a temp dir at link time -- zero user setup. Accessed via `alias crypto.SHA256` or `crypto.SHA256.digest(...)`.
+- `Net` -- **DONE** `TCPSocket`, `TCPListener`, `UDPSocket` implemented as the `Net` qualified stdlib package (`Net.expo`). TLS support (`upgrade_tls`, `TLSConfig`) pending.
+- `HTTP` -- shared vocabulary types (`Request`, `Response`, `Method`, `Status`, `Headers`), HTTP/1.1 parser, one-shot client, spawn-per-connection server.
+- `JSON` -- **DONE** (qualified stdlib package). `JSON.Value` (renamed from `JSONValue`), `JSON.Encoder`, `JSON.Decoder`, `JSON.StringBuilder`. Pure Expo, 17 tests. Accessed via `alias JSON.Value` or `JSON.Value.object(...)`.
+- ~~`Random`~~ -- **Done.** `Random.bytes(n)` and `Random.int(min, max)` landed in `lib/global/src/kernel.expo` (auto-imported, no package qualifier needed). OS entropy via `getrandom(2)` / `getentropy(2)`, no OpenSSL dependency. Decided against a separate package -- too small, too fundamental.
+- `Crypto` -- **DONE** (qualified stdlib package). Direct BoringSSL C FFI via `@extern "C"` + `@link "crypto:symbol"`. Full SHA family: `Crypto.SHA1`, `Crypto.SHA256`, `Crypto.SHA384`, `Crypto.SHA512` -- each with one-shot `digest(data)` and streaming (`new`, `update`, `finalize`) APIs. `Crypto.HMAC` with `sha1`, `sha256`, `sha384`, `sha512` methods. All functions accept and return `Binary`. Expo function names follow `snake_case`; C symbols specified via `@link "crypto:EVP_sha256"` convention. `libcrypto.a` is embedded in the compiler and written to a temp dir at link time -- zero user setup. Accessed via `alias Crypto.SHA256` or `Crypto.SHA256.digest(...)`.
 
 #### First-party packages
 
 High-quality, officially maintained, but not part of the compiler release cycle. Protocols and algorithms evolve on their own timeline.
 
-- `websocket` -- WebSocket server and client built on `http` (upgrade handshake) and `net` (framed message transport). Each WebSocket connection is a process.
-- `http2` -- HTTP/2 transport package reusing stdlib `http.Request`/`http.Response` types.
+- `WebSocket` -- WebSocket server and client built on `HTTP` (upgrade handshake) and `Net` (framed message transport). Each WebSocket connection is a process.
+- `http2` -- HTTP/2 transport package reusing stdlib `HTTP.Request`/`HTTP.Response` types.
 - `argon2` -- password hashing via libargon2 C FFI. `Argon2.hash(password)`, `Argon2.verify(password, hash)`.
 - `bcrypt` -- password hashing via bcrypt C FFI. Same API shape as `argon2`.
 - Structured logging
@@ -543,16 +543,16 @@ Exploration of treating modules as `TypeKind::Module` in the unified registry. N
 
 ### Stdlib design (implemented + planned)
 
-- **Done**: `std.kernel` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. `std.process` for process lifecycle types. Both embedded in the compiler via `include_str!`, parsed at startup.
-- **Planned**: two-tier stdlib with auto-imported core types and qualified standard packages (`net`, `http`, `json`). See [STDLIB.md](STDLIB.md) for the package hierarchy design.
+- **Done**: `lib/global/src/kernel.expo` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. `lib/global/src/process.expo` for process lifecycle types. Both embedded in the compiler via `include_str!`, parsed at startup.
+- **Planned**: two-tier stdlib with auto-imported core types and qualified standard packages (`Net`, `HTTP`, `JSON`). See [STDLIB.md](STDLIB.md) for the package hierarchy design.
 - Monomorphization ensures zero binary bloat for unused stdlib types. Only instantiations that are actually called get compiled.
 
 ### `Debug` protocol and `print` (decided, implemented)
 
-- **Done**: `Debug` protocol in `std.debug` with `format(self) -> String` (required) and `inspect(move self) -> Self` (default impl, tap-style debugging). Named `Debug` rather than `Display` to reflect developer-facing output (not user-facing presentation).
+- **Done**: `Debug` protocol in `lib/global/src/debug.expo` with `format(self) -> String` (required) and `inspect(move self) -> Self` (default impl, tap-style debugging). Named `Debug` rather than `Display` to reflect developer-facing output (not user-facing presentation).
 - **Auto-derived**: all structs and enums get a compiler-synthesized `format` implementation. Enums print as `VariantName` (unit) or `VariantName(value)` (tuple payload). Structs print as `TypeName{field: value, ...}`. Primitives use codegen intrinsics. Users can override with their own `impl Debug for MyType`.
 - **`print` and interpolation**: `print(value)` and `"#{value}"` dispatch through `Debug.format()` instead of hardcoded printf format specifiers. Any type can be printed or interpolated.
-- **`std.io`**: `IO.puts`, `IO.warn`, `IO.write` accept `String` only -- callers use interpolation or `.format()` for non-string types. `IO.gets` reads a line from stdin.
+- **`Global.IO`**: `IO.puts`, `IO.warn`, `IO.write` accept `String` only -- callers use interpolation or `.format()` for non-string types. `IO.gets` reads a line from stdin.
 
 ### ExpoIR and codegen backend protocol
 
@@ -582,7 +582,7 @@ See [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) for the destination architect
 | Tooling   | Formatter, `expo new`, `expo run`, VSCode extension, LSP, documentation generator                                     |
 | Core      | Generics, ownership, protocols, closures, collections, processes                                                      |
 | Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
-| Phase 4A  | Test runner, `net` package (POSIX surface), `Debug` protocol, `std.io`, `std.file`, `std.system`, `std.time`          |
+| Phase 4A  | Test runner, `Net` package (POSIX surface), `Debug` protocol, `Global.IO`, `Global.File`, `Global.System`, `Global.DateTime`/`Global.Duration` |
 | Tooling   | DWARF debug info, `--release` flag, runtime stacktraces, Vim plugin (indent, matchit, compiler)                       |
 | Phase 4B  | Multi-threaded scheduler, cgroup-aware thread count, Condvar parking, graceful shutdown, I/O reactor                  |
 
@@ -592,7 +592,7 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase | Milestone                                                                                                                                                                                                                                            |
 | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`std.io`~~, ~~`std.file`~~, ~~`System` type~~, ~~time~~, ~~`random`~~, package manager, ~~C FFI Phase 1-2~~, C FFI Phase 3, stdlib packages (`net`, `http`, ~~`json`~~, ~~`crypto`~~), first-party packages |
+| 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`Global.IO`~~, ~~`Global.File`~~, ~~`Global.System`~~, ~~time~~, ~~`Random`~~, package manager, ~~C FFI Phase 1-2~~, C FFI Phase 3, stdlib packages (`Net`, `HTTP`, ~~`JSON`~~, ~~`Crypto`~~), first-party packages |
 | 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                                                                               |
 | 5     | Documentation (doctests, search), LSP (~~autocomplete~~, ~~signature help~~, inlay hints), REPL, CLI query/guide system                                                                                                                              |
 | 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                                                                                           |
