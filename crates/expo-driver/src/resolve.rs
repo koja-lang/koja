@@ -27,6 +27,8 @@ use crate::project::{self, ProjectConfig};
 /// itself only carries what the driver needs to keep around for
 /// codegen / linking after typecheck consumes the parsed program.
 pub struct SourceSet {
+    /// Package names loaded as dependencies (e.g. "json", "http").
+    pub dep_packages: Vec<String>,
     /// Path of the entry file (the one whose `fn main` / type entry
     /// drives the program). Empty until the test harness pipeline
     /// fills it in for `expo test`.
@@ -34,8 +36,13 @@ pub struct SourceSet {
     /// Package name the entry belongs to. Used as the executable's
     /// app name. Empty until set alongside `entry`.
     pub entry_package: String,
-    /// Package names loaded as dependencies (e.g. "json", "http").
-    pub dep_packages: Vec<String>,
+    /// Source text of the entry file, captured at resolve time so
+    /// codegen-failure rendering (which fires after `ParsedProgram` is
+    /// consumed by typecheck) can still render inline span context
+    /// without re-borrowing the parsed program. The test-harness path
+    /// fills this in alongside `entry` when it injects the synthetic
+    /// `__expo_test_main__` source.
+    pub entry_source: String,
     /// When the entry is a PascalCase type name (Process entry mode), this
     /// holds the type name (e.g. `"App"`). `None` for legacy `fn main` mode.
     pub entry_type: Option<String>,
@@ -44,9 +51,10 @@ pub struct SourceSet {
 impl SourceSet {
     fn new() -> Self {
         SourceSet {
+            dep_packages: Vec::new(),
             entry: PathBuf::new(),
             entry_package: String::new(),
-            dep_packages: Vec::new(),
+            entry_source: String::new(),
             entry_type: None,
         }
     }
@@ -70,6 +78,7 @@ pub fn resolve_sources(entry_path: &Path) -> Result<(SourceSet, Vec<SourceFile>)
     let mut sources = SourceSet::new();
     sources.entry = entry_path.to_path_buf();
     sources.entry_package = entry_stem.clone();
+    sources.entry_source = source.clone();
 
     let source_files = vec![SourceFile {
         package: entry_stem,
@@ -137,6 +146,11 @@ pub fn resolve_project_sources(
             .find(|p| source_files.iter().any(|f| &f.path == p))
             .ok_or_else(|| format!("entry file `{entry}` not found in src directories"))?
     };
+    sources.entry_source = source_files
+        .iter()
+        .find(|f| f.path == entry_path)
+        .map(|f| f.source.clone())
+        .unwrap_or_default();
     sources.entry = entry_path;
 
     Ok((sources, source_files))

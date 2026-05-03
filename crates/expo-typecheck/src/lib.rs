@@ -6,6 +6,7 @@ mod cycle;
 mod env;
 mod expr;
 mod pattern;
+mod program;
 pub mod registry;
 pub mod resolve;
 mod stmt;
@@ -20,6 +21,7 @@ use expo_ast::ast::File;
 
 pub use aliases::resolve_file_aliases;
 pub use collect::{GlobalNames, collect_all_names, scan_globals};
+pub use program::{CheckedProgram, DiagnosticSink, check_program};
 pub use registry::{GlobalEntry, GlobalRegistry};
 pub use types::{Package, fqn_to_package, package_for_path, package_from_str};
 

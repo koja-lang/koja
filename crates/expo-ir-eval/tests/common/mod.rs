@@ -58,10 +58,10 @@ pub fn dedent(s: &str) -> String {
 /// interpret `entry`. Use for tests that only touch primitives.
 pub fn eval_entry(source: &str, entry: &str) -> Value {
     let mut file = parse_file(source);
+    file.package = "__test__".to_string();
     let type_ctx = expo_typecheck::check(&mut file);
     let files = vec![&file];
-    let packages = vec!["__test__"];
-    let program = expo_codegen::lower_files(&files, &packages, &type_ctx, "__test__", None)
+    let program = expo_codegen::lower_files(&files, &type_ctx, "__test__", None)
         .unwrap_or_else(|diags| panic!("lower_files failed: {diags:?}"));
     let mut interp = Interp::new(Arc::new(program), Arc::new(type_ctx)).expect("interp init");
     interp

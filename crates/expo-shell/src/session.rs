@@ -179,15 +179,14 @@ impl Session {
         let source = self.synthesize(return_type_text);
         let mut module = parse_file(&source)?;
         module.path = Some(session_module_path());
+        module.package = SESSION_PACKAGE.to_string();
         let type_ctx = expo_typecheck::check(&mut module);
         if !type_ctx.diagnostics.is_empty() {
             return Err(format_diagnostics(&type_ctx.diagnostics));
         }
         let modules = vec![&module];
-        let packages = vec![SESSION_PACKAGE];
-        let program =
-            expo_codegen::lower_files(&modules, &packages, &type_ctx, SESSION_PACKAGE, None)
-                .map_err(|diagnostics| format_diagnostics(&diagnostics))?;
+        let program = expo_codegen::lower_files(&modules, &type_ctx, SESSION_PACKAGE, None)
+            .map_err(|diagnostics| format_diagnostics(&diagnostics))?;
         let mut interp = Interp::new(Arc::new(program), Arc::new(type_ctx))
             .map_err(|error| error.to_string())?;
         interp

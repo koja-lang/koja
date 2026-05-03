@@ -42,15 +42,14 @@ pub struct ConstantTables {
 /// initializers are skipped.
 pub fn populate_constants(
     files: &[&File],
-    packages: &[&str],
     program: &mut IRProgram,
     type_ctx: &TypeContext,
     layouts: &crate::TypeLayouts,
 ) -> ConstantTables {
     let mut tables = ConstantTables::default();
     let empty_fn_lower = crate::FnLowerState::new();
-    for (file, package) in files.iter().zip(packages.iter()) {
-        let pkg = package_from_str(package);
+    for file in files {
+        let pkg = package_from_str(&file.package);
         let ctx = LowerCtx {
             closure_site_path: None,
             fn_lower: &empty_fn_lower,

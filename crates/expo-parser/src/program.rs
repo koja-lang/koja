@@ -57,12 +57,14 @@ impl ParsedFile {
 }
 
 /// Parses a single [`SourceFile`] into a [`ParsedFile`]. Populates
-/// `ast.path` from the source's path so downstream stages don't have
-/// to remember to set it manually.
+/// `ast.path` and `ast.package` from the source so downstream stages
+/// (typecheck, codegen) don't have to thread the per-file identity
+/// alongside the AST.
 pub fn parse_file(source: SourceFile) -> ParsedFile {
     let result = parse(&source.source);
     let mut ast = result.ast;
     ast.path = Some(source.path.clone());
+    ast.package = source.package.clone();
     ParsedFile {
         package: source.package,
         path: source.path,

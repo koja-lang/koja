@@ -318,8 +318,7 @@ pub fn eval_file(path: &Path, entry: Option<&str>) -> Result<Option<Value>, Stri
     };
     let type_ctx = expo_typecheck::check(&mut module);
     let modules = vec![&module];
-    let packages = vec![package.as_str()];
-    let program = expo_codegen::lower_files(&modules, &packages, &type_ctx, &package, None)
+    let program = expo_codegen::lower_files(&modules, &type_ctx, &package, None)
         .map_err(|diagnostics| format_diagnostics(&diagnostics))?;
     let mut interp =
         Interp::new(Arc::new(program), Arc::new(type_ctx)).map_err(|error| error.to_string())?;

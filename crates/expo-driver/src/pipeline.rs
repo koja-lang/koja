@@ -3,18 +3,15 @@
 //! This module contains the shared infrastructure that powers `build`, `run`,
 //! and `check`. No CLI command functions live here -- those are in [`crate::commands`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::sync::OnceLock;
 use std::{env, fs, mem, process};
 
-use expo_ast::ast::{Annotation, AnnotationValue, Diagnostic, File, ImplMember, Item, Severity};
+use expo_ast::ast::{Annotation, AnnotationValue, Diagnostic, File, ImplMember, Item};
 use expo_parser::{ParsedProgram, SourceFile};
-
-use expo_typecheck::context::TypeContext;
-use expo_typecheck::registry::GlobalRegistry;
-use expo_typecheck::types::Package;
+use expo_typecheck::{CheckedProgram, DiagnosticSink};
 
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
@@ -45,237 +42,68 @@ fn resolve_or_exit<T>(result: Result<T, String>) -> T {
     })
 }
 
-/// Renders a codegen failure (whose diagnostics are scoped to the entry file)
-/// using the entry file's source for context, then exits non-zero.
-fn render_codegen_failure(
-    sources: &SourceSet,
-    parsed: &ParsedProgram,
-    diagnostics: &[Diagnostic],
-    color: bool,
-) -> ! {
-    let entry_file = parsed
-        .get(&sources.entry)
-        .expect("entry file present in parsed program");
+/// Renders a codegen failure (whose diagnostics are scoped to the
+/// entry file) using the entry file's resolve-time source for context,
+/// then exits non-zero. Reads from [`SourceSet::entry_source`] so
+/// rendering survives `ParsedProgram` having been consumed by
+/// `check_program`.
+fn render_codegen_failure(sources: &SourceSet, diagnostics: &[Diagnostic], color: bool) -> ! {
     render_diagnostics(
-        entry_file.path.to_str().unwrap_or("<unknown>"),
-        &entry_file.source,
+        sources.entry.to_str().unwrap_or("<unknown>"),
+        &sources.entry_source,
         diagnostics,
         color,
     );
     process::exit(1);
 }
 
-/// Builds the set of [`Package`]s visible to the resolver from a parsed
-/// program's per-file `package` fields. Stdlib files collapse to a single
-/// [`Package::Std`]; every other file's package becomes a
-/// [`Package::Named`] so the type resolver can validate qualified
-/// `pkg.Type` paths during signature collection without waiting for the
-/// full type tables to be merged.
-fn packages_from_parsed(parsed: &ParsedProgram) -> BTreeSet<Package> {
-    let mut packages = BTreeSet::new();
-    for file in parsed.iter() {
-        if file.package == "std" {
-            packages.insert(Package::Std);
-        } else {
-            packages.insert(Package::Named(file.package.clone()));
-        }
+/// Driver-side [`DiagnosticSink`] that renders each batch through
+/// [`render_diagnostics`] -- the same terminal renderer the rest of the
+/// pipeline uses for codegen-failure / link-failure messages.
+struct TerminalSink {
+    color: bool,
+}
+
+impl DiagnosticSink for TerminalSink {
+    fn emit(&mut self, path: &Path, source: &str, diagnostics: &[Diagnostic]) {
+        render_diagnostics(
+            path.to_str().unwrap_or("<unknown>"),
+            source,
+            diagnostics,
+            self.color,
+        );
     }
-    packages
 }
 
 /// Runs the type-checking pipeline for every file in a parsed program.
-///
-/// Stdlib files are processed sequentially (they have a defined dependency
-/// order). Project files use a gather-unify-check pipeline:
-///   1. **Gather** – collect type signatures from every project file.
-///   2. **Unify** – merge all project contexts into a single shared context
-///      so every file sees every other file's types without imports.
-///   3. **Check** – type-check each project file against the unified context.
-///
-/// Returns the per-file type contexts (keyed by file path) and whether any
-/// errors were found.
-pub fn typecheck_sources(
-    parsed: &mut ParsedProgram,
-    color: bool,
-) -> (BTreeMap<PathBuf, TypeContext>, bool) {
-    let mut file_contexts: BTreeMap<PathBuf, TypeContext> = BTreeMap::new();
-    let mut has_errors = false;
-
-    for file in parsed.iter() {
-        if !file.diagnostics.is_empty() {
-            render_diagnostics(
-                file.path.to_str().unwrap_or("<unknown>"),
-                &file.source,
-                &file.diagnostics,
-                color,
-            );
-            if file.has_errors() {
-                has_errors = true;
-            }
-        }
-    }
-    if has_errors {
-        return (file_contexts, true);
-    }
-
-    // Pre-pass: build the program-wide identifier registry so cross-file
-    // duplicate-decl collisions surface as errors before the legacy
-    // gather-unify-check loop ever runs. Each file's diagnostics are scoped
-    // to that file (the second-defined site), so they render against the
-    // file that introduced the collision.
-    let mut shared_registry = GlobalRegistry::new();
-    for file in parsed.iter() {
-        let scan_diags =
-            expo_typecheck::scan_globals(&file.ast, &file.package, &mut shared_registry);
-        if !scan_diags.is_empty() {
-            render_diagnostics(
-                file.path.to_str().unwrap_or("<unknown>"),
-                &file.source,
-                &scan_diags,
-                color,
-            );
-            if scan_diags.iter().any(|d| d.severity == Severity::Error) {
-                has_errors = true;
-            }
-        }
-    }
-    if has_errors {
-        return (file_contexts, true);
-    }
-
-    let all_files: Vec<&File> = parsed.iter().map(|f| &f.ast).collect();
-    let known_packages = packages_from_parsed(parsed);
-    let global_names = expo_typecheck::collect_all_names(&all_files, known_packages);
-
-    let mut stdlib_ctx = TypeContext::new();
-
-    // Owned partition of paths so we can mutably borrow `parsed.files`
-    // inside the loops without re-borrowing `parsed.order`.
-    let (stdlib_paths, project_paths): (Vec<PathBuf>, Vec<PathBuf>) = parsed
-        .order
-        .iter()
-        .cloned()
-        .partition(|p| parsed.files[p].package == "std");
-
-    // Auto-imported std files: merge into stdlib_ctx directly.
-    // `collect_file` now runs the synthesize sub-pass internally
-    // (auto-derives `impl Debug for T`), so the AST gains synthesized
-    // items as a side effect.
-    for path in &stdlib_paths {
-        let file = parsed.files.get_mut(path).expect("file present");
-        let mut ctx = expo_typecheck::collect_file(&mut file.ast, &global_names, "std");
-        ctx.merge(&stdlib_ctx);
-
-        stdlib_ctx.merge(&ctx);
-        file_contexts.insert(path.clone(), ctx);
-    }
-
-    // Gather: collect signatures from every project file.
-    for path in &project_paths {
-        let file = parsed.files.get_mut(path).expect("file present");
-        let pkg = file.package.clone();
-        let mut ctx = expo_typecheck::collect_file(&mut file.ast, &global_names, &pkg);
-        ctx.merge(&stdlib_ctx);
-        // Other stdlib protocols (today: `Process` with `run` /
-        // `handle_signal`) still rely on default-method synthesis for
-        // user impls. `Debug` is auto-derived by the synthesize
-        // sub-pass inside `collect_file` and never touches this
-        // codepath.
-        expo_typecheck::synthesize_protocol_defaults(&file.ast, &mut ctx, &pkg);
-        expo_typecheck::mark_recursive_fields(&mut ctx);
-        file_contexts.insert(path.clone(), ctx);
-    }
-
-    // Unify: build a shared context containing all project definitions.
-    let mut unified_project_ctx = stdlib_ctx.clone();
-    for path in &project_paths {
-        unified_project_ctx.merge(&file_contexts[path]);
-    }
-
-    // Check: every file needs alias resolution, package resolution, and
-    // body typechecking. Embedded stdlib files (synthetic `<std.x>` paths)
-    // are checked alongside workspace sources so every expression carries a
-    // populated `resolved_type` -- downstream codegen / IR lowering relies on
-    // this invariant rather than re-deriving types from emission output.
-    let order_clone: Vec<PathBuf> = parsed.order.clone();
-    for path in order_clone {
-        let Some(mut ctx) = file_contexts.remove(&path) else {
-            continue;
-        };
-        ctx.merge(&unified_project_ctx);
-        let file = parsed.files.get_mut(&path).unwrap();
-        let pkg = file.package.clone();
-        expo_typecheck::resolve_file_aliases(&file.ast, &mut ctx);
-        expo_typecheck::resolve_packages(&mut ctx);
-        expo_typecheck::check_file(&mut file.ast, &mut ctx, &pkg);
-        expo_typecheck::validate_resolved_types(&file.ast, &mut ctx);
-        file_contexts.insert(path, ctx);
-    }
-
-    for file in parsed.iter() {
-        let ctx = &file_contexts[&file.path];
-        if !ctx.diagnostics.is_empty() {
-            render_diagnostics(
-                file.path.to_str().unwrap_or("<unknown>"),
-                &file.source,
-                &ctx.diagnostics,
-                color,
-            );
-            if ctx
-                .diagnostics
-                .iter()
-                .any(|d| d.severity == Severity::Error)
-            {
-                has_errors = true;
-            }
-        }
-    }
-
-    (file_contexts, has_errors)
+/// Thin wrapper around [`expo_typecheck::check_program`]; the seven
+/// sub-passes live there.
+pub fn typecheck_sources(parsed: ParsedProgram, color: bool) -> CheckedProgram {
+    let mut sink = TerminalSink { color };
+    expo_typecheck::check_program(parsed, &mut sink)
 }
 
-/// Compiles a fully resolved source set into an executable.
+/// Compiles a fully type-checked program into an executable.
 ///
-/// Type-checks all files, merges contexts, emits LLVM IR, and links.
-/// The parsed program must include stdlib files (via
-/// [`resolve::insert_stdlib`] before parsing). When `options.emit_llvm` is
-/// true, prints LLVM IR to stdout instead of linking.
+/// Reads ASTs and the merged context off `checked` (codegen pulls each
+/// file's package off `File.package` directly, no parallel slice
+/// needed); reads entry metadata off `sources`. When `options.emit_llvm`
+/// is true, prints LLVM IR to stdout instead of linking.
 pub fn build_from_sources(
     sources: &SourceSet,
-    parsed: &mut ParsedProgram,
+    checked: &CheckedProgram,
     output: &str,
     options: BuildOptions,
 ) {
-    let (file_contexts, has_errors) = typecheck_sources(parsed, options.color);
-    if has_errors {
-        process::exit(1);
-    }
-
-    let mut merged_ctx = TypeContext::new();
-    for path in &parsed.order {
-        merged_ctx.merge(&file_contexts[path]);
-    }
-    expo_typecheck::resolve_packages(&mut merged_ctx);
-
-    let files_ast: Vec<&File> = parsed.iter().map(|f| &f.ast).collect();
-    let file_packages: Vec<String> = parsed.iter().map(|f| f.package.clone()).collect();
-    let file_packages_refs: Vec<&str> = file_packages.iter().map(String::as_str).collect();
+    let files_ast: Vec<&File> = checked.ast.iter().collect();
 
     let app_name = sources.entry_package.clone();
     let entry_type = sources.entry_type.as_deref();
 
     if options.emit_llvm {
-        match expo_codegen::emit_llvm_ir(
-            &files_ast,
-            &file_packages_refs,
-            &merged_ctx,
-            &app_name,
-            entry_type,
-        ) {
+        match expo_codegen::emit_llvm_ir(&files_ast, &checked.merged_ctx, &app_name, entry_type) {
             Ok(ir) => print!("{ir}"),
-            Err(diagnostics) => {
-                render_codegen_failure(sources, parsed, &diagnostics, options.color)
-            }
+            Err(diagnostics) => render_codegen_failure(sources, &diagnostics, options.color),
         }
         return;
     }
@@ -283,14 +111,13 @@ pub fn build_from_sources(
     let obj_path = format!("{output}.o");
     if let Err(diagnostics) = expo_codegen::compile_files(
         &files_ast,
-        &file_packages_refs,
-        &merged_ctx,
+        &checked.merged_ctx,
         Path::new(&obj_path),
         options.release,
         &app_name,
         entry_type,
     ) {
-        render_codegen_failure(sources, parsed, &diagnostics, options.color);
+        render_codegen_failure(sources, &diagnostics, options.color);
     }
 
     let link_libs = collect_link_libraries(&files_ast);
@@ -349,7 +176,11 @@ pub fn build_project(
 ) {
     let (sources, source_files) =
         resolve_or_exit(resolve::resolve_project_sources(config, project_root));
-    let mut parsed = expo_parser::parse_program(source_files);
+    let parsed = expo_parser::parse_program(source_files);
+    let checked = typecheck_sources(parsed, options.color);
+    if checked.has_errors {
+        process::exit(1);
+    }
 
     let default_output;
     let output = match output {
@@ -368,7 +199,7 @@ pub fn build_project(
             default_output.to_str().unwrap()
         }
     };
-    build_from_sources(&sources, &mut parsed, output, options);
+    build_from_sources(&sources, &checked, output, options);
 }
 
 /// Full single-file build pipeline: resolve sources from an entry file,
@@ -397,8 +228,12 @@ pub fn build(args: BuildArgs, options: BuildOptions) {
 
     let (sources, mut source_files) = resolve_or_exit(resolve::resolve_sources(&entry_path));
     prepend_stdlib(&mut source_files);
-    let mut parsed = expo_parser::parse_program(source_files);
-    build_from_sources(&sources, &mut parsed, &output, options);
+    let parsed = expo_parser::parse_program(source_files);
+    let checked = typecheck_sources(parsed, options.color);
+    if checked.has_errors {
+        process::exit(1);
+    }
+    build_from_sources(&sources, &checked, &output, options);
 }
 
 /// Type-checks a single-file source set (without compiling).
@@ -416,12 +251,12 @@ pub fn check_single_file(entry_path: &Path, color: bool, emit_ast: bool) -> bool
     };
 
     prepend_stdlib(&mut source_files);
-    let mut parsed = expo_parser::parse_program(source_files);
-    let (_, has_errors) = typecheck_sources(&mut parsed, color);
+    let parsed = expo_parser::parse_program(source_files);
+    let checked = typecheck_sources(parsed, color);
     if emit_ast {
-        emit_parsed_ast(&parsed);
+        emit_checked_ast(&checked.ast);
     }
-    has_errors
+    checked.has_errors
 }
 
 /// Type-checks a project source set (without compiling).
@@ -441,24 +276,28 @@ pub fn check_project(
         }
     };
 
-    let mut parsed = expo_parser::parse_program(source_files);
-    let (_, has_errors) = typecheck_sources(&mut parsed, color);
+    let parsed = expo_parser::parse_program(source_files);
+    let checked = typecheck_sources(parsed, color);
     if emit_ast {
-        emit_parsed_ast(&parsed);
+        emit_checked_ast(&checked.ast);
     }
-    has_errors
+    checked.has_errors
 }
 
-/// Prints every file in the parsed program to stdout as a pretty-Debug
+/// Prints every file in the checked program to stdout as a pretty-Debug
 /// dump, preceded by a `// === <path> ===` header. Used by `expo check
 /// --emit-ast`. Pretty-Debug is intentional for now; a proper S-expression
 /// printer is a separate slice (see `design/COMPILER-NORTHSTAR.md`
 /// "Per-phase debug emitters").
-fn emit_parsed_ast(parsed: &ParsedProgram) {
-    for file in parsed.iter() {
-        let display = file.path.to_str().unwrap_or("<unknown>");
+fn emit_checked_ast(files: &[File]) {
+    for file in files {
+        let display = file
+            .path
+            .as_deref()
+            .and_then(|p| p.to_str())
+            .unwrap_or("<unknown>");
         println!("// === {display} ===");
-        println!("{:#?}", file.ast);
+        println!("{file:#?}");
     }
 }
 
@@ -496,7 +335,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     let harness_parsed = expo_parser::parse_file(SourceFile {
         package: config.name.clone(),
         path: harness_path.clone(),
-        source: harness_source,
+        source: harness_source.clone(),
     });
     if !harness_parsed.diagnostics.is_empty() {
         eprintln!("internal error: generated test harness failed to parse");
@@ -510,6 +349,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     parsed.files.insert(harness_path.clone(), harness_parsed);
     sources.entry = harness_path;
     sources.entry_package = config.name.clone();
+    sources.entry_source = harness_source;
 
     let target_dir = project_root.join("target").join("debug");
     fs::create_dir_all(&target_dir).unwrap_or_else(|e| {
@@ -525,7 +365,11 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
         quiet: true,
         release: false,
     };
-    build_from_sources(&sources, &mut parsed, &output, options);
+    let checked = typecheck_sources(parsed, options.color);
+    if checked.has_errors {
+        process::exit(1);
+    }
+    build_from_sources(&sources, &checked, &output, options);
 
     let status = process::Command::new(&binary).status();
     let _ = fs::remove_file(&binary);
