@@ -10,10 +10,11 @@ use std::sync::Arc;
 
 use expo_ir::Backend;
 use expo_ir_eval::{Interp, Value};
+use expo_parser::ParseMode;
 
 /// Parse `source` into an AST file, asserting no parser errors.
 pub fn parse_file(source: &str) -> expo_ast::ast::File {
-    let parsed = expo_parser::parse(source);
+    let parsed = expo_parser::parse(source, ParseMode::File);
     assert!(
         parsed.errors.is_empty(),
         "parser errors: {:?}",

@@ -3,9 +3,9 @@
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
 //! The single public entry point is [`check_program`]. It runs every
-//! sub-pass internally (collect, resolve, seal) and hands back a
-//! sealed [`CheckedProgram`] on success or a [`CheckFailure`] on
-//! failure.
+//! sub-pass internally (lift_script, collect, resolve, seal) and
+//! hands back a sealed [`CheckedProgram`] on success or a
+//! [`CheckFailure`] on failure.
 //!
 //! Stage ownership: the parser owns parse diagnostics, this crate owns
 //! typecheck diagnostics. If the input [`expo_parser::ParsedProgram`]
@@ -20,6 +20,7 @@
 
 mod collect;
 mod labels;
+mod lift_script;
 mod program;
 mod registry;
 mod resolve;

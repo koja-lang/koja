@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use expo_ast::ast::{Diagnostic, File, Severity};
 
+use crate::ParseMode;
 use crate::parse;
 
 /// A single source file ready to be parsed.
@@ -62,8 +63,8 @@ impl ParsedFile {
 /// `ast.path` and `ast.package` from the source so downstream stages
 /// (typecheck, codegen) don't have to thread the per-file identity
 /// alongside the AST.
-pub fn parse_file(source: SourceFile) -> ParsedFile {
-    let result = parse(&source.source);
+pub fn parse_file(source: SourceFile, mode: ParseMode) -> ParsedFile {
+    let result = parse(&source.source, mode);
     let mut ast = result.ast;
     ast.path = Some(source.path.clone());
     ast.package = source.package.clone();
@@ -118,12 +119,12 @@ impl ParsedProgram {
 }
 
 /// Parses a list of source files in input order, producing a
-/// [`ParsedProgram`].
-pub fn parse_program(sources: Vec<SourceFile>) -> ParsedProgram {
+/// [`ParsedProgram`]. All files are parsed in the same `mode`.
+pub fn parse_program(sources: Vec<SourceFile>, mode: ParseMode) -> ParsedProgram {
     let mut files = BTreeMap::new();
     let mut order = Vec::with_capacity(sources.len());
     for source in sources {
-        let parsed = parse_file(source);
+        let parsed = parse_file(source, mode);
         order.push(parsed.path.clone());
         files.insert(parsed.path.clone(), parsed);
     }

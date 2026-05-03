@@ -16,17 +16,20 @@ use std::path::PathBuf;
 use expo_ast::ast::{Expr, ExprKind, Item, Statement};
 use expo_ast::identifier::Identifier;
 use expo_ast::types::{Primitive, Type};
-use expo_parser::{SourceFile, parse_program};
+use expo_parser::{ParseMode, SourceFile, parse_program};
 use expo_typecheck_v2::{CheckedProgram, check_program};
 
 const PACKAGE: &str = "TestApp";
 
 fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(vec![SourceFile {
-        package: PACKAGE.to_string(),
-        path: PathBuf::from("two_plus_two.expo"),
-        source: source.to_string(),
-    }]);
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: PACKAGE.to_string(),
+            path: PathBuf::from("two_plus_two.expo"),
+            source: source.to_string(),
+        }],
+        ParseMode::File,
+    );
     check_program(parsed).unwrap_or_else(|failure| {
         panic!(
             "v2 typecheck failed on `{source}`: {} diagnostic(s):\n{failure}",
@@ -87,11 +90,14 @@ fn fn_main_two_plus_two_typechecks_to_int() {
 
 #[test]
 fn duplicate_fn_in_same_file_emits_diagnostic() {
-    let parsed = parse_program(vec![SourceFile {
-        package: PACKAGE.to_string(),
-        path: PathBuf::from("dup.expo"),
-        source: "fn main\n  1\nend\n\nfn main\n  2\nend\n".to_string(),
-    }]);
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: PACKAGE.to_string(),
+            path: PathBuf::from("dup.expo"),
+            source: "fn main\n  1\nend\n\nfn main\n  2\nend\n".to_string(),
+        }],
+        ParseMode::File,
+    );
     let failure = check_program(parsed).expect_err("duplicate fn should fail typecheck");
     assert_eq!(
         failure.diagnostics.len(),

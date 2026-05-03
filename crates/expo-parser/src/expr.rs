@@ -487,11 +487,11 @@ pub(crate) fn expr_span(expr: &Expr) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse;
+    use crate::{ParseMode, parse};
 
     fn parse_first_expr(src: &str) -> Expr {
         let wrapped = format!("fn main\n  {}\nend\n", src);
-        let result = parse(&wrapped);
+        let result = parse(&wrapped, ParseMode::File);
         for item in result.ast.items {
             if let Item::Function(f) = item {
                 for stmt in f.body.unwrap_or_default() {
@@ -740,7 +740,7 @@ mod tests {
     #[test]
     fn short_closure_in_parenthesized_context() {
         let wrapped = "fn main\n  apply(5, x -> x + 1)\nend\n";
-        let result = parse(wrapped);
+        let result = parse(wrapped, ParseMode::File);
         let func = result.ast.items.into_iter().find_map(|item| {
             if let Item::Function(f) = item {
                 Some(f)

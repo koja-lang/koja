@@ -23,6 +23,7 @@ best-effort consumption.
 ## Sub-passes
 
 ```
+lift_script   -> hoist File.body into synthesized fn main (script mode only)
 collect       -> register top-level decls; assign Identifier
 resolve       -> walk all bodies; populate Resolution + Expr.resolved_type
 seal          -> assert seal_ast invariants; panic on violation
@@ -31,9 +32,14 @@ seal          -> assert seal_ast invariants; panic on violation
 The order is forced by data dependencies, not preference. Each pass is a
 single function (`pub(crate)`) called by `program::check_program`.
 
+`lift_script` is intentionally narrow and self-contained — the synthetic
+`fn main` wrap is a transient bridge while the parser learns to express
+script-mode semantics natively. When the wrap is replaced, this single
+pass disappears.
+
 Future sub-passes land in this orchestration when the work they do becomes
-load-bearing — `strip_cfg` between parse and `collect` for `@cfg`-driven
-pruning, `synthesize` after `collect` for protocol defaults,
+load-bearing — `strip_cfg` between `lift_script` and `collect` for
+`@cfg`-driven pruning, `synthesize` after `collect` for protocol defaults,
 `lift_signatures` between `synthesize` and `resolve` for cross-decl
 signature resolution, `check` between `resolve` and `seal` for compatibility
 validation beyond what `resolve` enforces inline, and `annotate` between

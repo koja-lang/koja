@@ -537,10 +537,10 @@ fn string_expr(parts: Vec<StringPart>, span: Span) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use expo_parser::parse;
+    use expo_parser::{ParseMode, parse};
 
     fn parse_file(source: &str) -> File {
-        let result = parse(source);
+        let result = parse(source, ParseMode::File);
         assert!(
             result.errors.is_empty(),
             "parse errors: {:?}",

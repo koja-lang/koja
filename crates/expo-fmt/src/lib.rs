@@ -3,6 +3,7 @@ pub mod printer;
 
 use doc::render;
 use expo_ast::ast::Diagnostic;
+use expo_parser::ParseMode;
 
 /// The result of formatting a source string.
 pub enum FormatResult {
@@ -19,7 +20,7 @@ pub fn format(source: &str) -> FormatResult {
 
 /// Formats Expo source code, wrapping lines at `width` columns.
 pub fn format_width(source: &str, width: u32) -> FormatResult {
-    let result = expo_parser::parse(source);
+    let result = expo_parser::parse(source, ParseMode::File);
     if !result.errors.is_empty() {
         return FormatResult::ParseErrors(result.errors);
     }

@@ -172,8 +172,16 @@ pub enum Item {
 /// bare-string [`expo_parser::parse`] entry point (REPL, formatter,
 /// proptests) leave it `String::new()` -- those paths never reach the
 /// package-scoped passes that read it.
+///
+/// `body` is `Some(_)` only when the source was parsed in
+/// `ParseMode::Script` -- it carries top-level statements (e.g. the
+/// REPL's accumulated input) before they are hoisted into a synthetic
+/// `fn main` item. After typecheck-v2's `lift_script` sub-pass runs,
+/// `body` is always `None`; the sealed AST has no surviving
+/// script-level statement bodies.
 #[derive(Debug, Clone)]
 pub struct File {
+    pub body: Option<Vec<Statement>>,
     pub comments: Vec<Comment>,
     pub items: Vec<Item>,
     pub package: String,

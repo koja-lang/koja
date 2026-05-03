@@ -15,17 +15,20 @@ use expo_ir_v2::{
     ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRTerminator,
     LowerError, ValueId, lower_program,
 };
-use expo_parser::{SourceFile, parse_program};
+use expo_parser::{ParseMode, SourceFile, parse_program};
 use expo_typecheck_v2::check_program;
 
 const PACKAGE: &str = "TestApp";
 
 fn lower(source: &str) -> IRProgram {
-    let parsed = parse_program(vec![SourceFile {
-        package: PACKAGE.to_string(),
-        path: PathBuf::from("two_plus_two.expo"),
-        source: source.to_string(),
-    }]);
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: PACKAGE.to_string(),
+            path: PathBuf::from("two_plus_two.expo"),
+            source: source.to_string(),
+        }],
+        ParseMode::File,
+    );
     let checked = check_program(parsed).unwrap_or_else(|f| panic!("v2 typecheck failed:\n{f}"));
     let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
     lower_program(&checked, entry).expect("lowering should succeed")
@@ -75,11 +78,14 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
 
 #[test]
 fn lower_program_reports_missing_entry_point() {
-    let parsed = parse_program(vec![SourceFile {
-        package: PACKAGE.to_string(),
-        path: PathBuf::from("no_main.expo"),
-        source: "fn other\n  1\nend\n".to_string(),
-    }]);
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: PACKAGE.to_string(),
+            path: PathBuf::from("no_main.expo"),
+            source: "fn other\n  1\nend\n".to_string(),
+        }],
+        ParseMode::File,
+    );
     let checked = check_program(parsed).expect("typecheck should succeed");
     let missing = Identifier::new(PACKAGE, vec!["main".to_string()]);
     let err = lower_program(&checked, missing.clone())

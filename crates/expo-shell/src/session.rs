@@ -11,6 +11,7 @@ use std::sync::Arc;
 use expo_ast::ast::{File, Item, Statement};
 use expo_ir::{Backend, FunctionIdentifier};
 use expo_ir_eval::{Interp, Value};
+use expo_parser::ParseMode;
 use expo_typecheck::types::Type;
 
 use crate::{format_diagnostics, parse_file};
@@ -287,7 +288,7 @@ enum InputShape {
 /// is wrapped as a function body and re-parsed to get statements.
 /// Genuine parse errors surface from the wrapped parse.
 fn classify_input(input: &str) -> Result<InputShape, String> {
-    let raw = expo_parser::parse(input);
+    let raw = expo_parser::parse(input, ParseMode::File);
     if raw.errors.is_empty() && !raw.ast.items.is_empty() {
         return Ok(InputShape::Items(input.to_string()));
     }

@@ -25,21 +25,20 @@ use expo_ast::identifier::Identifier;
 use expo_ast::token::TokenKind;
 use expo_ir_eval_v2::{Interpreter, Value};
 use expo_ir_v2::lower_program;
-use expo_parser::{ParsedProgram, SourceFile, parse_program};
+use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
 use expo_typecheck_v2::{CheckFailure, check_program};
 
-/// Synthetic package name for the REPL session. The Session
-/// re-synthesizes the entire history into a single source file under
-/// this package; lowering uses the same name when constructing the
-/// entry-point [`Identifier`].
+/// Synthetic package name for the REPL session. The session
+/// re-runs the entire concatenated input history through the v2
+/// pipeline on every step; lowering uses the same name when
+/// constructing the entry-point [`Identifier`].
 const SESSION_PACKAGE: &str = "REPL";
 
-/// The REPL synthesizes a `fn main` wrapper around the accumulated
-/// statement blocks because today's parser rejects top-level
-/// expressions. This is interim scaffolding — when `.exps` (top-level
-/// scripts) lands, the wrap goes away and the session source becomes
-/// the script body directly. Until then, lower picks `main` up as the
-/// program entry point.
+/// Both alpha commands resolve their entry function under this name.
+/// In script-mode parsing, [`expo_typecheck_v2::lift_script`] hoists
+/// any top-level statements (the REPL's accumulated input, or a
+/// statements-only `.expo` file) into a synthesized `fn main`. Files
+/// that already declare an explicit `fn main` use that one directly.
 const SESSION_ENTRY: &str = "main";
 
 const BANNER: &str = "expo alpha shell -- v2 IR interpreter (POC: integer arithmetic only)\n\
@@ -169,13 +168,17 @@ pub fn cmd_shell() {
 }
 
 /// Accumulating REPL state. Each new input pushes one statement-text
-/// block; [`Session::try_eval`] re-synthesizes the entire history as
-/// a single source file (`fn main\n  <stmts>\nend\n`), runs it
-/// through the v2 pipeline, and returns the trailing-expression
-/// value. The pipeline is whole-program today (no incremental
-/// typecheck or IR delta), so re-running the whole history is the
-/// simplest way to make state "just work" — perf is fine for the
-/// first few hundred lines.
+/// block; [`Session::try_eval`] concatenates the entire history into
+/// a single source string, parses it in [`ParseMode::Script`], and
+/// drives it through the v2 pipeline. `lift_script` hoists the
+/// top-level statements into a synthetic `fn main`; the pipeline
+/// then resolves the trailing-expression value.
+///
+/// The pipeline is whole-program today (no incremental typecheck or
+/// IR delta), so re-running the whole history is the simplest way to
+/// make state "just work" — perf is fine for the first few hundred
+/// lines. Future incremental work would split this into a chunk-based
+/// representation; today's session is the reference shape.
 struct Session {
     counter: u32,
     statements: Vec<String>,
@@ -233,38 +236,37 @@ impl Session {
         run_pipeline(source, SESSION_PACKAGE, path, SESSION_ENTRY)
     }
 
-    /// Build the synthetic `fn main` source. Each statement block
-    /// gets indented two spaces per line so multi-line inputs parse
-    /// inside the function body. The wrapper goes away when `.exps`
-    /// (top-level scripts) lands.
+    /// Concatenate all statement blocks into the script source the
+    /// pipeline will parse. Blocks are joined with newlines so each
+    /// input remains its own logical line group; `ParseMode::Script`
+    /// + `lift_script` handle the rest.
     fn synthesize(&self) -> String {
-        let mut buffer = String::from("fn main\n");
-        for block in &self.statements {
-            for line in block.lines() {
-                buffer.push_str("  ");
-                buffer.push_str(line);
-                buffer.push('\n');
-            }
-        }
-        buffer.push_str("end\n");
-        buffer
+        self.statements.join("\n")
     }
 }
 
 /// Run one source file end-to-end through the v2 pipeline. Returns
 /// the entry function's value on success, or a formatted error string
 /// covering parse / typecheck / lower / runtime failures.
+///
+/// Always parses in [`ParseMode::Script`]: alpha is the v2 surface,
+/// and v2 treats top-level statements as first-class. Files that
+/// already have an explicit `fn main` parse identically in either
+/// mode, so this is strictly a superset.
 fn run_pipeline(
     source: String,
     package: &str,
     path: PathBuf,
     entry: &str,
 ) -> Result<Value, String> {
-    let parsed = parse_program(vec![SourceFile {
-        package: package.to_string(),
-        path,
-        source,
-    }]);
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: package.to_string(),
+            path,
+            source,
+        }],
+        ParseMode::Script,
+    );
     let checked = check_program(parsed).map_err(format_check_failure)?;
     let entry_id = Identifier::new(package, vec![entry.to_string()]);
     let program = lower_program(&checked, entry_id).map_err(|err| err.to_string())?;

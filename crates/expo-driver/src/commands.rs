@@ -7,6 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
+use expo_parser::ParseMode;
+
 use crate::diagnostics::render_diagnostics;
 use crate::pipeline;
 use crate::project::{self, ProjectConfig};
@@ -332,7 +334,7 @@ fn extract_doc_project(
             }
         };
 
-        let parse_result = expo_parser::parse(&source);
+        let parse_result = expo_parser::parse(&source, ParseMode::File);
         if !parse_result.errors.is_empty() {
             render_diagnostics(path, &source, &parse_result.errors, color);
             continue;
@@ -622,7 +624,7 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
             }
         };
 
-        let result = expo_parser::parse(&source);
+        let result = expo_parser::parse(&source, ParseMode::File);
 
         if !result.errors.is_empty() {
             render_diagnostics(path, &source, &result.errors, color);

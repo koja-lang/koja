@@ -23,6 +23,13 @@ pub(crate) fn seal_ast(program: &CheckedProgram) {
 }
 
 fn seal_file(file: &File) {
+    if file.body.is_some() {
+        seal_panic(
+            "file.body must be hoisted into a synthesized fn main by `lift_script` \
+             before sealing — this is a `lift_script` invariant violation",
+            file.span,
+        );
+    }
     for item in &file.items {
         if let Item::Function(function) = item {
             seal_function(function);

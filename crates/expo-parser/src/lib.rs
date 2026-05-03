@@ -9,5 +9,5 @@ mod stmt;
 mod types;
 
 pub use expo_ast::ast;
-pub use parser::{ParseResult, parse};
+pub use parser::{ParseMode, ParseResult, parse};
 pub use program::{ParsedFile, ParsedProgram, SourceFile, parse_file, parse_program};

@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 use std::{env, fs, mem, process};
 
 use expo_ast::ast::{Annotation, AnnotationValue, Diagnostic, File, ImplMember, Item};
-use expo_parser::{ParsedProgram, SourceFile};
+use expo_parser::{ParseMode, ParsedProgram, SourceFile};
 use expo_typecheck::{CheckedPackage, CheckedProgram, DiagnosticSink};
 
 use crate::diagnostics::render_diagnostics;
@@ -180,7 +180,7 @@ pub fn build_project(
 ) {
     let (sources, source_files) =
         resolve_or_exit(resolve::resolve_project_sources(config, project_root));
-    let parsed = expo_parser::parse_program(source_files);
+    let parsed = expo_parser::parse_program(source_files, ParseMode::File);
     let checked = typecheck_sources(parsed, options.color);
     if checked.has_errors {
         process::exit(1);
@@ -232,7 +232,7 @@ pub fn build(args: BuildArgs, options: BuildOptions) {
 
     let (sources, mut source_files) = resolve_or_exit(resolve::resolve_sources(&entry_path));
     prepend_stdlib(&mut source_files);
-    let parsed = expo_parser::parse_program(source_files);
+    let parsed = expo_parser::parse_program(source_files, ParseMode::File);
     let checked = typecheck_sources(parsed, options.color);
     if checked.has_errors {
         process::exit(1);
@@ -255,7 +255,7 @@ pub fn check_single_file(entry_path: &Path, color: bool, emit_ast: bool) -> bool
     };
 
     prepend_stdlib(&mut source_files);
-    let parsed = expo_parser::parse_program(source_files);
+    let parsed = expo_parser::parse_program(source_files, ParseMode::File);
     let checked = typecheck_sources(parsed, color);
     if emit_ast {
         emit_checked_ast(&checked.packages);
@@ -280,7 +280,7 @@ pub fn check_project(
         }
     };
 
-    let parsed = expo_parser::parse_program(source_files);
+    let parsed = expo_parser::parse_program(source_files, ParseMode::File);
     let checked = typecheck_sources(parsed, color);
     if emit_ast {
         emit_checked_ast(&checked.packages);
@@ -326,7 +326,7 @@ struct TestCase {
 pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     let (mut sources, source_files) =
         resolve_or_exit(resolve::resolve_test_project_sources(config, project_root));
-    let mut parsed = expo_parser::parse_program(source_files);
+    let mut parsed = expo_parser::parse_program(source_files, ParseMode::File);
 
     let tests = discover_tests(&parsed, &config.name);
 
@@ -337,11 +337,14 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
 
     let harness_source = generate_harness(&tests);
     let harness_path = PathBuf::from(format!("<{}.__test_harness__>", config.name));
-    let harness_parsed = expo_parser::parse_file(SourceFile {
-        package: config.name.clone(),
-        path: harness_path.clone(),
-        source: harness_source.clone(),
-    });
+    let harness_parsed = expo_parser::parse_file(
+        SourceFile {
+            package: config.name.clone(),
+            path: harness_path.clone(),
+            source: harness_source.clone(),
+        },
+        ParseMode::File,
+    );
     if !harness_parsed.diagnostics.is_empty() {
         eprintln!("internal error: generated test harness failed to parse");
         for d in &harness_parsed.diagnostics {

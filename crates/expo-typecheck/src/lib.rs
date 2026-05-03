@@ -99,6 +99,8 @@ pub fn validate_resolved_types(file: &File, ctx: &mut TypeContext) {
 
 #[cfg(test)]
 mod tests {
+    use expo_parser::ParseMode;
+
     use super::*;
 
     /// Strips the leading newline and common indentation from a test string,
@@ -132,7 +134,7 @@ mod tests {
     }
 
     fn check_source(src: &str) -> TypeContext {
-        let mut parse_result = expo_parser::parse(src);
+        let mut parse_result = expo_parser::parse(src, ParseMode::File);
         check(&mut parse_result.ast)
     }
 
@@ -212,8 +214,9 @@ mod tests {
         use expo_ast::identifier::Identifier;
         use registry::GlobalRegistry;
 
-        let parse_result = expo_parser::parse(&dedent(
-            r#"
+        let parse_result = expo_parser::parse(
+            &dedent(
+                r#"
             struct User
               name: String
             end
@@ -230,7 +233,9 @@ mod tests {
               42
             end
         "#,
-        ));
+            ),
+            ParseMode::File,
+        );
         let mut registry = GlobalRegistry::new();
         let diagnostics = collect::scan_globals(&parse_result.ast, "Alpha", &mut registry);
         assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
@@ -257,8 +262,9 @@ mod tests {
     fn scan_globals_reports_duplicates_as_diagnostics() {
         use registry::GlobalRegistry;
 
-        let parse_result = expo_parser::parse(&dedent(
-            r#"
+        let parse_result = expo_parser::parse(
+            &dedent(
+                r#"
             struct Foo
               x: Int
             end
@@ -267,7 +273,9 @@ mod tests {
               fn ping
             end
         "#,
-        ));
+            ),
+            ParseMode::File,
+        );
         let mut registry = GlobalRegistry::new();
         let diagnostics = collect::scan_globals(&parse_result.ast, "Alpha", &mut registry);
         assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");

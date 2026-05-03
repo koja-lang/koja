@@ -12,17 +12,20 @@ use std::path::PathBuf;
 use expo_ast::identifier::Identifier;
 use expo_ir_eval_v2::{Interpreter, RuntimeError, Value};
 use expo_ir_v2::lower_program;
-use expo_parser::{SourceFile, parse_program};
+use expo_parser::{ParseMode, SourceFile, parse_program};
 use expo_typecheck_v2::check_program;
 
 const PACKAGE: &str = "TestApp";
 
 fn evaluate(source: &str) -> Result<Value, RuntimeError> {
-    let parsed = parse_program(vec![SourceFile {
-        package: PACKAGE.to_string(),
-        path: PathBuf::from("two_plus_two.expo"),
-        source: source.to_string(),
-    }]);
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: PACKAGE.to_string(),
+            path: PathBuf::from("two_plus_two.expo"),
+            source: source.to_string(),
+        }],
+        ParseMode::File,
+    );
     let checked = check_program(parsed).expect("v2 typecheck should succeed on POC source");
     let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
     let program = lower_program(&checked, entry).expect("v2 lowering should succeed");
