@@ -3,10 +3,9 @@
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
 //! The single public entry point is [`check_program`]. It runs every
-//! sub-pass internally (collect, resolve, check, seal — plus stubs for
-//! strip-cfg, synthesize, and annotate that grow as features land) and
-//! hands back a sealed [`CheckedProgram`] on success or a
-//! [`CheckFailure`] on failure.
+//! sub-pass internally (collect, resolve, seal) and hands back a
+//! sealed [`CheckedProgram`] on success or a [`CheckFailure`] on
+//! failure.
 //!
 //! Stage ownership: the parser owns parse diagnostics, this crate owns
 //! typecheck diagnostics. If the input [`expo_parser::ParsedProgram`]
@@ -19,17 +18,12 @@
 //! without translation. Seal violations panic; they indicate compiler
 //! bugs, not user errors.
 
-mod annotate;
-mod check;
 mod collect;
 mod labels;
-mod lift_signatures;
 mod program;
 mod registry;
 mod resolve;
 mod seal;
-mod strip_cfg;
-mod synthesize;
 
 pub use program::{CheckFailure, CheckedPackage, CheckedProgram, check_program};
 pub use registry::{GlobalEntry, GlobalRegistry};

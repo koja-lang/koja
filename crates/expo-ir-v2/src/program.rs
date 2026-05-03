@@ -18,7 +18,7 @@ use expo_typecheck_v2::CheckedProgram;
 
 use crate::function::IRFunction;
 use crate::package::IRPackage;
-use crate::{closure, elaborate, lower_package, merge, seal};
+use crate::{lower_package, merge, seal};
 
 /// Sealed output of [`lower_program`]'s success path. Backends consume
 /// this directly; they build their own indices over the sealed
@@ -79,14 +79,18 @@ impl std::error::Error for LowerError {}
 ///    `IRPackage` fragment. Pure with respect to its input.
 /// 2. `merge` — stitch the per-package fragments into a single
 ///    working `IRProgram`.
-/// 3. `closure` — discover required generic instantiations (no-op
-///    today; lands with generic specialization).
-/// 4. `elaborate` — reserved for later refinements (no-op today).
-/// 5. `seal` — assert sealed-IRProgram invariants. Panics on violation.
+/// 3. `seal` — assert sealed-IRProgram invariants. Panics on violation.
 ///
-/// The entry-point existence check happens between `merge` and
-/// `closure` so the caller sees a clean [`LowerError`] before any
-/// stub passes run.
+/// The entry-point existence check happens between `merge` and `seal`
+/// so the caller sees a clean [`LowerError`] before the seal pass
+/// runs.
+///
+/// Future sub-passes land between `merge` and `seal` when the work
+/// they do becomes load-bearing (e.g. a `closure` pass for generic
+/// instantiation discovery, or an `elaborate` pass for coercion
+/// emission). They're not in the pipeline yet because the POC has
+/// nothing for them to do — adding no-op pass-throughs would be
+/// dead architecture.
 pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRProgram, LowerError> {
     let mut packages = Vec::with_capacity(checked.packages.len());
     for pkg in &checked.packages {
@@ -98,9 +102,6 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
     if program.function(&entry).is_none() {
         return Err(LowerError::EntryPointNotFound { identifier: entry });
     }
-
-    let program = closure::closure(program);
-    let program = elaborate::elaborate(program);
 
     seal::seal_program(&program);
     Ok(program)

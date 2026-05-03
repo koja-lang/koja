@@ -5,24 +5,16 @@
 //! real handling are integer literals (resolve to `Type::Primitive(I64)`)
 //! and `Binary { Add, .. }` (resolve to the integer type that flows
 //! through the operands). Identifier references and richer shapes land
-//! when [`crate::lift_signatures`] gains a real implementation.
+//! when a future `lift_signatures` pass starts publishing resolved
+//! signatures the resolver can look up.
 
 use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, File, Function, Item, Literal, Statement};
 use expo_ast::span::Span;
 use expo_ast::types::{Primitive, Type};
 
 use crate::labels::expr_kind_label;
-use crate::registry::GlobalRegistry;
 
-pub(crate) fn resolve_file(
-    file: &mut File,
-    _registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    // `_registry` is unused for the POC scope (`2 + 2` has no `Ident`
-    // references), but kept on the entry point so the orchestration in
-    // `program.rs` stays uniform with the other passes. It is plumbed
-    // back through the resolve helpers when identifier handling lands.
+pub(crate) fn resolve_file(file: &mut File, diagnostics: &mut Vec<Diagnostic>) {
     for item in &mut file.items {
         if let Item::Function(function) = item {
             resolve_function(function, diagnostics);

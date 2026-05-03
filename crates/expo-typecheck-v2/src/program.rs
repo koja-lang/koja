@@ -18,7 +18,7 @@ use expo_ast::ast::{Diagnostic, File};
 use expo_parser::{ParsedFile, ParsedProgram};
 
 use crate::registry::GlobalRegistry;
-use crate::{annotate, check, collect, lift_signatures, resolve, seal, strip_cfg, synthesize};
+use crate::{collect, resolve, seal};
 
 /// A package fragment of a [`CheckedProgram`]: the package name plus
 /// the set of sealed AST files that belong to it.
@@ -73,18 +73,21 @@ impl std::error::Error for CheckFailure {}
 /// diagnostics (those belong to the parse stage; consumers read them
 /// from `parsed.iter()`). Otherwise runs the sub-passes in order:
 ///
-/// 1. `strip_cfg` — prune nodes excluded by `@cfg(...)` (no-op today).
-/// 2. `collect` — register every surviving top-level decl into the
-///    registry. Identifiers only; signatures stay at placeholders.
-/// 3. `synthesize` — generate default protocol impl ASTs (no-op today).
-/// 4. `lift_signatures` — resolve and annotate every registered decl's
-///    signature on the AST using the now-populated registry. No-op
-///    today; lands when the first real cross-decl reference does.
-/// 5. `resolve` — walk every body and populate `Resolution` +
+/// 1. `collect` — register every top-level decl into the registry.
+///    Identifiers only; signatures stay at placeholders.
+/// 2. `resolve` — walk every body and populate `Resolution` +
 ///    `Expr.resolved_type`.
-/// 6. `check` — validate type compatibility.
-/// 7. `annotate` — emit coercion annotations (no-op today).
-/// 8. `seal` — assert sealed-AST invariants. Panics on violation.
+/// 3. `seal` — assert sealed-AST invariants. Panics on violation.
+///
+/// Future sub-passes land in this orchestration when the work they do
+/// becomes load-bearing — `strip_cfg` between parse and `collect` for
+/// `@cfg`-driven pruning, `synthesize` after `collect` for protocol
+/// defaults, `lift_signatures` between `synthesize` and `resolve` for
+/// cross-decl signature resolution, `check` between `resolve` and
+/// `seal` for compatibility validation beyond what `resolve` enforces
+/// inline, and `annotate` between `check` and `seal` for coercion
+/// emission. They're not in the pipeline yet because the POC has
+/// nothing for them to do.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {
@@ -96,7 +99,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut registry = GlobalRegistry::default();
 
-    let packages = strip_cfg::strip_cfg(into_packages(parsed));
+    let mut packages = into_packages(parsed);
 
     for pkg in &packages {
         for file in &pkg.files {
@@ -104,32 +107,11 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         }
     }
 
-    let mut packages = synthesize::synthesize(packages, &mut registry, &mut diagnostics);
-
-    for pkg in &packages {
-        for file in &pkg.files {
-            lift_signatures::lift_signatures_in_file(
-                file,
-                &pkg.package,
-                &mut registry,
-                &mut diagnostics,
-            );
-        }
-    }
-
     for pkg in &mut packages {
         for file in &mut pkg.files {
-            resolve::resolve_file(file, &registry, &mut diagnostics);
+            resolve::resolve_file(file, &mut diagnostics);
         }
     }
-
-    for pkg in &packages {
-        for file in &pkg.files {
-            check::check_file(file, &registry, &mut diagnostics);
-        }
-    }
-
-    let packages = annotate::annotate(packages, &registry, &mut diagnostics);
 
     if !diagnostics.is_empty() {
         return Err(CheckFailure {

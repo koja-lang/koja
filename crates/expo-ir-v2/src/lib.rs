@@ -5,10 +5,9 @@
 //!
 //! The single public entry point is [`lower_program`]. It consumes a
 //! sealed [`expo_typecheck_v2::CheckedProgram`], runs every sub-pass
-//! internally (`lower_package`, `merge`, `closure`, `elaborate`,
-//! `seal`), and hands back a sealed [`IRProgram`] on success or a
-//! [`LowerError`] for the one user-actionable failure mode (entry
-//! point not registered).
+//! internally (`lower_package`, `merge`, `seal`), and hands back a
+//! sealed [`IRProgram`] on success or a [`LowerError`] for the one
+//! user-actionable failure mode (entry point not registered).
 //!
 //! Diagnostics: lowering is a pure translation from a sealed input.
 //! User-actionable errors funnel through [`LowerError`]; everything
@@ -19,8 +18,6 @@
 //! [`IRFunction`], [`IRInstruction`], [`IRTerminator`], …) is fresh
 //! and self-contained.
 
-mod closure;
-mod elaborate;
 mod function;
 mod lower_package;
 mod merge;

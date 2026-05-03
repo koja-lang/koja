@@ -34,13 +34,17 @@ caller-supplied entry-point is not present in the lowered program).
 ```
 lower-package -> per-package translation: sealed AST  ->  IRPackage
 merge         -> stitch IRPackage fragments into a working IRProgram
-closure       -> [v2 POC: stub; generic instantiation discovery lands later]
-elaborate     -> [v2 POC: stub; reserved for later refinements]
 seal          -> assert seal_program invariants; panic on violation
 ```
 
 The order is forced by data dependencies, not preference. Each pass is a single
 function (`pub(crate)`) called by `program::lower_program`.
+
+Future sub-passes (e.g. `closure` for generic-instantiation discovery,
+`elaborate` for coercion emission) land between `merge` and `seal` when the
+work they do becomes load-bearing. They're not in the pipeline yet because the
+POC has nothing for them to do — no-op pass-throughs would be dead
+architecture.
 
 ## What v2 covers today
 
