@@ -49,11 +49,11 @@ pub struct TypeContext {
     /// File-private aliases from `alias` declarations. NOT merged across files.
     pub file_aliases: BTreeMap<String, Type>,
     /// Reverse index from type name to its fully qualified [`TypeIdentifier`].
-    /// Contains both qualified (`"std.Option"`) and bare (`"Option"`) entries.
+    /// Contains both qualified (`"Global.Option"`) and bare (`"Option"`) entries.
     /// Populated by the resolution pass; empty before that.
     pub name_index: BTreeMap<String, TypeIdentifier>,
     /// Package-to-type-names index for resolving qualified type paths like
-    /// `http.Request`. Populated by the resolution pass alongside `name_index`.
+    /// `HTTP.Request`. Populated by the resolution pass alongside `name_index`.
     pub package_types: BTreeMap<Package, BTreeSet<String>>,
     /// Identifier-keyed registry of every globally-named decl (top-level
     /// structs, enums, functions today; methods/variants/etc. as the
@@ -265,7 +265,7 @@ impl TypeContext {
     }
 
     /// Scope-aware [`TypeInfo`] lookup by bare name. Prefers the current
-    /// package's definition (when set), then falls back to `std`. Returns
+    /// package's definition (when set), then falls back to `Global`. Returns
     /// `None` for cross-package dependency types — callers must use the
     /// qualified form or declare an `alias` to reach them.
     pub fn lookup_by_name(&self, name: &str) -> Option<&TypeInfo> {
@@ -274,7 +274,7 @@ impl TypeContext {
         {
             return Some(ti);
         }
-        self.types.get(&TypeIdentifier::std(name))
+        self.types.get(&TypeIdentifier::global(name))
     }
 
     /// Collects the names of all registered struct types.
@@ -306,8 +306,8 @@ impl TypeContext {
     }
 
     /// Returns true if any registered type lives in the named package.
-    /// Names like `"std"` are matched against the synthetic [`Package::Std`]
-    /// variant, not [`Package::Named("std")`], so use [`Package::matches_name`]
+    /// Names like `"Global"` are matched against the synthetic [`Package::Global`]
+    /// variant, not [`Package::Named("Global")`], so use [`Package::matches_name`]
     /// indirectly via this helper instead of pattern-matching at call sites.
     pub fn has_named_package(&self, package: &str) -> bool {
         self.types.keys().any(|id| match &id.package {
@@ -317,7 +317,7 @@ impl TypeContext {
     }
 
     /// Returns true if a struct/enum/alias with `name` exists in the named
-    /// (non-`std`) package `package`.
+    /// (non-`Global`) package `package`.
     pub fn has_type_in_named_package(&self, package: &str, name: &str) -> bool {
         self.types
             .keys()
@@ -441,8 +441,8 @@ impl TypeContext {
 
     /// Returns `true` if the given package provides a type with the given name.
     pub fn is_package_type(&self, pkg: &str, type_name: &str) -> bool {
-        let id = if pkg == "std" {
-            TypeIdentifier::std(type_name)
+        let id = if pkg == "Global" {
+            TypeIdentifier::global(type_name)
         } else {
             TypeIdentifier::new(pkg, type_name)
         };
@@ -506,7 +506,7 @@ impl TypeContext {
                     && self.types.contains_key(&empty_key)
                 {
                     // self has Named("", X) from the current buffer while other
-                    // has the real package (e.g. Named("net", X) from stdlib).
+                    // has the real package (e.g. Named("Net", X) from stdlib).
                     // Promote to the real package, letting current-buffer
                     // functions win so live edits are reflected immediately.
                     let mut merged = info.clone();

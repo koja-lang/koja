@@ -290,14 +290,14 @@ pub struct IRStruct {
 pub enum IRStructKind {
     /// User-defined struct; layout is derived from `fields`.
     User,
-    /// `std.List<T>` — layout `{ ptr: i8*, length: i64, capacity: i64 }`.
-    StdList,
-    /// `std.Map<K,V>` or `std.Set<T>` — shared hashtable layout.
-    StdHashtable,
-    /// `std.Ref<T>` — single owning pointer.
-    StdRef,
-    /// `std.ReplyTo<T>` — process-reply channel handle.
-    StdReplyTo,
+    /// `Global.List<T>` — layout `{ ptr: i8*, length: i64, capacity: i64 }`.
+    GlobalList,
+    /// `Global.Map<K,V>` or `Global.Set<T>` — shared hashtable layout.
+    GlobalHashtable,
+    /// `Global.Ref<T>` — single owning pointer.
+    GlobalRef,
+    /// `Global.ReplyTo<T>` — process-reply channel handle.
+    GlobalReplyTo,
 }
 
 /// A monomorphized enum declaration with concrete variant payloads.

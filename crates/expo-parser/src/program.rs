@@ -26,10 +26,10 @@ use crate::parse;
 /// A single source file ready to be parsed.
 pub struct SourceFile {
     /// The package this file belongs to. For project files this is the
-    /// declared project name; for stdlib files this is `"std"`; for
+    /// declared project name; for stdlib files this is `"Global"`; for
     /// single-file eval / run paths this is the file stem.
     pub package: String,
-    /// Filesystem path (or a synthetic identifier like `<std.io>` for
+    /// Filesystem path (or a synthetic identifier like `<Global.io>` for
     /// embedded sources). Used for diagnostic attribution and as a
     /// stable identity across the pipeline.
     pub path: PathBuf,

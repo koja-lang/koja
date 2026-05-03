@@ -65,7 +65,7 @@ pub fn monomorphize_type(ctx: &LowerCtx<'_>, ty: &Type) -> Type {
 
 /// Package-aware replacement for `type_ctx.resolve_name` that honours the
 /// current package when set. Bare lookups resolve only within the current
-/// package or to `std`; dependency types must be qualified or imported via
+/// package or to `Global`; dependency types must be qualified or imported via
 /// `alias` upstream.
 pub fn resolve_name_current<'a>(ctx: &LowerCtx<'a>, name: &str) -> Option<&'a TypeIdentifier> {
     match ctx.package {

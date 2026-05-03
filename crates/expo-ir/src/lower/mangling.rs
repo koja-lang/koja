@@ -44,8 +44,8 @@ pub fn try_parse_mangled_name(ctx: &LowerCtx<'_>, mangled: &str) -> Option<(Stri
 
 /// Splits a mangled args string on `.` at depth 0, respecting nested
 /// `_$...$`. Because user-package type names use `.` as a package-qualifier
-/// separator (`http.Header`) and mangled args use `.` as a delimiter, a
-/// naive split would turn `Option_$http.Header$` into two args `http` and
+/// separator (`HTTP.Header`) and mangled args use `.` as a delimiter, a
+/// naive split would turn `Option_$HTTP.Header$` into two args `HTTP` and
 /// `Header`. We resolve the ambiguity by preferring package-qualified
 /// types: a `.` split is treated as a package boundary (not an arg
 /// delimiter) when the token before the `.` names a known package and the

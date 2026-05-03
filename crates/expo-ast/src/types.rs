@@ -451,16 +451,16 @@ pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
 ///
 /// The base component follows the same convention as
 /// `expo_ir::lower::naming::method_symbol_prefix`: stdlib and unresolved-package types
-/// use their bare name (so `std.String` → `String`), while user packages
+/// use their bare name (so `Global.String` → `String`), while user packages
 /// stay fully qualified (`alpha.Config` → `alpha.Config`). This keeps
 /// mangled names consistent with how function symbols are registered
 /// (`String_length`, `alpha.Config_new`, etc.) and prevents cross-package
 /// collisions for user types without changing stdlib symbol names.
 ///
 /// For generic instances the base is followed by `_$...$` containing the
-/// mangled type arguments: `std.List<Int>` → `List_$Int$`,
+/// mangled type arguments: `Global.List<Int>` → `List_$Int$`,
 /// `alpha.Pair<Int, String>` → `alpha.Pair_$Int.String$`, and
-/// `std.List<std.Pair<Int, Int>>` → `List_$Pair_$Int.Int$$`.
+/// `Global.List<Global.Pair<Int, Int>>` → `List_$Pair_$Int.Int$$`.
 pub fn mangle_name(
     id: &crate::identifier::TypeIdentifier,
     type_args: &[Type],
@@ -479,7 +479,9 @@ pub fn mangle_name(
 fn mangle_base(id: &crate::identifier::TypeIdentifier) -> std::string::String {
     match &id.package {
         crate::identifier::Package::Named(pkg) => format!("{pkg}.{}", id.name),
-        crate::identifier::Package::Std | crate::identifier::Package::Unresolved => id.name.clone(),
+        crate::identifier::Package::Global | crate::identifier::Package::Unresolved => {
+            id.name.clone()
+        }
     }
 }
 
@@ -562,13 +564,13 @@ pub fn unwrap_indirect(ty: &Type) -> &Type {
 /// Builds the mailbox envelope type `Pair<M, Option<ReplyTo<R>>>` from M and R.
 pub fn process_envelope_type(m: &Type, r: &Type) -> Type {
     Type::Named {
-        identifier: TypeIdentifier::std("Pair"),
+        identifier: TypeIdentifier::global("Pair"),
         type_args: vec![
             m.clone(),
             Type::Named {
-                identifier: TypeIdentifier::std("Option"),
+                identifier: TypeIdentifier::global("Option"),
                 type_args: vec![Type::Named {
-                    identifier: TypeIdentifier::std("ReplyTo"),
+                    identifier: TypeIdentifier::global("ReplyTo"),
                     type_args: vec![r.clone()],
                 }],
             },
@@ -592,21 +594,21 @@ pub fn type_identifier(ty: &Type) -> Option<&TypeIdentifier> {
     }
 }
 
-/// Constructs a non-generic Named type with `Package::Std`. Use for known
+/// Constructs a non-generic Named type with `Package::Global`. Use for known
 /// stdlib types (e.g. `IOReady`, `Lifecycle`) where the package is certain.
-pub fn named_std(name: &str) -> Type {
+pub fn named_global(name: &str) -> Type {
     Type::Named {
-        identifier: TypeIdentifier::std(name),
+        identifier: TypeIdentifier::global(name),
         type_args: vec![],
     }
 }
 
-/// Constructs a generic Named type with `Package::Std`. Use for known
+/// Constructs a generic Named type with `Package::Global`. Use for known
 /// stdlib generic types (e.g. `Option<T>`, `List<T>`) where the package is
 /// certain and no `TypeContext` resolution is needed.
-pub fn named_generic_std(name: &str, type_args: Vec<Type>) -> Type {
+pub fn named_generic_global(name: &str, type_args: Vec<Type>) -> Type {
     Type::Named {
-        identifier: TypeIdentifier::std(name),
+        identifier: TypeIdentifier::global(name),
         type_args,
     }
 }

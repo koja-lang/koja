@@ -63,24 +63,24 @@ impl Backend {
         }
 
         let stdlib_refs: Vec<&File> = stdlib_files.iter().collect();
-        let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Std]);
+        let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Global]);
         for name in &source_names {
-            if !name.starts_with("std.") {
+            if !name.starts_with("Global.") {
                 known_packages.insert(Package::Named(fqn_to_package(name).to_string()));
             }
         }
         let global_names = expo_typecheck::collect_all_names(&stdlib_refs, known_packages);
 
-        // Collect all stdlib files. Auto-imported files (std.*) use
-        // package "std". Qualified files (json, net, etc.) use their
+        // Collect all stdlib files. Auto-imported files (Global.*) use
+        // package "Global". Qualified files (JSON, Net, etc.) use their
         // package name as the identifier, making them accessible via
         // ctx.is_package_type() for alias resolution.
         // `collect_file` is `&mut` because it runs the synthesize
         // sub-pass internally (auto-derives `impl Debug`).
         for (i, file) in stdlib_files.iter_mut().enumerate() {
             let name = source_names[i];
-            let pkg = if name.starts_with("std.") {
-                "std"
+            let pkg = if name.starts_with("Global.") {
+                "Global"
             } else {
                 fqn_to_package(name)
             };

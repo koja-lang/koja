@@ -56,12 +56,12 @@ pub fn monomorphize_struct(
     // fields are populated to a canonical placeholder so future passes
     // can still walk struct decls uniformly; backends short-circuit on
     // `kind` to use their hard-coded layout.
-    if id.is_std() {
+    if id.is_global() {
         let intrinsic_kind = match name {
-            "List" => Some(IRStructKind::StdList),
-            "Map" | "Set" => Some(IRStructKind::StdHashtable),
-            "Ref" => Some(IRStructKind::StdRef),
-            "ReplyTo" => Some(IRStructKind::StdReplyTo),
+            "List" => Some(IRStructKind::GlobalList),
+            "Map" | "Set" => Some(IRStructKind::GlobalHashtable),
+            "Ref" => Some(IRStructKind::GlobalRef),
+            "ReplyTo" => Some(IRStructKind::GlobalReplyTo),
             _ => None,
         };
         if let Some(kind) = intrinsic_kind {

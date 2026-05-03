@@ -949,23 +949,23 @@ Access control is at the function level (`priv fn`), not the module level. Priva
 When using types from qualified standard library packages or dependency packages, `alias` creates a file-private shorthand:
 
 ```expo
-alias net.TCPSocket
-alias json.Decoder
-alias json.Encoder as JSONEncoder
+alias Net.TCPSocket
+alias JSON.Decoder
+alias JSON.Encoder as JSONEncoder
 
 conn = TCPSocket.connect("example.com", 80)
 ```
 
-`alias net.TCPSocket` makes `TCPSocket` available as a local name. `alias json.Decoder as JSONEncoder` binds a custom local name. Aliases are scoped to the declaring file and don't affect other modules.
+`alias Net.TCPSocket` makes `TCPSocket` available as a local name. `alias JSON.Encoder as JSONEncoder` binds a custom local name. Aliases are scoped to the declaring file and don't affect other modules.
 
 ### Standard library visibility
 
-Core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, etc.) are auto-imported into every module -- no alias needed. Domain-specific packages require qualified access:
+The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, etc.) -- no alias needed. Domain-specific packages require qualified access:
 
-- **`crypto`** -- `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`
-- **`net`** -- `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`
+- **`Crypto`** -- `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`
+- **`Net`** -- `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`
 
-Use `alias crypto.SHA256` or `alias net.TCPSocket` to access them.
+Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
 
 ---
 

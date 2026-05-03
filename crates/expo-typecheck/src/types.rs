@@ -10,17 +10,17 @@ pub use expo_ast::types::{
     unwrap_indirect,
 };
 
-/// Converts a caller-facing package label (`"std"` or a real package name such
-/// as `"alpha"`) into the matching [`Package`] variant used by the scoped
+/// Converts a caller-facing package label (`"Global"` or a real package name
+/// such as `"Alpha"`) into the matching [`Package`] variant used by the scoped
 /// name-index lookup. Empty strings are rejected because every file must
 /// carry a real package so bare-name lookups have a deterministic scope.
 pub fn package_from_str(package: &str) -> Package {
     assert!(
         !package.is_empty(),
-        "package_from_str called with empty package name; callers must supply a real package (file stem, project name, or \"std\")"
+        "package_from_str called with empty package name; callers must supply a real package (file stem, project name, or \"Global\")"
     );
-    if package == "std" {
-        Package::Std
+    if package == "Global" {
+        Package::Global
     } else {
         Package::Named(package.to_string())
     }
@@ -38,8 +38,8 @@ pub fn package_for_path(path: Option<&Path>, fallback: &str) -> String {
 }
 
 /// Extracts the package name from a fully-qualified file name.
-/// e.g. `"json.decoder"` → `"json"`, `"my_app.main"` → `"my_app"`,
-/// `"json"` → `"json"` (single-segment FQN).
+/// e.g. `"JSON.decoder"` → `"JSON"`, `"MyApp.main"` → `"MyApp"`,
+/// `"JSON"` → `"JSON"` (single-segment FQN).
 pub fn fqn_to_package(fqn: &str) -> &str {
     fqn.split('.').next().unwrap_or(fqn)
 }
@@ -103,10 +103,10 @@ pub fn resolve_type_alias_id(
 }
 
 /// Builds the `Package` value for a 2-segment path's leading segment.
-/// `"std"` maps to [`Package::Std`]; everything else is a [`Package::Named`].
+/// `"Global"` maps to [`Package::Global`]; everything else is a [`Package::Named`].
 fn path_package(label: &str) -> Package {
-    if label == "std" {
-        Package::Std
+    if label == "Global" {
+        Package::Global
     } else {
         Package::Named(label.to_string())
     }
@@ -303,12 +303,12 @@ pub fn resolve_type_expr_full(
 }
 
 /// Builds a [`TypeIdentifier`] from a 2-segment qualified path, mapping the
-/// `"std"` package label to [`Package::Std`] and everything else to
+/// `"Global"` package label to [`Package::Global`] and everything else to
 /// [`Package::Named`]. The caller has already verified that `package_label`
 /// names a known package via [`path_package`] + `known_packages.contains(...)`.
 fn qualified_identifier(package_label: &str, type_name: &str) -> TypeIdentifier {
-    if package_label == "std" {
-        TypeIdentifier::std(type_name)
+    if package_label == "Global" {
+        TypeIdentifier::global(type_name)
     } else {
         TypeIdentifier::new(package_label, type_name)
     }

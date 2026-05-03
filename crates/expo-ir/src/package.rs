@@ -80,11 +80,11 @@ mod tests {
         let mut checked = empty_checked();
         checked.packages.push(CheckedPackage {
             ast: Vec::new(),
-            package: "alpha".to_string(),
+            package: "Alpha".to_string(),
         });
         checked.packages.push(CheckedPackage {
             ast: Vec::new(),
-            package: "beta".to_string(),
+            package: "Beta".to_string(),
         });
         let program = lower_program(&checked);
         assert!(program.functions.is_empty());

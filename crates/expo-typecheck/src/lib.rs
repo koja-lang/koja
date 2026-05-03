@@ -31,12 +31,12 @@ pub use types::{Package, fqn_to_package, package_for_path, package_from_str};
 /// have a deterministic scope.
 ///
 /// Deliberately bypasses [`synthesize`]: the auto-derived `Debug` bodies
-/// reference `IO` (from `std`), which isn't loaded in single-file test
+/// reference `IO` (from `Global`), which isn't loaded in single-file test
 /// usage. Production callers go through [`collect_file`] and get
 /// synthesis as a side effect; this single-file helper does not.
 pub fn check(file: &mut File) -> TypeContext {
     let package = types::package_for_path(file.path.as_deref(), "__test__");
-    let packages = BTreeSet::from([Package::Std, package_from_str(&package)]);
+    let packages = BTreeSet::from([Package::Global, package_from_str(&package)]);
     let global = collect_all_names(&[file], packages);
     let mut ctx = collect::collect(file, &global, &package);
     resolve::resolve_packages(&mut ctx);
@@ -47,7 +47,7 @@ pub fn check(file: &mut File) -> TypeContext {
 
 /// Validates all function bodies, expressions, and patterns against the context.
 ///
-/// `package` is the file's package identifier (e.g. `"std"`, `"alpha"`, or
+/// `package` is the file's package identifier (e.g. `"Global"`, `"Alpha"`, or
 /// a synthetic file-stem-based name). Bare-name type references inside the
 /// file are resolved within this package first before falling back to
 /// globals.
@@ -58,8 +58,8 @@ pub fn check_file(file: &mut File, ctx: &mut TypeContext, package: &str) {
 /// Walks the AST to collect type signatures for functions, structs, and enums.
 /// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-file
 /// type references resolve correctly on the first pass.
-/// The `package` identifies which package the file belongs to (e.g. `"std"`,
-/// `"json"`, or the project name from `expo.toml`).
+/// The `package` identifies which package the file belongs to (e.g. `"Global"`,
+/// `"JSON"`, or the project name from `expo.toml`).
 ///
 /// Runs the [`synthesize`] sub-pass first (today: auto-derive `Debug` impls
 /// for every struct/enum that doesn't have one), then walks the resulting
@@ -232,23 +232,23 @@ mod tests {
         "#,
         ));
         let mut registry = GlobalRegistry::new();
-        let diagnostics = collect::scan_globals(&parse_result.ast, "alpha", &mut registry);
+        let diagnostics = collect::scan_globals(&parse_result.ast, "Alpha", &mut registry);
         assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
         assert_eq!(registry.len(), 4);
         assert!(matches!(
-            registry.get(&Identifier::new("alpha", vec!["User".to_string()])),
+            registry.get(&Identifier::new("Alpha", vec!["User".to_string()])),
             Some(GlobalEntry::Struct { .. })
         ));
         assert!(matches!(
-            registry.get(&Identifier::new("alpha", vec!["Color".to_string()])),
+            registry.get(&Identifier::new("Alpha", vec!["Color".to_string()])),
             Some(GlobalEntry::Enum { .. })
         ));
         assert!(matches!(
-            registry.get(&Identifier::new("alpha", vec!["Greet".to_string()])),
+            registry.get(&Identifier::new("Alpha", vec!["Greet".to_string()])),
             Some(GlobalEntry::Protocol { .. })
         ));
         assert!(matches!(
-            registry.get(&Identifier::new("alpha", vec!["main".to_string()])),
+            registry.get(&Identifier::new("Alpha", vec!["main".to_string()])),
             Some(GlobalEntry::Function { .. })
         ));
     }
@@ -269,7 +269,7 @@ mod tests {
         "#,
         ));
         let mut registry = GlobalRegistry::new();
-        let diagnostics = collect::scan_globals(&parse_result.ast, "alpha", &mut registry);
+        let diagnostics = collect::scan_globals(&parse_result.ast, "Alpha", &mut registry);
         assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");
         assert!(
             diagnostics[0].message.contains("`Foo` is already defined"),

@@ -4,7 +4,7 @@
 //! Layout: `{ ptr: i8*, length: i64, capacity: i64 }`
 
 use expo_ast::identifier::TypeIdentifier;
-use expo_ast::types::named_generic_std;
+use expo_ast::types::named_generic_global;
 use expo_typecheck::types::{Primitive, Type, mangle_name};
 
 use crate::compiler::{Compiler, EmitResult};
@@ -211,8 +211,8 @@ pub fn emit_list_method<'ctx>(
 
         "get" => {
             let option_type_args = vec![elem_ty.clone()];
-            let option_mangled = mangle_name(&TypeIdentifier::std("Option"), &option_type_args);
-            ensure_types_exist(c, &named_generic_std("Option", option_type_args))?;
+            let option_mangled = mangle_name(&TypeIdentifier::global("Option"), &option_type_args);
+            ensure_types_exist(c, &named_generic_global("Option", option_type_args))?;
             let option_struct = c
                 .llvm_types
                 .get_monomorphized(&MonomorphizedTypeIdentifier::new(&option_mangled))
@@ -401,18 +401,18 @@ pub fn emit_list_method<'ctx>(
 
         "pop" => {
             let option_type_args = vec![elem_ty.clone()];
-            ensure_types_exist(c, &named_generic_std("Option", option_type_args.clone()))?;
-            let option_mangled = mangle_name(&TypeIdentifier::std("Option"), &option_type_args);
+            ensure_types_exist(c, &named_generic_global("Option", option_type_args.clone()))?;
+            let option_mangled = mangle_name(&TypeIdentifier::global("Option"), &option_type_args);
             let option_struct = c
                 .llvm_types
                 .get_monomorphized(&MonomorphizedTypeIdentifier::new(&option_mangled))
                 .ok_or_else(|| format!("no LLVM type for {option_mangled}"))?;
 
-            let list_type = named_generic_std("List", vec![elem_ty.clone()]);
-            let option_type = named_generic_std("Option", option_type_args);
+            let list_type = named_generic_global("List", vec![elem_ty.clone()]);
+            let option_type = named_generic_global("Option", option_type_args);
             let pair_type_args = vec![option_type, list_type];
-            ensure_types_exist(c, &named_generic_std("Pair", pair_type_args.clone()))?;
-            let pair_mangled = mangle_name(&TypeIdentifier::std("Pair"), &pair_type_args);
+            ensure_types_exist(c, &named_generic_global("Pair", pair_type_args.clone()))?;
+            let pair_mangled = mangle_name(&TypeIdentifier::global("Pair"), &pair_type_args);
             let pair_struct = c
                 .llvm_types
                 .get_monomorphized(&MonomorphizedTypeIdentifier::new(&pair_mangled))

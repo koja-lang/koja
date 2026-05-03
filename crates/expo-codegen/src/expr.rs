@@ -7,7 +7,7 @@ use expo_ast::ast::{
 use expo_ast::span::Span;
 
 use expo_ast::identifier::TypeIdentifier;
-use expo_ast::types::{named_generic_std, named_std, type_identifier};
+use expo_ast::types::{named_generic_global, named_global, type_identifier};
 use expo_typecheck::context::FnParam;
 use expo_typecheck::types::{Primitive, Type, mangle_name};
 use inkwell::AddressSpace;
@@ -665,7 +665,7 @@ fn resolve_list_literal(
     };
 
     let type_args = vec![element_type.clone()];
-    let list_id = TypeIdentifier::std("List");
+    let list_id = TypeIdentifier::global("List");
     let mangled_type = mangle_name(&list_id, &type_args);
 
     if !compiler
@@ -687,7 +687,7 @@ fn resolve_list_literal(
         monomorphize_impl_method(compiler, "List", "append", &type_args, &[])?;
     }
 
-    let result_type = named_generic_std("List", vec![element_type.clone()]);
+    let result_type = named_generic_global("List", vec![element_type.clone()]);
 
     Ok(ResolvedListLiteral {
         element_type,
@@ -711,7 +711,7 @@ fn compile_list_literal<'ctx>(
     let resolved = resolve_list_literal(compiler, &compiled)?;
 
     let mangled_type = mangle_name(
-        &TypeIdentifier::std("List"),
+        &TypeIdentifier::global("List"),
         std::slice::from_ref(&resolved.element_type),
     );
     let new_fn = *compiler
@@ -749,7 +749,7 @@ fn resolve_map_literal(
     value_type: &Type,
 ) -> Result<ResolvedMapLiteral, String> {
     let type_args = vec![key_type.clone(), value_type.clone()];
-    let map_id = TypeIdentifier::std("Map");
+    let map_id = TypeIdentifier::global("Map");
     let mangled_type = mangle_name(&map_id, &type_args);
 
     if !compiler
@@ -771,7 +771,7 @@ fn resolve_map_literal(
         monomorphize_impl_method(compiler, "Map", "put", &type_args, &[])?;
     }
 
-    let result_type = named_generic_std("Map", vec![key_type.clone(), value_type.clone()]);
+    let result_type = named_generic_global("Map", vec![key_type.clone(), value_type.clone()]);
 
     Ok(ResolvedMapLiteral {
         key_type: key_type.clone(),
@@ -803,7 +803,7 @@ fn compile_map_literal<'ctx>(
     let resolved = resolve_map_literal(compiler, &key_type, &val_type)?;
 
     let mangled_type = mangle_name(
-        &TypeIdentifier::std("Map"),
+        &TypeIdentifier::global("Map"),
         &[resolved.key_type.clone(), resolved.value_type.clone()],
     );
     let new_fn = *compiler
@@ -1158,7 +1158,7 @@ fn load_io_ready_from_payload<'ctx>(
     payload_ptr: PointerValue<'ctx>,
     label: &str,
 ) -> Result<BasicValueEnum<'ctx>, String> {
-    let io_ready_type = named_std("IOReady");
+    let io_ready_type = named_global("IOReady");
     let io_ready_llvm = to_llvm_type(&io_ready_type, compiler.context, &compiler.llvm_types)
         .ok_or("no LLVM type for IOReady enum")?;
     Ok(compiler
@@ -1287,7 +1287,7 @@ fn compile_receive_tagged<'ctx>(
 
         let io_ready_val = load_io_ready_from_payload(compiler, payload_ptr, "synth_io")?;
 
-        let io_ready_type = named_std("IOReady");
+        let io_ready_type = named_global("IOReady");
         let m_type = if let Type::Named { type_args, .. } = &resolved.envelope_type {
             type_args.first().cloned()
         } else {
@@ -1376,7 +1376,7 @@ fn compile_receive_tagged<'ctx>(
     if has_lifecycle {
         compiler.builder.position_at_end(lifecycle_block);
 
-        let lifecycle_type = named_std("Lifecycle");
+        let lifecycle_type = named_global("Lifecycle");
         let lifecycle_llvm = to_llvm_type(&lifecycle_type, compiler.context, &compiler.llvm_types)
             .ok_or("no LLVM type for Lifecycle enum")?;
         let lifecycle_value = compiler
@@ -1417,7 +1417,7 @@ fn compile_receive_tagged<'ctx>(
     if let Some(io_ready_block) = io_ready_block {
         compiler.builder.position_at_end(io_ready_block);
 
-        let io_ready_type = named_std("IOReady");
+        let io_ready_type = named_global("IOReady");
         let io_ready_value = load_io_ready_from_payload(compiler, payload_ptr, "io_msg")?;
         let io_ready_alloca = compiler
             .builder

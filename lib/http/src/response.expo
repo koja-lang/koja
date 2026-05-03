@@ -1,4 +1,4 @@
-alias json.StringBuilder
+alias JSON.StringBuilder
 
 @doc """
 An HTTP response with status, headers, body, and protocol

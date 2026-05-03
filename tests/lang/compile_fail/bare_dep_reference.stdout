@@ -1,1 +1,1 @@
-unknown type `Headers`: bare names resolve to the current package or `std` only
+unknown type `Headers`: bare names resolve to the current package or `Global` only

@@ -30,7 +30,7 @@ Recursion bottoms out at primitives. Files have no place in this hierarchy -- th
 
 ### Concrete rules
 
-**Packages are PascalCase and comptime-only.** `std` → `Std`, `net` → `Net`, `expo_http` → `Expo.Http`. PascalCase eliminates the lowercase package-vs-fn ambiguity that would otherwise block free functions at file top-level. Packages are erased after typecheck -- no runtime `Package` type, no member tables, no metadata. Anywhere you'd want to pass a package as a value, write a generic with a protocol bound instead.
+**Packages are PascalCase and comptime-only.** `std` → `Global`, `net` → `Net`, `expo_http` → `Expo.HTTP`. PascalCase (with uppercased acronyms) eliminates the lowercase package-vs-fn ambiguity that would otherwise block free functions at file top-level. Packages are erased after typecheck -- no runtime `Package` type, no member tables, no metadata. Anywhere you'd want to pass a package as a value, write a generic with a protocol bound instead.
 
 **Free functions are members of the implicit package.** A `fn keyword?(s: String) -> Bool ... end` at file top-level in package `MyApp` is the same as defining a fn member of the `MyApp` package-type. Codegen treats it identically to an inline fn on any other type. No special "free function" path.
 
@@ -918,7 +918,7 @@ these two cases to decide restart strategy:
 - **Panic crash**: the process called `panic()` or hit an unrecoverable
   error. The supervisor needs a different notification.
 
-`ExitReason.Crashed(String)` is defined in `std.process` but runtime
+`ExitReason.Crashed(String)` is defined in `lib/global/src/process.expo` but runtime
 delivery is not yet designed. Options:
 
 **Option A: separate crash notification.** The runtime sends a different

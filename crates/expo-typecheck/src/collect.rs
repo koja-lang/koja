@@ -19,19 +19,19 @@ use crate::types::{
 };
 
 /// Resolves a bare type name to a [`TypeIdentifier`] by trying the current
-/// package first, then falling back to `Package::Std`.
+/// package first, then falling back to `Package::Global`.
 fn resolve_type_key(ctx: &TypeContext, name: &str, package: &str) -> Option<TypeIdentifier> {
-    let id = if package == "std" {
-        TypeIdentifier::std(name)
+    let id = if package == "Global" {
+        TypeIdentifier::global(name)
     } else {
         TypeIdentifier::new(package, name)
     };
     if ctx.types.contains_key(&id) {
         return Some(id);
     }
-    let std_id = TypeIdentifier::std(name);
-    if ctx.types.contains_key(&std_id) {
-        return Some(std_id);
+    let global_id = TypeIdentifier::global(name);
+    if ctx.types.contains_key(&global_id) {
+        return Some(global_id);
     }
     None
 }
@@ -48,7 +48,7 @@ pub struct GlobalNames {
 
 /// Scans all files for struct and enum names without resolving any types.
 /// `packages` is the set of package labels visible to the program (typically
-/// derived from the file graph: `Package::Std` for `std.*` files and
+/// derived from the file graph: `Package::Global` for `Global.*` files and
 /// `Package::Named(...)` for everything else). Together they form the
 /// first phase of a two-phase collection: names and packages are gathered
 /// globally, then passed into [`collect`] so cross-file type references
@@ -81,7 +81,7 @@ pub fn collect_all_names(files: &[&File], packages: BTreeSet<Package>) -> Global
 /// Requires [`GlobalNames`] from [`collect_all_names`] so that cross-file
 /// type references (e.g. imported struct names) resolve correctly.
 /// The `package` parameter identifies which package this file belongs to
-/// (e.g. `"std"`, `"json"`, or the project name). It's stored on each
+/// (e.g. `"Global"`, `"JSON"`, or the project name). It's stored on each
 /// [`TypeInfo`]'s [`TypeIdentifier`] for package-aware collision detection.
 pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeContext {
     let mut ctx = TypeContext::new();
@@ -176,8 +176,8 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                         }
                     })
                     .collect();
-                let type_id = if package == "std" {
-                    TypeIdentifier::std(&e.name)
+                let type_id = if package == "Global" {
+                    TypeIdentifier::global(&e.name)
                 } else {
                     TypeIdentifier::new(package, &e.name)
                 };
@@ -276,7 +276,7 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                         };
 
                     let type_id = resolve_type_key(&ctx, &target_name, package)
-                        .unwrap_or_else(|| TypeIdentifier::std(&target_name));
+                        .unwrap_or_else(|| TypeIdentifier::global(&target_name));
 
                     ctx.specialized_impl_asts
                         .entry(type_id.clone())
@@ -387,7 +387,7 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                                 ti.functions.insert(f.name.clone(), sig);
                             }
                         } else if Primitive::from_name(&target_name).is_some() {
-                            let prim_id = TypeIdentifier::std(&target_name);
+                            let prim_id = TypeIdentifier::global(&target_name);
                             let ti = ctx
                                 .types
                                 .entry(prim_id.clone())
@@ -496,8 +496,8 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                         };
                     let impl_key =
                         resolve_type_key(&ctx, &target_name, package).unwrap_or_else(|| {
-                            if package == "std" {
-                                TypeIdentifier::std(&target_name)
+                            if package == "Global" {
+                                TypeIdentifier::global(&target_name)
                             } else {
                                 TypeIdentifier::new(package, &target_name)
                             }
@@ -642,8 +642,8 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                         (f.name.clone(), ty)
                     })
                     .collect();
-                let type_id = if package == "std" {
-                    TypeIdentifier::std(&s.name)
+                let type_id = if package == "Global" {
+                    TypeIdentifier::global(&s.name)
                 } else {
                     TypeIdentifier::new(package, &s.name)
                 };

@@ -79,6 +79,10 @@ pub struct DocProject {
     pub enums: Vec<DocEnum>,
     pub functions: Vec<DocFunction>,
     pub items: Vec<DocItem>,
+    /// Display name shown in the sidebar header. Set by the driver from
+    /// `expo.toml`'s `name`, or falls back to "Docs" when running in
+    /// loose-file mode.
+    pub name: String,
     pub protocols: Vec<DocProtocol>,
     pub structs: Vec<DocStruct>,
 }

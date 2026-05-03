@@ -9,9 +9,11 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", lib_dir.display());
 
-    // Discover all projects under lib/. Each subdirectory with an expo.toml
-    // is a stdlib project. The directory name is the package name.
-    let mut std_entries: Vec<(String, String)> = Vec::new(); // (module_name, const_name)
+    // Discover all projects under lib/. Each subdirectory with an expo.toml is
+    // a stdlib project. Its package name comes from the `name = "..."` field
+    // in expo.toml (Elixir-style: directory is snake_case, package is
+    // PascalCase, the auto-imported package is `Global`).
+    let mut global_entries: Vec<(String, String)> = Vec::new(); // (module_name, const_name)
     let mut qualified: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
 
     let mut dirs: Vec<_> = fs::read_dir(&lib_dir)
@@ -25,10 +27,9 @@ fn main() {
     let mut const_idx = 0usize;
 
     for entry in &dirs {
-        let dir_name = entry.file_name().to_string_lossy().to_string();
         let project_dir = entry.path();
-
-        if !project_dir.join("expo.toml").exists() {
+        let toml_path = project_dir.join("expo.toml");
+        if !toml_path.exists() {
             continue;
         }
 
@@ -37,26 +38,34 @@ fn main() {
             continue;
         }
 
+        println!("cargo:rerun-if-changed={}", toml_path.display());
+        let package_name = read_package_name(&toml_path).unwrap_or_else(|| {
+            panic!(
+                "missing or unparsable `name = \"...\"` in {}",
+                toml_path.display()
+            )
+        });
+
         let files = discover_expo_files(&src_dir);
 
         for file_path in files {
             println!("cargo:rerun-if-changed={}", file_path.display());
 
             let stem = file_path.file_stem().unwrap().to_string_lossy().to_string();
-            let module_name = if stem == dir_name {
-                dir_name.clone()
+            let module_name = if stem == package_name {
+                package_name.clone()
             } else {
-                format!("{dir_name}.{stem}")
+                format!("{package_name}.{stem}")
             };
 
             let const_name = format!("SRC_{const_idx}");
             consts.push((const_name.clone(), file_path.display().to_string()));
 
-            if dir_name == "std" {
-                std_entries.push((module_name, const_name));
+            if package_name == "Global" {
+                global_entries.push((module_name, const_name));
             } else {
                 qualified
-                    .entry(dir_name.clone())
+                    .entry(package_name.clone())
                     .or_default()
                     .push((module_name, const_name));
             }
@@ -75,11 +84,11 @@ fn main() {
         ));
     }
 
-    code.push_str("\n/// All stdlib sources. `std` modules first (auto-imported),\n");
+    code.push_str("\n/// All stdlib sources. `Global` modules first (auto-imported),\n");
     code.push_str("/// then qualified packages in alphabetical order.\n");
     code.push_str("pub const SOURCES: &[(&str, &str)] = &[\n");
 
-    for (module_name, const_name) in &std_entries {
+    for (module_name, const_name) in &global_entries {
         code.push_str(&format!("    (\"{module_name}\", {const_name}),\n"));
     }
     for files in qualified.values() {
@@ -123,4 +132,28 @@ fn collect_expo_files(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path.canonicalize().unwrap_or(path));
         }
     }
+}
+
+/// Extracts the `name = "..."` value from a project-style expo.toml. Tolerant
+/// of arbitrary whitespace and key ordering, but expects the value to be a
+/// double-quoted string on a single line, which matches every shipped
+/// expo.toml in this workspace.
+fn read_package_name(toml_path: &Path) -> Option<String> {
+    let content = fs::read_to_string(toml_path).ok()?;
+    for line in content.lines() {
+        let Some(rest) = line.trim().strip_prefix("name") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('"') else {
+            continue;
+        };
+        let Some(end) = rest.find('"') else { continue };
+        return Some(rest[..end].to_string());
+    }
+    None
 }

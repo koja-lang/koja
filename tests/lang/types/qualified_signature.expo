@@ -1,12 +1,12 @@
-fn header_value(headers: http.Headers, name: String) -> String
+fn header_value(headers: HTTP.Headers, name: String) -> String
   match headers.get(name)
     Option.Some(v) -> v
     Option.None -> "missing"
   end
 end
 
-fn build -> http.Headers
-  http.Headers.new()
+fn build -> HTTP.Headers
+  HTTP.Headers.new()
     .set("X-One", "1")
     .set("X-Two", "2")
 end

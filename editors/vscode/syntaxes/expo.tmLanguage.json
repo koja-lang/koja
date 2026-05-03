@@ -8,14 +8,13 @@
     { "include": "#numbers" },
     { "include": "#annotations" },
     { "include": "#function-definition" },
-    { "include": "#package-qualified-call" },
     { "include": "#function-call" },
     { "include": "#keywords" },
     { "include": "#operators" },
     { "include": "#primitive-types" },
     { "include": "#package-constants" },
+    { "include": "#package-qualifier" },
     { "include": "#types" },
-    { "include": "#import-path" },
     { "include": "#typed-assignment" },
     { "include": "#identifiers" }
   ],
@@ -126,7 +125,7 @@
         },
         {
           "name": "keyword.other.expo",
-          "match": "\\b(const|impl|type|shared|import)\\b"
+          "match": "\\b(const|impl|type|shared|alias|as)\\b"
         },
         {
           "name": "storage.type.expo",
@@ -222,10 +221,11 @@
         }
       ]
     },
-    "import-path": {
+    "package-qualifier": {
       "patterns": [
         {
-          "match": "(?<=\\bimport\\s)([a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)*)",
+          "comment": "Packages are PascalCase and only ever appear as the head of a dotted path: `Net.TCPSocket`, `HTTP.Headers.new()`, `alias JSON.Encoder as JSONEncoder`. Match the leading PascalCase token when followed by `.PascalCase` so it gets the namespace classification rather than the generic type rule.",
+          "match": "\\b([A-Z][a-zA-Z0-9]*)(?=\\.[A-Z])",
           "captures": {
             "1": { "name": "entity.name.namespace.expo" }
           }
@@ -238,17 +238,6 @@
           "match": "\\b(fn)\\s+([a-z_][a-z0-9_]*\\??)",
           "captures": {
             "1": { "name": "keyword.other.fn.expo" },
-            "2": { "name": "entity.name.function.expo" }
-          }
-        }
-      ]
-    },
-    "package-qualified-call": {
-      "patterns": [
-        {
-          "match": "\\b([a-z_][a-z0-9_]*)\\.([a-z_][a-z0-9_]*\\??)\\s*(?:<[^>]*>)?\\s*(?=\\()",
-          "captures": {
-            "1": { "name": "entity.name.namespace.expo" },
             "2": { "name": "entity.name.function.expo" }
           }
         }

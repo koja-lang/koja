@@ -1477,7 +1477,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let stop_reason_llvm = self
             .llvm_types
-            .get_concrete(&TypeIdentifier::std("StopReason"))
+            .get_concrete(&TypeIdentifier::global("StopReason"))
             .ok_or("StopReason LLVM type not found")?;
 
         let i32_ty = self.context.i32_type();
@@ -2043,9 +2043,9 @@ fn store_ir_blocks(
 /// types, declares all functions across files, then defines their bodies.
 ///
 /// The owning package per file is read off `file.package` (populated by
-/// [`expo_parser::parse_file`] from `SourceFile.package`). `"std"` is the
+/// [`expo_parser::parse_file`] from `SourceFile.package`). `"Global"` is the
 /// stdlib (unqualified method symbols like `Int_hash`); any other value is
-/// a user package whose method symbols are prefixed (e.g. `alpha.Config_new`).
+/// a user package whose method symbols are prefixed (e.g. `Alpha.Config_new`).
 /// Empty strings are rejected by the typecheck-side `package_from_str`.
 pub fn compile_files(
     files: &[&File],

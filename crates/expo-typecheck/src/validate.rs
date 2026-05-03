@@ -297,7 +297,7 @@ fn unresolved_type_diagnostic(name: &str, ctx: &TypeContext) -> (String, Option<
         .collect();
     if owners.is_empty() {
         return (
-            format!("unknown type `{name}`: not in current package or `std`"),
+            format!("unknown type `{name}`: not in current package or `Global`"),
             Some(format!(
                 "qualify with the owning package (`pkg.{name}`) or import via `alias pkg.{name}`"
             )),
@@ -314,7 +314,9 @@ fn unresolved_type_diagnostic(name: &str, ctx: &TypeContext) -> (String, Option<
         .collect::<Vec<_>>()
         .join(", ");
     (
-        format!("unknown type `{name}`: bare names resolve to the current package or `std` only"),
+        format!(
+            "unknown type `{name}`: bare names resolve to the current package or `Global` only"
+        ),
         Some(format!(
             "qualify the reference ({suggestions}) or import via {alias_hint}"
         )),

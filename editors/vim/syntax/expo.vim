@@ -15,7 +15,7 @@ syn sync fromstart
 
 " --- Keywords ---------------------------------------------------------------
 
-syn keyword expoKeyword     after arena break const end enum fn for import impl in
+syn keyword expoKeyword     after alias arena as break const end enum fn for impl in
 syn keyword expoKeyword     move priv protocol receive return shared spawn struct type
 syn keyword expoConditional cond else if match unless when
 syn keyword expoRepeat      for loop while
@@ -54,10 +54,13 @@ syn region expoMultiString  start=/"""/ end=/"""/ contains=expoInterpolation,exp
 syn match  expoEscape       /\\[nrt\\"#]/ contained
 syn region expoInterpolation matchgroup=expoInterpDelim start=/#{/ end=/}/ contained contains=TOP
 
-" --- Module names -----------------------------------------------------------
+" --- Package qualifiers -----------------------------------------------------
+" Packages are PascalCase (`Net`, `HTTP`, `JSON`, `Crypto`, `Global`, ...) and
+" only ever appear as the head of a dotted path: `Net.TCPSocket`,
+" `HTTP.Headers.new()`, `alias JSON.Encoder as JSONEncoder`. Match a PascalCase
+" identifier followed by `.PascalCase` (lookahead via \ze keeps the dot out).
 
-syn match expoModulePath      /\(\<import\s\+\)\@<=\l\w*\(\.\l\w*\)*/
-syn match expoModuleQualifier /\<\l\w*\ze\.\l\w*\s*(/
+syn match expoModuleQualifier /\<[A-Z][A-Za-z0-9]*\ze\.[A-Z]/
 
 " --- Typed assignments (x: Type = value) ------------------------------------
 " Require a real type head after ':' (PascalCase type name or `fn`), so prose
@@ -100,7 +103,6 @@ hi def link expoMultiString   String
 hi def link expoEscape        SpecialChar
 hi def link expoInterpolation Normal
 hi def link expoInterpDelim   Special
-hi def link expoModulePath     Include
 hi def link expoModuleQualifier Include
 hi def link expoOperator      Operator
 hi def link expoTypeSep       Operator

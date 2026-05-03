@@ -1,10 +1,10 @@
-alias net.Socket
-alias net.SocketKind
-alias net.SocketAddress
-alias net.IPAddress
-alias net.TCPListener
-alias net.TCPSocket
-alias net.UDPSocket
+alias Net.Socket
+alias Net.SocketKind
+alias Net.SocketAddress
+alias Net.IPAddress
+alias Net.TCPListener
+alias Net.TCPSocket
+alias Net.UDPSocket
 
 struct SocketTest
   @test "create stream socket"

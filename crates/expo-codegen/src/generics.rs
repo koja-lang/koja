@@ -479,10 +479,10 @@ pub(crate) fn emit_ir_struct<'ctx>(c: &mut Compiler<'ctx>, decl: &IRStruct) -> R
     }
     let mangled = decl.mangled.as_str();
     match decl.kind {
-        IRStructKind::StdList => return monomorphize_list_struct(c, mangled),
-        IRStructKind::StdHashtable => return monomorphize_hashtable_struct(c, mangled),
-        IRStructKind::StdRef => return monomorphize_ref_struct(c, mangled),
-        IRStructKind::StdReplyTo => return monomorphize_reply_to_struct(c, mangled),
+        IRStructKind::GlobalList => return monomorphize_list_struct(c, mangled),
+        IRStructKind::GlobalHashtable => return monomorphize_hashtable_struct(c, mangled),
+        IRStructKind::GlobalRef => return monomorphize_ref_struct(c, mangled),
+        IRStructKind::GlobalReplyTo => return monomorphize_reply_to_struct(c, mangled),
         IRStructKind::User => {}
     }
 
