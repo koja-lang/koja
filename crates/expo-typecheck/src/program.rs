@@ -40,21 +40,34 @@ pub trait DiagnosticSink {
     fn emit(&mut self, path: &Path, source: &str, diagnostics: &[Diagnostic]);
 }
 
-/// Sealed output of [`check_program`]: the file ASTs (mutated in place
-/// by typecheck; each [`File`] carries its own `package` and `path`),
-/// per-file contexts keyed by path, the codegen-ready merged context,
-/// and a single `has_errors` flag the driver checks before proceeding
-/// to codegen.
+/// One package's slice of the sealed output: every [`File`] that
+/// declared `package = "..."` gathered under the package label.
+///
+/// Per-package grouping is the granularity expo-ir lowers at:
+/// `CheckedPackage` is the per-package handoff downstream lowering
+/// consumes. File order within `ast` matches the original
+/// `ParsedProgram.order` (today's stdlib-first / project-second
+/// iteration).
+pub struct CheckedPackage {
+    pub ast: Vec<File>,
+    pub package: String,
+}
+
+/// Sealed output of [`check_program`]: file ASTs grouped into
+/// per-package bundles (each [`File`] still carries its own `package`
+/// and `path`), per-file contexts keyed by path, the codegen-ready
+/// merged context, and a single `has_errors` flag the driver checks
+/// before proceeding to codegen.
 ///
 /// Deliberately flat: no `ParsedProgram`, no `ParsedFile`, no source
 /// text. Once typecheck has consumed the parsed bundle, the
 /// parser-phase shape is gone and downstream stages see only the
 /// validated ASTs they actually need.
 pub struct CheckedProgram {
-    pub ast: Vec<File>,
     pub file_contexts: BTreeMap<PathBuf, TypeContext>,
     pub has_errors: bool,
     pub merged_ctx: TypeContext,
+    pub packages: Vec<CheckedPackage>,
 }
 
 /// Runs every type-checking phase against `parsed`, emitting
@@ -85,12 +98,12 @@ pub fn check_program(parsed: ParsedProgram, sink: &mut dyn DiagnosticSink) -> Ch
     );
 
     let merged_ctx = build_merged_ctx(&parsed, &file_contexts);
-    let ast = into_ast(parsed);
+    let packages = into_packages(parsed);
     CheckedProgram {
-        ast,
         file_contexts,
         has_errors,
         merged_ctx,
+        packages,
     }
 }
 
@@ -296,30 +309,46 @@ fn build_merged_ctx(
     merged
 }
 
-/// Drain `parsed.files` in `parsed.order` into a flat `Vec<File>`,
-/// dropping per-file `source` and `diagnostics` (already emitted
-/// through the sink). Each `File` carries its own `package` and
-/// `path` for downstream identification.
-fn into_ast(mut parsed: ParsedProgram) -> Vec<File> {
-    let mut ast = Vec::with_capacity(parsed.order.len());
+/// Drain `parsed.files` in `parsed.order` into per-package
+/// [`CheckedPackage`] bundles, dropping per-file `source` and
+/// `diagnostics` (already emitted through the sink). Files belonging
+/// to the same package coalesce into the package's `ast`; packages
+/// appear in the order their first file shows up in `parsed.order`,
+/// preserving today's stdlib-first / project-second iteration.
+fn into_packages(mut parsed: ParsedProgram) -> Vec<CheckedPackage> {
+    let mut packages: Vec<CheckedPackage> = Vec::new();
+    let mut index_by_package: BTreeMap<String, usize> = BTreeMap::new();
     for path in &parsed.order {
-        if let Some(ParsedFile { ast: file_ast, .. }) = parsed.files.remove(path) {
-            ast.push(file_ast);
-        }
+        let Some(ParsedFile {
+            ast: file_ast,
+            package,
+            ..
+        }) = parsed.files.remove(path)
+        else {
+            continue;
+        };
+        let idx = *index_by_package.entry(package.clone()).or_insert_with(|| {
+            packages.push(CheckedPackage {
+                ast: Vec::new(),
+                package,
+            });
+            packages.len() - 1
+        });
+        packages[idx].ast.push(file_ast);
     }
-    ast
+    packages
 }
 
 /// Construct the empty-but-flagged sealed program for the parse-error
-/// and scan-error short-circuits. Carries the ASTs the parser produced
-/// (so callers that want a partial dump still have something to walk)
-/// but no contexts and no merged context.
+/// and scan-error short-circuits. Carries the per-package bundles the
+/// parser produced (so callers that want a partial dump still have
+/// something to walk) but no contexts and no merged context.
 fn seal_empty(parsed: ParsedProgram, has_errors: bool) -> CheckedProgram {
-    let ast = into_ast(parsed);
+    let packages = into_packages(parsed);
     CheckedProgram {
-        ast,
         file_contexts: BTreeMap::new(),
         has_errors,
         merged_ctx: TypeContext::new(),
+        packages,
     }
 }

@@ -11,7 +11,7 @@ use std::{env, fs, mem, process};
 
 use expo_ast::ast::{Annotation, AnnotationValue, Diagnostic, File, ImplMember, Item};
 use expo_parser::{ParsedProgram, SourceFile};
-use expo_typecheck::{CheckedProgram, DiagnosticSink};
+use expo_typecheck::{CheckedPackage, CheckedProgram, DiagnosticSink};
 
 use crate::diagnostics::render_diagnostics;
 use crate::project::ProjectConfig;
@@ -95,7 +95,11 @@ pub fn build_from_sources(
     output: &str,
     options: BuildOptions,
 ) {
-    let files_ast: Vec<&File> = checked.ast.iter().collect();
+    let files_ast: Vec<&File> = checked
+        .packages
+        .iter()
+        .flat_map(|pkg| pkg.ast.iter())
+        .collect();
 
     let app_name = sources.entry_package.clone();
     let entry_type = sources.entry_type.as_deref();
@@ -254,7 +258,7 @@ pub fn check_single_file(entry_path: &Path, color: bool, emit_ast: bool) -> bool
     let parsed = expo_parser::parse_program(source_files);
     let checked = typecheck_sources(parsed, color);
     if emit_ast {
-        emit_checked_ast(&checked.ast);
+        emit_checked_ast(&checked.packages);
     }
     checked.has_errors
 }
@@ -279,7 +283,7 @@ pub fn check_project(
     let parsed = expo_parser::parse_program(source_files);
     let checked = typecheck_sources(parsed, color);
     if emit_ast {
-        emit_checked_ast(&checked.ast);
+        emit_checked_ast(&checked.packages);
     }
     checked.has_errors
 }
@@ -288,9 +292,10 @@ pub fn check_project(
 /// dump, preceded by a `// === <path> ===` header. Used by `expo check
 /// --emit-ast`. Pretty-Debug is intentional for now; a proper S-expression
 /// printer is a separate slice (see `design/COMPILER-NORTHSTAR.md`
-/// "Per-phase debug emitters").
-fn emit_checked_ast(files: &[File]) {
-    for file in files {
+/// "Per-phase debug emitters"). Iterates package-by-package, files in
+/// per-package order, matching the original `ParsedProgram.order` walk.
+fn emit_checked_ast(packages: &[CheckedPackage]) {
+    for file in packages.iter().flat_map(|pkg| pkg.ast.iter()) {
         let display = file
             .path
             .as_deref()
