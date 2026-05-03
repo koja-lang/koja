@@ -1,49 +1,72 @@
 //! Source set resolution.
 //!
 //! Two resolution modes:
-//! - **Single-file** ([`resolve_sources`]): parse one entry file into a
-//!   single-file source set
+//! - **Single-file** ([`resolve_sources`]): one entry file
 //! - **Project** ([`resolve_project_sources`]): uses [`ProjectConfig`] to scan
 //!   directories for `.expo` files, building a flat namespace with stdlib
 //!   auto-imported
+//!
+//! Resolution is parse-free: each resolver returns a [`SourceSet`] of
+//! build-config metadata (entry, deps, target hints) plus a `Vec<SourceFile>`
+//! of unparsed file bundles. The driver pipeline feeds the file vec to
+//! [`expo_parser::parse_program`] as its own discrete step.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use expo_ast::ast::File;
+use expo_parser::SourceFile;
 
 use crate::project::{self, ProjectConfig};
 
-/// A single resolved file: its source text, parsed AST, and any parse errors.
-pub struct ResolvedFile {
-    pub name: String,
-    pub path: PathBuf,
-    pub source: String,
-    pub ast: File,
-    pub errors: Vec<expo_ast::ast::Diagnostic>,
-}
-
-/// All files visible to one build: stdlib + project files + dep packages.
+/// Build-config metadata for a single build.
+///
+/// Files live alongside in a `Vec<SourceFile>` returned by each
+/// resolver; downstream stages thread them through
+/// [`expo_parser::parse_program`] into a `ParsedProgram`. `SourceSet`
+/// itself only carries what the driver needs to keep around for
+/// codegen / linking after typecheck consumes the parsed program.
 pub struct SourceSet {
-    pub entry: String,
-    pub files: HashMap<String, ResolvedFile>,
-    /// File FQNs in processing order (stdlib first, then project files).
-    pub order: Vec<String>,
     /// Package names loaded as dependencies (e.g. "json", "http").
     pub dep_packages: Vec<String>,
+    /// Path of the entry file (the one whose `fn main` / type entry
+    /// drives the program). Empty until the test harness pipeline
+    /// fills it in for `expo test`.
+    pub entry: PathBuf,
+    /// Package name the entry belongs to. Used as the executable's
+    /// app name. Empty until set alongside `entry`.
+    pub entry_package: String,
+    /// Source text of the entry file, captured at resolve time so
+    /// codegen-failure rendering (which fires after `ParsedProgram` is
+    /// consumed by typecheck) can still render inline span context
+    /// without re-borrowing the parsed program. The test-harness path
+    /// fills this in alongside `entry` when it injects the synthetic
+    /// `__expo_test_main__` source.
+    pub entry_source: String,
     /// When the entry is a PascalCase type name (Process entry mode), this
     /// holds the type name (e.g. `"App"`). `None` for legacy `fn main` mode.
     pub entry_type: Option<String>,
+}
+
+impl SourceSet {
+    fn new() -> Self {
+        SourceSet {
+            dep_packages: Vec::new(),
+            entry: PathBuf::new(),
+            entry_package: String::new(),
+            entry_source: String::new(),
+            entry_type: None,
+        }
+    }
 }
 
 // =============================================================================
 // Single-file resolution
 // =============================================================================
 
-/// Builds a [`SourceSet`] containing just the entry file.
-pub fn resolve_sources(entry_path: &Path) -> Result<SourceSet, String> {
-    let entry_name = entry_path
+/// Builds a [`SourceSet`] + single-element file vector for one entry file.
+pub fn resolve_sources(entry_path: &Path) -> Result<(SourceSet, Vec<SourceFile>), String> {
+    let entry_stem = entry_path
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or("invalid entry file name")?
@@ -51,46 +74,34 @@ pub fn resolve_sources(entry_path: &Path) -> Result<SourceSet, String> {
 
     let source = fs::read_to_string(entry_path)
         .map_err(|e| format!("error reading {}: {e}", entry_path.display()))?;
-    let parse_result = expo_parser::parse(&source);
-    let mut ast = parse_result.ast;
-    ast.path = Some(entry_path.to_path_buf());
 
-    let mut sources = SourceSet {
-        entry: entry_name.clone(),
-        files: HashMap::new(),
-        order: Vec::new(),
-        dep_packages: Vec::new(),
-        entry_type: None,
-    };
+    let mut sources = SourceSet::new();
+    sources.entry = entry_path.to_path_buf();
+    sources.entry_package = entry_stem.clone();
+    sources.entry_source = source.clone();
 
-    sources.order.push(entry_name.clone());
-    sources.files.insert(
-        entry_name.clone(),
-        ResolvedFile {
-            name: entry_name,
-            path: entry_path.to_path_buf(),
-            source,
-            ast,
-            errors: parse_result.errors,
-        },
-    );
+    let source_files = vec![SourceFile {
+        package: entry_stem,
+        path: entry_path.to_path_buf(),
+        source,
+    }];
 
-    Ok(sources)
+    Ok((sources, source_files))
 }
 
 // =============================================================================
 // Project-mode resolution
 // =============================================================================
 
-/// Builds a [`SourceSet`] for a project with `expo.toml`.
+/// Builds a [`SourceSet`] + file vector for a project with `expo.toml`.
 ///
-/// Scans all `src` directories for `.expo` files and adds them to the source
-/// set. Stdlib files are inserted first. No import-following or topological
-/// sorting -- all project files form a flat namespace.
+/// Scans all `src` directories for `.expo` files. Stdlib files are inserted
+/// first. No import-following or topological sorting -- all project files
+/// form a flat namespace.
 pub fn resolve_project_sources(
     config: &ProjectConfig,
     project_root: &Path,
-) -> Result<SourceSet, String> {
+) -> Result<(SourceSet, Vec<SourceFile>), String> {
     let src_roots: Vec<PathBuf> = config.src.iter().map(|s| project_root.join(s)).collect();
 
     let entry = config
@@ -100,78 +111,85 @@ pub fn resolve_project_sources(
 
     let is_type_entry = config.entry_type_name().is_some();
 
-    let entry_fqn = if is_type_entry {
-        format!("{}.src", config.name)
-    } else {
-        format!("{}.{}", config.name, entry)
-    };
+    let mut sources = SourceSet::new();
+    sources.entry_package = config.name.clone();
+    sources.entry_type = config.entry_type_name().map(|s| s.to_string());
 
-    let mut sources = SourceSet {
-        entry: entry_fqn.clone(),
-        files: HashMap::new(),
-        order: Vec::new(),
-        dep_packages: Vec::new(),
-        entry_type: config.entry_type_name().map(|s| s.to_string()),
-    };
+    let mut source_files: Vec<SourceFile> = Vec::new();
 
     if config.name != "std" {
-        insert_stdlib(&mut sources);
+        insert_stdlib(&mut source_files, Some(&config.name));
     }
-    scan_directories(&config.name, &src_roots, &mut sources)?;
-    resolve_dependencies(config, project_root, &mut sources)?;
+    scan_directories(&config.name, &src_roots, &mut source_files)?;
+    resolve_dependencies(config, project_root, &mut sources, &mut source_files)?;
 
-    let project_prefix = format!("{}.", config.name);
-    if is_type_entry {
-        if !sources
-            .order
+    let entry_path = if is_type_entry {
+        let preferred = src_roots
             .iter()
-            .any(|n| n.starts_with(&project_prefix) || n == &config.name)
-        {
-            return Err("no source files found in src directories".to_string());
-        }
-        if !sources.files.contains_key(&entry_fqn) {
-            let first_project = sources
-                .order
+            .map(|r| r.join("src.expo"))
+            .find(|p| source_files.iter().any(|f| &f.path == p));
+        match preferred {
+            Some(p) => p,
+            None => source_files
                 .iter()
-                .find(|n| n.starts_with(&project_prefix) || *n == &config.name)
-                .cloned();
-            if let Some(name) = first_project {
-                sources.entry = name;
-            }
+                .find(|f| f.package == config.name)
+                .map(|f| f.path.clone())
+                .ok_or_else(|| "no source files found in src directories".to_string())?,
         }
-    } else if !sources.files.contains_key(&entry_fqn) {
-        return Err(format!("entry file `{entry}` not found in src directories"));
-    }
+    } else {
+        let candidates: Vec<PathBuf> = src_roots
+            .iter()
+            .map(|r| r.join(format!("{entry}.expo")))
+            .collect();
+        candidates
+            .into_iter()
+            .find(|p| source_files.iter().any(|f| &f.path == p))
+            .ok_or_else(|| format!("entry file `{entry}` not found in src directories"))?
+    };
+    sources.entry_source = source_files
+        .iter()
+        .find(|f| f.path == entry_path)
+        .map(|f| f.source.clone())
+        .unwrap_or_default();
+    sources.entry = entry_path;
 
-    Ok(sources)
+    Ok((sources, source_files))
 }
 
-/// Parses all embedded stdlib files and inserts them into the source set.
-pub fn insert_stdlib(sources: &mut SourceSet) {
+/// Inserts every embedded stdlib source file into `source_files`, with
+/// synthetic paths like `<std.io>` so they're stably keyed even though
+/// they have no on-disk location. The package is derived from the
+/// leading segment of the source name, so e.g. `<json.StringBuilder>`
+/// joins the `json` package alongside the auto-imported `std` package.
+///
+/// `skip_package` lets a project that *is* a stdlib package (e.g.
+/// building or testing `lib/json`) bypass loading its own embedded
+/// snapshot, so the local on-disk files become the authority instead
+/// of double-defining every type.
+pub fn insert_stdlib(source_files: &mut Vec<SourceFile>, skip_package: Option<&str>) {
     for &(name, source) in expo_stdlib::SOURCES {
-        let parse_result = expo_parser::parse(source);
-        sources.order.push(name.to_string());
-        sources.files.insert(
-            name.to_string(),
-            ResolvedFile {
-                name: name.to_string(),
-                path: PathBuf::from(format!("<{name}>")),
-                source: source.to_string(),
-                ast: parse_result.ast,
-                errors: parse_result.errors,
-            },
-        );
+        let package = name
+            .split_once('.')
+            .map_or(name, |(pkg, _)| pkg)
+            .to_string();
+        if Some(package.as_str()) == skip_package {
+            continue;
+        }
+        source_files.push(SourceFile {
+            package,
+            path: PathBuf::from(format!("<{name}>")),
+            source: source.to_string(),
+        });
     }
 }
 
-/// Scans directories for `.expo` files and adds each as a file to the source
-/// set. The fully qualified name is `{project_name}.{relative_path}` where
-/// `relative_path` is the file path relative to the src root with `.expo`
-/// stripped and `/` replaced by `.`.
+/// Scans directories for `.expo` files and adds each as a [`SourceFile`].
+/// Files already present in `source_files` (matched by `path`) are skipped,
+/// so overlapping roots / repeat scans don't double-count.
 fn scan_directories(
     project_name: &str,
     roots: &[PathBuf],
-    sources: &mut SourceSet,
+    source_files: &mut Vec<SourceFile>,
 ) -> Result<(), String> {
     for root in roots {
         if !root.is_dir() {
@@ -179,42 +197,22 @@ fn scan_directories(
         }
         let files = collect_expo_files_recursive(root);
         for file_path in files {
-            let relative_fqn = file_path
-                .strip_prefix(root)
-                .unwrap_or(&file_path)
-                .with_extension("")
-                .components()
-                .filter_map(|c| c.as_os_str().to_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let fqn = format!("{project_name}.{relative_fqn}");
-            if sources.files.contains_key(&fqn) {
+            if source_files.iter().any(|f| f.path == file_path) {
                 continue;
             }
-
             let source = fs::read_to_string(&file_path)
                 .map_err(|e| format!("error reading {}: {e}", file_path.display()))?;
-            let parse_result = expo_parser::parse(&source);
-            let mut ast = parse_result.ast;
-            ast.path = Some(file_path.clone());
-
-            sources.order.push(fqn.clone());
-            sources.files.insert(
-                fqn,
-                ResolvedFile {
-                    name: format!("{project_name}.{relative_fqn}"),
-                    path: file_path,
-                    source,
-                    ast,
-                    errors: parse_result.errors,
-                },
-            );
+            source_files.push(SourceFile {
+                package: project_name.to_string(),
+                path: file_path,
+                source,
+            });
         }
     }
     Ok(())
 }
 
-/// Builds a [`SourceSet`] for running tests.
+/// Builds a [`SourceSet`] + file vector for running tests.
 ///
 /// Like [`resolve_project_sources`], but also scans `test` directories and
 /// includes all source + test files in the source set. The project's entry
@@ -224,41 +222,36 @@ fn scan_directories(
 pub fn resolve_test_project_sources(
     config: &ProjectConfig,
     project_root: &Path,
-) -> Result<SourceSet, String> {
+) -> Result<(SourceSet, Vec<SourceFile>), String> {
     let src_roots: Vec<PathBuf> = config.src.iter().map(|s| project_root.join(s)).collect();
     let test_roots: Vec<PathBuf> = config.test.iter().map(|s| project_root.join(s)).collect();
 
     let all_roots: Vec<PathBuf> = src_roots.iter().chain(test_roots.iter()).cloned().collect();
 
-    let mut sources = SourceSet {
-        entry: String::new(),
-        files: HashMap::new(),
-        order: Vec::new(),
-        dep_packages: Vec::new(),
-        entry_type: None,
-    };
+    let mut sources = SourceSet::new();
+    let mut source_files: Vec<SourceFile> = Vec::new();
 
     if config.name != "std" {
-        insert_stdlib(&mut sources);
+        insert_stdlib(&mut source_files, Some(&config.name));
     }
-    scan_directories(&config.name, &all_roots, &mut sources)?;
-    resolve_dependencies(config, project_root, &mut sources)?;
+    scan_directories(&config.name, &all_roots, &mut source_files)?;
+    resolve_dependencies(config, project_root, &mut sources, &mut source_files)?;
 
     if let Some(ref entry) = config.entry
         && config.entry_type_name().is_none()
     {
-        let entry_fqn = format!("{}.{}", config.name, entry);
-        if let Some(pos) = sources.order.iter().position(|n| n == &entry_fqn) {
-            sources.order.remove(pos);
-        }
-        sources.files.remove(&entry_fqn);
+        let entry_paths: Vec<PathBuf> = src_roots
+            .iter()
+            .map(|r| r.join(format!("{entry}.expo")))
+            .collect();
+        source_files.retain(|f| !entry_paths.iter().any(|p| p == &f.path));
     }
 
-    Ok(sources)
+    Ok((sources, source_files))
 }
 
 /// Scans each dependency declared in `[dependencies]` and adds its source
-/// files to the source set. The dep's entry file is skipped to avoid
+/// files to the file vector. The dep's entry file is skipped to avoid
 /// `fn main` conflicts with the consuming project.
 ///
 /// Enforces the duplicate-package-name rule: every project implicitly imports
@@ -270,6 +263,7 @@ fn resolve_dependencies(
     config: &ProjectConfig,
     project_root: &Path,
     sources: &mut SourceSet,
+    source_files: &mut Vec<SourceFile>,
 ) -> Result<(), String> {
     let mut seen_pkgs: BTreeSet<String> = BTreeSet::new();
     seen_pkgs.insert(config.name.clone());
@@ -301,15 +295,15 @@ fn resolve_dependencies(
         }
 
         let dep_src_roots: Vec<PathBuf> = dep_config.src.iter().map(|s| dep_path.join(s)).collect();
-        scan_directories(&dep_config.name, &dep_src_roots, sources)?;
+        scan_directories(&dep_config.name, &dep_src_roots, source_files)?;
         sources.dep_packages.push(dep_config.name.clone());
 
         if let Some(ref entry) = dep_config.entry {
-            let entry_fqn = format!("{}.{}", dep_config.name, entry);
-            if let Some(pos) = sources.order.iter().position(|n| n == &entry_fqn) {
-                sources.order.remove(pos);
-            }
-            sources.files.remove(&entry_fqn);
+            let entry_paths: Vec<PathBuf> = dep_src_roots
+                .iter()
+                .map(|r| r.join(format!("{entry}.expo")))
+                .collect();
+            source_files.retain(|f| !entry_paths.iter().any(|p| p == &f.path));
         }
     }
     Ok(())

@@ -21,6 +21,7 @@ mod fn_state;
 pub mod identity;
 pub mod lower;
 pub mod ownership;
+pub mod package;
 pub mod program;
 pub mod resolved;
 mod type_layouts;
@@ -37,6 +38,7 @@ pub use fn_state::FnLowerState;
 pub use identity::{FunctionIdentifier, MonomorphizedTypeIdentifier, VariantIdentifier};
 pub use lower::Lowerer;
 pub use ownership::Ownership;
+pub use package::{IRPackage, lower_program};
 pub use program::{
     ExternAbi, ExternAttrs, IRConstant, IREnum, IRFunction, IRFunctionKind, IRFunctionMeta,
     IRParam, IRProgram, IRStruct, IRStructKind, ProgramInvariantError,

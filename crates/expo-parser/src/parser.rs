@@ -223,10 +223,11 @@ impl Parser {
         }
 
         File {
-            items,
             comments: self.comments.clone(),
-            span: self.span_from(start),
+            items,
+            package: String::new(),
             path: None,
+            span: self.span_from(start),
         }
     }
 

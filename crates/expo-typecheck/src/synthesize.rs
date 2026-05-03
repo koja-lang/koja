@@ -37,6 +37,7 @@ use expo_ast::ast::{
     Function, ImplBlock, ImplMember, Item, MatchArm, Param, PassMode, Pattern, Statement,
     StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
+use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
 
 const DEBUG_PROTOCOL: &str = "Debug";
@@ -270,6 +271,7 @@ fn ident_expr(name: &str, span: Span) -> Expr {
     Expr::new(
         ExprKind::Ident {
             name: name.to_string(),
+            resolution: Resolution::Unresolved,
         },
         span,
     )
@@ -484,6 +486,7 @@ fn binding_format_part(name: &str, ty: &TypeExpr, span: Span) -> StringPart {
     let ident = Expr::new(
         ExprKind::Ident {
             name: name.to_string(),
+            resolution: Resolution::Unresolved,
         },
         span,
     );

@@ -811,7 +811,7 @@ fn collect_bindings_inner(pat: &Pattern, out: &mut Vec<(String, Span)>) {
 
 /// Extracts binding identifiers from binary segment value expressions.
 fn collect_bindings_inner_expr(expr: &Expr, out: &mut Vec<(String, Span)>) {
-    if let ExprKind::Ident { name } = &expr.kind
+    if let ExprKind::Ident { name, .. } = &expr.kind
         && name != "_"
     {
         out.push((name.clone(), expr.span));

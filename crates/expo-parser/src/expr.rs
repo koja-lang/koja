@@ -1,4 +1,5 @@
 use expo_ast::ast::*;
+use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
 use expo_ast::token::TokenKind;
 
@@ -289,7 +290,13 @@ impl Parser {
             TokenKind::Ident(name) => {
                 let start = self.current_span();
                 self.advance();
-                Expr::new(ExprKind::Ident { name }, self.span_from(start))
+                Expr::new(
+                    ExprKind::Ident {
+                        name,
+                        resolution: Resolution::Unresolved,
+                    },
+                    self.span_from(start),
+                )
             }
 
             TokenKind::TypeIdent(_) => self.parse_type_construction(),

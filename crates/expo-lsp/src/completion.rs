@@ -81,7 +81,7 @@ fn resolve_dot_type(receiver: &expo_ast::ast::Expr, ctx: &TypeContext) -> (Optio
         }
     }
 
-    if let ExprKind::Ident { name } = &receiver.kind
+    if let ExprKind::Ident { name, .. } = &receiver.kind
         && (ctx.is_struct(name) || ctx.is_enum(name))
     {
         return (Some(name.clone()), true);

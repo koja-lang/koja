@@ -6,6 +6,8 @@ mod cycle;
 mod env;
 mod expr;
 mod pattern;
+mod program;
+pub mod registry;
 pub mod resolve;
 mod stmt;
 mod synthesize;
@@ -18,7 +20,9 @@ use context::TypeContext;
 use expo_ast::ast::File;
 
 pub use aliases::resolve_file_aliases;
-pub use collect::{GlobalNames, collect_all_names};
+pub use collect::{GlobalNames, collect_all_names, scan_globals};
+pub use program::{CheckedPackage, CheckedProgram, DiagnosticSink, check_program};
+pub use registry::{GlobalEntry, GlobalRegistry};
 pub use types::{Package, fqn_to_package, package_for_path, package_from_str};
 
 /// Runs collection and type-checking in one step, returning a populated context.
@@ -134,6 +138,152 @@ mod tests {
 
     fn errors(ctx: &TypeContext) -> Vec<&str> {
         ctx.diagnostics.iter().map(|d| d.message.as_str()).collect()
+    }
+
+    // ---- GlobalRegistry ----
+
+    #[test]
+    fn registry_collects_top_level_decls() {
+        use expo_ast::identifier::Identifier;
+
+        let ctx = check_source(&dedent(
+            r#"
+            struct User
+              name: String
+            end
+
+            enum Color
+              Red
+              Green
+            end
+
+            fn greet(u: User) -> String
+              u.name
+            end
+        "#,
+        ));
+        assert!(errors(&ctx).is_empty(), "errors: {:?}", errors(&ctx));
+
+        let pkg = "__test__";
+        let user_id = Identifier::new(pkg, vec!["User".to_string()]);
+        let color_id = Identifier::new(pkg, vec!["Color".to_string()]);
+        let greet_id = Identifier::new(pkg, vec!["greet".to_string()]);
+        assert!(matches!(
+            ctx.registry.get(&user_id),
+            Some(GlobalEntry::Struct { .. })
+        ));
+        assert!(matches!(
+            ctx.registry.get(&color_id),
+            Some(GlobalEntry::Enum { .. })
+        ));
+        assert!(matches!(
+            ctx.registry.get(&greet_id),
+            Some(GlobalEntry::Function { .. })
+        ));
+        let in_pkg: Vec<_> = ctx.registry.iter_in_package(pkg).collect();
+        assert_eq!(in_pkg.len(), 3);
+    }
+
+    #[test]
+    fn registry_reports_struct_enum_collision() {
+        let ctx = check_source(&dedent(
+            r#"
+            struct Foo
+              x: Int
+            end
+
+            enum Foo
+              A
+              B
+            end
+        "#,
+        ));
+        assert!(
+            errors(&ctx)
+                .iter()
+                .any(|e| e.contains("`Foo` is already defined")),
+            "expected duplicate-definition error, got: {:?}",
+            errors(&ctx)
+        );
+    }
+
+    #[test]
+    fn scan_globals_registers_all_top_level_kinds() {
+        use expo_ast::identifier::Identifier;
+        use registry::GlobalRegistry;
+
+        let parse_result = expo_parser::parse(&dedent(
+            r#"
+            struct User
+              name: String
+            end
+
+            enum Color
+              Red
+            end
+
+            protocol Greet
+              fn greet -> String
+            end
+
+            fn main
+              42
+            end
+        "#,
+        ));
+        let mut registry = GlobalRegistry::new();
+        let diagnostics = collect::scan_globals(&parse_result.ast, "alpha", &mut registry);
+        assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+        assert_eq!(registry.len(), 4);
+        assert!(matches!(
+            registry.get(&Identifier::new("alpha", vec!["User".to_string()])),
+            Some(GlobalEntry::Struct { .. })
+        ));
+        assert!(matches!(
+            registry.get(&Identifier::new("alpha", vec!["Color".to_string()])),
+            Some(GlobalEntry::Enum { .. })
+        ));
+        assert!(matches!(
+            registry.get(&Identifier::new("alpha", vec!["Greet".to_string()])),
+            Some(GlobalEntry::Protocol { .. })
+        ));
+        assert!(matches!(
+            registry.get(&Identifier::new("alpha", vec!["main".to_string()])),
+            Some(GlobalEntry::Function { .. })
+        ));
+    }
+
+    #[test]
+    fn scan_globals_reports_duplicates_as_diagnostics() {
+        use registry::GlobalRegistry;
+
+        let parse_result = expo_parser::parse(&dedent(
+            r#"
+            struct Foo
+              x: Int
+            end
+
+            protocol Foo
+              fn ping
+            end
+        "#,
+        ));
+        let mut registry = GlobalRegistry::new();
+        let diagnostics = collect::scan_globals(&parse_result.ast, "alpha", &mut registry);
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("`Foo` is already defined"),
+            "unexpected message: {}",
+            diagnostics[0].message
+        );
+        assert!(
+            diagnostics[0]
+                .hint
+                .as_ref()
+                .is_some_and(|h| h.contains("previous struct definition")),
+            "missing or wrong hint: {:?}",
+            diagnostics[0].hint
+        );
     }
 
     #[test]

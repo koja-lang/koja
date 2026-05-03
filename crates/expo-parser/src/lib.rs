@@ -4,8 +4,10 @@ mod decl;
 mod expr;
 mod parser;
 mod pattern;
+mod program;
 mod stmt;
 mod types;
 
 pub use expo_ast::ast;
 pub use parser::{ParseResult, parse};
+pub use program::{ParsedFile, ParsedProgram, SourceFile, parse_file, parse_program};

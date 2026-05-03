@@ -15,7 +15,7 @@ impl<'a> Printer<'a> {
     pub(super) fn expr_to_doc(&mut self, expr: &Expr) -> Doc {
         match &expr.kind {
             ExprKind::Literal { value } => literal_to_doc(value),
-            ExprKind::Ident { name } => text(name.clone()),
+            ExprKind::Ident { name, .. } => text(name.clone()),
             ExprKind::Self_ => text("self"),
 
             ExprKind::Binary {

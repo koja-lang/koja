@@ -58,12 +58,12 @@ Definitions used throughout this doc.
   `IRFunction` to `IRProgram`. LLVM-free; idempotent.
 - **`IRPackage`.** A per-package fragment produced by source
   lowering. The unit of incremental cache.
-- **`TypeIdentifier`.** The single identifier type
-  (`{ package: Package, path: Vec<String> }`). Identifies any bound
+- **`Identifier`.** The single identifier type
+  (`{ package: String, path: Vec<String> }`). Identifies any bound
   thing in the program — types, functions, methods, fields,
   variants, locals, type parameters, anonymous closures.
 - **`Resolution`.** AST annotation type
-  (`enum Resolution { Global(TypeIdentifier) }`). Single-variant
+  (`enum Resolution { Global(Identifier), Unresolved }`). Single-variant
   today as compiler-checked migration prep for future variants
   (`Local(LocalId)`, etc.).
 
@@ -97,7 +97,7 @@ type checking, annotation, and sealing. There is no separate
 expo-typecheck:
   strip-cfg     -> remove @cfg-excluded nodes
   collect       -> register surviving top-level decls; assign
-                   TypeIdentifier
+                   Identifier
   synthesize    -> generate AST for default protocol impls (Debug,
                    etc.) for surviving types only
   resolve       -> walk all bodies (user + synthesized); populate
@@ -290,15 +290,9 @@ IR. They are not IR features and do not introduce any
 One identifier type:
 
 ```rust
-pub struct TypeIdentifier {
-    pub package: Package,
-    pub path: Vec<String>,  // lexical containment chain
-}
-
-pub enum Package {
-    Std,
-    Named(String),
-    Unresolved,  // present only during early pipeline stages
+pub struct Identifier {
+    package: String,
+    path: Vec<String>,  // lexical containment chain
 }
 ```
 
@@ -317,16 +311,17 @@ The path is the lexical containment chain. Examples:
 | Type param in a fn         | `["identity", "T"]`                         |
 
 Type args remain _separate_ from the identifier and compose at use
-sites: `List<Int>` is `(TypeIdentifier { package: Std, path:
+sites: `List<Int>` is `(Identifier { package: "std", path:
 ["List"] }, type_args: [Type::Int])`.
 
 AST annotation type:
 
 ```rust
 pub enum Resolution {
-    Global(TypeIdentifier),
+    #[default]
+    Unresolved,
+    Global(Identifier),
 }
-// AST annotation: Option<Resolution>
 ```
 
 Single-variant enum from day one. When a future memory optimization
@@ -350,7 +345,7 @@ cache key in it.
 
 #### Stable IDs across builds
 
-Satisfied by construction. `TypeIdentifier` paths are derived from
+Satisfied by construction. `Identifier` paths are derived from
 source positions (lexical containment + naming policy). Cross-
 package references stay valid across cache hits because they are
 content-addressed, not opaque-counter-allocated.
@@ -370,7 +365,7 @@ Not in a parallel side-table. Choices:
    can be computed from other annotations + the source, do not
    store it.
 2. No backend handles in the AST. Annotations point to typecheck-
-   layer concepts (`TypeIdentifier`, `Type`). Never `IRInstructionId`,
+   layer concepts (`Identifier`, `Type`). Never `IRInstructionId`,
    `LLVMValueRef`, etc.
 3. One annotation per decision kind per node.
 4. Typecheck writes; consumers read. Annotations are immutable
@@ -523,15 +518,15 @@ indices. Each consumer builds its own purpose-shaped lookups:
 `TypeContext` is _typecheck's own_ indices — its purpose-built
 lookup tables. It is not a privileged shared brain. Other
 consumers can ignore it and build their own indices keyed by the
-same `TypeIdentifier`s.
+same `Identifier`s.
 
 ### Entry points
 
 ```rust
 pub enum EntryPoint {
-    LegacyMain(TypeIdentifier),     // legacy fn main; going away
-    Process(TypeIdentifier),        // Process.run entry
-    Eval(TypeIdentifier),           // whole-file eval entry
+    LegacyMain(Identifier),     // legacy fn main; going away
+    Process(Identifier),        // Process.run entry
+    Eval(Identifier),           // whole-file eval entry
 }
 ```
 

@@ -1592,15 +1592,7 @@ pub fn compile(
     release: bool,
     app_name: &str,
 ) -> Result<(), Vec<Diagnostic>> {
-    compile_files(
-        &[file],
-        &[app_name],
-        type_ctx,
-        output_path,
-        release,
-        app_name,
-        None,
-    )
+    compile_files(&[file], type_ctx, output_path, release, app_name, None)
 }
 
 /// Wraps an error string into the `Vec<Diagnostic>` shape that `run_codegen`
@@ -1615,13 +1607,13 @@ fn codegen_error(message: String, span: Span) -> Vec<Diagnostic> {
     }]
 }
 
-/// Runs codegen for all files: register types, declare, define. `packages`
-/// is a parallel slice: `packages[i]` is the owning package of `files[i]`.
-/// Every entry must be a real, non-empty package name (the typecheck-side
+/// Runs codegen for all files: register types, declare, define. The
+/// owning package per file is read off `file.package` (populated by
+/// [`expo_parser::parse_file`] from `SourceFile.package`); every entry
+/// must be a real, non-empty package name (the typecheck-side
 /// `package_from_str` panics on `""`).
 fn run_codegen<'ctx>(
     files: &[&File],
-    packages: &[&str],
     type_ctx: &'ctx TypeContext,
     context: &'ctx Context,
     release: bool,
@@ -1658,7 +1650,6 @@ fn run_codegen<'ctx>(
 
     compiler.const_tables = populate_constants(
         files,
-        packages,
         &mut compiler.ir,
         compiler.type_ctx,
         &compiler.layouts,
@@ -1668,9 +1659,11 @@ fn run_codegen<'ctx>(
         .declare_constants()
         .map_err(|e| codegen_error(e, constants_span))?;
 
-    for (file, pkg) in files.iter().zip(packages.iter()) {
+    for file in files {
         compiler
-            .with_package(package_from_str(pkg), |c| c.declare_functions(file))
+            .with_package(package_from_str(&file.package), |c| {
+                c.declare_functions(file)
+            })
             .map_err(|e| codegen_error(e, file.span))?;
     }
 
@@ -1718,9 +1711,11 @@ fn run_codegen<'ctx>(
     // coercion passes have a single fixed integration point.
     expo_ir::elaborate_program(&mut compiler.ir).map_err(|e| codegen_error(e, entry_span))?;
 
-    for (file, pkg) in files.iter().zip(packages.iter()) {
+    for file in files {
         compiler
-            .with_package(package_from_str(pkg), |c| c.define_functions(file))
+            .with_package(package_from_str(&file.package), |c| {
+                c.define_functions(file)
+            })
             .map_err(|e| codegen_error(e, file.span))?;
     }
 
@@ -1734,7 +1729,7 @@ fn run_codegen<'ctx>(
             .map_err(|e| codegen_error(e, entry_span))?;
     }
 
-    populate_ir_blocks(&mut compiler, files, packages);
+    populate_ir_blocks(&mut compiler, files);
 
     // Verify the closure pass covered every generic instantiation the
     // codegen path had to backfill. Non-zero indicates a closure pass
@@ -1799,8 +1794,8 @@ fn drain_pending_ir_decls<'ctx>(compiler: &mut Compiler<'ctx>) -> Result<(), Str
 /// are left empty. Backends that walk blocks
 /// (e.g. [`crate::lower_files`]'s consumers) treat an empty `blocks`
 /// field as "unsupported" and surface a structured error.
-fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, files: &[&File], packages: &[&str]) {
-    let fn_packages = build_fn_package_map(files, packages);
+fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, files: &[&File]) {
+    let fn_packages = build_fn_package_map(files);
     let plans: Vec<LowerPlan> = compiler
         .ir
         .function_order
@@ -1843,13 +1838,10 @@ fn populate_ir_blocks<'ctx>(compiler: &mut Compiler<'ctx>, files: &[&File], pack
 /// `with_package` loop. Generic instantiations and synthesized bodies
 /// (closure pass, intrinsics, etc.) aren't in any file's items and
 /// fall through with no package — same as before this map existed.
-fn build_fn_package_map(
-    files: &[&File],
-    packages: &[&str],
-) -> HashMap<FunctionIdentifier, Package> {
+fn build_fn_package_map(files: &[&File]) -> HashMap<FunctionIdentifier, Package> {
     let mut map: HashMap<FunctionIdentifier, Package> = HashMap::new();
-    for (file, pkg_str) in files.iter().zip(packages.iter()) {
-        let pkg = package_from_str(pkg_str);
+    for file in files {
+        let pkg = package_from_str(&file.package);
         for item in &file.items {
             match item {
                 Item::Function(func) => {
@@ -2050,14 +2042,13 @@ fn store_ir_blocks(
 /// Compiles multiple Expo files into a single native object file. Registers
 /// types, declares all functions across files, then defines their bodies.
 ///
-/// `packages` is parallel to `files`: each entry is the owning package for
-/// the corresponding file. `"std"` is the stdlib (unqualified method
-/// symbols like `Int_hash`); any other value is a user package whose method
-/// symbols are prefixed (e.g. `alpha.Config_new`). Empty strings are
-/// rejected by the typecheck-side `package_from_str`.
+/// The owning package per file is read off `file.package` (populated by
+/// [`expo_parser::parse_file`] from `SourceFile.package`). `"std"` is the
+/// stdlib (unqualified method symbols like `Int_hash`); any other value is
+/// a user package whose method symbols are prefixed (e.g. `alpha.Config_new`).
+/// Empty strings are rejected by the typecheck-side `package_from_str`.
 pub fn compile_files(
     files: &[&File],
-    packages: &[&str],
     type_ctx: &TypeContext,
     output_path: &Path,
     release: bool,
@@ -2065,9 +2056,7 @@ pub fn compile_files(
     entry_type: Option<&str>,
 ) -> Result<(), Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(
-        files, packages, type_ctx, &context, release, app_name, entry_type,
-    )?;
+    let compiler = run_codegen(files, type_ctx, &context, release, app_name, entry_type)?;
 
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
@@ -2098,18 +2087,15 @@ pub fn compile_files(
 /// Compiles multiple Expo files and returns the LLVM IR as a string.
 /// Skips verification so IR can be inspected even when it contains errors.
 ///
-/// See [`compile_files`] for the `packages` parameter semantics.
+/// See [`compile_files`] for the per-file package semantics.
 pub fn emit_llvm_ir(
     files: &[&File],
-    packages: &[&str],
     type_ctx: &TypeContext,
     app_name: &str,
     entry_type: Option<&str>,
 ) -> Result<String, Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(
-        files, packages, type_ctx, &context, false, app_name, entry_type,
-    )?;
+    let compiler = run_codegen(files, type_ctx, &context, false, app_name, entry_type)?;
     compiler.apply_unwind_attrs();
     compiler.debug.finalize();
     Ok(compiler.module.print_to_string().to_string())
@@ -2126,18 +2112,15 @@ pub fn emit_llvm_ir(
 /// [`compile_files`] would have built immediately before
 /// `emit_object_file`.
 ///
-/// See [`compile_files`] for the `packages` parameter semantics.
+/// See [`compile_files`] for the per-file package semantics.
 pub fn lower_files(
     files: &[&File],
-    packages: &[&str],
     type_ctx: &TypeContext,
     app_name: &str,
     entry_type: Option<&str>,
 ) -> Result<IRProgram, Vec<Diagnostic>> {
     let context = Context::create();
-    let compiler = run_codegen(
-        files, packages, type_ctx, &context, false, app_name, entry_type,
-    )?;
+    let compiler = run_codegen(files, type_ctx, &context, false, app_name, entry_type)?;
     Ok(compiler.ir)
 }
 

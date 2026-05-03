@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use crate::identifier::TypeIdentifier;
+use crate::identifier::{Resolution, TypeIdentifier};
 use crate::span::Span;
 use crate::types::Type;
 
@@ -129,12 +129,20 @@ pub enum Item {
 }
 
 /// The root AST node representing a single Expo source file.
+///
+/// `package` is the post-parse identity that flows downstream through
+/// typecheck and codegen; it's set by [`expo_parser::parse_file`] from
+/// the originating `SourceFile.package`. Callers that go through the
+/// bare-string [`expo_parser::parse`] entry point (REPL, formatter,
+/// proptests) leave it `String::new()` -- those paths never reach the
+/// package-scoped passes that read it.
 #[derive(Debug, Clone)]
 pub struct File {
-    pub items: Vec<Item>,
     pub comments: Vec<Comment>,
-    pub span: Span,
+    pub items: Vec<Item>,
+    pub package: String,
     pub path: Option<PathBuf>,
+    pub span: Span,
 }
 
 /// The severity level of a compiler diagnostic.
@@ -528,7 +536,10 @@ pub enum ExprKind {
     /// A parenthesized grouping: `(expr)`.
     Group { expr: Box<Expr> },
     /// A variable reference: `x`, `my_var`.
-    Ident { name: String },
+    Ident {
+        name: String,
+        resolution: Resolution,
+    },
     /// An if/else expression: `if cond ... end`.
     If {
         condition: Box<Expr>,

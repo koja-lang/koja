@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use expo_ast::ast::*;
-use expo_ast::identifier::TypeIdentifier;
+use expo_ast::identifier::{Resolution, TypeIdentifier};
 use expo_ast::span::Span;
 
 use crate::check::{
@@ -114,7 +114,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
 
         ExprKind::Group { expr: inner, .. } => infer_expr(inner, ctx, ce),
 
-        ExprKind::Ident { name } => {
+        ExprKind::Ident { name, .. } => {
             if let Some(info) = ce.env.get(name) {
                 ce.check_not_moved(name, span, ctx);
                 ce.used_vars.insert(name.clone());
@@ -1380,6 +1380,7 @@ fn rewrite_qualified_static_receiver(receiver: &mut Expr, ctx: &TypeContext) {
     }
     receiver.kind = ExprKind::Ident {
         name: format!("{}.{}", type_path[0], variant),
+        resolution: Resolution::Unresolved,
     };
 }
 

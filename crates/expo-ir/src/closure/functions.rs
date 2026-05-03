@@ -112,7 +112,7 @@ fn collect_from_expr(
     let ExprKind::Call { callee, args } = &expr.kind else {
         return;
     };
-    let ExprKind::Ident { name } = &callee.kind else {
+    let ExprKind::Ident { name, .. } = &callee.kind else {
         return;
     };
     if !generic_fn_asts.contains_key(name) {

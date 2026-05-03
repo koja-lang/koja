@@ -7,6 +7,4 @@ version.workspace = true
 
 [dependencies]
 expo-ast = { path = "../expo-ast" }
-
-[dev-dependencies]
 expo-parser = { path = "../expo-parser" }
