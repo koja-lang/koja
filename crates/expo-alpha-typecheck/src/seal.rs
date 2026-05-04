@@ -60,6 +60,10 @@ fn seal_statement(stmt: &Statement) {
 }
 
 fn seal_expr(expr: &Expr) {
+    // Exception for the callee position of a `Call`: function names
+    // are not first-class values yet, so the outer callee
+    // `Expr.resolution` deliberately stays `Unresolved`. Every other
+    // position must carry a fully-resolved type.
     if !expr.resolution.is_resolved() {
         seal_panic("expression missing resolution", expr.span);
     }
@@ -67,6 +71,12 @@ fn seal_expr(expr: &Expr) {
         ExprKind::Binary { left, right, .. } => {
             seal_expr(left);
             seal_expr(right);
+        }
+        ExprKind::Call { callee, args } => {
+            seal_call_callee(callee);
+            for arg in args {
+                seal_expr(&arg.value);
+            }
         }
         ExprKind::Group { expr: inner } => seal_expr(inner),
         ExprKind::Ident { name, resolution } => {
@@ -86,6 +96,29 @@ fn seal_expr(expr: &Expr) {
             ),
             expr.span,
         ),
+    }
+}
+
+/// Seal the callee position of a `Call`. The outer `Expr.resolution`
+/// intentionally stays `Unresolved` here (function names aren't
+/// values yet) — what we check is that the inner `Ident` carries a
+/// `Global(_)` resolution so downstream IR lowering has a concrete
+/// target.
+fn seal_call_callee(callee: &Expr) {
+    let ExprKind::Ident { name, resolution } = &callee.kind else {
+        seal_panic(
+            &format!(
+                "call site has a non-identifier callee `{}` that passed typecheck",
+                expr_kind_label(&callee.kind),
+            ),
+            callee.span,
+        );
+    };
+    if matches!(resolution, Resolution::Unresolved) {
+        seal_panic(
+            &format!("callee `{name}` has Unresolved resolution after typecheck"),
+            callee.span,
+        );
     }
 }
 

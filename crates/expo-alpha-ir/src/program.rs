@@ -94,7 +94,7 @@ impl std::error::Error for LowerError {}
 pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRProgram, LowerError> {
     let mut packages = Vec::with_capacity(checked.packages.len());
     for pkg in &checked.packages {
-        packages.push(lower_package::lower_package(pkg));
+        packages.push(lower_package::lower_package(pkg, &checked.registry));
     }
 
     let program = merge::merge(packages, entry.clone());

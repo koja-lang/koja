@@ -4,6 +4,14 @@
 //! is already sealed by `expo-alpha-ir::lower_program`), then call
 //! [`Interpreter::run`] to execute the entry function and receive the
 //! returned [`Value`].
+//!
+//! Function calls chain through `execute_function`: each `Call`
+//! instruction evaluates its argument operands in the current frame,
+//! looks up the callee in the program, seeds a fresh frame with the
+//! callee's param `ValueId`s bound to the incoming arg values, and
+//! recurses. Stack overflow from pathological mutual recursion would
+//! propagate as a native Rust stack overflow — the POC does not cap
+//! call depth.
 
 use std::collections::BTreeMap;
 
@@ -28,33 +36,53 @@ impl Interpreter {
     /// produces (or `Value::Unit` if the entry returns nothing).
     pub fn run(&self) -> Result<Value, RuntimeError> {
         let entry = self.program.entry_function();
-        execute_function(entry)
+        execute_function(&self.program, entry, Vec::new())
     }
 }
 
-/// Run `function` to completion. POC scope guarantees a single basic
-/// block per function, so this loops until the terminator says so —
-/// branches land when control flow does.
-fn execute_function(function: &IRFunction) -> Result<Value, RuntimeError> {
+/// Run `function` to completion in a fresh frame, with `args`
+/// positionally bound to the callee's param `ValueId`s. POC scope
+/// guarantees a single basic block per function, so this runs the
+/// block and returns its terminator value — branches land when
+/// control flow does.
+fn execute_function(
+    program: &IRProgram,
+    function: &IRFunction,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    debug_assert_eq!(
+        function.params.len(),
+        args.len(),
+        "arity mismatch calling `{}`: {} params vs {} args (typecheck invariant)",
+        function.identifier,
+        function.params.len(),
+        args.len(),
+    );
     let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
+    for (param_id, value) in function.params.iter().zip(args.into_iter()) {
+        frame.insert(*param_id, value);
+    }
+
     let block = function
         .blocks
         .first()
         .expect("sealed IRFunction has at least one basic block");
-    execute_block(block, &mut frame)
+    execute_block(program, block, &mut frame)
 }
 
 fn execute_block(
+    program: &IRProgram,
     block: &IRBasicBlock,
     frame: &mut BTreeMap<ValueId, Value>,
 ) -> Result<Value, RuntimeError> {
     for instruction in &block.instructions {
-        execute_instruction(instruction, frame)?;
+        execute_instruction(program, instruction, frame)?;
     }
     follow_terminator(&block.terminator, frame)
 }
 
 fn execute_instruction(
+    program: &IRProgram,
     instruction: &IRInstruction,
     frame: &mut BTreeMap<ValueId, Value>,
 ) -> Result<(), RuntimeError> {
@@ -63,6 +91,21 @@ fn execute_instruction(
             let lhs_value = lookup(frame, *lhs)?;
             let rhs_value = lookup(frame, *rhs)?;
             let result = apply_binary_op(*op, lhs_value, rhs_value)?;
+            frame.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::Call { dest, callee, args } => {
+            let mut arg_values = Vec::with_capacity(args.len());
+            for arg in args {
+                arg_values.push(lookup(frame, *arg)?);
+            }
+            let callee_fn = program.function(callee).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: callee `{callee}` missing from IRProgram — \
+                     seal invariant violation",
+                )
+            });
+            let result = execute_function(program, callee_fn, arg_values)?;
             frame.insert(*dest, result);
             Ok(())
         }

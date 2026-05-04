@@ -21,10 +21,14 @@
 mod collect;
 mod labels;
 mod lift_script;
+mod lift_signatures;
 mod program;
 mod registry;
 mod resolve;
 mod seal;
 
 pub use program::{CheckFailure, CheckedPackage, CheckedProgram, check_program};
-pub use registry::{GlobalKind, GlobalRegistry, InsertOutcome, RegistryEntry, format_registry};
+pub use registry::{
+    FunctionSignature, GlobalKind, GlobalRegistry, InsertOutcome, RegistryEntry, ResolvedParam,
+    format_registry,
+};

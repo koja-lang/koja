@@ -15,27 +15,61 @@
 //! Ids are assigned sequentially (monotonic `u32` counter). This is an
 //! implementation detail; a future parallel-cache story will swap in
 //! content-addressable hashing without changing the public surface.
+//!
+//! # Function signatures
+//!
+//! Function signatures live inside the [`GlobalKind::Function`]
+//! variant as `Option<FunctionSignature>`. The option encodes the
+//! pipeline phase: `Function(None)` is the "collected but not yet
+//! lifted" state; `Function(Some(sig))` is the "lifted" state reached
+//! after `lift_signatures` runs. The variant-carried design makes
+//! illegal states unrepresentable: `Struct`/`Enum`/`Protocol` entries
+//! literally cannot carry a signature slot.
 
 use std::collections::HashMap;
 
-use expo_ast::identifier::{GlobalRegistryId, Identifier};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-/// What kind of declaration a registry entry points at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A single resolved parameter: the surface-syntax name plus its
+/// resolved type. Part of a [`FunctionSignature`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedParam {
+    pub name: String,
+    pub ty: ResolvedType,
+}
+
+/// A fully-resolved function signature: positional parameters plus
+/// return type. Stamped onto a [`GlobalKind::Function`] entry by the
+/// `lift_signatures` sub-pass.
+///
+/// Both params and return carry registry-backed [`ResolvedType`]s, so
+/// a signature stays valid as long as its referent entries exist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FunctionSignature {
+    pub params: Vec<ResolvedParam>,
+    pub return_type: ResolvedType,
+}
+
+/// What kind of declaration a registry entry points at. Function
+/// entries carry their signature inline (`None` until
+/// `lift_signatures` stamps it in). Other kinds grow their own
+/// per-variant metadata when features land (struct fields, enum
+/// variants, protocol methods, etc.).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalKind {
     Enum,
-    Function,
+    Function(Option<FunctionSignature>),
     Protocol,
     Struct,
 }
 
 impl GlobalKind {
     /// Human-readable kind label for diagnostics ("struct", "enum", ...).
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             GlobalKind::Enum => "enum",
-            GlobalKind::Function => "function",
+            GlobalKind::Function(_) => "function",
             GlobalKind::Protocol => "protocol",
             GlobalKind::Struct => "struct",
         }
@@ -106,8 +140,11 @@ impl GlobalRegistry {
         self.insert(identifier, GlobalKind::Enum, span)
     }
 
+    /// Register a function in the `Function(None)` state. The
+    /// signature is stamped in later by
+    /// [`Self::set_signature`] from the `lift_signatures` sub-pass.
     pub fn insert_function(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Function, span)
+        self.insert(identifier, GlobalKind::Function(None), span)
     }
 
     pub fn insert_protocol(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
@@ -143,6 +180,35 @@ impl GlobalRegistry {
             },
         );
         InsertOutcome::Fresh(id)
+    }
+
+    /// Stamp a resolved signature onto a function entry. Panics unless
+    /// the entry's kind is exactly `Function(None)` — wrong kind or
+    /// second set are compiler bugs in the sub-pass ordering.
+    pub fn set_signature(&mut self, id: GlobalRegistryId, signature: FunctionSignature) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!("set_signature on missing registry id {id} — collect invariant violation")
+        });
+        match &entry.kind {
+            GlobalKind::Function(None) => {
+                entry.kind = GlobalKind::Function(Some(signature));
+            }
+            GlobalKind::Function(Some(_)) => {
+                panic!(
+                    "set_signature called twice on `{}` — lift_signatures must stamp each \
+                     function exactly once",
+                    entry.identifier,
+                );
+            }
+            other => {
+                panic!(
+                    "set_signature called on non-function entry `{}` ({}) — \
+                     only Function entries carry signatures",
+                    entry.identifier,
+                    other.label(),
+                );
+            }
+        }
     }
 
     /// Forward lookup: dereference an id to its entry.
@@ -198,6 +264,10 @@ impl GlobalRegistry {
 /// (declaration order under sequential id assignment) so `<id>`
 /// references from the AST printer line up one-to-one with rows here.
 ///
+/// Function entries render their signature inline on the kind column
+/// as `fn (p1: Global.Int, p2: Global.Int) -> Global.Int`. Functions
+/// whose signature has not yet been lifted render as `fn <unlifted>`.
+///
 /// Always returns text that ends with `\n`. Empty registries render
 /// just the header line.
 pub fn format_registry(registry: &GlobalRegistry) -> String {
@@ -212,11 +282,58 @@ pub fn format_registry(registry: &GlobalRegistry) -> String {
         writeln!(
             out,
             "  {id} {} {} @{}",
-            entry.kind.label(),
+            format_kind(&entry.kind, registry),
             entry.identifier.qualified_name(),
             entry.span,
         )
         .expect("writing into a String cannot fail");
     }
     out
+}
+
+/// Render a [`GlobalKind`] for the registry sidecar. Function entries
+/// get their signature inlined so the reader can see resolved param /
+/// return types without chasing nested ids.
+fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
+    match kind {
+        GlobalKind::Enum => "enum".to_string(),
+        GlobalKind::Function(None) => "fn <unlifted>".to_string(),
+        GlobalKind::Function(Some(sig)) => format_signature(sig, registry),
+        GlobalKind::Protocol => "protocol".to_string(),
+        GlobalKind::Struct => "struct".to_string(),
+    }
+}
+
+fn format_signature(sig: &FunctionSignature, registry: &GlobalRegistry) -> String {
+    let params = sig
+        .params
+        .iter()
+        .map(|p| format!("{}: {}", p.name, format_resolved(&p.ty, registry)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "fn ({params}) -> {}",
+        format_resolved(&sig.return_type, registry),
+    )
+}
+
+fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
+    let head = match ty.resolution {
+        Resolution::Unresolved => "<unresolved>".to_string(),
+        Resolution::Global(id) => match registry.get(id) {
+            Some(entry) => entry.identifier.qualified_name(),
+            None => format!("<id {id}>"),
+        },
+    };
+    if ty.type_args.is_empty() {
+        head
+    } else {
+        let args = ty
+            .type_args
+            .iter()
+            .map(|arg| format_resolved(arg, registry))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{head}<{args}>")
+    }
 }

@@ -18,7 +18,7 @@ use expo_ast::ast::{Diagnostic, File};
 use expo_parser::{ParsedFile, ParsedProgram};
 
 use crate::registry::GlobalRegistry;
-use crate::{collect, lift_script, resolve, seal};
+use crate::{collect, lift_script, lift_signatures, resolve, seal};
 
 /// A package fragment of a [`CheckedProgram`]: the package name plus
 /// the set of sealed AST files that belong to it.
@@ -84,21 +84,28 @@ impl std::error::Error for CheckFailure {}
 ///    item. After this pass `file.body` is always `None`; downstream
 ///    passes see a uniform shape.
 /// 2. `collect` — register every top-level decl into the registry.
-///    Identifiers only; signatures stay at placeholders.
-/// 3. `resolve` — walk every body and populate `Resolution` +
+///    Identifiers only; function signatures land in the
+///    `Function(None)` state, waiting for `lift_signatures` to stamp
+///    them in.
+/// 3. `lift_signatures` — walk each function's signature, resolve
+///    its `TypeExpr` params + return into `ResolvedType`s, and
+///    upgrade its registry entry to `Function(Some(signature))`.
+///    This has to happen after `collect` (so cross-references
+///    resolve) and before `resolve` (so call sites can look up
+///    callee signatures).
+/// 4. `resolve` — walk every body and populate `Resolution` +
 ///    `Expr.resolution` (a [`expo_ast::identifier::ResolvedType`]
 ///    pointing into the registry).
-/// 4. `seal` — assert sealed-AST invariants (including the post-lift
+/// 5. `seal` — assert sealed-AST invariants (including the post-lift
 ///    `file.body.is_none()` invariant). Panics on violation.
 ///
 /// Future sub-passes land in this orchestration when the work they do
 /// becomes load-bearing — `strip_cfg` between `lift_script` and
-/// `collect` for `@cfg`-driven pruning, `synthesize` after `collect`
-/// for protocol defaults, `lift_signatures` between `synthesize` and
-/// `resolve` for cross-decl signature resolution, `check` between
-/// `resolve` and `seal` for compatibility validation beyond what
-/// `resolve` enforces inline, and `annotate` between `check` and
-/// `seal` for coercion emission. They're not in the pipeline yet
+/// `collect` for `@cfg`-driven pruning, `synthesize` between
+/// `collect` and `lift_signatures` for protocol defaults, `check`
+/// between `resolve` and `seal` for compatibility validation beyond
+/// what `resolve` enforces inline, and `annotate` between `check`
+/// and `seal` for coercion emission. They're not in the pipeline yet
 /// because the POC has nothing for them to do.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
@@ -125,9 +132,15 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         }
     }
 
+    for pkg in &packages {
+        for file in &pkg.files {
+            lift_signatures::lift_signatures(file, &pkg.package, &mut registry, &mut diagnostics);
+        }
+    }
+
     for pkg in &mut packages {
         for file in &mut pkg.files {
-            resolve::resolve_file(file, &registry, &mut diagnostics);
+            resolve::resolve_file(file, &pkg.package, &registry, &mut diagnostics);
         }
     }
 

@@ -13,7 +13,12 @@
 //! 3. Every function has at least one basic block.
 //! 4. Within each function: every value reference (instruction operand
 //!    or terminator value) points at a `ValueId` defined earlier in
-//!    the same function.
+//!    the same function. Parameter `ValueId`s are seeded into the
+//!    defined set before the first block, so body references to
+//!    params are valid without having a distinct "definition"
+//!    instruction.
+//! 5. Every `IRInstruction::Call`'s `callee` identifier resolves to a
+//!    function that actually exists somewhere in the `IRProgram`.
 
 use std::collections::BTreeSet;
 
@@ -33,6 +38,7 @@ pub(crate) fn seal_program(program: &IRProgram) {
     for pkg in &program.packages {
         seal_package(pkg);
     }
+    seal_calls(program);
 }
 
 fn seal_package(pkg: &IRPackage) {
@@ -54,7 +60,18 @@ fn seal_function(function: &IRFunction) {
             function.identifier,
         ));
     }
+    // Parameter `ValueId`s count as definitions for the purposes of
+    // downstream operand references. Seed them first so the rest of
+    // the block walk treats them as already-defined.
     let mut defined: BTreeSet<ValueId> = BTreeSet::new();
+    for param in &function.params {
+        if !defined.insert(*param) {
+            seal_panic(&format!(
+                "function `{}` lists duplicate parameter value `{param}`",
+                function.identifier,
+            ));
+        }
+    }
     for block in &function.blocks {
         seal_block(block, &function.identifier, &mut defined);
     }
@@ -80,6 +97,7 @@ fn seal_block(block: &IRBasicBlock, owner: &Identifier, defined: &mut BTreeSet<V
 fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
     match inst {
         IRInstruction::BinaryOp { lhs, rhs, .. } => vec![*lhs, *rhs],
+        IRInstruction::Call { args, .. } => args.clone(),
         IRInstruction::Const { .. } => vec![],
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
     }
@@ -96,6 +114,30 @@ fn require_defined(value: ValueId, owner: &Identifier, defined: &BTreeSet<ValueI
         seal_panic(&format!(
             "function `{owner}` references value `{value}` before it is defined",
         ));
+    }
+}
+
+/// Cross-function check: every `IRInstruction::Call` must name a
+/// callee that exists as a registered function in the IRProgram. Lower
+/// dereferences the callee id through the typecheck registry, so a
+/// missing target here would indicate either a registry / IRProgram
+/// drift or a genuine lowering bug — both compiler issues.
+fn seal_calls(program: &IRProgram) {
+    for pkg in &program.packages {
+        for (owner, function) in &pkg.functions {
+            for block in &function.blocks {
+                for inst in &block.instructions {
+                    if let IRInstruction::Call { callee, .. } = inst
+                        && program.function(callee).is_none()
+                    {
+                        seal_panic(&format!(
+                            "function `{owner}` calls `{callee}`, but that function is not \
+                             registered in the IRProgram",
+                        ));
+                    }
+                }
+            }
+        }
     }
 }
 
