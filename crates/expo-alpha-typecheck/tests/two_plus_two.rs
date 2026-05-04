@@ -64,8 +64,8 @@ fn fn_main_two_plus_two_typechecks_to_int() {
 
     let main_id = Identifier::new(PACKAGE, vec!["main".to_string()]);
     assert!(
-        checked.registry.get(&main_id).is_some(),
-        "registry is missing `{main_id}`; entries: {:?}",
+        checked.registry.lookup(&main_id).is_some(),
+        "registry is missing `{main_id}`; registry: {:?}",
         checked.registry,
     );
 

@@ -27,4 +27,4 @@ mod resolve;
 mod seal;
 
 pub use program::{CheckFailure, CheckedPackage, CheckedProgram, check_program};
-pub use registry::{GlobalEntry, GlobalRegistry};
+pub use registry::{GlobalKind, GlobalRegistry, InsertOutcome, RegistryEntry, format_registry};

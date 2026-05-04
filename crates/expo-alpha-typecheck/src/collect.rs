@@ -14,7 +14,7 @@ use expo_ast::ast::{Diagnostic, File, Function, Item};
 use expo_ast::identifier::Identifier;
 
 use crate::labels::{item_label, item_span};
-use crate::registry::GlobalRegistry;
+use crate::registry::{GlobalRegistry, InsertOutcome};
 
 pub(crate) fn collect_file(
     file: &File,
@@ -56,15 +56,18 @@ fn register_function(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let identifier = Identifier::new(package, vec![function.name.clone()]);
-    if let Some(existing) = registry.insert_function(identifier.clone(), function.span) {
-        diagnostics.push(Diagnostic::error_with_hint(
-            format!("`{identifier}` is already defined"),
-            format!(
-                "previous {} definition is at line {}",
-                existing.kind_label(),
-                existing.span().start.line
-            ),
-            function.span,
-        ));
+    match registry.insert_function(identifier.clone(), function.span) {
+        InsertOutcome::Fresh(_) => {}
+        InsertOutcome::Collision { existing } => {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("`{}` is already defined", existing.identifier),
+                format!(
+                    "previous {} definition is at line {}",
+                    existing.kind.label(),
+                    existing.span.start.line
+                ),
+                function.span,
+            ));
+        }
     }
 }

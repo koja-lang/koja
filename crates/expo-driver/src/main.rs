@@ -142,6 +142,15 @@ enum Command {
 /// alpha build-out.
 #[derive(Subcommand)]
 enum AlphaCommand {
+    /// Type-check a source file through the alpha pipeline without lowering or running it
+    Check {
+        /// Source file
+        file: String,
+
+        /// Print the type-checked AST to stdout instead of just OK/diagnostics
+        #[arg(long)]
+        emit_ast: bool,
+    },
     /// Run a source file through the alpha pipeline (POC scope: integer arithmetic only)
     Eval {
         /// Source file
@@ -161,6 +170,7 @@ fn main() {
 
     match cli.command {
         Command::Alpha { command } => match command {
+            AlphaCommand::Check { file, emit_ast } => alpha::cmd_check(file, emit_ast),
             AlphaCommand::Eval { file, entry } => alpha::cmd_eval(file, entry),
             AlphaCommand::Shell => alpha::cmd_shell(),
         },

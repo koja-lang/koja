@@ -1,22 +1,24 @@
-//! `expo alpha {eval,shell}` subcommand handlers.
+//! `expo alpha {check,eval,shell}` subcommand handlers.
 //!
 //! The `alpha` namespace hosts experimental subcommands that drive the
 //! alpha compiler pipeline (`expo-alpha-typecheck → expo-alpha-ir →
-//! expo-alpha-ir-eval`). Production users keep using `expo eval` /
-//! `expo shell` (the v1 path); `expo alpha *` lets us iterate on the
-//! alpha track end-to-end without touching the v1 surface.
+//! expo-alpha-ir-eval`). Production users keep using `expo check` /
+//! `expo eval` / `expo shell` (the v1 path); `expo alpha *` lets us
+//! iterate on the alpha track end-to-end without touching the v1
+//! surface.
 //!
-//! `cmd_eval` carries its own copy of the pipeline driver since it
-//! runs a single source file and has no REPL state to thread. The
-//! REPL itself lives in [`expo_alpha_shell`]; `cmd_shell` is just a
-//! thin entry point that hands control off to it. When the alpha
-//! shell grows file-input support both handlers will collapse into
-//! `expo_alpha_shell` and this module will retire alongside the v1
-//! `expo-shell` / `expo-ir-eval` crates.
+//! `cmd_check` and `cmd_eval` each carry their own copy of the pipeline
+//! driver since they run a single source file and have no REPL state
+//! to thread. The REPL itself lives in [`expo_alpha_shell`];
+//! `cmd_shell` is just a thin entry point that hands control off to
+//! it. When the alpha shell grows file-input support all three
+//! handlers will collapse into `expo_alpha_shell` and this module will
+//! retire alongside the v1 `expo-shell` / `expo-ir-eval` crates.
 //!
 //! POC scope today (mirrors `expo-alpha-typecheck` / `expo-alpha-ir`):
 //! integer literals, integer arithmetic (`+ - * / %`), parenthesized
-//! groups. Anything richer typecheck-errors with a precise diagnostic.
+//! groups, and the boolean/comparison/unary operators. Anything
+//! richer typecheck-errors with a precise diagnostic.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,10 +26,44 @@ use std::process;
 
 use expo_alpha_ir::lower_program;
 use expo_alpha_ir_eval::{Interpreter, Value};
-use expo_alpha_typecheck::{CheckFailure, check_program};
+use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::Identifier;
 use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
+
+/// `expo alpha check <file>` — parse and typecheck a single source
+/// file through the alpha pipeline, without lowering or running it.
+///
+/// Mirrors `expo check`'s contract: prints `<file>: OK` on success,
+/// or the collected parse/type diagnostics on failure (exit 1). When
+/// `emit_ast` is set, prints the sealed, resolved AST in
+/// [`expo_ast::format_file`]'s compact tree format instead of the OK
+/// line. The alpha pipeline is single-file today; a project-aware
+/// variant will come with `expo-alpha-shell` file-input support.
+pub fn cmd_check(file: String, emit_ast: bool) {
+    let path = Path::new(&file);
+    let source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(err) => {
+            eprintln!("error: cannot read `{}`: {err}", path.display());
+            process::exit(1);
+        }
+    };
+    let package = derive_package(path);
+    match run_check(source, &package, path.to_path_buf()) {
+        Ok(checked) => {
+            if emit_ast {
+                emit_checked_ast(&checked);
+            } else {
+                println!("{}: OK", path.display());
+            }
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            process::exit(1);
+        }
+    }
+}
 
 /// `expo alpha eval <file>` — run a single source file through the
 /// alpha pipeline and print the entry function's [`Value`].
@@ -95,6 +131,47 @@ fn run_pipeline(
     Interpreter::new(program)
         .run()
         .map_err(|err| err.to_string())
+}
+
+/// Parse + typecheck one source file. Returns the sealed
+/// [`CheckedProgram`] on success, or a formatted error string on
+/// parse/typecheck failure. Shares parse mode and package derivation
+/// with [`run_pipeline`] so `expo alpha check` and `expo alpha eval`
+/// see the same frontend shape.
+fn run_check(source: String, package: &str, path: PathBuf) -> Result<CheckedProgram, String> {
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: package.to_string(),
+            path,
+            source,
+        }],
+        ParseMode::Script,
+    );
+    check_program(parsed).map_err(format_check_failure)
+}
+
+/// Prints every file in the sealed program to stdout using
+/// [`expo_ast::format_file`], followed by the compact registry
+/// sidecar from [`expo_alpha_typecheck::format_registry`] so the ids
+/// that appear on AST reference sites are decodable without a
+/// separate lookup. Mirrors what `expo check --emit-ast` does for the
+/// v1 pipeline on the AST side; the registry sidecar is alpha-only.
+///
+/// A blank line separates the AST section(s) from the registry
+/// section, and successive files from each other.
+fn emit_checked_ast(checked: &CheckedProgram) {
+    if !checked.registry.is_empty() {
+        println!();
+        println!("{}", format_registry(&checked.registry));
+    }
+    let mut first = true;
+    for file in checked.packages.iter().flat_map(|pkg| pkg.files.iter()) {
+        if !first {
+            println!();
+        }
+        first = false;
+        print!("{}", expo_ast::format_file(file));
+    }
 }
 
 /// Derive the package name from the source file's stem. Falls back to

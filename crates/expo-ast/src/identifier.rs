@@ -101,16 +101,60 @@ impl fmt::Display for Identifier {
     }
 }
 
+/// Opaque handle into the alpha typecheck crate's `GlobalRegistry`.
+///
+/// Assigned by the registry at insertion time (sequential `u32`s in the
+/// current implementation). Callers treat it as opaque: they never
+/// synthesize one by hand and never reason about its numeric value.
+/// The constructor [`GlobalRegistryId::new`] is public so the registry
+/// crate can mint ids, but outside of the registry itself there should
+/// be no reason to call it.
+///
+/// The id's derivation is an implementation detail; a future parallel
+/// cache will swap sequential assignment for content-addressable
+/// hashing without changing this type's surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GlobalRegistryId(u32);
+
+impl GlobalRegistryId {
+    /// Wraps a raw `u32`. Intended for registry internals only.
+    pub fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw `u32` for serialization or debug rendering.
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Display for GlobalRegistryId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Resolution attached to an AST reference site by typecheck.
 ///
-/// Single-variant for resolved identifiers today (plus the `Unresolved`
-/// in-flight state). Adding a future variant -- e.g. `Local(LocalId)` --
-/// becomes a compiler-enforced migration thanks to exhaustiveness checks.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+/// `Global` carries a [`GlobalRegistryId`] handle into the typecheck
+/// crate's `GlobalRegistry`; dereferencing to the underlying
+/// [`Identifier`] goes through that registry. Storing a handle (rather
+/// than the full `Identifier`) keeps AST annotations small and lets the
+/// registry stay the single source of truth for what each id names.
+///
+/// `Unresolved` is the in-flight state before resolve runs. The seal
+/// contract asserts every reference site carries `Global(_)` once
+/// typecheck completes (subject to the carve-outs in
+/// [`COMPILER-NORTHSTAR.md`]).
+///
+/// Single-variant for resolved references today. Adding a future
+/// variant -- e.g. `Local(LocalId)` -- becomes a compiler-enforced
+/// migration thanks to exhaustiveness checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Resolution {
     #[default]
     Unresolved,
-    Global(Identifier),
+    Global(GlobalRegistryId),
 }
 
 impl Resolution {

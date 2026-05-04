@@ -1000,10 +1000,7 @@ fn enum_pattern_header(
 // -------------------------------------------------------------------
 
 fn format_span(span: Span) -> String {
-    format!(
-        "@{}:{}-{}:{}",
-        span.start.line, span.start.column, span.end.line, span.end.column,
-    )
+    format!("@{span}")
 }
 
 fn format_bin_op(op: BinOp) -> &'static str {
