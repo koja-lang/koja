@@ -29,4 +29,4 @@ mod types;
 pub use function::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator};
 pub use package::IRPackage;
 pub use program::{IRProgram, LowerError, lower_program};
-pub use types::{ConstValue, IRBinOp, IRType, ValueId};
+pub use types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};

@@ -4,7 +4,7 @@
 
 use expo_ast::identifier::Identifier;
 
-use crate::types::{ConstValue, IRBinOp, ValueId};
+use crate::types::{ConstValue, IRBinOp, IRUnaryOp, ValueId};
 
 /// A lowered function. Body is a list of basic blocks; `blocks[0]` is
 /// the entry block. The POC scope only ever emits a single block per
@@ -36,13 +36,21 @@ pub enum IRInstruction {
     },
     /// `dest = <constant>`.
     Const { dest: ValueId, value: ConstValue },
+    /// `dest = <op> operand`.
+    UnaryOp {
+        dest: ValueId,
+        op: IRUnaryOp,
+        operand: ValueId,
+    },
 }
 
 impl IRInstruction {
     /// The `ValueId` this instruction defines.
     pub fn dest(&self) -> ValueId {
         match self {
-            IRInstruction::BinaryOp { dest, .. } | IRInstruction::Const { dest, .. } => *dest,
+            IRInstruction::BinaryOp { dest, .. }
+            | IRInstruction::Const { dest, .. }
+            | IRInstruction::UnaryOp { dest, .. } => *dest,
         }
     }
 }

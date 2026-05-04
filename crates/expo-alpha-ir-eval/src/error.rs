@@ -6,7 +6,7 @@
 //! `ValueId`, missing entry point, etc.) is a seal violation upstream
 //! and panics through `expo_alpha_ir::seal`, never surfaces here.
 
-use expo_alpha_ir::{IRBinOp, ValueId};
+use expo_alpha_ir::{IRBinOp, IRUnaryOp, ValueId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeError {
@@ -14,9 +14,12 @@ pub enum RuntimeError {
     DivisionByZero { op: IRBinOp },
     /// Integer arithmetic produced a value outside the `i64` range.
     IntegerOverflow { lhs: i64, op: IRBinOp, rhs: i64 },
-    /// A binary operator received operands whose runtime types it
-    /// cannot combine. The POC eval only knows `Int op Int`.
+    /// A binary or unary operator received operands whose runtime
+    /// types it cannot combine.
     TypeMismatch { detail: String },
+    /// A unary operator produced a value outside the `i64` range
+    /// (in practice: negating `i64::MIN`).
+    UnaryIntegerOverflow { op: IRUnaryOp, operand: i64 },
     /// Catch-all for IR shapes the interpreter doesn't yet handle.
     Unsupported { detail: String },
     /// An operand referenced a `ValueId` not yet defined in the
@@ -35,6 +38,9 @@ impl std::fmt::Display for RuntimeError {
                 write!(f, "integer overflow: {lhs} {op:?} {rhs}")
             }
             RuntimeError::TypeMismatch { detail } => write!(f, "type mismatch: {detail}"),
+            RuntimeError::UnaryIntegerOverflow { op, operand } => {
+                write!(f, "integer overflow: {op:?} {operand}")
+            }
             RuntimeError::Unsupported { detail } => write!(f, "unsupported: {detail}"),
             RuntimeError::ValueUndefined { id } => {
                 write!(f, "undefined SSA value `{id}`")

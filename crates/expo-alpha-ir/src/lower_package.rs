@@ -6,18 +6,19 @@
 //! already be resolvable thanks to the upstream seal.
 //!
 //! POC scope: every fn body must lower to a single basic block holding
-//! `Const` / `BinaryOp` instructions and ending in `Return`. Anything
-//! richer panics until the corresponding feature lands.
+//! `Const` / `BinaryOp` / `UnaryOp` instructions and ending in
+//! `Return`. Anything richer panics until the corresponding feature
+//! lands.
 
 use std::collections::BTreeMap;
 
 use expo_alpha_typecheck::CheckedPackage;
-use expo_ast::ast::{BinOp, Expr, ExprKind, Function, Item, Literal, Statement};
+use expo_ast::ast::{BinOp, Expr, ExprKind, Function, Item, Literal, Statement, UnaryOp};
 use expo_ast::identifier::Identifier;
 
 use crate::function::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator};
 use crate::package::IRPackage;
-use crate::types::{ConstValue, IRBinOp, ValueId};
+use crate::types::{ConstValue, IRBinOp, IRUnaryOp, ValueId};
 
 pub(crate) fn lower_package(pkg: &CheckedPackage) -> IRPackage {
     let mut functions = BTreeMap::new();
@@ -104,6 +105,16 @@ fn lower_expr(expr: &Expr, builder: &mut BlockBuilder) -> ValueId {
             });
             dest
         }
+        ExprKind::Unary { op, operand } => {
+            let operand = lower_expr(operand, builder);
+            let dest = builder.fresh();
+            builder.push(IRInstruction::UnaryOp {
+                dest,
+                op: lower_unary_op(*op),
+                operand,
+            });
+            dest
+        }
         other => panic!("alpha IR POC does not yet lower expression kind {other:?}"),
     }
 }
@@ -127,11 +138,26 @@ fn lower_literal(value: &Literal) -> ConstValue {
 fn lower_bin_op(op: BinOp) -> IRBinOp {
     match op {
         BinOp::Add => IRBinOp::Add,
+        BinOp::And => IRBinOp::And,
         BinOp::Div => IRBinOp::Div,
+        BinOp::Eq => IRBinOp::Eq,
+        BinOp::Gt => IRBinOp::Gt,
+        BinOp::GtEq => IRBinOp::GtEq,
+        BinOp::Lt => IRBinOp::Lt,
+        BinOp::LtEq => IRBinOp::LtEq,
         BinOp::Mod => IRBinOp::Mod,
         BinOp::Mul => IRBinOp::Mul,
+        BinOp::NotEq => IRBinOp::NotEq,
+        BinOp::Or => IRBinOp::Or,
         BinOp::Sub => IRBinOp::Sub,
         other => panic!("alpha IR POC does not yet lower binary operator {other:?}"),
+    }
+}
+
+fn lower_unary_op(op: UnaryOp) -> IRUnaryOp {
+    match op {
+        UnaryOp::Neg => IRUnaryOp::Neg,
+        UnaryOp::Not => IRUnaryOp::Not,
     }
 }
 

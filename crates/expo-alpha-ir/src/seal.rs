@@ -81,6 +81,7 @@ fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
     match inst {
         IRInstruction::BinaryOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Const { .. } => vec![],
+        IRInstruction::UnaryOp { operand, .. } => vec![*operand],
     }
 }
 

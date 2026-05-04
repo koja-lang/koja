@@ -78,6 +78,7 @@ fn seal_expr(expr: &Expr) {
             }
         }
         ExprKind::Literal { .. } => {}
+        ExprKind::Unary { operand, .. } => seal_expr(operand),
         other => seal_panic(
             &format!(
                 "alpha typecheck seal does not yet recognize expression kind `{}`",

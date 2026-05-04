@@ -22,15 +22,33 @@ pub enum ConstValue {
     Unit,
 }
 
-/// Binary arithmetic operators. The POC scope ships only the integer
-/// arithmetic set; comparison / logical / concat lands as features grow.
+/// Binary operators the IR supports. Covers integer arithmetic,
+/// boolean conjunction / disjunction, and equality / ordering
+/// comparisons. All operators are eager — short-circuit lowering
+/// lands with control-flow constructs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IRBinOp {
     Add,
+    And,
     Div,
+    Eq,
+    Gt,
+    GtEq,
+    Lt,
+    LtEq,
     Mod,
     Mul,
+    NotEq,
+    Or,
     Sub,
+}
+
+/// Unary operators the IR supports: boolean negation and integer
+/// negation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IRUnaryOp {
+    Neg,
+    Not,
 }
 
 /// The IR type lattice. Defined here so the vocabulary has a stable
