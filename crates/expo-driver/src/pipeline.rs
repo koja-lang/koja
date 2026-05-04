@@ -288,21 +288,22 @@ pub fn check_project(
     checked.has_errors
 }
 
-/// Prints every file in the checked program to stdout as a pretty-Debug
-/// dump, preceded by a `// === <path> ===` header. Used by `expo check
-/// --emit-ast`. Pretty-Debug is intentional for now; a proper S-expression
-/// printer is a separate slice (see `design/COMPILER-NORTHSTAR.md`
-/// "Per-phase debug emitters"). Iterates package-by-package, files in
-/// per-package order, matching the original `ParsedProgram.order` walk.
+/// Prints every file in the checked program to stdout using
+/// [`expo_ast::format_file`], the compact 2-space-indent tree format
+/// used by `expo check --emit-ast` and `expo parse --emit-ast`. Each
+/// file's `File` header line carries the package and path, so no
+/// separate `// === <path> ===` banner is needed. A blank line
+/// separates successive files when more than one is emitted. Iterates
+/// package-by-package, files in per-package order, matching the
+/// original `ParsedProgram.order` walk.
 fn emit_checked_ast(packages: &[CheckedPackage]) {
+    let mut first = true;
     for file in packages.iter().flat_map(|pkg| pkg.ast.iter()) {
-        let display = file
-            .path
-            .as_deref()
-            .and_then(|p| p.to_str())
-            .unwrap_or("<unknown>");
-        println!("// === {display} ===");
-        println!("{file:#?}");
+        if !first {
+            println!();
+        }
+        first = false;
+        print!("{}", expo_ast::format_file(file));
     }
 }
 

@@ -16,7 +16,10 @@
 //! - `CONCURRENCY.md` — tasks, actors, and runtime design
 
 pub mod ast;
+mod debug_print;
 pub mod identifier;
 pub mod span;
 pub mod token;
 pub mod types;
+
+pub use debug_print::format_file;

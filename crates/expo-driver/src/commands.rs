@@ -606,16 +606,19 @@ pub fn cmd_new(name: String) {
 
 /// `expo parse <file.expo> [--emit-ast]` -- parses and reports item count or errors.
 ///
-/// With `--emit-ast`, prints the raw parsed AST (`{:#?}`) to stdout instead of the
-/// item-count line. Annotation slots like `Expr.resolved_type` are `None` here --
-/// no typecheck has run. Diagnostics still go to stderr regardless.
+/// With `--emit-ast`, prints the parsed AST to stdout using the compact
+/// `expo_ast::format_file` tree (2-space indent, `@L:C-L:C` span
+/// suffixes, exhaustive over every AST variant) instead of the
+/// item-count line. Annotation slots like `Expr.resolved_type` are
+/// `None` here -- no typecheck has run. Diagnostics still go to
+/// stderr regardless.
 pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
     if files.is_empty() {
         eprintln!("Usage: expo parse <file.expo>");
         process::exit(1);
     }
 
-    for path in &files {
+    for (index, path) in files.iter().enumerate() {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -624,7 +627,12 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
             }
         };
 
-        let result = expo_parser::parse(&source, ParseMode::File);
+        let mut result = expo_parser::parse(&source, ParseMode::File);
+        // `expo_parser::parse` is the bare-string entry point that
+        // leaves `ast.path` unset. Populate it from the CLI argument
+        // so `--emit-ast` surfaces the file identity in the `File`
+        // header line.
+        result.ast.path = Some(std::path::PathBuf::from(path));
 
         if !result.errors.is_empty() {
             render_diagnostics(path, &source, &result.errors, color);
@@ -632,8 +640,10 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
         }
 
         if emit_ast {
-            println!("// === {path} ===");
-            println!("{:#?}", result.ast);
+            if index > 0 {
+                println!();
+            }
+            print!("{}", expo_ast::format_file(&result.ast));
         } else {
             println!("{path}: OK ({} items)", result.ast.items.len());
         }
