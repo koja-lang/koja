@@ -6,14 +6,16 @@
 //!   ends in a terminator, every value reference points at a
 //!   previously-defined value in the same function, the entry point
 //!   resolves to a registered function), or
-//! - returns `Err(LowerError)` for the one user-actionable failure
-//!   today: the caller-supplied entry point is not present in any
-//!   lowered package.
+//! - returns `Err(LowerError)` carrying one of two user-actionable
+//!   failure modes: feature-gap diagnostics accumulated while walking
+//!   the sealed AST, or an entry-point lookup miss when the caller
+//!   asked for a function that no package registered.
 //!
 //! `seal_program` runs as the last sub-pass of `lower_program`; seal
 //! violations panic per northstar (compiler bugs, not user errors).
 
 use expo_alpha_typecheck::CheckedProgram;
+use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::Identifier;
 
 use crate::function::IRFunction;
@@ -52,8 +54,20 @@ impl IRProgram {
 /// User-actionable failure modes from [`lower_program`]. Anything that
 /// could only originate from a compiler bug panics through `seal`
 /// instead of surfacing here.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Diagnostics` and `EntryPointNotFound` are disjoint: the lowering
+/// pass short-circuits before the entry-point check when diagnostics
+/// are present, so callers can match on one variant at a time.
+#[derive(Debug, Clone)]
 pub enum LowerError {
+    /// One or more feature-gap diagnostics surfaced while lowering
+    /// the sealed AST (unsupported expression / literal / statement
+    /// kinds, extern-body functions, unsupported binary operators,
+    /// etc.). Each [`Diagnostic`] carries a source span + message.
+    /// Lowering is per-function fail-fast: a failed function
+    /// contributes one diagnostic and is omitted from the resulting
+    /// partial IR.
+    Diagnostics(Vec<Diagnostic>),
     /// The caller asked for an entry point that no package in the
     /// lowered program registers.
     EntryPointNotFound { identifier: Identifier },
@@ -62,6 +76,15 @@ pub enum LowerError {
 impl std::fmt::Display for LowerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            LowerError::Diagnostics(diagnostics) => {
+                for (index, diag) in diagnostics.iter().enumerate() {
+                    if index > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "{}", diag.message)?;
+                }
+                Ok(())
+            }
             LowerError::EntryPointNotFound { identifier } => {
                 write!(f, "entry point `{identifier}` is not defined")
             }
@@ -76,14 +99,17 @@ impl std::error::Error for LowerError {}
 /// Sub-pass order (forced by data dependencies):
 ///
 /// 1. `lower_package` — translate each `CheckedPackage` into an
-///    `IRPackage` fragment. Pure with respect to its input.
-/// 2. `merge` — stitch the per-package fragments into a single
+///    `IRPackage` fragment. Pushes feature-gap diagnostics into the
+///    shared buffer and omits functions that failed to lower.
+/// 2. If any diagnostics were recorded, return
+///    `Err(LowerError::Diagnostics)` immediately. Seal never runs on
+///    a partial IR — its invariants assume a complete program, and
+///    violating them panics (northstar: seal failures are compiler
+///    bugs, not user errors).
+/// 3. `merge` — stitch the per-package fragments into a single
 ///    working `IRProgram`.
-/// 3. `seal` — assert sealed-IRProgram invariants. Panics on violation.
-///
-/// The entry-point existence check happens between `merge` and `seal`
-/// so the caller sees a clean [`LowerError`] before the seal pass
-/// runs.
+/// 4. Entry-point existence check — surfaces `EntryPointNotFound`.
+/// 5. `seal` — assert sealed-IRProgram invariants. Panics on violation.
 ///
 /// Future sub-passes land between `merge` and `seal` when the work
 /// they do becomes load-bearing (e.g. a `closure` pass for generic
@@ -92,9 +118,18 @@ impl std::error::Error for LowerError {}
 /// nothing for them to do — adding no-op pass-throughs would be
 /// dead architecture.
 pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRProgram, LowerError> {
+    let mut diagnostics = Vec::new();
     let mut packages = Vec::with_capacity(checked.packages.len());
     for pkg in &checked.packages {
-        packages.push(lower_package::lower_package(pkg, &checked.registry));
+        packages.push(lower_package::lower_package(
+            pkg,
+            &checked.registry,
+            &mut diagnostics,
+        ));
+    }
+
+    if !diagnostics.is_empty() {
+        return Err(LowerError::Diagnostics(diagnostics));
     }
 
     let program = merge::merge(packages, entry.clone());

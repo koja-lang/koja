@@ -90,10 +90,8 @@ fn lower_program_reports_missing_entry_point() {
     let missing = Identifier::new(PACKAGE, vec!["main".to_string()]);
     let err = lower_program(&checked, missing.clone())
         .expect_err("missing entry point should be reported");
-    assert_eq!(
-        err,
-        LowerError::EntryPointNotFound {
-            identifier: missing
-        },
-    );
+    match err {
+        LowerError::EntryPointNotFound { identifier } => assert_eq!(identifier, missing),
+        other => panic!("expected EntryPointNotFound, got {other:?}"),
+    }
 }

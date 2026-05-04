@@ -7,27 +7,36 @@
 //!
 //! POC scope: every fn body must lower to a single basic block holding
 //! `Const` / `BinaryOp` / `UnaryOp` / `Call` instructions and ending
-//! in `Return`. Anything richer panics until the corresponding feature
-//! lands.
+//! in `Return`. Anything richer surfaces as a [`Diagnostic`] and the
+//! offending function is dropped from the package (per-function
+//! fail-fast). Seal invariant violations — e.g. a call callee with
+//! `Unresolved` resolution after typecheck seal — remain panics per
+//! northstar (compiler bugs, not user errors).
 
 use std::collections::BTreeMap;
 
 use expo_alpha_typecheck::{CheckedPackage, GlobalRegistry};
 use expo_ast::ast::{
-    Arg, BinOp, Expr, ExprKind, Function, Item, Literal, Param, Statement, UnaryOp,
+    Arg, BinOp, Diagnostic, Expr, ExprKind, Function, Item, Literal, Param, Statement, UnaryOp,
 };
 use expo_ast::identifier::{Identifier, Resolution};
+use expo_ast::span::Span;
 
 use crate::function::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator};
 use crate::package::IRPackage;
 use crate::types::{ConstValue, IRBinOp, IRUnaryOp, ValueId};
 
-pub(crate) fn lower_package(pkg: &CheckedPackage, registry: &GlobalRegistry) -> IRPackage {
+pub(crate) fn lower_package(
+    pkg: &CheckedPackage,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> IRPackage {
     let mut functions = BTreeMap::new();
     for file in &pkg.files {
         for item in &file.items {
-            if let Item::Function(function) = item {
-                let lowered = lower_function(function, &pkg.package, registry);
+            if let Item::Function(function) = item
+                && let Some(lowered) = lower_function(function, &pkg.package, registry, diagnostics)
+            {
                 functions.insert(lowered.identifier.clone(), lowered);
             }
         }
@@ -38,12 +47,28 @@ pub(crate) fn lower_package(pkg: &CheckedPackage, registry: &GlobalRegistry) -> 
     }
 }
 
-fn lower_function(function: &Function, package: &str, registry: &GlobalRegistry) -> IRFunction {
+/// Lower a single [`Function`] or return `None` if any feature-gap
+/// diagnostic surfaced while lowering it. The function is simply
+/// omitted from the package in that case; `lower_program` will turn
+/// the accumulated diagnostics into a [`LowerError::Diagnostics`]
+/// before seal runs.
+fn lower_function(
+    function: &Function,
+    package: &str,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<IRFunction> {
     let identifier = Identifier::new(package, vec![function.name.clone()]);
-    let body = function
-        .body
-        .as_ref()
-        .expect("alpha IR POC does not yet support extern fns");
+    let Some(body) = function.body.as_ref() else {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha IR does not yet lower extern fn `{}` (no body to lower)",
+                function.name,
+            ),
+            function.span,
+        ));
+        return None;
+    };
 
     let mut builder = BlockBuilder::default();
 
@@ -51,23 +76,25 @@ fn lower_function(function: &Function, package: &str, registry: &GlobalRegistry)
     // order. This happens before lowering the body so every param
     // id is strictly less than any body-produced id — body lowering
     // stays naturally topological on the sealed AST. `self` receivers
-    // are diagnosed upstream (POC does not yet support them); if the
-    // AST still carries one we bail loudly rather than silently skip.
+    // are a feature gap, not a compiler bug: record a diagnostic and
+    // bail on this function.
     let mut params = Vec::with_capacity(function.params.len());
     for param in &function.params {
         match param {
             Param::Regular { .. } => {
                 params.push(builder.fresh());
             }
-            Param::Self_ { .. } => {
-                panic!(
-                    "alpha IR POC does not yet lower `self` receivers (saw one on `{identifier}`)",
-                );
+            Param::Self_ { span, .. } => {
+                diagnostics.push(Diagnostic::error(
+                    format!("alpha IR does not yet lower `self` receivers (on `{identifier}`)",),
+                    *span,
+                ));
+                return None;
             }
         }
     }
 
-    let return_value = lower_body(body, &mut builder, registry);
+    let return_value = lower_body(body, &mut builder, registry, diagnostics).ok()?;
     let block = IRBasicBlock {
         instructions: builder.instructions,
         terminator: IRTerminator::Return {
@@ -75,95 +102,135 @@ fn lower_function(function: &Function, package: &str, registry: &GlobalRegistry)
         },
     };
 
-    IRFunction {
+    Some(IRFunction {
         blocks: vec![block],
         identifier,
         params,
-    }
+    })
 }
 
 /// Lower a function body to a flat instruction sequence. The "value"
 /// of a body is the SSA id produced by lowering its trailing
 /// expression statement, or `None` if the body is empty / ends in a
 /// non-expression statement.
+///
+/// The `Result` is just an abort signal — a single `Err(())` means
+/// "stop walking this function; a diagnostic has been pushed". The
+/// caller turns that into a missing [`IRFunction`].
 fn lower_body(
     body: &[Statement],
     builder: &mut BlockBuilder,
     registry: &GlobalRegistry,
-) -> Option<ValueId> {
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<ValueId>, ()> {
     let mut last_value = None;
     for stmt in body {
-        last_value = lower_statement(stmt, builder, registry);
+        last_value = lower_statement(stmt, builder, registry, diagnostics)?;
     }
-    last_value
+    Ok(last_value)
 }
 
 fn lower_statement(
     stmt: &Statement,
     builder: &mut BlockBuilder,
     registry: &GlobalRegistry,
-) -> Option<ValueId> {
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<ValueId>, ()> {
     match stmt {
-        Statement::Expr(expr) => Some(lower_expr(expr, builder, registry)),
-        Statement::Return { value, .. } => value
-            .as_ref()
-            .map(|expr| lower_expr(expr, builder, registry)),
-        Statement::Assignment { .. }
-        | Statement::Break { .. }
-        | Statement::CompoundAssign { .. } => {
-            panic!("alpha IR POC does not yet lower this statement kind: {stmt:?}")
+        Statement::Expr(expr) => Ok(Some(lower_expr(expr, builder, registry, diagnostics)?)),
+        Statement::Return { value, .. } => match value.as_ref() {
+            Some(expr) => Ok(Some(lower_expr(expr, builder, registry, diagnostics)?)),
+            None => Ok(None),
+        },
+        Statement::Assignment { span, .. } => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower `=` assignment statements",
+                *span,
+            ));
+            Err(())
+        }
+        Statement::CompoundAssign { span, .. } => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower compound assignment statements",
+                *span,
+            ));
+            Err(())
+        }
+        Statement::Break { span } => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower `break` statements",
+                *span,
+            ));
+            Err(())
         }
     }
 }
 
-fn lower_expr(expr: &Expr, builder: &mut BlockBuilder, registry: &GlobalRegistry) -> ValueId {
+fn lower_expr(
+    expr: &Expr,
+    builder: &mut BlockBuilder,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<ValueId, ()> {
     match &expr.kind {
         ExprKind::Binary { op, left, right } => {
-            let lhs = lower_expr(left, builder, registry);
-            let rhs = lower_expr(right, builder, registry);
+            let lhs = lower_expr(left, builder, registry, diagnostics)?;
+            let rhs = lower_expr(right, builder, registry, diagnostics)?;
+            let ir_op = lower_bin_op(*op, expr.span, diagnostics)?;
             let dest = builder.fresh();
             builder.push(IRInstruction::BinaryOp {
                 dest,
                 lhs,
-                op: lower_bin_op(*op),
+                op: ir_op,
                 rhs,
             });
-            dest
+            Ok(dest)
         }
-        ExprKind::Call { callee, args } => lower_call(callee, args, builder, registry),
-        ExprKind::Group { expr: inner } => lower_expr(inner, builder, registry),
+        ExprKind::Call { callee, args } => lower_call(callee, args, builder, registry, diagnostics),
+        ExprKind::Group { expr: inner } => lower_expr(inner, builder, registry, diagnostics),
         ExprKind::Literal { value } => {
+            let const_value = lower_literal(value, expr.span, diagnostics)?;
             let dest = builder.fresh();
             builder.push(IRInstruction::Const {
                 dest,
-                value: lower_literal(value),
+                value: const_value,
             });
-            dest
+            Ok(dest)
         }
         ExprKind::Unary { op, operand } => {
-            let operand = lower_expr(operand, builder, registry);
+            let operand = lower_expr(operand, builder, registry, diagnostics)?;
             let dest = builder.fresh();
             builder.push(IRInstruction::UnaryOp {
                 dest,
                 op: lower_unary_op(*op),
                 operand,
             });
-            dest
+            Ok(dest)
         }
-        other => panic!("alpha IR POC does not yet lower expression kind {other:?}"),
+        other => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alpha IR does not yet lower this expression kind ({})",
+                    expr_kind_label(other),
+                ),
+                expr.span,
+            ));
+            Err(())
+        }
     }
 }
 
 /// Lower a `ExprKind::Call`. The seal contract guarantees the callee
-/// is a bare `Ident` whose inner `Resolution` is `Global(id)` — we
-/// dereference that id through the registry to reach the canonical
-/// callee [`Identifier`], then emit an `IRInstruction::Call`.
+/// is a bare `Ident` whose inner `Resolution` is `Global(id)` — any
+/// deviation is a compiler bug, not a feature gap, so we panic rather
+/// than emit a diagnostic.
 fn lower_call(
     callee: &Expr,
     args: &[Arg],
     builder: &mut BlockBuilder,
     registry: &GlobalRegistry,
-) -> ValueId {
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<ValueId, ()> {
     let ExprKind::Ident { resolution, name } = &callee.kind else {
         panic!(
             "alpha IR lower: call callee must be a bare Ident after typecheck seal (got {:?})",
@@ -181,10 +248,10 @@ fn lower_call(
     });
     let callee_identifier = entry.identifier.clone();
 
-    let lowered_args: Vec<ValueId> = args
-        .iter()
-        .map(|arg| lower_expr(&arg.value, builder, registry))
-        .collect();
+    let mut lowered_args = Vec::with_capacity(args.len());
+    for arg in args {
+        lowered_args.push(lower_expr(&arg.value, builder, registry, diagnostics)?);
+    }
 
     let dest = builder.fresh();
     builder.push(IRInstruction::Call {
@@ -192,41 +259,66 @@ fn lower_call(
         callee: callee_identifier,
         args: lowered_args,
     });
-    dest
+    Ok(dest)
 }
 
-fn lower_literal(value: &Literal) -> ConstValue {
+fn lower_literal(
+    value: &Literal,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<ConstValue, ()> {
     match value {
-        Literal::Bool(b) => ConstValue::Bool(*b),
-        Literal::Int(text) => {
-            let parsed = text
-                .parse::<i64>()
-                .unwrap_or_else(|err| panic!("invalid Int literal `{text}`: {err}"));
-            ConstValue::Int(parsed)
+        Literal::Bool(b) => Ok(ConstValue::Bool(*b)),
+        Literal::Int(text) => match text.parse::<i64>() {
+            Ok(parsed) => Ok(ConstValue::Int(parsed)),
+            Err(err) => {
+                diagnostics.push(Diagnostic::error(
+                    format!("invalid Int literal `{text}`: {err}"),
+                    span,
+                ));
+                Err(())
+            }
+        },
+        Literal::Unit => Ok(ConstValue::Unit),
+        Literal::Float(_) => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower Float literals",
+                span,
+            ));
+            Err(())
         }
-        Literal::Unit => ConstValue::Unit,
-        Literal::Float(_) | Literal::String(_) => {
-            panic!("alpha IR POC does not yet lower this literal kind: {value:?}")
+        Literal::String(_) => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower String literals",
+                span,
+            ));
+            Err(())
         }
     }
 }
 
-fn lower_bin_op(op: BinOp) -> IRBinOp {
+fn lower_bin_op(op: BinOp, span: Span, diagnostics: &mut Vec<Diagnostic>) -> Result<IRBinOp, ()> {
     match op {
-        BinOp::Add => IRBinOp::Add,
-        BinOp::And => IRBinOp::And,
-        BinOp::Div => IRBinOp::Div,
-        BinOp::Eq => IRBinOp::Eq,
-        BinOp::Gt => IRBinOp::Gt,
-        BinOp::GtEq => IRBinOp::GtEq,
-        BinOp::Lt => IRBinOp::Lt,
-        BinOp::LtEq => IRBinOp::LtEq,
-        BinOp::Mod => IRBinOp::Mod,
-        BinOp::Mul => IRBinOp::Mul,
-        BinOp::NotEq => IRBinOp::NotEq,
-        BinOp::Or => IRBinOp::Or,
-        BinOp::Sub => IRBinOp::Sub,
-        other => panic!("alpha IR POC does not yet lower binary operator {other:?}"),
+        BinOp::Add => Ok(IRBinOp::Add),
+        BinOp::And => Ok(IRBinOp::And),
+        BinOp::Div => Ok(IRBinOp::Div),
+        BinOp::Eq => Ok(IRBinOp::Eq),
+        BinOp::Gt => Ok(IRBinOp::Gt),
+        BinOp::GtEq => Ok(IRBinOp::GtEq),
+        BinOp::Lt => Ok(IRBinOp::Lt),
+        BinOp::LtEq => Ok(IRBinOp::LtEq),
+        BinOp::Mod => Ok(IRBinOp::Mod),
+        BinOp::Mul => Ok(IRBinOp::Mul),
+        BinOp::NotEq => Ok(IRBinOp::NotEq),
+        BinOp::Or => Ok(IRBinOp::Or),
+        BinOp::Sub => Ok(IRBinOp::Sub),
+        BinOp::Concat => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower the `<>` concat operator",
+                span,
+            ));
+            Err(())
+        }
     }
 }
 
@@ -234,6 +326,42 @@ fn lower_unary_op(op: UnaryOp) -> IRUnaryOp {
     match op {
         UnaryOp::Neg => IRUnaryOp::Neg,
         UnaryOp::Not => IRUnaryOp::Not,
+    }
+}
+
+/// Short, user-facing label for an [`ExprKind`] that the alpha IR
+/// cannot yet lower. Kept local because it only serves feature-gap
+/// diagnostics; a public `ExprKind::label()` would imply stability
+/// guarantees we aren't ready to make.
+fn expr_kind_label(kind: &ExprKind) -> &'static str {
+    match kind {
+        ExprKind::Binary { .. } => "binary expression",
+        ExprKind::BinaryLiteral { .. } => "binary literal",
+        ExprKind::Call { .. } => "call",
+        ExprKind::Closure { .. } => "closure",
+        ExprKind::Cond { .. } => "cond",
+        ExprKind::EnumConstruction { .. } => "enum construction",
+        ExprKind::FieldAccess { .. } => "field access",
+        ExprKind::For { .. } => "for",
+        ExprKind::Group { .. } => "group",
+        ExprKind::Ident { .. } => "identifier reference",
+        ExprKind::If { .. } => "if",
+        ExprKind::List { .. } => "list literal",
+        ExprKind::Literal { .. } => "literal",
+        ExprKind::Loop { .. } => "loop",
+        ExprKind::Map { .. } => "map literal",
+        ExprKind::Match { .. } => "match",
+        ExprKind::MethodCall { .. } => "method call",
+        ExprKind::Receive { .. } => "receive",
+        ExprKind::Self_ => "self reference",
+        ExprKind::ShortClosure { .. } => "short closure",
+        ExprKind::Spawn { .. } => "spawn",
+        ExprKind::String { .. } => "string interpolation",
+        ExprKind::StructConstruction { .. } => "struct construction",
+        ExprKind::Ternary { .. } => "ternary",
+        ExprKind::Unary { .. } => "unary",
+        ExprKind::Unless { .. } => "unless",
+        ExprKind::While { .. } => "while",
     }
 }
 
