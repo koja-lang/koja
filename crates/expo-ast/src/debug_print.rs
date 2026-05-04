@@ -21,7 +21,7 @@ use crate::ast::{
     Literal, MatchArm, Param, PassMode, Pattern, ProtocolDecl, ProtocolMethod, Statement,
     StringPart, StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
 };
-use crate::identifier::Resolution;
+use crate::identifier::{Resolution, ResolvedType};
 use crate::span::Span;
 
 /// Render `file` as a compact indented tree suitable for `--emit-ast`
@@ -941,7 +941,28 @@ fn expr_header(expr: &Expr) -> String {
     if let Some(ty) = &expr.resolved_type {
         let _ = write!(out, " : {}", ty.display());
     }
+    if expr.resolution.resolution != Resolution::Unresolved || !expr.resolution.type_args.is_empty()
+    {
+        let _ = write!(out, " ~> {}", format_resolved_type(&expr.resolution));
+    }
     out
+}
+
+/// Compact rendering of a [`ResolvedType`] for `--emit-ast` output.
+/// Leaves show the head `<id>`; generics show `<id><arg, ...>`
+/// recursively. Unresolved heads render as `?` so partial resolution
+/// states are visible during development.
+fn format_resolved_type(ty: &ResolvedType) -> String {
+    let head = match ty.resolution {
+        Resolution::Unresolved => String::from("?"),
+        Resolution::Global(id) => id.to_string(),
+    };
+    if ty.type_args.is_empty() {
+        head
+    } else {
+        let args: Vec<String> = ty.type_args.iter().map(format_resolved_type).collect();
+        format!("{head}<{}>", args.join(", "))
+    }
 }
 
 fn expr_has_children(kind: &ExprKind) -> bool {

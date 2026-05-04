@@ -163,6 +163,51 @@ impl Resolution {
     }
 }
 
+/// Northstar-aligned type annotation attached to every `Expr` by alpha
+/// typecheck. Pairs a head [`Resolution`] (which registry entry this
+/// type refers to) with its type arguments (themselves `ResolvedType`s,
+/// so generics nest recursively).
+///
+/// Shape examples:
+/// - `Int` -> `{ Global(int_id), [] }`
+/// - `List<Int>` -> `{ Global(list_id), [{ Global(int_id), [] }] }`
+/// - Partially inferred `List<?>` -> `{ Global(list_id), [Unresolved] }`
+///
+/// `Default` returns a fully-unresolved leaf so freshly-constructed
+/// `Expr`s carry a safe placeholder until resolve runs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResolvedType {
+    pub resolution: Resolution,
+    pub type_args: Vec<ResolvedType>,
+}
+
+impl ResolvedType {
+    /// Fully-unresolved leaf: head is [`Resolution::Unresolved`] and no
+    /// arguments. Equivalent to [`ResolvedType::default`], exposed as a
+    /// named constructor for intent at call sites.
+    pub fn unresolved() -> Self {
+        Self::default()
+    }
+
+    /// Leaf node: carries a head `resolution` and no type arguments.
+    /// Convenience for primitives and other arity-0 types.
+    pub fn leaf(resolution: Resolution) -> Self {
+        Self {
+            resolution,
+            type_args: Vec::new(),
+        }
+    }
+
+    /// Returns `true` iff the head is `Global(_)` **and** every nested
+    /// type argument is also fully resolved. Seal uses this as its
+    /// whole-tree invariant — a single `Unresolved` hole anywhere in
+    /// the tree fails the check.
+    pub fn is_resolved(&self) -> bool {
+        matches!(self.resolution, Resolution::Global(_))
+            && self.type_args.iter().all(ResolvedType::is_resolved)
+    }
+}
+
 /// A canonical, package-qualified identifier for a user-defined type.
 /// Every struct, enum, and protocol carries one of these throughout the
 /// compiler pipeline, ensuring types from different packages never collide.

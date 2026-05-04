@@ -75,6 +75,33 @@ impl GlobalRegistry {
         Self::default()
     }
 
+    /// Seed a fresh registry with stdlib struct stubs for the scalar
+    /// types alpha knows how to synthesize from literals (`Int`, `Bool`,
+    /// `Unit`, `Float`, `String`). They register as ordinary
+    /// [`GlobalKind::Struct`] entries under the `Global` package so
+    /// alpha resolve has something to point at without special-casing
+    /// primitives.
+    ///
+    /// Temporary scaffolding: once the real stdlib is formally compiled
+    /// as a package, these entries land through the same `collect` path
+    /// as any other decl and this constructor is no longer needed.
+    /// Because stubs and real decls share the same shape, swapping in
+    /// the real stdlib requires no changes to downstream consumers.
+    pub fn with_stdlib_stubs() -> Self {
+        let mut reg = Self::default();
+        for name in ["Int", "Bool", "Unit", "Float", "String"] {
+            let outcome = reg.insert_struct(
+                Identifier::new("Global", vec![name.to_string()]),
+                Span::default(),
+            );
+            debug_assert!(
+                matches!(outcome, InsertOutcome::Fresh(_)),
+                "stdlib stub `Global.{name}` collided on preload — registry was not empty",
+            );
+        }
+        reg
+    }
+
     pub fn insert_enum(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
         self.insert(identifier, GlobalKind::Enum, span)
     }

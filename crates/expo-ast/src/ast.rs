@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use crate::identifier::{Resolution, TypeIdentifier};
+use crate::identifier::{Resolution, ResolvedType, TypeIdentifier};
 use crate::span::Span;
 use crate::types::Type;
 
@@ -151,6 +151,11 @@ impl Diagnostic {
 }
 
 /// A top-level declaration within a file.
+// `Constant` dominates the discriminant size because it embeds an `Expr`
+// for its RHS. Boxing it would ripple through every crate that matches
+// `Item::Constant(_)` without a corresponding simplicity win -- these
+// are transient AST nodes, not hot-path runtime values.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Item {
     Alias(AliasDecl),
@@ -504,26 +509,48 @@ pub enum EnumConstructionData {
 
 /// An expression node in the AST.
 ///
-/// Every expression carries a `span` for source location and a `resolved_type`
-/// that the type checker populates after inference. Downstream consumers
-/// (codegen, LSP, formatter) read the type from this struct instead of
-/// re-deriving it.
+/// Every expression carries a `span` for source location and **two**
+/// type-annotation slots that together describe the expression's type
+/// as known by the compiler:
+///
+/// - `resolved_type`: **legacy (v1 pipeline).** Populated by
+///   `expo-typecheck`; read by v1 codegen, LSP, and IR. Uses the
+///   closed `Type` enum from `expo_ast::types`. Alpha does **not**
+///   populate this field.
+/// - `resolution`: **northstar (alpha pipeline).** Populated by
+///   `expo-alpha-typecheck`; carries a [`ResolvedType`] that points
+///   into the alpha `GlobalRegistry` by id. Every sealed alpha `Expr`
+///   has `resolution.is_resolved()` true. V1 does **not** populate
+///   this field.
+///
+/// The two fields coexist during the v1 -> alpha migration so both
+/// pipelines can operate on the same AST shape without clobbering
+/// each other's state. Once v1 is retired, `resolved_type` goes away
+/// and `resolution` is the single ledger.
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
-    /// The resolved type of this expression. Populated by the type checker;
-    /// `None` before type checking.
+    /// Legacy v1 type annotation. `None` before v1 typecheck runs.
+    /// Alpha does not populate this field.
     pub resolved_type: Option<Type>,
+    /// Northstar-aligned type annotation. Default is
+    /// [`ResolvedType::unresolved`]; alpha resolve populates it with
+    /// a registry-pointing shape, and seal asserts
+    /// `resolution.is_resolved()` on every non-excluded node.
+    pub resolution: ResolvedType,
 }
 
 impl Expr {
-    /// Convenience constructor: wraps a kind + span with `resolved_type: None`.
+    /// Convenience constructor: wraps a kind + span with both type
+    /// annotations defaulted (legacy `resolved_type: None`,
+    /// northstar `resolution: Unresolved`).
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Self {
             kind,
             span,
             resolved_type: None,
+            resolution: ResolvedType::unresolved(),
         }
     }
 }

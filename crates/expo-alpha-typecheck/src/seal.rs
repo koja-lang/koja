@@ -1,8 +1,8 @@
 //! Seal sub-pass: walks the checked AST and asserts that every
-//! relevant `resolution` / `resolved_type` field is populated. Panics
-//! on violation per the [`COMPILER-NORTHSTAR.md`] contract — seal
-//! failures indicate compiler bugs in upstream sub-passes, not user
-//! errors.
+//! relevant [`Resolution`] / [`expo_ast::identifier::ResolvedType`]
+//! annotation is populated. Panics on violation per the
+//! [`COMPILER-NORTHSTAR.md`] contract — seal failures indicate
+//! compiler bugs in upstream sub-passes, not user errors.
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 
@@ -60,8 +60,8 @@ fn seal_statement(stmt: &Statement) {
 }
 
 fn seal_expr(expr: &Expr) {
-    if expr.resolved_type.is_none() {
-        seal_panic("expression missing resolved_type", expr.span);
+    if !expr.resolution.is_resolved() {
+        seal_panic("expression missing resolution", expr.span);
     }
     match &expr.kind {
         ExprKind::Binary { left, right, .. } => {

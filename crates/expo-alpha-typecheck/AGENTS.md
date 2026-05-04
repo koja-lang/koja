@@ -12,11 +12,16 @@ One entry point:
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure>;
 ```
 
-Success arm is **always sealed** — every relevant `Expr.resolved_type` populated, every
-`Resolution` either `Global(Identifier)` or `Unresolved` (only for nodes the seal
-contract excludes). The `seal_ast` invariant check runs as the last sub-pass of
-`check_program` and panics on violation; seal failures are compiler bugs, not
-recoverable conditions.
+Success arm is **always sealed** — every relevant `Expr.resolution` fully populated
+into the registry, every `Resolution` either `Global(GlobalRegistryId)` or
+`Unresolved` (only for nodes the seal contract excludes). The `seal_ast` invariant
+check runs as the last sub-pass of `check_program` and panics on violation; seal
+failures are compiler bugs, not recoverable conditions.
+
+Alpha does **not** populate the legacy `Expr.resolved_type` field — that slot is v1's
+annotation, preserved on the shared `Expr` struct during the v1 → alpha migration and
+ignored by alpha. Type identity in alpha flows through `Expr.resolution`, a
+registry-pointing `ResolvedType` (see `expo_ast::identifier`).
 
 Failure arm carries diagnostics + the partial `ParsedProgram` for LSP / IDE
 best-effort consumption.
@@ -24,9 +29,13 @@ best-effort consumption.
 ## Sub-passes
 
 ```
+preload       -> GlobalRegistry::with_stdlib_stubs seeds Global.Int/Bool/Unit/
+                 Float/String as struct entries (temporary; real stdlib
+                 compilation will supplant this)
 lift_script   -> hoist File.body into synthesized fn main (script mode only)
 collect       -> register top-level decls; assign Identifier
-resolve       -> walk all bodies; populate Resolution + Expr.resolved_type
+resolve       -> walk all bodies; populate Resolution + Expr.resolution
+                 (a registry-pointing ResolvedType)
 seal          -> assert seal_ast invariants; panic on violation
 ```
 

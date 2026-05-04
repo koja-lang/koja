@@ -5,8 +5,10 @@
 //!
 //! 1. The pipeline succeeds (no typecheck diagnostics).
 //! 2. The registry contains `TestApp.main` registered as a function.
-//! 3. The body's `2 + 2` expression carries a populated `resolved_type`
-//!    of `Type::Primitive(I64)` — proof that resolve + seal both ran.
+//! 3. The body's `2 + 2` expression carries a populated `resolution`
+//!    that resolves into the preloaded `Global.Int` stdlib stub —
+//!    proof that resolve + seal both ran and the registry is the hub
+//!    for type identity.
 //!
 //! When this test passes the alpha typecheck phase has end-to-end coverage
 //! sufficient for the next slice (lowering + eval).
@@ -15,8 +17,7 @@ use std::path::PathBuf;
 
 use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::ast::{Expr, ExprKind, Item, Statement};
-use expo_ast::identifier::Identifier;
-use expo_ast::types::{Primitive, Type};
+use expo_ast::identifier::{Identifier, Resolution};
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -69,23 +70,43 @@ fn fn_main_two_plus_two_typechecks_to_int() {
         checked.registry,
     );
 
+    let int_ident = Identifier::new("Global", vec!["Int".to_string()]);
+    let (int_id, int_entry) = checked
+        .registry
+        .lookup(&int_ident)
+        .expect("Global.Int stub is missing from the registry");
+    assert_eq!(
+        int_entry.identifier, int_ident,
+        "Global.Int registry entry identifier drifted",
+    );
+
     let body = main_body(&checked);
     assert_eq!(body.len(), 1, "expected exactly one statement in main");
     let Statement::Expr(expr) = &body[0] else {
         panic!("expected Statement::Expr at body[0], got {:?}", body[0]);
     };
 
+    assert!(
+        expr.resolution.is_resolved(),
+        "top-level `2 + 2` has an unresolved annotation: {:?}",
+        expr.resolution,
+    );
     assert_eq!(
-        expr.resolved_type.as_ref(),
-        Some(&Type::Primitive(Primitive::I64)),
-        "top-level `2 + 2` did not resolve to Int",
+        expr.resolution.resolution,
+        Resolution::Global(int_id),
+        "top-level `2 + 2` did not resolve to Global.Int",
+    );
+    assert!(
+        expr.resolution.type_args.is_empty(),
+        "Int is arity-0 but resolution carried type args: {:?}",
+        expr.resolution.type_args,
     );
 
     let ExprKind::Binary { left, right, .. } = &expr.kind else {
         panic!("expected ExprKind::Binary, got {:?}", expr.kind);
     };
-    assert_int(left);
-    assert_int(right);
+    assert_int(left, int_id);
+    assert_int(right, int_id);
 }
 
 #[test]
@@ -112,10 +133,15 @@ fn duplicate_fn_in_same_file_emits_diagnostic() {
     );
 }
 
-fn assert_int(expr: &Expr) {
+fn assert_int(expr: &Expr, int_id: expo_ast::identifier::GlobalRegistryId) {
     assert_eq!(
-        expr.resolved_type.as_ref(),
-        Some(&Type::Primitive(Primitive::I64)),
-        "operand did not resolve to Int: {expr:?}",
+        expr.resolution.resolution,
+        Resolution::Global(int_id),
+        "operand did not resolve to Global.Int: {expr:?}",
+    );
+    assert!(
+        expr.resolution.type_args.is_empty(),
+        "Int leaf should have no type args: {:?}",
+        expr.resolution.type_args,
     );
 }

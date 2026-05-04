@@ -2,15 +2,15 @@
 //! `and`, `or`, `not`, `== != < > <= >=`.
 //!
 //! Mirrors the `two_plus_two.rs` pattern: parse + check a small
-//! `fn main` source, then inspect the resolved type of its trailing
-//! expression. Error paths are covered by asserting a diagnostic on
-//! ill-typed programs.
+//! `fn main` source, then inspect the northstar-aligned `resolution`
+//! of its trailing expression. Error paths are covered by asserting
+//! a diagnostic on ill-typed programs.
 
 use std::path::PathBuf;
 
 use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
 use expo_ast::ast::{Item, Statement};
-use expo_ast::types::{Primitive, Type};
+use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -42,7 +42,7 @@ fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
     check_program(parsed)
 }
 
-fn trailing_expr_type(checked: &CheckedProgram) -> Type {
+fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
     let pkg = checked
         .packages
         .iter()
@@ -63,48 +63,55 @@ fn trailing_expr_type(checked: &CheckedProgram) -> Type {
         .expect("`fn main` has no body — extern fn cannot be the entry point");
     let trailing = body.last().expect("expected at least one statement");
     match trailing {
-        Statement::Expr(expr) => expr
-            .resolved_type
-            .clone()
-            .expect("trailing expression has no resolved type"),
+        Statement::Expr(expr) => expr.resolution.clone(),
         other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
     }
 }
 
-fn bool_type() -> Type {
-    Type::Primitive(Primitive::Bool)
+/// Resolved leaf for the preloaded `Global.<name>` stdlib stub, looked
+/// up via `registry.lookup` rather than a cached handle -- same
+/// discipline the resolver uses.
+fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
+    let ident = Identifier::new("Global", vec![name.to_string()]);
+    let (id, _) = checked
+        .registry
+        .lookup(&ident)
+        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
+    ResolvedType::leaf(Resolution::Global(id))
 }
 
-fn int_type() -> Type {
-    Type::Primitive(Primitive::I64)
+fn bool_type(checked: &CheckedProgram) -> ResolvedType {
+    global_leaf(checked, "Bool")
+}
+
+fn int_type(checked: &CheckedProgram) -> ResolvedType {
+    global_leaf(checked, "Int")
+}
+
+fn assert_trailing_is(source: &str, expected_name: &str) {
+    let checked = typecheck(source);
+    let expected = global_leaf(&checked, expected_name);
+    let actual = trailing_resolution(&checked);
+    assert_eq!(
+        actual, expected,
+        "source = {source:?} did not resolve to Global.{expected_name}",
+    );
 }
 
 #[test]
 fn logical_and_or_resolve_to_bool() {
-    assert_eq!(
-        trailing_expr_type(&typecheck("fn main\n  true and false\nend\n")),
-        bool_type(),
-    );
-    assert_eq!(
-        trailing_expr_type(&typecheck("fn main\n  true or false\nend\n")),
-        bool_type(),
-    );
+    assert_trailing_is("fn main\n  true and false\nend\n", "Bool");
+    assert_trailing_is("fn main\n  true or false\nend\n", "Bool");
 }
 
 #[test]
 fn unary_not_resolves_to_bool() {
-    assert_eq!(
-        trailing_expr_type(&typecheck("fn main\n  not true\nend\n")),
-        bool_type(),
-    );
+    assert_trailing_is("fn main\n  not true\nend\n", "Bool");
 }
 
 #[test]
 fn unary_neg_resolves_to_int() {
-    assert_eq!(
-        trailing_expr_type(&typecheck("fn main\n  -7\nend\n")),
-        int_type(),
-    );
+    assert_trailing_is("fn main\n  -7\nend\n", "Int");
 }
 
 #[test]
@@ -117,9 +124,10 @@ fn comparisons_resolve_to_bool() {
         "fn main\n  1 <= 2\nend\n",
         "fn main\n  1 >= 2\nend\n",
     ] {
+        let checked = typecheck(source);
         assert_eq!(
-            trailing_expr_type(&typecheck(source)),
-            bool_type(),
+            trailing_resolution(&checked),
+            bool_type(&checked),
             "source = {source:?}",
         );
     }
@@ -127,10 +135,17 @@ fn comparisons_resolve_to_bool() {
 
 #[test]
 fn bool_equality_is_allowed() {
-    assert_eq!(
-        trailing_expr_type(&typecheck("fn main\n  true == false\nend\n")),
-        bool_type(),
-    );
+    let checked = typecheck("fn main\n  true == false\nend\n");
+    assert_eq!(trailing_resolution(&checked), bool_type(&checked));
+}
+
+#[test]
+fn int_type_helper_still_references_int() {
+    // Sanity check that both `int_type` and `bool_type` correspond to
+    // the stubs the resolver emits; catches reverse-index breakage.
+    let checked = typecheck("fn main\n  1 + 1\nend\n");
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    assert_ne!(int_type(&checked), bool_type(&checked));
 }
 
 #[test]

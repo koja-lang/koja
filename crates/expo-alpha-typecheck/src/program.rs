@@ -2,9 +2,9 @@
 //!
 //! [`check_program`] consumes a [`ParsedProgram`] and either:
 //! - returns `Ok(CheckedProgram)` whose AST is **sealed** (every
-//!   `Expr.resolved_type` populated; every `Resolution` either
-//!   `Global(Identifier)` or `Unresolved` only on nodes the seal
-//!   contract excludes), or
+//!   `Expr.resolution` fully resolved into the registry; every
+//!   `Resolution` either `Global(GlobalRegistryId)` or `Unresolved`
+//!   only on nodes the seal contract excludes), or
 //! - returns `Err(CheckFailure)` carrying diagnostics + the partial
 //!   `ParsedProgram` for LSP best-effort consumption.
 //!
@@ -73,6 +73,12 @@ impl std::error::Error for CheckFailure {}
 /// diagnostics (those belong to the parse stage; consumers read them
 /// from `parsed.iter()`). Otherwise runs the sub-passes in order:
 ///
+/// 0. **preload stdlib stubs** — seed the [`GlobalRegistry`] with
+///    [`GlobalRegistry::with_stdlib_stubs`] so `Global.Int`, `.Bool`,
+///    `.Unit`, `.Float`, `.String` are registered as structs before
+///    any user decl. Temporary: once the real stdlib is compiled as a
+///    package these entries land through `collect` like any other
+///    decl.
 /// 1. `lift_script` — for files parsed in `ParseMode::Script`, hoist
 ///    `File.body`'s top-level statements into a synthesized `fn main`
 ///    item. After this pass `file.body` is always `None`; downstream
@@ -80,7 +86,8 @@ impl std::error::Error for CheckFailure {}
 /// 2. `collect` — register every top-level decl into the registry.
 ///    Identifiers only; signatures stay at placeholders.
 /// 3. `resolve` — walk every body and populate `Resolution` +
-///    `Expr.resolved_type`.
+///    `Expr.resolution` (a [`expo_ast::identifier::ResolvedType`]
+///    pointing into the registry).
 /// 4. `seal` — assert sealed-AST invariants (including the post-lift
 ///    `file.body.is_none()` invariant). Panics on violation.
 ///
@@ -102,7 +109,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     }
 
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
-    let mut registry = GlobalRegistry::default();
+    let mut registry = GlobalRegistry::with_stdlib_stubs();
 
     let mut packages = into_packages(parsed);
 
@@ -120,7 +127,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
 
     for pkg in &mut packages {
         for file in &mut pkg.files {
-            resolve::resolve_file(file, &mut diagnostics);
+            resolve::resolve_file(file, &registry, &mut diagnostics);
         }
     }
 
