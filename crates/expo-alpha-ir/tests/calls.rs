@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use expo_alpha_ir::{IRFunction, IRInstruction, IRProgram, IRTerminator, lower_program};
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
+use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -46,18 +47,17 @@ fn count_calls(function: &IRFunction) -> usize {
 
 #[test]
 fn zero_arg_call_lowers_to_single_call_instruction() {
-    let program = lower(
-        "\
-fn answer -> Int
-  42
-end
+    let source = "
+        fn answer -> Int
+          42
+        end
 
-fn main
-  answer()
-end
-",
-    );
+        fn main
+          answer()
+        end
+        ";
 
+    let program = lower(&dedent(source));
     let main = function(&program, "main");
     let block = main.blocks.first().expect("main has at least one block");
     assert_eq!(
@@ -91,18 +91,17 @@ end
 
 #[test]
 fn arg_taking_callee_allocates_param_value_ids_before_body() {
-    let program = lower(
-        "\
-fn take(x: Int) -> Int
-  7
-end
+    let source = "
+        fn take(x: Int) -> Int
+          7
+        end
 
-fn main
-  take(99)
-end
-",
-    );
+        fn main
+          take(99)
+        end
+        ";
 
+    let program = lower(&dedent(source));
     let take = function(&program, "take");
     assert_eq!(take.params.len(), 1, "take has one declared param");
     // Params are the first ids allocated, so the body's const
@@ -139,22 +138,21 @@ end
 
 #[test]
 fn nested_calls_chain_through_value_ids() {
-    let program = lower(
-        "\
-fn a -> Int
-  1
-end
+    let source = "
+        fn a -> Int
+          1
+        end
 
-fn b -> Int
-  2
-end
+        fn b -> Int
+          2
+        end
 
-fn main
-  a() + b()
-end
-",
-    );
+        fn main
+          a() + b()
+        end
+        ";
 
+    let program = lower(&dedent(source));
     let main = function(&program, "main");
     assert_eq!(
         count_calls(main),
@@ -200,17 +198,17 @@ end
 fn returned_value_flows_through_call_terminator() {
     // Sanity that the Call's `dest` gets plumbed into the
     // terminator when the call is the trailing expression.
-    let program = lower(
-        "\
-fn answer -> Int
-  42
-end
+    let source = "
+        fn answer -> Int
+          42
+        end
 
-fn main
-  answer()
-end
-",
-    );
+        fn main
+          answer()
+        end
+        ";
+
+    let program = lower(&dedent(source));
     let main = function(&program, "main");
     let block = &main.blocks[0];
     let Some(IRInstruction::Call { dest, .. }) = block.instructions.last() else {

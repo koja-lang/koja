@@ -42,6 +42,8 @@ pub fn format_width(source: &str, width: u32) -> FormatResult {
 
 #[cfg(test)]
 mod tests {
+    use expo_ast::util::dedent;
+
     use super::*;
 
     fn fmt(source: &str) -> String {
@@ -61,26 +63,6 @@ mod tests {
             actual, expected,
             "\n--- actual ---\n{actual}--- expected ---\n{expected}"
         );
-    }
-
-    fn dedent(s: &str) -> String {
-        let s = s.strip_prefix('\n').unwrap_or(s);
-        let min_indent = s
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| l.len() - l.trim_start().len())
-            .min()
-            .unwrap_or(0);
-        s.lines()
-            .map(|l| {
-                if l.len() >= min_indent {
-                    &l[min_indent..]
-                } else {
-                    l.trim()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     #[test]

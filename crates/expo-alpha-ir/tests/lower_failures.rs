@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use expo_alpha_ir::{LowerError, lower_program};
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
+use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -48,8 +49,14 @@ fn expect_diagnostics(err: LowerError) -> Vec<String> {
 
 #[test]
 fn float_literal_in_body_surfaces_feature_gap_diagnostic() {
-    let err = lower_err("fn main\n  1.5\nend\n", "main");
-    let messages = expect_diagnostics(err);
+    let source = "
+        fn main
+          1.5
+        end
+        ";
+
+    let program = dedent(source);
+    let messages = expect_diagnostics(lower_err(&program, "main"));
     assert_eq!(messages.len(), 1);
     assert!(
         messages[0].contains("Float literals"),
@@ -59,8 +66,14 @@ fn float_literal_in_body_surfaces_feature_gap_diagnostic() {
 
 #[test]
 fn assignment_statement_surfaces_feature_gap_diagnostic() {
-    let err = lower_err("fn main\n  x = 1\nend\n", "main");
-    let messages = expect_diagnostics(err);
+    let source = "
+        fn main
+          x = 1
+        end
+        ";
+
+    let program = dedent(source);
+    let messages = expect_diagnostics(lower_err(&program, "main"));
     assert_eq!(messages.len(), 1);
     assert!(
         messages[0].contains("assignment statements"),
@@ -70,9 +83,13 @@ fn assignment_statement_surfaces_feature_gap_diagnostic() {
 
 #[test]
 fn extern_fn_without_body_surfaces_feature_gap_diagnostic() {
-    let source = "@extern \"C\"\nfn missing() -> Int\n";
-    let err = lower_err(source, "missing");
-    let messages = expect_diagnostics(err);
+    let source = "
+        @extern \"C\"
+        fn missing() -> Int
+        ";
+
+    let program = dedent(source);
+    let messages = expect_diagnostics(lower_err(&program, "missing"));
     assert_eq!(messages.len(), 1);
     assert!(
         messages[0].contains("extern fn `missing`"),
@@ -88,9 +105,18 @@ fn extern_fn_without_body_surfaces_feature_gap_diagnostic() {
 /// other ones and doesn't spew spurious errors either.
 #[test]
 fn partial_failure_reports_only_the_failing_function_diagnostic() {
-    let source = "fn main\n  1\nend\nfn broken\n  1.5\nend\n";
-    let err = lower_err(source, "main");
-    let messages = expect_diagnostics(err);
+    let source = "
+        fn main
+          1
+        end
+
+        fn broken
+          1.5
+        end
+        ";
+
+    let program = dedent(source);
+    let messages = expect_diagnostics(lower_err(&program, "main"));
     assert_eq!(
         messages.len(),
         1,
@@ -109,9 +135,15 @@ fn partial_failure_reports_only_the_failing_function_diagnostic() {
 /// the assignment and produce two diagnostics instead of one.
 #[test]
 fn fail_fast_within_function_emits_single_diagnostic() {
-    let source = "fn main\n  1.5\n  x = 2\nend\n";
-    let err = lower_err(source, "main");
-    let messages = expect_diagnostics(err);
+    let source = "
+        fn main
+          1.5
+          x = 2
+        end
+        ";
+
+    let program = dedent(source);
+    let messages = expect_diagnostics(lower_err(&program, "main"));
     assert_eq!(
         messages.len(),
         1,

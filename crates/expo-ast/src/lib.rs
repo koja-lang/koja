@@ -21,5 +21,6 @@ pub mod identifier;
 pub mod span;
 pub mod token;
 pub mod types;
+pub mod util;
 
 pub use debug_print::format_file;

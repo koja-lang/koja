@@ -15,6 +15,7 @@ use expo_alpha_ir::lower_program;
 use expo_alpha_ir_eval::{Interpreter, RuntimeError, Value};
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
+use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -37,34 +38,38 @@ fn evaluate(source: &str) -> Result<Value, RuntimeError> {
 
 #[test]
 fn zero_arg_call_returns_callee_value() {
-    let source = "\
-fn answer -> Int
-  42
-end
+    let source = "
+        fn answer -> Int
+          42
+        end
 
-fn main
-  answer() + 1
-end
-";
-    assert_eq!(evaluate(source).unwrap(), Value::Int(43));
+        fn main
+          answer() + 1
+        end
+        ";
+
+    let program = dedent(source);
+    assert_eq!(evaluate(&program).unwrap(), Value::Int(43));
 }
 
 #[test]
 fn nested_zero_arg_calls_combine_via_arithmetic() {
-    let source = "\
-fn a -> Int
-  1
-end
+    let source = "
+        fn a -> Int
+          1
+        end
 
-fn b -> Int
-  2
-end
+        fn b -> Int
+          2
+        end
 
-fn main
-  a() + b()
-end
-";
-    assert_eq!(evaluate(source).unwrap(), Value::Int(3));
+        fn main
+          a() + b()
+        end
+        ";
+
+    let program = dedent(source);
+    assert_eq!(evaluate(&program).unwrap(), Value::Int(3));
 }
 
 #[test]
@@ -74,16 +79,18 @@ fn arg_taking_callee_with_unreferenced_param_returns_body_value() {
     // ground for *arity correctness*: the arg is evaluated and
     // bound in the callee's frame even though the body never
     // reads it, and the call returns the body's constant.
-    let source = "\
-fn take(x: Int) -> Int
-  7
-end
+    let source = "
+        fn take(x: Int) -> Int
+          7
+        end
 
-fn main
-  take(99)
-end
-";
-    assert_eq!(evaluate(source).unwrap(), Value::Int(7));
+        fn main
+          take(99)
+        end
+        ";
+
+    let program = dedent(source);
+    assert_eq!(evaluate(&program).unwrap(), Value::Int(7));
 }
 
 #[test]
@@ -91,28 +98,32 @@ fn multiple_args_evaluate_in_order() {
     // Same POC limitation applies: neither param is referenced,
     // so the return is a constant. The value carries out the
     // multi-arg call path end-to-end.
-    let source = "\
-fn pair(a: Int, b: Int) -> Int
-  11
-end
+    let source = "
+        fn pair(a: Int, b: Int) -> Int
+          11
+        end
 
-fn main
-  pair(2, 3)
-end
-";
-    assert_eq!(evaluate(source).unwrap(), Value::Int(11));
+        fn main
+          pair(2, 3)
+        end
+        ";
+
+    let program = dedent(source);
+    assert_eq!(evaluate(&program).unwrap(), Value::Int(11));
 }
 
 #[test]
 fn call_return_participates_in_outer_expression() {
-    let source = "\
-fn double -> Int
-  4
-end
+    let source = "
+        fn double -> Int
+          4
+        end
 
-fn main
-  double() * 5
-end
-";
-    assert_eq!(evaluate(source).unwrap(), Value::Int(20));
+        fn main
+          double() * 5
+        end
+        ";
+
+    let program = dedent(source);
+    assert_eq!(evaluate(&program).unwrap(), Value::Int(20));
 }

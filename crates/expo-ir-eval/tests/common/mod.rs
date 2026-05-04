@@ -12,6 +12,8 @@ use expo_ir::Backend;
 use expo_ir_eval::{Interp, Value};
 use expo_parser::ParseMode;
 
+pub use expo_ast::util::dedent;
+
 /// Parse `source` into an AST file, asserting no parser errors.
 pub fn parse_file(source: &str) -> expo_ast::ast::File {
     let parsed = expo_parser::parse(source, ParseMode::File);
@@ -21,38 +23,6 @@ pub fn parse_file(source: &str) -> expo_ast::ast::File {
         parsed.errors
     );
     parsed.ast
-}
-
-/// Strip leading newline + uniform indent from a raw multiline source
-/// literal. Mirrors the helper in `expo-typecheck`, `expo-fmt`, and
-/// `expo-driver` -- lets test sources be written as naturally
-/// indented blocks:
-///
-/// ```ignore
-/// eval_entry(&dedent("
-///     fn run -> Int
-///       42
-///     end
-/// "), "run");
-/// ```
-pub fn dedent(s: &str) -> String {
-    let s = s.strip_prefix('\n').unwrap_or(s);
-    let min_indent = s
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
-        .min()
-        .unwrap_or(0);
-    s.lines()
-        .map(|l| {
-            if l.len() >= min_indent {
-                &l[min_indent..]
-            } else {
-                l.trim()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// Lower a self-contained file (no stdlib auto-import) and

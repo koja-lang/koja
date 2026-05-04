@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::ast::{Expr, ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution};
+use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -61,7 +62,13 @@ fn main_body(checked: &CheckedProgram) -> &[Statement] {
 
 #[test]
 fn fn_main_two_plus_two_typechecks_to_int() {
-    let checked = typecheck("fn main\n  2 + 2\nend\n");
+    let source = "
+        fn main
+          2 + 2
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
 
     let main_id = Identifier::new(PACKAGE, vec!["main".to_string()]);
     assert!(
@@ -111,11 +118,21 @@ fn fn_main_two_plus_two_typechecks_to_int() {
 
 #[test]
 fn duplicate_fn_in_same_file_emits_diagnostic() {
+    let source = "
+        fn main
+          1
+        end
+
+        fn main
+          2
+        end
+        ";
+
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
             path: PathBuf::from("dup.expo"),
-            source: "fn main\n  1\nend\n\nfn main\n  2\nend\n".to_string(),
+            source: dedent(source),
         }],
         ParseMode::File,
     );

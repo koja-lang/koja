@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
+use expo_ast::util::dedent;
 use expo_parser::ParseMode;
 
 use crate::diagnostics::render_diagnostics;
@@ -62,28 +63,6 @@ fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, PathBuf) {
         }
     };
     (config, cwd)
-}
-
-/// Strips the common leading whitespace from a multi-line string so that
-/// template literals can be written with natural indentation in the source.
-fn dedent(s: &str) -> String {
-    let s = s.strip_prefix('\n').unwrap_or(s);
-    let min_indent = s
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
-        .min()
-        .unwrap_or(0);
-    s.lines()
-        .map(|l| {
-            if l.len() >= min_indent {
-                &l[min_indent..]
-            } else {
-                l.trim()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// `expo build [file.expo] [-o output] [--emit-llvm]` -- compiles an Expo program to an executable.

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use expo_alpha_typecheck::{CheckFailure, CheckedProgram, GlobalKind, check_program};
 use expo_ast::ast::{Expr, ExprKind, Function, Item, Literal, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -98,16 +99,17 @@ fn diagnostic_messages(failure: &CheckFailure) -> Vec<String> {
 
 #[test]
 fn zero_arg_call_resolves_to_callee_return_type() {
-    let source = "\
-fn answer -> Int
-  42
-end
+    let source = "
+        fn answer -> Int
+          42
+        end
 
-fn main
-  answer()
-end
-";
-    let checked = typecheck(source);
+        fn main
+          answer()
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
 
     let main = find_function(&checked, "main");
@@ -142,16 +144,17 @@ end
 
 #[test]
 fn arg_taking_call_resolves_and_registers_signature() {
-    let source = "\
-fn add(a: Int, b: Int) -> Int
-  1
-end
+    let source = "
+        fn add(a: Int, b: Int) -> Int
+          1
+        end
 
-fn main
-  add(2, 3)
-end
-";
-    let checked = typecheck(source);
+        fn main
+          add(2, 3)
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
 
     let main = find_function(&checked, "main");
@@ -199,17 +202,17 @@ end
 
 #[test]
 fn arity_mismatch_diagnoses() {
-    let failure = typecheck_fail(
-        "\
-fn add(a: Int, b: Int) -> Int
-  1
-end
+    let source = "
+        fn add(a: Int, b: Int) -> Int
+          1
+        end
 
-fn main
-  add(1)
-end
-",
-    );
+        fn main
+          add(1)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     assert!(
         messages.iter().any(|m| m.contains("expects 2 argument")),
@@ -219,17 +222,17 @@ end
 
 #[test]
 fn arg_type_mismatch_diagnoses() {
-    let failure = typecheck_fail(
-        "\
-fn only_int(a: Int) -> Int
-  1
-end
+    let source = "
+        fn only_int(a: Int) -> Int
+          1
+        end
 
-fn main
-  only_int(true)
-end
-",
-    );
+        fn main
+          only_int(true)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     assert!(
         messages
@@ -253,13 +256,13 @@ fn unknown_callee_diagnoses() {
 
 #[test]
 fn wrong_kind_callee_diagnoses() {
-    let failure = typecheck_fail(
-        "\
-fn main
-  Int()
-end
-",
-    );
+    let source = "
+        fn main
+          Int()
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     // `Int` is a struct (stdlib stub), so calling it should fail
     // the wrong-kind branch. The resolver sees `Int` as an Ident
@@ -294,17 +297,17 @@ fn non_ident_callee_diagnoses() {
 
 #[test]
 fn named_args_diagnoses() {
-    let failure = typecheck_fail(
-        "\
-fn add(a: Int, b: Int) -> Int
-  1
-end
+    let source = "
+        fn add(a: Int, b: Int) -> Int
+          1
+        end
 
-fn main
-  add(a: 1, b: 2)
-end
-",
-    );
+        fn main
+          add(a: 1, b: 2)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     assert!(
         messages.iter().any(|m| m.contains("named arguments")),
@@ -323,13 +326,13 @@ end
 
 #[test]
 fn param_reference_in_body_diagnoses() {
-    let failure = typecheck_fail(
-        "\
-fn identity(x: Int) -> Int
-  x
-end
-",
-    );
+    let source = "
+        fn identity(x: Int) -> Int
+          x
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     assert!(
         messages
@@ -343,16 +346,17 @@ end
 fn return_type_propagates_through_arithmetic() {
     // Exercises `resolve_call` returning a `ResolvedType` that the
     // surrounding expression (`+ 1`) then type-checks against.
-    let source = "\
-fn answer -> Int
-  42
-end
+    let source = "
+        fn answer -> Int
+          42
+        end
 
-fn main
-  answer() + 1
-end
-";
-    let checked = typecheck(source);
+        fn main
+          answer() + 1
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
     let main = find_function(&checked, "main");
     let trailing = trailing_expr(main);

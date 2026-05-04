@@ -16,6 +16,7 @@ use expo_alpha_ir::{
 };
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
+use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -36,7 +37,13 @@ fn lower(source: &str) -> IRProgram {
 
 #[test]
 fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
-    let program = lower("fn main\n  2 + 2\nend\n");
+    let source = "
+        fn main
+          2 + 2
+        end
+        ";
+
+    let program = lower(&dedent(source));
 
     assert_eq!(program.entry_point.last(), "main");
     assert_eq!(program.packages.len(), 1);
@@ -78,11 +85,18 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
 
 #[test]
 fn lower_program_reports_missing_entry_point() {
+    let source = "
+        fn other
+          1
+        end
+        ";
+
+    let program = dedent(source);
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
             path: PathBuf::from("no_main.expo"),
-            source: "fn other\n  1\nend\n".to_string(),
+            source: program,
         }],
         ParseMode::File,
     );
