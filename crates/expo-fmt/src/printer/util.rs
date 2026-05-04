@@ -86,7 +86,6 @@ pub(super) fn item_span(item: &Item) -> &Span {
         Item::Function(f) => &f.span,
         Item::Impl(i) => &i.span,
         Item::Protocol(p) => &p.span,
-        Item::Shared(s) => &s.span,
         Item::Struct(s) => &s.span,
         Item::TypeAlias(t) => &t.span,
     }
@@ -117,16 +116,6 @@ pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
     parts.push(text(" = "));
     parts.push(type_expr_to_doc(&t.type_expr));
     concat(parts)
-}
-
-/// Formats a `shared` declaration (`shared Name: TypeExpr`).
-pub(super) fn shared_to_doc(s: &SharedDecl) -> Doc {
-    concat(vec![
-        text("shared "),
-        text(&s.name),
-        text(": "),
-        type_expr_to_doc(&s.type_expr),
-    ])
 }
 
 /// Formats a list of annotations, preserving the stacked/inline layout.
@@ -456,7 +445,7 @@ pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
 }
 
 /// Returns `true` if the expression is a multi-line block construct
-/// (if, match, cond, for, loop, unless, while, closure, receive, arena).
+/// (if, match, cond, for, loop, unless, while, closure, receive).
 pub(super) fn is_block_expr(expr: &Expr) -> bool {
     matches!(
         expr.kind,
@@ -469,7 +458,6 @@ pub(super) fn is_block_expr(expr: &Expr) -> bool {
             | ExprKind::While { .. }
             | ExprKind::Closure { .. }
             | ExprKind::Receive { .. }
-            | ExprKind::Arena { .. }
     )
 }
 

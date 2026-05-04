@@ -21,9 +21,11 @@ use std::path::{Path, PathBuf};
 
 use expo_ast::ast::{Diagnostic, File, Severity};
 
+use crate::ParseMode;
 use crate::parse;
 
 /// A single source file ready to be parsed.
+#[derive(Debug)]
 pub struct SourceFile {
     /// The package this file belongs to. For project files this is the
     /// declared project name; for stdlib files this is `"Global"`; for
@@ -38,6 +40,7 @@ pub struct SourceFile {
 }
 
 /// The result of parsing a single [`SourceFile`].
+#[derive(Debug)]
 pub struct ParsedFile {
     pub package: String,
     pub path: PathBuf,
@@ -60,8 +63,8 @@ impl ParsedFile {
 /// `ast.path` and `ast.package` from the source so downstream stages
 /// (typecheck, codegen) don't have to thread the per-file identity
 /// alongside the AST.
-pub fn parse_file(source: SourceFile) -> ParsedFile {
-    let result = parse(&source.source);
+pub fn parse_file(source: SourceFile, mode: ParseMode) -> ParsedFile {
+    let result = parse(&source.source, mode);
     let mut ast = result.ast;
     ast.path = Some(source.path.clone());
     ast.package = source.package.clone();
@@ -80,6 +83,7 @@ pub fn parse_file(source: SourceFile) -> ParsedFile {
 /// preserves the input order so downstream stages walk files
 /// deterministically (today's convention: stdlib first, then project
 /// files in scan order).
+#[derive(Debug)]
 pub struct ParsedProgram {
     pub files: BTreeMap<PathBuf, ParsedFile>,
     pub order: Vec<PathBuf>,
@@ -115,12 +119,12 @@ impl ParsedProgram {
 }
 
 /// Parses a list of source files in input order, producing a
-/// [`ParsedProgram`].
-pub fn parse_program(sources: Vec<SourceFile>) -> ParsedProgram {
+/// [`ParsedProgram`]. All files are parsed in the same `mode`.
+pub fn parse_program(sources: Vec<SourceFile>, mode: ParseMode) -> ParsedProgram {
     let mut files = BTreeMap::new();
     let mut order = Vec::with_capacity(sources.len());
     for source in sources {
-        let parsed = parse_file(source);
+        let parsed = parse_file(source, mode);
         order.push(parsed.path.clone());
         files.insert(parsed.path.clone(), parsed);
     }

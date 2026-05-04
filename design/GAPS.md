@@ -378,3 +378,178 @@ weeks for generics.
 **Why deferred:** much cheaper than local-types-in-function-bodies but
 still a sizeable feature; not a 1.0 blocker. Tracked here so the design
 analysis isn't lost.
+
+---
+
+Audited 2026-05-03
+
+# Audit: AST / grammar / LANGUAGE.md / ROADMAP.md / IR / codegen drift
+
+Inventory of every discrepancy between `expo-ast`, `expo-parser`,
+`grammar.ebnf`, `LANGUAGE.md`, `design/ROADMAP.md`, and downstream
+`expo-ir` / `expo-codegen` (non-alpha). Grouped by category so each item
+can be triaged independently: remove the cruft, tighten the AST, or just
+reconcile the docs.
+
+## A. Dead end cruft (parsed, but dies at codegen or earlier)
+
+### A3. `ExprKind` variants that only go through the legacy codegen path (never real IR)
+
+These lower to `IRInstruction::Stub`, which `expo-codegen`'s instruction
+executor unwraps back into the legacy AST emitter at
+[instructions.rs:369-378](../crates/expo-codegen/src/control/instructions.rs).
+They work, but represent IR gaps, not AST gaps:
+
+- `Closure`, `ShortClosure` → `compile_closure_core` ([expr.rs:296-302](../crates/expo-codegen/src/expr.rs))
+- `List`, `Map` → `compile_list_literal`, `compile_map_literal`
+- `For` → `compile_for` (note: there IS a `lower_for` in `loops.rs` but it's dead code — never called)
+- `Receive`, `Spawn` → `compile_receive`, `compile_spawn`
+- `Literal::Unit` → falls through `resolve_const_inline` → Stub → legacy
+
+**Action:** not AST cruft. Flag for the EXPOIR roadmap /
+stub-categorization doc — no changes to AST/grammar/LANGUAGE needed.
+
+---
+
+## B. AST shapes never produced by the parser (dead AST subspace)
+
+### B1. `AssignTarget::Pattern` with non-trivial patterns
+
+- **Grammar:** [grammar.ebnf:150-152](../grammar.ebnf) `assignment = IDENT, ":", type_expr, "=", expr | lvalue, "=", expr | pattern, "=", expr`.
+- **AST:** [ast.rs:410-415](../crates/expo-ast/src/ast.rs) `AssignTarget::LValue | AssignTarget::Pattern`.
+- **Parser reality:** `try_expr_to_pattern` ([stmt.rs:146-157](../crates/expo-parser/src/stmt.rs)) only accepts `Ident` (→ `Binding`) and `_` (→ `Wildcard`). List, struct, enum, and OR patterns on assignment LHS are _not_ parseable today.
+- **Typecheck:** `AssignTarget::Pattern(_) => {}` is empty ([stmt.rs:130-131](../crates/expo-typecheck/src/stmt.rs)).
+- **Codegen:** errors with `destructuring patterns not yet supported` ([stmt.rs:278-280](../crates/expo-codegen/src/stmt.rs)) for anything non-trivial.
+- **LANGUAGE.md lines 1831-1836:** "parsed and/or type-checked" — overstates.
+
+**Action:** tighten `AssignTarget` to
+`AssignTarget::LValue(LValue) | AssignTarget::Binding { name, wildcard: bool }` —
+or just keep `Pattern` but document the pattern subspace actually
+accepted. Update LANGUAGE.md Planned Features to read "designed; not
+parsed yet".
+
+### B2. `ClosureParam::Destructured` inside `ShortClosure`
+
+- **Grammar:** line 246-247 allows `(a, b) -> expr`.
+- **Parser:** `expr_to_closure_params` ([construct.rs:474-492](../crates/expo-parser/src/construct.rs)) handles only `Ident`, `_`, and single-element `Group`. A parenthesized list short closure collides with `parse_paren_expr` tuple rejection.
+- **Block `Closure`:** `Destructured` _is_ produced from `parse_closure_params` ([construct.rs:424-435](../crates/expo-parser/src/construct.rs)). So the variant isn't dead overall — just dead for short closures.
+
+**Action:** either remove destructured-form from `closure_param_short`
+in grammar, or implement it. Grammar line 246-247 is the liar today.
+
+---
+
+## C. Grammar.ebnf vs parser shape mismatches (grammar lies, parser right)
+
+### C1. `cond` mandatory `else`
+
+- **Grammar:** lines 279-284 say `cond` is `{ cond_arm } end` with no else arm.
+- **Parser:** `parse_cond_expr` ([control.rs:167-203](../crates/expo-parser/src/control.rs)) **requires** an `else -> ...` terminal arm.
+
+**Action:** update grammar.ebnf to reflect parser truth
+(`cond_expr = "cond" , { cond_arm } , "else" , "->" , match_body , "end"`).
+
+### C2. Missing `move` modifier on `closure_param`
+
+- **Grammar:** lines 238-241 — no `move`.
+- **Parser:** accepts `move` for block closure params ([construct.rs:418-422](../crates/expo-parser/src/construct.rs)).
+
+**Action:** add `[ "move" ]` to `closure_param` in grammar.ebnf.
+
+### C3. `constant_decl` accepts TypeIdent as name
+
+- **Grammar:** line 472 — `IDENT` only.
+- **Parser:** [decl.rs:657-661](../crates/expo-parser/src/decl.rs) — accepts `Ident | TypeIdent`.
+
+**Action:** tighten parser to match grammar (constants must be `IDENT`).
+
+### C4. Pattern literals and multiline strings
+
+- **Grammar:** `pattern → literal → multiline_string_lit` legal.
+- **Parser:** `parse_literal_pattern` ([pattern.rs:74-95](../crates/expo-parser/src/pattern.rs)) handles `StringStart` only, not `MultilineStringStart`.
+
+**Action:** trivial parser fix (a few lines) or disallow in grammar.
+Probably fix the parser since the feature is cheap.
+
+---
+
+## D. LANGUAGE.md drift (docs lie about reality)
+
+### D1. `Process` protocol surface (biggest documented lie)
+
+- **LANGUAGE.md:** shows `fn new(config: C) -> Self`, `handle -> Self | StopReason`, default `run` dispatching `Pair<M, Option<ReplyTo<R>>>` (lines ~991-1042).
+- **Reality:** stdlib has `fn start(move config: C) -> Result<Self, StopReason>`, `handle -> Step<Self>`, and `run` also dispatches `Lifecycle` ([process.expo:162-206](../lib/global/src/process.expo)). Typecheck requires `spawn Type.start(config)` form ([expr.rs:312-318](../crates/expo-typecheck/src/expr.rs)).
+
+**Action:** rewrite the Concurrency section to match reality — `start`
+not `new`, `Step<Self>` not union, mention `Lifecycle` and
+`Step.Continue` / `Step.Done`.
+
+### D2. `Process` example won't copy-paste
+
+- The `spawn Counter.new(Counter{count: 0})` example (line ~1045) is wrong on two counts — `new` should be `start`, and the arg pattern doesn't match the signature.
+
+**Action:** replace with a minimal copy-pasteable `Counter` example
+matching today's Process protocol.
+
+### D4. `receive ... after` underdocumented
+
+- LANGUAGE.md lines 1133-1139 show only the mailbox arm.
+- Parser supports `after timeout -> body` and codegen emits `expo_rt_receive_timeout`.
+
+**Action:** add an `after` example.
+
+### D5. `Ref<M, R>` missing `send_after`
+
+- Stdlib exposes `send_after(self, msg, delay_ms)` at [process.expo:147-154](../lib/global/src/process.expo).
+- LANGUAGE.md lists cast / call / signal / kill / alive? only.
+
+**Action:** add `send_after` to the Ref API list.
+
+### D7. `Debug` auto-derive for generics is degraded
+
+- LANGUAGE.md ~1603 says Debug is auto-derived "for all types with rich formatting".
+- Reality: generic types get a type-name-only `format` because `<A: Debug>` bounds aren't inferred ([synthesize.rs:13-23](../crates/expo-typecheck/src/synthesize.rs)).
+
+**Action:** note the generics limitation in docs.
+
+### D8. Struct destructuring assignment status
+
+- LANGUAGE.md 1831-1836 says "parsed and/or type-checked" — typecheck is a no-op, codegen errors.
+
+**Action:** demote to "designed; not parsed yet" pending
+shorthand-in-struct-pattern work.
+
+---
+
+## E. ROADMAP.md drift
+
+### E1. `Global.Mmap` — "DONE" but absent
+
+- ROADMAP.md line 169 lists `Mmap` as shipped.
+- `rg Mmap expo/lib` finds nothing. No Mmap type, no `mmap` intrinsic.
+
+**Action:** remove the `Mmap` line or move it to "Remaining".
+
+---
+
+## F. Internal AST/AST-user consistency findings (minor)
+
+### F1. `Annotation.value` has 2 variants but grammar allows 3
+
+- **AST:** `AnnotationValue::String | False` ([ast.rs:69-75](../crates/expo-ast/src/ast.rs)).
+- **Grammar:** line 442-444 includes `string_lit | multiline_string_lit | "false"`.
+- `String` variant holds both single-line and multiline — parser collapses. OK in practice, but grammar suggests a distinction that doesn't exist.
+
+**Action:** tweak grammar comment or leave — low priority.
+
+---
+
+## Recommended execution order
+
+1. **Category A1 + A2** (remove `arena`, `shared`) — most cruft, clear decision, ~200 LOC deletion across parser/AST/grammar/LANGUAGE.md/lexer token list.
+2. **Category C** (grammar.ebnf sync) — 5 minutes, grammar-only.
+3. **Category D** (LANGUAGE.md drift) — rewrite Concurrency section, fix TOC, fix `receive` / `reply` / `send_after` / generics note.
+4. **Category E** (ROADMAP.md sync) — tiny, remove Mmap claim, rewrite arena status.
+5. **Category B / F** (AssignTarget tightening, short closure destructure, other minor cleanups) — pick off as bite-sized PRs.
+
+Each step is independent and can land in its own commit/PR.

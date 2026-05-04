@@ -503,8 +503,6 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
                 Type::Error
             }
         }
-
-        ExprKind::Arena { .. } => Type::Unknown,
     };
     expr.resolved_type = Some(ty.clone());
     ty

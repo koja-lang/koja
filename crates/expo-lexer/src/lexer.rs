@@ -146,7 +146,6 @@ impl Lexer {
         match name.as_str() {
             "after" => TokenKind::After,
             "alias" => TokenKind::Alias,
-            "arena" => TokenKind::Arena,
             "break" => TokenKind::Break,
             "cond" => TokenKind::Cond,
             "const" => TokenKind::Const,
@@ -168,7 +167,6 @@ impl Lexer {
             "receive" => TokenKind::Receive,
             "return" => TokenKind::Return,
             "self" => TokenKind::Self_,
-            "shared" => TokenKind::Shared,
             "spawn" => TokenKind::Spawn,
             "struct" => TokenKind::Struct,
             "true" => TokenKind::True,

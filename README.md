@@ -128,12 +128,12 @@ end
 ### Protocols
 
 ```expo
-protocol Display
-  fn display(self) -> String
+protocol Greeter
+  fn greet(self) -> String
 end
 
-impl Display for Point
-  fn display(self) -> String
+impl Greeter for Point
+  fn greet(self) -> String
     "(#{self.x}, #{self.y})"
   end
 end

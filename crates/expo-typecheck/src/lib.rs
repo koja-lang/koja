@@ -99,40 +99,13 @@ pub fn validate_resolved_types(file: &File, ctx: &mut TypeContext) {
 
 #[cfg(test)]
 mod tests {
+    use expo_ast::util::dedent;
+    use expo_parser::ParseMode;
+
     use super::*;
 
-    /// Strips the leading newline and common indentation from a test string,
-    /// so Expo source can be written as naturally indented blocks:
-    ///
-    /// ```ignore
-    /// let ctx = check(&dedent("
-    ///     fn main
-    ///       x = 42
-    ///     end
-    /// "));
-    /// ```
-    fn dedent(s: &str) -> String {
-        let s = s.strip_prefix('\n').unwrap_or(s);
-        let min_indent = s
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| l.len() - l.trim_start().len())
-            .min()
-            .unwrap_or(0);
-        s.lines()
-            .map(|l| {
-                if l.len() >= min_indent {
-                    &l[min_indent..]
-                } else {
-                    l.trim()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     fn check_source(src: &str) -> TypeContext {
-        let mut parse_result = expo_parser::parse(src);
+        let mut parse_result = expo_parser::parse(src, ParseMode::File);
         check(&mut parse_result.ast)
     }
 
@@ -212,8 +185,9 @@ mod tests {
         use expo_ast::identifier::Identifier;
         use registry::GlobalRegistry;
 
-        let parse_result = expo_parser::parse(&dedent(
-            r#"
+        let parse_result = expo_parser::parse(
+            &dedent(
+                r#"
             struct User
               name: String
             end
@@ -230,7 +204,9 @@ mod tests {
               42
             end
         "#,
-        ));
+            ),
+            ParseMode::File,
+        );
         let mut registry = GlobalRegistry::new();
         let diagnostics = collect::scan_globals(&parse_result.ast, "Alpha", &mut registry);
         assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
@@ -257,8 +233,9 @@ mod tests {
     fn scan_globals_reports_duplicates_as_diagnostics() {
         use registry::GlobalRegistry;
 
-        let parse_result = expo_parser::parse(&dedent(
-            r#"
+        let parse_result = expo_parser::parse(
+            &dedent(
+                r#"
             struct Foo
               x: Int
             end
@@ -267,7 +244,9 @@ mod tests {
               fn ping
             end
         "#,
-        ));
+            ),
+            ParseMode::File,
+        );
         let mut registry = GlobalRegistry::new();
         let diagnostics = collect::scan_globals(&parse_result.ast, "Alpha", &mut registry);
         assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");

@@ -29,7 +29,6 @@ pub enum TokenKind {
 
     // Keywords
     After,
-    Arena,
     Break,
     Cond,
     Const,
@@ -50,7 +49,6 @@ pub enum TokenKind {
     Receive,
     Return,
     Self_,
-    Shared,
     Spawn,
     Struct,
     Type,
@@ -109,7 +107,6 @@ impl TokenKind {
             self,
             TokenKind::After
                 | TokenKind::Alias
-                | TokenKind::Arena
                 | TokenKind::Break
                 | TokenKind::Cond
                 | TokenKind::Const
@@ -131,7 +128,6 @@ impl TokenKind {
                 | TokenKind::Receive
                 | TokenKind::Return
                 | TokenKind::Self_
-                | TokenKind::Shared
                 | TokenKind::Spawn
                 | TokenKind::Struct
                 | TokenKind::True

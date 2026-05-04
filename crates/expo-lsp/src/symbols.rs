@@ -250,7 +250,6 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                     }
                 }
             }
-            Item::Shared(_) => {}
         }
     }
 }
@@ -417,7 +416,6 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     children: None,
                 });
             }
-            Item::Shared(_) => {}
         }
     }
 

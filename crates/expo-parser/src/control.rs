@@ -248,15 +248,6 @@ impl Parser {
         )
     }
 
-    pub(crate) fn parse_arena_expr(&mut self) -> Expr {
-        let start = self.current_span();
-        self.advance(); // arena
-        let body = self.parse_block();
-        self.expect(&TokenKind::End);
-
-        Expr::new(ExprKind::Arena { body }, self.span_from(start))
-    }
-
     pub(crate) fn parse_receive_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.advance(); // receive

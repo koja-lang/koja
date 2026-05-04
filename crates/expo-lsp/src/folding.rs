@@ -104,7 +104,7 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                     ranges.push(r);
                 }
             }
-            Item::TypeAlias(_) | Item::Shared(_) => {}
+            Item::TypeAlias(_) => {}
         }
     }
 }
@@ -189,12 +189,6 @@ fn collect_expr_folds(expr: &Expr, ranges: &mut Vec<FoldingRange>) {
             collect_statement_folds(after_body, ranges);
         }
         ExprKind::Closure { body, .. } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            collect_statement_folds(body, ranges);
-        }
-        ExprKind::Arena { body, .. } => {
             if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
                 ranges.push(r);
             }

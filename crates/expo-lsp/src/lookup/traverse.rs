@@ -555,7 +555,7 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        ExprKind::Arena { .. } | ExprKind::Literal { .. } | ExprKind::Self_ => {}
+        ExprKind::Literal { .. } | ExprKind::Self_ => {}
     }
     None
 }
@@ -776,7 +776,6 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
                 .find_map(|f| find_expr_at_inner(&f.value, line, col)),
             EnumConstructionData::Unit => None,
         },
-        ExprKind::Arena { body } => find_expr_at_in_body(body, line, col),
         ExprKind::Literal { .. } | ExprKind::Self_ | ExprKind::Ident { .. } => None,
     };
 
@@ -990,7 +989,6 @@ fn find_call_inner<'a>(expr: &'a Expr, line: u32, col: u32) -> Option<CallSite<'
                 .find_map(|f| find_call_inner(&f.value, line, col)),
             EnumConstructionData::Unit => None,
         },
-        ExprKind::Arena { body } => find_call_in_body(body, line, col),
         _ => None,
     };
 

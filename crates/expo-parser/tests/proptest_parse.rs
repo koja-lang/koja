@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use expo_parser::parse;
+use expo_parser::{ParseMode, parse};
 use proptest::prelude::*;
 
 fn collect_expo_files(roots: &[&Path]) -> Vec<PathBuf> {
@@ -83,7 +83,7 @@ fn corpus_parses_clean() {
                 continue;
             }
         };
-        let result = parse(&src);
+        let result = parse(&src, ParseMode::File);
         if !result.errors.is_empty() {
             failures.push(format!(
                 "{}: {} parse error(s):\n{}",
@@ -110,18 +110,18 @@ fn corpus_parses_clean() {
 proptest! {
     #[test]
     fn never_panics_on_random_string(s in ".{0,500}") {
-        let _ = parse(&s);
+        let _ = parse(&s, ParseMode::File);
     }
 
     #[test]
     fn never_panics_on_random_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..500)) {
         let s = String::from_utf8_lossy(&bytes);
-        let _ = parse(&s);
+        let _ = parse(&s, ParseMode::File);
     }
 
     #[test]
     fn diagnostic_spans_well_formed(s in ".{0,500}") {
-        let result = parse(&s);
+        let result = parse(&s, ParseMode::File);
         for diag in &result.errors {
             if let Err(err) = span_within_source(
                 diag.span.start.offset,
@@ -137,7 +137,7 @@ proptest! {
 
     #[test]
     fn diagnostic_messages_non_empty(s in ".{0,500}") {
-        let result = parse(&s);
+        let result = parse(&s, ParseMode::File);
         for diag in &result.errors {
             prop_assert!(
                 !diag.message.is_empty(),
@@ -155,8 +155,8 @@ fn deterministic_on_corpus() {
 
     for path in &fixtures {
         let src = fs::read_to_string(path).unwrap();
-        let a = parse(&src);
-        let b = parse(&src);
+        let a = parse(&src, ParseMode::File);
+        let b = parse(&src, ParseMode::File);
         assert_eq!(
             a.errors.len(),
             b.errors.len(),

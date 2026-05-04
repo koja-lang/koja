@@ -15,6 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use expo_fmt::{FormatResult, format};
+use expo_parser::ParseMode;
 use proptest::prelude::*;
 
 fn collect_expo_files(roots: &[&Path]) -> Vec<PathBuf> {
@@ -159,7 +160,7 @@ proptest! {
     #[test]
     fn formatted_output_always_parses(s in ".{0,500}") {
         if let FormatResult::Ok(out) = format(&s) {
-            let result = expo_parser::parse(&out);
+            let result = expo_parser::parse(&out, ParseMode::File);
             prop_assert!(
                 result.errors.is_empty(),
                 "formatter produced un-parseable output:\n{out}"

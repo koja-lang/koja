@@ -1,0 +1,10 @@
+[package]
+name = "expo-alpha-typecheck"
+description = "Sealed-AST typechecker for the alpha pipeline"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+expo-ast = { path = "../expo-ast" }
+expo-parser = { path = "../expo-parser" }

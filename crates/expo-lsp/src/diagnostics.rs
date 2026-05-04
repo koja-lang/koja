@@ -14,6 +14,7 @@ use serde::Deserialize;
 use tower_lsp_server::ls_types::*;
 
 use expo_ast::ast::{Diagnostic as ExpoDiagnostic, File, Severity as ExpoSeverity};
+use expo_parser::ParseMode;
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{Package, package_for_path, package_from_str};
 
@@ -117,7 +118,7 @@ fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<
                             continue;
                         }
                         if let Ok(text) = fs::read_to_string(&file_path) {
-                            let pr = expo_parser::parse(&text);
+                            let pr = expo_parser::parse(&text, ParseMode::File);
                             if pr
                                 .errors
                                 .iter()
@@ -179,7 +180,7 @@ impl Backend {
     /// all sibling project files are parsed so cross-file type references
     /// resolve correctly.
     pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
-        let mut parse_result = expo_parser::parse(text);
+        let mut parse_result = expo_parser::parse(text, ParseMode::File);
         let file_path = uri_to_path(uri.as_str());
 
         let mut all_diags: Vec<ExpoDiagnostic> = parse_result.errors;

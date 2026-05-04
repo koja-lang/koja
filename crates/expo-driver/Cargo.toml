@@ -12,6 +12,10 @@ path = "src/main.rs"
 [dependencies]
 expo-runtime = { path = "../expo-runtime" }
 boring-sys = { version = "5", default-features = false }
+expo-alpha-ir = { path = "../expo-alpha-ir" }
+expo-alpha-ir-eval = { path = "../expo-alpha-ir-eval" }
+expo-alpha-shell = { path = "../expo-alpha-shell" }
+expo-alpha-typecheck = { path = "../expo-alpha-typecheck" }
 expo-ast = { path = "../expo-ast" }
 expo-codegen = { path = "../expo-codegen" }
 expo-doc = { path = "../expo-doc" }

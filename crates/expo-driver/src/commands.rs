@@ -7,6 +7,9 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
+use expo_ast::util::dedent;
+use expo_parser::ParseMode;
+
 use crate::diagnostics::render_diagnostics;
 use crate::pipeline;
 use crate::project::{self, ProjectConfig};
@@ -60,28 +63,6 @@ fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, PathBuf) {
         }
     };
     (config, cwd)
-}
-
-/// Strips the common leading whitespace from a multi-line string so that
-/// template literals can be written with natural indentation in the source.
-fn dedent(s: &str) -> String {
-    let s = s.strip_prefix('\n').unwrap_or(s);
-    let min_indent = s
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
-        .min()
-        .unwrap_or(0);
-    s.lines()
-        .map(|l| {
-            if l.len() >= min_indent {
-                &l[min_indent..]
-            } else {
-                l.trim()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// `expo build [file.expo] [-o output] [--emit-llvm]` -- compiles an Expo program to an executable.
@@ -332,7 +313,7 @@ fn extract_doc_project(
             }
         };
 
-        let parse_result = expo_parser::parse(&source);
+        let parse_result = expo_parser::parse(&source, ParseMode::File);
         if !parse_result.errors.is_empty() {
             render_diagnostics(path, &source, &parse_result.errors, color);
             continue;
@@ -604,16 +585,19 @@ pub fn cmd_new(name: String) {
 
 /// `expo parse <file.expo> [--emit-ast]` -- parses and reports item count or errors.
 ///
-/// With `--emit-ast`, prints the raw parsed AST (`{:#?}`) to stdout instead of the
-/// item-count line. Annotation slots like `Expr.resolved_type` are `None` here --
-/// no typecheck has run. Diagnostics still go to stderr regardless.
+/// With `--emit-ast`, prints the parsed AST to stdout using the compact
+/// `expo_ast::format_file` tree (2-space indent, `@L:C-L:C` span
+/// suffixes, exhaustive over every AST variant) instead of the
+/// item-count line. Annotation slots like `Expr.resolved_type` are
+/// `None` here -- no typecheck has run. Diagnostics still go to
+/// stderr regardless.
 pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
     if files.is_empty() {
         eprintln!("Usage: expo parse <file.expo>");
         process::exit(1);
     }
 
-    for path in &files {
+    for (index, path) in files.iter().enumerate() {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -622,7 +606,12 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
             }
         };
 
-        let result = expo_parser::parse(&source);
+        let mut result = expo_parser::parse(&source, ParseMode::File);
+        // `expo_parser::parse` is the bare-string entry point that
+        // leaves `ast.path` unset. Populate it from the CLI argument
+        // so `--emit-ast` surfaces the file identity in the `File`
+        // header line.
+        result.ast.path = Some(std::path::PathBuf::from(path));
 
         if !result.errors.is_empty() {
             render_diagnostics(path, &source, &result.errors, color);
@@ -630,8 +619,10 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
         }
 
         if emit_ast {
-            println!("// === {path} ===");
-            println!("{:#?}", result.ast);
+            if index > 0 {
+                println!();
+            }
+            print!("{}", expo_ast::format_file(&result.ast));
         } else {
             println!("{path}: OK ({} items)", result.ast.items.len());
         }

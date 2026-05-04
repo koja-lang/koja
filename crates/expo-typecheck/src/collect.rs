@@ -672,7 +672,6 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                 }
             }
             Item::TypeAlias(_) => {} // handled in pre-pass above
-            _ => {}
         }
     }
 
@@ -1393,7 +1392,7 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
                 substitute_named_in_statement(s, from, to);
             }
         }
-        ExprKind::Loop { body, .. } | ExprKind::Arena { body, .. } => {
+        ExprKind::Loop { body, .. } => {
             for s in body {
                 substitute_named_in_statement(s, from, to);
             }
@@ -1634,7 +1633,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
                 substitute_self_in_statement(s, target);
             }
         }
-        ExprKind::Loop { body, .. } | ExprKind::Arena { body, .. } => {
+        ExprKind::Loop { body, .. } => {
             for s in body {
                 substitute_self_in_statement(s, target);
             }

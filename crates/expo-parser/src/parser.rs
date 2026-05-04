@@ -1,7 +1,26 @@
-use expo_ast::ast::{Comment, Diagnostic, File, Item, Severity, Visibility};
+use expo_ast::ast::{Comment, Diagnostic, File, Item, Severity, Statement, Visibility};
 use expo_ast::span::{Position, Span};
 use expo_ast::token::{Token, TokenKind};
 use expo_lexer::{LexResult, lex};
+
+/// Selects the top-level grammar accepted by the parser.
+///
+/// `ParseMode::File` (default) parses today's `.expo` compilation-unit
+/// grammar: only declarations (`fn`, `struct`, `enum`, `protocol`,
+/// `impl`, `const`, ...) at the top level. `File.body` is always
+/// `None` in this mode.
+///
+/// `ParseMode::Script` additionally accepts top-level statements (bare
+/// expressions, assignments, etc.) interleaved with declarations.
+/// Statements collect into `File.body = Some(...)` for later hoisting
+/// into a synthetic `fn main` item by `expo-alpha-typecheck`'s `lift_script`
+/// sub-pass.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ParseMode {
+    #[default]
+    File,
+    Script,
+}
 
 pub struct ParseResult {
     pub ast: File,
@@ -210,24 +229,77 @@ impl Parser {
     // Top-level parsing
     // =========================================================================
 
-    pub(crate) fn parse_file(&mut self) -> File {
+    pub(crate) fn parse_file(&mut self, mode: ParseMode) -> File {
         let start = self.current_span();
         let mut items = Vec::new();
+        let mut body: Vec<Statement> = Vec::new();
 
         self.skip_newlines();
         while !self.at_eof() {
-            if let Some(item) = self.parse_item() {
-                items.push(item);
+            match mode {
+                ParseMode::File => {
+                    if let Some(item) = self.parse_item() {
+                        items.push(item);
+                    }
+                }
+                ParseMode::Script => {
+                    if self.at_top_level_item_starter() {
+                        if let Some(item) = self.parse_item() {
+                            items.push(item);
+                        }
+                    } else {
+                        body.push(self.parse_statement());
+                    }
+                }
             }
             self.skip_newlines();
         }
 
+        // Script-mode body is only `Some` when there's actually
+        // something to hoist. An empty `body` (`fn main; ... end`
+        // parsed in script mode) collapses to `None` so `lift_script`
+        // doesn't synthesize an empty `fn main` that collides with a
+        // user-declared one.
+        let body = match mode {
+            ParseMode::File => None,
+            ParseMode::Script if body.is_empty() => None,
+            ParseMode::Script => Some(body),
+        };
+
         File {
+            body,
             comments: self.comments.clone(),
             items,
             package: String::new(),
             path: None,
             span: self.span_from(start),
+        }
+    }
+
+    /// Returns `true` when the current token (and, for `fn`, the
+    /// following one) starts a top-level declaration as opposed to a
+    /// statement. Used by `ParseMode::Script` to dispatch between
+    /// `parse_item` and `parse_statement` at the top level.
+    ///
+    /// `fn` is ambiguous: `fn name(...) ... end` is a function item,
+    /// `fn(x) -> x + 1` is a closure expression. The disambiguator is
+    /// the token immediately after `fn` -- an identifier means item,
+    /// `(` means closure expression. The `@` annotation prefix is
+    /// treated as an item starter because the only legal followers are
+    /// declaration keywords (struct/enum/fn/...).
+    pub(crate) fn at_top_level_item_starter(&self) -> bool {
+        match self.peek() {
+            TokenKind::Alias
+            | TokenKind::At
+            | TokenKind::Const
+            | TokenKind::Enum
+            | TokenKind::Impl
+            | TokenKind::Priv
+            | TokenKind::Protocol
+            | TokenKind::Struct
+            | TokenKind::Type => true,
+            TokenKind::Fn => matches!(self.peek_nth(1), TokenKind::Ident(_)),
+            _ => false,
         }
     }
 
@@ -270,7 +342,6 @@ impl Parser {
             }
             TokenKind::Type => Some(self.parse_type_alias_item(Vec::new())),
             TokenKind::Alias => Some(self.parse_alias_item()),
-            TokenKind::Shared => Some(self.parse_shared_item()),
             TokenKind::Const => Some(self.parse_constant_item(Vec::new())),
             _ => {
                 let span = self.current_span();
@@ -285,10 +356,10 @@ impl Parser {
     }
 }
 
-pub fn parse(source: &str) -> ParseResult {
+pub fn parse(source: &str, mode: ParseMode) -> ParseResult {
     let lex_result = lex(source);
     let mut parser = Parser::new(lex_result);
-    let ast = parser.parse_file();
+    let ast = parser.parse_file(mode);
     ParseResult {
         ast,
         errors: parser.errors,

@@ -370,6 +370,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "expo-alpha-ir"
+version = "0.9.0"
+dependencies = [
+ "expo-alpha-typecheck",
+ "expo-ast",
+ "expo-parser",
+]
+
+[[package]]
+name = "expo-alpha-ir-eval"
+version = "0.9.0"
+dependencies = [
+ "expo-alpha-ir",
+ "expo-alpha-typecheck",
+ "expo-ast",
+ "expo-parser",
+]
+
+[[package]]
+name = "expo-alpha-shell"
+version = "0.9.0"
+dependencies = [
+ "expo-alpha-ir",
+ "expo-alpha-ir-eval",
+ "expo-alpha-typecheck",
+ "expo-ast",
+ "expo-lexer",
+ "expo-parser",
+]
+
+[[package]]
+name = "expo-alpha-typecheck"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-parser",
+]
+
+[[package]]
 name = "expo-ast"
 version = "0.9.0"
 
@@ -398,6 +437,10 @@ version = "0.9.0"
 dependencies = [
  "boring-sys",
  "clap",
+ "expo-alpha-ir",
+ "expo-alpha-ir-eval",
+ "expo-alpha-shell",
+ "expo-alpha-typecheck",
  "expo-ast",
  "expo-codegen",
  "expo-doc",

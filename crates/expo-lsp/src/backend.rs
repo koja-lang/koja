@@ -13,6 +13,7 @@ use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
 use expo_ast::ast::File;
+use expo_parser::ParseMode;
 use expo_typecheck::context::TypeContext;
 use expo_typecheck::types::{Package, fqn_to_package};
 
@@ -57,7 +58,7 @@ impl Backend {
         let mut source_names = Vec::new();
 
         for &(name, source) in expo_stdlib::SOURCES {
-            let parsed = expo_parser::parse(source);
+            let parsed = expo_parser::parse(source, ParseMode::File);
             source_names.push(name);
             stdlib_files.push(parsed.ast);
         }

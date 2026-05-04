@@ -4,6 +4,8 @@
 //! source file. Spans are defined by a start and end [`Position`], each
 //! storing byte offset, line, and column.
 
+use std::fmt;
+
 /// A byte offset with line and column numbers within a source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Position {
@@ -17,6 +19,19 @@ pub struct Position {
 pub struct Span {
     pub start: Position,
     pub end: Position,
+}
+
+/// Compact `L:C-L:C` rendering shared by the AST printer and the
+/// registry printer. Callers prepend `@` if they want the `@L:C-L:C`
+/// convention the AST tree uses.
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}-{}:{}",
+            self.start.line, self.start.column, self.end.line, self.end.column,
+        )
+    }
 }
 
 impl Default for Span {

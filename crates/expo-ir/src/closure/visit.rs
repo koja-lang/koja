@@ -91,7 +91,6 @@ where
     F: FnMut(&Expr),
 {
     match &expr.kind {
-        ExprKind::Arena { body } => visit_statements(body, visitor),
         ExprKind::Binary { left, right, .. } => {
             visit_expr(left, visitor);
             visit_expr(right, visitor);

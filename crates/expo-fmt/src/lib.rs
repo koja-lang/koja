@@ -3,6 +3,7 @@ pub mod printer;
 
 use doc::render;
 use expo_ast::ast::Diagnostic;
+use expo_parser::ParseMode;
 
 /// The result of formatting a source string.
 pub enum FormatResult {
@@ -19,7 +20,7 @@ pub fn format(source: &str) -> FormatResult {
 
 /// Formats Expo source code, wrapping lines at `width` columns.
 pub fn format_width(source: &str, width: u32) -> FormatResult {
-    let result = expo_parser::parse(source);
+    let result = expo_parser::parse(source, ParseMode::File);
     if !result.errors.is_empty() {
         return FormatResult::ParseErrors(result.errors);
     }
@@ -41,6 +42,8 @@ pub fn format_width(source: &str, width: u32) -> FormatResult {
 
 #[cfg(test)]
 mod tests {
+    use expo_ast::util::dedent;
+
     use super::*;
 
     fn fmt(source: &str) -> String {
@@ -60,26 +63,6 @@ mod tests {
             actual, expected,
             "\n--- actual ---\n{actual}--- expected ---\n{expected}"
         );
-    }
-
-    fn dedent(s: &str) -> String {
-        let s = s.strip_prefix('\n').unwrap_or(s);
-        let min_indent = s
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| l.len() - l.trim_start().len())
-            .min()
-            .unwrap_or(0);
-        s.lines()
-            .map(|l| {
-                if l.len() >= min_indent {
-                    &l[min_indent..]
-                } else {
-                    l.trim()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     #[test]

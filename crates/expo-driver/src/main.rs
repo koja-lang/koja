@@ -2,6 +2,7 @@
 //!
 //! Parses the top-level subcommand and delegates to [`commands`].
 
+mod alpha;
 mod commands;
 mod diagnostics;
 mod pipeline;
@@ -27,6 +28,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Experimental alpha-pipeline subcommands (subject to breaking changes)
+    Alpha {
+        #[command(subcommand)]
+        command: AlphaCommand,
+    },
     /// Compile a source file to a native binary
     Build {
         /// Source file (omit to use expo.toml)
@@ -129,11 +135,45 @@ enum Command {
     Test,
 }
 
+/// Subcommands under `expo alpha`. These drive the alpha compiler
+/// pipeline (`expo-alpha-typecheck → expo-alpha-ir → expo-alpha-ir-eval`) and
+/// are intentionally namespaced so the production `expo eval` /
+/// `expo shell` paths can keep their full v1 feature set during the
+/// alpha build-out.
+#[derive(Subcommand)]
+enum AlphaCommand {
+    /// Type-check a source file through the alpha pipeline without lowering or running it
+    Check {
+        /// Source file
+        file: String,
+
+        /// Print the type-checked AST to stdout instead of just OK/diagnostics
+        #[arg(long)]
+        emit_ast: bool,
+    },
+    /// Run a source file through the alpha pipeline (POC scope: integer arithmetic only)
+    Eval {
+        /// Source file
+        file: String,
+
+        /// Entry function to invoke (defaults to `main`)
+        #[arg(long)]
+        entry: Option<String>,
+    },
+    /// Start an interactive REPL backed by the alpha pipeline (POC scope: integer arithmetic only)
+    Shell,
+}
+
 fn main() {
     let cli = Cli::parse();
     let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
 
     match cli.command {
+        Command::Alpha { command } => match command {
+            AlphaCommand::Check { file, emit_ast } => alpha::cmd_check(file, emit_ast),
+            AlphaCommand::Eval { file, entry } => alpha::cmd_eval(file, entry),
+            AlphaCommand::Shell => alpha::cmd_shell(),
+        },
         Command::Build {
             file,
             output,

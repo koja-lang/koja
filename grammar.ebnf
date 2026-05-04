@@ -28,7 +28,6 @@ top_level_decl = struct_decl
                | impl_block
                | function_decl
                | constant_decl
-               | shared_decl
                | type_alias_decl
                | alias_decl ;
 
@@ -206,7 +205,6 @@ primary = literal
         | for_expr
         | loop_expr
         | while_expr
-        | arena_expr
         | receive_expr
         | spawn_expr
         | "(" , expr , ")" ;                                 (* grouping *)
@@ -296,16 +294,7 @@ while_expr = "while" , expr ,
 
 
 (* ========================================================================== *)
-(* 10. Arena                                                                  *)
-(* ========================================================================== *)
-
-arena_expr = "arena" ,
-             { statement } ,
-             "end" ;
-
-
-(* ========================================================================== *)
-(* 11. Concurrency                                                            *)
+(* 10. Concurrency                                                            *)
 (* ========================================================================== *)
 
 (* spawn creates a new process; the type checker enforces the Process<C, M, R> constraint *)
@@ -321,7 +310,7 @@ receive_expr = "receive" ,
 
 
 (* ========================================================================== *)
-(* 12. Binary / bitstring literals                                            *)
+(* 11. Binary / bitstring literals                                            *)
 (* ========================================================================== *)
 
 binary_literal  = "<<" , [ binary_segment , { "," , binary_segment } ] , ">>" ;
@@ -344,7 +333,7 @@ modifier = "signed" | "unsigned" | "big" | "little" ;
 
 
 (* ========================================================================== *)
-(* 13. Pattern matching                                                       *)
+(* 12. Pattern matching                                                       *)
 (* ========================================================================== *)
 
 pattern = "_"                                                       (* wildcard *)
@@ -370,7 +359,7 @@ field_pattern = IDENT , ":" , pattern ;
 
 
 (* ========================================================================== *)
-(* 14. Literals                                                               *)
+(* 13. Literals                                                               *)
 (* ========================================================================== *)
 
 literal = integer_lit
@@ -415,7 +404,7 @@ map_lit  = "[" , ":" , "]"                                          (* empty map
 
 
 (* ========================================================================== *)
-(* 15. Operators                                                              *)
+(* 14. Operators                                                              *)
 (* ========================================================================== *)
 
 (* Precedence (lowest to highest):                                            *)
@@ -434,7 +423,7 @@ compound_assign = lvalue , ( "+=" | "-=" | "*=" | "/=" ) , expr ;
 
 
 (* ========================================================================== *)
-(* 16. Annotations                                                            *)
+(* 15. Annotations                                                            *)
 (* ========================================================================== *)
 
 annotation = "@" , IDENT , [ annotation_value ] ;
@@ -456,7 +445,7 @@ annotation_value = string_lit
 
 
 (* ========================================================================== *)
-(* 17. Comments                                                               *)
+(* 16. Comments                                                               *)
 (* ========================================================================== *)
 
 (* Line comments begin with # and extend to end of line.
@@ -466,16 +455,14 @@ comment = "#" , { any_char_except_newline } ;
 
 
 (* ========================================================================== *)
-(* 18. Other top-level declarations                                           *)
+(* 17. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
 constant_decl = { annotation } , "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
 
-shared_decl = "shared" , IDENT , ":" , type_expr ;
-
 
 (* ========================================================================== *)
-(* 19. Lexical elements                                                       *)
+(* 18. Lexical elements                                                       *)
 (* ========================================================================== *)
 
 IDENT       = LOWER , { LOWER | UPPER | DIGIT | "_" | "?" } ;
@@ -492,9 +479,9 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, alias, arena, break, cond, const, else, end, enum, false, fn,  *)
+(* after, alias, break, cond, const, else, end, enum, false, fn,        *)
 (* for, if, impl, in, loop, match, move, not, priv, protocol, receive,   *)
-(* return, self, shared, spawn, struct, true, type, unless, when, while  *)
+(* return, self, spawn, struct, true, type, unless, when, while         *)
 (*                                                                       *)
 (* Note: `and`, `or`, and `as` are contextual identifiers, not reserved  *)
 (* keywords. `and`/`or` are recognized as infix operators by the parser  *)

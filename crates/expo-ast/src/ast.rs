@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use crate::identifier::{Resolution, TypeIdentifier};
+use crate::identifier::{Resolution, ResolvedType, TypeIdentifier};
 use crate::span::Span;
 use crate::types::Type;
 
@@ -114,7 +114,48 @@ pub struct Diagnostic {
     pub span: Span,
 }
 
+impl Diagnostic {
+    /// Build an `Error`-severity diagnostic with no hint.
+    pub fn error(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            severity: Severity::Error,
+            message: message.into(),
+            hint: None,
+            span,
+        }
+    }
+
+    /// Build an `Error`-severity diagnostic carrying a hint.
+    pub fn error_with_hint(
+        message: impl Into<String>,
+        hint: impl Into<String>,
+        span: Span,
+    ) -> Self {
+        Self {
+            severity: Severity::Error,
+            message: message.into(),
+            hint: Some(hint.into()),
+            span,
+        }
+    }
+
+    /// Build a `Warning`-severity diagnostic with no hint.
+    pub fn warning(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            severity: Severity::Warning,
+            message: message.into(),
+            hint: None,
+            span,
+        }
+    }
+}
+
 /// A top-level declaration within a file.
+// `Constant` dominates the discriminant size because it embeds an `Expr`
+// for its RHS. Boxing it would ripple through every crate that matches
+// `Item::Constant(_)` without a corresponding simplicity win -- these
+// are transient AST nodes, not hot-path runtime values.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Item {
     Alias(AliasDecl),
@@ -123,7 +164,6 @@ pub enum Item {
     Function(Function),
     Impl(ImplBlock),
     Protocol(ProtocolDecl),
-    Shared(SharedDecl),
     Struct(StructDecl),
     TypeAlias(TypeAlias),
 }
@@ -136,8 +176,16 @@ pub enum Item {
 /// bare-string [`expo_parser::parse`] entry point (REPL, formatter,
 /// proptests) leave it `String::new()` -- those paths never reach the
 /// package-scoped passes that read it.
+///
+/// `body` is `Some(_)` only when the source was parsed in
+/// `ParseMode::Script` -- it carries top-level statements (e.g. the
+/// REPL's accumulated input) before they are hoisted into a synthetic
+/// `fn main` item. After `expo-alpha-typecheck`'s `lift_script` sub-pass runs,
+/// `body` is always `None`; the sealed AST has no surviving
+/// script-level statement bodies.
 #[derive(Debug, Clone)]
 pub struct File {
+    pub body: Option<Vec<Statement>>,
     pub comments: Vec<Comment>,
     pub items: Vec<Item>,
     pub package: String,
@@ -280,14 +328,6 @@ pub enum Param {
         default: Option<Expr>,
         span: Span,
     },
-}
-
-/// A `shared` declaration for concurrent shared state.
-#[derive(Debug, Clone)]
-pub struct SharedDecl {
-    pub name: String,
-    pub type_expr: TypeExpr,
-    pub span: Span,
 }
 
 /// A struct declaration: `struct Point ... end`.
@@ -469,26 +509,48 @@ pub enum EnumConstructionData {
 
 /// An expression node in the AST.
 ///
-/// Every expression carries a `span` for source location and a `resolved_type`
-/// that the type checker populates after inference. Downstream consumers
-/// (codegen, LSP, formatter) read the type from this struct instead of
-/// re-deriving it.
+/// Every expression carries a `span` for source location and **two**
+/// type-annotation slots that together describe the expression's type
+/// as known by the compiler:
+///
+/// - `resolved_type`: **legacy (v1 pipeline).** Populated by
+///   `expo-typecheck`; read by v1 codegen, LSP, and IR. Uses the
+///   closed `Type` enum from `expo_ast::types`. Alpha does **not**
+///   populate this field.
+/// - `resolution`: **northstar (alpha pipeline).** Populated by
+///   `expo-alpha-typecheck`; carries a [`ResolvedType`] that points
+///   into the alpha `GlobalRegistry` by id. Every sealed alpha `Expr`
+///   has `resolution.is_resolved()` true. V1 does **not** populate
+///   this field.
+///
+/// The two fields coexist during the v1 -> alpha migration so both
+/// pipelines can operate on the same AST shape without clobbering
+/// each other's state. Once v1 is retired, `resolved_type` goes away
+/// and `resolution` is the single ledger.
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
-    /// The resolved type of this expression. Populated by the type checker;
-    /// `None` before type checking.
+    /// Legacy v1 type annotation. `None` before v1 typecheck runs.
+    /// Alpha does not populate this field.
     pub resolved_type: Option<Type>,
+    /// Northstar-aligned type annotation. Default is
+    /// [`ResolvedType::unresolved`]; alpha resolve populates it with
+    /// a registry-pointing shape, and seal asserts
+    /// `resolution.is_resolved()` on every non-excluded node.
+    pub resolution: ResolvedType,
 }
 
 impl Expr {
-    /// Convenience constructor: wraps a kind + span with `resolved_type: None`.
+    /// Convenience constructor: wraps a kind + span with both type
+    /// annotations defaulted (legacy `resolved_type: None`,
+    /// northstar `resolution: Unresolved`).
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Self {
             kind,
             span,
             resolved_type: None,
+            resolution: ResolvedType::unresolved(),
         }
     }
 }
@@ -496,8 +558,6 @@ impl Expr {
 /// The specific kind of an expression node.
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    /// An arena allocation block: `arena ... end`.
-    Arena { body: Vec<Statement> },
     /// A binary operation: `a + b`, `x * y`.
     Binary {
         op: BinOp,

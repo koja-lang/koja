@@ -61,6 +61,7 @@ use expo_ast::ast::{File, Item};
 use expo_ast::token::TokenKind;
 use expo_ir::{Backend, FunctionIdentifier};
 use expo_ir_eval::{Interp, Value};
+use expo_parser::ParseMode;
 
 const BANNER: &str = "Expo shell -- interactive REPL backed by the IR interpreter\n\
     Type :help for commands, :quit (or Ctrl-D) to exit\n";
@@ -303,11 +304,14 @@ pub fn eval_file(path: &Path, entry: Option<&str>) -> Result<Option<Value>, Stri
         .and_then(|stem| stem.to_str())
         .unwrap_or("__eval__")
         .to_string();
-    let parsed = expo_parser::parse_file(expo_parser::SourceFile {
-        package: package.clone(),
-        path: path.to_path_buf(),
-        source,
-    });
+    let parsed = expo_parser::parse_file(
+        expo_parser::SourceFile {
+            package: package.clone(),
+            path: path.to_path_buf(),
+            source,
+        },
+        ParseMode::File,
+    );
     if !parsed.diagnostics.is_empty() {
         return Err(format_parse_diagnostics(&parsed.diagnostics));
     }
@@ -374,8 +378,7 @@ pub fn is_input_complete(source: &str) -> bool {
     let mut interpol_depth: i32 = 0;
     for token in expo_lexer::lex(source).tokens {
         match token.kind {
-            TokenKind::Arena
-            | TokenKind::Cond
+            TokenKind::Cond
             | TokenKind::Enum
             | TokenKind::Fn
             | TokenKind::For
@@ -417,7 +420,7 @@ pub fn is_input_complete(source: &str) -> bool {
 /// file-on-disk paths see [`eval_file`] which goes through
 /// [`expo_parser::parse_file`].
 pub(crate) fn parse_file(source: &str) -> Result<File, String> {
-    let parsed = expo_parser::parse(source);
+    let parsed = expo_parser::parse(source, ParseMode::File);
     if !parsed.errors.is_empty() {
         return Err(format_parse_diagnostics(&parsed.errors));
     }

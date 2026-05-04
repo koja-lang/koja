@@ -336,11 +336,6 @@ pub fn compile_expr<'ctx>(
             after_body,
             function,
         ),
-
-        _ => Err(format!(
-            "not yet supported in compilation: {:?}",
-            std::mem::discriminant(&expr.kind)
-        )),
     }
 }
 
