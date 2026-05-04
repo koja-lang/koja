@@ -47,7 +47,7 @@ x = 42  # inline comment
 ```
 alias, break, cond, const, else, end, enum, false, fn, for,
 if, impl, in, loop, match, move, not, priv, protocol,
-receive, return, self, shared, spawn, struct, true, type, unless, when
+receive, return, self, spawn, struct, true, type, unless, when
 ```
 
 `and` and `or` are operator-identifiers, not reserved keywords. They act as infix boolean operators in expressions (`a and b`, `x or y`) but can also be used freely as method names, function names, or field names (e.g., `option.or(default)`).
@@ -702,7 +702,7 @@ Variable bindings inside OR patterns are disallowed.
 
 ### `cond`
 
-Multi-branch conditional, like a chain of `if`/`else if`. Requires `else` arm:
+Multi-branch conditional. Expo has no `else if`; `cond` is the idiomatic way to chain conditions. Requires an `else` arm:
 
 ```expo
 fn classify(n: Int32) -> String
@@ -716,7 +716,7 @@ end
 
 `cond` is value-producing when all arms (including `else`) produce values.
 
-`cond` is the idiomatic replacement for `else if` chains. Arms can use any boolean expression, including method calls:
+Arms can use any boolean expression, including method calls:
 
 ```expo
 cond
@@ -872,18 +872,17 @@ w.name.print()              # "HELLO"
 Protocols define behavioral contracts. Types implement protocols via `impl Protocol for Type`.
 
 ```expo
-protocol Display
-  fn display(self) -> String
+protocol Greeter
+  fn greet(self) -> String
 end
 
-struct Point
-  x: Int32
-  y: Int32
+struct Cat
+  name: String
 end
 
-impl Display for Point
-  fn display(self) -> String
-    "Point"
+impl Greeter for Cat
+  fn greet(self) -> String
+    "meow, I'm #{self.name}"
   end
 end
 ```
@@ -1037,7 +1036,7 @@ impl Process<Counter, CounterMsg, Int> for Counter
       CounterMsg.Increment -> self.count += 1
       CounterMsg.Decrement -> self.count -= 1
     end
-    reply(from, self.count)
+    ReplyTo.reply(from, self.count)
     self
   end
 end
@@ -1122,10 +1121,18 @@ end
 
 - `send(reply: R)` -- sends the reply back to the caller.
 
-The `reply` convenience function handles the common pattern of replying only when a caller is present (skips silently for `cast` messages):
+`ReplyTo.reply(from, value)` is a convenience on `ReplyTo<R>` that handles the common pattern of replying only when a caller is present (skips silently for `cast` messages):
 
 ```expo
-fn reply<R>(from: Option<ReplyTo<R>>, value: R)
+impl ReplyTo<R>
+  fn reply(from: Option<ReplyTo<R>>, value: R)
+end
+```
+
+Call it with the handler's `from` parameter directly:
+
+```expo
+ReplyTo.reply(from, self.count)
 ```
 
 ### `spawn` and `receive`

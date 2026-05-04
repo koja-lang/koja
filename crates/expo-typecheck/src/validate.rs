@@ -56,7 +56,7 @@ fn validate_item(item: &Item, ctx: &mut TypeContext) {
                 validate_function(f, ctx);
             }
         }
-        Item::Alias(_) | Item::Protocol(_) | Item::Shared(_) | Item::TypeAlias(_) => {}
+        Item::Alias(_) | Item::Protocol(_) | Item::TypeAlias(_) => {}
     }
 }
 

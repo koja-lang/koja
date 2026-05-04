@@ -35,7 +35,6 @@ pub(crate) fn collect_file(
             | Item::Enum(_)
             | Item::Impl(_)
             | Item::Protocol(_)
-            | Item::Shared(_)
             | Item::Struct(_)
             | Item::TypeAlias(_) => {
                 diagnostics.push(Diagnostic::error(

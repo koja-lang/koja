@@ -672,7 +672,6 @@ pub fn collect(file: &File, global_names: &GlobalNames, package: &str) -> TypeCo
                 }
             }
             Item::TypeAlias(_) => {} // handled in pre-pass above
-            _ => {}
         }
     }
 

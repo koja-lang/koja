@@ -49,7 +49,6 @@ pub enum TokenKind {
     Receive,
     Return,
     Self_,
-    Shared,
     Spawn,
     Struct,
     Type,
@@ -129,7 +128,6 @@ impl TokenKind {
                 | TokenKind::Receive
                 | TokenKind::Return
                 | TokenKind::Self_
-                | TokenKind::Shared
                 | TokenKind::Spawn
                 | TokenKind::Struct
                 | TokenKind::True

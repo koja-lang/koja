@@ -16,8 +16,8 @@ use crate::lookup::find_expr_at;
 /// Expo language keywords offered as completions.
 const KEYWORDS: &[&str] = &[
     "break", "cond", "const", "else", "end", "enum", "false", "fn", "for", "if", "impl", "in",
-    "loop", "match", "move", "priv", "protocol", "receive", "return", "self", "shared", "spawn",
-    "struct", "true", "type", "unless", "when", "while",
+    "loop", "match", "move", "priv", "protocol", "receive", "return", "self", "spawn", "struct",
+    "true", "type", "unless", "when", "while",
 ];
 
 impl Backend {

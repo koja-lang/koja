@@ -635,21 +635,8 @@ impl Parser {
     }
 
     // =========================================================================
-    // Shared / Constant
+    // Constant
     // =========================================================================
-
-    pub(crate) fn parse_shared_item(&mut self) -> Item {
-        let start = self.current_span();
-        self.advance(); // shared
-        let name = self.expect_ident();
-        self.expect(&TokenKind::Colon);
-        let type_expr = self.parse_type_expr();
-        Item::Shared(SharedDecl {
-            name,
-            type_expr,
-            span: self.span_from(start),
-        })
-    }
 
     pub(crate) fn parse_constant_item(&mut self, annotations: Vec<Annotation>) -> Item {
         let start = self.current_span();

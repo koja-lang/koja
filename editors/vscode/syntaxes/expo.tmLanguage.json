@@ -125,7 +125,7 @@
         },
         {
           "name": "keyword.other.expo",
-          "match": "\\b(const|impl|type|shared|alias|as)\\b"
+          "match": "\\b(const|impl|type|alias|as)\\b"
         },
         {
           "name": "storage.type.expo",

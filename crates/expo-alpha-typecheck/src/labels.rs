@@ -44,7 +44,6 @@ pub(crate) fn item_label(item: &Item) -> &'static str {
         Item::Function(_) => "fn",
         Item::Impl(_) => "impl",
         Item::Protocol(_) => "protocol",
-        Item::Shared(_) => "shared",
         Item::Struct(_) => "struct",
         Item::TypeAlias(_) => "type",
     }
@@ -58,7 +57,6 @@ pub(crate) fn item_span(item: &Item) -> expo_ast::span::Span {
         Item::Function(f) => f.span,
         Item::Impl(i) => i.span,
         Item::Protocol(p) => p.span,
-        Item::Shared(s) => s.span,
         Item::Struct(s) => s.span,
         Item::TypeAlias(t) => t.span,
     }

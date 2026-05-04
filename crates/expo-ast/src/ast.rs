@@ -159,7 +159,6 @@ pub enum Item {
     Function(Function),
     Impl(ImplBlock),
     Protocol(ProtocolDecl),
-    Shared(SharedDecl),
     Struct(StructDecl),
     TypeAlias(TypeAlias),
 }
@@ -324,14 +323,6 @@ pub enum Param {
         default: Option<Expr>,
         span: Span,
     },
-}
-
-/// A `shared` declaration for concurrent shared state.
-#[derive(Debug, Clone)]
-pub struct SharedDecl {
-    pub name: String,
-    pub type_expr: TypeExpr,
-    pub span: Span,
 }
 
 /// A struct declaration: `struct Point ... end`.

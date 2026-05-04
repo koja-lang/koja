@@ -28,7 +28,6 @@ top_level_decl = struct_decl
                | impl_block
                | function_decl
                | constant_decl
-               | shared_decl
                | type_alias_decl
                | alias_decl ;
 
@@ -461,8 +460,6 @@ comment = "#" , { any_char_except_newline } ;
 
 constant_decl = { annotation } , "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
 
-shared_decl = "shared" , IDENT , ":" , type_expr ;
-
 
 (* ========================================================================== *)
 (* 18. Lexical elements                                                       *)
@@ -484,7 +481,7 @@ BIN_DIGIT = "0" | "1" ;
 
 (* after, alias, break, cond, const, else, end, enum, false, fn,        *)
 (* for, if, impl, in, loop, match, move, not, priv, protocol, receive,   *)
-(* return, self, shared, spawn, struct, true, type, unless, when, while  *)
+(* return, self, spawn, struct, true, type, unless, when, while         *)
 (*                                                                       *)
 (* Note: `and`, `or`, and `as` are contextual identifiers, not reserved  *)
 (* keywords. `and`/`or` are recognized as infix operators by the parser  *)

@@ -1,5 +1,5 @@
-protocol Display
-  fn display(self) -> String
+protocol Greeter
+  fn greet(self) -> String
 end
 
 struct Point
@@ -7,14 +7,14 @@ struct Point
   y: Int
 end
 
-impl Display for Point
-  fn display(self) -> String
+impl Greeter for Point
+  fn greet(self) -> String
     "Point"
   end
 end
 
 fn main
   p = Point{x: 1, y: 2}
-  label = p.display()
+  label = p.greet()
   label.print()
 end

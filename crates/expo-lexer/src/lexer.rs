@@ -167,7 +167,6 @@ impl Lexer {
             "receive" => TokenKind::Receive,
             "return" => TokenKind::Return,
             "self" => TokenKind::Self_,
-            "shared" => TokenKind::Shared,
             "spawn" => TokenKind::Spawn,
             "struct" => TokenKind::Struct,
             "true" => TokenKind::True,

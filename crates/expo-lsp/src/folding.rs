@@ -104,7 +104,7 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                     ranges.push(r);
                 }
             }
-            Item::TypeAlias(_) | Item::Shared(_) => {}
+            Item::TypeAlias(_) => {}
         }
     }
 }

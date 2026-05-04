@@ -296,7 +296,6 @@ impl Parser {
             | TokenKind::Impl
             | TokenKind::Priv
             | TokenKind::Protocol
-            | TokenKind::Shared
             | TokenKind::Struct
             | TokenKind::Type => true,
             TokenKind::Fn => matches!(self.peek_nth(1), TokenKind::Ident(_)),
@@ -343,7 +342,6 @@ impl Parser {
             }
             TokenKind::Type => Some(self.parse_type_alias_item(Vec::new())),
             TokenKind::Alias => Some(self.parse_alias_item()),
-            TokenKind::Shared => Some(self.parse_shared_item()),
             TokenKind::Const => Some(self.parse_constant_item(Vec::new())),
             _ => {
                 let span = self.current_span();

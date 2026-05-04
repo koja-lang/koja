@@ -393,20 +393,6 @@ reconcile the docs.
 
 ## A. Dead end cruft (parsed, but dies at codegen or earlier)
 
-### A2. `shared` / `SharedDecl`
-
-- **Parser:** [decl.rs:641-651](../crates/expo-parser/src/decl.rs) — `parse_shared_item` produces `Item::Shared(SharedDecl)`.
-- **AST:** [ast.rs:162, 329-334](../crates/expo-ast/src/ast.rs).
-- **Grammar:** `shared_decl` at line 474.
-- **Typecheck:** `scan_globals` does NOT register `Shared`; `Item::Shared` falls to the `_ => continue` arm ([collect.rs:734-739](../crates/expo-typecheck/src/collect.rs)). `validate.rs:59` is a no-op.
-- **IR / codegen:** zero references to `Item::Shared` in non-alpha crates (`rg Item::Shared expo-ir expo-codegen` is empty).
-- **LANGUAGE.md:** listed in the Keywords section at line 49 with no "not yet implemented" note. No prose/section describing the feature.
-- **ROADMAP.md:** a `shared_map` is listed for Phase 4B, but it's described as a stdlib type, not a keyword — the `shared` keyword itself never appears in ROADMAP.
-
-**Action:** remove `shared` keyword + `SharedDecl` from
-AST/parser/grammar/LANGUAGE.md/reserved-keywords list. The `shared_map`
-concept in ROADMAP does not depend on the keyword.
-
 ### A3. `ExprKind` variants that only go through the legacy codegen path (never real IR)
 
 These lower to `IRInstruction::Stub`, which `expo-codegen`'s instruction
@@ -451,15 +437,6 @@ parsed yet".
 **Action:** either remove destructured-form from `closure_param_short`
 in grammar, or implement it. Grammar line 246-247 is the liar today.
 
-### B3. `PassMode::Copy`
-
-- **AST:** [ast.rs:35-41](../crates/expo-ast/src/ast.rs) — Copy / Move / Borrow.
-- **Parser:** never produces `Copy` (grep confirms: `rg "PassMode::Copy" expo/crates/expo-parser` is empty).
-- **Typecheck / codegen:** closure capture analysis produces `Copy` for primitive captures.
-
-**Verdict:** not cruft — `Copy` is a semantic result of typecheck, not a
-parser output. Leave alone.
-
 ---
 
 ## C. Grammar.ebnf vs parser shape mismatches (grammar lies, parser right)
@@ -494,15 +471,6 @@ parser output. Leave alone.
 **Action:** trivial parser fix (a few lines) or disallow in grammar.
 Probably fix the parser since the feature is cheap.
 
-### C5. `else if` chaining
-
-- **Parser:** explicitly rejects `else if` with a diagnostic ([control.rs:15-22](../crates/expo-parser/src/control.rs)).
-- **Grammar:** doesn't explicitly say yes or no.
-- **LANGUAGE.md lines 285-300:** shows `else if` as idiomatic — worth verifying the examples actually compile.
-
-**Action:** confirm LANGUAGE.md's `else if` examples actually compile;
-if not, fix parser OR doc.
-
 ---
 
 ## D. LANGUAGE.md drift (docs lie about reality)
@@ -523,13 +491,6 @@ not `new`, `Step<Self>` not union, mention `Lifecycle` and
 **Action:** replace with a minimal copy-pasteable `Counter` example
 matching today's Process protocol.
 
-### D3. `reply` is a method, not a free function
-
-- **LANGUAGE.md ~1127-1128:** `fn reply<R>(from: Option<ReplyTo<R>>, value: R)`.
-- **Reality:** in `impl ReplyTo<R>`, called as `ReplyTo.reply(from, value)` ([process.expo:74-90](../lib/global/src/process.expo)).
-
-**Action:** fix signature + call sites in docs.
-
 ### D4. `receive ... after` underdocumented
 
 - LANGUAGE.md lines 1133-1139 show only the mailbox arm.
@@ -543,14 +504,6 @@ matching today's Process protocol.
 - LANGUAGE.md lists cast / call / signal / kill / alive? only.
 
 **Action:** add `send_after` to the Ref API list.
-
-### D6. Table of Contents lists `Display` under Planned Features
-
-- **TOC line 23:** "Planned Features -- Arena Blocks, Display, Struct Destructuring, command".
-- **Actual Planned Features section (1813-1840):** Arena, Struct destructuring, command — no Display.
-- `Display` is just a user-defined protocol example in the Protocols section, not a built-in.
-
-**Action:** remove "Display" from the TOC.
 
 ### D7. `Debug` auto-derive for generics is degraded
 
