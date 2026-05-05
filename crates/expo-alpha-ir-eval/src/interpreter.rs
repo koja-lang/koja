@@ -26,11 +26,12 @@
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRProgram, IRScript,
-    IRTerminator, ValueId,
+    ConstValue, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRProgram,
+    IRScript, IRTerminator, ValueId,
 };
 
 use crate::error::RuntimeError;
+use crate::intrinsics;
 use crate::ops::{apply_binary_op, apply_unary_op};
 use crate::value::Value;
 
@@ -76,7 +77,8 @@ impl CallResolver for IRScript {
 
 /// Run `function` in a fresh frame with `args` positionally bound to
 /// its param `ValueId`s. Multi-block bodies dispatch through
-/// [`execute_blocks`].
+/// [`execute_blocks`]; `@intrinsic`-tagged functions short-circuit
+/// to the hand-written handler in [`crate::intrinsics`].
 fn execute_function<R: CallResolver>(
     function: &IRFunction,
     args: Vec<Value>,
@@ -90,6 +92,9 @@ fn execute_function<R: CallResolver>(
         function.params.len(),
         args.len(),
     );
+    if function.kind == FunctionKind::Intrinsic {
+        return intrinsics::dispatch(function.symbol.mangled(), &args);
+    }
     let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
     for (param, value) in function.params.iter().zip(args.into_iter()) {
         frame.insert(param.id, value);

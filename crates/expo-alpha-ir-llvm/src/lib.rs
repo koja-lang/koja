@@ -59,9 +59,11 @@ mod ctx;
 mod emit;
 mod error;
 mod function;
+mod intrinsics;
 mod main_wrapper;
 mod object;
 mod program;
+mod runtime;
 mod script;
 mod types;
 

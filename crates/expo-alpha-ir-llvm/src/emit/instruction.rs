@@ -24,8 +24,9 @@ pub(super) fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::Call { dest, callee, args } => {
-            let result = emit_call(ctx, callee, args, values)?;
-            values.insert(*dest, result);
+            if let Some(result) = emit_call(ctx, callee, args, values)? {
+                values.insert(*dest, result);
+            }
             Ok(())
         }
         IRInstruction::Const { dest, value } => {
@@ -59,18 +60,21 @@ pub(super) fn emit_instruction<'ctx>(
 }
 
 /// Emit a call to the helper function registered on `ctx.module`
-/// under the callee's mangled symbol. Every non-entry function is
-/// declared before any body emission and the IR seal pass guarantees
-/// every `IRInstruction::Call::callee` resolves to a registered
-/// function — so a miss here is a compiler bug, not a feature gap.
-/// `Unit` returns are rejected upstream so we always have a basic
-/// value to extract.
+/// under the callee's mangled symbol. Returns the call's basic value
+/// for non-`Unit` callees and `None` for `Unit`-returning ones (the
+/// underlying LLVM call returns `void`); the caller skips the value
+/// map insert in that case.
+///
+/// Every non-entry function is declared before any body emission
+/// and the IR seal pass guarantees every `IRInstruction::Call::callee`
+/// resolves to a registered function — so a miss here is a compiler
+/// bug, not a feature gap.
 fn emit_call<'ctx>(
     ctx: &EmitCtx<'ctx>,
     callee: &IRSymbol,
     args: &[ValueId],
     values: &ValueMap<'ctx>,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
     let mangled = callee.mangled();
     let function = ctx.module.get_function(mangled).unwrap_or_else(|| {
         panic!(
@@ -88,11 +92,7 @@ fn emit_call<'ctx>(
         .map_err(|e| {
             LlvmError::Codegen(format!("inkwell rejected build_call for `{mangled}`: {e}"))
         })?;
-    call_site.try_as_basic_value().basic().ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "alpha LLVM does not yet emit Unit-returning calls (callee `{mangled}`)",
-        ))
-    })
+    Ok(call_site.try_as_basic_value().basic())
 }
 
 fn emit_const<'ctx>(

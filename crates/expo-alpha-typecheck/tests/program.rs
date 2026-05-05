@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_typecheck::{CheckedProgram, check_program};
+use expo_alpha_typecheck::{CheckedProgram, GlobalKind, check_program};
 use expo_ast::ast::{Expr, ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution};
 use expo_ast::util::dedent;
@@ -106,6 +106,57 @@ fn fn_main_two_plus_two_typechecks_to_int() {
     };
     assert_int(left, int_id);
     assert_int(right, int_id);
+}
+
+#[test]
+fn intrinsic_fn_typechecks_without_body_and_lifts_signature() {
+    // Bodyless `@intrinsic` decls flow through collect /
+    // lift_signatures / resolve / seal exactly like regular fns;
+    // the only surface-level difference is `function.body == None`
+    // and the parser refusing to consume a body. The registry
+    // still ends up with a `Function(Some(_))` entry once
+    // `lift_signatures` runs, so call-site resolution finds the
+    // signature.
+    let source = "
+        @intrinsic
+        fn print(s: String)
+        ";
+
+    let checked = typecheck(&dedent(source));
+
+    let print_id = Identifier::new(PACKAGE, vec!["print".to_string()]);
+    let (_, entry) = checked
+        .registry
+        .lookup(&print_id)
+        .expect("intrinsic should be registered in the GlobalRegistry");
+    let GlobalKind::Function(Some(signature)) = &entry.kind else {
+        panic!(
+            "expected Function(Some(_)) for intrinsic; got {:?}",
+            entry.kind
+        );
+    };
+    assert_eq!(signature.params.len(), 1);
+    assert_eq!(signature.params[0].name, "s");
+
+    let string_id = Identifier::new("Global", vec!["String".to_string()]);
+    let (string_global_id, _) = checked
+        .registry
+        .lookup(&string_id)
+        .expect("Global.String stub should be registered");
+    assert_eq!(
+        signature.params[0].ty.resolution,
+        Resolution::Global(string_global_id),
+    );
+
+    let unit_id = Identifier::new("Global", vec!["Unit".to_string()]);
+    let (unit_global_id, _) = checked
+        .registry
+        .lookup(&unit_id)
+        .expect("Global.Unit stub should be registered");
+    assert_eq!(
+        signature.return_type.resolution,
+        Resolution::Global(unit_global_id),
+    );
 }
 
 #[test]

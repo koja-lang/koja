@@ -20,6 +20,10 @@ pub enum RuntimeError {
     /// A unary operator produced a value outside the `i64` range
     /// (in practice: negating `i64::MIN`).
     UnaryIntegerOverflow { op: IRUnaryOp, operand: i64 },
+    /// An `@intrinsic`-tagged call resolved to a mangled symbol the
+    /// interpreter has no registered handler for. Indicates a missing
+    /// registration in `crate::intrinsics`, not a user error.
+    UnknownIntrinsic { symbol: String },
     /// Catch-all for IR shapes the interpreter doesn't yet handle.
     Unsupported { detail: String },
     /// An operand referenced a `ValueId` not yet defined in the
@@ -40,6 +44,12 @@ impl fmt::Display for RuntimeError {
             RuntimeError::TypeMismatch { detail } => write!(f, "type mismatch: {detail}"),
             RuntimeError::UnaryIntegerOverflow { op, operand } => {
                 write!(f, "integer overflow: {op:?} {operand}")
+            }
+            RuntimeError::UnknownIntrinsic { symbol } => {
+                write!(
+                    f,
+                    "unknown intrinsic `{symbol}`: no eval handler registered"
+                )
             }
             RuntimeError::Unsupported { detail } => write!(f, "unsupported: {detail}"),
             RuntimeError::ValueUndefined { id } => {

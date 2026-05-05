@@ -13,6 +13,7 @@
 
 mod error;
 mod interpreter;
+mod intrinsics;
 mod ops;
 mod value;
 

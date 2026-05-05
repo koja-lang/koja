@@ -16,21 +16,19 @@
 use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRTerminator, IRType};
 use inkwell::AddressSpace;
 use inkwell::module::Linkage;
-use inkwell::types::BasicMetadataTypeEnum;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
+use inkwell::values::{BasicValueEnum, IntValue};
 
 use crate::ctx::EmitCtx;
 use crate::emit::{self, ValueMap};
 use crate::error::LlvmError;
 use crate::function::declare_blocks;
+use crate::runtime::{
+    PRINT_BOOL_SYMBOL, PRINT_F32_SYMBOL, PRINT_F64_SYMBOL, PRINT_INT_SYMBOL, PRINT_STRING_SYMBOL,
+    declare_runtime_printer,
+};
 
 const APP_NAME_SYMBOL: &str = "__expo_app_name";
 const ENTRY_SYMBOL: &str = "main";
-const PRINT_BOOL_SYMBOL: &str = "__expo_alpha_print_bool";
-const PRINT_F32_SYMBOL: &str = "__expo_alpha_print_f32";
-const PRINT_F64_SYMBOL: &str = "__expo_alpha_print_f64";
-const PRINT_INT_SYMBOL: &str = "__expo_alpha_print_i64";
-const PRINT_STRING_SYMBOL: &str = "__expo_alpha_print_string";
 
 /// Emit `__expo_app_name` as a null-terminated C-string constant.
 /// The `expo-runtime` panic handler reads it for backtrace labels
@@ -52,6 +50,12 @@ pub(crate) fn emit_app_name_global(ctx: &EmitCtx<'_>, app_name: &str) {
 /// trailing-block's `Return` so we can insert the auto-print call
 /// before `ret i64 0`. Branch / cond-branch terminators are lowered
 /// to `br` instructions verbatim.
+///
+/// `IRType::Unit` trailings (e.g. a script body whose last
+/// expression is `print("hello")`) skip the auto-print call entirely
+/// — Unit has no value to print — and just emit `ret i64 0`. The
+/// non-Unit path looks up the trailing value and dispatches through
+/// [`emit_print_call`].
 ///
 /// Empty bodies are illegal (sealed IR guarantees at least one
 /// block), and the final IR block must end in `Return`. The seal
@@ -78,29 +82,42 @@ pub(crate) fn emit_as_main<'ctx>(
             let (next_values, terminator) =
                 emit::emit_instructions(ctx, block, std::mem::take(&mut values))?;
             values = next_values;
-            let body_value = match terminator {
-                IRTerminator::Return { value: Some(id) } => emit::lookup(&values, *id)?,
-                IRTerminator::Return { value: None } => {
-                    return Err(LlvmError::Codegen(
-                        "alpha LLVM does not yet emit Unit-returning `main`".to_string(),
-                    ));
-                }
-                other => {
-                    unreachable!("main return-block must terminate in Return; got {other:?}")
-                }
-            };
-            emit_print_call(ctx, return_type, body_value)?;
-            ctx.builder
-                .build_return(Some(&i64_type.const_int(0, false)))
-                .map(|_| ())
-                .map_err(|e| {
-                    LlvmError::Codegen(format!("inkwell rejected build_return for main: {e}"))
-                })?;
+            emit_main_return(ctx, return_type, terminator, &values)?;
         } else {
             emit::emit_block(ctx, block, &block_map, &mut values)?;
         }
     }
     Ok(())
+}
+
+/// Auto-print + `ret i64 0` synthesis for the trailing block of
+/// `main`. `Unit` trailings skip the print call; everything else
+/// looks up the trailing value and routes through
+/// [`emit_print_call`]. Both paths finish with `ret i64 0` per the
+/// host-runtime contract.
+fn emit_main_return<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    return_type: &IRType,
+    terminator: &IRTerminator,
+    values: &ValueMap<'ctx>,
+) -> Result<(), LlvmError> {
+    let i64_type = ctx.context.i64_type();
+    if !matches!(return_type, IRType::Unit) {
+        let body_value = match terminator {
+            IRTerminator::Return { value: Some(id) } => emit::lookup(values, *id)?,
+            IRTerminator::Return { value: None } => {
+                return Err(LlvmError::Codegen(format!(
+                    "main return block has no value but its return type is `{return_type:?}`",
+                )));
+            }
+            other => unreachable!("main return-block must terminate in Return; got {other:?}"),
+        };
+        emit_print_call(ctx, return_type, body_value)?;
+    }
+    ctx.builder
+        .build_return(Some(&i64_type.const_int(0, false)))
+        .map(|_| ())
+        .map_err(|e| LlvmError::Codegen(format!("inkwell rejected build_return for main: {e}")))
 }
 
 /// The [`IRBlockId`] of the unique block ending in `Return`. The
@@ -190,7 +207,9 @@ fn emit_print_call<'ctx>(
         ),
         IRType::Unit => {
             return Err(LlvmError::Codegen(
-                "alpha LLVM does not yet emit Unit-typed main bodies".to_string(),
+                "emit_print_call invoked with `IRType::Unit` — the Unit-typed trailing path \
+                 in emit_as_main should have skipped this call (compiler bug)"
+                    .to_string(),
             ));
         }
     };
@@ -199,19 +218,6 @@ fn emit_print_call<'ctx>(
         .build_call(printer, &[argument], "")
         .map(|_| ())
         .map_err(|e| LlvmError::Codegen(format!("inkwell rejected print call: {e}")))
-}
-
-fn declare_runtime_printer<'ctx>(
-    ctx: &EmitCtx<'ctx>,
-    symbol: &str,
-    argument_type: BasicMetadataTypeEnum<'ctx>,
-) -> FunctionValue<'ctx> {
-    if let Some(existing) = ctx.module.get_function(symbol) {
-        return existing;
-    }
-    let signature = ctx.context.void_type().fn_type(&[argument_type], false);
-    ctx.module
-        .add_function(symbol, signature, Some(Linkage::External))
 }
 
 fn sext_to_i64<'ctx>(

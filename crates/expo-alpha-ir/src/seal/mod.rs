@@ -32,7 +32,10 @@
 //!    function.
 //! 2. Every function in every package keys at its own symbol
 //!    (`pkg.functions[sym].symbol == sym`).
-//! 3. Every function has at least one basic block.
+//! 3. Per-function body shape matches its [`crate::FunctionKind`]:
+//!    `Regular` carries at least one basic block; `Intrinsic`
+//!    carries zero (the body is synthesized at emit time by the
+//!    backend's `intrinsics/` dispatch).
 //! 4. Every basic-block id is unique within its function.
 //! 5. Every operand referenced by an instruction or terminator points
 //!    at a `ValueId` defined earlier in the same basic block.

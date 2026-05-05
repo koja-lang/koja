@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRFunction};
+use expo_alpha_ir::{FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRType};
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
@@ -19,6 +19,7 @@ use inkwell::values::FunctionValue;
 use crate::ctx::EmitCtx;
 use crate::emit::{self, BlockMap, ValueMap};
 use crate::error::LlvmError;
+use crate::intrinsics;
 use crate::types::ir_basic_type;
 
 /// Declare an LLVM function for `function` under its mangled
@@ -47,23 +48,33 @@ fn function_signature<'ctx>(
     for param in &function.params {
         param_types.push(ir_basic_type(ctx.context, &param.ty)?.into());
     }
-    let return_type = ir_basic_type(ctx.context, &function.return_type)?;
-    Ok(return_type.fn_type(&param_types, false))
+    Ok(if matches!(function.return_type, IRType::Unit) {
+        ctx.context.void_type().fn_type(&param_types, false)
+    } else {
+        ir_basic_type(ctx.context, &function.return_type)?.fn_type(&param_types, false)
+    })
 }
 
-/// Define a non-entry function's body. Helpers keep the natural
-/// `Return`-to-`ret` emission via [`emit::emit_block`] — only `main`
-/// gets the auto-print wrapper. Pre-creates one inkwell `BasicBlock`
-/// per IR block so `Branch` / `CondBranch` terminators can resolve
-/// to a real [`BasicBlock`]. The body's [`ValueMap`] is seeded with
-/// each [`expo_alpha_ir::IRFunctionParam`] bound to the matching
-/// `function.get_nth_param(i)` LLVM value before walking the entry
-/// block.
+/// Define a non-entry function's body. Dispatches on
+/// [`FunctionKind`]: `Regular` walks the IR basic blocks via
+/// [`emit::emit_block`]; `Intrinsic` routes to
+/// [`intrinsics::emit_intrinsic_body`] which synthesizes a body from
+/// the per-symbol emitter table. Only `main` gets the auto-print
+/// wrapper; `Regular` helpers keep the natural `Return`-to-`ret`
+/// emission. Pre-creates one inkwell `BasicBlock` per IR block (a
+/// no-op for `Intrinsic`'s empty `blocks`) so `Branch` / `CondBranch`
+/// terminators can resolve to a real [`BasicBlock`]. The body's
+/// [`ValueMap`] is seeded with each [`expo_alpha_ir::IRFunctionParam`]
+/// bound to the matching `function.get_nth_param(i)` LLVM value
+/// before walking the entry block.
 pub(crate) fn define_function<'ctx>(
     ctx: &EmitCtx<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
+    if function.kind == FunctionKind::Intrinsic {
+        return intrinsics::emit_intrinsic_body(ctx, function, llvm_function);
+    }
     let block_map = declare_blocks(ctx, llvm_function, &function.blocks);
     let mut values = seed_params(function, llvm_function);
     for block in &function.blocks {

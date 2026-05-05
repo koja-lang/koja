@@ -127,6 +127,24 @@ const FLOAT_COMPARE_SCRIPT_SOURCE: &str = "
     1.5 < 2.5
 ";
 
+/// Script-mode fixture exercising the `@intrinsic` slice end-to-end.
+/// The script declares `@intrinsic fn print(s: String)` and calls it
+/// with `"hello"`. LLVM lowers the call to `call void
+/// @Global.print(ptr ...)`, the synthesized `@Global.print` body
+/// dispatches to `__expo_alpha_print_string`, and the runtime
+/// printer writes `hello\n`. The trailing expression has type
+/// `Unit` so the auto-print wrapper around `main` is a no-op.
+/// Backend symmetry: the eval path runs the
+/// [`expo_alpha_ir_eval::intrinsics::global_print`] handler, which
+/// writes the same `hello\n` to stdout via Rust's `io::stdout`. Both
+/// produce identical observable output.
+const INTRINSIC_PRINT_SCRIPT_SOURCE: &str = "
+    @intrinsic
+    fn print(s: String)
+
+    print(\"hello\")
+";
+
 /// Script-mode fixture exercising `unless` lowering through both
 /// backends. `unless cond` runs its body when the cond is `false`,
 /// the inverse of `if`. `pick_body` runs the early `return 1`
@@ -635,6 +653,72 @@ fn alpha_run_interpreter_script_float_compare_prints_true() {
         stdout.trim(),
         "true",
         "expected interpreter to print `true`, got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_intrinsic_print_prints_hello() {
+    let scratch = scratch_dir("run_llvm_intrinsic_print");
+    // Fixture stem is `Global` so the driver-derived package
+    // matches the dispatch-table key (`Global.print`). The future
+    // stdlib-loading slice will register intrinsics from real
+    // `lib/global/src/...` files and this convention disappears.
+    let fixture = write_fixture(
+        &scratch,
+        "Global.exps",
+        &dedent(INTRINSIC_PRINT_SCRIPT_SOURCE),
+    );
+
+    // Drives the full alpha `@intrinsic` slice through the LLVM
+    // backend: the script declares an intrinsic, calls it on a
+    // string literal, and the binary's stdout is exactly `hello\n`
+    // (no auto-print wrapper firing since the trailing is
+    // `Unit`-typed).
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (intrinsic print) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"hello\n",
+        "expected LLVM backend to print `hello\\n`, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_intrinsic_print_prints_hello() {
+    let scratch = scratch_dir("run_interpreter_intrinsic_print");
+    let fixture = write_fixture(
+        &scratch,
+        "Global.exps",
+        &dedent(INTRINSIC_PRINT_SCRIPT_SOURCE),
+    );
+
+    // Backend symmetry with the LLVM test above: the interpreter
+    // routes the call through
+    // `expo_alpha_ir_eval::intrinsics::global_print`, which writes
+    // `hello\n` and returns `Value::Unit`. The driver's auto-print
+    // skips `Unit`, so stdout is `hello\n` byte-for-byte.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, intrinsic print) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"hello\n",
+        "expected interpreter to print `hello\\n`, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
     );
 
     let _ = fs::remove_dir_all(&scratch);

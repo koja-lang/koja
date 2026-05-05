@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use crate::function::{IRBasicBlock, IRBlockId, IRFunction, IRInstruction};
+use crate::function::{FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction};
 use crate::package::IRPackage;
 use crate::types::ValueId;
 
@@ -30,8 +30,21 @@ pub(super) fn seal_package(pkg: &IRPackage) {
 
 fn seal_function(function: &IRFunction) {
     let owner = format!("function `{}`", function.symbol);
-    if function.blocks.is_empty() {
-        seal_panic(&format!("{owner} has no basic blocks"));
+    match function.kind {
+        FunctionKind::Intrinsic => {
+            if !function.blocks.is_empty() {
+                seal_panic(&format!(
+                    "{owner} is `@intrinsic` but carries {} basic block(s); intrinsic bodies \
+                     are synthesized at emit time and must lower to empty `blocks`",
+                    function.blocks.len(),
+                ));
+            }
+        }
+        FunctionKind::Regular => {
+            if function.blocks.is_empty() {
+                seal_panic(&format!("{owner} has no basic blocks"));
+            }
+        }
     }
     require_supported_type(&function.return_type, &|| format!("{owner} return type"));
     // Parameter `ValueId`s count as definitions for the purposes of

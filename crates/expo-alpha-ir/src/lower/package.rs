@@ -9,10 +9,10 @@
 //! seam without re-coding the registry shape.
 
 use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
-use expo_ast::ast::{Diagnostic, Function, Item, Param};
+use expo_ast::ast::{Diagnostic, Function, Item, Param, is_intrinsic};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 
-use crate::function::{IRFunction, IRFunctionParam, IRSymbol};
+use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSymbol};
 use crate::package::IRPackage;
 use crate::types::IRType;
 
@@ -47,6 +47,19 @@ pub(crate) fn lower_package(
 /// omitted from the package in that case; `lower_program` will turn
 /// the accumulated diagnostics into a [`crate::LowerError::Diagnostics`]
 /// before seal runs.
+///
+/// Three shapes flow through here, distinguished by annotation +
+/// body presence (mutually exclusive at the source level; mixing
+/// markers diagnoses):
+///
+/// - `@intrinsic fn name(...)` (no body) lowers to
+///   [`FunctionKind::Intrinsic`] with empty `blocks`. The backend
+///   looks the body up by mangled symbol in its `intrinsics/`
+///   dispatch table.
+/// - `@extern "C" fn name(...)` (no body) is a planned follow-up;
+///   today it surfaces a feature-gap diagnostic.
+/// - Regular `fn name(...)` (body present) lowers to
+///   [`FunctionKind::Regular`] with at least one basic block.
 fn lower_function(
     function: &Function,
     package: &str,
@@ -54,6 +67,41 @@ fn lower_function(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<IRFunction> {
     let identifier = Identifier::new(package, vec![function.name.clone()]);
+    let signature = lookup_signature(registry, &identifier);
+    let return_type = resolved_type_to_ir_type(&signature.return_type, registry);
+    let intrinsic = is_intrinsic(&function.annotations);
+
+    if intrinsic && function.body.is_some() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`@intrinsic` and a function body are mutually exclusive (on `{}`)",
+                function.name,
+            ),
+            function.span,
+        ));
+        return None;
+    }
+
+    let mut ctx = FnLowerCtx::new();
+    let params = lower_params(
+        function,
+        &identifier,
+        signature,
+        registry,
+        diagnostics,
+        &mut ctx,
+    )?;
+
+    if intrinsic {
+        return Some(IRFunction {
+            blocks: Vec::new(),
+            kind: FunctionKind::Intrinsic,
+            params,
+            return_type,
+            symbol: IRSymbol::from_identifier(&identifier),
+        });
+    }
+
     let Some(body) = function.body.as_ref() else {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -65,19 +113,35 @@ fn lower_function(
         return None;
     };
 
-    let signature = lookup_signature(registry, &identifier);
-    let return_type = resolved_type_to_ir_type(&signature.return_type, registry);
-
-    let mut ctx = FnLowerCtx::new();
     let entry = ctx.fresh_block("entry");
+    let flow = lower_body(body, &mut ctx, entry, registry, diagnostics).ok()?;
+    finalize_open_flow(&mut ctx, flow);
 
-    // Allocate one `ValueId` per regular parameter in declaration
-    // order, paired with its IRType pulled from the lifted function
-    // signature on the registry. Pre-allocation ensures every param
-    // id is strictly less than any body-produced id — body lowering
-    // stays naturally topological on the sealed AST. `self` receivers
-    // are a feature gap, not a compiler bug: record a diagnostic and
-    // bail on this function.
+    let blocks = ctx.into_blocks();
+    Some(IRFunction {
+        blocks,
+        kind: FunctionKind::Regular,
+        params,
+        return_type,
+        symbol: IRSymbol::from_identifier(&identifier),
+    })
+}
+
+/// Allocate one [`ValueId`] per regular parameter in declaration
+/// order, paired with its IRType pulled from the lifted function
+/// signature on the registry. Pre-allocation ensures every param id
+/// is strictly less than any body-produced id — body lowering stays
+/// naturally topological on the sealed AST. `self` receivers are a
+/// feature gap, not a compiler bug: record a diagnostic and bail on
+/// this function.
+fn lower_params(
+    function: &Function,
+    identifier: &Identifier,
+    signature: &FunctionSignature,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+    ctx: &mut FnLowerCtx,
+) -> Option<Vec<IRFunctionParam>> {
     let mut params = Vec::with_capacity(function.params.len());
     let mut signature_index = 0;
     for param in &function.params {
@@ -98,17 +162,7 @@ fn lower_function(
             }
         }
     }
-
-    let flow = lower_body(body, &mut ctx, entry, registry, diagnostics).ok()?;
-    finalize_open_flow(&mut ctx, flow);
-
-    let blocks = ctx.into_blocks();
-    Some(IRFunction {
-        blocks,
-        params,
-        return_type,
-        symbol: IRSymbol::from_identifier(&identifier),
-    })
+    Some(params)
 }
 
 /// Lookup the lifted [`FunctionSignature`] for `identifier` in the

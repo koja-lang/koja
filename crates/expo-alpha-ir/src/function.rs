@@ -100,10 +100,35 @@ impl fmt::Display for IRBlockId {
     }
 }
 
+/// How a function's body is materialized at backend emission time.
+///
+/// `Regular` carries a non-empty `IRFunction.blocks`; the backend
+/// walks the basic blocks and emits the IR instructions.
+///
+/// `Intrinsic` carries empty `IRFunction.blocks`; the backend looks
+/// the function up by [`IRSymbol::mangled`] in its per-backend
+/// `intrinsics/` dispatch table and synthesizes the body from a
+/// hand-written emitter. Compile-time analogue of `@extern "C"`'s
+/// "external symbol resolves at link time" — only the synthesis
+/// happens inside the compiler instead.
+///
+/// Per-kind body shape is enforced by the seal pass: see
+/// `seal::function::seal_function`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionKind {
+    Intrinsic,
+    Regular,
+}
+
 /// A lowered function. Body is a list of basic blocks; `blocks[0]` is
 /// the entry block. Multi-block bodies appear once control-flow
 /// constructs (`if` / `unless`, future loops/match) lower through the
 /// `CFGBuilder` lowering path.
+///
+/// `kind` distinguishes regular fns from `@intrinsic`-annotated ones.
+/// `Intrinsic` always pairs with empty `blocks`; the backend looks up
+/// `symbol.mangled()` in its `intrinsics/` dispatch table and emits a
+/// hand-written body. See [`FunctionKind`].
 ///
 /// `symbol` is the function's stable, backend-facing handle (see
 /// [`IRSymbol`]). It's the lookup key on [`crate::IRPackage::functions`]
@@ -128,6 +153,7 @@ impl fmt::Display for IRBlockId {
 #[derive(Debug, Clone)]
 pub struct IRFunction {
     pub blocks: Vec<IRBasicBlock>,
+    pub kind: FunctionKind,
     pub params: Vec<IRFunctionParam>,
     pub return_type: IRType,
     pub symbol: IRSymbol,

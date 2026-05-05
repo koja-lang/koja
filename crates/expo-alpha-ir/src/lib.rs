@@ -41,7 +41,8 @@ mod types;
 
 pub use error::LowerError;
 pub use function::{
-    IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
+    IRTerminator,
 };
 pub use package::IRPackage;
 pub use program::{IRProgram, lower_program};
