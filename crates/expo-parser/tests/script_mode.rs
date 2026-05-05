@@ -4,8 +4,8 @@
 //! top-level statements that script mode introduces, plus the
 //! regression-safety guarantee that file-mode behavior is unchanged.
 //!
-//! Higher-level coverage of the lift pass lives in
-//! `expo-alpha-typecheck/src/lift_script.rs`.
+//! Higher-level coverage of script-mode typechecking lives in
+//! `expo-alpha-typecheck/tests/script_mode.rs`.
 
 use expo_ast::ast::{ExprKind, Item, Literal, Statement};
 use expo_parser::{ParseMode, parse};
@@ -120,7 +120,7 @@ fn script_mode_with_only_items_leaves_body_none() {
     assert_eq!(result.ast.items.len(), 1);
     assert!(
         result.ast.body.is_none(),
-        "items-only script must collapse File.body to None so lift_script no-ops",
+        "items-only script must collapse File.body to None so downstream passes can distinguish it from statement-bearing scripts",
     );
 }
 

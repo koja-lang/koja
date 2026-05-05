@@ -140,12 +140,29 @@ enum Command {
 /// are intentionally namespaced so the production `expo eval` /
 /// `expo shell` paths can keep their full v1 feature set during the
 /// alpha build-out.
+///
+/// Source dispatch follows [`alpha::cmd_build`]'s extension rules:
+/// `.exps` files are scripts (top-level expressions, no project
+/// context); `.expo` files are project members. Omitting the file
+/// argument falls back to discovering an `expo.toml` in the current
+/// directory; project-mode pipelines themselves are stubbed today.
+///
+/// Backend selection: `run` and `build` accept
+/// `--backend={interpreter,llvm}` (see [`alpha::Backend`]). `run`
+/// defaults to `interpreter` (fast feedback, prints the trailing
+/// value, exits 0); `build` defaults to `llvm` (only backend that
+/// produces a binary). `build --backend=interpreter` errors. The
+/// future WASM backend slots in here as a third variant.
 #[derive(Subcommand)]
 enum AlphaCommand {
-    /// Compile a source file through the alpha pipeline to a native binary (POC scope: `fn main -> Int` returning an integer expression)
+    /// Compile a source file through the alpha pipeline to a native binary (POC scope: integer arithmetic via `.exps` scripts; project mode stubbed)
     Build {
-        /// Source file
-        file: String,
+        /// Source file (omit to use `expo.toml` in the current directory)
+        file: Option<String>,
+
+        /// Backend to drive the build through (defaults to `llvm`; `interpreter` errors since it cannot produce a binary)
+        #[arg(long, value_enum, default_value = "llvm")]
+        backend: alpha::Backend,
 
         /// Output binary name
         #[arg(short, long)]
@@ -153,26 +170,21 @@ enum AlphaCommand {
     },
     /// Type-check a source file through the alpha pipeline without lowering or running it
     Check {
-        /// Source file
-        file: String,
+        /// Source file (omit to use `expo.toml` in the current directory)
+        file: Option<String>,
 
         /// Print the type-checked AST to stdout instead of just OK/diagnostics
         #[arg(long)]
         emit_ast: bool,
     },
     /// Run a source file through the alpha pipeline (POC scope: integer arithmetic only)
-    Eval {
-        /// Source file
-        file: String,
-
-        /// Entry function to invoke (defaults to `main`)
-        #[arg(long)]
-        entry: Option<String>,
-    },
-    /// Compile and execute a source file through the alpha pipeline; exits with the binary's exit code
     Run {
-        /// Source file
-        file: String,
+        /// Source file (omit to use `expo.toml` in the current directory)
+        file: Option<String>,
+
+        /// Backend to drive execution through (defaults to `interpreter`; `llvm` compiles + execs and forwards the exit code)
+        #[arg(long, value_enum, default_value = "interpreter")]
+        backend: alpha::Backend,
 
         /// Arguments passed to the compiled program
         #[arg(last = true)]
@@ -188,10 +200,17 @@ fn main() {
 
     match cli.command {
         Command::Alpha { command } => match command {
-            AlphaCommand::Build { file, output } => alpha::cmd_build(file, output),
+            AlphaCommand::Build {
+                file,
+                backend,
+                output,
+            } => alpha::cmd_build(file, backend, output),
             AlphaCommand::Check { file, emit_ast } => alpha::cmd_check(file, emit_ast),
-            AlphaCommand::Eval { file, entry } => alpha::cmd_eval(file, entry),
-            AlphaCommand::Run { file, args } => alpha::cmd_run(file, args),
+            AlphaCommand::Run {
+                file,
+                backend,
+                args,
+            } => alpha::cmd_run(file, backend, args),
             AlphaCommand::Shell => alpha::cmd_shell(),
         },
         Command::Build {

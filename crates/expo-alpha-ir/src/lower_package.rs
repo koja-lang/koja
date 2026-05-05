@@ -102,34 +102,59 @@ fn lower_function(
         }
     }
 
-    let return_value = lower_body(body, &mut builder, registry, diagnostics).ok()?;
-    let return_type = match return_value {
-        Some(id) => builder.type_of(id),
-        None => IRType::Unit,
-    };
-    let block = IRBasicBlock {
-        instructions: builder.instructions,
-        terminator: IRTerminator::Return {
-            value: return_value,
-        },
-    };
+    let (blocks, return_type) =
+        lower_body_to_blocks(body, &mut builder, registry, diagnostics).ok()?;
 
     Some(IRFunction {
-        blocks: vec![block],
+        blocks,
         identifier,
         params,
         return_type,
     })
 }
 
-/// Lower a function body to a flat instruction sequence. The "value"
-/// of a body is the SSA id produced by lowering its trailing
-/// expression statement, or `None` if the body is empty / ends in a
-/// non-expression statement.
+/// Lower a sequence of statements into the single-block, single-return
+/// IR shape that both function bodies and script bodies share today.
 ///
-/// The `Result` is just an abort signal — a single `Err(())` means
-/// "stop walking this function; a diagnostic has been pushed". The
-/// caller turns that into a missing [`IRFunction`].
+/// The caller owns the [`BlockBuilder`]; this lets `lower_function`
+/// pre-allocate parameter `ValueId`s before any body-emitted id is
+/// allocated, while `lower_script` can pass a fresh builder. On
+/// success the builder is consumed into a single [`IRBasicBlock`]
+/// terminated by `Return` with the trailing expression's value (or
+/// `Unit`, if the body has no trailing expression value).
+///
+/// `Err(())` means "a feature-gap diagnostic was already pushed and
+/// the caller should drop this body / function from the surrounding
+/// fragment". This matches the per-function fail-fast policy
+/// `lower_program` already implements; `lower_script` mirrors it for
+/// the implicit script body.
+pub(crate) fn lower_body_to_blocks(
+    body: &[Statement],
+    builder: &mut BlockBuilder,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(Vec<IRBasicBlock>, IRType), ()> {
+    let return_value = lower_body(body, builder, registry, diagnostics)?;
+    let return_type = match return_value {
+        Some(id) => builder.type_of(id),
+        None => IRType::Unit,
+    };
+    let block = IRBasicBlock {
+        instructions: std::mem::take(&mut builder.instructions),
+        terminator: IRTerminator::Return {
+            value: return_value,
+        },
+    };
+    Ok((vec![block], return_type))
+}
+
+/// Walk a sequence of statements, lowering each through the existing
+/// statement helper. Returns the trailing statement's `ValueId` or
+/// `None` for an empty body / a body that ends in a non-expression
+/// statement.
+///
+/// `Err(())` is just an abort signal: a single error means "stop
+/// walking; a diagnostic has been pushed".
 fn lower_body(
     body: &[Statement],
     builder: &mut BlockBuilder,
@@ -501,8 +526,8 @@ fn expr_kind_label(kind: &ExprKind) -> &'static str {
 /// lowering — used to derive operator result types and stamp
 /// [`IRFunction::return_type`] from the trailing expression.
 #[derive(Default)]
-struct BlockBuilder {
-    instructions: Vec<IRInstruction>,
+pub(crate) struct BlockBuilder {
+    pub(crate) instructions: Vec<IRInstruction>,
     next_value: u32,
     value_types: BTreeMap<ValueId, IRType>,
 }

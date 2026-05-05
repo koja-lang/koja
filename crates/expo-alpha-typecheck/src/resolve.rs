@@ -44,6 +44,11 @@ pub(crate) fn resolve_file(
             resolve_function(function, package, registry, diagnostics);
         }
     }
+    if let Some(body) = file.body.as_mut() {
+        for stmt in body.iter_mut() {
+            resolve_statement(stmt, package, registry, diagnostics);
+        }
+    }
 }
 
 fn resolve_function(

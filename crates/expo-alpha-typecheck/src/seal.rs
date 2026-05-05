@@ -23,16 +23,19 @@ pub(crate) fn seal_ast(program: &CheckedProgram) {
 }
 
 fn seal_file(file: &File) {
-    if file.body.is_some() {
-        seal_panic(
-            "file.body must be hoisted into a synthesized fn main by `lift_script` \
-             before sealing — this is a `lift_script` invariant violation",
-            file.span,
-        );
-    }
     for item in &file.items {
         if let Item::Function(function) = item {
             seal_function(function);
+        }
+    }
+    if let Some(body) = file.body.as_ref() {
+        // Script-mode files keep their top-level statements on
+        // `file.body`. There is no synthesized `fn main`; downstream
+        // passes (`expo-alpha-ir::lower_script`) consume the body
+        // directly. Seal the same statement-tree invariants that
+        // function bodies satisfy.
+        for stmt in body {
+            seal_statement(stmt);
         }
     }
 }

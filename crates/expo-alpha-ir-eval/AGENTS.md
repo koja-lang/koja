@@ -7,22 +7,29 @@ code** and **no types** — this crate consumes only the sealed `IRProgram` from
 
 ## Public surface
 
-Two entry points:
+Two entry points, one per IR shape:
 
 ```rust
-pub fn Interpreter::new(program: IRProgram) -> Self;
-pub fn Interpreter::run(&self) -> Result<Value, RuntimeError>;
+pub fn Interpreter::run_program(program: IRProgram) -> Result<Value, RuntimeError>;
+pub fn Interpreter::run_script(script: IRScript) -> Result<Value, RuntimeError>;
 ```
 
-The input is **always sealed**: `expo-alpha-ir::lower_program` enforces SSA
-definition-before-use, terminator presence, and entry-point resolution before
-constructing the `IRProgram`. The interpreter therefore performs **no**
-program-level validation; missing values, missing entry points, or
-unterminated blocks would be seal violations upstream and panic in
+`run_program` executes the program's `entry_function()` and returns its
+produced [`Value`] (or `Value::Unit` if the entry returns nothing).
+`run_script` executes the script's implicit body (`script.blocks`) the
+same way and returns the value of its trailing expression.
+
+The input is **always sealed**: `expo-alpha-ir::lower_program` /
+`lower_script` enforce SSA definition-before-use, terminator presence,
+and (in the program path) entry-point resolution before handing back
+the IR. The interpreter therefore performs **no** program-level
+validation; missing values, missing entry points, or unterminated
+blocks would be seal violations upstream and panic in
 `expo-alpha-ir::seal`, never surface here.
 
-`run()` executes the program's `entry_function()` and returns its produced
-[`Value`] (or `Value::Unit` if the entry returns nothing).
+A shared internal walker drives both entry points; only the
+call-resolution closure differs (`IRProgram::function` vs
+`IRScript::function`).
 
 ## Runtime errors
 
@@ -50,11 +57,17 @@ enums, closures, …).
 
 ## What alpha covers today
 
-`fn main; 2 + 2; end` end-to-end through `parse_program → check_program →
-lower_program → Interpreter::run`. `tests/two_plus_two.rs` exercises
-four POC scenarios: the canonical `2 + 2`, integer-arithmetic
-combinations (`+ - * / %` plus parentheses), runtime division-by-zero,
-and an empty `fn main` returning `Unit`.
+Both shapes of `2 + 2` end-to-end:
+
+- Project mode: `fn main; 2 + 2; end` through `parse_program →
+  check_program → lower_program → Interpreter::run_program`.
+- Script mode: bare `2 + 2\n` through `parse_program → check_program
+  → lower_script → Interpreter::run_script`.
+
+`tests/two_plus_two.rs` exercises both paths; `tests/calls.rs` and
+`tests/boolean_ops.rs` mirror the same project-mode coverage and
+add focused script-mode regressions for calls and boolean / comparison
+operators.
 
 ## Hard contract
 

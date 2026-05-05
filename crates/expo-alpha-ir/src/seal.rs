@@ -1,11 +1,11 @@
-//! Seal sub-pass: walks the merged [`IRProgram`] and asserts the
-//! sealed-IRProgram invariants per the [`COMPILER-NORTHSTAR.md`]
+//! Seal sub-pass: walks the merged [`IRProgram`] / [`IRScript`] and
+//! asserts the sealed-IR invariants per the [`COMPILER-NORTHSTAR.md`]
 //! contract. Panics on violation — seal failures indicate compiler
 //! bugs in upstream sub-passes, not user errors.
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
-//! Invariants asserted:
+//! Invariants asserted (program path):
 //!
 //! 1. The entry-point identifier resolves to a registered function.
 //! 2. Every function in every package keys at its own identifier
@@ -18,7 +18,8 @@
 //!    params are valid without having a distinct "definition"
 //!    instruction.
 //! 5. Every `IRInstruction::Call`'s `callee` identifier resolves to a
-//!    function that actually exists somewhere in the `IRProgram`.
+//!    function that actually exists somewhere in the `IRProgram` /
+//!    `IRScript`.
 //! 6. **Transient slice invariant**: every [`ConstValue`] and
 //!    [`IRType`] that flows through the IR is one of `Bool`,
 //!    `Int64`, or `Unit`. The narrower / unsigned width variants
@@ -28,12 +29,16 @@
 //!    reshuffling, but they're forbidden until those upstream pieces
 //!    land. Loosen this invariant when adding `Int8` / etc. to the
 //!    stdlib stubs.
+//!
+//! The script path ([`seal_script`]) re-asserts (3)–(6) on the
+//! implicit-function shape ([`IRScript::blocks`] +
+//! [`IRScript::return_type`]), and re-asserts (5) using
+//! [`IRScript::packages`] as the call-target lookup.
 
 use std::collections::BTreeSet;
 
-use expo_ast::identifier::Identifier;
-
 use crate::function::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator};
+use crate::script::IRScript;
 use crate::types::{ConstValue, IRType, ValueId};
 use crate::{IRProgram, package::IRPackage};
 
@@ -47,7 +52,23 @@ pub(crate) fn seal_program(program: &IRProgram) {
     for pkg in &program.packages {
         seal_package(pkg);
     }
-    seal_calls(program);
+    seal_program_calls(program);
+}
+
+pub(crate) fn seal_script(script: &IRScript) {
+    for pkg in &script.packages {
+        seal_package(pkg);
+    }
+    let owner = "script body";
+    if script.blocks.is_empty() {
+        seal_panic(&format!("{owner} has no basic blocks"));
+    }
+    require_supported_type(&script.return_type, &|| format!("{owner} return type"));
+    let mut defined: BTreeSet<ValueId> = BTreeSet::new();
+    for block in &script.blocks {
+        seal_block(block, owner, &mut defined);
+    }
+    seal_script_calls(script);
 }
 
 fn seal_package(pkg: &IRPackage) {
@@ -63,15 +84,11 @@ fn seal_package(pkg: &IRPackage) {
 }
 
 fn seal_function(function: &IRFunction) {
+    let owner = format!("function `{}`", function.identifier);
     if function.blocks.is_empty() {
-        seal_panic(&format!(
-            "function `{}` has no basic blocks",
-            function.identifier,
-        ));
+        seal_panic(&format!("{owner} has no basic blocks"));
     }
-    require_supported_type(&function.return_type, &|| {
-        format!("function `{}` return type", function.identifier)
-    });
+    require_supported_type(&function.return_type, &|| format!("{owner} return type"));
     // Parameter `ValueId`s count as definitions for the purposes of
     // downstream operand references. Seed them first so the rest of
     // the block walk treats them as already-defined.
@@ -79,31 +96,27 @@ fn seal_function(function: &IRFunction) {
     for param in &function.params {
         if !defined.insert(*param) {
             seal_panic(&format!(
-                "function `{}` lists duplicate parameter value `{param}`",
-                function.identifier,
+                "{owner} lists duplicate parameter value `{param}`",
             ));
         }
     }
     for block in &function.blocks {
-        seal_block(block, &function.identifier, &mut defined);
+        seal_block(block, &owner, &mut defined);
     }
 }
 
-fn seal_block(block: &IRBasicBlock, owner: &Identifier, defined: &mut BTreeSet<ValueId>) {
+fn seal_block(block: &IRBasicBlock, owner: &str, defined: &mut BTreeSet<ValueId>) {
     for inst in &block.instructions {
         for operand in instruction_operands(inst) {
             require_defined(operand, owner, defined);
         }
         if let IRInstruction::Const { value, .. } = inst {
             require_supported_const(value, &|| {
-                format!("function `{owner}` const instruction at {}", inst.dest())
+                format!("{owner} const instruction at {}", inst.dest())
             });
         }
         if !defined.insert(inst.dest()) {
-            seal_panic(&format!(
-                "function `{owner}` redefines value `{}`",
-                inst.dest(),
-            ));
+            seal_panic(&format!("{owner} redefines value `{}`", inst.dest()));
         }
     }
     for operand in terminator_operands(&block.terminator) {
@@ -150,10 +163,10 @@ fn terminator_operands(term: &IRTerminator) -> Vec<ValueId> {
     }
 }
 
-fn require_defined(value: ValueId, owner: &Identifier, defined: &BTreeSet<ValueId>) {
+fn require_defined(value: ValueId, owner: &str, defined: &BTreeSet<ValueId>) {
     if !defined.contains(&value) {
         seal_panic(&format!(
-            "function `{owner}` references value `{value}` before it is defined",
+            "{owner} references value `{value}` before it is defined",
         ));
     }
 }
@@ -163,7 +176,7 @@ fn require_defined(value: ValueId, owner: &Identifier, defined: &BTreeSet<ValueI
 /// dereferences the callee id through the typecheck registry, so a
 /// missing target here would indicate either a registry / IRProgram
 /// drift or a genuine lowering bug — both compiler issues.
-fn seal_calls(program: &IRProgram) {
+fn seal_program_calls(program: &IRProgram) {
     for pkg in &program.packages {
         for (owner, function) in &pkg.functions {
             for block in &function.blocks {
@@ -174,6 +187,41 @@ fn seal_calls(program: &IRProgram) {
                         seal_panic(&format!(
                             "function `{owner}` calls `{callee}`, but that function is not \
                              registered in the IRProgram",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Script counterpart of [`seal_program_calls`]: `IRScript` carries
+/// its own `packages` table; both the inline script body and any
+/// helper functions inside `packages` may emit calls, and every one
+/// of those must resolve to something `script.function()` can find.
+fn seal_script_calls(script: &IRScript) {
+    for block in &script.blocks {
+        for inst in &block.instructions {
+            if let IRInstruction::Call { callee, .. } = inst
+                && script.function(callee).is_none()
+            {
+                seal_panic(&format!(
+                    "script body calls `{callee}`, but that function is not \
+                     registered in the IRScript",
+                ));
+            }
+        }
+    }
+    for pkg in &script.packages {
+        for (owner, function) in &pkg.functions {
+            for block in &function.blocks {
+                for inst in &block.instructions {
+                    if let IRInstruction::Call { callee, .. } = inst
+                        && script.function(callee).is_none()
+                    {
+                        seal_panic(&format!(
+                            "function `{owner}` calls `{callee}`, but that function is not \
+                             registered in the IRScript",
                         ));
                     }
                 }

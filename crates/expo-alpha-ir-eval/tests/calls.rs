@@ -11,29 +11,38 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::lower_program;
+use expo_alpha_ir::{lower_program, lower_script};
 use expo_alpha_ir_eval::{Interpreter, RuntimeError, Value};
-use expo_alpha_typecheck::check_program;
+use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
 
-fn evaluate(source: &str) -> Result<Value, RuntimeError> {
+fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
             path: PathBuf::from("calls.expo"),
             source: source.to_string(),
         }],
-        ParseMode::File,
+        mode,
     );
-    let checked = check_program(parsed)
-        .unwrap_or_else(|failure| panic!("alpha typecheck failed:\n{failure}"));
+    check_program(parsed).unwrap_or_else(|failure| panic!("alpha typecheck failed:\n{failure}"))
+}
+
+fn evaluate(source: &str) -> Result<Value, RuntimeError> {
+    let checked = typecheck(source, ParseMode::File);
     let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
     let program = lower_program(&checked, entry).expect("alpha lowering should succeed");
-    Interpreter::new(program).run()
+    Interpreter::run_program(program)
+}
+
+fn evaluate_script(source: &str) -> Result<Value, RuntimeError> {
+    let checked = typecheck(source, ParseMode::Script);
+    let script = lower_script(&checked).expect("alpha script lowering should succeed");
+    Interpreter::run_script(script)
 }
 
 #[test]
@@ -126,4 +135,22 @@ fn call_return_participates_in_outer_expression() {
 
     let program = dedent(source);
     assert_eq!(evaluate(&program).unwrap(), Value::Int(20));
+}
+
+#[test]
+fn script_body_calls_helper_fn_in_packages() {
+    // Mirror of `zero_arg_call_returns_callee_value` for script
+    // mode: the helper fn lives in the script's package fragment;
+    // the implicit body calls it. Drives `lower_script` +
+    // `Interpreter::run_script` end to end.
+    let source = "
+        fn answer -> Int
+          42
+        end
+
+        answer() + 1
+        ";
+
+    let script = dedent(source);
+    assert_eq!(evaluate_script(&script).unwrap(), Value::Int(43));
 }
