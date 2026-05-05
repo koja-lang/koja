@@ -29,37 +29,40 @@ best-effort consumption.
 ## Sub-passes
 
 ```
-preload       -> GlobalRegistry::with_stdlib_stubs seeds Global.Int/Bool/Unit/
-                 Float/String as struct entries (temporary; real stdlib
-                 compilation will supplant this)
-lift_script   -> hoist File.body into synthesized fn main (script mode only)
-collect       -> register top-level decls; assign Identifier
-resolve       -> walk all bodies; populate Resolution + Expr.resolution
-                 (a registry-pointing ResolvedType)
-seal          -> assert seal_ast invariants; panic on violation
+preload         -> GlobalRegistry::with_stdlib_stubs seeds Global.Int/Bool/Unit/
+                   Float/String as struct entries (temporary; real stdlib
+                   compilation will supplant this)
+collect         -> register top-level decls; assign Identifier
+lift_signatures -> resolve TypeExpr params/return into ResolvedType and
+                   stamp Function entries with their signature
+resolve         -> walk all bodies AND any File.body (script mode);
+                   populate Resolution + Expr.resolution (a
+                   registry-pointing ResolvedType)
+seal            -> assert seal_ast invariants over both items and
+                   File.body; panic on violation
 ```
 
 The order is forced by data dependencies, not preference. Each pass is a
 single function (`pub(crate)`) called by `program::check_program`.
 
-`lift_script` is intentionally narrow and self-contained — the synthetic
-`fn main` wrap is a transient bridge while the parser learns to express
-script-mode semantics natively. When the wrap is replaced, this single
-pass disappears.
+Script-mode files (top-level expressions, no surrounding `fn`) keep their
+statements on `File.body`. There is no synthetic `fn main` wrapper —
+`resolve` and `seal` walk `File.body` directly, and the IR layer's
+`lower_script` consumes that shape. Project-mode files leave `File.body`
+as `None`; their work lives in `File.items[Function]`.
 
 Future sub-passes land in this orchestration when the work they do becomes
-load-bearing — `strip_cfg` between `lift_script` and `collect` for
-`@cfg`-driven pruning, `synthesize` after `collect` for protocol defaults,
-`lift_signatures` between `synthesize` and `resolve` for cross-decl
-signature resolution, `check` between `resolve` and `seal` for compatibility
-validation beyond what `resolve` enforces inline, and `annotate` between
-`check` and `seal` for coercion emission. They're not in the pipeline yet
-because the POC has nothing for them to do — no-op pass-throughs would be
-dead architecture.
+load-bearing — `strip_cfg` for `@cfg`-driven pruning, `synthesize` between
+`collect` and `lift_signatures` for protocol defaults, `check` between
+`resolve` and `seal` for compatibility validation beyond what `resolve`
+enforces inline, and `annotate` between `check` and `seal` for coercion
+emission. They're not in the pipeline yet because the POC has nothing for
+them to do — no-op pass-throughs would be dead architecture.
 
 ## What alpha covers today
 
-`fn main; 2 + 2; end` — literally the smallest program that exercises every
-sub-pass at least vacuously and produces a sealed `CheckedProgram`. Each
-new feature (structs, enums, generics, ...) lands as a thin slice on top
-of the existing sub-pass framework.
+`fn main; 2 + 2; end` (project mode) and bare `2 + 2` (script mode) —
+literally the smallest programs that exercise every sub-pass at least
+vacuously and produce a sealed `CheckedProgram`. Each new feature
+(structs, enums, generics, ...) lands as a thin slice on top of the
+existing sub-pass framework.

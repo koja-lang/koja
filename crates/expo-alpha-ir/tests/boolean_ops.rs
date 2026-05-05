@@ -9,8 +9,8 @@
 use std::path::PathBuf;
 
 use expo_alpha_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRTerminator,
-    IRUnaryOp, ValueId, lower_program,
+    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRScript,
+    IRTerminator, IRUnaryOp, ValueId, lower_program, lower_script,
 };
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
@@ -30,6 +30,19 @@ fn lower(source: &str) -> IRProgram {
     let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
     let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
     lower_program(&checked, entry).expect("lowering should succeed")
+}
+
+fn lower_as_script(source: &str) -> IRScript {
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: PACKAGE.to_string(),
+            path: PathBuf::from("boolean_ops.expo"),
+            source: source.to_string(),
+        }],
+        ParseMode::Script,
+    );
+    let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
+    lower_script(&checked).expect("script lowering should succeed")
 }
 
 fn entry_block(program: &IRProgram) -> &IRBasicBlock {
@@ -125,6 +138,42 @@ fn neg_lowers_to_unary_op_neg() {
                 operand: ValueId(0),
             },
         ],
+    );
+}
+
+#[test]
+fn script_mode_and_lowers_to_two_consts_and_a_binary_op() {
+    let script = lower_as_script("true and false\n");
+    assert_eq!(
+        script.blocks.len(),
+        1,
+        "POC script bodies lower to a single basic block",
+    );
+    let block = &script.blocks[0];
+    assert_eq!(
+        block.instructions,
+        vec![
+            IRInstruction::Const {
+                dest: ValueId(0),
+                value: ConstValue::Bool(true),
+            },
+            IRInstruction::Const {
+                dest: ValueId(1),
+                value: ConstValue::Bool(false),
+            },
+            IRInstruction::BinaryOp {
+                dest: ValueId(2),
+                lhs: ValueId(0),
+                op: IRBinOp::And,
+                rhs: ValueId(1),
+            },
+        ],
+    );
+    assert_eq!(
+        block.terminator,
+        IRTerminator::Return {
+            value: Some(ValueId(2)),
+        },
     );
 }
 

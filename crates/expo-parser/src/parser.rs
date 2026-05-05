@@ -12,9 +12,9 @@ use expo_lexer::{LexResult, lex};
 ///
 /// `ParseMode::Script` additionally accepts top-level statements (bare
 /// expressions, assignments, etc.) interleaved with declarations.
-/// Statements collect into `File.body = Some(...)` for later hoisting
-/// into a synthetic `fn main` item by `expo-alpha-typecheck`'s `lift_script`
-/// sub-pass.
+/// Statements collect into `File.body = Some(...)` and stay there
+/// through typecheck; downstream passes (`expo-alpha-ir::lower_script`)
+/// consume the body directly. There is no synthetic `fn main` wrapper.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ParseMode {
     #[default]
@@ -257,9 +257,9 @@ impl Parser {
 
         // Script-mode body is only `Some` when there's actually
         // something to hoist. An empty `body` (`fn main; ... end`
-        // parsed in script mode) collapses to `None` so `lift_script`
-        // doesn't synthesize an empty `fn main` that collides with a
-        // user-declared one.
+        // parsed in script mode) collapses to `None` so downstream
+        // passes can tell "items-only script" apart from "script with
+        // top-level statements" purely by the body shape.
         let body = match mode {
             ParseMode::File => None,
             ParseMode::Script if body.is_empty() => None,

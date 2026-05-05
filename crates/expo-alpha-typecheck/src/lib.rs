@@ -3,9 +3,14 @@
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
 //! The single public entry point is [`check_program`]. It runs every
-//! sub-pass internally (lift_script, collect, resolve, seal) and
+//! sub-pass internally (collect, lift_signatures, resolve, seal) and
 //! hands back a sealed [`CheckedProgram`] on success or a
 //! [`CheckFailure`] on failure.
+//!
+//! Script-mode files (top-level expressions, no surrounding `fn`) keep
+//! their statements on `File.body`; downstream passes (`resolve`,
+//! `seal`, `expo-alpha-ir::lower_script`) consume `File.body`
+//! directly. There is no synthetic `fn main` wrapper.
 //!
 //! Stage ownership: the parser owns parse diagnostics, this crate owns
 //! typecheck diagnostics. If the input [`expo_parser::ParsedProgram`]
@@ -20,7 +25,6 @@
 
 mod collect;
 mod labels;
-mod lift_script;
 mod lift_signatures;
 mod program;
 mod registry;

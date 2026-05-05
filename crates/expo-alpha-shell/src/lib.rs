@@ -4,6 +4,10 @@
 //! into a [`Session`], re-runs the whole session through
 //! `expo-parser → expo-alpha-typecheck → expo-alpha-ir → expo-alpha-ir-eval`
 //! on every step, and prints the trailing expression's value (if any).
+//! Each fragment is lowered as a script (`lower_script` →
+//! `Interpreter::run_script`); top-level expressions and assignments
+//! are first-class, and any user-typed `fn` definitions land as
+//! helper functions in the script's package fragment.
 //!
 //! This crate is self-contained: it owns its own pipeline driver and depends
 //! directly on the alpha pipeline crates, with no path back through
@@ -23,26 +27,18 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process;
 
-use expo_alpha_ir::lower_program;
+use expo_alpha_ir::lower_script;
 use expo_alpha_ir_eval::{Interpreter, Value};
 use expo_alpha_typecheck::{CheckFailure, check_program};
 use expo_ast::ast::Diagnostic;
-use expo_ast::identifier::Identifier;
 use expo_ast::token::TokenKind;
 use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
 
 /// Synthetic package name for the REPL session. The session re-runs
 /// the entire concatenated input history through the alpha pipeline
-/// on every step; lowering uses the same name when constructing the
-/// entry-point [`Identifier`].
+/// on every step; the package label flows through into any helper
+/// functions the user defines via top-level `fn` items.
 const SESSION_PACKAGE: &str = "REPL";
-
-/// The session resolves its entry function under this name.
-/// In script-mode parsing, [`expo_alpha_typecheck::lift_script`] hoists
-/// any top-level statements (the REPL's accumulated input, or a
-/// statements-only `.expo` file) into a synthesized `fn main`. Files
-/// that already declare an explicit `fn main` use that one directly.
-const SESSION_ENTRY: &str = "main";
 
 const BANNER: &str = "expo alpha shell -- alpha IR interpreter (POC: integer arithmetic only)\n\
     Type :help for commands, :quit (or Ctrl-D) to exit\n";
@@ -144,9 +140,11 @@ pub fn run() {
 /// Accumulating REPL state. Each new input pushes one statement-text
 /// block; [`Session::try_eval`] concatenates the entire history into
 /// a single source string, parses it in [`ParseMode::Script`], and
-/// drives it through the alpha pipeline. `lift_script` hoists the
-/// top-level statements into a synthetic `fn main`; the pipeline
-/// then resolves the trailing-expression value.
+/// drives it through the alpha pipeline as an [`expo_alpha_ir::IRScript`]:
+/// `expo_alpha_ir::lower_script` produces an implicit-function body
+/// for the top-level statements, and `Interpreter::run_script` runs
+/// it. Helper `fn` items the user defines land as helpers on
+/// `IRScript.packages`.
 ///
 /// The pipeline is whole-program today (no incremental typecheck or
 /// IR delta), so re-running the whole history is the simplest way to
@@ -207,33 +205,28 @@ impl Session {
     fn run(&self) -> Result<Value, String> {
         let source = self.synthesize();
         let path = PathBuf::from(format!("{SESSION_PACKAGE}.expo"));
-        run_pipeline(source, SESSION_PACKAGE, path, SESSION_ENTRY)
+        run_pipeline(source, SESSION_PACKAGE, path)
     }
 
     /// Concatenate all statement blocks into the script source the
     /// pipeline will parse. Blocks are joined with newlines so each
     /// input remains its own logical line group; `ParseMode::Script`
-    /// + `lift_script` handle the rest.
+    /// handles the rest.
     fn synthesize(&self) -> String {
         self.statements.join("\n")
     }
 }
 
-/// Run one source string end-to-end through the alpha pipeline.
-/// Returns the entry function's value on success, or a formatted
-/// error string covering parse / typecheck / lower / runtime
-/// failures.
+/// Run one source string end-to-end through the script-mode alpha
+/// pipeline. Returns the script body's trailing value on success,
+/// or a formatted error string covering parse / typecheck / lower /
+/// runtime failures.
 ///
-/// Always parses in [`ParseMode::Script`]: the alpha surface treats
-/// top-level statements as first-class. Files that already have an
-/// explicit `fn main` parse identically in either mode, so this is
-/// strictly a superset.
-fn run_pipeline(
-    source: String,
-    package: &str,
-    path: PathBuf,
-    entry: &str,
-) -> Result<Value, String> {
+/// Always parses in [`ParseMode::Script`]: the REPL treats top-level
+/// statements as first-class. Helper `fn` items land on
+/// [`expo_alpha_ir::IRScript::packages`] for [`Interpreter::run_script`]
+/// to resolve as call targets.
+fn run_pipeline(source: String, package: &str, path: PathBuf) -> Result<Value, String> {
     let parsed = parse_program(
         vec![SourceFile {
             package: package.to_string(),
@@ -243,11 +236,8 @@ fn run_pipeline(
         ParseMode::Script,
     );
     let checked = check_program(parsed).map_err(format_check_failure)?;
-    let entry_id = Identifier::new(package, vec![entry.to_string()]);
-    let program = lower_program(&checked, entry_id).map_err(|err| err.to_string())?;
-    Interpreter::new(program)
-        .run()
-        .map_err(|err| err.to_string())
+    let script = lower_script(&checked).map_err(|err| err.to_string())?;
+    Interpreter::run_script(script).map_err(|err| err.to_string())
 }
 
 /// True when `source` (the accumulated multiline buffer) is a

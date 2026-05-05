@@ -179,10 +179,11 @@ pub enum Item {
 ///
 /// `body` is `Some(_)` only when the source was parsed in
 /// `ParseMode::Script` -- it carries top-level statements (e.g. the
-/// REPL's accumulated input) before they are hoisted into a synthetic
-/// `fn main` item. After `expo-alpha-typecheck`'s `lift_script` sub-pass runs,
-/// `body` is always `None`; the sealed AST has no surviving
-/// script-level statement bodies.
+/// REPL's accumulated input). The alpha pipeline keeps `body`
+/// populated through typecheck and seal; downstream lowering
+/// (`expo-alpha-ir::lower_script`) consumes it directly. Project-mode
+/// (`ParseMode::File`) sources leave `body` as `None` and put their
+/// work in `items`.
 #[derive(Debug, Clone)]
 pub struct File {
     pub body: Option<Vec<Statement>>,

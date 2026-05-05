@@ -1,42 +1,79 @@
-//! Tree-walking interpreter over a sealed [`IRProgram`].
+//! Tree-walking interpreter over a sealed [`IRProgram`] or
+//! [`IRScript`].
 //!
-//! Construct with [`Interpreter::new`] (no validation work — the program
-//! is already sealed by `expo-alpha-ir::lower_program`), then call
-//! [`Interpreter::run`] to execute the entry function and receive the
-//! returned [`Value`].
+//! Two public entry points, one shared instruction walker:
+//!
+//! - [`Interpreter::run_program`] consumes a sealed
+//!   [`IRProgram`] (project-mode source: user-declared `fn main`)
+//!   and runs the entry function.
+//! - [`Interpreter::run_script`] consumes a sealed
+//!   [`IRScript`] (script-mode source: top-level expressions on the
+//!   implicit body) and runs the body.
+//!
+//! The walker is parameterized over a [`CallResolver`]: each variant
+//! supplies its own way to dereference an [`IRInstruction::Call`]
+//! callee, but everything else (per-instruction execution, frame
+//! management, terminator following) is shared.
 //!
 //! Function calls chain through `execute_function`: each `Call`
 //! instruction evaluates its argument operands in the current frame,
-//! looks up the callee in the program, seeds a fresh frame with the
-//! callee's param `ValueId`s bound to the incoming arg values, and
-//! recurses. Stack overflow from pathological mutual recursion would
-//! propagate as a native Rust stack overflow — the POC does not cap
-//! call depth.
+//! looks up the callee through the resolver, seeds a fresh frame with
+//! the callee's param `ValueId`s bound to the incoming arg values,
+//! and recurses. Stack overflow from pathological mutual recursion
+//! would propagate as a native Rust stack overflow — the POC does
+//! not cap call depth.
 
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRTerminator,
-    IRUnaryOp, ValueId,
+    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRScript,
+    IRTerminator, IRUnaryOp, ValueId,
 };
+use expo_ast::identifier::Identifier;
 
 use crate::error::RuntimeError;
 use crate::value::Value;
 
-pub struct Interpreter {
-    program: IRProgram,
-}
+pub struct Interpreter;
 
 impl Interpreter {
-    pub fn new(program: IRProgram) -> Self {
-        Self { program }
+    /// Execute a project-mode [`IRProgram`]'s entry function and
+    /// return the value it produces (or [`Value::Unit`] if the
+    /// entry returns nothing).
+    pub fn run_program(program: IRProgram) -> Result<Value, RuntimeError> {
+        let entry = program.entry_function();
+        execute_function(entry, Vec::new(), &program)
     }
 
-    /// Execute the program's entry function and return the value it
-    /// produces (or `Value::Unit` if the entry returns nothing).
-    pub fn run(&self) -> Result<Value, RuntimeError> {
-        let entry = self.program.entry_function();
-        execute_function(&self.program, entry, Vec::new())
+    /// Execute a script-mode [`IRScript`]'s implicit body and return
+    /// the value of its trailing expression (or [`Value::Unit`] for
+    /// an empty / non-expression-trailing body).
+    pub fn run_script(script: IRScript) -> Result<Value, RuntimeError> {
+        let blocks = &script.blocks;
+        let block = blocks
+            .first()
+            .expect("sealed IRScript has at least one basic block");
+        let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
+        execute_block(block, &mut frame, &script)
+    }
+}
+
+/// Dereferences an [`IRInstruction::Call`] callee to its target
+/// [`IRFunction`]. Implemented by both [`IRProgram`] and [`IRScript`]
+/// so the shared instruction walker can drive either.
+trait CallResolver {
+    fn resolve(&self, id: &Identifier) -> Option<&IRFunction>;
+}
+
+impl CallResolver for IRProgram {
+    fn resolve(&self, id: &Identifier) -> Option<&IRFunction> {
+        self.function(id)
+    }
+}
+
+impl CallResolver for IRScript {
+    fn resolve(&self, id: &Identifier) -> Option<&IRFunction> {
+        self.function(id)
     }
 }
 
@@ -45,10 +82,10 @@ impl Interpreter {
 /// guarantees a single basic block per function, so this runs the
 /// block and returns its terminator value — branches land when
 /// control flow does.
-fn execute_function(
-    program: &IRProgram,
+fn execute_function<R: CallResolver>(
     function: &IRFunction,
     args: Vec<Value>,
+    resolver: &R,
 ) -> Result<Value, RuntimeError> {
     debug_assert_eq!(
         function.params.len(),
@@ -67,24 +104,24 @@ fn execute_function(
         .blocks
         .first()
         .expect("sealed IRFunction has at least one basic block");
-    execute_block(program, block, &mut frame)
+    execute_block(block, &mut frame, resolver)
 }
 
-fn execute_block(
-    program: &IRProgram,
+fn execute_block<R: CallResolver>(
     block: &IRBasicBlock,
     frame: &mut BTreeMap<ValueId, Value>,
+    resolver: &R,
 ) -> Result<Value, RuntimeError> {
     for instruction in &block.instructions {
-        execute_instruction(program, instruction, frame)?;
+        execute_instruction(instruction, frame, resolver)?;
     }
     follow_terminator(&block.terminator, frame)
 }
 
-fn execute_instruction(
-    program: &IRProgram,
+fn execute_instruction<R: CallResolver>(
     instruction: &IRInstruction,
     frame: &mut BTreeMap<ValueId, Value>,
+    resolver: &R,
 ) -> Result<(), RuntimeError> {
     match instruction {
         IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
@@ -99,13 +136,13 @@ fn execute_instruction(
             for arg in args {
                 arg_values.push(lookup(frame, *arg)?);
             }
-            let callee_fn = program.function(callee).unwrap_or_else(|| {
+            let callee_fn = resolver.resolve(callee).unwrap_or_else(|| {
                 panic!(
-                    "interpreter: callee `{callee}` missing from IRProgram — \
+                    "interpreter: callee `{callee}` missing from IR — \
                      seal invariant violation",
                 )
             });
-            let result = execute_function(program, callee_fn, arg_values)?;
+            let result = execute_function(callee_fn, arg_values, resolver)?;
             frame.insert(*dest, result);
             Ok(())
         }

@@ -18,7 +18,7 @@ use expo_ast::ast::{Diagnostic, File};
 use expo_parser::{ParsedFile, ParsedProgram};
 
 use crate::registry::GlobalRegistry;
-use crate::{collect, lift_script, lift_signatures, resolve, seal};
+use crate::{collect, lift_signatures, resolve, seal};
 
 /// A package fragment of a [`CheckedProgram`]: the package name plus
 /// the set of sealed AST files that belong to it.
@@ -79,34 +79,33 @@ impl std::error::Error for CheckFailure {}
 ///    any user decl. Temporary: once the real stdlib is compiled as a
 ///    package these entries land through `collect` like any other
 ///    decl.
-/// 1. `lift_script` — for files parsed in `ParseMode::Script`, hoist
-///    `File.body`'s top-level statements into a synthesized `fn main`
-///    item. After this pass `file.body` is always `None`; downstream
-///    passes see a uniform shape.
-/// 2. `collect` — register every top-level decl into the registry.
+/// 1. `collect` — register every top-level decl into the registry.
 ///    Identifiers only; function signatures land in the
 ///    `Function(None)` state, waiting for `lift_signatures` to stamp
 ///    them in.
-/// 3. `lift_signatures` — walk each function's signature, resolve
+/// 2. `lift_signatures` — walk each function's signature, resolve
 ///    its `TypeExpr` params + return into `ResolvedType`s, and
 ///    upgrade its registry entry to `Function(Some(signature))`.
 ///    This has to happen after `collect` (so cross-references
 ///    resolve) and before `resolve` (so call sites can look up
 ///    callee signatures).
-/// 4. `resolve` — walk every body and populate `Resolution` +
+/// 3. `resolve` — walk every body and populate `Resolution` +
 ///    `Expr.resolution` (a [`expo_ast::identifier::ResolvedType`]
-///    pointing into the registry).
-/// 5. `seal` — assert sealed-AST invariants (including the post-lift
-///    `file.body.is_none()` invariant). Panics on violation.
+///    pointing into the registry). Walks `File.items[Function]`
+///    bodies and `File.body` (script-mode top-level statements)
+///    uniformly.
+/// 4. `seal` — assert sealed-AST invariants. Both project-mode files
+///    (body `None`, `Function` items carry the work) and script-mode
+///    files (body `Some(_)` of resolved statements, no synthesized
+///    `fn main`) are accepted. Panics on violation.
 ///
 /// Future sub-passes land in this orchestration when the work they do
-/// becomes load-bearing — `strip_cfg` between `lift_script` and
-/// `collect` for `@cfg`-driven pruning, `synthesize` between
-/// `collect` and `lift_signatures` for protocol defaults, `check`
-/// between `resolve` and `seal` for compatibility validation beyond
-/// what `resolve` enforces inline, and `annotate` between `check`
-/// and `seal` for coercion emission. They're not in the pipeline yet
-/// because the POC has nothing for them to do.
+/// becomes load-bearing — `strip_cfg` for `@cfg`-driven pruning,
+/// `synthesize` between `collect` and `lift_signatures` for protocol
+/// defaults, `check` between `resolve` and `seal` for compatibility
+/// validation beyond what `resolve` enforces inline, and `annotate`
+/// between `check` and `seal` for coercion emission. They're not in
+/// the pipeline yet because the POC has nothing for them to do.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {
@@ -119,12 +118,6 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     let mut registry = GlobalRegistry::with_stdlib_stubs();
 
     let mut packages = into_packages(parsed);
-
-    for pkg in &mut packages {
-        for file in &mut pkg.files {
-            lift_script::lift_script(file);
-        }
-    }
 
     for pkg in &packages {
         for file in &pkg.files {

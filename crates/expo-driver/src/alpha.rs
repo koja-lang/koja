@@ -1,19 +1,31 @@
-//! `expo alpha {check,eval,shell}` subcommand handlers.
+//! `expo alpha {check,eval,shell,build,run}` subcommand handlers.
 //!
 //! The `alpha` namespace hosts experimental subcommands that drive the
 //! alpha compiler pipeline (`expo-alpha-typecheck → expo-alpha-ir →
-//! expo-alpha-ir-eval`). Production users keep using `expo check` /
-//! `expo eval` / `expo shell` (the v1 path); `expo alpha *` lets us
-//! iterate on the alpha track end-to-end without touching the v1
-//! surface.
+//! expo-alpha-ir-eval` / `expo-alpha-ir-llvm`). Production users keep
+//! using `expo check` / `expo eval` / `expo shell` (the v1 path);
+//! `expo alpha *` lets us iterate on the alpha track end-to-end
+//! without touching the v1 surface.
 //!
-//! `cmd_check` and `cmd_eval` each carry their own copy of the pipeline
-//! driver since they run a single source file and have no REPL state
-//! to thread. The REPL itself lives in [`expo_alpha_shell`];
-//! `cmd_shell` is just a thin entry point that hands control off to
-//! it. When the alpha shell grows file-input support all three
-//! handlers will collapse into `expo_alpha_shell` and this module will
-//! retire alongside the v1 `expo-shell` / `expo-ir-eval` crates.
+//! Each command carries its own copy of the pipeline driver since
+//! they run a single source file and have no REPL state to thread.
+//! The REPL itself lives in [`expo_alpha_shell`]; `cmd_shell` is just
+//! a thin entry point that hands control off to it. When the alpha
+//! shell grows file-input support all five handlers will collapse
+//! into `expo_alpha_shell` and this module will retire alongside the
+//! v1 `expo-shell` / `expo-ir-eval` crates.
+//!
+//! ## Mode dispatch
+//!
+//! `cmd_build` is project-mode (parse `ParseMode::File`, lower via
+//! [`lower_program`], compile via
+//! [`expo_alpha_ir_llvm::compile_program`]); the source must contain
+//! an explicit `fn main`. `cmd_eval`, `cmd_run`, and (transitively)
+//! `cmd_shell` are script-mode (parse `ParseMode::Script`, lower via
+//! [`lower_script`], drive via
+//! [`Interpreter::run_script`] or
+//! [`expo_alpha_ir_llvm::compile_script`]). `cmd_check` typechecks
+//! either shape — its parse mode follows the v1 contract for now.
 //!
 //! POC scope today (mirrors `expo-alpha-typecheck` / `expo-alpha-ir`):
 //! integer literals, integer arithmetic (`+ - * / %`), parenthesized
@@ -25,7 +37,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use expo_alpha_ir::{IRProgram, lower_program};
+use expo_alpha_ir::{IRProgram, IRScript, lower_program, lower_script};
 use expo_alpha_ir_eval::{Interpreter, Value};
 use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 use expo_ast::ast::Diagnostic;
@@ -69,14 +81,23 @@ pub fn cmd_check(file: String, emit_ast: bool) {
 }
 
 /// `expo alpha eval <file>` — run a single source file through the
-/// alpha pipeline and print the entry function's [`Value`].
+/// script-mode alpha pipeline and print the trailing expression's
+/// [`Value`].
+///
+/// `expo alpha eval` always treats its input as a script: top-level
+/// expressions and assignments are first-class, and an explicit
+/// `fn main` is a helper definition rather than the entry point. The
+/// pipeline lowers via [`lower_script`] and runs through
+/// [`Interpreter::run_script`].
 ///
 /// Mirrors `expo eval`'s contract for the print rule: `Value::Unit`
-/// suppresses the trailing line so void entries don't print `()` (the
+/// suppresses the trailing line so void scripts don't print `()` (the
 /// driver still exits 0). Any pipeline failure (filesystem, parse,
 /// typecheck, lower, runtime) prints `error: <details>` to stderr
-/// and exits 1.
-pub fn cmd_eval(file: String, entry: Option<String>) {
+/// and exits 1. The `entry` parameter is accepted for CLI parity
+/// with v1's `expo eval` but is ignored — script mode has no named
+/// entry point.
+pub fn cmd_eval(file: String, _entry: Option<String>) {
     let path = Path::new(&file);
     let source = match fs::read_to_string(path) {
         Ok(source) => source,
@@ -86,8 +107,7 @@ pub fn cmd_eval(file: String, entry: Option<String>) {
         }
     };
     let package = derive_package(path);
-    let entry_name = entry.as_deref().unwrap_or("main");
-    match run_pipeline(source, &package, path.to_path_buf(), entry_name) {
+    match run_script_pipeline(source, &package, path.to_path_buf()) {
         Ok(Value::Unit) => {}
         Ok(value) => println!("{value}"),
         Err(error) => {
@@ -121,18 +141,22 @@ pub fn cmd_shell() {
 pub fn cmd_build(file: String, output: Option<String>) {
     let path = canonical_source_path(&file);
     let output = resolve_output_name(output, &path);
-    let (program, _checked) = build_program(&path);
+    let program = build_program(&path);
     emit_and_link(&program, &output);
     println!("compiled: {output}");
 }
 
-/// `expo alpha run <file>` — build the source file as in
-/// [`cmd_build`], execute the resulting binary, and forward its exit
-/// code. The binary is written to a temp path and removed after
-/// exec, so this leaves no artifacts behind in the working directory.
+/// `expo alpha run <file>` — build the source file as a script
+/// (top-level expressions are first-class), execute the resulting
+/// binary, and forward its exit code. The binary is written to a
+/// temp path and removed after exec, so this leaves no artifacts
+/// behind in the working directory.
+///
+/// Pipeline: parse (script mode) → check → [`lower_script`] →
+/// [`expo_alpha_ir_llvm::compile_script`] → link.
 pub fn cmd_run(file: String, args: Vec<String>) {
     let path = canonical_source_path(&file);
-    let (program, _checked) = build_program(&path);
+    let script = build_script(&path);
 
     let stem = path
         .file_stem()
@@ -143,7 +167,7 @@ pub fn cmd_run(file: String, args: Vec<String>) {
         .to_string_lossy()
         .to_string();
 
-    emit_and_link(&program, &output);
+    emit_and_link_script(&script, &output);
 
     let status = process::Command::new(&output).args(&args).status();
     let _ = fs::remove_file(&output);
@@ -157,11 +181,45 @@ pub fn cmd_run(file: String, args: Vec<String>) {
     }
 }
 
-/// Read a source file, run the full alpha pipeline through lowering,
-/// and return the sealed [`IRProgram`] plus the [`CheckedProgram`] it
-/// came from. Bails the process on any pipeline failure with a
-/// `error: <details>` line — matching `cmd_eval`'s contract.
-fn build_program(path: &Path) -> (IRProgram, CheckedProgram) {
+/// Read a source file and drive it through the project-mode alpha
+/// pipeline (`parse → check → lower_program`). Returns the sealed
+/// [`IRProgram`] on success; bails the process on any pipeline
+/// failure with an `error: <details>` line matching `cmd_eval`'s
+/// contract. `cmd_build` uses this; the source must contain an
+/// explicit `fn main`.
+fn build_program(path: &Path) -> IRProgram {
+    let (checked, package) = read_and_check(path, ParseMode::File);
+    let entry = Identifier::new(&package, vec!["main".to_string()]);
+    match lower_program(&checked, entry) {
+        Ok(program) => program,
+        Err(err) => {
+            eprintln!("error: {err}");
+            process::exit(1);
+        }
+    }
+}
+
+/// Read a source file and drive it through the script-mode alpha
+/// pipeline (`parse → check → lower_script`). Returns the sealed
+/// [`IRScript`] on success; bails the process on any pipeline
+/// failure. `cmd_run` uses this — script-mode treats top-level
+/// expressions as first-class.
+fn build_script(path: &Path) -> IRScript {
+    let (checked, _package) = read_and_check(path, ParseMode::Script);
+    match lower_script(&checked) {
+        Ok(script) => script,
+        Err(err) => {
+            eprintln!("error: {err}");
+            process::exit(1);
+        }
+    }
+}
+
+/// Shared parse + check helper for the build / run paths. Returns
+/// the sealed [`CheckedProgram`] and the derived package name.
+/// Bails the process with a formatted error on read / parse /
+/// typecheck failures.
+fn read_and_check(path: &Path, mode: ParseMode) -> (CheckedProgram, String) {
     let source = match fs::read_to_string(path) {
         Ok(source) => source,
         Err(err) => {
@@ -176,7 +234,7 @@ fn build_program(path: &Path) -> (IRProgram, CheckedProgram) {
             path: path.to_path_buf(),
             source,
         }],
-        ParseMode::Script,
+        mode,
     );
     let checked = match check_program(parsed) {
         Ok(checked) => checked,
@@ -185,15 +243,7 @@ fn build_program(path: &Path) -> (IRProgram, CheckedProgram) {
             process::exit(1);
         }
     };
-    let entry = Identifier::new(&package, vec!["main".to_string()]);
-    let program = match lower_program(&checked, entry) {
-        Ok(program) => program,
-        Err(err) => {
-            eprintln!("error: {err}");
-            process::exit(1);
-        }
-    };
-    (program, checked)
+    (checked, package)
 }
 
 /// Compile the [`IRProgram`] to an object file and link it into a
@@ -207,13 +257,29 @@ fn emit_and_link(program: &IRProgram, output: &str) {
         eprintln!("error: {err}");
         process::exit(1);
     }
+    link_object(&object_path, output);
+}
+
+/// Script-mode counterpart of [`emit_and_link`]: drives
+/// [`expo_alpha_ir_llvm::compile_script`] and shares the same
+/// link path.
+fn emit_and_link_script(script: &IRScript, output: &str) {
+    let object_path = format!("{output}.o");
+    if let Err(err) = expo_alpha_ir_llvm::compile_script(script, Path::new(&object_path)) {
+        eprintln!("error: {err}");
+        process::exit(1);
+    }
+    link_object(&object_path, output);
+}
+
+fn link_object(object_path: &str, output: &str) {
     let options = BuildOptions {
         color: false,
         emit_llvm: false,
         quiet: true,
         release: false,
     };
-    pipeline::link(&object_path, output, &[], options);
+    pipeline::link(object_path, output, &[], options);
 }
 
 /// Canonicalize a user-supplied source path, exiting on miss with a
@@ -237,20 +303,14 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
     })
 }
 
-/// Run one source file end-to-end through the alpha pipeline. Returns
-/// the entry function's value on success, or a formatted error string
-/// covering parse / typecheck / lower / runtime failures.
+/// Run one source file end-to-end through the script-mode alpha
+/// pipeline. Returns the script body's trailing value on success,
+/// or a formatted error string covering parse / typecheck / lower /
+/// runtime failures.
 ///
-/// Parses in [`ParseMode::Script`] so `cmd_eval` accepts both the
-/// legacy `fn main` shape and bare-statement script files; the
-/// `lift_script` typecheck pass hoists script statements into a
-/// synthetic entry point.
-fn run_pipeline(
-    source: String,
-    package: &str,
-    path: PathBuf,
-    entry: &str,
-) -> Result<Value, String> {
+/// Parses in [`ParseMode::Script`]; lowers via [`lower_script`] and
+/// drives through [`Interpreter::run_script`]. Used by `cmd_eval`.
+fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<Value, String> {
     let parsed = parse_program(
         vec![SourceFile {
             package: package.to_string(),
@@ -260,18 +320,15 @@ fn run_pipeline(
         ParseMode::Script,
     );
     let checked = check_program(parsed).map_err(format_check_failure)?;
-    let entry_id = Identifier::new(package, vec![entry.to_string()]);
-    let program = lower_program(&checked, entry_id).map_err(|err| err.to_string())?;
-    Interpreter::new(program)
-        .run()
-        .map_err(|err| err.to_string())
+    let script = lower_script(&checked).map_err(|err| err.to_string())?;
+    Interpreter::run_script(script).map_err(|err| err.to_string())
 }
 
 /// Parse + typecheck one source file. Returns the sealed
 /// [`CheckedProgram`] on success, or a formatted error string on
 /// parse/typecheck failure. Shares parse mode and package derivation
-/// with [`run_pipeline`] so `expo alpha check` and `expo alpha eval`
-/// see the same frontend shape.
+/// with [`run_script_pipeline`] so `expo alpha check` and `expo
+/// alpha eval` see the same frontend shape.
 fn run_check(source: String, package: &str, path: PathBuf) -> Result<CheckedProgram, String> {
     let parsed = parse_program(
         vec![SourceFile {
