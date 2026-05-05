@@ -1,0 +1,39 @@
+//! Sealed-AST → alpha IR lowering, organized as one submodule per
+//! concern. Public surface to the rest of the crate is [`lower_package`]
+//! (the package walker invoked from [`crate::program::lower_program`])
+//! and [`lower_body_to_blocks`] (the body-shaped seam
+//! [`crate::lower_script`] also reuses).
+//!
+//! Layout map:
+//!
+//! - [`ctx`] — [`FnLowerCtx`] + [`FlowResult`], the per-function
+//!   accumulator every helper threads through. No language-aware
+//!   logic; just counters, the [`crate::cfg::CFGBuilder`], and the
+//!   `value -> IRType` index.
+//! - [`package`] — entry points: [`lower_package`] /
+//!   [`lower_function`] plus the registry adapters
+//!   ([`lookup_signature`], [`resolved_type_to_ir_type`]) that bridge
+//!   the typecheck-resolved AST to the IR vocabulary.
+//! - [`body`] — statement-list driver: [`lower_body_to_blocks`],
+//!   [`lower_body`], [`lower_statement`], [`finalize_open_flow`].
+//!   Owns the `Statement::Return` handling and the per-function
+//!   fail-fast contract.
+//! - [`control_flow`] — `if` / `unless` lowering: builds the
+//!   then/merge (or body/merge) blocks, stamps `CondBranch` /
+//!   `Branch` terminators, and emits the merge `Const::Unit`
+//!   placeholder for the conditional's value.
+//! - [`expr`] — expression dispatch: [`lower_expr`] + [`lower_call`]
+//!   plus the [`expr_kind_label`] used in feature-gap diagnostics.
+//! - [`ops`] — operator / literal translation: [`lower_literal`],
+//!   [`lower_bin_op`], [`lower_unary_op`], plus the small
+//!   `IRType`-shaped result-type helpers.
+
+mod body;
+mod control_flow;
+mod ctx;
+mod expr;
+mod ops;
+mod package;
+
+pub(crate) use body::lower_body_to_blocks;
+pub(crate) use package::lower_package;

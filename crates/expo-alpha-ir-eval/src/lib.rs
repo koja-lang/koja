@@ -13,6 +13,7 @@
 
 mod error;
 mod interpreter;
+mod ops;
 mod value;
 
 pub use error::RuntimeError;

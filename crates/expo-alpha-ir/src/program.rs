@@ -1,4 +1,6 @@
-//! The single public entry point for the alpha lowering phase.
+//! Sealed IR for project-mode sources (`expo build`, `expo run` on
+//! a manifest-rooted package) plus the [`lower_program`] entry point
+//! that produces them.
 //!
 //! [`lower_program`] consumes a sealed
 //! [`expo_alpha_typecheck::CheckedProgram`] and either:
@@ -15,12 +17,12 @@
 //! violations panic per northstar (compiler bugs, not user errors).
 
 use expo_alpha_typecheck::CheckedProgram;
-use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::Identifier;
 
+use crate::error::LowerError;
 use crate::function::{IRFunction, IRSymbol};
 use crate::package::IRPackage;
-use crate::{lower_package, merge, seal};
+use crate::{lower, merge, seal};
 
 /// Sealed output of [`lower_program`]'s success path. Backends consume
 /// this directly; they build their own indices over the sealed
@@ -71,49 +73,6 @@ impl IRProgram {
     }
 }
 
-/// User-actionable failure modes from [`lower_program`]. Anything that
-/// could only originate from a compiler bug panics through `seal`
-/// instead of surfacing here.
-///
-/// `Diagnostics` and `EntryPointNotFound` are disjoint: the lowering
-/// pass short-circuits before the entry-point check when diagnostics
-/// are present, so callers can match on one variant at a time.
-#[derive(Debug, Clone)]
-pub enum LowerError {
-    /// One or more feature-gap diagnostics surfaced while lowering
-    /// the sealed AST (unsupported expression / literal / statement
-    /// kinds, extern-body functions, unsupported binary operators,
-    /// etc.). Each [`Diagnostic`] carries a source span + message.
-    /// Lowering is per-function fail-fast: a failed function
-    /// contributes one diagnostic and is omitted from the resulting
-    /// partial IR.
-    Diagnostics(Vec<Diagnostic>),
-    /// The caller asked for an entry point that no package in the
-    /// lowered program registers.
-    EntryPointNotFound { identifier: Identifier },
-}
-
-impl std::fmt::Display for LowerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LowerError::Diagnostics(diagnostics) => {
-                for (index, diag) in diagnostics.iter().enumerate() {
-                    if index > 0 {
-                        writeln!(f)?;
-                    }
-                    write!(f, "{}", diag.message)?;
-                }
-                Ok(())
-            }
-            LowerError::EntryPointNotFound { identifier } => {
-                write!(f, "entry point `{identifier}` is not defined")
-            }
-        }
-    }
-}
-
-impl std::error::Error for LowerError {}
-
 /// Run every sub-pass in the alpha lowering phase.
 ///
 /// Sub-pass order (forced by data dependencies):
@@ -140,7 +99,7 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
     let mut diagnostics = Vec::new();
     let mut packages = Vec::with_capacity(checked.packages.len());
     for pkg in &checked.packages {
-        packages.push(lower_package::lower_package(
+        packages.push(lower::lower_package(
             pkg,
             &checked.registry,
             &mut diagnostics,

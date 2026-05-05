@@ -1,7 +1,12 @@
-//! End-to-end interpreter coverage for boolean and comparison
-//! operators (`and`, `or`, `not`, `== != < > <= >=`) plus unary `-`.
+//! End-to-end coverage for the operator math in `src/ops.rs`:
+//! `apply_binary_op` (`and`, `or`, `==`, `!=`, `<`, `>`, `<=`, `>=`)
+//! and `apply_unary_op` (`not`, unary `-`).
+//!
 //! Eager semantics: both sides always evaluated; result produced by
-//! a single `BinaryOp` / `UnaryOp`.
+//! a single `BinaryOp` / `UnaryOp` instruction. Source-driven (parse
+//! → check → lower → run) so the tests stay faithful to the IR
+//! shape lowering produces; the helpers themselves never see anything
+//! but pre-resolved [`Value`] operands.
 
 use std::path::PathBuf;
 
@@ -17,7 +22,7 @@ fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("boolean_ops.expo"),
+            path: PathBuf::from("ops.expo"),
             source: source.to_string(),
         }],
         mode,

@@ -29,9 +29,9 @@
 //! …) is fresh and self-contained.
 
 mod cfg;
+mod error;
 mod function;
-mod lower_package;
-mod lower_script;
+mod lower;
 mod merge;
 mod package;
 mod program;
@@ -39,11 +39,11 @@ mod script;
 mod seal;
 mod types;
 
+pub use error::LowerError;
 pub use function::{
     IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
 };
-pub use lower_script::lower_script;
 pub use package::IRPackage;
-pub use program::{IRProgram, LowerError, lower_program};
-pub use script::IRScript;
+pub use program::{IRProgram, lower_program};
+pub use script::{IRScript, lower_script};
 pub use types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};

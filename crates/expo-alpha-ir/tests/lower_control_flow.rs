@@ -1,10 +1,13 @@
-//! IR lowering coverage for `if` and `unless` statements.
+//! Coverage for `if` / `unless` lowering in `src/lower/control_flow.rs`.
 //!
 //! Pins the basic-block CFG shape: an `if` lowers to a
 //! `CondBranch(then, merge)` terminator on the entry block, a
 //! body-bearing then-block ending in `Branch(merge)`, and a merge
 //! block holding the if-expression's `Const::Unit` result. `unless`
 //! mirrors the shape with the arms swapped on the `CondBranch`.
+//! Early `return` inside an arm closes that arm's flow without
+//! overwriting the terminator stamped by the body's `Return`
+//! statement.
 
 use std::path::PathBuf;
 
@@ -22,7 +25,7 @@ fn lower(source: &str) -> IRProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("branches.expo"),
+            path: PathBuf::from("lower_control_flow.expo"),
             source: source.to_string(),
         }],
         ParseMode::File,

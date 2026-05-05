@@ -1,10 +1,12 @@
-//! IR lowering coverage for `ExprKind::Call`.
+//! Coverage for expression-level lowering in `src/lower/expr.rs`.
 //!
-//! Exercises: zero-arg callee lowers to a single `Call`
-//! instruction; an arg-taking callee's function gets `ValueId`s
-//! allocated up front in `IRFunction.params`; nested calls chain
-//! two `Call` instructions through a shared intermediate
-//! `ValueId`.
+//! Headline coverage today is `ExprKind::Call`: zero-arg callee
+//! lowers to a single `Call` instruction; an arg-taking callee's
+//! function gets `ValueId`s allocated up front in
+//! `IRFunction.params`; nested calls chain two `Call` instructions
+//! through a shared intermediate `ValueId`. Other [`ExprKind`]
+//! variants get their dedicated test files (literals + ops in
+//! `lower_ops.rs`, `if`/`unless` in `lower_control_flow.rs`).
 
 use std::path::PathBuf;
 
@@ -20,7 +22,7 @@ fn lower(source: &str) -> IRProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("calls.expo"),
+            path: PathBuf::from("lower_expr.expo"),
             source: source.to_string(),
         }],
         ParseMode::File,

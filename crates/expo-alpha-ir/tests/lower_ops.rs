@@ -1,19 +1,22 @@
-//! Lowering coverage for the boolean and comparison operators:
-//! `and`, `or`, `not`, `== != < > <= >=`, and unary `-`.
+//! Coverage for the operator + literal helpers in `src/lower/ops.rs`:
+//! `lower_literal`, `lower_bin_op`, `lower_unary_op`, and the
+//! `*_result_type` helpers (observed indirectly through the
+//! produced `IRInstruction` shape).
 //!
-//! Mirrors the `two_plus_two.rs` pattern: parse + check + lower a
-//! small `fn main`, then assert the produced instruction sequence
-//! matches the eager lowering contract (both operands first, then a
-//! single `BinaryOp` or `UnaryOp`).
+//! The eager-lowering contract: both operands first, then a single
+//! `BinaryOp` / `UnaryOp` for the result. Float literal lowering
+//! surfaces a feature-gap diagnostic (the `Literal::Float` arm is
+//! the only currently-reachable feature gap in this module).
 
 use std::path::PathBuf;
 
 use expo_alpha_ir::{
     ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRScript,
-    IRTerminator, IRUnaryOp, ValueId, lower_program, lower_script,
+    IRTerminator, IRUnaryOp, LowerError, ValueId, lower_program, lower_script,
 };
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
+use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -22,7 +25,7 @@ fn lower(source: &str) -> IRProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("boolean_ops.expo"),
+            path: PathBuf::from("lower_ops.expo"),
             source: source.to_string(),
         }],
         ParseMode::File,
@@ -36,13 +39,34 @@ fn lower_as_script(source: &str) -> IRScript {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("boolean_ops.expo"),
+            path: PathBuf::from("lower_ops.expo"),
             source: source.to_string(),
         }],
         ParseMode::Script,
     );
     let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
     lower_script(&checked).expect("script lowering should succeed")
+}
+
+fn lower_err(source: &str, entry: &str) -> LowerError {
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: PACKAGE.to_string(),
+            path: PathBuf::from("lower_ops.expo"),
+            source: source.to_string(),
+        }],
+        ParseMode::File,
+    );
+    let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
+    let entry_id = Identifier::new(PACKAGE, vec![entry.to_string()]);
+    lower_program(&checked, entry_id).expect_err("lowering should surface diagnostics")
+}
+
+fn expect_diagnostics(err: LowerError) -> Vec<String> {
+    match err {
+        LowerError::Diagnostics(d) => d.into_iter().map(|diag| diag.message).collect(),
+        other => panic!("expected Diagnostics, got {other:?}"),
+    }
 }
 
 fn entry_block(program: &IRProgram) -> &IRBasicBlock {
@@ -194,4 +218,21 @@ fn comparisons_lower_to_matching_ir_bin_ops() {
         };
         assert_eq!(*op, expected, "source = {source:?}");
     }
+}
+
+#[test]
+fn float_literal_in_body_surfaces_feature_gap_diagnostic() {
+    let source = "
+        fn main
+          1.5
+        end
+        ";
+
+    let program = dedent(source);
+    let messages = expect_diagnostics(lower_err(&program, "main"));
+    assert_eq!(messages.len(), 1);
+    assert!(
+        messages[0].contains("Float literals"),
+        "expected Float-literal diagnostic, got: {messages:?}",
+    );
 }

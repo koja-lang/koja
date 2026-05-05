@@ -1,21 +1,18 @@
-//! End-to-end smoke tests for the alpha IR lowering pipeline.
+//! Coverage for the package- and function-shaped lowering entry
+//! points (`src/lower/package.rs`):
 //!
-//! Drives `parse_program → check_program → lower_{program,script}` on
-//! `2 + 2` in both shapes:
-//!
-//! - **Project mode**: source is `fn main; 2 + 2; end`, lowered via
-//!   [`lower_program`]. Asserts the resulting [`IRProgram`] has the
-//!   exact instruction sequence an interpreter can execute to produce
-//!   `Int(4)`.
-//! - **Script mode**: source is bare `2 + 2\n`, lowered via
-//!   [`lower_script`]. Asserts the resulting [`IRScript`] has the
-//!   same `2 + 2 → Return` shape, but with no entry-point identifier
-//!   and the body sitting directly on `IRScript.blocks` instead of
-//!   inside an [`IRFunction`].
-//!
-//! Together they cover both paths from `expo-alpha-ir`'s public
-//! surface; downstream backends pick the matching `run_*` /
-//! `compile_*` entry point.
+//! - happy-path lowering of a `fn main` (project mode) and a bare
+//!   trailing-expression script body, asserting the produced
+//!   instruction sequence on the resulting [`IRProgram`] /
+//!   [`IRScript`];
+//! - cross-package call wiring through script mode's
+//!   [`IRScript::function`] index;
+//! - the [`LowerError::EntryPointNotFound`] failure mode for a
+//!   missing `fn main`;
+//! - the per-function fail-fast contract: extern-fn-without-body
+//!   surfaces a feature-gap diagnostic, and a single bad function
+//!   in a multi-fn package produces exactly one diagnostic for the
+//!   failing function while the rest are still walked.
 
 use std::path::PathBuf;
 
@@ -34,7 +31,7 @@ fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("two_plus_two.expo"),
+            path: PathBuf::from("lower_package.expo"),
             source: source.to_string(),
         }],
         mode,
@@ -51,6 +48,19 @@ fn lower(source: &str) -> IRProgram {
 fn lower_as_script(source: &str) -> IRScript {
     let checked = typecheck(source, ParseMode::Script);
     lower_script(&checked).expect("script lowering should succeed")
+}
+
+fn lower_err(source: &str, entry: &str) -> LowerError {
+    let checked = typecheck(source, ParseMode::File);
+    let entry_id = Identifier::new(PACKAGE, vec![entry.to_string()]);
+    lower_program(&checked, entry_id).expect_err("lowering should surface diagnostics")
+}
+
+fn expect_diagnostics(err: LowerError) -> Vec<String> {
+    match err {
+        LowerError::Diagnostics(d) => d.into_iter().map(|diag| diag.message).collect(),
+        other => panic!("expected Diagnostics, got {other:?}"),
+    }
 }
 
 #[test]
@@ -212,4 +222,51 @@ fn lower_program_reports_missing_entry_point() {
         LowerError::EntryPointNotFound { identifier } => assert_eq!(identifier, missing),
         other => panic!("expected EntryPointNotFound, got {other:?}"),
     }
+}
+
+#[test]
+fn extern_fn_without_body_surfaces_feature_gap_diagnostic() {
+    let source = "
+        @extern \"C\"
+        fn missing() -> Int
+        ";
+
+    let program = dedent(source);
+    let messages = expect_diagnostics(lower_err(&program, "missing"));
+    assert_eq!(messages.len(), 1);
+    assert!(
+        messages[0].contains("extern fn `missing`"),
+        "expected extern-fn diagnostic, got: {messages:?}",
+    );
+}
+
+/// When one function fails to lower, other functions in the same
+/// package still get walked — the failing one is simply omitted, and
+/// the final [`LowerError::Diagnostics`] carries *only* the diagnostic
+/// from the function that actually failed. Pins the per-function
+/// fail-fast contract so a single bad function doesn't mask issues in
+/// other ones and doesn't spew spurious errors either.
+#[test]
+fn partial_failure_reports_only_the_failing_function_diagnostic() {
+    let source = "
+        fn main
+          1
+        end
+
+        fn broken
+          1.5
+        end
+        ";
+
+    let program = dedent(source);
+    let messages = expect_diagnostics(lower_err(&program, "main"));
+    assert_eq!(
+        messages.len(),
+        1,
+        "expected a single diagnostic from the failing fn, got: {messages:?}",
+    );
+    assert!(
+        messages[0].contains("Float literals"),
+        "expected Float-literal diagnostic from `broken`, got: {messages:?}",
+    );
 }

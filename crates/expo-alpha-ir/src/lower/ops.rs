@@ -1,0 +1,140 @@
+//! Operator and literal translation helpers. Pure functions over
+//! AST nodes — no [`super::ctx::FnLowerCtx`] needed; callers in
+//! [`super::expr`] handle block / value bookkeeping after these
+//! return.
+//!
+//! Three concerns live here together because they form the "AST
+//! vocabulary → IR vocabulary" border for non-control-flow constructs:
+//!
+//! - [`lower_literal`] / [`lower_bin_op`] / [`lower_unary_op`] —
+//!   surface-syntax → IR-enum mapping, with diagnostics on feature
+//!   gaps (Float / String literals, `<>` concat).
+//! - [`const_value_type`] — `ConstValue` variant → `IRType` width.
+//! - [`bin_op_result_type`] / [`unary_op_result_type`] — typed-result
+//!   inference: comparisons / boolean logic always produce `Bool`,
+//!   arithmetic and `Neg` preserve operand width.
+
+use expo_ast::ast::{BinOp, Diagnostic, Literal, UnaryOp};
+use expo_ast::span::Span;
+
+use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp};
+
+pub(super) fn lower_literal(
+    value: &Literal,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<ConstValue, ()> {
+    match value {
+        Literal::Bool(b) => Ok(ConstValue::Bool(*b)),
+        // Slice scope: every Int literal lowers to the 64-bit signed
+        // variant. Once stdlib stubs grow `Int8`..`UInt64` and literal
+        // width inference lands, this match grows arms (or threads
+        // expected width through from typecheck).
+        Literal::Int(text) => match text.parse::<i64>() {
+            Ok(parsed) => Ok(ConstValue::Int64(parsed)),
+            Err(err) => {
+                diagnostics.push(Diagnostic::error(
+                    format!("invalid Int literal `{text}`: {err}"),
+                    span,
+                ));
+                Err(())
+            }
+        },
+        Literal::Unit => Ok(ConstValue::Unit),
+        Literal::Float(_) => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower Float literals",
+                span,
+            ));
+            Err(())
+        }
+        Literal::String(_) => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower String literals",
+                span,
+            ));
+            Err(())
+        }
+    }
+}
+
+pub(super) fn lower_bin_op(
+    op: BinOp,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<IRBinOp, ()> {
+    match op {
+        BinOp::Add => Ok(IRBinOp::Add),
+        BinOp::And => Ok(IRBinOp::And),
+        BinOp::Div => Ok(IRBinOp::Div),
+        BinOp::Eq => Ok(IRBinOp::Eq),
+        BinOp::Gt => Ok(IRBinOp::Gt),
+        BinOp::GtEq => Ok(IRBinOp::GtEq),
+        BinOp::Lt => Ok(IRBinOp::Lt),
+        BinOp::LtEq => Ok(IRBinOp::LtEq),
+        BinOp::Mod => Ok(IRBinOp::Mod),
+        BinOp::Mul => Ok(IRBinOp::Mul),
+        BinOp::NotEq => Ok(IRBinOp::NotEq),
+        BinOp::Or => Ok(IRBinOp::Or),
+        BinOp::Sub => Ok(IRBinOp::Sub),
+        BinOp::Concat => {
+            diagnostics.push(Diagnostic::error(
+                "alpha IR does not yet lower the `<>` concat operator",
+                span,
+            ));
+            Err(())
+        }
+    }
+}
+
+pub(super) fn lower_unary_op(op: UnaryOp) -> IRUnaryOp {
+    match op {
+        UnaryOp::Neg => IRUnaryOp::Neg,
+        UnaryOp::Not => IRUnaryOp::Not,
+    }
+}
+
+/// Map a [`ConstValue`] variant to its [`IRType`]. Pure
+/// transliteration — each integer width gets its mirroring type, and
+/// `Bool` / `Unit` round-trip directly.
+pub(super) fn const_value_type(value: &ConstValue) -> IRType {
+    match value {
+        ConstValue::Bool(_) => IRType::Bool,
+        ConstValue::Int8(_) => IRType::Int8,
+        ConstValue::Int16(_) => IRType::Int16,
+        ConstValue::Int32(_) => IRType::Int32,
+        ConstValue::Int64(_) => IRType::Int64,
+        ConstValue::UInt8(_) => IRType::UInt8,
+        ConstValue::UInt16(_) => IRType::UInt16,
+        ConstValue::UInt32(_) => IRType::UInt32,
+        ConstValue::UInt64(_) => IRType::UInt64,
+        ConstValue::Unit => IRType::Unit,
+    }
+}
+
+/// The result type of a [`IRBinOp`] given the operand type.
+/// Comparisons and boolean logic always produce `Bool`; arithmetic
+/// preserves the operand width (typecheck guarantees both operands
+/// share a width).
+pub(super) fn bin_op_result_type(op: IRBinOp, operand_ty: IRType) -> IRType {
+    match op {
+        IRBinOp::Add | IRBinOp::Sub | IRBinOp::Mul | IRBinOp::Div | IRBinOp::Mod => operand_ty,
+        IRBinOp::And
+        | IRBinOp::Or
+        | IRBinOp::Eq
+        | IRBinOp::NotEq
+        | IRBinOp::Gt
+        | IRBinOp::GtEq
+        | IRBinOp::Lt
+        | IRBinOp::LtEq => IRType::Bool,
+    }
+}
+
+/// The result type of a [`IRUnaryOp`] given the operand type. `Neg`
+/// preserves the operand width; `Not` is always `Bool`.
+pub(super) fn unary_op_result_type(op: IRUnaryOp, operand_ty: IRType) -> IRType {
+    match op {
+        IRUnaryOp::Neg => operand_ty,
+        IRUnaryOp::Not => IRType::Bool,
+    }
+}
