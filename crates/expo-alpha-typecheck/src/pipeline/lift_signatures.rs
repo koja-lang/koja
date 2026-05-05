@@ -57,7 +57,7 @@ fn lift_function(
 
     let return_type = match function.return_type.as_ref() {
         Some(type_expr) => resolve_type_expr(type_expr, registry, diagnostics),
-        None => primitive(registry, "Unit"),
+        None => registry.primitive("Unit"),
     };
 
     let signature = FunctionSignature {
@@ -149,8 +149,13 @@ fn resolve_type_expr(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     match type_expr {
-        TypeExpr::Named { path, span } => resolve_named(path, *span, registry, diagnostics),
-        TypeExpr::Unit { .. } => primitive(registry, "Unit"),
+        TypeExpr::Function { span, .. } => {
+            diagnostics.push(Diagnostic::error(
+                "alpha typecheck does not yet support function-typed annotations".to_string(),
+                *span,
+            ));
+            ResolvedType::unresolved()
+        }
         TypeExpr::Generic { path, span, .. } => {
             diagnostics.push(Diagnostic::error(
                 format!(
@@ -161,13 +166,7 @@ fn resolve_type_expr(
             ));
             ResolvedType::unresolved()
         }
-        TypeExpr::Function { span, .. } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support function-typed annotations".to_string(),
-                *span,
-            ));
-            ResolvedType::unresolved()
-        }
+        TypeExpr::Named { path, span } => resolve_named(path, *span, registry, diagnostics),
         TypeExpr::Self_ { span } => {
             diagnostics.push(Diagnostic::error(
                 "alpha typecheck does not yet support `Self` type annotations".to_string(),
@@ -182,6 +181,7 @@ fn resolve_type_expr(
             ));
             ResolvedType::unresolved()
         }
+        TypeExpr::Unit { .. } => registry.primitive("Unit"),
     }
 }
 
@@ -223,16 +223,5 @@ fn resolve_named(
         ));
         return ResolvedType::unresolved();
     }
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn primitive(registry: &GlobalRegistry, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = registry.lookup(&ident).unwrap_or_else(|| {
-        panic!(
-            "stdlib stub `Global.{name}` missing from registry — \
-             alpha pipeline must seed it via `GlobalRegistry::with_stdlib_stubs`",
-        )
-    });
     ResolvedType::leaf(Resolution::Global(id))
 }

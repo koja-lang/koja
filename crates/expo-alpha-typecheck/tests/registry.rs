@@ -21,7 +21,7 @@ fn check_empty_main() -> CheckedProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("primitives_registered.expo"),
+            path: PathBuf::from("registry.expo"),
             source: "fn main\n  1\nend\n".to_string(),
         }],
         ParseMode::File,

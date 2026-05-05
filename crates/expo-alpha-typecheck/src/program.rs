@@ -1,7 +1,8 @@
 //! Public entry point for the alpha typecheck phase. [`check_program`]
-//! returns a sealed [`CheckedProgram`] on success or a [`CheckFailure`]
-//! carrying diagnostics + the partial `ParsedProgram` on failure.
-//! Seal is asserted as the last sub-pass and panics on violation.
+//! returns a sealed [`CheckedProgram`] on success or a
+//! [`crate::CheckFailure`] carrying diagnostics + the partial
+//! `ParsedProgram` on failure. Seal is asserted as the last sub-pass
+//! and panics on violation.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -9,8 +10,9 @@ use std::path::PathBuf;
 use expo_ast::ast::{Diagnostic, File};
 use expo_parser::{ParsedFile, ParsedProgram};
 
+use crate::error::CheckFailure;
+use crate::pipeline::{collect, lift_signatures, resolve, seal};
 use crate::registry::GlobalRegistry;
-use crate::{collect, lift_signatures, resolve, seal};
 
 /// A package fragment of a [`CheckedProgram`].
 #[derive(Debug, Clone)]
@@ -29,30 +31,6 @@ pub struct CheckedProgram {
     /// crates build their own indices over `Identifier`.
     pub registry: GlobalRegistry,
 }
-
-/// Failure result of [`check_program`].
-///
-/// `diagnostics` carries only the diagnostics alpha typecheck emitted.
-/// Parse diagnostics live on `partial.iter().flat_map(|f|
-/// &f.diagnostics)`. When the parser already produced error-severity
-/// diagnostics, typecheck halts early and `diagnostics` is empty.
-/// The partial AST is **not** sealed.
-#[derive(Debug)]
-pub struct CheckFailure {
-    pub diagnostics: Vec<Diagnostic>,
-    pub partial: ParsedProgram,
-}
-
-impl std::fmt::Display for CheckFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for diag in &self.diagnostics {
-            writeln!(f, "{}", diag.message)?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for CheckFailure {}
 
 /// Run every sub-pass in the alpha typecheck phase.
 ///

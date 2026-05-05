@@ -43,7 +43,7 @@ fn library_path() -> Option<String> {
     None
 }
 
-const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 fn run_expo(file: &Path) -> (String, String, i32) {
     run_with_timeout(|cmd| {

@@ -1,6 +1,6 @@
 //! Collect sub-pass: register a canonical [`Identifier`] for every
 //! globally-named decl. Pure registration — signature resolution lives
-//! in [`crate::lift_signatures`].
+//! in [`super::lift_signatures`].
 //!
 //! Path encoding follows the [`Identifier`] convention: top-level
 //! functions register at `path = ["name"]`; methods on `User` will

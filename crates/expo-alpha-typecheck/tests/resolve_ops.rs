@@ -1,8 +1,9 @@
 //! Typecheck coverage for boolean and comparison operators
-//! (`and`/`or`/`not`/`== != < > <= >=`). Mirrors `two_plus_two.rs`:
-//! parse + check a tiny `fn main`, then inspect the trailing
-//! expression's `resolution`. Error paths assert a diagnostic on
-//! ill-typed programs.
+//! (`and`/`or`/`not`/`== != < > <= >=`) — pairs with
+//! `pipeline::resolve::ops` in src. Mirrors `program.rs`: parse +
+//! check a tiny `fn main`, then inspect the trailing expression's
+//! `resolution`. Error paths assert a diagnostic on ill-typed
+//! programs.
 
 use std::path::PathBuf;
 
@@ -32,7 +33,7 @@ fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("boolean_ops.expo"),
+            path: PathBuf::from("resolve_ops.expo"),
             source: source.to_string(),
         }],
         ParseMode::File,

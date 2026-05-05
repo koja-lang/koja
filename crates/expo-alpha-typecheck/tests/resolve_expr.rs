@@ -34,7 +34,7 @@ fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("calls.expo"),
+            path: PathBuf::from("resolve_expr.expo"),
             source: source.to_string(),
         }],
         ParseMode::File,

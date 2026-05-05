@@ -19,7 +19,7 @@ fn typecheck(source: &str) -> CheckedProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("two_plus_two.expo"),
+            path: PathBuf::from("program.expo"),
             source: source.to_string(),
         }],
         ParseMode::File,

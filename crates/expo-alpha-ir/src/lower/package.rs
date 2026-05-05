@@ -19,12 +19,14 @@ use crate::types::IRType;
 use super::body::{finalize_open_flow, lower_body};
 use super::ctx::FnLowerCtx;
 
+use std::collections::BTreeMap;
+
 pub(crate) fn lower_package(
     pkg: &CheckedPackage,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> IRPackage {
-    let mut functions = std::collections::BTreeMap::new();
+    let mut functions = BTreeMap::new();
     for file in &pkg.files {
         for item in &file.items {
             if let Item::Function(function) = item

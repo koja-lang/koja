@@ -12,16 +12,25 @@
 //! script-mode files keep their top-level statements on `File.body`.
 //! Both shapes share the same sub-passes — there is no synthetic
 //! `fn main` wrapper.
+//!
+//! # Module layout
+//!
+//! - [`error`] — user-actionable failure type ([`CheckFailure`]).
+//! - [`labels`] — short, stable labels for AST shapes (used by every
+//!   pass that mentions a node kind in a diagnostic).
+//! - [`pipeline`] — sub-passes (collect, lift_signatures, resolve, seal).
+//! - [`program`] — public entry point and program-level types.
+//! - [`registry`] — [`GlobalRegistry`] of decls + diagnostic-friendly
+//!   [`format_registry`] rendering.
 
-mod collect;
+mod error;
 mod labels;
-mod lift_signatures;
+mod pipeline;
 mod program;
 mod registry;
-mod resolve;
-mod seal;
 
-pub use program::{CheckFailure, CheckedPackage, CheckedProgram, check_program};
+pub use error::CheckFailure;
+pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
     FunctionSignature, GlobalKind, GlobalRegistry, InsertOutcome, RegistryEntry, ResolvedParam,
     format_registry,

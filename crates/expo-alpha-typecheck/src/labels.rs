@@ -1,8 +1,17 @@
-//! Short, stable, human-readable labels for AST shapes. Used by
-//! `resolve` and `seal` for diagnostic / panic messages so the same
-//! vocabulary surfaces from every sub-pass.
+//! Short, stable, human-readable labels for AST shapes. Used by every
+//! pipeline pass that needs to mention an [`ExprKind`] / [`Item`] /
+//! [`BinOp`] in a diagnostic or panic message, so the same vocabulary
+//! surfaces from `collect`, `lift_signatures`, `resolve`, and `seal`.
+//!
+//! The split between [`expr_kind_label`] / [`item_label`] (compact
+//! kind names like `"binary"` / `"fn"`) and [`bin_op_label`] (surface
+//! syntax like `"+"` / `"and"`) is deliberate: the former describe
+//! the AST node *kind*, the latter render the *literal source token*
+//! a user would have typed. Both flavors live here because they're
+//! the same audience (diagnostics) and same shape (AST → `&'static str`).
 
-use expo_ast::ast::{ExprKind, Item};
+use expo_ast::ast::{BinOp, ExprKind, Item};
+use expo_ast::span::Span;
 
 pub(crate) fn expr_kind_label(kind: &ExprKind) -> &'static str {
     match kind {
@@ -49,7 +58,7 @@ pub(crate) fn item_label(item: &Item) -> &'static str {
     }
 }
 
-pub(crate) fn item_span(item: &Item) -> expo_ast::span::Span {
+pub(crate) fn item_span(item: &Item) -> Span {
     match item {
         Item::Alias(decl) => decl.span,
         Item::Constant(c) => c.span,
@@ -59,5 +68,28 @@ pub(crate) fn item_span(item: &Item) -> expo_ast::span::Span {
         Item::Protocol(p) => p.span,
         Item::Struct(s) => s.span,
         Item::TypeAlias(t) => t.span,
+    }
+}
+
+/// Surface-syntax rendering of a binary operator for user-facing
+/// diagnostic messages (`"+"`, `"and"`, `"<>"`, …). Distinct from
+/// [`expr_kind_label`]: the latter returns the kind name (`"binary"`),
+/// this returns what the user actually typed.
+pub(crate) fn bin_op_label(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "+",
+        BinOp::And => "and",
+        BinOp::Concat => "<>",
+        BinOp::Div => "/",
+        BinOp::Eq => "==",
+        BinOp::Gt => ">",
+        BinOp::GtEq => ">=",
+        BinOp::Lt => "<",
+        BinOp::LtEq => "<=",
+        BinOp::Mod => "%",
+        BinOp::Mul => "*",
+        BinOp::NotEq => "!=",
+        BinOp::Or => "or",
+        BinOp::Sub => "-",
     }
 }

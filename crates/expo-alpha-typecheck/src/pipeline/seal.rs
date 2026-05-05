@@ -3,7 +3,7 @@
 //! Panics on violation per [`COMPILER-NORTHSTAR.md`] — seal failures
 //! are upstream compiler bugs, not user errors.
 //!
-//! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
+//! [`COMPILER-NORTHSTAR.md`]: ../../../design/COMPILER-NORTHSTAR.md
 
 use expo_ast::ast::{Expr, ExprKind, File, Function, Item, Statement};
 use expo_ast::identifier::Resolution;
