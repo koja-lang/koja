@@ -47,7 +47,7 @@ fn lower_as_script(source: &str) -> IRScript {
 
 fn entry_block(program: &IRProgram) -> &IRBasicBlock {
     let main: &IRFunction = program.entry_function();
-    assert_eq!(main.blocks.len(), 1, "POC fns lower to one basic block");
+    assert_eq!(main.blocks.len(), 1, "fns lower to one basic block");
     &main.blocks[0]
 }
 
@@ -147,7 +147,7 @@ fn script_mode_and_lowers_to_two_consts_and_a_binary_op() {
     assert_eq!(
         script.blocks.len(),
         1,
-        "POC script bodies lower to a single basic block",
+        "script bodies lower to a single basic block",
     );
     let block = &script.blocks[0];
     assert_eq!(

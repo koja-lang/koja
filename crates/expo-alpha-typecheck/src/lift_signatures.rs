@@ -1,20 +1,14 @@
-//! Lift-signatures sub-pass: walk every `Item::Function` in each file,
-//! resolve its param and return `TypeExpr`s against the already-seeded
-//! [`GlobalRegistry`], and stamp a [`FunctionSignature`] onto each
-//! function's registry entry.
+//! Lift-signatures sub-pass: resolve each function's param + return
+//! `TypeExpr`s against the seeded [`GlobalRegistry`] and stamp a
+//! [`FunctionSignature`] onto its registry entry.
 //!
-//! Runs **after** `collect` (so every top-level function already has
-//! a `Function(None)` slot in the registry) and **before** `resolve`
-//! (so `resolve_call` can look up a callee's signature without
-//! re-walking the source).
+//! Runs after `collect` (so every function has a `Function(None)`
+//! slot) and before `resolve` (so call sites see callee signatures).
 //!
-//! POC scope: only `TypeExpr::Named` pointing at a preloaded stdlib
-//! primitive (`Int`, `Bool`, `Unit`, `Float`, `String`) resolves
-//! successfully. Anything richer (generics, unions, function types,
-//! user types) emits a diagnostic and stamps an `Unresolved`
-//! placeholder so downstream resolve / seal still see a signature
-//! shape of the right arity. Named-parameter defaults, `move`, and
-//! `Self` receivers also diagnose.
+//! Today only `TypeExpr::Named` against a preloaded stdlib primitive
+//! (`Int`/`Bool`/`Unit`/`Float`/`String`) resolves. Richer shapes
+//! diagnose and stamp an `Unresolved` placeholder so the signature's
+//! arity stays accurate downstream.
 
 use expo_ast::ast::{Diagnostic, File, Function, Item, Param, PassMode, TypeExpr};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
@@ -44,7 +38,7 @@ fn lift_function(
     if !function.type_params.is_empty() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck POC does not yet support generic functions (`{}` has type parameters)",
+                "alpha typecheck does not yet support generic functions (`{}` has type parameters)",
                 function.name,
             ),
             function.span,
@@ -101,7 +95,7 @@ fn lift_param(
         Param::Self_ { span, .. } => {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck POC does not yet support `self` receivers (`{function_name}`)",
+                    "alpha typecheck does not yet support `self` receivers (`{function_name}`)",
                 ),
                 *span,
             ));
@@ -120,7 +114,7 @@ fn lift_param(
             if !matches!(mode, PassMode::Borrow) {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "alpha typecheck POC does not yet support `move` parameters \
+                        "alpha typecheck does not yet support `move` parameters \
                          (`{function_name}.{name}`)",
                     ),
                     *span,
@@ -129,7 +123,7 @@ fn lift_param(
             if default.is_some() {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "alpha typecheck POC does not yet support default parameter values \
+                        "alpha typecheck does not yet support default parameter values \
                          (`{function_name}.{name}`)",
                     ),
                     *span,
@@ -144,12 +138,11 @@ fn lift_param(
     }
 }
 
-/// Resolve a [`TypeExpr`] against the registry. POC scope supports
-/// only bare `TypeExpr::Named` with a single-segment path that
-/// resolves to a preloaded `Global.<name>` stdlib stub. Everything
-/// else diagnoses and returns [`ResolvedType::unresolved`] so the
-/// signature shape (arity, param names) stays accurate for downstream
-/// consumers.
+/// Resolve a [`TypeExpr`] against the registry. Today only a bare
+/// `TypeExpr::Named` whose single-segment path resolves to a preloaded
+/// `Global.<name>` stdlib stub succeeds; everything else diagnoses and
+/// returns [`ResolvedType::unresolved`] so the surrounding signature
+/// shape (arity, param names) stays accurate.
 fn resolve_type_expr(
     type_expr: &TypeExpr,
     registry: &GlobalRegistry,
@@ -161,7 +154,7 @@ fn resolve_type_expr(
         TypeExpr::Generic { path, span, .. } => {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck POC does not yet support generic type annotations (`{}`)",
+                    "alpha typecheck does not yet support generic type annotations (`{}`)",
                     path.join("."),
                 ),
                 *span,
@@ -170,21 +163,21 @@ fn resolve_type_expr(
         }
         TypeExpr::Function { span, .. } => {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck POC does not yet support function-typed annotations".to_string(),
+                "alpha typecheck does not yet support function-typed annotations".to_string(),
                 *span,
             ));
             ResolvedType::unresolved()
         }
         TypeExpr::Self_ { span } => {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck POC does not yet support `Self` type annotations".to_string(),
+                "alpha typecheck does not yet support `Self` type annotations".to_string(),
                 *span,
             ));
             ResolvedType::unresolved()
         }
         TypeExpr::Union { span, .. } => {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck POC does not yet support union type annotations".to_string(),
+                "alpha typecheck does not yet support union type annotations".to_string(),
                 *span,
             ));
             ResolvedType::unresolved()
@@ -201,7 +194,7 @@ fn resolve_named(
     if path.len() != 1 {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck POC does not yet support dotted type names (`{}`)",
+                "alpha typecheck does not yet support dotted type names (`{}`)",
                 path.join("."),
             ),
             span,
@@ -213,7 +206,7 @@ fn resolve_named(
     let Some((id, entry)) = registry.lookup(&candidate) else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck POC only recognizes primitive type names \
+                "alpha typecheck only recognizes primitive type names \
                  (`Int`, `Bool`, `Unit`, `Float`, `String`); got `{name}`",
             ),
             span,
@@ -223,7 +216,7 @@ fn resolve_named(
     if !entry.identifier.is_in_global() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck POC only recognizes `Global.*` primitive type names; \
+                "alpha typecheck only recognizes `Global.*` primitive type names; \
                  got `{name}`",
             ),
             span,

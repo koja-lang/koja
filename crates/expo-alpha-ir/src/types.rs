@@ -23,9 +23,9 @@ impl std::fmt::Display for ValueId {
 /// admits, so e.g. `Int8(i8)` cannot construct an out-of-range value
 /// at the type level.
 ///
-/// **Transient invariant for the alpha POC**: the seal pass currently
-/// asserts only `Int64` flows through. The other width variants exist
-/// in the vocabulary so future stdlib stub expansion + literal width
+/// **Transient invariant**: the seal pass currently asserts only
+/// `Int64` flows through. The other width variants exist in the
+/// vocabulary so future stdlib stub expansion + literal width
 /// inference can stamp them without reshuffling the IR shape.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstValue {
@@ -48,7 +48,7 @@ pub enum ConstValue {
 ///
 /// **Overflow contract**: integer arithmetic (`Add`/`Sub`/`Mul`/`Div`/`Mod`)
 /// wraps on overflow (two's-complement). The interpreter currently
-/// flags overflow as a `RuntimeError::IntegerOverflow` (POC-level
+/// flags overflow as a `RuntimeError::IntegerOverflow` (transient
 /// safety net); native LLVM emission uses plain `add`/`sub`/`mul`
 /// without `nsw`/`nuw` flags — wrapping semantics. Aligning the
 /// interpreter to wrap-on-overflow is a follow-up.

@@ -1,10 +1,8 @@
-//! Typecheck coverage for the boolean and comparison operators:
-//! `and`, `or`, `not`, `== != < > <= >=`.
-//!
-//! Mirrors the `two_plus_two.rs` pattern: parse + check a small
-//! `fn main` source, then inspect the northstar-aligned `resolution`
-//! of its trailing expression. Error paths are covered by asserting
-//! a diagnostic on ill-typed programs.
+//! Typecheck coverage for boolean and comparison operators
+//! (`and`/`or`/`not`/`== != < > <= >=`). Mirrors `two_plus_two.rs`:
+//! parse + check a tiny `fn main`, then inspect the trailing
+//! expression's `resolution`. Error paths assert a diagnostic on
+//! ill-typed programs.
 
 use std::path::PathBuf;
 
@@ -68,9 +66,7 @@ fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
     }
 }
 
-/// Resolved leaf for the preloaded `Global.<name>` stdlib stub, looked
-/// up via `registry.lookup` rather than a cached handle -- same
-/// discipline the resolver uses.
+/// Resolved leaf for the preloaded `Global.<name>` stdlib stub.
 fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
     let ident = Identifier::new("Global", vec![name.to_string()]);
     let (id, _) = checked

@@ -1,13 +1,8 @@
-//! End-to-end interpreter coverage for `ExprKind::Call`.
-//!
-//! Drives parse -> typecheck -> IR lower -> evaluate on a handful of
-//! multi-function programs and asserts the runtime value the
-//! interpreter returns. Focus is on the call-control path: passing
-//! args, returning a value, and recursing through nested calls.
-//! Parameter references inside bodies are still out of scope for
-//! this slice (typecheck diagnoses them), so `take(99)` ignores
-//! its param and returns a constant — that's the deliberate
-//! limitation being exercised.
+//! End-to-end interpreter coverage for `ExprKind::Call`. Focus is
+//! the call-control path: passing args, returning a value, recursing
+//! through nested calls. Parameter *references* inside bodies are
+//! still out of scope (typecheck diagnoses them), so the args-taking
+//! tests below pass values that the callee body ignores.
 
 use std::path::PathBuf;
 
@@ -83,11 +78,11 @@ fn nested_zero_arg_calls_combine_via_arithmetic() {
 
 #[test]
 fn arg_taking_callee_with_unreferenced_param_returns_body_value() {
-    // POC limitation: function bodies cannot reference parameters
-    // yet (the typecheck would reject `x`). This test stakes
-    // ground for *arity correctness*: the arg is evaluated and
-    // bound in the callee's frame even though the body never
-    // reads it, and the call returns the body's constant.
+    // Function bodies cannot reference parameters yet (typecheck
+    // would reject `x`). This test stakes ground for arity
+    // correctness: the arg is evaluated and bound in the callee's
+    // frame even though the body never reads it, and the call
+    // returns the body's constant.
     let source = "
         fn take(x: Int) -> Int
           7
@@ -104,9 +99,9 @@ fn arg_taking_callee_with_unreferenced_param_returns_body_value() {
 
 #[test]
 fn multiple_args_evaluate_in_order() {
-    // Same POC limitation applies: neither param is referenced,
-    // so the return is a constant. The value carries out the
-    // multi-arg call path end-to-end.
+    // Same param-reference limitation applies: neither param is
+    // referenced, so the return is a constant. The value carries
+    // out the multi-arg call path end-to-end.
     let source = "
         fn pair(a: Int, b: Int) -> Int
           11

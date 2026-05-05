@@ -59,11 +59,10 @@
 //!   no codegen surface, so there's nothing to write out.
 //! - `check` and `shell` have no backend dimension.
 //!
-//! POC scope today (mirrors `expo-alpha-typecheck` /
-//! `expo-alpha-ir`): integer literals, integer arithmetic
-//! (`+ - * / %`), parenthesized groups, and the
-//! boolean/comparison/unary operators. Anything richer
-//! typecheck-errors with a precise diagnostic.
+//! Scope today (mirrors `expo-alpha-typecheck` / `expo-alpha-ir`):
+//! integer literals, integer arithmetic (`+ - * / %`),
+//! boolean/comparison/unary operators, and parenthesized groups.
+//! Anything richer typecheck-errors with a precise diagnostic.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -256,11 +255,11 @@ pub fn cmd_shell() {
 /// since there's nothing useful to write out. For a `.exps`
 /// argument: parse Script → check → [`lower_script`] →
 /// [`expo_alpha_ir_llvm::compile_script`] → link. The script body
-/// becomes `main`'s body, so executing the binary runs the script
-/// and exits with its trailing expression's value truncated to 8
-/// bits (POC artifact; will become 0 on success once `Kernel.exit`
-/// is wired in). `-o`/`--output` overrides the default stem-based
-/// output name.
+/// becomes `main`'s body, so executing the binary prints the
+/// script's trailing value and exits 0 (via the temporary
+/// auto-print wrapper in `expo-runtime/src/alpha.rs`; goes away
+/// with `IO.puts`). `-o`/`--output` overrides the default
+/// stem-based output name.
 pub fn cmd_build(file: Option<String>, backend: Backend, output: Option<String>) {
     let mode = resolve_alpha_mode(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
     match (mode, backend) {
@@ -300,7 +299,7 @@ pub fn cmd_run(file: Option<String>, backend: Backend, args: Vec<String>) {
 fn build_and_keep(path: &Path, output: Option<String>) {
     let script = build_script(path);
     let output = resolve_output_name(output, path);
-    emit_and_link_script(&script, &output);
+    emit_and_link_script(&script, &derive_package(path), &output);
     println!("compiled: {output}");
 }
 
@@ -319,7 +318,7 @@ fn run_script_compiled(path: &Path, args: &[String]) -> ! {
         .join(format!("expo-alpha-run-{}-{stem}", process::id()))
         .to_string_lossy()
         .to_string();
-    emit_and_link_script(&script, &output);
+    emit_and_link_script(&script, &derive_package(path), &output);
 
     let status = process::Command::new(&output).args(args).status();
     let _ = fs::remove_file(&output);
@@ -336,11 +335,10 @@ fn run_script_compiled(path: &Path, args: &[String]) -> ! {
 /// Run the `.exps` script at `path` through the interpreter and
 /// print the trailing value (suppressing [`Value::Unit`] so void
 /// scripts don't print `()`). Any pipeline failure prints
-/// `error: <details>` and exits 1; success exits 0 regardless of
-/// the trailing value (the interpreter does not surface a script's
-/// trailing value as an exit code — that's the LLVM backend's
-/// POC behavior). Used by `cmd_run` when the user picks the
-/// interpreter backend.
+/// `error: <details>` and exits 1; success exits 0. The LLVM
+/// backend matches this contract (print + exit 0) via the
+/// auto-print wrapper in `expo-runtime/src/alpha.rs`. Used by
+/// `cmd_run` when the user picks the interpreter backend.
 fn run_script_interpreted(path: &Path) {
     let source = read_source_or_exit(path);
     let package = derive_package(path);
@@ -435,11 +433,13 @@ fn read_source_or_exit(path: &Path) -> String {
 /// Compile the [`IRScript`] to an object file and link it into a
 /// native binary at `output`, reusing v1's
 /// [`pipeline::link`](crate::pipeline) helper for `cc` invocation,
-/// runtime archive embedding, and BoringSSL linkage. Bails the
-/// process on any LLVM emission failure.
-fn emit_and_link_script(script: &IRScript, output: &str) {
+/// runtime archive embedding, and BoringSSL linkage. `app_name`
+/// flows into the binary's `__expo_app_name` global (panic
+/// backtrace label).
+fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str) {
     let object_path = format!("{output}.o");
-    if let Err(err) = expo_alpha_ir_llvm::compile_script(script, Path::new(&object_path)) {
+    if let Err(err) = expo_alpha_ir_llvm::compile_script(script, app_name, Path::new(&object_path))
+    {
         eprintln!("error: {err}");
         process::exit(1);
     }

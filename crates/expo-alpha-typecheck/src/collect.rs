@@ -1,14 +1,12 @@
-//! Collect sub-pass: walks each `File`'s top-level items and registers
-//! a canonical [`Identifier`] for every globally-named decl into the
-//! [`GlobalRegistry`]. Pure registration — no signature resolution
-//! happens here. Resolved param/return types are annotated on the AST
-//! by [`crate::lift_signatures`] once the registry is fully populated.
+//! Collect sub-pass: register a canonical [`Identifier`] for every
+//! globally-named decl. Pure registration — signature resolution lives
+//! in [`crate::lift_signatures`].
 //!
-//! The path encoding follows the [`Identifier`] convention: top-level
-//! functions register at `path = ["name"]`; methods on `User` register
-//! at `path = ["User", "name"]` (when impls land).
+//! Path encoding follows the [`Identifier`] convention: top-level
+//! functions register at `path = ["name"]`; methods on `User` will
+//! register at `path = ["User", "name"]` (when impls land).
 //!
-//! For the POC the only registered shape is `fn` items.
+//! Today only `fn` items register; richer shapes diagnose.
 
 use expo_ast::ast::{Diagnostic, File, Function, Item};
 use expo_ast::identifier::Identifier;
@@ -27,9 +25,9 @@ pub(crate) fn collect_file(
             Item::Function(function) => {
                 register_function(function, package, registry, diagnostics);
             }
-            // The other Item variants land as alpha grows. Reject them
-            // explicitly so the POC fails loudly on shapes it cannot
-            // round-trip yet.
+            // Other Item variants land as alpha grows. Reject them
+            // explicitly so unsupported shapes diagnose instead of
+            // round-tripping silently.
             Item::Alias(_)
             | Item::Constant(_)
             | Item::Enum(_)
@@ -39,7 +37,7 @@ pub(crate) fn collect_file(
             | Item::TypeAlias(_) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "alpha typecheck POC does not yet support `{}` items",
+                        "alpha typecheck does not yet support `{}` items",
                         item_label(item)
                     ),
                     item_span(item),

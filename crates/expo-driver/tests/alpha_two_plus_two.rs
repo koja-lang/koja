@@ -4,14 +4,24 @@
 //! Drives the full alpha pipeline through the `expo` binary,
 //! mirroring how a user would invoke it. The codegen success
 //! criterion is that a bare `2 + 2` source compiles to a native
-//! binary that exits with status 4 — the lowest-level evidence
-//! that frontend → typecheck → IR → LLVM → object → linker is
-//! wired correctly (a POC artifact: scripts will exit 0 by default
-//! once `Kernel.exit` is wired in). The interpreter backend is
-//! covered by a separate test that asserts the trailing value
-//! `4` lands on stdout. Build and run paths both exercise the
-//! script-mode pipeline (`.exps` extension); program-mode
-//! end-to-end coverage waits on the project-pipeline follow-up.
+//! binary that prints `4` on stdout and exits 0 — the lowest-level
+//! evidence that frontend → typecheck → IR → LLVM → object →
+//! linker is wired correctly. The auto-print wrapper that gives the
+//! binary its observable behavior lives in
+//! [`expo-runtime/src/alpha.rs`](../../expo-runtime/src/alpha.rs); it's
+//! temporary scaffolding mirroring the eval interpreter's
+//! `print-then-exit-0` contract while the language has no
+//! user-level prints. Once `IO.puts` lands the wrapper is removed
+//! and these tests will be replaced by ones that assert
+//! user-program-controlled output. Build and run paths both
+//! exercise the script-mode pipeline (`.exps` extension);
+//! program-mode end-to-end coverage waits on the project-pipeline
+//! follow-up.
+//!
+//! Backend symmetry is the headline contract pinned here:
+//! `expo alpha run --backend=interpreter` and
+//! `expo alpha run --backend=llvm` produce identical stdout + exit
+//! code on the same source.
 //!
 //! In addition to the codegen smoke tests, this file pins the
 //! driver's mode-dispatch contract for [`alpha::resolve_alpha_mode`]:
@@ -36,6 +46,13 @@ use expo_ast::util::dedent;
 /// (the only difference is whether the binary is kept or execed).
 const TWO_PLUS_TWO_SCRIPT_SOURCE: &str = "
     2 + 2
+";
+
+/// Script-mode fixture exercising boolean lowering: `true and
+/// false` evaluates to `false`, both backends print `false` and
+/// exit 0.
+const BOOL_AND_SCRIPT_SOURCE: &str = "
+    true and false
 ";
 
 fn expo_bin() -> PathBuf {
@@ -78,7 +95,7 @@ fn run_expo_in(cwd: &Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn alpha_build_two_plus_two_exits_with_four() {
+fn alpha_build_script_prints_value_and_exits_zero() {
     let scratch = scratch_dir("build_two_plus_two");
     let fixture = write_fixture(
         &scratch,
@@ -106,23 +123,31 @@ fn alpha_build_two_plus_two_exits_with_four() {
         binary.display(),
     );
 
+    // The auto-print wrapper in `expo-runtime/src/alpha.rs` prints
+    // `4\n` and returns 0 from the binary's `main`. Temporary
+    // scaffolding that goes away once `IO.puts` lands.
     let run_output = Command::new(&binary)
         .output()
         .expect("failed to exec compiled alpha binary");
-    let exit_code = run_output.status.code().unwrap_or(-1);
-    assert_eq!(
-        exit_code,
-        4,
-        "expected `2 + 2` to exit with status 4, got {exit_code}\nstdout:\n{}\nstderr:\n{}",
+    assert!(
+        run_output.status.success(),
+        "expected built binary to exit 0, got {:?}\nstdout:\n{}\nstderr:\n{}",
+        run_output.status.code(),
         String::from_utf8_lossy(&run_output.stdout),
         String::from_utf8_lossy(&run_output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&run_output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "4",
+        "expected built binary to print `4`, got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);
 }
 
 #[test]
-fn alpha_run_llvm_script_two_plus_two_propagates_exit_code() {
+fn alpha_run_llvm_script_prints_value_and_exits_zero() {
     let scratch = scratch_dir("run_llvm_two_plus_two");
     let fixture = write_fixture(
         &scratch,
@@ -133,17 +158,21 @@ fn alpha_run_llvm_script_two_plus_two_propagates_exit_code() {
     // `expo alpha run --backend=llvm` parses script-mode and
     // dispatches to `lower_script` + `compile_script`; the bare
     // `2 + 2` becomes the implicit body of the produced binary's
-    // `main`. Exit code 4 is the integer value of `2 + 2`
-    // truncated to 8 bits — a POC artifact that will become 0
-    // (success) once `Kernel.exit` is wired in.
+    // `main`, which then prints `4\n` and exits 0 thanks to the
+    // auto-print wrapper. Backend symmetry with the interpreter
+    // test below is the contract under test.
     let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
-    let exit_code = output.status.code().unwrap_or(-1);
-    assert_eq!(
-        exit_code,
-        4,
-        "expected `expo alpha run --backend=llvm` to surface exit code 4, got {exit_code}\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
         String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "4",
+        "expected LLVM backend to print `4`, got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);
@@ -160,8 +189,8 @@ fn alpha_run_interpreter_script_two_plus_two_prints_value() {
 
     // `expo alpha run` with no `--backend` flag defaults to the
     // interpreter; the trailing value is printed to stdout and the
-    // process exits 0 regardless. Asymmetric with the LLVM backend
-    // by design — see the run-llvm test for context.
+    // process exits 0. The LLVM backend matches this contract via
+    // the auto-print wrapper, see `alpha_run_llvm_script_*` above.
     let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
     assert!(
         output.status.success(),
@@ -173,6 +202,33 @@ fn alpha_run_interpreter_script_two_plus_two_prints_value() {
     assert!(
         stdout.trim() == "4",
         "expected interpreter to print `4`, got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_bool_prints_false_and_exits_zero() {
+    let scratch = scratch_dir("run_llvm_bool_and");
+    let fixture = write_fixture(&scratch, "bool_and.exps", &dedent(BOOL_AND_SCRIPT_SOURCE));
+
+    // Pins the boolean lowering + the auto-print wrapper's
+    // `__expo_alpha_print_bool` path end-to-end: `true and false`
+    // lowers through `IRBinOp::And` on i1, the wrapper zext's to
+    // i64 and calls the bool printer, which writes `false\n` and
+    // returns; `main` then exits 0.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (bool) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "false",
+        "expected LLVM backend to print `false`, got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);

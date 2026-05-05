@@ -5,13 +5,13 @@
 //! lowering helpers contract — every reference into the AST should
 //! already be resolvable thanks to the upstream seal.
 //!
-//! POC scope: every fn body must lower to a single basic block holding
-//! `Const` / `BinaryOp` / `UnaryOp` / `Call` instructions and ending
-//! in `Return`. Anything richer surfaces as a [`Diagnostic`] and the
-//! offending function is dropped from the package (per-function
-//! fail-fast). Seal invariant violations — e.g. a call callee with
-//! `Unresolved` resolution after typecheck seal — remain panics per
-//! northstar (compiler bugs, not user errors).
+//! Today's scope: every fn body must lower to a single basic block
+//! holding `Const` / `BinaryOp` / `UnaryOp` / `Call` instructions and
+//! ending in `Return`. Anything richer surfaces as a [`Diagnostic`]
+//! and the offending function is dropped from the package
+//! (per-function fail-fast). Seal invariant violations — e.g. a call
+//! callee with `Unresolved` resolution after typecheck seal — remain
+//! panics per northstar (compiler bugs, not user errors).
 //!
 //! Type tracking: the [`BlockBuilder`] tracks an [`IRType`] for every
 //! emitted [`ValueId`]. Each lowering helper that produces a fresh

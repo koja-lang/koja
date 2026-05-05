@@ -1,5 +1,4 @@
-//! End-to-end smoke tests for the alpha IR lowering pipeline at its
-//! POC scope.
+//! End-to-end smoke tests for the alpha IR lowering pipeline.
 //!
 //! Drives `parse_program → check_program → lower_{program,script}` on
 //! `2 + 2` in both shapes:
@@ -72,7 +71,7 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
 
     let main: &IRFunction = program.entry_function();
     assert_eq!(main.identifier, program.entry_point);
-    assert_eq!(main.blocks.len(), 1, "POC fns lower to one basic block");
+    assert_eq!(main.blocks.len(), 1, "fns lower to one basic block");
 
     let block: &IRBasicBlock = &main.blocks[0];
     assert_eq!(
@@ -119,7 +118,7 @@ fn bare_two_plus_two_lowers_to_script_with_const_const_add_return() {
     assert_eq!(
         script.blocks.len(),
         1,
-        "POC script bodies lower to a single basic block",
+        "script bodies lower to a single basic block",
     );
 
     let block = &script.blocks[0];

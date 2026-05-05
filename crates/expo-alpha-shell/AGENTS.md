@@ -70,7 +70,7 @@ graduates to `expo-shell` and the legacy crate retires.
 
 ## What alpha covers today
 
-POC scope mirrors `expo-alpha-typecheck` / `expo-alpha-ir`: integer
-literals, integer arithmetic (`+ - * / %`), parenthesized groups. Anything
-richer typecheck-errors with a precise diagnostic, then the session rolls
-back and the user can retry.
+Scope mirrors `expo-alpha-typecheck` / `expo-alpha-ir`: integer literals,
+integer arithmetic (`+ - * / %`), boolean / comparison operators, and
+parenthesized groups. Anything richer typecheck-errors with a precise
+diagnostic, then the session rolls back and the user can retry.

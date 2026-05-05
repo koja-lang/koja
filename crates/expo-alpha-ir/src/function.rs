@@ -7,26 +7,22 @@ use expo_ast::identifier::Identifier;
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
 
 /// A lowered function. Body is a list of basic blocks; `blocks[0]` is
-/// the entry block. The POC scope only ever emits a single block per
-/// function; multi-block lowering lands with control-flow constructs.
+/// the entry block. Today's scope emits a single block per function;
+/// multi-block lowering lands with control-flow constructs.
 ///
 /// `params` lists the `ValueId` bound to each positional parameter,
-/// in declaration order. These ids are the first ones allocated by
-/// the function's lowering, so `function.params` always holds a
-/// prefix of the function's defined `ValueId`s. The POC does not
-/// yet lower body references to parameters (see alpha typecheck's
-/// "identifier references in function bodies" diagnostic), but the
-/// allocation shape is in place so the next slice can drop in a
-/// `Local` read instruction without reshuffling.
+/// in declaration order. These ids are the first ones allocated, so
+/// `function.params` always holds a prefix of the function's defined
+/// `ValueId`s. Body references to parameters are not yet lowered (see
+/// alpha typecheck's "identifier references in function bodies"
+/// diagnostic); the allocation shape is in place so the next slice
+/// can drop in a `Local` read instruction without reshuffling.
 ///
-/// `return_type` is the static type of the function's return value
-/// (`IRTerminator::Return`). Backends consume this directly — LLVM
-/// codegen reads it to pick the function signature and the
-/// `ret iN` width without re-querying the typecheck registry.
-/// Parameter types are intentionally **not** carried yet (hybrid
-/// drift-fix): the POC does not lower body references to parameters,
-/// so per-param `IRType` entries would currently be unused. They
-/// land alongside the slice that wires up `Local` reads.
+/// `return_type` is the static type of the function's return value.
+/// Backends consume this directly — LLVM codegen reads it to pick the
+/// function signature and `ret iN` width without re-querying the
+/// typecheck registry. Per-param `IRType` entries are intentionally
+/// not carried yet — they land alongside the `Local` reads slice.
 #[derive(Debug, Clone)]
 pub struct IRFunction {
     pub blocks: Vec<IRBasicBlock>,
@@ -97,7 +93,7 @@ impl IRInstruction {
     }
 }
 
-/// How a basic block ends. The POC scope only emits `Return`; branch
+/// How a basic block ends. Today only `Return` is emitted; branch
 /// terminators land with control flow.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IRTerminator {

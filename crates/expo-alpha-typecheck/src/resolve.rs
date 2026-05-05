@@ -1,28 +1,22 @@
-//! Resolve sub-pass: walk every body in `file`, populating `Resolution`
-//! on identifier references and `Expr.resolution` (a [`ResolvedType`]
-//! pointing into the [`GlobalRegistry`]) on every expression.
+//! Resolve sub-pass: walk every body, populating `Resolution` on
+//! identifier references and `Expr.resolution` on every expression.
 //!
-//! The POC scope covers integer arithmetic, the boolean operators
-//! (`and`, `or`, `not`), the comparison operators
-//! (`== != < > <= >=`), and function calls with bare-identifier
-//! callees. Local identifier references (including parameter uses
-//! inside a body) land when a future slice introduces
-//! [`Resolution::Local`].
+//! Today's scope covers integer arithmetic, boolean (`and`/`or`/`not`),
+//! comparison (`== != < > <= >=`), and bare-identifier function calls.
+//! Local references (including parameter uses) land with
+//! [`Resolution::Local`] in a follow-up slice.
 //!
-//! Type identity is registry-backed: `Int`, `Bool`, `Unit` come from
-//! the stdlib struct stubs preloaded by [`GlobalRegistry::with_stdlib_stubs`].
-//! The resolver never caches ids -- every primitive production goes
+//! Type identity is registry-backed: every primitive production goes
 //! through `registry.lookup(&Identifier)` so the registry stays the
-//! single source of truth for what `Int` means.
+//! single source of truth for what `Int` (etc.) means.
 //!
 //! # Call resolution
 //!
-//! Calls only accept bare-`Ident` callees in this POC. The inner
-//! `Ident.resolution` is stamped with the callee's `GlobalRegistryId`;
-//! the outer callee `Expr.resolution` stays `Unresolved` (carve-out
-//! in seal) because function names aren't first-class values in the
-//! language yet. The call-site `Expr.resolution` takes the callee's
-//! return type.
+//! Calls accept only bare-`Ident` callees. The inner `Ident.resolution`
+//! is stamped with the callee's `GlobalRegistryId`; the outer callee
+//! `Expr.resolution` stays `Unresolved` (seal carves this out) because
+//! function names aren't first-class values yet. The call-site
+//! `Expr.resolution` takes the callee's return type.
 
 use expo_ast::ast::{
     Arg, BinOp, Diagnostic, Expr, ExprKind, File, Function, Item, Literal, Statement, UnaryOp,
@@ -112,30 +106,26 @@ fn resolve_expr(
             resolve_call(callee, args, expr.span, package, registry, diagnostics)
         }
         ExprKind::Ident { name, .. } => {
-            // Bare-identifier references inside function bodies are
-            // not yet supported (including parameter uses). The
-            // lift_signatures pass records param names on the registry
-            // entry, but local scope / `Resolution::Local` lands in a
-            // follow-up slice. Emit a dedicated diagnostic so the
-            // shape is clear to users and LSP.
+            // Local references (including parameter uses) are not yet
+            // supported. `Resolution::Local` lands with the follow-up
+            // slice; until then emit a dedicated diagnostic.
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck POC does not yet support identifier references in function \
+                    "alpha typecheck does not yet support identifier references in function \
                      bodies (got `{name}`)",
                 ),
                 expr.span,
             ));
             ResolvedType::unresolved()
         }
-        // Anything else: emit a diagnostic and leave the expression
-        // unresolved. The POC does not need to support these shapes;
-        // they unblock as features land. Seal runs only on the success
-        // path, so an `Unresolved` leaf here is fine -- diagnostics is
-        // non-empty and `check_program` will return early.
+        // Unsupported shapes diagnose and leave the expression
+        // unresolved. Seal runs only on the success path, so an
+        // `Unresolved` leaf here is harmless — diagnostics is non-empty
+        // and `check_program` returns early.
         other => {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck POC does not yet support expression `{}`",
+                    "alpha typecheck does not yet support expression `{}`",
                     expr_kind_label(other)
                 ),
                 expr.span,
@@ -155,12 +145,12 @@ fn resolve_call(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     // Resolve arguments first regardless of whether the callee is
-    // well-formed, so nested errors show up and `seal_expr` has
-    // resolutions to walk on each arg's expression.
+    // well-formed, so nested errors surface and `seal_expr` has
+    // resolutions to walk on each arg.
     for arg in args.iter_mut() {
         if let Some(name) = arg.name.as_ref() {
             diagnostics.push(Diagnostic::error(
-                format!("alpha typecheck POC does not yet support named arguments (got `{name}`)",),
+                format!("alpha typecheck does not yet support named arguments (got `{name}`)",),
                 arg.span,
             ));
         }
@@ -174,7 +164,7 @@ fn resolve_call(
     else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck POC only supports bare-identifier callees (got `{}`)",
+                "alpha typecheck only supports bare-identifier callees (got `{}`)",
                 expr_kind_label(&callee.kind),
             ),
             callee.span,
@@ -279,7 +269,7 @@ fn binary_type(
             } else {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "alpha typecheck POC supports integer arithmetic only; got `{}` and `{}`",
+                        "alpha typecheck supports integer arithmetic only; got `{}` and `{}`",
                         display_resolution(lhs, registry),
                         display_resolution(rhs, registry),
                     ),
@@ -341,7 +331,7 @@ fn binary_type(
         }
         _ => {
             diagnostics.push(Diagnostic::error(
-                format!("alpha typecheck POC does not yet support binary operator `{op:?}`"),
+                format!("alpha typecheck does not yet support binary operator `{op:?}`"),
                 span,
             ));
             ResolvedType::unresolved()
@@ -390,9 +380,8 @@ fn unary_type(
 }
 
 /// Build a leaf `ResolvedType` for a preloaded `Global.<name>` stdlib
-/// struct stub. Panics if the stub is missing -- preload is a
-/// [`GlobalRegistry::with_stdlib_stubs`] invariant and a missing stub
-/// means the pipeline was wired up wrong.
+/// struct stub. Panics if the stub is missing — preload is a
+/// [`GlobalRegistry::with_stdlib_stubs`] invariant.
 fn primitive(registry: &GlobalRegistry, name: &str) -> ResolvedType {
     let ident = Identifier::new("Global", vec![name.to_string()]);
     let (id, _) = registry.lookup(&ident).unwrap_or_else(|| {
@@ -404,10 +393,7 @@ fn primitive(registry: &GlobalRegistry, name: &str) -> ResolvedType {
     ResolvedType::leaf(Resolution::Global(id))
 }
 
-/// Tell-don't-ask predicate: does `ty` resolve to the preloaded
-/// `Global.<name>` stdlib stub? Guard-clauses short-circuit when any
-/// of the required conditions fails, so callers just read the final
-/// result.
+/// Does `ty` resolve to the preloaded `Global.<name>` stdlib stub?
 fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &str) -> bool {
     let Resolution::Global(id) = ty.resolution else {
         return false;
@@ -421,9 +407,9 @@ fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &str) -> boo
     entry.identifier.is_in_global() && entry.identifier.last() == name
 }
 
-/// Human-readable rendering of a `ResolvedType` for diagnostics.
-/// Dereferences the head through the registry when it's `Global` so
-/// users see `Int` rather than an opaque `#0`.
+/// Human-readable rendering of a `ResolvedType` for diagnostics:
+/// dereferences `Global` heads through the registry so users see
+/// `Int` rather than an opaque `#0`.
 fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     match ty.resolution {
         Resolution::Unresolved => "<unresolved>".to_string(),

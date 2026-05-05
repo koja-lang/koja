@@ -1,10 +1,10 @@
-//! Runtime errors raised by the interpreter.
-//!
-//! These are conditions the interpreter can recover diagnostics from
-//! at runtime — division by zero, integer overflow, type mismatches.
+//! Runtime errors raised by the interpreter — recoverable diagnostics
+//! like division by zero, integer overflow, and type mismatches.
 //! Anything that would indicate a malformed `IRProgram` (undefined
-//! `ValueId`, missing entry point, etc.) is a seal violation upstream
-//! and panics through `expo_alpha_ir::seal`, never surfaces here.
+//! `ValueId`, missing entry, etc.) is a seal violation upstream and
+//! panics through `expo_alpha_ir::seal`, never surfaces here.
+
+use std::fmt;
 
 use expo_alpha_ir::{IRBinOp, IRUnaryOp, ValueId};
 
@@ -23,13 +23,13 @@ pub enum RuntimeError {
     /// Catch-all for IR shapes the interpreter doesn't yet handle.
     Unsupported { detail: String },
     /// An operand referenced a `ValueId` not yet defined in the
-    /// current frame. Should never happen on a sealed program; if it
-    /// does, the IRProgram seal contract was violated.
+    /// current frame. Seal contract violation if it happens on a
+    /// sealed program.
     ValueUndefined { id: ValueId },
 }
 
-impl std::fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RuntimeError::DivisionByZero { op } => {
                 write!(f, "{op:?} by zero")

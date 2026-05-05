@@ -1,25 +1,17 @@
 //! IR-text snapshot tests for the alpha LLVM backend.
 //!
-//! Each test drives the full alpha pipeline (`parse_program ->
-//! check_program -> lower_{program,script} -> emit_{,script_}llvm_ir`)
-//! on a tiny fixture, then asserts the produced module text contains
-//! the expected substrings. No linking, no subprocess — those live
-//! in `expo-driver`'s end-to-end test, which inherits the runtime /
-//! BoringSSL build deps.
+//! Each test drives the full alpha pipeline on a tiny fixture and
+//! asserts substrings of the produced module text. No linking, no
+//! subprocess — driver e2e tests cover that path.
 //!
-//! Coverage splits along the two IR shapes:
+//! Every emitted `main` returns `i64 0`; the body's value is fed to
+//! a runtime printer first (temporary scaffolding, see
+//! [`expo-runtime/src/alpha.rs`](../../../expo-runtime/src/alpha.rs)).
+//! The substrings pinned here are: which printer fires, what value
+//! lands in the call, and that `main` exits 0.
 //!
-//! - `program_*` tests feed an explicit `fn main -> Int / 2 + 2 /
-//!   end` source through `lower_program` + `emit_llvm_ir`.
-//! - `script_*` tests feed bare `2 + 2\n` through `lower_script` +
-//!   `emit_script_llvm_ir` and assert the same `define i64 @main()`
-//!   / `ret i64 4` outcome.
-//!
-//! Substring assertions instead of full-text equality: inkwell may
-//! adjust attribute ordering or comment formatting between LLVM
-//! patch versions, which would make pinned IR-text fragile. The
-//! substrings here check for the lowering rules we actually care
-//! about (which instruction shows up, which type, which return).
+//! Substring (not full-text) assertions because inkwell may adjust
+//! attribute ordering between LLVM patch versions.
 
 use std::path::PathBuf;
 
@@ -31,6 +23,7 @@ use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
+const APP_NAME: &str = "emit_test";
 
 fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     let parsed = parse_program(
@@ -55,14 +48,28 @@ fn lower_as_script(source: &str) -> IRScript {
     lower_script(&checked).expect("script lowering should succeed")
 }
 
-// inkwell's `build_int_add` constant-folds when both operands are
-// constants, so `2 + 2` lowers to a literal `i64 4` instead of an
-// `add i64 2, 2` instruction. That folding is value-preserving (and
-// what we'd want a release build to do regardless) so the assertions
-// pin the observable contract — module shape and the final value the
-// LLVM main returns — rather than the un-folded instruction text.
+fn assert_contains(ir_text: &str, needle: &str) {
+    assert!(
+        ir_text.contains(needle),
+        "expected `{needle}` in:\n{ir_text}",
+    );
+}
+
+fn assert_main_shape(ir_text: &str) {
+    assert_contains(ir_text, "define i64 @main()");
+    assert_contains(ir_text, "ret i64 0");
+    // `__expo_app_name` is required by `expo-runtime`'s panic.rs; the
+    // alpha backend must emit it on every module so the runtime
+    // archive links cleanly regardless of cgu partitioning.
+    assert_contains(ir_text, "@__expo_app_name");
+}
+
+// ---------------------------------------------------------------------------
+// Program-mode (`fn main -> ...`) coverage
+// ---------------------------------------------------------------------------
+
 #[test]
-fn program_fn_main_two_plus_two_emits_i64_main_returning_four() {
+fn program_fn_main_two_plus_two_prints_four() {
     let source = "
         fn main -> Int
           2 + 2
@@ -70,24 +77,16 @@ fn program_fn_main_two_plus_two_emits_i64_main_returning_four() {
         ";
 
     let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program).expect("emit_llvm_ir should succeed");
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert!(
-        ir_text.contains("define i64 @main()"),
-        "expected `define i64 @main()` in:\n{ir_text}",
-    );
-    assert!(
-        ir_text.contains("ret i64 4"),
-        "expected `ret i64 4` (constant-folded `2 + 2`) in:\n{ir_text}",
-    );
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "declare void @__expo_alpha_print_i64(i64)");
+    // inkwell folds `2 + 2` to `i64 4` at const-emission time.
+    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 4)");
 }
 
-// Use a non-folded shape: subtraction is not yet supported, but a
-// `ret i64 <large>` exercises the const-emission path for a value
-// beyond i32 range, sanity-checking that we route through `i64`
-// constants and not a narrower width.
 #[test]
-fn program_large_int_literal_returns_i64_constant() {
+fn program_large_int_literal_prints_i64_constant() {
     let source = "
         fn main -> Int
           5000000000
@@ -95,36 +94,150 @@ fn program_large_int_literal_returns_i64_constant() {
         ";
 
     let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program).expect("emit_llvm_ir should succeed");
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert!(
-        ir_text.contains("ret i64 5000000000"),
-        "expected `ret i64 5000000000` in:\n{ir_text}",
+    assert_main_shape(&ir_text);
+    assert_contains(
+        &ir_text,
+        "call void @__expo_alpha_print_i64(i64 5000000000)",
     );
 }
 
 #[test]
-fn script_bare_two_plus_two_emits_i64_main_returning_four() {
+fn program_neg_unary_prints_negative_int() {
+    let source = "
+        fn main -> Int
+          -7
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 -7)");
+}
+
+#[test]
+fn program_logical_and_prints_false() {
+    let source = "
+        fn main -> Bool
+          true and false
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "declare void @__expo_alpha_print_bool(i64)");
+    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 0)");
+}
+
+#[test]
+fn program_logical_or_prints_true() {
+    let source = "
+        fn main -> Bool
+          true or false
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 1)");
+}
+
+#[test]
+fn program_not_unary_prints_false() {
+    let source = "
+        fn main -> Bool
+          not true
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 0)");
+}
+
+#[test]
+fn program_int_lt_prints_true() {
+    let source = "
+        fn main -> Bool
+          1 < 2
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 1)");
+}
+
+#[test]
+fn program_int_eq_prints_true() {
+    let source = "
+        fn main -> Bool
+          1 == 1
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 1)");
+}
+
+// ---------------------------------------------------------------------------
+// Script-mode (top-level expression) coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn script_bare_two_plus_two_prints_four() {
     let script = lower_as_script("2 + 2\n");
-    let ir_text = emit_script_llvm_ir(&script).expect("emit_script_llvm_ir should succeed");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    assert!(
-        ir_text.contains("define i64 @main()"),
-        "expected `define i64 @main()` in:\n{ir_text}",
-    );
-    assert!(
-        ir_text.contains("ret i64 4"),
-        "expected `ret i64 4` (constant-folded `2 + 2`) in:\n{ir_text}",
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 4)");
+}
+
+#[test]
+fn script_large_int_literal_prints_i64_constant() {
+    let script = lower_as_script("5000000000\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(
+        &ir_text,
+        "call void @__expo_alpha_print_i64(i64 5000000000)",
     );
 }
 
 #[test]
-fn script_large_int_literal_returns_i64_constant() {
-    let script = lower_as_script("5000000000\n");
-    let ir_text = emit_script_llvm_ir(&script).expect("emit_script_llvm_ir should succeed");
+fn script_bare_not_true_prints_false() {
+    let script = lower_as_script("not true\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    assert!(
-        ir_text.contains("ret i64 5000000000"),
-        "expected `ret i64 5000000000` in:\n{ir_text}",
-    );
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "declare void @__expo_alpha_print_bool(i64)");
+    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 0)");
+}
+
+#[test]
+fn script_int_compare_prints_true() {
+    let script = lower_as_script("1 < 2\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 1)");
 }

@@ -1,8 +1,7 @@
-//! Runtime values produced by the [`crate::Interpreter`] backend.
-//!
-//! POC scope: just the variants that map 1:1 onto
-//! [`expo_alpha_ir::ConstValue`]. New variants land as the IR vocabulary
-//! grows (lists, strings, structs, enums, closures, …).
+//! Runtime values produced by the [`crate::Interpreter`] — variants
+//! map 1:1 onto [`expo_alpha_ir::ConstValue`]. New variants (lists,
+//! strings, structs, enums, closures, …) land as the IR vocabulary
+//! grows.
 
 use std::fmt;
 

@@ -56,7 +56,7 @@ load-bearing — `strip_cfg` for `@cfg`-driven pruning, `synthesize` between
 `collect` and `lift_signatures` for protocol defaults, `check` between
 `resolve` and `seal` for compatibility validation beyond what `resolve`
 enforces inline, and `annotate` between `check` and `seal` for coercion
-emission. They're not in the pipeline yet because the POC has nothing for
+emission. They aren't in the pipeline yet because there's nothing for
 them to do — no-op pass-throughs would be dead architecture.
 
 ## What alpha covers today

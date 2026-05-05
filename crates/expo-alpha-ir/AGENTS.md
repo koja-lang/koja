@@ -59,8 +59,8 @@ function (`pub(crate)`) called by `program::lower_program`.
 
 Future sub-passes (e.g. `closure` for generic-instantiation discovery,
 `elaborate` for coercion emission) land between `merge` and `seal` when the
-work they do becomes load-bearing. They're not in the pipeline yet because the
-POC has nothing for them to do — no-op pass-throughs would be dead
+work they do becomes load-bearing. They aren't in the pipeline yet because
+there's nothing for them to do — no-op pass-throughs would be dead
 architecture.
 
 ## What alpha covers today

@@ -155,7 +155,7 @@ enum Command {
 /// future WASM backend slots in here as a third variant.
 #[derive(Subcommand)]
 enum AlphaCommand {
-    /// Compile a source file through the alpha pipeline to a native binary (POC scope: integer arithmetic via `.exps` scripts; project mode stubbed)
+    /// Compile a source file through the alpha pipeline to a native binary (`.exps` scripts today; project mode stubbed)
     Build {
         /// Source file (omit to use `expo.toml` in the current directory)
         file: Option<String>,
@@ -177,7 +177,7 @@ enum AlphaCommand {
         #[arg(long)]
         emit_ast: bool,
     },
-    /// Run a source file through the alpha pipeline (POC scope: integer arithmetic only)
+    /// Run a source file through the alpha pipeline
     Run {
         /// Source file (omit to use `expo.toml` in the current directory)
         file: Option<String>,
@@ -190,7 +190,7 @@ enum AlphaCommand {
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Start an interactive REPL backed by the alpha pipeline (POC scope: integer arithmetic only)
+    /// Start an interactive REPL backed by the alpha pipeline
     Shell,
 }
 

@@ -39,14 +39,15 @@ without a compiler bug:
 - `DivisionByZero { op }` — `lhs / rhs` or `lhs % rhs` with `rhs == 0`.
 - `IntegerOverflow { lhs, op, rhs }` — `i64` arithmetic outside range.
 - `TypeMismatch { detail }` — a binary operator received operands whose
-  runtime types it can't combine. POC eval only knows `Int op Int`.
+  runtime types it can't combine. Eval today only knows `Int op Int`,
+  `Bool op Bool`, and the comparison/equality forms.
 - `Unsupported { detail }` — IR shapes the interpreter doesn't yet handle.
 - `ValueUndefined { id }` — defensive guard; should be unreachable on a
   sealed program.
 
 ## Values
 
-POC scope mirrors `expo-alpha-ir::ConstValue`:
+Today's scope mirrors `expo-alpha-ir::ConstValue`:
 
 - `Value::Bool(bool)`
 - `Value::Int(i64)`

@@ -1,27 +1,13 @@
 //! Tree-walking interpreter over a sealed [`IRProgram`] or
-//! [`IRScript`].
+//! [`IRScript`]. The walker is parameterized over a [`CallResolver`]
+//! so both IR shapes share the per-instruction execution / frame
+//! management / terminator follow code; only callee lookup differs.
 //!
-//! Two public entry points, one shared instruction walker:
-//!
-//! - [`Interpreter::run_program`] consumes a sealed
-//!   [`IRProgram`] (project-mode source: user-declared `fn main`)
-//!   and runs the entry function.
-//! - [`Interpreter::run_script`] consumes a sealed
-//!   [`IRScript`] (script-mode source: top-level expressions on the
-//!   implicit body) and runs the body.
-//!
-//! The walker is parameterized over a [`CallResolver`]: each variant
-//! supplies its own way to dereference an [`IRInstruction::Call`]
-//! callee, but everything else (per-instruction execution, frame
-//! management, terminator following) is shared.
-//!
-//! Function calls chain through `execute_function`: each `Call`
-//! instruction evaluates its argument operands in the current frame,
-//! looks up the callee through the resolver, seeds a fresh frame with
-//! the callee's param `ValueId`s bound to the incoming arg values,
-//! and recurses. Stack overflow from pathological mutual recursion
-//! would propagate as a native Rust stack overflow — the POC does
-//! not cap call depth.
+//! `Call` instructions chain through [`execute_function`]: evaluate
+//! the args in the current frame, resolve the callee, seed a fresh
+//! frame with param `ValueId`s bound to arg values, recurse. Call
+//! depth is uncapped — pathological recursion propagates as a native
+//! Rust stack overflow.
 
 use std::collections::BTreeMap;
 
@@ -37,20 +23,19 @@ use crate::value::Value;
 pub struct Interpreter;
 
 impl Interpreter {
-    /// Execute a project-mode [`IRProgram`]'s entry function and
-    /// return the value it produces (or [`Value::Unit`] if the
-    /// entry returns nothing).
+    /// Execute the project-mode entry function and return the value
+    /// it produces (or [`Value::Unit`] if the entry returns nothing).
     pub fn run_program(program: IRProgram) -> Result<Value, RuntimeError> {
         let entry = program.entry_function();
         execute_function(entry, Vec::new(), &program)
     }
 
-    /// Execute a script-mode [`IRScript`]'s implicit body and return
-    /// the value of its trailing expression (or [`Value::Unit`] for
-    /// an empty / non-expression-trailing body).
+    /// Execute the script-mode implicit body and return its trailing
+    /// value (or [`Value::Unit`] for an empty / non-expression-trailing
+    /// body).
     pub fn run_script(script: IRScript) -> Result<Value, RuntimeError> {
-        let blocks = &script.blocks;
-        let block = blocks
+        let block = script
+            .blocks
             .first()
             .expect("sealed IRScript has at least one basic block");
         let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
@@ -58,9 +43,9 @@ impl Interpreter {
     }
 }
 
-/// Dereferences an [`IRInstruction::Call`] callee to its target
-/// [`IRFunction`]. Implemented by both [`IRProgram`] and [`IRScript`]
-/// so the shared instruction walker can drive either.
+/// Dereferences a `Call` callee to its target [`IRFunction`].
+/// Implemented by both [`IRProgram`] and [`IRScript`] so one walker
+/// drives either.
 trait CallResolver {
     fn resolve(&self, id: &Identifier) -> Option<&IRFunction>;
 }
@@ -77,11 +62,10 @@ impl CallResolver for IRScript {
     }
 }
 
-/// Run `function` to completion in a fresh frame, with `args`
-/// positionally bound to the callee's param `ValueId`s. POC scope
-/// guarantees a single basic block per function, so this runs the
-/// block and returns its terminator value — branches land when
-/// control flow does.
+/// Run `function` in a fresh frame with `args` positionally bound to
+/// its param `ValueId`s. Single-block-per-function is the current
+/// invariant, so this just runs the block and returns its terminator
+/// value.
 fn execute_function<R: CallResolver>(
     function: &IRFunction,
     args: Vec<Value>,
@@ -176,13 +160,10 @@ fn lookup(frame: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, Runtim
         .ok_or(RuntimeError::ValueUndefined { id })
 }
 
-/// Materialize a `ConstValue` as a runtime [`Value`].
-///
-/// The interpreter's `Value::Int` is a single `i64` slot — wide
-/// enough for every signed integer width and for unsigned widths
-/// `UInt8`..`UInt32` (range fits in `i64`). `UInt64` cannot fit;
-/// the slice's seal pass forbids it from flowing through, so the
-/// arm is unreachable in practice but kept exhaustive for safety.
+/// Materialize a `ConstValue` as a runtime [`Value`]. `Value::Int`
+/// is a single `i64` slot; `UInt64` is reinterpreted as `i64` (the
+/// seal pass forbids it from flowing through today, but the arm
+/// stays exhaustive).
 fn materialize_const(value: &ConstValue) -> Value {
     match value {
         ConstValue::Bool(b) => Value::Bool(*b),

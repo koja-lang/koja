@@ -1,8 +1,7 @@
-//! Seal sub-pass: walks the checked AST and asserts that every
-//! relevant [`Resolution`] / [`expo_ast::identifier::ResolvedType`]
-//! annotation is populated. Panics on violation per the
-//! [`COMPILER-NORTHSTAR.md`] contract — seal failures indicate
-//! compiler bugs in upstream sub-passes, not user errors.
+//! Seal sub-pass: assert every relevant [`Resolution`] /
+//! [`expo_ast::identifier::ResolvedType`] annotation is populated.
+//! Panics on violation per [`COMPILER-NORTHSTAR.md`] — seal failures
+//! are upstream compiler bugs, not user errors.
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 
@@ -30,10 +29,8 @@ fn seal_file(file: &File) {
     }
     if let Some(body) = file.body.as_ref() {
         // Script-mode files keep their top-level statements on
-        // `file.body`. There is no synthesized `fn main`; downstream
-        // passes (`expo-alpha-ir::lower_script`) consume the body
-        // directly. Seal the same statement-tree invariants that
-        // function bodies satisfy.
+        // `file.body`; downstream passes consume them directly. Seal
+        // the same statement-tree invariants function bodies satisfy.
         for stmt in body {
             seal_statement(stmt);
         }
@@ -63,10 +60,10 @@ fn seal_statement(stmt: &Statement) {
 }
 
 fn seal_expr(expr: &Expr) {
-    // Exception for the callee position of a `Call`: function names
-    // are not first-class values yet, so the outer callee
-    // `Expr.resolution` deliberately stays `Unresolved`. Every other
-    // position must carry a fully-resolved type.
+    // The callee position of a `Call` is the one carve-out: function
+    // names aren't first-class values yet, so the outer callee
+    // `Expr.resolution` stays `Unresolved`. Every other position must
+    // carry a fully-resolved type.
     if !expr.resolution.is_resolved() {
         seal_panic("expression missing resolution", expr.span);
     }
@@ -102,11 +99,10 @@ fn seal_expr(expr: &Expr) {
     }
 }
 
-/// Seal the callee position of a `Call`. The outer `Expr.resolution`
-/// intentionally stays `Unresolved` here (function names aren't
-/// values yet) — what we check is that the inner `Ident` carries a
-/// `Global(_)` resolution so downstream IR lowering has a concrete
-/// target.
+/// Seal the callee of a `Call`: the outer `Expr.resolution` stays
+/// `Unresolved` (function names aren't values yet); we check the inner
+/// `Ident` carries a `Global(_)` resolution so IR lowering has a
+/// concrete target.
 fn seal_call_callee(callee: &Expr) {
     let ExprKind::Ident { name, resolution } = &callee.kind else {
         seal_panic(

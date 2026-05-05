@@ -31,7 +31,7 @@ use crate::types::IRType;
 ///
 /// `blocks` is the implicit function's body — the top-level
 /// statements of the script source lowered to one or more basic
-/// blocks. The POC scope produces exactly one block ending in
+/// blocks. Today's scope produces exactly one block ending in
 /// `IRTerminator::Return`, mirroring `IRFunction.blocks` for a body
 /// without control flow.
 ///

@@ -2,26 +2,16 @@
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
-//! The single public entry point is [`check_program`]. It runs every
-//! sub-pass internally (collect, lift_signatures, resolve, seal) and
-//! hands back a sealed [`CheckedProgram`] on success or a
-//! [`CheckFailure`] on failure.
+//! Single public entry point: [`check_program`]. It runs every
+//! sub-pass internally and returns a sealed [`CheckedProgram`] on
+//! success or a [`CheckFailure`] on failure. Diagnostics flow through
+//! the shared `expo_ast::ast::Diagnostic` vocabulary; seal violations
+//! panic (compiler bugs, not user errors).
 //!
-//! Script-mode files (top-level expressions, no surrounding `fn`) keep
-//! their statements on `File.body`; downstream passes (`resolve`,
-//! `seal`, `expo-alpha-ir::lower_script`) consume `File.body`
-//! directly. There is no synthetic `fn main` wrapper.
-//!
-//! Stage ownership: the parser owns parse diagnostics, this crate owns
-//! typecheck diagnostics. If the input [`expo_parser::ParsedProgram`]
-//! already carries error-severity parse diagnostics, [`check_program`]
-//! halts immediately without contributing any diagnostics of its own;
-//! the caller reads parse errors from `partial.iter()`.
-//!
-//! Diagnostics use the shared `expo_ast::ast::Diagnostic` vocabulary so
-//! alpha outputs flow through the existing driver / LSP / shell sinks
-//! without translation. Seal violations panic; they indicate compiler
-//! bugs, not user errors.
+//! Project-mode files keep their function items on `File.items`;
+//! script-mode files keep their top-level statements on `File.body`.
+//! Both shapes share the same sub-passes — there is no synthetic
+//! `fn main` wrapper.
 
 mod collect;
 mod labels;

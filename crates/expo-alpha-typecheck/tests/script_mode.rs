@@ -1,20 +1,10 @@
 //! Coverage for script-mode (`File.body` populated) typechecking.
 //!
-//! Replaces the unit-test coverage that previously lived alongside
-//! `lift_script.rs`. Now that the `lift_script` synthesis pass is gone,
 //! `resolve` walks `File.body` directly and `seal` accepts a populated
-//! `File.body` as the script-mode shape. These tests pin both
-//! invariants:
-//!
-//! 1. `resolve` populates `Statement::Expr.resolution` for body
-//!    statements.
-//! 2. `seal_ast` (the post-`check_program` invariant check) does not
-//!    panic when the sealed `CheckedProgram` carries a script file.
-//! 3. Script files coexist with `File.items[Function]` decls (mixed
-//!    parse-mode source).
-//!
-//! The seal panic path is implicit: `check_program` calls `seal_ast`
-//! on the success branch, and a panic would surface as a test failure.
+//! `File.body` as the script-mode shape. These tests pin that:
+//! `resolve` populates `Statement::Expr.resolution`, `seal_ast`
+//! accepts the resulting program (a panic would fail the test), and
+//! script files coexist with `File.items[Function]` decls.
 
 use std::path::PathBuf;
 

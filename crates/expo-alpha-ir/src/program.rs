@@ -120,12 +120,11 @@ impl std::error::Error for LowerError {}
 /// 4. Entry-point existence check — surfaces `EntryPointNotFound`.
 /// 5. `seal` — assert sealed-IRProgram invariants. Panics on violation.
 ///
-/// Future sub-passes land between `merge` and `seal` when the work
-/// they do becomes load-bearing (e.g. a `closure` pass for generic
-/// instantiation discovery, or an `elaborate` pass for coercion
-/// emission). They're not in the pipeline yet because the POC has
-/// nothing for them to do — adding no-op pass-throughs would be
-/// dead architecture.
+/// Future sub-passes (e.g. `closure` for generic-instantiation
+/// discovery, `elaborate` for coercion emission) land between `merge`
+/// and `seal` when the work they do becomes load-bearing. They're not
+/// in the pipeline yet because there's nothing for them to do —
+/// no-op pass-throughs would be dead architecture.
 pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRProgram, LowerError> {
     let mut diagnostics = Vec::new();
     let mut packages = Vec::with_capacity(checked.packages.len());

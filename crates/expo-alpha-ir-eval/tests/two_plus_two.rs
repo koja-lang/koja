@@ -1,13 +1,6 @@
-//! End-to-end smoke test for the alpha pipeline at its POC scope:
-//!
-//!   parse → expo-alpha-typecheck → expo-alpha-ir → expo-alpha-ir-eval
-//!
-//! Drives integer arithmetic through both the project-mode path
-//! (explicit `fn main; 2 + 2; end` lowered via [`lower_program`]) and
-//! the script-mode path (bare `2 + 2\n` lowered via [`lower_script`])
-//! and asserts the interpreter returns `Value::Int(4)` regardless of
-//! source shape. When this passes, the alpha pipeline has end-to-end
-//! coverage from source to a runtime value on both shapes.
+//! End-to-end smoke tests for integer arithmetic through the alpha
+//! pipeline (parse → typecheck → IR → interpret), exercising both
+//! `lower_program` (project mode) and `lower_script` (script mode).
 
 use std::path::PathBuf;
 
@@ -28,7 +21,7 @@ fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
         }],
         mode,
     );
-    check_program(parsed).expect("alpha typecheck should succeed on POC source")
+    check_program(parsed).expect("alpha typecheck should succeed")
 }
 
 fn evaluate_program(source: &str) -> Result<Value, RuntimeError> {

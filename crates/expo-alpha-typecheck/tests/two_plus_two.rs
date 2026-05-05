@@ -1,17 +1,9 @@
-//! End-to-end smoke test for the alpha typecheck pipeline at its POC scope.
+//! End-to-end smoke test for the alpha typecheck pipeline.
 //!
 //! Drives `parse_program → check_program` on `fn main; 2 + 2; end` and
-//! asserts:
-//!
-//! 1. The pipeline succeeds (no typecheck diagnostics).
-//! 2. The registry contains `TestApp.main` registered as a function.
-//! 3. The body's `2 + 2` expression carries a populated `resolution`
-//!    that resolves into the preloaded `Global.Int` stdlib stub —
-//!    proof that resolve + seal both ran and the registry is the hub
-//!    for type identity.
-//!
-//! When this test passes the alpha typecheck phase has end-to-end coverage
-//! sufficient for the next slice (lowering + eval).
+//! asserts the pipeline succeeds, the registry holds `TestApp.main`,
+//! and the body's `2 + 2` resolves into the preloaded `Global.Int`
+//! stdlib stub.
 
 use std::path::PathBuf;
 

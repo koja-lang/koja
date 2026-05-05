@@ -1,13 +1,9 @@
-//! Typecheck coverage for bare-identifier function calls.
-//!
-//! Exercises the full path from `collect` -> `lift_signatures` ->
-//! `resolve` -> `seal` for call expressions. The callee side covers
-//! zero-arg, arg-taking, arity-mismatched, type-mismatched,
-//! unknown, non-identifier, and wrong-kind forms. The param-ref
-//! diagnostic (POC limitation: body cannot reference parameters
-//! yet) is also asserted here since it surfaces the moment a
-//! function has any `Regular` parameter that gets mentioned in the
-//! body.
+//! Typecheck coverage for bare-identifier function calls. Exercises
+//! the full `collect → lift_signatures → resolve → seal` path on
+//! zero-arg, arg-taking, arity-mismatched, type-mismatched, unknown,
+//! non-identifier, and wrong-kind callees. Also pins the param-ref
+//! diagnostic (function bodies cannot reference parameters yet),
+//! which surfaces as soon as a `Regular` parameter is mentioned.
 
 use std::path::PathBuf;
 

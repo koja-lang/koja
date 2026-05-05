@@ -1,13 +1,11 @@
 //! Coverage that `check_program` preloads the stdlib struct stubs
-//! (`Int`, `Bool`, `Unit`, `Float`, `String`) into the
-//! [`GlobalRegistry`] before user decls are collected.
+//! (`Int`/`Bool`/`Unit`/`Float`/`String`) into the [`GlobalRegistry`]
+//! before user decls are collected.
 //!
-//! These stubs are temporary scaffolding -- once the real stdlib is
-//! compiled as a package they land through `collect` like any other
-//! decl. The test still matters post-cutover: the exact same
-//! assertions should pass against the real entries because the stubs
-//! and the real stdlib share the same shape (`Global.<name>` struct
-//! in the registry).
+//! Stubs are temporary scaffolding — once the real stdlib compiles as
+//! a package they land through `collect`. These assertions stay valid
+//! post-cutover because stubs and real entries share the same shape
+//! (`Global.<name>` struct in the registry).
 
 use std::path::PathBuf;
 

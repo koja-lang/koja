@@ -1,50 +1,43 @@
-//! Global registry of every uniquely-named declaration in a program,
-//! keyed by [`GlobalRegistryId`] and reverse-indexed by [`Identifier`].
+//! Global registry of every uniquely-named declaration, keyed by
+//! [`GlobalRegistryId`] and reverse-indexed by [`Identifier`]. The
+//! registry is the authoritative gate enforcing identifier uniqueness;
+//! insert sites emit the "already defined" diagnostic when an insert
+//! returns [`InsertOutcome::Collision`].
 //!
-//! The registry is the authoritative gate that enforces "every
-//! identifier in the program is unique." Insert sites are responsible
-//! for emitting a diagnostic when an insert returns
-//! [`InsertOutcome::Collision`] -- the registry itself does not own
-//! diagnostic emission, just collision detection.
+//! Today only top-level structs, enums, functions, and protocols
+//! register. Methods, enum variants, constants, and type aliases land
+//! as the surrounding pipeline migrates onto path-based
+//! [`Identifier`]s.
 //!
-//! Today the registry only carries top-level structs, enums, functions,
-//! and protocols. Methods on impls, enum variants, constants, and type
-//! aliases will be added as the surrounding pipeline migrates onto
-//! path-based [`Identifier`]s.
-//!
-//! Ids are assigned sequentially (monotonic `u32` counter). This is an
-//! implementation detail; a future parallel-cache story will swap in
-//! content-addressable hashing without changing the public surface.
+//! Ids are assigned sequentially (monotonic `u32` counter); a future
+//! parallel-cache story will swap in content-addressable hashing
+//! without changing the public surface.
 //!
 //! # Function signatures
 //!
-//! Function signatures live inside the [`GlobalKind::Function`]
-//! variant as `Option<FunctionSignature>`. The option encodes the
-//! pipeline phase: `Function(None)` is the "collected but not yet
-//! lifted" state; `Function(Some(sig))` is the "lifted" state reached
-//! after `lift_signatures` runs. The variant-carried design makes
-//! illegal states unrepresentable: `Struct`/`Enum`/`Protocol` entries
-//! literally cannot carry a signature slot.
+//! [`GlobalKind::Function`] carries its signature inline as
+//! `Option<FunctionSignature>`: `None` is the "collected but not yet
+//! lifted" state, `Some(sig)` the "lifted" state reached after
+//! `lift_signatures` runs. The variant-carried design makes illegal
+//! states unrepresentable — non-function entries literally cannot
+//! carry a signature.
 
 use std::collections::HashMap;
 
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-/// A single resolved parameter: the surface-syntax name plus its
-/// resolved type. Part of a [`FunctionSignature`].
+/// A single resolved parameter: surface-syntax name plus resolved type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedParam {
     pub name: String,
     pub ty: ResolvedType,
 }
 
-/// A fully-resolved function signature: positional parameters plus
-/// return type. Stamped onto a [`GlobalKind::Function`] entry by the
-/// `lift_signatures` sub-pass.
-///
-/// Both params and return carry registry-backed [`ResolvedType`]s, so
-/// a signature stays valid as long as its referent entries exist.
+/// A fully-resolved function signature stamped onto
+/// [`GlobalKind::Function`] entries by the `lift_signatures` sub-pass.
+/// Params and return carry registry-backed [`ResolvedType`]s, so a
+/// signature stays valid as long as its referents do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionSignature {
     pub params: Vec<ResolvedParam>,
@@ -52,10 +45,9 @@ pub struct FunctionSignature {
 }
 
 /// What kind of declaration a registry entry points at. Function
-/// entries carry their signature inline (`None` until
-/// `lift_signatures` stamps it in). Other kinds grow their own
-/// per-variant metadata when features land (struct fields, enum
-/// variants, protocol methods, etc.).
+/// entries carry their signature inline (`None` until `lift_signatures`
+/// stamps it in). Other kinds grow per-variant metadata as features
+/// land (struct fields, enum variants, protocol methods, ...).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalKind {
     Enum,
@@ -65,7 +57,6 @@ pub enum GlobalKind {
 }
 
 impl GlobalKind {
-    /// Human-readable kind label for diagnostics ("struct", "enum", ...).
     pub fn label(&self) -> &'static str {
         match self {
             GlobalKind::Enum => "enum",
@@ -76,9 +67,9 @@ impl GlobalKind {
     }
 }
 
-/// A single registered declaration: the canonical [`Identifier`], its
-/// [`GlobalKind`], and the source span of the originating decl (used
-/// for "already defined here" diagnostic notes).
+/// A single registered declaration: canonical [`Identifier`],
+/// [`GlobalKind`], and source span (used for "already defined here"
+/// diagnostic notes).
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
     pub identifier: Identifier,
@@ -86,10 +77,8 @@ pub struct RegistryEntry {
     pub span: Span,
 }
 
-/// Outcome of an insert attempt. `Fresh` means the id was newly minted;
-/// `Collision` means an entry for the same identifier already existed
-/// and the caller should emit a "already defined" diagnostic using
-/// `existing`.
+/// Outcome of an insert attempt. `Collision` carries the existing
+/// entry so the caller can emit an "already defined" diagnostic.
 #[derive(Debug)]
 pub enum InsertOutcome<'a> {
     Fresh(GlobalRegistryId),
@@ -110,17 +99,15 @@ impl GlobalRegistry {
     }
 
     /// Seed a fresh registry with stdlib struct stubs for the scalar
-    /// types alpha knows how to synthesize from literals (`Int`, `Bool`,
-    /// `Unit`, `Float`, `String`). They register as ordinary
+    /// types alpha synthesizes from literals (`Int`/`Bool`/`Unit`/
+    /// `Float`/`String`). They register as ordinary
     /// [`GlobalKind::Struct`] entries under the `Global` package so
-    /// alpha resolve has something to point at without special-casing
-    /// primitives.
+    /// resolve never special-cases primitives.
     ///
-    /// Temporary scaffolding: once the real stdlib is formally compiled
-    /// as a package, these entries land through the same `collect` path
-    /// as any other decl and this constructor is no longer needed.
-    /// Because stubs and real decls share the same shape, swapping in
-    /// the real stdlib requires no changes to downstream consumers.
+    /// Temporary scaffolding — once the real stdlib compiles as a
+    /// package these entries land through `collect` like any other
+    /// decl. Stubs share their shape with the eventual real entries,
+    /// so the cutover is invisible to downstream consumers.
     pub fn with_stdlib_stubs() -> Self {
         let mut reg = Self::default();
         for name in ["Int", "Bool", "Unit", "Float", "String"] {
@@ -141,8 +128,7 @@ impl GlobalRegistry {
     }
 
     /// Register a function in the `Function(None)` state. The
-    /// signature is stamped in later by
-    /// [`Self::set_signature`] from the `lift_signatures` sub-pass.
+    /// signature is stamped in later by [`Self::set_signature`].
     pub fn insert_function(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
         self.insert(identifier, GlobalKind::Function(None), span)
     }
@@ -183,8 +169,7 @@ impl GlobalRegistry {
     }
 
     /// Stamp a resolved signature onto a function entry. Panics unless
-    /// the entry's kind is exactly `Function(None)` — wrong kind or
-    /// second set are compiler bugs in the sub-pass ordering.
+    /// the entry's kind is exactly `Function(None)`.
     pub fn set_signature(&mut self, id: GlobalRegistryId, signature: FunctionSignature) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!("set_signature on missing registry id {id} — collect invariant violation")
@@ -211,31 +196,28 @@ impl GlobalRegistry {
         }
     }
 
-    /// Forward lookup: dereference an id to its entry.
+    /// Dereference an id to its entry.
     pub fn get(&self, id: GlobalRegistryId) -> Option<&RegistryEntry> {
         self.entries.get(&id)
     }
 
-    /// Reverse lookup: given an [`Identifier`], find its id (if any)
-    /// and the entry. Used by resolve to stamp ids onto AST reference
-    /// sites.
+    /// Reverse lookup: an [`Identifier`] to its id + entry. Used by
+    /// resolve to stamp ids onto AST reference sites.
     pub fn lookup(&self, identifier: &Identifier) -> Option<(GlobalRegistryId, &RegistryEntry)> {
         let id = *self.by_identifier.get(identifier)?;
         let entry = self.entries.get(&id)?;
         Some((id, entry))
     }
 
-    /// Iterate every entry in the registry. `HashMap` iteration order
-    /// is not stable across runs; callers that need a deterministic
-    /// order sort by id (matches declaration order under sequential
-    /// assignment) or by `entry.identifier.qualified_name()`.
+    /// Iterate every entry. `HashMap` iteration is not stable across
+    /// runs; callers needing a deterministic order sort by id (matches
+    /// declaration order) or by `entry.identifier.qualified_name()`.
     pub fn iter(&self) -> impl Iterator<Item = (GlobalRegistryId, &RegistryEntry)> {
         self.entries.iter().map(|(id, entry)| (*id, entry))
     }
 
-    /// Iterate every entry whose identifier lives in `pkg`. Tell-don't-ask
-    /// query so callers never compare packages directly. Same stability
-    /// caveat as [`Self::iter`].
+    /// Iterate every entry whose identifier lives in `pkg`. Same
+    /// stability caveat as [`Self::iter`].
     pub fn iter_in_package<'a>(
         &'a self,
         pkg: &'a str,
@@ -255,21 +237,18 @@ impl GlobalRegistry {
     }
 }
 
-/// Compact tree-style registry rendering, used by
+/// Compact tree-style registry rendering for
 /// `expo alpha check --emit-ast` as a sidecar to the AST printer.
 ///
 /// Format mirrors [`expo_ast::format_file`]: a header line with the
-/// entry count, then one indented `<id> <kind> <qualified_name>
-/// @<span>` line per entry. Entries are emitted in id order
-/// (declaration order under sequential id assignment) so `<id>`
-/// references from the AST printer line up one-to-one with rows here.
+/// entry count, then one indented `<id> <kind> <qualified_name> @<span>`
+/// row per entry, ordered by id so AST `<id>` references line up
+/// one-to-one with rows here. Function entries render their signature
+/// inline (`fn (p: Global.Int) -> Global.Int`); unlifted functions
+/// render as `fn <unlifted>`.
 ///
-/// Function entries render their signature inline on the kind column
-/// as `fn (p1: Global.Int, p2: Global.Int) -> Global.Int`. Functions
-/// whose signature has not yet been lifted render as `fn <unlifted>`.
-///
-/// Always returns text that ends with `\n`. Empty registries render
-/// just the header line.
+/// Always trailing-newline-terminated; empty registries render just
+/// the header.
 pub fn format_registry(registry: &GlobalRegistry) -> String {
     use std::fmt::Write as _;
 
@@ -291,9 +270,6 @@ pub fn format_registry(registry: &GlobalRegistry) -> String {
     out
 }
 
-/// Render a [`GlobalKind`] for the registry sidecar. Function entries
-/// get their signature inlined so the reader can see resolved param /
-/// return types without chasing nested ids.
 fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
     match kind {
         GlobalKind::Enum => "enum".to_string(),

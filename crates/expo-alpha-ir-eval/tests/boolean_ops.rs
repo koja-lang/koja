@@ -1,10 +1,7 @@
-//! End-to-end interpreter coverage for the boolean and comparison
-//! operators: `and`, `or`, `not`, `== != < > <= >=`, and unary `-`.
-//!
-//! Mirrors the `two_plus_two.rs` pattern: source → typecheck → lower
-//! → interpret, asserting the returned [`Value`] matches eager
-//! semantics (both sides always evaluated; result produced by a
-//! single `BinaryOp`/`UnaryOp`).
+//! End-to-end interpreter coverage for boolean and comparison
+//! operators (`and`, `or`, `not`, `== != < > <= >=`) plus unary `-`.
+//! Eager semantics: both sides always evaluated; result produced by
+//! a single `BinaryOp` / `UnaryOp`.
 
 use std::path::PathBuf;
 

@@ -24,9 +24,10 @@
 //! relative to `expo eval` / `expo shell` — the alpha namespace is a clean
 //! cut from v1, not an evolution of it.
 //!
-//! POC scope (mirrors `expo-alpha-typecheck` / `expo-alpha-ir`): integer
-//! literals, integer arithmetic (`+ - * / %`), parenthesized groups.
-//! Anything richer typecheck-errors with a precise diagnostic.
+//! Today's scope mirrors `expo-alpha-typecheck` / `expo-alpha-ir`:
+//! integer literals, integer arithmetic (`+ - * / %`), boolean and
+//! comparison operators, and parenthesized groups. Richer constructs
+//! typecheck-error with a precise diagnostic.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -45,7 +46,7 @@ use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
 /// functions the user defines via top-level `fn` items.
 const SESSION_PACKAGE: &str = "REPL";
 
-const BANNER: &str = "expo alpha shell -- alpha IR interpreter (POC: integer arithmetic only)\n\
+const BANNER: &str = "expo alpha shell -- alpha IR interpreter\n\
     Type :help for commands, :quit (or Ctrl-D) to exit\n";
 
 const HELP: &str = "Commands:\n  \
@@ -58,8 +59,9 @@ Notes:\n  \
     - State accumulates across inputs: each new input runs the whole\n    \
       session (today's pipeline is whole-program; incremental support\n    \
       lands later).\n  \
-    - POC scope: integer literals, integer arithmetic (+, -, *, /, %),\n    \
-      and parenthesized groups. Other constructs typecheck-error.\n";
+    - Scope today: integer literals, integer arithmetic (+, -, *, /, %),\n    \
+      boolean / comparison operators, and parenthesized groups.\n    \
+      Other constructs typecheck-error.\n";
 
 /// Run the alpha REPL on stdin/stdout until `:quit` or EOF.
 ///

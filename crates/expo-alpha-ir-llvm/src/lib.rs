@@ -1,60 +1,43 @@
 //! LLVM backend for sealed [`expo_alpha_ir::IRProgram`]s and
 //! [`expo_alpha_ir::IRScript`]s — peer to
-//! [`expo-alpha-ir-eval`](../expo_alpha_ir_eval/index.html), but
+//! [`expo-alpha-ir-eval`](../expo_alpha_ir_eval/index.html) but
 //! emitting native object code via [`inkwell`] instead of
 //! interpreting in-process.
 //!
 //! # Slice scope
 //!
-//! Lowers a sealed IR whose entry / script-body returns
-//! `IRType::Int64` to a single-module LLVM IR program with one
-//! external symbol (`main`) of signature `i64 ()`. The host operating
-//! system truncates the i64 return value to its 8-bit exit code,
-//! which is how `cargo test` and the expo driver assert behavior.
+//! Emits a single-module LLVM IR program with one external `main`
+//! symbol of signature `i64 ()`. `main` always returns 0 — the
+//! body's value is fed to a runtime printer
+//! ([`expo-runtime/src/alpha.rs`](../../expo-runtime/src/alpha.rs))
+//! before the return so the binary's observable behavior matches
+//! the eval interpreter's `print value, exit 0` contract. Temporary
+//! scaffolding; goes away with `IO.puts`.
 //!
-//! Supported IR vocabulary: `Const(Int64 / Bool / Unit)`,
-//! `BinaryOp::Add`, `Return`. Any other instruction or terminator
-//! triggers a feature-gap panic — those follow on with the matching
-//! IR slices.
+//! Supported IR vocabulary:
 //!
-//! # Why we mirror v1's link contract but skip its entry-point wrapper
-//!
-//! v1 codegen wraps user `fn main` in `__expo_user_main` and emits an
-//! LLVM `main` that calls `expo_rt_spawn(...)` then `expo_rt_main_done`
-//! and finally `ret 0`. The wrapper is mandatory once Expo grows
-//! Process / spawn semantics, but adopting it now would silently
-//! discard the user's return value and force tests to observe through
-//! some other channel (stdout, runtime exit-code setter). For the
-//! slice we emit a direct `i64 main()` so the smoke test can assert
-//! the exit code matches the expression value. The runtime libraries
-//! are still statically linked at the driver layer so any future
-//! runtime call lights up without rewiring the build.
+//! - `Const(Bool, Int8..Int64, UInt8..UInt64)`.
+//! - `BinaryOp::{Add, And, Eq, Gt, GtEq, Lt, LtEq, NotEq, Or}` —
+//!   `Sub`/`Mul`/`Div`/`Mod` and `Call` are feature-gap follow-ups.
+//! - `UnaryOp::{Neg, Not}`.
+//! - `Return`.
 //!
 //! # Public API
 //!
 //! Two pairs of entry points, one per IR shape:
 //!
-//! - [`compile_program`] / [`emit_llvm_ir`] — project-mode source
-//!   whose user-declared `fn main` lowered through
-//!   `expo-alpha-ir::lower_program`.
-//! - [`compile_script`] / [`emit_script_llvm_ir`] — script-mode
-//!   source whose top-level statements lowered through
-//!   `expo-alpha-ir::lower_script`.
-//!
-//! All four mirror `expo-alpha-ir-eval`'s `Interpreter::run_*` pair:
-//! one shared block-emission seam ([`compiler::Compiler::emit_as_main`])
-//! drives both compile paths, with the only difference being whether
-//! "main's body" comes from `program.entry_function()` or directly
-//! from `script.blocks` / `script.return_type`.
+//! - [`compile_program`] / [`emit_llvm_ir`] for project-mode source
+//!   lowered through `expo-alpha-ir::lower_program`.
+//! - [`compile_script`] / [`emit_script_llvm_ir`] for script-mode
+//!   source lowered through `expo-alpha-ir::lower_script`.
 //!
 //! `compile_*` writes a native object file at the requested path;
-//! linking lives in `expo-driver` so this crate stays free of
-//! `boring-sys` and runtime archives.
+//! linking lives in `expo-driver`.
 
 mod compiler;
 mod emit;
 mod error;
-mod lower;
+mod object;
 mod types;
 
 pub use error::LlvmError;
@@ -62,45 +45,45 @@ pub use error::LlvmError;
 use std::path::Path;
 
 use expo_alpha_ir::{IRProgram, IRScript};
+use inkwell::context::Context;
 
 /// Compile a sealed [`IRProgram`] to a native object file at
-/// `output`. The caller is responsible for linking the resulting
-/// object into an executable; `expo-driver`'s `pipeline::link` covers
-/// the v1 + alpha case with the same `cc` + runtime + BoringSSL
-/// invocation.
-pub fn compile_program(program: &IRProgram, output: &Path) -> Result<(), LlvmError> {
-    let context = inkwell::context::Context::create();
+/// `output`. `app_name` is embedded as the runtime's
+/// `__expo_app_name` global (panic-backtrace label); convention is
+/// the binary's stem. Caller links the object into an executable.
+pub fn compile_program(
+    program: &IRProgram,
+    app_name: &str,
+    output: &Path,
+) -> Result<(), LlvmError> {
+    let context = Context::create();
     let compiler = compiler::Compiler::new(&context);
-    compiler.compile_program(program)?;
-    emit::emit_object_file(compiler.module(), output)
+    compiler.compile_program(program, app_name)?;
+    object::emit_object_file(compiler.module(), output)
 }
 
-/// Compile a sealed [`IRProgram`] and return its LLVM IR text. Used
-/// for fast snapshot-style coverage of the lowering rules — no
-/// linking, no subprocess.
-pub fn emit_llvm_ir(program: &IRProgram) -> Result<String, LlvmError> {
-    let context = inkwell::context::Context::create();
+/// Compile a sealed [`IRProgram`] and return its LLVM IR text — for
+/// snapshot-style coverage in `tests/emit.rs`. No linking, no
+/// subprocess.
+pub fn emit_llvm_ir(program: &IRProgram, app_name: &str) -> Result<String, LlvmError> {
+    let context = Context::create();
     let compiler = compiler::Compiler::new(&context);
-    compiler.compile_program(program)?;
+    compiler.compile_program(program, app_name)?;
     Ok(compiler.module().print_to_string().to_string())
 }
 
-/// Compile a sealed [`IRScript`] to a native object file at
-/// `output`. Counterpart to [`compile_program`] for script-mode
-/// sources (`expo run <bare-file>`, `expo eval`, REPL fragments).
-pub fn compile_script(script: &IRScript, output: &Path) -> Result<(), LlvmError> {
-    let context = inkwell::context::Context::create();
+/// Counterpart to [`compile_program`] for script-mode sources.
+pub fn compile_script(script: &IRScript, app_name: &str, output: &Path) -> Result<(), LlvmError> {
+    let context = Context::create();
     let compiler = compiler::Compiler::new(&context);
-    compiler.compile_script(script)?;
-    emit::emit_object_file(compiler.module(), output)
+    compiler.compile_script(script, app_name)?;
+    object::emit_object_file(compiler.module(), output)
 }
 
-/// Compile a sealed [`IRScript`] and return its LLVM IR text.
-/// Counterpart to [`emit_llvm_ir`] for script-mode sources; used by
-/// the snapshot tests in `tests/emit.rs`.
-pub fn emit_script_llvm_ir(script: &IRScript) -> Result<String, LlvmError> {
-    let context = inkwell::context::Context::create();
+/// Counterpart to [`emit_llvm_ir`] for script-mode sources.
+pub fn emit_script_llvm_ir(script: &IRScript, app_name: &str) -> Result<String, LlvmError> {
+    let context = Context::create();
     let compiler = compiler::Compiler::new(&context);
-    compiler.compile_script(script)?;
+    compiler.compile_script(script, app_name)?;
     Ok(compiler.module().print_to_string().to_string())
 }
