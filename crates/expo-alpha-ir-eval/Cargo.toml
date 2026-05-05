@@ -7,8 +7,8 @@ version.workspace = true
 
 [dependencies]
 expo-alpha-ir = { path = "../expo-alpha-ir" }
-expo-ast = { path = "../expo-ast" }
 
 [dev-dependencies]
 expo-alpha-typecheck = { path = "../expo-alpha-typecheck" }
+expo-ast = { path = "../expo-ast" }
 expo-parser = { path = "../expo-parser" }

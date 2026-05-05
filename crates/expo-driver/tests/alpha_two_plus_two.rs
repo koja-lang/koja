@@ -55,6 +55,19 @@ const BOOL_AND_SCRIPT_SOURCE: &str = "
     true and false
 ";
 
+/// Script-mode fixture that drives a helper-function call from the
+/// implicit body. `answer()` is declared inside the script source,
+/// the trailing expression invokes it and adds 1, and the
+/// auto-print wrapper renders `43\n`. Exercises the full
+/// declare-then-call path through `compile_script` end-to-end.
+const HELPER_CALL_SCRIPT_SOURCE: &str = "
+    fn answer -> Int
+      42
+    end
+
+    answer() + 1
+";
+
 fn expo_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_expo"))
 }
@@ -202,6 +215,41 @@ fn alpha_run_interpreter_script_two_plus_two_prints_value() {
     assert!(
         stdout.trim() == "4",
         "expected interpreter to print `4`, got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_calls_helper_prints_value() {
+    let scratch = scratch_dir("run_llvm_helper_call");
+    let fixture = write_fixture(
+        &scratch,
+        "helper_call.exps",
+        &dedent(HELPER_CALL_SCRIPT_SOURCE),
+    );
+
+    // Pins the function-definition + call path through codegen
+    // end-to-end. `fn answer` lowers to a non-entry helper that
+    // the compiler declares with mangled symbol `TestApp.answer`
+    // and the script body issues the matching `call i64`. The
+    // built binary's `main` runs the call, adds 1, hands the
+    // result to `__expo_alpha_print_i64`, and exits 0 — observable
+    // as `43\n` on stdout. Backend symmetry with the interpreter
+    // is implicitly checked by the matching alpha-eval test in
+    // `expo-alpha-ir-eval/tests/calls.rs`.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (helper call) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "43",
+        "expected LLVM backend to print `43` (42 from helper + 1), got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);

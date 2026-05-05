@@ -63,14 +63,14 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
 
     let program = lower(&dedent(source));
 
-    assert_eq!(program.entry_point.last(), "main");
+    assert_eq!(program.entry_point.mangled(), format!("{PACKAGE}.main"));
     assert_eq!(program.packages.len(), 1);
     let pkg = &program.packages[0];
     assert_eq!(pkg.package, PACKAGE);
     assert_eq!(pkg.functions.len(), 1);
 
     let main: &IRFunction = program.entry_function();
-    assert_eq!(main.identifier, program.entry_point);
+    assert_eq!(main.symbol, program.entry_point);
     assert_eq!(main.blocks.len(), 1, "fns lower to one basic block");
 
     let block: &IRBasicBlock = &main.blocks[0];
@@ -153,11 +153,11 @@ fn bare_two_plus_two_lowers_to_script_with_const_const_add_return() {
 fn script_with_helper_fn_lowers_call_through_packages() {
     let script = lower_as_script("fn helper -> Int\n  1\nend\n\nhelper() + 1\n");
 
-    let helper_id = Identifier::new(PACKAGE, vec!["helper".to_string()]);
+    let helper_mangled = format!("{PACKAGE}.helper");
     let helper = script
-        .function(&helper_id)
+        .function(&helper_mangled)
         .expect("helper fn should be lowered into IRScript.packages");
-    assert_eq!(helper.identifier, helper_id);
+    assert_eq!(helper.symbol.mangled(), helper_mangled);
     assert_eq!(helper.return_type, IRType::Int64);
 
     assert_eq!(script.return_type, IRType::Int64);
@@ -184,7 +184,7 @@ fn script_with_helper_fn_lowers_call_through_packages() {
     let IRInstruction::Call { callee, .. } = call else {
         unreachable!();
     };
-    assert_eq!(*callee, helper_id);
+    assert_eq!(callee.mangled(), helper_mangled);
 }
 
 #[test]

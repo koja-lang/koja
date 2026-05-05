@@ -7,12 +7,11 @@
 //! so the future deduplication / specialized-decl planning has a clear
 //! seam.
 
-use expo_ast::identifier::Identifier;
-
 use crate::IRProgram;
+use crate::function::IRSymbol;
 use crate::package::IRPackage;
 
-pub(crate) fn merge(packages: Vec<IRPackage>, entry_point: Identifier) -> IRProgram {
+pub(crate) fn merge(packages: Vec<IRPackage>, entry_point: IRSymbol) -> IRProgram {
     IRProgram {
         entry_point,
         packages,

@@ -7,9 +7,10 @@
 //!
 //! Invariants asserted (program path):
 //!
-//! 1. The entry-point identifier resolves to a registered function.
-//! 2. Every function in every package keys at its own identifier
-//!    (`pkg.functions[id].identifier == id`).
+//! 1. The entry-point [`crate::IRSymbol`] resolves to a registered
+//!    function.
+//! 2. Every function in every package keys at its own symbol
+//!    (`pkg.functions[sym].symbol == sym`).
 //! 3. Every function has at least one basic block.
 //! 4. Within each function: every value reference (instruction operand
 //!    or terminator value) points at a `ValueId` defined earlier in
@@ -17,7 +18,7 @@
 //!    defined set before the first block, so body references to
 //!    params are valid without having a distinct "definition"
 //!    instruction.
-//! 5. Every `IRInstruction::Call`'s `callee` identifier resolves to a
+//! 5. Every `IRInstruction::Call`'s `callee` symbol resolves to a
 //!    function that actually exists somewhere in the `IRProgram` /
 //!    `IRScript`.
 //! 6. **Transient slice invariant**: every [`ConstValue`] and
@@ -28,7 +29,8 @@
 //!    expansion + literal width inference can stamp them without
 //!    reshuffling, but they're forbidden until those upstream pieces
 //!    land. Loosen this invariant when adding `Int8` / etc. to the
-//!    stdlib stubs.
+//!    stdlib stubs. Applies to function return types, parameter
+//!    types, and every value-flow [`IRType`] alike.
 //!
 //! The script path ([`seal_script`]) re-asserts (3)–(6) on the
 //! implicit-function shape ([`IRScript::blocks`] +
@@ -43,7 +45,7 @@ use crate::types::{ConstValue, IRType, ValueId};
 use crate::{IRProgram, package::IRPackage};
 
 pub(crate) fn seal_program(program: &IRProgram) {
-    if program.function(&program.entry_point).is_none() {
+    if program.function(program.entry_point.mangled()).is_none() {
         seal_panic(&format!(
             "entry point `{}` not registered in any package",
             program.entry_point
@@ -72,11 +74,11 @@ pub(crate) fn seal_script(script: &IRScript) {
 }
 
 fn seal_package(pkg: &IRPackage) {
-    for (id, function) in &pkg.functions {
-        if id != &function.identifier {
+    for (sym, function) in &pkg.functions {
+        if sym != &function.symbol {
             seal_panic(&format!(
-                "package `{}` keys function at `{id}` but the function's own identifier is `{}`",
-                pkg.package, function.identifier,
+                "package `{}` keys function at `{sym}` but the function's own symbol is `{}`",
+                pkg.package, function.symbol,
             ));
         }
         seal_function(function);
@@ -84,7 +86,7 @@ fn seal_package(pkg: &IRPackage) {
 }
 
 fn seal_function(function: &IRFunction) {
-    let owner = format!("function `{}`", function.identifier);
+    let owner = format!("function `{}`", function.symbol);
     if function.blocks.is_empty() {
         seal_panic(&format!("{owner} has no basic blocks"));
     }
@@ -93,10 +95,14 @@ fn seal_function(function: &IRFunction) {
     // downstream operand references. Seed them first so the rest of
     // the block walk treats them as already-defined.
     let mut defined: BTreeSet<ValueId> = BTreeSet::new();
-    for param in &function.params {
-        if !defined.insert(*param) {
+    for (index, param) in function.params.iter().enumerate() {
+        require_supported_type(&param.ty, &|| {
+            format!("{owner} parameter #{index} ({}) type", param.id)
+        });
+        if !defined.insert(param.id) {
             seal_panic(&format!(
-                "{owner} lists duplicate parameter value `{param}`",
+                "{owner} lists duplicate parameter value `{}`",
+                param.id,
             ));
         }
     }
@@ -182,7 +188,7 @@ fn seal_program_calls(program: &IRProgram) {
             for block in &function.blocks {
                 for inst in &block.instructions {
                     if let IRInstruction::Call { callee, .. } = inst
-                        && program.function(callee).is_none()
+                        && program.function(callee.mangled()).is_none()
                     {
                         seal_panic(&format!(
                             "function `{owner}` calls `{callee}`, but that function is not \
@@ -203,7 +209,7 @@ fn seal_script_calls(script: &IRScript) {
     for block in &script.blocks {
         for inst in &block.instructions {
             if let IRInstruction::Call { callee, .. } = inst
-                && script.function(callee).is_none()
+                && script.function(callee.mangled()).is_none()
             {
                 seal_panic(&format!(
                     "script body calls `{callee}`, but that function is not \
@@ -217,7 +223,7 @@ fn seal_script_calls(script: &IRScript) {
             for block in &function.blocks {
                 for inst in &block.instructions {
                     if let IRInstruction::Call { callee, .. } = inst
-                        && script.function(callee).is_none()
+                        && script.function(callee.mangled()).is_none()
                     {
                         seal_panic(&format!(
                             "function `{owner}` calls `{callee}`, but that function is not \

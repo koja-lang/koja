@@ -38,7 +38,9 @@ mod script;
 mod seal;
 mod types;
 
-pub use function::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator};
+pub use function::{
+    IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
+};
 pub use lower_script::lower_script;
 pub use package::IRPackage;
 pub use program::{IRProgram, LowerError, lower_program};

@@ -18,7 +18,7 @@ use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::Identifier;
 
-use crate::function::IRFunction;
+use crate::function::{IRFunction, IRSymbol};
 use crate::package::IRPackage;
 use crate::{lower_package, merge, seal};
 
@@ -26,19 +26,30 @@ use crate::{lower_package, merge, seal};
 /// this directly; they build their own indices over the sealed
 /// vocabulary and never need to revisit the `CheckedProgram` it came
 /// from.
+///
+/// `entry_point` is the stable [`IRSymbol`] of the user-declared entry
+/// function. Stamped from the [`Identifier`] the caller passed into
+/// [`lower_program`] — backends consume the symbol and never need to
+/// reach back into `expo-ast`.
 #[derive(Debug, Clone)]
 pub struct IRProgram {
-    pub entry_point: Identifier,
+    pub entry_point: IRSymbol,
     pub packages: Vec<IRPackage>,
 }
 
 impl IRProgram {
-    /// Lookup a function across every package by its fully-qualified
-    /// identifier. `O(packages * log functions_per_package)`; for the
-    /// 1–3 packages an alpha program ships today this is overwhelmingly
-    /// cheap. A flat index lands when codegen needs hot-path lookups.
-    pub fn function(&self, id: &Identifier) -> Option<&IRFunction> {
-        self.packages.iter().find_map(|pkg| pkg.functions.get(id))
+    /// Lookup a function across every package by its mangled symbol.
+    /// `O(packages * log functions_per_package)`; for the 1–3 packages
+    /// an alpha program ships today this is overwhelmingly cheap. A
+    /// flat index lands when codegen needs hot-path lookups.
+    ///
+    /// Accepts any `&str`-borrowable input, so backends can pass a
+    /// `&IRSymbol` directly or a raw mangled string they pulled off
+    /// an `IRInstruction::Call`.
+    pub fn function(&self, mangled: &str) -> Option<&IRFunction> {
+        self.packages
+            .iter()
+            .find_map(|pkg| pkg.functions.get(mangled))
     }
 
     /// The function the entry point resolves to. Panics if missing —
@@ -46,17 +57,17 @@ impl IRProgram {
     /// `lower_program` enforces, and `seal_program` re-asserts on the
     /// final IRProgram.
     pub fn entry_function(&self) -> &IRFunction {
-        self.function(&self.entry_point)
+        self.function(self.entry_point.mangled())
             .expect("entry point not registered in IRProgram (seal violation upstream)")
     }
 
     /// Whether `function` is this program's entry point. Lets backends
     /// distinguish the entry function (which gets exported under the
     /// host-runtime symbol, e.g. `main` on Unix) from every other
-    /// function in the program without decomposing [`Identifier`]
-    /// internals.
+    /// function in the program — symbol-keyed, with no AST types in
+    /// scope.
     pub fn is_entry(&self, function: &IRFunction) -> bool {
-        function.identifier == self.entry_point
+        function.symbol == self.entry_point
     }
 }
 
@@ -140,9 +151,10 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
         return Err(LowerError::Diagnostics(diagnostics));
     }
 
-    let program = merge::merge(packages, entry.clone());
+    let entry_symbol = IRSymbol::from_identifier(&entry);
+    let program = merge::merge(packages, entry_symbol);
 
-    if program.function(&entry).is_none() {
+    if program.function(program.entry_point.mangled()).is_none() {
         return Err(LowerError::EntryPointNotFound { identifier: entry });
     }
 

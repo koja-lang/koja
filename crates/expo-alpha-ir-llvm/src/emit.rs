@@ -11,16 +11,25 @@
 //!   `ret`. Used by every non-`main` function.
 //!
 //! [`emit_block`] is the convenience composition of the two.
+//!
+//! Both seams accept a `seed: ValueMap` so callers can pre-bind
+//! parameter `ValueId`s to the LLVM `function.get_nth_param` values
+//! before the body walk starts. `emit_as_main` passes an empty
+//! seed today; helper-function emission seeds one entry per
+//! `IRFunctionParam`. They also accept a `&Module` so `Call`
+//! instructions can resolve their callee by mangled name without
+//! re-threading a separate function table.
 
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRInstruction, IRTerminator, IRUnaryOp, ValueId,
+    ConstValue, IRBasicBlock, IRBinOp, IRInstruction, IRSymbol, IRTerminator, IRUnaryOp, ValueId,
 };
 use inkwell::IntPredicate;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::values::IntValue;
+use inkwell::module::Module;
+use inkwell::values::{BasicMetadataValueEnum, IntValue};
 
 use crate::error::LlvmError;
 
@@ -29,27 +38,31 @@ pub(crate) type ValueMap<'ctx> = BTreeMap<ValueId, IntValue<'ctx>>;
 /// Emit `block` (instructions + terminator) into the builder's
 /// current insert position. The caller is responsible for having
 /// called `position_at_end` on the block's LLVM target before this
-/// runs.
+/// runs and for seeding `seed` with any param `ValueId`s.
 pub(crate) fn emit_block<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
+    module: &Module<'ctx>,
     block: &IRBasicBlock,
+    seed: ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let (values, terminator) = emit_instructions(context, builder, block)?;
+    let (values, terminator) = emit_instructions(context, builder, module, block, seed)?;
     emit_terminator_default(builder, terminator, &values)
 }
 
 /// Emit `block`'s instructions only; return the populated value map
-/// plus a borrow of the block's terminator so the caller can emit it
-/// (or substitute a different one).
+/// (starting from `seed`) plus a borrow of the block's terminator
+/// so the caller can emit it (or substitute a different one).
 pub(crate) fn emit_instructions<'ctx, 'block>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
+    module: &Module<'ctx>,
     block: &'block IRBasicBlock,
+    seed: ValueMap<'ctx>,
 ) -> Result<(ValueMap<'ctx>, &'block IRTerminator), LlvmError> {
-    let mut values: ValueMap<'ctx> = BTreeMap::new();
+    let mut values = seed;
     for instruction in &block.instructions {
-        emit_instruction(context, builder, instruction, &mut values)?;
+        emit_instruction(context, builder, module, instruction, &mut values)?;
     }
     Ok((values, &block.terminator))
 }
@@ -89,6 +102,7 @@ pub(crate) fn lookup<'ctx>(
 fn emit_instruction<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
+    module: &Module<'ctx>,
     instruction: &IRInstruction,
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
@@ -100,10 +114,11 @@ fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
-        IRInstruction::Call { dest, callee, .. } => Err(LlvmError::Codegen(format!(
-            "alpha LLVM does not yet emit Call instructions \
-             (callee `{callee}` at value {dest})",
-        ))),
+        IRInstruction::Call { dest, callee, args } => {
+            let result = emit_call(builder, module, callee, args, values)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
         IRInstruction::Const { dest, value } => {
             let constant = emit_const(context, value)?;
             values.insert(*dest, constant);
@@ -116,6 +131,45 @@ fn emit_instruction<'ctx>(
             Ok(())
         }
     }
+}
+
+/// Emit a call to the helper function registered on `module` under
+/// the callee's mangled symbol. Compiler declares every non-entry
+/// function before any body emission and the IR seal pass guarantees
+/// every `IRInstruction::Call::callee` resolves to a registered
+/// function — so a miss here is a compiler bug, not a feature gap.
+/// All return values are `IntValue` today (the seal pass admits only
+/// `Bool` / `Int64` / `Unit`); `Unit` returns are rejected upstream
+/// so we always have a basic value to extract.
+fn emit_call<'ctx>(
+    builder: &Builder<'ctx>,
+    module: &Module<'ctx>,
+    callee: &IRSymbol,
+    args: &[ValueId],
+    values: &ValueMap<'ctx>,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    let mangled = callee.mangled();
+    let function = module.get_function(mangled).unwrap_or_else(|| {
+        panic!(
+            "alpha LLVM emit: callee `{mangled}` not declared on the module — \
+             declaration order or seal violation",
+        )
+    });
+    let mut arg_values: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
+    for arg in args {
+        arg_values.push(lookup(values, *arg)?.into());
+    }
+    let call_site = builder
+        .build_call(function, &arg_values, "call")
+        .map_err(|e| {
+            LlvmError::Codegen(format!("inkwell rejected build_call for `{mangled}`: {e}"))
+        })?;
+    let basic_value = call_site.try_as_basic_value().basic().ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "alpha LLVM does not yet emit Unit-returning calls (callee `{mangled}`)",
+        ))
+    })?;
+    Ok(basic_value.into_int_value())
 }
 
 fn emit_const<'ctx>(

@@ -18,8 +18,12 @@
 //!
 //! - `Const(Bool, Int8..Int64, UInt8..UInt64)`.
 //! - `BinaryOp::{Add, And, Eq, Gt, GtEq, Lt, LtEq, NotEq, Or}` —
-//!   `Sub`/`Mul`/`Div`/`Mod` and `Call` are feature-gap follow-ups.
+//!   `Sub`/`Mul`/`Div`/`Mod` are feature-gap follow-ups.
 //! - `UnaryOp::{Neg, Not}`.
+//! - `Call` — direct calls to functions declared in the same
+//!   module, resolved by mangled name. Param `ValueId`s are seeded
+//!   into the body's value map up front so any future
+//!   parameter-reference lowering already finds its operands.
 //! - `Return`.
 //!
 //! # Public API

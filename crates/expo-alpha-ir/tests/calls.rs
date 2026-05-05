@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{IRFunction, IRInstruction, IRProgram, IRTerminator, lower_program};
+use expo_alpha_ir::{IRFunction, IRInstruction, IRProgram, IRTerminator, IRType, lower_program};
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
@@ -31,9 +31,10 @@ fn lower(source: &str) -> IRProgram {
 }
 
 fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
+    let mangled = format!("{PACKAGE}.{name}");
     program
-        .function(&Identifier::new(PACKAGE, vec![name.to_string()]))
-        .unwrap_or_else(|| panic!("missing function `{name}` in IRProgram"))
+        .function(&mangled)
+        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
 }
 
 fn count_calls(function: &IRFunction) -> usize {
@@ -74,10 +75,7 @@ fn zero_arg_call_lowers_to_single_call_instruction() {
         );
     };
     assert_eq!(args.len(), 0);
-    assert_eq!(
-        callee,
-        &Identifier::new(PACKAGE, vec!["answer".to_string()])
-    );
+    assert_eq!(callee.mangled(), format!("{PACKAGE}.answer"));
 
     assert_eq!(
         block.terminator,
@@ -106,7 +104,12 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
     assert_eq!(take.params.len(), 1, "take has one declared param");
     // Params are the first ids allocated, so the body's const
     // instruction should land at the *next* id.
-    let param_id = take.params[0];
+    let param = &take.params[0];
+    assert_eq!(
+        param.ty,
+        IRType::Int64,
+        "alpha lowering should stamp the param's IRType from the lifted signature",
+    );
     let body_const = take
         .blocks
         .first()
@@ -115,10 +118,10 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
         .first()
         .expect("take body has at least one instruction");
     assert!(
-        body_const.dest().0 > param_id.0,
+        body_const.dest().0 > param.id.0,
         "body-produced value ({}) should be allocated after param value ({})",
         body_const.dest(),
-        param_id,
+        param.id,
     );
 
     // The call site wires `99` into the Call's args.
@@ -188,8 +191,8 @@ fn nested_calls_chain_through_value_ids() {
     let IRInstruction::BinaryOp { lhs, rhs, .. } = binop else {
         panic!("instruction 2 should be BinaryOp; got {binop:?}");
     };
-    assert_eq!(a_callee.last(), "a");
-    assert_eq!(b_callee.last(), "b");
+    assert_eq!(a_callee.mangled(), format!("{PACKAGE}.a"));
+    assert_eq!(b_callee.mangled(), format!("{PACKAGE}.b"));
     assert_eq!(*lhs, *a_dest);
     assert_eq!(*rhs, *b_dest);
 }

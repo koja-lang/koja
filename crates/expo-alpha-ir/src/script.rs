@@ -2,11 +2,11 @@
 //! `expo eval`, REPL fragments).
 //!
 //! Where [`crate::IRProgram`] models a user-declared entry function
-//! by [`Identifier`], an `IRScript` carries its body inline: the
-//! top-level statements lowered into a single basic block sequence
-//! plus the package fragments needed to resolve any helper-function
-//! calls. There is no "entry point identifier" — the script *is* the
-//! entry point.
+//! by its stable [`crate::function::IRSymbol`], an `IRScript` carries
+//! its body inline: the top-level statements lowered into a single
+//! basic block sequence plus the package fragments needed to resolve
+//! any helper-function calls. There is no entry-point symbol — the
+//! script *is* the entry point.
 //!
 //! Backends consume an `IRScript` directly:
 //!
@@ -20,8 +20,6 @@
 //! The shape mirrors a single function's body without leaking an
 //! [`IRFunction`] (which carries a name, parameters, and the
 //! "user-declared" semantics that scripts deliberately don't have).
-
-use expo_ast::identifier::Identifier;
 
 use crate::function::{IRBasicBlock, IRFunction};
 use crate::package::IRPackage;
@@ -52,12 +50,14 @@ pub struct IRScript {
 }
 
 impl IRScript {
-    /// Lookup a helper function across every package by its
-    /// fully-qualified [`Identifier`]. Mirrors
-    /// [`crate::IRProgram::function`] so the interpreter and LLVM
-    /// backend can drive a single shared instruction walker over
-    /// either IR shape — only the call-resolver closure differs.
-    pub fn function(&self, id: &Identifier) -> Option<&IRFunction> {
-        self.packages.iter().find_map(|pkg| pkg.functions.get(id))
+    /// Lookup a helper function across every package by its mangled
+    /// symbol. Mirrors [`crate::IRProgram::function`] so the
+    /// interpreter and LLVM backend can drive a single shared
+    /// instruction walker over either IR shape — only the
+    /// call-resolver closure differs.
+    pub fn function(&self, mangled: &str) -> Option<&IRFunction> {
+        self.packages
+            .iter()
+            .find_map(|pkg| pkg.functions.get(mangled))
     }
 }

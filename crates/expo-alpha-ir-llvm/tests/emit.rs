@@ -195,6 +195,119 @@ fn program_int_eq_prints_true() {
 }
 
 // ---------------------------------------------------------------------------
+// Function-definition + call coverage
+//
+// Pin three things per scenario:
+//   1. The helper's `define` line — confirms the IR's
+//      [`IRSymbol::mangled`] flows directly through `add_function`.
+//   2. The body's `call ...` line — confirms callee lookup and
+//      argument plumbing.
+//   3. The trailing print-then-exit-0 shape via `assert_main_shape`.
+//
+// Param refs from inside a body are still a typecheck feature gap,
+// so the helpers below all return constants. The call site is what
+// these tests exercise.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn program_zero_arg_call_emits_helper_define_and_call() {
+    let source = "
+        fn answer -> Int
+          42
+        end
+
+        fn main -> Int
+          answer()
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "define i64 @TestApp.answer()");
+    assert_contains(&ir_text, "call i64 @TestApp.answer()");
+    // Helper's body folds to `ret i64 42`; main's call result is fed
+    // straight to the int printer.
+    assert_contains(&ir_text, "ret i64 42");
+    assert_contains(&ir_text, "@__expo_alpha_print_i64");
+}
+
+#[test]
+fn program_one_arg_call_threads_int_through_helper_signature() {
+    // The helper ignores its param (typecheck won't yet lower a
+    // body reference to it), but the param shape still has to be
+    // emitted on both sides of the call: `define i64 @id(i64 ...)`
+    // for the helper and `call i64 @TestApp.id(i64 7)` for main.
+    let source = "
+        fn id(x: Int) -> Int
+          5
+        end
+
+        fn main -> Int
+          id(7)
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "define i64 @TestApp.id(i64");
+    assert_contains(&ir_text, "call i64 @TestApp.id(i64 7)");
+}
+
+#[test]
+fn program_multi_arg_call_threads_each_int_in_declared_order() {
+    let source = "
+        fn pair(a: Int, b: Int) -> Int
+          11
+        end
+
+        fn main -> Int
+          pair(2, 3)
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "define i64 @TestApp.pair(i64");
+    assert_contains(&ir_text, "call i64 @TestApp.pair(i64 2, i64 3)");
+}
+
+#[test]
+fn script_call_to_helper_emits_call_in_main_body() {
+    // Script mode wires the same helper-declare-then-call shape
+    // through `emit_script_llvm_ir`: helper lives in a package
+    // fragment, the implicit `main` body issues the call and feeds
+    // the result through arithmetic before printing.
+    let source = "
+        fn answer -> Int
+          42
+        end
+
+        answer() + 1
+        ";
+
+    let script = lower_as_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "define i64 @TestApp.answer()");
+    assert_contains(&ir_text, "call i64 @TestApp.answer()");
+    // inkwell does not const-fold across the call boundary: the
+    // callee's return value lands in a fresh SSA name (`%call`),
+    // gets `add`-ed against `i64 1`, and the resulting `%add` is
+    // what the printer receives. Pin the SSA-shaped invocation
+    // rather than the value `43`.
+    assert_contains(&ir_text, "%add = add i64 %call, 1");
+    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 %add)");
+}
+
+// ---------------------------------------------------------------------------
 // Script-mode (top-level expression) coverage
 // ---------------------------------------------------------------------------
 

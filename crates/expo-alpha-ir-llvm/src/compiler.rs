@@ -13,10 +13,10 @@ use expo_alpha_ir::{IRBasicBlock, IRFunction, IRProgram, IRScript, IRTerminator,
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{FunctionType, IntType};
+use inkwell::types::{BasicMetadataTypeEnum, FunctionType, IntType};
 use inkwell::values::{FunctionValue, IntValue};
 
-use crate::emit;
+use crate::emit::{self, ValueMap};
 use crate::error::LlvmError;
 use crate::types::ir_int_type;
 
@@ -128,8 +128,13 @@ impl<'ctx> Compiler<'ctx> {
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
 
-        let (values, terminator) =
-            emit::emit_instructions(self.context, &self.builder, &blocks[0])?;
+        let (values, terminator) = emit::emit_instructions(
+            self.context,
+            &self.builder,
+            &self.module,
+            &blocks[0],
+            ValueMap::new(),
+        )?;
         let body_value = match terminator {
             IRTerminator::Return { value: Some(id) } => emit::lookup(&values, *id)?,
             IRTerminator::Return { value: None } => {
@@ -207,31 +212,38 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     /// Declare an LLVM function for a non-entry [`IRFunction`] under
-    /// its mangled name. The slice rejects parameters and non-integer
-    /// return types up-front so the rest of emission can assume an
-    /// integer-returning, parameter-less signature.
+    /// its mangled [`expo_alpha_ir::IRSymbol`]. The signature mirrors
+    /// the IR exactly: each [`expo_alpha_ir::IRFunctionParam::ty`]
+    /// becomes an LLVM `iN` parameter, and the return type does the
+    /// same. Non-integer types still surface as feature-gap
+    /// diagnostics through [`ir_int_type`] until non-scalar lowering
+    /// lands.
     fn declare_function(&self, function: &IRFunction) -> Result<FunctionValue<'ctx>, LlvmError> {
         let signature = self.function_signature(function)?;
-        Ok(self
-            .module
-            .add_function(&function.mangled_name(), signature, Some(Linkage::External)))
+        Ok(self.module.add_function(
+            function.symbol.mangled(),
+            signature,
+            Some(Linkage::External),
+        ))
     }
 
     fn function_signature(&self, function: &IRFunction) -> Result<FunctionType<'ctx>, LlvmError> {
-        if !function.params.is_empty() {
-            return Err(LlvmError::Codegen(format!(
-                "alpha LLVM does not yet emit function parameters (`{}` has {} params)",
-                function.mangled_name(),
-                function.params.len(),
-            )));
+        let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
+            Vec::with_capacity(function.params.len());
+        for param in &function.params {
+            param_types.push(ir_int_type(self.context, &param.ty)?.into());
         }
         let return_int = ir_int_type(self.context, &function.return_type)?;
-        Ok(return_int.fn_type(&[], false))
+        Ok(return_int.fn_type(&param_types, false))
     }
 
     /// Define a non-entry function's body. Helpers keep the natural
     /// `Return`-to-`ret` emission via [`emit::emit_block`] — only
-    /// `main` gets the auto-print wrapper.
+    /// `main` gets the auto-print wrapper. The body's `ValueMap` is
+    /// seeded with each [`expo_alpha_ir::IRFunctionParam`] bound to
+    /// the matching `function.get_nth_param(i)` LLVM value, so any
+    /// body reference to a param resolves through the same
+    /// [`emit::lookup`] path as a body-emitted instruction.
     fn define_function(
         &self,
         function: &IRFunction,
@@ -240,12 +252,45 @@ impl<'ctx> Compiler<'ctx> {
         if function.blocks.len() != 1 {
             return Err(LlvmError::Codegen(format!(
                 "alpha LLVM does not yet emit multi-block functions (`{}` has {} blocks)",
-                function.mangled_name(),
+                function.symbol,
                 function.blocks.len(),
             )));
         }
         let entry_block = self.context.append_basic_block(llvm_function, "entry");
         self.builder.position_at_end(entry_block);
-        emit::emit_block(self.context, &self.builder, &function.blocks[0])
+        let seed = self.seed_params(function, llvm_function)?;
+        emit::emit_block(
+            self.context,
+            &self.builder,
+            &self.module,
+            &function.blocks[0],
+            seed,
+        )
+    }
+
+    /// Seed a fresh [`ValueMap`] with each parameter's LLVM value,
+    /// keyed by the [`expo_alpha_ir::IRFunctionParam::id`] that body
+    /// lowering uses. Inkwell's `get_nth_param` panics on
+    /// out-of-bounds; the IR seal guarantees `params.len()` matches
+    /// the LLVM function's arity.
+    fn seed_params(
+        &self,
+        function: &IRFunction,
+        llvm_function: FunctionValue<'ctx>,
+    ) -> Result<ValueMap<'ctx>, LlvmError> {
+        let mut seed = ValueMap::new();
+        for (index, param) in function.params.iter().enumerate() {
+            let llvm_param = llvm_function
+                .get_nth_param(index as u32)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "alpha LLVM emit: missing LLVM param #{index} on `{}` — \
+                         signature/IR arity mismatch",
+                        function.symbol,
+                    )
+                });
+            seed.insert(param.id, llvm_param.into_int_value());
+        }
+        Ok(seed)
     }
 }

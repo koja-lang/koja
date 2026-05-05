@@ -23,14 +23,16 @@
 
 use std::collections::BTreeMap;
 
-use expo_alpha_typecheck::{CheckedPackage, GlobalKind, GlobalRegistry};
+use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
 use expo_ast::ast::{
     Arg, BinOp, Diagnostic, Expr, ExprKind, Function, Item, Literal, Param, Statement, UnaryOp,
 };
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-use crate::function::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator};
+use crate::function::{
+    IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
+};
 use crate::package::IRPackage;
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
 
@@ -45,7 +47,7 @@ pub(crate) fn lower_package(
             if let Item::Function(function) = item
                 && let Some(lowered) = lower_function(function, &pkg.package, registry, diagnostics)
             {
-                functions.insert(lowered.identifier.clone(), lowered);
+                functions.insert(lowered.symbol.clone(), lowered);
             }
         }
     }
@@ -81,16 +83,25 @@ fn lower_function(
     let mut builder = BlockBuilder::default();
 
     // Allocate one `ValueId` per regular parameter in declaration
-    // order. This happens before lowering the body so every param
+    // order, paired with its IRType pulled from the lifted function
+    // signature on the registry. Pre-allocation ensures every param
     // id is strictly less than any body-produced id — body lowering
     // stays naturally topological on the sealed AST. `self` receivers
     // are a feature gap, not a compiler bug: record a diagnostic and
     // bail on this function.
+    let signature = lookup_signature(registry, &identifier);
     let mut params = Vec::with_capacity(function.params.len());
+    let mut signature_index = 0;
     for param in &function.params {
         match param {
             Param::Regular { .. } => {
-                params.push(builder.fresh());
+                let resolved = &signature.params[signature_index].ty;
+                let ty = resolved_type_to_ir_type(resolved, registry);
+                signature_index += 1;
+                params.push(IRFunctionParam {
+                    id: builder.fresh(),
+                    ty,
+                });
             }
             Param::Self_ { span, .. } => {
                 diagnostics.push(Diagnostic::error(
@@ -107,10 +118,34 @@ fn lower_function(
 
     Some(IRFunction {
         blocks,
-        identifier,
         params,
         return_type,
+        symbol: IRSymbol::from_identifier(&identifier),
     })
+}
+
+/// Lookup the lifted [`FunctionSignature`] for `identifier` in the
+/// registry. The seal contract guarantees a registered function has
+/// a `Some(_)` signature stamped by `lift_signatures`, so a miss or
+/// `None` here is a compiler bug, not a feature gap.
+fn lookup_signature<'a>(
+    registry: &'a GlobalRegistry,
+    identifier: &Identifier,
+) -> &'a FunctionSignature {
+    let entry = registry.lookup(identifier).unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: function `{identifier}` not in registry — \
+             collect/seal invariant violation",
+        );
+    });
+    match &entry.1.kind {
+        GlobalKind::Function(Some(sig)) => sig,
+        other => panic!(
+            "alpha IR lower: function `{identifier}` has no lifted signature \
+             ({}) — lift_signatures invariant violation",
+            other.label(),
+        ),
+    }
 }
 
 /// Lower a sequence of statements into the single-block, single-return
@@ -310,7 +345,7 @@ fn lower_call(
         ),
     };
     let return_ty = resolved_type_to_ir_type(&signature.return_type, registry);
-    let callee_identifier = entry.identifier.clone();
+    let callee_symbol = IRSymbol::from_identifier(&entry.identifier);
 
     let mut lowered_args = Vec::with_capacity(args.len());
     for arg in args {
@@ -321,7 +356,7 @@ fn lower_call(
     builder.push_typed(
         IRInstruction::Call {
             dest,
-            callee: callee_identifier,
+            callee: callee_symbol,
             args: lowered_args,
         },
         dest,

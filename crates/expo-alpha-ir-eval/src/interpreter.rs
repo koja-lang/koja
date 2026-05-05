@@ -15,7 +15,6 @@ use expo_alpha_ir::{
     ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRScript,
     IRTerminator, IRUnaryOp, ValueId,
 };
-use expo_ast::identifier::Identifier;
 
 use crate::error::RuntimeError;
 use crate::value::Value;
@@ -43,22 +42,24 @@ impl Interpreter {
     }
 }
 
-/// Dereferences a `Call` callee to its target [`IRFunction`].
-/// Implemented by both [`IRProgram`] and [`IRScript`] so one walker
-/// drives either.
+/// Dereferences a `Call` callee to its target [`IRFunction`] by
+/// mangled symbol. Implemented by both [`IRProgram`] and [`IRScript`]
+/// so one walker drives either; the IR's stable
+/// [`expo_alpha_ir::IRSymbol`] is the only handle the interpreter
+/// needs — no AST [`expo_ast`] types here.
 trait CallResolver {
-    fn resolve(&self, id: &Identifier) -> Option<&IRFunction>;
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
 }
 
 impl CallResolver for IRProgram {
-    fn resolve(&self, id: &Identifier) -> Option<&IRFunction> {
-        self.function(id)
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
+        self.function(mangled)
     }
 }
 
 impl CallResolver for IRScript {
-    fn resolve(&self, id: &Identifier) -> Option<&IRFunction> {
-        self.function(id)
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
+        self.function(mangled)
     }
 }
 
@@ -75,13 +76,13 @@ fn execute_function<R: CallResolver>(
         function.params.len(),
         args.len(),
         "arity mismatch calling `{}`: {} params vs {} args (typecheck invariant)",
-        function.identifier,
+        function.symbol,
         function.params.len(),
         args.len(),
     );
     let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
-    for (param_id, value) in function.params.iter().zip(args.into_iter()) {
-        frame.insert(*param_id, value);
+    for (param, value) in function.params.iter().zip(args.into_iter()) {
+        frame.insert(param.id, value);
     }
 
     let block = function
@@ -120,7 +121,7 @@ fn execute_instruction<R: CallResolver>(
             for arg in args {
                 arg_values.push(lookup(frame, *arg)?);
             }
-            let callee_fn = resolver.resolve(callee).unwrap_or_else(|| {
+            let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
                 panic!(
                     "interpreter: callee `{callee}` missing from IR — \
                      seal invariant violation",
