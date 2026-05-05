@@ -1,0 +1,85 @@
+//! Shared test scaffolding for the alpha-ir-llvm integration test
+//! suite. Each `tests/*.rs` file is its own Cargo test binary, so
+//! anything pulled in here lives behind a `mod common;` in the test
+//! file. The directory form (`tests/common/mod.rs`) keeps Cargo from
+//! picking this up as a test target itself.
+//!
+//! Every llvm test shape drives `parse → check → lower → emit_*` and
+//! asserts substrings of the produced IR text, so we expose:
+//!
+//! - [`PACKAGE`] / [`APP_NAME`] — defaults every test source registers
+//!   under (`"TestApp"` / `"emit_test"`).
+//! - [`typecheck`] / [`typecheck_in`] — `parse_program → check_program`
+//!   shorthands, parameterized by `ParseMode` (and optionally package
+//!   name for tests that target `Global` directly, e.g.
+//!   `intrinsics.rs`).
+//! - [`lower_program_source`] / [`lower_script_source`] /
+//!   [`lower_script_source_in`] — happy-path lowering shorthands.
+//! - [`assert_contains`] — substring assertion with a panic message
+//!   that includes the full IR text on miss.
+//! - [`assert_main_shape`] — pin the wrapper invariants every emitted
+//!   module must satisfy: `define i64 @main()`, `ret i64 0`, and the
+//!   `@__expo_app_name` global.
+
+// Each `tests/*.rs` file is its own Cargo test binary that only
+// pulls a subset of the helpers below, so `dead_code` would fire on
+// every helper for every test that doesn't happen to use it. Silence
+// it once at the module level rather than peppering individual fns.
+#![allow(dead_code)]
+
+use std::path::PathBuf;
+
+use expo_alpha_ir::{IRProgram, IRScript, lower_program, lower_script};
+use expo_alpha_typecheck::{CheckedProgram, check_program};
+use expo_ast::identifier::Identifier;
+use expo_parser::{ParseMode, SourceFile, parse_program};
+
+pub const PACKAGE: &str = "TestApp";
+pub const APP_NAME: &str = "emit_test";
+
+pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
+    typecheck_in(PACKAGE, source, mode)
+}
+
+pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProgram {
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: package.to_string(),
+            path: PathBuf::from("test.expo"),
+            source: source.to_string(),
+        }],
+        mode,
+    );
+    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
+}
+
+pub fn lower_program_source(source: &str) -> IRProgram {
+    let checked = typecheck(source, ParseMode::File);
+    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
+    lower_program(&checked, entry).expect("lowering should succeed")
+}
+
+pub fn lower_script_source(source: &str) -> IRScript {
+    lower_script_source_in(PACKAGE, source)
+}
+
+pub fn lower_script_source_in(package: &str, source: &str) -> IRScript {
+    let checked = typecheck_in(package, source, ParseMode::Script);
+    lower_script(&checked).expect("script lowering should succeed")
+}
+
+pub fn assert_contains(ir_text: &str, needle: &str) {
+    assert!(
+        ir_text.contains(needle),
+        "expected `{needle}` in:\n{ir_text}",
+    );
+}
+
+/// Pin the wrapper invariants every emitted alpha module must satisfy:
+/// `define i64 @main()`, `ret i64 0`, and the `@__expo_app_name` global
+/// that `expo-runtime`'s panic.rs links against.
+pub fn assert_main_shape(ir_text: &str) {
+    assert_contains(ir_text, "define i64 @main()");
+    assert_contains(ir_text, "ret i64 0");
+    assert_contains(ir_text, "@__expo_app_name");
+}

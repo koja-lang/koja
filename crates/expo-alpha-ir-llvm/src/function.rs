@@ -46,12 +46,12 @@ fn function_signature<'ctx>(
     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
         Vec::with_capacity(function.params.len());
     for param in &function.params {
-        param_types.push(ir_basic_type(ctx.context, &param.ty)?.into());
+        param_types.push(ir_basic_type(ctx, &param.ty)?.into());
     }
     Ok(if matches!(function.return_type, IRType::Unit) {
         ctx.context.void_type().fn_type(&param_types, false)
     } else {
-        ir_basic_type(ctx.context, &function.return_type)?.fn_type(&param_types, false)
+        ir_basic_type(ctx, &function.return_type)?.fn_type(&param_types, false)
     })
 }
 

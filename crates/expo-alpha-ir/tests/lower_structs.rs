@@ -1,0 +1,240 @@
+//! IR-lowering coverage for the struct slice: `lower/structs.rs`.
+//!
+//! Walks an end-to-end happy path (`struct Point` plus a body that
+//! constructs and projects it) and pins:
+//!
+//! - `IRPackage::structs` carries the lifted [`IRStructDecl`] keyed
+//!   at the mangled [`IRSymbol`], with dense 0..n field indices and
+//!   translated [`IRType`]s.
+//! - `Point{x: 1, y: 2}` lowers to `IRInstruction::StructInit` with
+//!   one [`StructFieldInit`] per declared field, canonicalized to
+//!   declaration order regardless of AST order.
+//! - `p.x` lowers to `IRInstruction::FieldGet` with the resolved
+//!   `field_index`, the field's [`IRType`], and the receiver's
+//!   `struct_symbol`.
+//! - Feature gaps (generics, struct-fn, annotations, default values)
+//!   surface a [`LowerError::Diagnostics`] with the matching message
+//!   and the offending struct is dropped from the package fragment.
+
+use expo_alpha_ir::{IRInstruction, IRProgram, IRStructDecl, IRType};
+use expo_ast::util::dedent;
+
+mod common;
+
+use common::{PACKAGE, lower_program_source, lower_script_source};
+
+fn struct_decl<'a>(program: &'a IRProgram, name: &str) -> &'a IRStructDecl {
+    let mangled = format!("{PACKAGE}.{name}");
+    program
+        .struct_decl(&mangled)
+        .unwrap_or_else(|| panic!("struct `{mangled}` missing from IRProgram"))
+}
+
+// ---------------------------------------------------------------------------
+// Decl lowering
+// ---------------------------------------------------------------------------
+
+#[test]
+fn struct_decl_lowers_to_ir_struct_decl_with_dense_indices() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main -> Int
+          1
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let decl = struct_decl(&program, "Point");
+
+    assert_eq!(decl.symbol.mangled(), "TestApp.Point");
+    assert_eq!(decl.fields.len(), 2);
+
+    assert_eq!(decl.fields[0].name, "x");
+    assert_eq!(decl.fields[0].index, 0);
+    assert_eq!(decl.fields[0].ir_type, IRType::Int64);
+
+    assert_eq!(decl.fields[1].name, "y");
+    assert_eq!(decl.fields[1].index, 1);
+    assert_eq!(decl.fields[1].ir_type, IRType::Int64);
+}
+
+#[test]
+fn mixed_field_struct_translates_each_field_independently() {
+    let source = "
+        struct Mixed
+          flag: Bool
+          name: String
+          count: Int
+        end
+
+        fn main -> Int
+          1
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let decl = struct_decl(&program, "Mixed");
+    let kinds: Vec<_> = decl.fields.iter().map(|f| f.ir_type.clone()).collect();
+    assert_eq!(kinds, vec![IRType::Bool, IRType::String, IRType::Int64]);
+}
+
+#[test]
+fn nested_struct_field_lowers_to_inner_struct_ir_type() {
+    let source = "
+        struct Inner
+          n: Int
+        end
+
+        struct Outer
+          inner: Inner
+          tag: Bool
+        end
+
+        fn main -> Int
+          1
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let outer = struct_decl(&program, "Outer");
+    let inner = struct_decl(&program, "Inner");
+    assert_eq!(
+        outer.fields[0].ir_type,
+        IRType::Struct(inner.symbol.clone())
+    );
+    assert_eq!(outer.fields[1].ir_type, IRType::Bool);
+}
+
+#[test]
+fn empty_struct_lowers_to_empty_field_list() {
+    let source = "
+        struct Marker
+        end
+
+        fn main -> Int
+          1
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let decl = struct_decl(&program, "Marker");
+    assert!(decl.fields.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// StructInit + FieldGet
+// ---------------------------------------------------------------------------
+
+#[test]
+fn struct_construction_lowers_to_struct_init_with_canonical_field_order() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        Point{y: 20, x: 10}
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let block = script.blocks.first().expect("script has one block");
+    // Two consts (10, 20) plus the StructInit; AST order doesn't
+    // dictate the per-field-init index ordering on the StructInit.
+    let init = block
+        .instructions
+        .iter()
+        .find_map(|inst| match inst {
+            IRInstruction::StructInit { ty, fields, .. } => Some((ty, fields)),
+            _ => None,
+        })
+        .expect("expected one StructInit");
+    let (ty, fields) = init;
+    assert_eq!(ty.mangled(), "TestApp.Point");
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].index, 0);
+    assert_eq!(fields[1].index, 1);
+}
+
+#[test]
+fn field_access_lowers_to_field_get_with_resolved_index_and_type() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        Point{x: 1, y: 2}.y
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let block = script.blocks.first().expect("script has one block");
+    let field_get = block
+        .instructions
+        .iter()
+        .find_map(|inst| match inst {
+            IRInstruction::FieldGet {
+                field_index,
+                field_type,
+                struct_symbol,
+                ..
+            } => Some((*field_index, field_type.clone(), struct_symbol.clone())),
+            _ => None,
+        })
+        .expect("expected one FieldGet");
+    let (field_index, field_type, struct_symbol) = field_get;
+    assert_eq!(field_index, 1);
+    assert_eq!(field_type, IRType::Int64);
+    assert_eq!(struct_symbol.mangled(), "TestApp.Point");
+    assert_eq!(script.return_type, IRType::Int64);
+}
+
+#[test]
+fn nested_field_access_chains_two_field_gets() {
+    let source = "
+        struct Inner
+          n: Int
+        end
+
+        struct Outer
+          inner: Inner
+        end
+
+        Outer{inner: Inner{n: 7}}.inner.n
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let block = script.blocks.first().expect("script has one block");
+    let field_gets: Vec<_> = block
+        .instructions
+        .iter()
+        .filter_map(|inst| match inst {
+            IRInstruction::FieldGet {
+                field_index,
+                struct_symbol,
+                ..
+            } => Some((*field_index, struct_symbol.mangled().to_string())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        field_gets,
+        vec![
+            (0, "TestApp.Outer".to_string()),
+            (0, "TestApp.Inner".to_string()),
+        ],
+    );
+    assert_eq!(script.return_type, IRType::Int64);
+}
+
+// Feature-gap diagnostics on the IR side (`lower/structs.rs::has_feature_gap`)
+// duplicate the equivalents in `pipeline/collect.rs::diagnose_struct_feature_gaps`.
+// In practice the typecheck pass rejects these programs before lowering ever
+// runs, so they're unreachable through the normal `parse → check → lower`
+// pipeline these tests drive. The IR-side checks stay as defense-in-depth
+// for any future caller that bypasses typecheck (e.g. tooling that constructs
+// a CheckedProgram by hand); the typecheck-side gaps are covered by
+// `expo-alpha-typecheck/tests/structs.rs`.

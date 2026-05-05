@@ -183,6 +183,45 @@ fn execute_instruction<R: CallResolver>(
             frame.insert(*dest, materialize_const(value));
             Ok(())
         }
+        IRInstruction::FieldGet {
+            base,
+            dest,
+            field_index,
+            field_type: _,
+            struct_symbol: _,
+        } => {
+            let base_value = lookup(frame, *base)?;
+            let Value::Struct { fields, .. } = base_value else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("field_get expects a Struct receiver; got {base_value}",),
+                });
+            };
+            let field = fields
+                .into_iter()
+                .nth(*field_index as usize)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: FieldGet index {field_index} out of range — \
+                         seal invariant violation",
+                    )
+                });
+            frame.insert(*dest, field);
+            Ok(())
+        }
+        IRInstruction::StructInit { dest, fields, ty } => {
+            let mut materialized = Vec::with_capacity(fields.len());
+            for field in fields {
+                materialized.push(lookup(frame, field.value)?);
+            }
+            frame.insert(
+                *dest,
+                Value::Struct {
+                    symbol: ty.clone(),
+                    fields: materialized,
+                },
+            );
+            Ok(())
+        }
         IRInstruction::UnaryOp { dest, op, operand } => {
             let operand_value = lookup(frame, *operand)?;
             let result = apply_unary_op(*op, operand_value)?;

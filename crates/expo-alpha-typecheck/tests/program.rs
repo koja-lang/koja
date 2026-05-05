@@ -5,32 +5,14 @@
 //! and the body's `2 + 2` resolves into the preloaded `Global.Int`
 //! stdlib stub.
 
-use std::path::PathBuf;
-
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind, check_program};
+use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::ast::{Expr, ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("program.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    check_program(parsed).unwrap_or_else(|failure| {
-        panic!(
-            "alpha typecheck failed on `{source}`: {} diagnostic(s):\n{failure}",
-            failure.diagnostics.len()
-        )
-    })
-}
+use common::{PACKAGE, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail};
 
 fn main_body(checked: &CheckedProgram) -> &[Statement] {
     let pkg = checked
@@ -171,15 +153,7 @@ fn duplicate_fn_in_same_file_emits_diagnostic() {
         end
         ";
 
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("dup.expo"),
-            source: dedent(source),
-        }],
-        ParseMode::File,
-    );
-    let failure = check_program(parsed).expect_err("duplicate fn should fail typecheck");
+    let failure = typecheck_fail(&dedent(source));
     assert_eq!(
         failure.diagnostics.len(),
         1,

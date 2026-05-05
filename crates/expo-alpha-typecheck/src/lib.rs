@@ -33,5 +33,5 @@ pub use error::CheckFailure;
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
     FunctionSignature, GlobalKind, GlobalRegistry, InsertOutcome, RegistryEntry, ResolvedParam,
-    format_registry,
+    ResolvedStructField, StructDefinition, format_registry,
 };

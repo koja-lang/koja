@@ -19,30 +19,16 @@
 //!
 //! [`FunctionKind`]: expo_alpha_ir::FunctionKind
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{FunctionKind, IRInstruction, IRScript, IRTerminator, IRType, lower_script};
-use expo_alpha_typecheck::{CheckedProgram, check_program};
+use expo_alpha_ir::{FunctionKind, IRInstruction, IRScript, IRTerminator, IRType};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_parser::ParseMode;
+
+mod common;
 
 const PACKAGE: &str = "Global";
 
-fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_intrinsics.exps"),
-            source: source.to_string(),
-        }],
-        ParseMode::Script,
-    );
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
-}
-
 fn lower(source: &str) -> IRScript {
-    let checked = typecheck(source);
-    lower_script(&checked).expect("script lowering should succeed")
+    common::lower_script_source_in(PACKAGE, source)
 }
 
 #[test]
@@ -153,15 +139,7 @@ fn intrinsic_arg_type_mismatch_diagnoses_through_typecheck() {
         print(1)
         ";
 
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_intrinsics_mismatch.exps"),
-            source: dedent(source),
-        }],
-        ParseMode::Script,
-    );
-    let failure = check_program(parsed).expect_err("type mismatch should surface");
+    let failure = common::typecheck_fail_in(PACKAGE, &dedent(source), ParseMode::Script);
     assert!(
         failure
             .diagnostics

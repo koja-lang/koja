@@ -11,6 +11,7 @@ use crate::script::IRScript;
 use crate::types::ValueId;
 
 use super::function::{collect_block_ids, seal_block, seal_package};
+use super::structs::{package_instructions, script_body_instructions, seal_struct_ops};
 use super::{require_supported_type, seal_panic};
 
 pub(crate) fn seal_script(script: &IRScript) {
@@ -28,6 +29,19 @@ pub(crate) fn seal_script(script: &IRScript) {
         seal_block(block, owner, &seeded, &block_ids);
     }
     seal_script_calls(script);
+    seal_script_struct_ops(script);
+}
+
+/// Cross-IR struct check for script-shaped output. Mirrors
+/// [`super::program::seal_program_struct_ops`]: walks both the
+/// implicit script body and every package fragment, validating each
+/// `StructInit` / `FieldGet` against the assembled struct lookup.
+fn seal_script_struct_ops(script: &IRScript) {
+    let lookup = |mangled: &str| script.struct_decl(mangled);
+    seal_struct_ops(script_body_instructions(&script.blocks), &lookup);
+    for pkg in &script.packages {
+        seal_struct_ops(package_instructions(pkg), &lookup);
+    }
 }
 
 /// Script counterpart of [`super::program`]'s `seal_program_calls`:

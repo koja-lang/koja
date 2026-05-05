@@ -18,51 +18,12 @@
 //! [`compile_program`]: expo_alpha_ir_llvm::compile_program
 //! [`emit_llvm_ir`]: expo_alpha_ir_llvm::emit_llvm_ir
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{IRProgram, lower_program};
 use expo_alpha_ir_llvm::emit_llvm_ir;
-use expo_alpha_typecheck::{CheckedProgram, check_program};
-use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const APP_NAME: &str = "emit_test";
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("program.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
-}
-
-fn lower(source: &str) -> IRProgram {
-    let checked = typecheck(source);
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
-}
-
-fn assert_contains(ir_text: &str, needle: &str) {
-    assert!(
-        ir_text.contains(needle),
-        "expected `{needle}` in:\n{ir_text}",
-    );
-}
-
-fn assert_main_shape(ir_text: &str) {
-    assert_contains(ir_text, "define i64 @main()");
-    assert_contains(ir_text, "ret i64 0");
-    // `__expo_app_name` is required by `expo-runtime`'s panic.rs;
-    // the alpha backend must emit it on every module so the runtime
-    // archive links cleanly regardless of cgu partitioning.
-    assert_contains(ir_text, "@__expo_app_name");
-}
+use common::{APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower};
 
 // ---------------------------------------------------------------------------
 // `fn main` body: literals, arithmetic, boolean, comparison

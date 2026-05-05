@@ -14,10 +14,12 @@ use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 
 use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSymbol};
 use crate::package::IRPackage;
+use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
 use super::body::{finalize_open_flow, lower_body};
 use super::ctx::FnLowerCtx;
+use super::structs::lower_struct_decl;
 
 use std::collections::BTreeMap;
 
@@ -27,18 +29,32 @@ pub(crate) fn lower_package(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> IRPackage {
     let mut functions = BTreeMap::new();
+    let mut structs: BTreeMap<IRSymbol, IRStructDecl> = BTreeMap::new();
     for file in &pkg.files {
         for item in &file.items {
-            if let Item::Function(function) = item
-                && let Some(lowered) = lower_function(function, &pkg.package, registry, diagnostics)
-            {
-                functions.insert(lowered.symbol.clone(), lowered);
+            match item {
+                Item::Function(function) => {
+                    if let Some(lowered) =
+                        lower_function(function, &pkg.package, registry, diagnostics)
+                    {
+                        functions.insert(lowered.symbol.clone(), lowered);
+                    }
+                }
+                Item::Struct(decl) => {
+                    if let Some(lowered) =
+                        lower_struct_decl(decl, &pkg.package, registry, diagnostics)
+                    {
+                        structs.insert(lowered.symbol.clone(), lowered);
+                    }
+                }
+                _ => {}
             }
         }
     }
     IRPackage {
         functions,
         package: pkg.package.clone(),
+        structs,
     }
 }
 
@@ -191,12 +207,12 @@ pub(super) fn lookup_signature<'a>(
 
 /// Translate a typecheck-resolved [`ResolvedType`] to an [`IRType`].
 ///
-/// Today the alpha registry's stdlib stubs only cover the scalars
-/// alpha typecheck synthesizes from literals (`Int`, `Bool`, `Unit`,
-/// `Float`, `String`). Anything else — width-explicit ints, user
-/// structs, polymorphic containers — is a feature gap and panics with
-/// a "not yet translatable" message. As stdlib stubs grow this match
-/// grows in lockstep.
+/// Two shapes today: stdlib primitives (`Bool` / `Float` / `Int` /
+/// `String` / `Unit`) under the `Global` package map to their
+/// matching scalar [`IRType`]; user-declared structs (any package)
+/// map to [`IRType::Struct`] keyed by the canonical
+/// [`IRSymbol::from_identifier`] for the entry. Width-explicit ints
+/// and polymorphic containers stay feature gaps.
 pub(super) fn resolved_type_to_ir_type(ty: &ResolvedType, registry: &GlobalRegistry) -> IRType {
     let Resolution::Global(id) = ty.resolution else {
         panic!(
@@ -207,22 +223,26 @@ pub(super) fn resolved_type_to_ir_type(ty: &ResolvedType, registry: &GlobalRegis
     let entry = registry.get(id).unwrap_or_else(|| {
         panic!("alpha IR lower: ResolvedType id {id} missing from registry — seal violation",)
     });
-    if !entry.identifier.is_in_package("Global") {
-        panic!(
-            "alpha IR lower: cannot translate non-`Global` type `{}` to IRType yet",
-            entry.identifier,
-        );
+    if entry.identifier.is_in_package("Global") {
+        return match entry.identifier.last() {
+            "Bool" => IRType::Bool,
+            "Float" => IRType::Float64,
+            "Int" => IRType::Int64,
+            "String" => IRType::String,
+            "Unit" => IRType::Unit,
+            other => panic!(
+                "alpha IR lower: cannot translate `Global.{other}` to IRType yet \
+                 (`Float32` / `Float64` annotations and width-explicit ints land \
+                  in follow-up slices)",
+            ),
+        };
     }
-    match entry.identifier.last() {
-        "Bool" => IRType::Bool,
-        "Float" => IRType::Float64,
-        "Int" => IRType::Int64,
-        "String" => IRType::String,
-        "Unit" => IRType::Unit,
+    match &entry.kind {
+        GlobalKind::Struct(_) => IRType::Struct(IRSymbol::from_identifier(&entry.identifier)),
         other => panic!(
-            "alpha IR lower: cannot translate `Global.{other}` to IRType yet \
-             (`Float32` / `Float64` annotations and width-explicit ints land \
-              in follow-up slices)",
+            "alpha IR lower: cannot translate `{}` ({}) to IRType yet",
+            entry.identifier,
+            other.label(),
         ),
     }
 }

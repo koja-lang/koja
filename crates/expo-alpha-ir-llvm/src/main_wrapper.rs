@@ -205,6 +205,13 @@ fn emit_print_call<'ctx>(
             ctx.context.ptr_type(AddressSpace::default()).into(),
             body_value.into_pointer_value().into(),
         ),
+        IRType::Struct(symbol) => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM does not yet auto-print struct values (return type \
+                 `Struct({symbol})`); project a primitive field with `value.field` or \
+                 wrap the call site so the trailing expression is a primitive",
+            )));
+        }
         IRType::Unit => {
             return Err(LlvmError::Codegen(
                 "emit_print_call invoked with `IRType::Unit` — the Unit-typed trailing path \

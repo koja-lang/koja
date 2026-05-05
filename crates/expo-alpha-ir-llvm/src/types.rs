@@ -4,13 +4,16 @@
 //! per-instruction, not per-type); `Float32` / `Float64` map to
 //! `f32` / `f64` IEEE 754; `String` maps to a default-AS pointer
 //! (the v1 header layout lives in
-//! [`crate::emit::instruction::emit_const_string`]).
+//! [`crate::emit::instruction::emit_const_string`]); `Struct(_)`
+//! resolves through the pre-emitted [`crate::ctx::EmitCtx`] struct
+//! type map.
 
 use expo_alpha_ir::IRType;
 use inkwell::AddressSpace;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, IntType};
 
+use crate::ctx::EmitCtx;
 use crate::error::LlvmError;
 
 /// LLVM integer type for an integer-family or `Bool` [`IRType`].
@@ -34,6 +37,9 @@ pub(crate) fn ir_int_type<'ctx>(
         IRType::String => Err(LlvmError::Codegen(
             "expected an integer or Bool IRType, got `String`".to_string(),
         )),
+        IRType::Struct(_) => Err(LlvmError::Codegen(format!(
+            "expected an integer or Bool IRType, got `{ty:?}`",
+        ))),
         IRType::Unit => Err(LlvmError::Codegen(
             "expected an integer or Bool IRType, got `Unit`".to_string(),
         )),
@@ -43,9 +49,11 @@ pub(crate) fn ir_int_type<'ctx>(
 /// LLVM basic type for any [`IRType`] that has a value-level
 /// representation. `Unit` is rejected (no LLVM type); ints / `Bool`
 /// route through [`ir_int_type`]; `Float32` / `Float64` map to
-/// `f32` / `f64`; `String` is a default-AS pointer.
+/// `f32` / `f64`; `String` is a default-AS pointer; `Struct(symbol)`
+/// resolves through [`EmitCtx::struct_type`] (registered by the
+/// pre-emit phase).
 pub(crate) fn ir_basic_type<'ctx>(
-    context: &'ctx Context,
+    ctx: &EmitCtx<'ctx>,
     ty: &IRType,
 ) -> Result<BasicTypeEnum<'ctx>, LlvmError> {
     match ty {
@@ -57,10 +65,11 @@ pub(crate) fn ir_basic_type<'ctx>(
         | IRType::UInt8
         | IRType::UInt16
         | IRType::UInt32
-        | IRType::UInt64 => Ok(ir_int_type(context, ty)?.into()),
-        IRType::Float32 => Ok(context.f32_type().into()),
-        IRType::Float64 => Ok(context.f64_type().into()),
-        IRType::String => Ok(context.ptr_type(AddressSpace::default()).into()),
+        | IRType::UInt64 => Ok(ir_int_type(ctx.context, ty)?.into()),
+        IRType::Float32 => Ok(ctx.context.f32_type().into()),
+        IRType::Float64 => Ok(ctx.context.f64_type().into()),
+        IRType::String => Ok(ctx.context.ptr_type(AddressSpace::default()).into()),
+        IRType::Struct(symbol) => Ok(ctx.struct_type(symbol.mangled()).into()),
         IRType::Unit => Err(LlvmError::Codegen(
             "expected a value-level IRType, got `Unit`".to_string(),
         )),

@@ -11,12 +11,14 @@ use crate::function::{FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstr
 use crate::package::IRPackage;
 use crate::types::ValueId;
 
+use super::structs::seal_struct_decls;
 use super::{
     instruction_operands, require_defined, require_supported_const, require_supported_type,
     seal_panic, terminator_operands, terminator_targets,
 };
 
 pub(super) fn seal_package(pkg: &IRPackage) {
+    seal_struct_decls(pkg);
     for (sym, function) in &pkg.functions {
         if sym != &function.symbol {
             seal_panic(&format!(

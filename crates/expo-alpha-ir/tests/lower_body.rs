@@ -8,55 +8,14 @@
 //!   diagnostic, and a body that mixes feature-gaps emits exactly
 //!   one diagnostic for whichever gap trips first (no cascading).
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{
-    IRFunction, IRInstruction, IRProgram, IRTerminator, IRType, LowerError, lower_program,
-};
-use expo_alpha_typecheck::{CheckedProgram, check_program};
-use expo_ast::identifier::Identifier;
+use expo_alpha_ir::{IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_body.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
-}
-
-fn lower(source: &str) -> IRProgram {
-    let checked = typecheck(source);
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
-}
-
-fn lower_err(source: &str, entry: &str) -> LowerError {
-    let checked = typecheck(source);
-    let entry_id = Identifier::new(PACKAGE, vec![entry.to_string()]);
-    lower_program(&checked, entry_id).expect_err("lowering should surface diagnostics")
-}
-
-fn expect_diagnostics(err: LowerError) -> Vec<String> {
-    match err {
-        LowerError::Diagnostics(d) => d.into_iter().map(|diag| diag.message).collect(),
-        other => panic!("expected Diagnostics, got {other:?}"),
-    }
-}
-
-fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
-    let mangled = format!("{PACKAGE}.{name}");
-    program
-        .function(&mangled)
-        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
-}
+use common::{
+    expect_diagnostics, function, lower_program_err as lower_err, lower_program_source as lower,
+};
 
 #[test]
 fn explicit_return_with_value_terminates_block() {

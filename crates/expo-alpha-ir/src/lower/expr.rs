@@ -22,6 +22,7 @@ use super::ops::{
     unary_op_result_type,
 };
 use super::package::resolved_type_to_ir_type;
+use super::structs::{lower_field_access, lower_struct_construction};
 
 pub(super) fn lower_expr(
     expr: &Expr,
@@ -51,6 +52,15 @@ pub(super) fn lower_expr(
         ExprKind::Call { callee, args } => {
             lower_call(callee, args, ctx, block, registry, diagnostics)
         }
+        ExprKind::FieldAccess { receiver, field } => lower_field_access(
+            receiver,
+            field,
+            &expr.resolution,
+            ctx,
+            block,
+            registry,
+            diagnostics,
+        ),
         ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block, registry, diagnostics),
         ExprKind::If {
             condition,
@@ -80,6 +90,9 @@ pub(super) fn lower_expr(
             Ok((dest, block))
         }
         ExprKind::String { parts, .. } => lower_string(parts, expr.span, ctx, block, diagnostics),
+        ExprKind::StructConstruction { fields, .. } => {
+            lower_struct_construction(fields, &expr.resolution, ctx, block, registry, diagnostics)
+        }
         ExprKind::Unary { op, operand } => {
             let (operand, block) = lower_expr(operand, ctx, block, registry, diagnostics)?;
             let ir_op = lower_unary_op(*op);

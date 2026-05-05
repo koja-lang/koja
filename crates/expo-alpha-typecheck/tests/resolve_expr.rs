@@ -5,42 +5,17 @@
 //! diagnostic (function bodies cannot reference parameters yet),
 //! which surfaces as soon as a `Regular` parameter is mentioned.
 
-use std::path::PathBuf;
-
-use expo_alpha_typecheck::{CheckFailure, CheckedProgram, GlobalKind, check_program};
+use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::ast::{Expr, ExprKind, Function, Item, Literal, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str) -> CheckedProgram {
-    parse_and_check(source).unwrap_or_else(|failure| {
-        panic!(
-            "alpha typecheck failed on `{source}`: {} diagnostic(s):\n{failure}",
-            failure.diagnostics.len()
-        )
-    })
-}
-
-fn typecheck_fail(source: &str) -> CheckFailure {
-    parse_and_check(source).expect_err(
-        "expected alpha typecheck to fail; it succeeded (test source must produce a diagnostic)",
-    )
-}
-
-fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("resolve_expr.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    check_program(parsed)
-}
+use common::{
+    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
+    typecheck_file_fail as typecheck_fail,
+};
 
 fn find_function<'a>(checked: &'a CheckedProgram, name: &str) -> &'a Function {
     let pkg = checked
@@ -79,14 +54,6 @@ fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
         .lookup(&ident)
         .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
     ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn diagnostic_messages(failure: &CheckFailure) -> Vec<String> {
-    failure
-        .diagnostics
-        .iter()
-        .map(|d| d.message.clone())
-        .collect()
 }
 
 // ---------------------------------------------------------------------------

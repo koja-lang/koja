@@ -1,12 +1,14 @@
 //! Per-instruction dispatch + the const + call helpers it routes
 //! to. Operator emission lives in the sibling [`super::ops`] module.
 
-use expo_alpha_ir::{ConstValue, IRInstruction, IRSymbol, ValueId};
+use expo_alpha_ir::{ConstValue, IRInstruction, IRSymbol, IRType, StructFieldInit, ValueId};
 use inkwell::module::Linkage;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use inkwell::types::StructType;
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
 
 use crate::ctx::EmitCtx;
 use crate::error::LlvmError;
+use crate::types::ir_basic_type;
 
 use super::{ValueMap, lookup, ops};
 
@@ -50,6 +52,25 @@ pub(super) fn emit_instruction<'ctx>(
             values.insert(*dest, constant);
             Ok(())
         }
+        IRInstruction::FieldGet {
+            base,
+            dest,
+            field_index,
+            field_type,
+            struct_symbol,
+        } => {
+            let base_value = lookup(values, *base)?;
+            let struct_type = ctx.struct_type(struct_symbol.mangled());
+            let result = emit_field_get(ctx, struct_type, base_value, *field_index, field_type)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::StructInit { dest, fields, ty } => {
+            let struct_type = ctx.struct_type(ty.mangled());
+            let result = emit_struct_init(ctx, struct_type, ty, fields, values)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
         IRInstruction::UnaryOp { dest, op, operand } => {
             let operand_value = lookup(values, *operand)?;
             let result = ops::emit_unary_op(ctx, *op, operand_value)?;
@@ -57,6 +78,93 @@ pub(super) fn emit_instruction<'ctx>(
             Ok(())
         }
     }
+}
+
+/// Materialize a `Struct{...}` literal at runtime: hoist a scratch
+/// alloca to the function's entry block, store each field through a
+/// `getelementptr`, then load the populated struct out as the
+/// instruction's SSA value. Mirrors v1 codegen's
+/// `emit_struct_construction` shape so eventual stack-allocation /
+/// return-by-pointer optimizations transplant cleanly.
+fn emit_struct_init<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    struct_type: StructType<'ctx>,
+    symbol: &IRSymbol,
+    fields: &[StructFieldInit],
+    values: &ValueMap<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let alloca = ctx.build_entry_alloca(struct_type, &format!("{symbol}_tmp"));
+    for field in fields {
+        let field_value = lookup(values, field.value)?;
+        let field_ptr = build_field_gep(ctx, struct_type, alloca, field.index, symbol)?;
+        ctx.builder
+            .build_store(field_ptr, field_value)
+            .map_err(|e| {
+                LlvmError::Codegen(format!(
+                    "inkwell rejected build_store for `{symbol}` field #{}: {e}",
+                    field.index,
+                ))
+            })?;
+    }
+    ctx.builder
+        .build_load(struct_type, alloca, symbol.mangled())
+        .map_err(|e| {
+            LlvmError::Codegen(format!(
+                "inkwell rejected build_load for `{symbol}` after StructInit: {e}",
+            ))
+        })
+}
+
+/// Project a single field out of a struct-typed SSA value. Allocates
+/// a scratch slot in the function's entry block, stores the receiver
+/// into it, GEPs the field, and loads. Mirrors v1's
+/// `emit_field_load`.
+fn emit_field_get<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    struct_type: StructType<'ctx>,
+    base: BasicValueEnum<'ctx>,
+    field_index: u32,
+    field_type: &IRType,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let struct_value = base.into_struct_value();
+    let alloca = ctx.build_entry_alloca(struct_type, "field_tmp");
+    ctx.builder.build_store(alloca, struct_value).map_err(|e| {
+        LlvmError::Codegen(format!("inkwell rejected build_store for FieldGet: {e}"))
+    })?;
+    let label = format!("field_{field_index}");
+    let field_ptr = ctx
+        .builder
+        .build_struct_gep(struct_type, alloca, field_index, &label)
+        .map_err(|e| {
+            LlvmError::Codegen(format!(
+                "inkwell rejected build_struct_gep for FieldGet field #{field_index}: {e}",
+            ))
+        })?;
+    let field_llvm_type = ir_basic_type(ctx, field_type)?;
+    ctx.builder
+        .build_load(field_llvm_type, field_ptr, &label)
+        .map_err(|e| {
+            LlvmError::Codegen(format!(
+                "inkwell rejected build_load for FieldGet field #{field_index}: {e}",
+            ))
+        })
+}
+
+fn build_field_gep<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    struct_type: StructType<'ctx>,
+    base_ptr: PointerValue<'ctx>,
+    field_index: u32,
+    symbol: &IRSymbol,
+) -> Result<PointerValue<'ctx>, LlvmError> {
+    let label = format!("{symbol}_field_{field_index}");
+    ctx.builder
+        .build_struct_gep(struct_type, base_ptr, field_index, &label)
+        .map_err(|e| {
+            LlvmError::Codegen(format!(
+                "inkwell rejected build_struct_gep for `{symbol}` field #{field_index}: {e}",
+            ))
+        })
 }
 
 /// Emit a call to the helper function registered on `ctx.module`

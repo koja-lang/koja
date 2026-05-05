@@ -14,54 +14,20 @@
 //!   in a multi-fn package produces exactly one diagnostic for the
 //!   failing function while the rest are still walked.
 
-use std::path::PathBuf;
-
 use expo_alpha_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRScript,
-    IRTerminator, IRType, LowerError, ValueId, lower_program, lower_script,
+    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRTerminator, IRType, LowerError,
+    ValueId, lower_program,
 };
-use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_parser::ParseMode;
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_package.expo"),
-            source: source.to_string(),
-        }],
-        mode,
-    );
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
-}
-
-fn lower(source: &str) -> IRProgram {
-    let checked = typecheck(source, ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
-}
-
-fn lower_as_script(source: &str) -> IRScript {
-    let checked = typecheck(source, ParseMode::Script);
-    lower_script(&checked).expect("script lowering should succeed")
-}
-
-fn lower_err(source: &str, entry: &str) -> LowerError {
-    let checked = typecheck(source, ParseMode::File);
-    let entry_id = Identifier::new(PACKAGE, vec![entry.to_string()]);
-    lower_program(&checked, entry_id).expect_err("lowering should surface diagnostics")
-}
-
-fn expect_diagnostics(err: LowerError) -> Vec<String> {
-    match err {
-        LowerError::Diagnostics(d) => d.into_iter().map(|diag| diag.message).collect(),
-        other => panic!("expected Diagnostics, got {other:?}"),
-    }
-}
+use common::{
+    PACKAGE, expect_diagnostics, lower_program_err as lower_err, lower_program_source as lower,
+    lower_script_source as lower_as_script, typecheck,
+};
 
 #[test]
 fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
@@ -205,16 +171,7 @@ fn lower_program_reports_missing_entry_point() {
         end
         ";
 
-    let program = dedent(source);
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("no_main.expo"),
-            source: program,
-        }],
-        ParseMode::File,
-    );
-    let checked = check_program(parsed).expect("typecheck should succeed");
+    let checked = typecheck(&dedent(source), ParseMode::File);
     let missing = Identifier::new(PACKAGE, vec!["main".to_string()]);
     let err = lower_program(&checked, missing.clone())
         .expect_err("missing entry point should be reported");

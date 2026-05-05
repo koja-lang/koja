@@ -6,31 +6,14 @@
 //! accepts the resulting program (a panic would fail the test), and
 //! script files coexist with `File.items[Function]` decls.
 
-use std::path::PathBuf;
-
-use expo_alpha_typecheck::{CheckedProgram, check_program};
+use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution};
-use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_parser::ParseMode;
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("script.expo"),
-            source: source.to_string(),
-        }],
-        mode,
-    );
-    check_program(parsed).unwrap_or_else(|failure| {
-        panic!(
-            "alpha typecheck failed on `{source}`: {} diagnostic(s):\n{failure}",
-            failure.diagnostics.len()
-        )
-    })
-}
+use common::{PACKAGE, typecheck};
 
 fn body_statements(checked: &CheckedProgram) -> &[Statement] {
     let pkg = checked

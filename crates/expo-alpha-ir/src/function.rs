@@ -7,6 +7,7 @@ use std::fmt;
 
 use expo_ast::identifier::Identifier;
 
+use crate::struct_decl::StructFieldInit;
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
 
 /// The IR's stable, backend-facing handle for a callable. Stamped at
@@ -195,6 +196,31 @@ pub enum IRInstruction {
     },
     /// `dest = <constant>`.
     Const { dest: ValueId, value: ConstValue },
+    /// `dest = base.<field_index>`. Backends emit this as GEP + load
+    /// over the struct value; `field_type` is the static [`IRType`]
+    /// of the projected field, recovered from the matching
+    /// [`crate::IRStructDecl`] at lower time so emit doesn't have to
+    /// re-walk the decl table per access. `struct_symbol` names the
+    /// receiver's [`crate::IRStructDecl`] so seal can validate the
+    /// index/type pair against the decl without re-deriving the
+    /// receiver's type from `base`.
+    FieldGet {
+        base: ValueId,
+        dest: ValueId,
+        field_index: u32,
+        field_type: IRType,
+        struct_symbol: IRSymbol,
+    },
+    /// `dest = <ty>{<fields>}`. `ty` names the [`crate::IRStructDecl`]
+    /// being constructed (mangled symbol); `fields` are pre-canonicalized
+    /// to declaration order and carry one [`StructFieldInit`] per
+    /// declared field. Backends materialize as alloca + per-field
+    /// store + load, mirroring v1 codegen.
+    StructInit {
+        dest: ValueId,
+        fields: Vec<StructFieldInit>,
+        ty: IRSymbol,
+    },
     /// `dest = <op> operand`.
     UnaryOp {
         dest: ValueId,
@@ -210,6 +236,8 @@ impl IRInstruction {
             IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
             | IRInstruction::Const { dest, .. }
+            | IRInstruction::FieldGet { dest, .. }
+            | IRInstruction::StructInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => *dest,
         }
     }

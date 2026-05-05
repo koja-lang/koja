@@ -22,6 +22,10 @@
 //!   plus the const + call helpers it routes to.
 //! - [`ops`]: binary + unary operator emission, parallel to
 //!   `expo-alpha-ir-eval/src/ops.rs`.
+//! - [`structs`]: pre-emit phase that mints LLVM `StructType`s for
+//!   every [`expo_alpha_ir::IRStructDecl`] and registers them on
+//!   the [`EmitCtx`] before any function emission walks an
+//!   [`IRType::Struct`] reference.
 
 use std::collections::BTreeMap;
 
@@ -34,6 +38,7 @@ use crate::error::LlvmError;
 
 mod instruction;
 mod ops;
+pub(crate) mod structs;
 
 /// Per-function SSA index. The migration to [`BasicValueEnum`] (from
 /// `IntValue`) is what lets pointer-typed values (e.g. `IRType::String`

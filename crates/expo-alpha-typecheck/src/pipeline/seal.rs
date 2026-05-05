@@ -78,6 +78,7 @@ fn seal_expr(expr: &Expr) {
                 seal_expr(&arg.value);
             }
         }
+        ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver),
         ExprKind::Group { expr: inner } => seal_expr(inner),
         ExprKind::Ident { name, resolution } => {
             if matches!(resolution, Resolution::Unresolved) {
@@ -108,6 +109,11 @@ fn seal_expr(expr: &Expr) {
                 if let StringPart::Interpolation { expr, .. } = part {
                     seal_expr(expr);
                 }
+            }
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                seal_expr(&field.value);
             }
         }
         ExprKind::Unary { operand, .. } => seal_expr(operand),

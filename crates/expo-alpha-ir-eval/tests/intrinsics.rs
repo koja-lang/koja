@@ -19,32 +19,15 @@
 //! `expo-driver` e2e suite (`alpha_two_plus_two::*`), where the
 //! whole binary's stdout is captured via `Command::output`.
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::lower_script;
-use expo_alpha_ir_eval::{Interpreter, RuntimeError, Value};
-use expo_alpha_typecheck::{CheckedProgram, check_program};
+use expo_alpha_ir_eval::{RuntimeError, Value};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
+
+mod common;
 
 const PACKAGE: &str = "Global";
 
-fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("intrinsics.exps"),
-            source: source.to_string(),
-        }],
-        ParseMode::Script,
-    );
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
-}
-
 fn evaluate_script(source: &str) -> Result<Value, RuntimeError> {
-    let checked = typecheck(source);
-    let script = lower_script(&checked).expect("alpha script lowering should succeed");
-    Interpreter::run_script(script)
+    common::evaluate_script_in(PACKAGE, source)
 }
 
 #[test]

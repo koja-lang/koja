@@ -170,6 +170,33 @@ const UNLESS_BRANCH_SCRIPT_SOURCE: &str = "
     pick_body() + pick_skip()
 ";
 
+/// Script-mode fixture exercising the alpha struct slice end-to-end:
+/// a `struct Point` decl, a struct literal `Point { x: 5, y: 10 }`,
+/// and a field-read `.x` projecting the literal-5 leaf. Pins the
+/// full pipeline contract:
+///
+/// - typecheck registers `TestApp.Point` with two `Int` fields and
+///   resolves the literal + projection;
+/// - IR lowering stamps an `IRStructDecl` on `IRPackage::structs`,
+///   produces an `IRInstruction::StructInit` with canonicalized
+///   field-init order, and threads an `IRInstruction::FieldGet`
+///   through the script body;
+/// - LLVM emits `%TestApp.Point = type { i64, i64 }`, materializes
+///   the literal through alloca + GEP + store, projects `.x` via a
+///   second alloca + GEP + load, and the auto-print wrapper
+///   dispatches to `__expo_alpha_print_i64`;
+/// - the eval interpreter constructs a `Value::Struct { symbol,
+///   fields }`, indexes field 0, and the driver's auto-print emits
+///   the same `5\n`.
+const STRUCT_FIELD_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    Point{x: 5, y: 10}.x
+";
+
 fn expo_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_expo"))
 }
@@ -719,6 +746,69 @@ fn alpha_run_interpreter_script_intrinsic_print_prints_hello() {
         b"hello\n",
         "expected interpreter to print `hello\\n`, got stdout:\n{}",
         String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_struct_field_prints_five() {
+    let scratch = scratch_dir("run_llvm_struct_field");
+    let fixture = write_fixture(
+        &scratch,
+        "struct_field.exps",
+        &dedent(STRUCT_FIELD_SCRIPT_SOURCE),
+    );
+
+    // Drives the alpha struct slice through the LLVM backend
+    // end-to-end. The trailing `Point { x: 5, y: 10 }.x` lowers
+    // through `IRInstruction::StructInit` (alloca + per-field
+    // store) and `IRInstruction::FieldGet` (alloca + GEP + load),
+    // the auto-print wrapper hands the loaded i64 to
+    // `__expo_alpha_print_i64`, and stdout is `5\n`.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (struct field) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "5",
+        "expected LLVM backend to print `5` (Point.x), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_struct_field_prints_five() {
+    let scratch = scratch_dir("run_interpreter_struct_field");
+    let fixture = write_fixture(
+        &scratch,
+        "struct_field.exps",
+        &dedent(STRUCT_FIELD_SCRIPT_SOURCE),
+    );
+
+    // Backend symmetry with the LLVM test above. The interpreter
+    // builds a `Value::Struct { symbol: TestApp.Point, fields:
+    // [Int(5), Int(10)] }` for the literal, projects field 0
+    // through `IRInstruction::FieldGet`, and the driver's
+    // auto-print emits `5\n`.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, struct field) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "5",
+        "expected interpreter to print `5` (Point.x), got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);

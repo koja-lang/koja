@@ -27,6 +27,9 @@
 //! - [`ops`] — operator / literal translation: [`lower_literal`],
 //!   [`lower_bin_op`], [`lower_unary_op`], plus the small
 //!   `IRType`-shaped result-type helpers.
+//! - [`structs`] — struct decl, struct-literal construction, and
+//!   field-access lowering: [`lower_struct_decl`],
+//!   [`lower_struct_construction`], [`lower_field_access`].
 
 mod body;
 mod control_flow;
@@ -34,6 +37,7 @@ mod ctx;
 mod expr;
 mod ops;
 mod package;
+mod structs;
 
 pub(crate) use body::lower_body_to_blocks;
 pub(crate) use package::lower_package;
