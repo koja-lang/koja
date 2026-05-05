@@ -9,11 +9,16 @@
 //! are first-class, and any user-typed `fn` definitions land as
 //! helper functions in the script's package fragment.
 //!
+//! REPL fragments have no file dimension, so the shell bypasses the
+//! `.exps` / `.expo` extension dispatch that `expo alpha {build,run,
+//! eval,check}` use — every fragment is unconditionally script-mode.
+//!
 //! This crate is self-contained: it owns its own pipeline driver and depends
 //! directly on the alpha pipeline crates, with no path back through
 //! `expo-driver`. Today's only public surface is [`run`] (the REPL entry
 //! point); when the shell grows file-input support it will gain an
-//! `eval_source`-style helper that the driver's `cmd_eval` can delegate to.
+//! `eval_source`-style helper that the driver's `cmd_run --backend=interpreter`
+//! path can delegate to.
 //!
 //! Mirrors the v1 [`expo-shell`](https://docs.rs/expo-shell) crate's role
 //! relative to `expo eval` / `expo shell` — the alpha namespace is a clean
