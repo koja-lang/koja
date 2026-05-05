@@ -461,21 +461,37 @@ fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
         String::from_utf8_lossy(&build_out.stderr)
     );
 
-    let child = Command::new(&binary)
+    let mut child = Command::new(&binary)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to run compiled binary");
 
     let pid = child.id() as libc::pid_t;
-    std::thread::sleep(Duration::from_millis(500));
+
+    // Wait for the runtime to print its first ready-line before
+    // signalling. The first line of `expected.stdout` doubles as a
+    // ready handshake: the process prints it only after its
+    // lifecycle/signal handlers are installed, so this is more
+    // robust under parallel-test load than a fixed sleep, where a
+    // 500 ms grace can fire SIGTERM before the runtime has finished
+    // wiring up its handlers and the kernel kills the process
+    // outright (exit -1, empty stdout).
+    let expected_text = fs::read_to_string(&expected_path).unwrap();
+    let ready_line = expected_text
+        .lines()
+        .next()
+        .expect("expected.stdout must contain at least one ready line");
+    let mut early_stdout =
+        wait_for_ready_line(&mut child, ready_line, Duration::from_secs(10), label);
 
     unsafe {
         libc::kill(pid, signal);
     }
 
     let output = child.wait_with_output().expect("failed to collect output");
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    early_stdout.extend_from_slice(&output.stdout);
+    let stdout = String::from_utf8_lossy(&early_stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let code = output.status.code().unwrap_or(-1);
 
@@ -494,10 +510,82 @@ fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
         "{label}: expected exit code {expected_code}, got {code}\nstderr:\n{stderr}\nstdout:\n{stdout}"
     );
 
-    let expected = fs::read_to_string(&expected_path).unwrap();
-    if stdout != expected {
-        let diff = diff_lines(&stdout, &expected);
+    if stdout != expected_text {
+        let diff = diff_lines(&stdout, &expected_text);
         panic!("\n--- FAIL: {label} ---\n{diff}");
+    }
+}
+
+/// Reads `child`'s stdout on a background thread until either a line
+/// matching `ready_line` arrives or `timeout` elapses. Returns the
+/// bytes read so far so the caller can prepend them to whatever
+/// `wait_with_output()` collects after the signal lands. Panics on
+/// timeout — a runtime that never prints its ready line is broken.
+fn wait_for_ready_line(
+    child: &mut std::process::Child,
+    ready_line: &str,
+    timeout: Duration,
+    label: &str,
+) -> Vec<u8> {
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc;
+
+    let stdout = child.stdout.take().expect("child stdout already taken");
+    let target = ready_line.to_string();
+    let (tx, rx) = mpsc::channel::<Result<Vec<u8>, String>>();
+
+    let reader_handle = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut accumulated = Vec::new();
+        let outcome = loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    break Err(format!(
+                        "child closed stdout before printing ready line `{target}`; got:\n{}",
+                        String::from_utf8_lossy(&accumulated),
+                    ));
+                }
+                Ok(_) => {
+                    accumulated.extend_from_slice(line.as_bytes());
+                    if line.trim_end_matches('\n') == target {
+                        break Ok(());
+                    }
+                }
+                Err(err) => break Err(format!("read_line failed: {err}")),
+            }
+        };
+        // BufReader::into_inner drops anything already pulled into
+        // its internal buffer but not yet returned via read_line.
+        // Capture that tail so we don't lose lines a fast child
+        // printed back-to-back with the ready line.
+        accumulated.extend_from_slice(reader.buffer());
+        let stdout = reader.into_inner();
+        let payload = match outcome {
+            Ok(()) => Ok(accumulated),
+            Err(msg) => Err(msg),
+        };
+        let _ = tx.send(payload);
+        stdout
+    });
+
+    let result = rx.recv_timeout(timeout);
+    let stdout = reader_handle
+        .join()
+        .expect("ready-line reader thread panicked");
+    // Re-attach stdout so `wait_with_output` can collect the rest.
+    child.stdout = Some(stdout);
+
+    match result {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(msg)) => {
+            let _ = child.kill();
+            panic!("{label}: {msg}");
+        }
+        Err(_) => {
+            let _ = child.kill();
+            panic!("{label}: timed out after {timeout:?} waiting for ready line `{ready_line}`");
+        }
     }
 }
 

@@ -113,6 +113,21 @@ pub fn build_from_sources(
     }
 
     let obj_path = format!("{output}.o");
+    // LLVM `write_to_file` and the linker both require the output's
+    // parent directory to exist; create it up front so callers can
+    // pass paths like `target/debug/binary` on a fresh checkout
+    // without a manual `mkdir -p`.
+    if let Some(parent) = Path::new(output).parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "error: failed to create output directory `{}`: {e}",
+            parent.display(),
+        );
+        process::exit(1);
+    }
+
     if let Err(diagnostics) = expo_codegen::compile_files(
         &files_ast,
         &checked.merged_ctx,
