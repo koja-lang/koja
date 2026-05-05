@@ -122,15 +122,15 @@ fn assignment_statement_surfaces_feature_gap_diagnostic() {
 
 /// Multiple feature gaps inside a single function should emit *one*
 /// diagnostic — the first one seen — and abort walking that function.
-/// Pins the fail-fast-per-function contract explicitly: here the Float
-/// literal trips first; if lowering kept walking it would also trip on
-/// the assignment and produce two diagnostics instead of one.
+/// Pins the fail-fast-per-function contract explicitly: two
+/// assignment statements would trip the gap twice, but lowering
+/// stops after the first.
 #[test]
 fn fail_fast_within_function_emits_single_diagnostic() {
     let source = "
         fn main
-          1.5
-          x = 2
+          x = 1
+          y = 2
         end
         ";
 
@@ -142,7 +142,7 @@ fn fail_fast_within_function_emits_single_diagnostic() {
         "expected fail-fast within a function, got: {messages:?}",
     );
     assert!(
-        messages[0].contains("Float literals"),
-        "expected first diagnostic to be Float literal, got: {messages:?}",
+        messages[0].contains("assignment statements"),
+        "expected first diagnostic to be the assignment gap, got: {messages:?}",
     );
 }

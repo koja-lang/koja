@@ -26,6 +26,20 @@ pub(super) fn lower_literal(
 ) -> Result<ConstValue, ()> {
     match value {
         Literal::Bool(b) => Ok(ConstValue::Bool(*b)),
+        // Slice scope: every Float literal lowers to the 64-bit
+        // variant (matches v1's `Float == Float64` alias). Width
+        // inference for `f: Float32 = 3.14`-style coercion lands
+        // with the annotation pass.
+        Literal::Float(text) => match text.parse::<f64>() {
+            Ok(parsed) => Ok(ConstValue::Float64(parsed)),
+            Err(err) => {
+                diagnostics.push(Diagnostic::error(
+                    format!("invalid Float literal `{text}`: {err}"),
+                    span,
+                ));
+                Err(())
+            }
+        },
         // Slice scope: every Int literal lowers to the 64-bit signed
         // variant. Once stdlib stubs grow `Int8`..`UInt64` and literal
         // width inference lands, this match grows arms (or threads
@@ -40,14 +54,6 @@ pub(super) fn lower_literal(
                 Err(())
             }
         },
-        Literal::Unit => Ok(ConstValue::Unit),
-        Literal::Float(_) => {
-            diagnostics.push(Diagnostic::error(
-                "alpha IR does not yet lower Float literals",
-                span,
-            ));
-            Err(())
-        }
         Literal::String(_) => {
             diagnostics.push(Diagnostic::error(
                 "alpha IR does not yet lower String literals",
@@ -55,6 +61,7 @@ pub(super) fn lower_literal(
             ));
             Err(())
         }
+        Literal::Unit => Ok(ConstValue::Unit),
     }
 }
 
@@ -95,11 +102,13 @@ pub(super) fn lower_unary_op(op: UnaryOp) -> IRUnaryOp {
 }
 
 /// Map a [`ConstValue`] variant to its [`IRType`]. Pure
-/// transliteration — each integer width gets its mirroring type, and
-/// `Bool` / `String` / `Unit` round-trip directly.
+/// transliteration — each integer / float width gets its mirroring
+/// type, and `Bool` / `String` / `Unit` round-trip directly.
 pub(super) fn const_value_type(value: &ConstValue) -> IRType {
     match value {
         ConstValue::Bool(_) => IRType::Bool,
+        ConstValue::Float32(_) => IRType::Float32,
+        ConstValue::Float64(_) => IRType::Float64,
         ConstValue::Int8(_) => IRType::Int8,
         ConstValue::Int16(_) => IRType::Int16,
         ConstValue::Int32(_) => IRType::Int32,

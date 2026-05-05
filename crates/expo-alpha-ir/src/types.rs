@@ -16,18 +16,21 @@ impl std::fmt::Display for ValueId {
 /// Compile-time-known constant payload that an [`crate::IRInstruction::Const`]
 /// loads into a fresh `ValueId`.
 ///
-/// Integer variants mirror Expo's stdlib `Int8`..`Int64` and
-/// `UInt8`..`UInt64` primitive structs 1:1 — width and signedness are
-/// part of the variant identity, not separate fields. `String` carries
-/// raw UTF-8; backends materialize per [`IRType::String`].
+/// Integer + float variants mirror Expo's stdlib primitive structs
+/// 1:1 — width and signedness (or precision) are part of the variant
+/// identity, not separate fields. `Float32` / `Float64` are IEEE 754
+/// payloads (copy types per `LANGUAGE.md`). `String` carries raw
+/// UTF-8; backends materialize per [`IRType::String`].
 ///
 /// **Transient invariant**: the seal pass currently asserts only
-/// `Int64` flows through. The other width variants exist in the
-/// vocabulary so future stdlib stub expansion + literal width
+/// `Int64` / `Float64` flow through. The other width variants exist
+/// in the vocabulary so future stdlib stub expansion + literal width
 /// inference can stamp them without reshuffling the IR shape.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstValue {
     Bool(bool),
+    Float32(f32),
+    Float64(f64),
     Int8(i8),
     Int16(i16),
     Int32(i32),
@@ -77,10 +80,16 @@ pub enum IRUnaryOp {
 }
 
 /// The IR type lattice. Mirrors [`ConstValue`] one-for-one on the
-/// integer side: each Expo stdlib `Int{N}` / `UInt{N}` primitive
-/// struct gets its own variant. Width and signedness are part of the
-/// variant identity, not separate fields, so illegal states (e.g.
-/// `bits: 7`) are unrepresentable.
+/// integer + float side: each Expo stdlib `Int{N}` / `UInt{N}` /
+/// `Float{N}` primitive struct gets its own variant. Width and
+/// signedness/precision are part of the variant identity, not
+/// separate fields, so illegal states (e.g. `bits: 7`) are
+/// unrepresentable.
+///
+/// `Float32` / `Float64` are IEEE 754 by-value primitives — **copy
+/// types** per `LANGUAGE.md`, distinct from `String`'s move-type
+/// status. `Float64` is the v1 alias for `Global.Float`; `Float32`
+/// only enters via explicit annotations / casts (a future slice).
 ///
 /// `String` is the first member of the bit-length-header family
 /// shared with `Binary` / `Bits` (future variants). Layout matches
@@ -93,6 +102,8 @@ pub enum IRUnaryOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IRType {
     Bool,
+    Float32,
+    Float64,
     Int8,
     Int16,
     Int32,
@@ -106,6 +117,13 @@ pub enum IRType {
 }
 
 impl IRType {
+    /// True when this type is one of the float-family variants
+    /// (`Float32`, `Float64`). Symmetrical with [`Self::is_int`] for
+    /// uniform "any float" predicates.
+    pub fn is_float(&self) -> bool {
+        matches!(self, Self::Float32 | Self::Float64)
+    }
+
     /// True when this type is one of the integer-family variants
     /// (`Int8`..`Int64`, `UInt8`..`UInt64`). Useful in places that
     /// want to handle "any integer" uniformly — e.g. typecheck

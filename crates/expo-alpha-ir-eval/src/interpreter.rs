@@ -201,6 +201,8 @@ fn lookup(frame: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, Runtim
 fn materialize_const(value: &ConstValue) -> Value {
     match value {
         ConstValue::Bool(b) => Value::Bool(*b),
+        ConstValue::Float32(v) => Value::Float32(*v),
+        ConstValue::Float64(v) => Value::Float64(*v),
         ConstValue::Int8(v) => Value::Int(*v as i64),
         ConstValue::Int16(v) => Value::Int(*v as i64),
         ConstValue::Int32(v) => Value::Int(*v as i64),

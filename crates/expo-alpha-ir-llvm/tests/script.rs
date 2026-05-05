@@ -130,6 +130,48 @@ fn empty_string_literal_uses_zero_bit_length() {
 }
 
 #[test]
+fn float_literal_emits_double_const_and_print_f64_call() {
+    let script = lower_as_script("3.5\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "declare void @__expo_alpha_print_f64(double)");
+    assert_contains(&ir_text, "call void @__expo_alpha_print_f64(double 3.5");
+}
+
+#[test]
+fn float_arithmetic_emits_fadd() {
+    let script = lower_as_script("1.5 + 2.5\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    // inkwell may or may not const-fold the add; pin the operator
+    // and the f64 print sink so either lowering passes.
+    assert!(
+        ir_text.contains("fadd double") || ir_text.contains("@__expo_alpha_print_f64(double 4."),
+        "expected `fadd double` or folded f64 print of 4.0:\n{ir_text}",
+    );
+}
+
+#[test]
+fn float_compare_emits_ordered_predicate() {
+    let script = lower_as_script("1.5 < 2.5\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    // `OLT` -> `fcmp olt`. inkwell may const-fold, in which case
+    // the comparison vanishes and we land on the print(true=1) sink.
+    assert!(
+        ir_text.contains("fcmp olt double")
+            || ir_text.contains("call void @__expo_alpha_print_bool(i64 1)"),
+        "expected `fcmp olt double` or folded bool=true print:\n{ir_text}",
+    );
+}
+
+#[test]
 fn call_to_helper_emits_call_in_main_body() {
     // Script mode wires the same helper-declare-then-call shape
     // through `emit_script_llvm_ir`: helper lives in a package

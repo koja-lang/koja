@@ -81,6 +81,10 @@ fn bool_type(checked: &CheckedProgram) -> ResolvedType {
     global_leaf(checked, "Bool")
 }
 
+fn float_type(checked: &CheckedProgram) -> ResolvedType {
+    global_leaf(checked, "Float")
+}
+
 fn int_type(checked: &CheckedProgram) -> ResolvedType {
     global_leaf(checked, "Int")
 }
@@ -161,7 +165,7 @@ fn ordering_on_bool_diagnoses() {
     let failure = typecheck_fail("fn main\n  true < false\nend\n");
     assert_eq!(failure.diagnostics.len(), 1);
     assert!(
-        failure.diagnostics[0].message.contains("Int operands"),
+        failure.diagnostics[0].message.contains("Int or Float"),
         "unexpected diagnostic: {}",
         failure.diagnostics[0].message,
     );
@@ -183,7 +187,65 @@ fn neg_on_bool_diagnoses() {
     let failure = typecheck_fail("fn main\n  -true\nend\n");
     assert_eq!(failure.diagnostics.len(), 1);
     assert!(
-        failure.diagnostics[0].message.contains("Int operand"),
+        failure.diagnostics[0].message.contains("Int or Float"),
+        "unexpected diagnostic: {}",
+        failure.diagnostics[0].message,
+    );
+}
+
+#[test]
+fn float_arithmetic_resolves_to_float() {
+    for source in [
+        "fn main\n  1.0 + 2.0\nend\n",
+        "fn main\n  1.0 - 2.0\nend\n",
+        "fn main\n  1.0 * 2.0\nend\n",
+        "fn main\n  1.0 / 2.0\nend\n",
+        "fn main\n  1.0 % 2.0\nend\n",
+    ] {
+        let checked = typecheck(source);
+        assert_eq!(
+            trailing_resolution(&checked),
+            float_type(&checked),
+            "source = {source:?}",
+        );
+    }
+}
+
+#[test]
+fn float_comparison_resolves_to_bool() {
+    for source in [
+        "fn main\n  1.0 < 2.0\nend\n",
+        "fn main\n  1.0 > 2.0\nend\n",
+        "fn main\n  1.0 <= 2.0\nend\n",
+        "fn main\n  1.0 >= 2.0\nend\n",
+    ] {
+        let checked = typecheck(source);
+        assert_eq!(
+            trailing_resolution(&checked),
+            bool_type(&checked),
+            "source = {source:?}",
+        );
+    }
+}
+
+#[test]
+fn float_equality_resolves_to_bool() {
+    let checked = typecheck("fn main\n  1.0 == 2.0\nend\n");
+    assert_eq!(trailing_resolution(&checked), bool_type(&checked));
+}
+
+#[test]
+fn unary_neg_on_float_resolves_to_float() {
+    let checked = typecheck("fn main\n  -3.14\nend\n");
+    assert_eq!(trailing_resolution(&checked), float_type(&checked));
+}
+
+#[test]
+fn mixed_int_float_arith_diagnoses() {
+    let failure = typecheck_fail("fn main\n  1 + 1.0\nend\n");
+    assert_eq!(failure.diagnostics.len(), 1);
+    assert!(
+        failure.diagnostics[0].message.contains("Int or Float"),
         "unexpected diagnostic: {}",
         failure.diagnostics[0].message,
     );

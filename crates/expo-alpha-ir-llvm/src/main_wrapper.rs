@@ -27,6 +27,8 @@ use crate::function::declare_blocks;
 const APP_NAME_SYMBOL: &str = "__expo_app_name";
 const ENTRY_SYMBOL: &str = "main";
 const PRINT_BOOL_SYMBOL: &str = "__expo_alpha_print_bool";
+const PRINT_F32_SYMBOL: &str = "__expo_alpha_print_f32";
+const PRINT_F64_SYMBOL: &str = "__expo_alpha_print_f64";
 const PRINT_INT_SYMBOL: &str = "__expo_alpha_print_i64";
 const PRINT_STRING_SYMBOL: &str = "__expo_alpha_print_string";
 
@@ -130,9 +132,9 @@ fn find_return_block(blocks: &[IRBasicBlock]) -> Result<IRBlockId, LlvmError> {
 
 /// Pick the runtime printer for `return_type` and emit the call.
 /// Integer / `Bool` widths extend to `i64` (sign- or zero-extended
-/// per signedness); `String` flows the payload pointer through
-/// unchanged. The runtime side reads the v1 header at `ptr - 8` to
-/// compute byte length.
+/// per signedness); `Float32` / `Float64` flow as native f32 / f64;
+/// `String` flows the payload pointer through unchanged (runtime
+/// reads the v1 header at `ptr - 8` for byte length).
 fn emit_print_call<'ctx>(
     ctx: &EmitCtx<'ctx>,
     return_type: &IRType,
@@ -148,6 +150,16 @@ fn emit_print_call<'ctx>(
                 extended.into(),
             )
         }
+        IRType::Float32 => (
+            PRINT_F32_SYMBOL,
+            ctx.context.f32_type().into(),
+            body_value.into_float_value().into(),
+        ),
+        IRType::Float64 => (
+            PRINT_F64_SYMBOL,
+            ctx.context.f64_type().into(),
+            body_value.into_float_value().into(),
+        ),
         IRType::Int8 | IRType::Int16 | IRType::Int32 => {
             let int = body_value.into_int_value();
             let extended = sext_to_i64(ctx, int)?;

@@ -254,7 +254,7 @@ fn partial_failure_reports_only_the_failing_function_diagnostic() {
         end
 
         fn broken
-          1.5
+          x = 1
         end
         ";
 
@@ -266,7 +266,7 @@ fn partial_failure_reports_only_the_failing_function_diagnostic() {
         "expected a single diagnostic from the failing fn, got: {messages:?}",
     );
     assert!(
-        messages[0].contains("Float literals"),
-        "expected Float-literal diagnostic from `broken`, got: {messages:?}",
+        messages[0].contains("assignment statements"),
+        "expected assignment-statement diagnostic from `broken`, got: {messages:?}",
     );
 }

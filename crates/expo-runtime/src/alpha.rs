@@ -36,6 +36,22 @@ pub extern "C" fn __expo_alpha_print_bool(value: i64) {
     let _ = writeln!(io::stdout(), "{rendered}");
 }
 
+/// Print a `Float32`-flavored body value followed by a newline.
+/// Uses Rust's `{:?}` so `1.0` round-trips as `"1.0"` (vs `{}`'s
+/// `"1"`); pairs with `Value::Float32`'s `Display` in
+/// `expo-alpha-ir-eval` for byte-exact backend symmetry.
+#[unsafe(no_mangle)]
+pub extern "C" fn __expo_alpha_print_f32(value: f32) {
+    let _ = writeln!(io::stdout(), "{value:?}");
+}
+
+/// Print a `Float64`-flavored body value followed by a newline.
+/// Same `{:?}` round-trip rule as the f32 printer.
+#[unsafe(no_mangle)]
+pub extern "C" fn __expo_alpha_print_f64(value: f64) {
+    let _ = writeln!(io::stdout(), "{value:?}");
+}
+
 /// Print a `String`-flavored body value followed by a newline.
 /// Reads the `i64` bit-length 8 bytes before `payload` (the v1 header
 /// layout shared with `Binary` / `Bits`; see `IRType::String`) and

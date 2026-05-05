@@ -38,68 +38,66 @@ pub(super) fn binary_type(
     let rhs = &right.resolution;
     match op {
         BinOp::Add | BinOp::Div | BinOp::Mod | BinOp::Mul | BinOp::Sub => {
-            if is_primitive(lhs, registry, "Int") && is_primitive(rhs, registry, "Int") {
+            // Arithmetic preserves the operand's numeric width: both
+            // sides must agree on `Int` or `Float`. Cross-numeric
+            // mixing (`1 + 1.0`) is an error per `LANGUAGE.md`.
+            if both(lhs, rhs, registry, "Int") {
                 registry.primitive("Int")
+            } else if both(lhs, rhs, registry, "Float") {
+                registry.primitive("Float")
             } else {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "alpha typecheck supports integer arithmetic only; got `{}` and `{}`",
-                        display_resolution(lhs, registry),
-                        display_resolution(rhs, registry),
-                    ),
+                push_op_mismatch(
+                    diagnostics,
+                    op,
+                    "Int or Float operands of the same type",
+                    lhs,
+                    rhs,
                     span,
-                ));
+                    registry,
+                );
                 ResolvedType::unresolved()
             }
         }
         BinOp::And | BinOp::Or => {
-            if is_primitive(lhs, registry, "Bool") && is_primitive(rhs, registry, "Bool") {
+            if both(lhs, rhs, registry, "Bool") {
                 registry.primitive("Bool")
             } else {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "`{}` requires Bool operands; got `{}` and `{}`",
-                        bin_op_label(op),
-                        display_resolution(lhs, registry),
-                        display_resolution(rhs, registry),
-                    ),
-                    span,
-                ));
+                push_op_mismatch(diagnostics, op, "Bool operands", lhs, rhs, span, registry);
                 ResolvedType::unresolved()
             }
         }
         BinOp::Eq | BinOp::NotEq => {
-            let both_int = is_primitive(lhs, registry, "Int") && is_primitive(rhs, registry, "Int");
-            let both_bool =
-                is_primitive(lhs, registry, "Bool") && is_primitive(rhs, registry, "Bool");
-            if both_int || both_bool {
+            if both(lhs, rhs, registry, "Bool")
+                || both(lhs, rhs, registry, "Float")
+                || both(lhs, rhs, registry, "Int")
+            {
                 registry.primitive("Bool")
             } else {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "`{}` requires matching Int or Bool operands; got `{}` and `{}`",
-                        bin_op_label(op),
-                        display_resolution(lhs, registry),
-                        display_resolution(rhs, registry),
-                    ),
+                push_op_mismatch(
+                    diagnostics,
+                    op,
+                    "matching Bool, Float, or Int operands",
+                    lhs,
+                    rhs,
                     span,
-                ));
+                    registry,
+                );
                 ResolvedType::unresolved()
             }
         }
         BinOp::Gt | BinOp::GtEq | BinOp::Lt | BinOp::LtEq => {
-            if is_primitive(lhs, registry, "Int") && is_primitive(rhs, registry, "Int") {
+            if both(lhs, rhs, registry, "Float") || both(lhs, rhs, registry, "Int") {
                 registry.primitive("Bool")
             } else {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "`{}` requires Int operands; got `{}` and `{}`",
-                        bin_op_label(op),
-                        display_resolution(lhs, registry),
-                        display_resolution(rhs, registry),
-                    ),
+                push_op_mismatch(
+                    diagnostics,
+                    op,
+                    "Int or Float operands of the same type",
+                    lhs,
+                    rhs,
                     span,
-                ));
+                    registry,
+                );
                 ResolvedType::unresolved()
             }
         }
@@ -125,10 +123,12 @@ pub(super) fn unary_type(
         UnaryOp::Neg => {
             if is_primitive(ty, registry, "Int") {
                 registry.primitive("Int")
+            } else if is_primitive(ty, registry, "Float") {
+                registry.primitive("Float")
             } else {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "unary `-` requires an Int operand; got `{}`",
+                        "unary `-` requires an Int or Float operand; got `{}`",
                         display_resolution(ty, registry),
                     ),
                     span,
@@ -151,4 +151,28 @@ pub(super) fn unary_type(
             }
         }
     }
+}
+
+fn both(lhs: &ResolvedType, rhs: &ResolvedType, registry: &GlobalRegistry, name: &str) -> bool {
+    is_primitive(lhs, registry, name) && is_primitive(rhs, registry, name)
+}
+
+fn push_op_mismatch(
+    diagnostics: &mut Vec<Diagnostic>,
+    op: BinOp,
+    expected: &str,
+    lhs: &ResolvedType,
+    rhs: &ResolvedType,
+    span: Span,
+    registry: &GlobalRegistry,
+) {
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "`{}` requires {expected}; got `{}` and `{}`",
+            bin_op_label(op),
+            display_resolution(lhs, registry),
+            display_resolution(rhs, registry),
+        ),
+        span,
+    ));
 }

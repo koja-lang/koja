@@ -4,19 +4,16 @@
 //! produced `IRInstruction` shape).
 //!
 //! The eager-lowering contract: both operands first, then a single
-//! `BinaryOp` / `UnaryOp` for the result. Float literal lowering
-//! surfaces a feature-gap diagnostic (the `Literal::Float` arm is
-//! the only currently-reachable feature gap in this module).
+//! `BinaryOp` / `UnaryOp` for the result.
 
 use std::path::PathBuf;
 
 use expo_alpha_ir::{
     ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRScript,
-    IRTerminator, IRUnaryOp, LowerError, ValueId, lower_program, lower_script,
+    IRTerminator, IRUnaryOp, ValueId, lower_program, lower_script,
 };
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
-use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 const PACKAGE: &str = "TestApp";
@@ -46,27 +43,6 @@ fn lower_as_script(source: &str) -> IRScript {
     );
     let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
     lower_script(&checked).expect("script lowering should succeed")
-}
-
-fn lower_err(source: &str, entry: &str) -> LowerError {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_ops.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
-    let entry_id = Identifier::new(PACKAGE, vec![entry.to_string()]);
-    lower_program(&checked, entry_id).expect_err("lowering should surface diagnostics")
-}
-
-fn expect_diagnostics(err: LowerError) -> Vec<String> {
-    match err {
-        LowerError::Diagnostics(d) => d.into_iter().map(|diag| diag.message).collect(),
-        other => panic!("expected Diagnostics, got {other:?}"),
-    }
 }
 
 fn entry_block(program: &IRProgram) -> &IRBasicBlock {
@@ -221,18 +197,78 @@ fn comparisons_lower_to_matching_ir_bin_ops() {
 }
 
 #[test]
-fn float_literal_in_body_surfaces_feature_gap_diagnostic() {
-    let source = "
-        fn main
-          1.5
-        end
-        ";
+fn float_literal_lowers_to_const_float64() {
+    let program = lower("fn main\n  1.5\nend\n");
+    let block = entry_block(&program);
+    assert_eq!(
+        block.instructions,
+        vec![IRInstruction::Const {
+            dest: ValueId(0),
+            value: ConstValue::Float64(1.5),
+        }],
+    );
+    assert_eq!(
+        block.terminator,
+        IRTerminator::Return {
+            value: Some(ValueId(0)),
+        },
+    );
+}
 
-    let program = dedent(source);
-    let messages = expect_diagnostics(lower_err(&program, "main"));
-    assert_eq!(messages.len(), 1);
-    assert!(
-        messages[0].contains("Float literals"),
-        "expected Float-literal diagnostic, got: {messages:?}",
+#[test]
+fn float_arithmetic_lowers_with_float64_operand_type() {
+    let program = lower("fn main\n  2.0 + 2.0\nend\n");
+    let block = entry_block(&program);
+    assert_eq!(
+        block.instructions,
+        vec![
+            IRInstruction::Const {
+                dest: ValueId(0),
+                value: ConstValue::Float64(2.0),
+            },
+            IRInstruction::Const {
+                dest: ValueId(1),
+                value: ConstValue::Float64(2.0),
+            },
+            IRInstruction::BinaryOp {
+                dest: ValueId(2),
+                lhs: ValueId(0),
+                op: IRBinOp::Add,
+                rhs: ValueId(1),
+            },
+        ],
+    );
+    assert_eq!(
+        block.terminator,
+        IRTerminator::Return {
+            value: Some(ValueId(2)),
+        },
+    );
+}
+
+#[test]
+fn float_comparison_lowers_with_bool_result() {
+    let program = lower("fn main\n  1.0 < 2.0\nend\n");
+    let block = entry_block(&program);
+    let Some(IRInstruction::BinaryOp { op, lhs, rhs, .. }) = block.instructions.last() else {
+        panic!(
+            "expected trailing BinaryOp for `1.0 < 2.0`, got {:?}",
+            block.instructions.last(),
+        );
+    };
+    assert_eq!(*op, IRBinOp::Lt);
+    // Operands trace back to the two preceding Float64 consts.
+    assert_eq!(
+        block.instructions[..2],
+        [
+            IRInstruction::Const {
+                dest: *lhs,
+                value: ConstValue::Float64(1.0),
+            },
+            IRInstruction::Const {
+                dest: *rhs,
+                value: ConstValue::Float64(2.0),
+            },
+        ],
     );
 }

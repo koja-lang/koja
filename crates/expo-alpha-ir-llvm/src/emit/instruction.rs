@@ -8,7 +8,7 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
 use crate::ctx::EmitCtx;
 use crate::error::LlvmError;
 
-use super::{ValueMap, lookup, lookup_int, ops};
+use super::{ValueMap, lookup, ops};
 
 pub(super) fn emit_instruction<'ctx>(
     ctx: &EmitCtx<'ctx>,
@@ -17,10 +17,10 @@ pub(super) fn emit_instruction<'ctx>(
 ) -> Result<(), LlvmError> {
     match instr {
         IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
-            let lhs_value = lookup_int(values, *lhs)?;
-            let rhs_value = lookup_int(values, *rhs)?;
+            let lhs_value = lookup(values, *lhs)?;
+            let rhs_value = lookup(values, *rhs)?;
             let result = ops::emit_binary_op(ctx, *op, lhs_value, rhs_value)?;
-            values.insert(*dest, result.into());
+            values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::Call { dest, callee, args } => {
@@ -50,9 +50,9 @@ pub(super) fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::UnaryOp { dest, op, operand } => {
-            let operand_value = lookup_int(values, *operand)?;
+            let operand_value = lookup(values, *operand)?;
             let result = ops::emit_unary_op(ctx, *op, operand_value)?;
-            values.insert(*dest, result.into());
+            values.insert(*dest, result);
             Ok(())
         }
     }
@@ -105,6 +105,10 @@ fn emit_const<'ctx>(
             .bool_type()
             .const_int(u64::from(*b), false)
             .into()),
+        // `const_float` always takes f64; the f32 type narrows on
+        // its own. Bit-exact since `f32` widens losslessly.
+        ConstValue::Float32(v) => Ok(ctx.context.f32_type().const_float(f64::from(*v)).into()),
+        ConstValue::Float64(v) => Ok(ctx.context.f64_type().const_float(*v).into()),
         ConstValue::Int8(v) => Ok(ctx.context.i8_type().const_int(*v as u64, true).into()),
         ConstValue::Int16(v) => Ok(ctx.context.i16_type().const_int(*v as u64, true).into()),
         ConstValue::Int32(v) => Ok(ctx.context.i32_type().const_int(*v as u64, true).into()),

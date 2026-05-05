@@ -109,6 +109,24 @@ const STRING_LITERAL_SCRIPT_SOURCE: &str = "
     \"hello\"
 ";
 
+/// Script-mode fixture exercising the float-literal slice through
+/// arithmetic. `2.0 + 2.0` lowers to two `Const(Float64)` ops + an
+/// `IRBinOp::Add`; LLVM emits `fadd double` and the auto-print
+/// wrapper dispatches to `__expo_alpha_print_f64`. Stdout is
+/// `4.0\n` (Rust `{:?}` formatting, matching the interpreter's
+/// `Value::Float64` `Display`).
+const FLOAT_ARITH_SCRIPT_SOURCE: &str = "
+    2.0 + 2.0
+";
+
+/// Script-mode fixture pinning the float ordered-comparison path:
+/// `1.5 < 2.5` lowers to `IRBinOp::Lt` over two `Float64` operands.
+/// LLVM emits `fcmp olt double` and zext's the i1 to i64 for the
+/// bool printer; both backends print `true\n`.
+const FLOAT_COMPARE_SCRIPT_SOURCE: &str = "
+    1.5 < 2.5
+";
+
 /// Script-mode fixture exercising `unless` lowering through both
 /// backends. `unless cond` runs its body when the cond is `false`,
 /// the inverse of `if`. `pick_body` runs the early `return 1`
@@ -513,6 +531,110 @@ fn alpha_run_interpreter_script_unless_branch_prints_three() {
         "3",
         "expected interpreter to print `3` (`unless` arms swapped relative to `if`), \
          got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_float_arith_prints_four_point_zero() {
+    let scratch = scratch_dir("run_llvm_float_arith");
+    let fixture = write_fixture(
+        &scratch,
+        "float_arith.exps",
+        &dedent(FLOAT_ARITH_SCRIPT_SOURCE),
+    );
+
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (float arith) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "4.0",
+        "expected LLVM backend to print `4.0` (Rust `{{:?}}` form), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_float_arith_prints_four_point_zero() {
+    let scratch = scratch_dir("run_interpreter_float_arith");
+    let fixture = write_fixture(
+        &scratch,
+        "float_arith.exps",
+        &dedent(FLOAT_ARITH_SCRIPT_SOURCE),
+    );
+
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, float arith) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "4.0",
+        "expected interpreter to print `4.0` (matching LLVM backend), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_float_compare_prints_true() {
+    let scratch = scratch_dir("run_llvm_float_compare");
+    let fixture = write_fixture(
+        &scratch,
+        "float_compare.exps",
+        &dedent(FLOAT_COMPARE_SCRIPT_SOURCE),
+    );
+
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (float compare) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "true",
+        "expected LLVM backend to print `true`, got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_float_compare_prints_true() {
+    let scratch = scratch_dir("run_interpreter_float_compare");
+    let fixture = write_fixture(
+        &scratch,
+        "float_compare.exps",
+        &dedent(FLOAT_COMPARE_SCRIPT_SOURCE),
+    );
+
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, float compare) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "true",
+        "expected interpreter to print `true`, got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);

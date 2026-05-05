@@ -165,3 +165,54 @@ fn script_mode_comparison_evaluates_to_bool() {
     assert_eq!(evaluate_script("1 < 2\n").unwrap(), Value::Bool(true));
     assert_eq!(evaluate_script("3 == 3\n").unwrap(), Value::Bool(true));
 }
+
+#[test]
+fn float_arithmetic_evaluates_natively() {
+    assert_eq!(
+        evaluate("fn main\n  2.0 + 2.0\nend\n").unwrap(),
+        Value::Float64(4.0),
+    );
+    assert_eq!(
+        evaluate("fn main\n  3.5 - 1.25\nend\n").unwrap(),
+        Value::Float64(2.25),
+    );
+    assert_eq!(
+        evaluate("fn main\n  1.5 * 4.0\nend\n").unwrap(),
+        Value::Float64(6.0),
+    );
+}
+
+#[test]
+fn float_division_by_zero_returns_inf() {
+    let value = evaluate("fn main\n  1.0 / 0.0\nend\n").unwrap();
+    let Value::Float64(v) = value else {
+        panic!("expected Float64, got {value:?}");
+    };
+    assert!(v.is_infinite() && v.is_sign_positive());
+}
+
+#[test]
+fn nan_comparisons_return_false() {
+    // `0.0 / 0.0` is `NaN`; every ordered predicate against `NaN`
+    // must return `false` (matches IEEE 754 + LLVM `OEQ`/`OLT`).
+    assert_eq!(
+        evaluate("fn main\n  (0.0 / 0.0) == (0.0 / 0.0)\nend\n").unwrap(),
+        Value::Bool(false),
+    );
+    assert_eq!(
+        evaluate("fn main\n  (0.0 / 0.0) < 1.0\nend\n").unwrap(),
+        Value::Bool(false),
+    );
+}
+
+#[test]
+fn unary_float_neg_flips_sign() {
+    assert_eq!(
+        evaluate("fn main\n  -2.5\nend\n").unwrap(),
+        Value::Float64(-2.5),
+    );
+    assert_eq!(
+        evaluate("fn main\n  -(1.0 - 4.0)\nend\n").unwrap(),
+        Value::Float64(3.0),
+    );
+}
