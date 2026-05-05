@@ -19,13 +19,22 @@
 //!    instruction.
 //! 5. Every `IRInstruction::Call`'s `callee` identifier resolves to a
 //!    function that actually exists somewhere in the `IRProgram`.
+//! 6. **Transient slice invariant**: every [`ConstValue`] and
+//!    [`IRType`] that flows through the IR is one of `Bool`,
+//!    `Int64`, or `Unit`. The narrower / unsigned width variants
+//!    (`Int8` / `Int16` / `Int32` / `UInt8` / `UInt16` / `UInt32` /
+//!    `UInt64`) exist in the IR vocabulary so future stdlib stub
+//!    expansion + literal width inference can stamp them without
+//!    reshuffling, but they're forbidden until those upstream pieces
+//!    land. Loosen this invariant when adding `Int8` / etc. to the
+//!    stdlib stubs.
 
 use std::collections::BTreeSet;
 
 use expo_ast::identifier::Identifier;
 
 use crate::function::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator};
-use crate::types::ValueId;
+use crate::types::{ConstValue, IRType, ValueId};
 use crate::{IRProgram, package::IRPackage};
 
 pub(crate) fn seal_program(program: &IRProgram) {
@@ -60,6 +69,9 @@ fn seal_function(function: &IRFunction) {
             function.identifier,
         ));
     }
+    require_supported_type(&function.return_type, &|| {
+        format!("function `{}` return type", function.identifier)
+    });
     // Parameter `ValueId`s count as definitions for the purposes of
     // downstream operand references. Seed them first so the rest of
     // the block walk treats them as already-defined.
@@ -82,6 +94,11 @@ fn seal_block(block: &IRBasicBlock, owner: &Identifier, defined: &mut BTreeSet<V
         for operand in instruction_operands(inst) {
             require_defined(operand, owner, defined);
         }
+        if let IRInstruction::Const { value, .. } = inst {
+            require_supported_const(value, &|| {
+                format!("function `{owner}` const instruction at {}", inst.dest())
+            });
+        }
         if !defined.insert(inst.dest()) {
             seal_panic(&format!(
                 "function `{owner}` redefines value `{}`",
@@ -91,6 +108,30 @@ fn seal_block(block: &IRBasicBlock, owner: &Identifier, defined: &mut BTreeSet<V
     }
     for operand in terminator_operands(&block.terminator) {
         require_defined(operand, owner, defined);
+    }
+}
+
+/// Transient slice invariant: only `Bool` / `Int64` / `Unit` flow
+/// through the IR. See module docstring invariant 6.
+fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
+    match ty {
+        IRType::Bool | IRType::Int64 | IRType::Unit => {}
+        other => seal_panic(&format!(
+            "{}: IRType `{other:?}` is not yet supported (alpha slice admits only \
+             Bool / Int64 / Unit until stdlib stub expansion lands)",
+            location(),
+        )),
+    }
+}
+
+fn require_supported_const(value: &ConstValue, location: &dyn Fn() -> String) {
+    match value {
+        ConstValue::Bool(_) | ConstValue::Int64(_) | ConstValue::Unit => {}
+        other => seal_panic(&format!(
+            "{}: ConstValue `{other:?}` is not yet supported (alpha slice admits only \
+             Bool / Int64 / Unit until stdlib stub expansion lands)",
+            location(),
+        )),
     }
 }
 

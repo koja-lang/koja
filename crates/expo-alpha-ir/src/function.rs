@@ -4,7 +4,7 @@
 
 use expo_ast::identifier::Identifier;
 
-use crate::types::{ConstValue, IRBinOp, IRUnaryOp, ValueId};
+use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
 
 /// A lowered function. Body is a list of basic blocks; `blocks[0]` is
 /// the entry block. The POC scope only ever emits a single block per
@@ -18,11 +18,33 @@ use crate::types::{ConstValue, IRBinOp, IRUnaryOp, ValueId};
 /// "identifier references in function bodies" diagnostic), but the
 /// allocation shape is in place so the next slice can drop in a
 /// `Local` read instruction without reshuffling.
+///
+/// `return_type` is the static type of the function's return value
+/// (`IRTerminator::Return`). Backends consume this directly — LLVM
+/// codegen reads it to pick the function signature and the
+/// `ret iN` width without re-querying the typecheck registry.
+/// Parameter types are intentionally **not** carried yet (hybrid
+/// drift-fix): the POC does not lower body references to parameters,
+/// so per-param `IRType` entries would currently be unused. They
+/// land alongside the slice that wires up `Local` reads.
 #[derive(Debug, Clone)]
 pub struct IRFunction {
     pub blocks: Vec<IRBasicBlock>,
     pub identifier: Identifier,
     pub params: Vec<ValueId>,
+    pub return_type: IRType,
+}
+
+impl IRFunction {
+    /// Stable per-function symbol name. Backends use this as their
+    /// own lookup key — the northstar's "consumer-builds-its-own-indices"
+    /// contract says backends index by mangled name (a `String`),
+    /// never by decomposing the [`Identifier`] internals. The entry
+    /// point may be exported under a host-runtime symbol (`main` on
+    /// Unix); every other function is exported under this name.
+    pub fn mangled_name(&self) -> String {
+        self.identifier.qualified_name()
+    }
 }
 
 /// A straight-line sequence of [`IRInstruction`]s that ends in exactly

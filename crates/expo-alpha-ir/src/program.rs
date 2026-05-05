@@ -49,6 +49,15 @@ impl IRProgram {
         self.function(&self.entry_point)
             .expect("entry point not registered in IRProgram (seal violation upstream)")
     }
+
+    /// Whether `function` is this program's entry point. Lets backends
+    /// distinguish the entry function (which gets exported under the
+    /// host-runtime symbol, e.g. `main` on Unix) from every other
+    /// function in the program without decomposing [`Identifier`]
+    /// internals.
+    pub fn is_entry(&self, function: &IRFunction) -> bool {
+        function.identifier == self.entry_point
+    }
 }
 
 /// User-actionable failure modes from [`lower_program`]. Anything that

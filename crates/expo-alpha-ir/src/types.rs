@@ -15,10 +15,29 @@ impl std::fmt::Display for ValueId {
 
 /// Compile-time-known constant payload that an [`crate::IRInstruction::Const`]
 /// loads into a fresh `ValueId`.
+///
+/// Integer variants mirror Expo's stdlib `Int8`..`Int64` and
+/// `UInt8`..`UInt64` primitive structs 1:1 — width and signedness are
+/// part of the variant identity, not separate fields. The carried Rust
+/// primitive (`i8`, `u8`, …) is sized to exactly what the variant
+/// admits, so e.g. `Int8(i8)` cannot construct an out-of-range value
+/// at the type level.
+///
+/// **Transient invariant for the alpha POC**: the seal pass currently
+/// asserts only `Int64` flows through. The other width variants exist
+/// in the vocabulary so future stdlib stub expansion + literal width
+/// inference can stamp them without reshuffling the IR shape.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstValue {
     Bool(bool),
-    Int(i64),
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
     Unit,
 }
 
@@ -26,6 +45,13 @@ pub enum ConstValue {
 /// boolean conjunction / disjunction, and equality / ordering
 /// comparisons. All operators are eager — short-circuit lowering
 /// lands with control-flow constructs.
+///
+/// **Overflow contract**: integer arithmetic (`Add`/`Sub`/`Mul`/`Div`/`Mod`)
+/// wraps on overflow (two's-complement). The interpreter currently
+/// flags overflow as a `RuntimeError::IntegerOverflow` (POC-level
+/// safety net); native LLVM emission uses plain `add`/`sub`/`mul`
+/// without `nsw`/`nuw` flags — wrapping semantics. Aligning the
+/// interpreter to wrap-on-overflow is a follow-up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IRBinOp {
     Add,
@@ -51,14 +77,41 @@ pub enum IRUnaryOp {
     Not,
 }
 
-/// The IR type lattice. Defined here so the vocabulary has a stable
-/// place for type annotations (return types on `IRFunction`, parameter
-/// types on future `Call` instructions, etc.) but **not yet wired into
-/// `IRFunction`** for the POC — eval reads the runtime type off the
-/// returned [`ConstValue`] and codegen has not been rewired to alpha.
+/// The IR type lattice. Mirrors [`ConstValue`] one-for-one on the
+/// integer side: each Expo stdlib `Int{N}` / `UInt{N}` primitive
+/// struct gets its own variant. Width and signedness are part of the
+/// variant identity, not separate fields, so illegal states (e.g.
+/// `bits: 7`) are unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IRType {
     Bool,
-    Int,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
     Unit,
+}
+
+impl IRType {
+    /// True when this type is one of the integer-family variants
+    /// (`Int8`..`Int64`, `UInt8`..`UInt64`). Useful in places that
+    /// want to handle "any integer" uniformly — e.g. typecheck
+    /// "is this an integer expression" predicates.
+    pub fn is_int(&self) -> bool {
+        matches!(
+            self,
+            Self::Int8
+                | Self::Int16
+                | Self::Int32
+                | Self::Int64
+                | Self::UInt8
+                | Self::UInt16
+                | Self::UInt32
+                | Self::UInt64
+        )
+    }
 }

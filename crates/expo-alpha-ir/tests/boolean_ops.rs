@@ -117,7 +117,7 @@ fn neg_lowers_to_unary_op_neg() {
         vec![
             IRInstruction::Const {
                 dest: ValueId(0),
-                value: ConstValue::Int(7),
+                value: ConstValue::Int64(7),
             },
             IRInstruction::UnaryOp {
                 dest: ValueId(1),

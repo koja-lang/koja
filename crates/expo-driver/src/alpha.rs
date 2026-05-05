@@ -20,16 +20,19 @@
 //! groups, and the boolean/comparison/unary operators. Anything
 //! richer typecheck-errors with a precise diagnostic.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use expo_alpha_ir::lower_program;
+use expo_alpha_ir::{IRProgram, lower_program};
 use expo_alpha_ir_eval::{Interpreter, Value};
 use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::Identifier;
 use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
+
+use crate::pipeline::{self, BuildOptions};
 
 /// `expo alpha check <file>` — parse and typecheck a single source
 /// file through the alpha pipeline, without lowering or running it.
@@ -101,6 +104,137 @@ pub fn cmd_eval(file: String, entry: Option<String>) {
 /// own pipeline driver.
 pub fn cmd_shell() {
     expo_alpha_shell::run();
+}
+
+/// `expo alpha build <file>` — compile a single source file through
+/// the alpha pipeline (`parse → check → lower → compile_program →
+/// link`) into a native binary.
+///
+/// Slice scope mirrors the rest of the alpha pipeline: a single
+/// `fn main -> Int` whose body returns an `Int` arithmetic
+/// expression. The output binary's exit code is the i64 return value
+/// truncated to 8 bits — matches the OS exit-code contract. The
+/// runtime + BoringSSL static archives are linked in (link-time
+/// parity with v1) but not called yet; see
+/// [`expo_alpha_ir_llvm`]'s crate docstring for the entry-point
+/// wrapper deferral.
+pub fn cmd_build(file: String, output: Option<String>) {
+    let path = canonical_source_path(&file);
+    let output = resolve_output_name(output, &path);
+    let (program, _checked) = build_program(&path);
+    emit_and_link(&program, &output);
+    println!("compiled: {output}");
+}
+
+/// `expo alpha run <file>` — build the source file as in
+/// [`cmd_build`], execute the resulting binary, and forward its exit
+/// code. The binary is written to a temp path and removed after
+/// exec, so this leaves no artifacts behind in the working directory.
+pub fn cmd_run(file: String, args: Vec<String>) {
+    let path = canonical_source_path(&file);
+    let (program, _checked) = build_program(&path);
+
+    let stem = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("alpha_program");
+    let output = std::env::temp_dir()
+        .join(format!("expo-alpha-run-{}-{stem}", process::id()))
+        .to_string_lossy()
+        .to_string();
+
+    emit_and_link(&program, &output);
+
+    let status = process::Command::new(&output).args(&args).status();
+    let _ = fs::remove_file(&output);
+
+    match status {
+        Ok(s) => process::exit(s.code().unwrap_or(1)),
+        Err(err) => {
+            eprintln!("error: failed to exec `{output}`: {err}");
+            process::exit(1);
+        }
+    }
+}
+
+/// Read a source file, run the full alpha pipeline through lowering,
+/// and return the sealed [`IRProgram`] plus the [`CheckedProgram`] it
+/// came from. Bails the process on any pipeline failure with a
+/// `error: <details>` line — matching `cmd_eval`'s contract.
+fn build_program(path: &Path) -> (IRProgram, CheckedProgram) {
+    let source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(err) => {
+            eprintln!("error: cannot read `{}`: {err}", path.display());
+            process::exit(1);
+        }
+    };
+    let package = derive_package(path);
+    let parsed = parse_program(
+        vec![SourceFile {
+            package: package.clone(),
+            path: path.to_path_buf(),
+            source,
+        }],
+        ParseMode::Script,
+    );
+    let checked = match check_program(parsed) {
+        Ok(checked) => checked,
+        Err(failure) => {
+            eprintln!("error: {}", format_check_failure(failure));
+            process::exit(1);
+        }
+    };
+    let entry = Identifier::new(&package, vec!["main".to_string()]);
+    let program = match lower_program(&checked, entry) {
+        Ok(program) => program,
+        Err(err) => {
+            eprintln!("error: {err}");
+            process::exit(1);
+        }
+    };
+    (program, checked)
+}
+
+/// Compile the [`IRProgram`] to an object file and link it into a
+/// native binary at `output`, reusing v1's
+/// [`pipeline::link`](crate::pipeline) helper for `cc` invocation,
+/// runtime archive embedding, and BoringSSL linkage. Bails the
+/// process on any LLVM emission failure.
+fn emit_and_link(program: &IRProgram, output: &str) {
+    let object_path = format!("{output}.o");
+    if let Err(err) = expo_alpha_ir_llvm::compile_program(program, Path::new(&object_path)) {
+        eprintln!("error: {err}");
+        process::exit(1);
+    }
+    let options = BuildOptions {
+        color: false,
+        emit_llvm: false,
+        quiet: true,
+        release: false,
+    };
+    pipeline::link(&object_path, output, &[], options);
+}
+
+/// Canonicalize a user-supplied source path, exiting on miss with a
+/// matching error message to v1's `expo build`.
+fn canonical_source_path(file: &str) -> PathBuf {
+    Path::new(file).canonicalize().unwrap_or_else(|_| {
+        eprintln!("error: file not found: {file}");
+        process::exit(1);
+    })
+}
+
+/// Pick the output binary name. Honors a user-supplied `--output`,
+/// otherwise mirrors v1: drop the source extension to derive the
+/// binary name, falling back to `output` if there's no usable stem.
+fn resolve_output_name(output: Option<String>, path: &Path) -> String {
+    output.unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(OsStr::to_str)
+            .unwrap_or("output")
+            .to_string()
+    })
 }
 
 /// Run one source file end-to-end through the alpha pipeline. Returns

@@ -389,6 +389,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "expo-alpha-ir-llvm"
+version = "0.9.0"
+dependencies = [
+ "expo-alpha-ir",
+ "expo-alpha-typecheck",
+ "expo-ast",
+ "expo-parser",
+ "inkwell",
+]
+
+[[package]]
 name = "expo-alpha-shell"
 version = "0.9.0"
 dependencies = [
@@ -439,6 +450,7 @@ dependencies = [
  "clap",
  "expo-alpha-ir",
  "expo-alpha-ir-eval",
+ "expo-alpha-ir-llvm",
  "expo-alpha-shell",
  "expo-alpha-typecheck",
  "expo-ast",

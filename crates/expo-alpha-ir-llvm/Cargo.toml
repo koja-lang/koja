@@ -1,0 +1,15 @@
+[package]
+name = "expo-alpha-ir-llvm"
+description = "LLVM backend for sealed expo-alpha-ir IRPrograms"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+expo-alpha-ir = { path = "../expo-alpha-ir" }
+inkwell = { version = "0.8", features = ["llvm18-1"] }
+
+[dev-dependencies]
+expo-alpha-typecheck = { path = "../expo-alpha-typecheck" }
+expo-ast = { path = "../expo-ast" }
+expo-parser = { path = "../expo-parser" }

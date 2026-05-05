@@ -14,6 +14,7 @@ expo-runtime = { path = "../expo-runtime" }
 boring-sys = { version = "5", default-features = false }
 expo-alpha-ir = { path = "../expo-alpha-ir" }
 expo-alpha-ir-eval = { path = "../expo-alpha-ir-eval" }
+expo-alpha-ir-llvm = { path = "../expo-alpha-ir-llvm" }
 expo-alpha-shell = { path = "../expo-alpha-shell" }
 expo-alpha-typecheck = { path = "../expo-alpha-typecheck" }
 expo-ast = { path = "../expo-ast" }

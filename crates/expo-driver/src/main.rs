@@ -142,6 +142,15 @@ enum Command {
 /// alpha build-out.
 #[derive(Subcommand)]
 enum AlphaCommand {
+    /// Compile a source file through the alpha pipeline to a native binary (POC scope: `fn main -> Int` returning an integer expression)
+    Build {
+        /// Source file
+        file: String,
+
+        /// Output binary name
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     /// Type-check a source file through the alpha pipeline without lowering or running it
     Check {
         /// Source file
@@ -160,6 +169,15 @@ enum AlphaCommand {
         #[arg(long)]
         entry: Option<String>,
     },
+    /// Compile and execute a source file through the alpha pipeline; exits with the binary's exit code
+    Run {
+        /// Source file
+        file: String,
+
+        /// Arguments passed to the compiled program
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
     /// Start an interactive REPL backed by the alpha pipeline (POC scope: integer arithmetic only)
     Shell,
 }
@@ -170,8 +188,10 @@ fn main() {
 
     match cli.command {
         Command::Alpha { command } => match command {
+            AlphaCommand::Build { file, output } => alpha::cmd_build(file, output),
             AlphaCommand::Check { file, emit_ast } => alpha::cmd_check(file, emit_ast),
             AlphaCommand::Eval { file, entry } => alpha::cmd_eval(file, entry),
+            AlphaCommand::Run { file, args } => alpha::cmd_run(file, args),
             AlphaCommand::Shell => alpha::cmd_shell(),
         },
         Command::Build {

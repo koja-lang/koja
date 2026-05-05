@@ -61,11 +61,11 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
         vec![
             IRInstruction::Const {
                 dest: ValueId(0),
-                value: ConstValue::Int(2),
+                value: ConstValue::Int64(2),
             },
             IRInstruction::Const {
                 dest: ValueId(1),
-                value: ConstValue::Int(2),
+                value: ConstValue::Int64(2),
             },
             IRInstruction::BinaryOp {
                 dest: ValueId(2),

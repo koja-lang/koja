@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/expo-alpha-ir",
     "crates/expo-alpha-ir-eval",
+    "crates/expo-alpha-ir-llvm",
     "crates/expo-alpha-shell",
     "crates/expo-alpha-typecheck",
     "crates/expo-ast",

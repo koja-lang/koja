@@ -522,7 +522,13 @@ fn macos_version() -> &'static str {
 
 /// Links an object file with the embedded runtime library to produce an executable.
 /// `link_libraries` contains library names from `@link` annotations (passed as `-l` flags).
-fn link(obj_path: &str, output: &str, link_libraries: &[String], options: BuildOptions) {
+///
+/// Exposed at `pub(crate)` so `crate::alpha`'s `cmd_alpha_build` can
+/// reuse the same `cc` invocation + embedded runtime + BoringSSL
+/// archives that v1 already wires up. Keeping it crate-private keeps
+/// the function out of the public driver API; alpha and v1 link side
+/// by side rather than diverging.
+pub(crate) fn link(obj_path: &str, output: &str, link_libraries: &[String], options: BuildOptions) {
     #[cfg(not(target_os = "macos"))]
     let _ = options.release;
 

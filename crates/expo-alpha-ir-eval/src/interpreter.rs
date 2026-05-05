@@ -139,10 +139,24 @@ fn lookup(frame: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, Runtim
         .ok_or(RuntimeError::ValueUndefined { id })
 }
 
+/// Materialize a `ConstValue` as a runtime [`Value`].
+///
+/// The interpreter's `Value::Int` is a single `i64` slot — wide
+/// enough for every signed integer width and for unsigned widths
+/// `UInt8`..`UInt32` (range fits in `i64`). `UInt64` cannot fit;
+/// the slice's seal pass forbids it from flowing through, so the
+/// arm is unreachable in practice but kept exhaustive for safety.
 fn materialize_const(value: &ConstValue) -> Value {
     match value {
         ConstValue::Bool(b) => Value::Bool(*b),
-        ConstValue::Int(i) => Value::Int(*i),
+        ConstValue::Int8(v) => Value::Int(*v as i64),
+        ConstValue::Int16(v) => Value::Int(*v as i64),
+        ConstValue::Int32(v) => Value::Int(*v as i64),
+        ConstValue::Int64(v) => Value::Int(*v),
+        ConstValue::UInt8(v) => Value::Int(*v as i64),
+        ConstValue::UInt16(v) => Value::Int(*v as i64),
+        ConstValue::UInt32(v) => Value::Int(*v as i64),
+        ConstValue::UInt64(v) => Value::Int(*v as i64),
         ConstValue::Unit => Value::Unit,
     }
 }
