@@ -18,7 +18,7 @@
 use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::Diagnostic;
 
-use crate::lower_package::{BlockBuilder, lower_body_to_blocks, lower_package};
+use crate::lower_package::{lower_body_to_blocks, lower_package};
 use crate::package::IRPackage;
 use crate::program::LowerError;
 use crate::script::IRScript;
@@ -45,8 +45,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
 
     let body = locate_script_body(checked);
 
-    let mut builder = BlockBuilder::default();
-    let lowered = lower_body_to_blocks(body, &mut builder, &checked.registry, &mut diagnostics);
+    let lowered = lower_body_to_blocks(body, &checked.registry, &mut diagnostics);
 
     if !diagnostics.is_empty() {
         return Err(LowerError::Diagnostics(diagnostics));

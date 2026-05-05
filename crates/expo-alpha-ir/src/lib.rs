@@ -28,6 +28,7 @@
 //! [`IRPackage`], [`IRFunction`], [`IRInstruction`], [`IRTerminator`],
 //! …) is fresh and self-contained.
 
+mod cfg;
 mod function;
 mod lower_package;
 mod lower_script;
@@ -39,7 +40,7 @@ mod seal;
 mod types;
 
 pub use function::{
-    IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
+    IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
 };
 pub use lower_script::lower_script;
 pub use package::IRPackage;

@@ -86,9 +86,24 @@ pub struct IRFunctionParam {
     pub ty: IRType,
 }
 
+/// Function-unique handle for an [`IRBasicBlock`]. Block ids are
+/// minted from a per-function counter on `FnLowerCtx`; the same
+/// `IRBlockId` value has no meaning across functions. Display renders
+/// as `bb<n>`, mirroring the SIL-style convention LLVM debug viewers
+/// use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IRBlockId(pub u32);
+
+impl fmt::Display for IRBlockId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "bb{}", self.0)
+    }
+}
+
 /// A lowered function. Body is a list of basic blocks; `blocks[0]` is
-/// the entry block. Today's scope emits a single block per function;
-/// multi-block lowering lands with control-flow constructs.
+/// the entry block. Multi-block bodies appear once control-flow
+/// constructs (`if` / `unless`, future loops/match) lower through the
+/// `CFGBuilder` lowering path.
 ///
 /// `symbol` is the function's stable, backend-facing handle (see
 /// [`IRSymbol`]). It's the lookup key on [`crate::IRPackage::functions`]
@@ -119,9 +134,14 @@ pub struct IRFunction {
 }
 
 /// A straight-line sequence of [`IRInstruction`]s that ends in exactly
-/// one [`IRTerminator`].
+/// one [`IRTerminator`]. `id` is the function-unique handle every
+/// terminator targeting this block carries; `label` is a short human
+/// hint (`"entry"`, `"if_then"`, `"if_merge"`) the IR text format and
+/// LLVM block names borrow.
 #[derive(Debug, Clone)]
 pub struct IRBasicBlock {
+    pub id: IRBlockId,
+    pub label: String,
     pub instructions: Vec<IRInstruction>,
     pub terminator: IRTerminator,
 }
@@ -169,9 +189,24 @@ impl IRInstruction {
     }
 }
 
-/// How a basic block ends. Today only `Return` is emitted; branch
-/// terminators land with control flow.
+/// How a basic block ends. Three variants today: `Return` exits the
+/// function; `Branch` jumps unconditionally to another block in the
+/// same function; `CondBranch` picks one of two blocks based on a
+/// `Bool`-typed value. The seal pass guarantees every targeted
+/// `IRBlockId` resolves to a block in the enclosing function.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IRTerminator {
+    /// Unconditional jump to `target`. Emitted at the tail of an
+    /// `if` / `unless` arm to reach the merge block.
+    Branch(IRBlockId),
+    /// `cond` is a `Bool`-typed [`ValueId`]; flow continues at
+    /// `then_block` when `cond` is `true`, at `else_block` otherwise.
+    CondBranch {
+        cond: ValueId,
+        then_block: IRBlockId,
+        else_block: IRBlockId,
+    },
+    /// Exit the function with `value` (or `Unit` semantics when
+    /// `value` is `None`).
     Return { value: Option<ValueId> },
 }

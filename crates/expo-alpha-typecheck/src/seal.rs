@@ -87,8 +87,29 @@ fn seal_expr(expr: &Expr) {
                 );
             }
         }
+        ExprKind::If {
+            condition,
+            then_body,
+            else_body,
+        } => {
+            seal_expr(condition);
+            for stmt in then_body {
+                seal_statement(stmt);
+            }
+            if let Some(else_body) = else_body {
+                for stmt in else_body {
+                    seal_statement(stmt);
+                }
+            }
+        }
         ExprKind::Literal { .. } => {}
         ExprKind::Unary { operand, .. } => seal_expr(operand),
+        ExprKind::Unless { condition, body } => {
+            seal_expr(condition);
+            for stmt in body {
+                seal_statement(stmt);
+            }
+        }
         other => seal_panic(
             &format!(
                 "alpha typecheck seal does not yet recognize expression kind `{}`",

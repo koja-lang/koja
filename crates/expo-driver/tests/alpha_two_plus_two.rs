@@ -68,6 +68,60 @@ const HELPER_CALL_SCRIPT_SOURCE: &str = "
     answer() + 1
 ";
 
+/// Script-mode fixture exercising `if` lowering through both
+/// backends. Each helper carries the same `if` shape with a
+/// different literal cond: `pick_then` runs the early `return 1`
+/// inside the then-arm; `pick_merge` skips the body and falls
+/// through to the trailing `2` in the merge block. Identifier
+/// references in function bodies aren't resolved until the locals
+/// slice, so the cond can't be a parameter — two helpers stand in.
+/// The script body sums them, the auto-print wrapper renders
+/// `3\n`. Pins the CFG-based lowering path end-to-end (LLVM emits
+/// a real `br i1` + `br label` pair; the interpreter dispatches
+/// on `CondBranch` at runtime).
+const IF_BRANCH_SCRIPT_SOURCE: &str = "
+    fn pick_then -> Int
+      if true
+        return 1
+      end
+      2
+    end
+
+    fn pick_merge -> Int
+      if false
+        return 1
+      end
+      2
+    end
+
+    pick_then() + pick_merge()
+";
+
+/// Script-mode fixture exercising `unless` lowering through both
+/// backends. `unless cond` runs its body when the cond is `false`,
+/// the inverse of `if`. `pick_body` runs the early `return 1`
+/// because its cond is `false`; `pick_skip` falls through to `2`
+/// because its cond is `true`. The sum is `3`; the auto-print
+/// wrapper renders `3\n`. Pins the swapped-arms CondBranch shape
+/// `unless` emits, distinct from `if`'s shape.
+const UNLESS_BRANCH_SCRIPT_SOURCE: &str = "
+    fn pick_body -> Int
+      unless false
+        return 1
+      end
+      2
+    end
+
+    fn pick_skip -> Int
+      unless true
+        return 1
+      end
+      2
+    end
+
+    pick_body() + pick_skip()
+";
+
 fn expo_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_expo"))
 }
@@ -277,6 +331,113 @@ fn alpha_run_llvm_script_bool_prints_false_and_exits_zero() {
         stdout.trim(),
         "false",
         "expected LLVM backend to print `false`, got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_if_branch_prints_three() {
+    let scratch = scratch_dir("run_llvm_if_branch");
+    let fixture = write_fixture(&scratch, "if_branch.exps", &dedent(IF_BRANCH_SCRIPT_SOURCE));
+
+    // `pick(true) + pick(false)` exercises the early-return arm and
+    // the merge fall-through inside the same helper. LLVM emits a
+    // multi-block `pick` with `br i1` on the cond and `br label`
+    // back to the merge; the script-mode `main` is a single block
+    // wrapping the two calls and the addition.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (if branch) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "expected LLVM backend to print `3` (1 + 2 from the two pick() arms), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_if_branch_prints_three() {
+    let scratch = scratch_dir("run_interpreter_if_branch");
+    let fixture = write_fixture(&scratch, "if_branch.exps", &dedent(IF_BRANCH_SCRIPT_SOURCE));
+
+    // Backend symmetry with the LLVM test above. The interpreter
+    // dispatches the `CondBranch` terminator at runtime instead of
+    // emitting machine-code branches, but the observable contract
+    // (stdout `3`, exit 0) matches.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, if branch) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "expected interpreter to print `3`, got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_unless_branch_prints_three() {
+    let scratch = scratch_dir("run_llvm_unless_branch");
+    let fixture = write_fixture(
+        &scratch,
+        "unless_branch.exps",
+        &dedent(UNLESS_BRANCH_SCRIPT_SOURCE),
+    );
+
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (unless branch) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "expected LLVM backend to print `3` (`unless` arms swapped relative to `if`), \
+         got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_unless_branch_prints_three() {
+    let scratch = scratch_dir("run_interpreter_unless_branch");
+    let fixture = write_fixture(
+        &scratch,
+        "unless_branch.exps",
+        &dedent(UNLESS_BRANCH_SCRIPT_SOURCE),
+    );
+
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, unless branch) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "expected interpreter to print `3` (`unless` arms swapped relative to `if`), \
+         got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);

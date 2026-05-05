@@ -7,25 +7,30 @@
 //! - [`emit_instructions`] walks `block.instructions` only and hands
 //!   the values map plus a borrow of the terminator back to the
 //!   caller.
-//! - [`emit_terminator_default`] emits `Return` straight to LLVM's
-//!   `ret`. Used by every non-`main` function.
+//! - [`emit_terminator_default`] emits each terminator straight to
+//!   LLVM's `ret` / `br` / `br <cond>`. Used by every non-`main`
+//!   walker.
 //!
 //! [`emit_block`] is the convenience composition of the two.
 //!
-//! Both seams accept a `seed: ValueMap` so callers can pre-bind
-//! parameter `ValueId`s to the LLVM `function.get_nth_param` values
-//! before the body walk starts. `emit_as_main` passes an empty
-//! seed today; helper-function emission seeds one entry per
-//! `IRFunctionParam`. They also accept a `&Module` so `Call`
+//! Both seams accept a `values: &mut ValueMap` so callers can
+//! pre-bind parameter `ValueId`s to the LLVM `function.get_nth_param`
+//! values before the body walk starts and so cross-block walks can
+//! thread a single value map through every IR block. They also
+//! accept a `BlockMap` so `Branch` / `CondBranch` terminators can
+//! resolve their target [`IRBlockId`] to a real
+//! [`inkwell::basic_block::BasicBlock`], and a `&Module` so `Call`
 //! instructions can resolve their callee by mangled name without
 //! re-threading a separate function table.
 
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRInstruction, IRSymbol, IRTerminator, IRUnaryOp, ValueId,
+    ConstValue, IRBasicBlock, IRBinOp, IRBlockId, IRInstruction, IRSymbol, IRTerminator, IRUnaryOp,
+    ValueId,
 };
 use inkwell::IntPredicate;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -34,25 +39,33 @@ use inkwell::values::{BasicMetadataValueEnum, IntValue};
 use crate::error::LlvmError;
 
 pub(crate) type ValueMap<'ctx> = BTreeMap<ValueId, IntValue<'ctx>>;
+pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
 
 /// Emit `block` (instructions + terminator) into the builder's
 /// current insert position. The caller is responsible for having
 /// called `position_at_end` on the block's LLVM target before this
-/// runs and for seeding `seed` with any param `ValueId`s.
+/// runs and for seeding `values` with any param `ValueId`s before
+/// the entry-block walk.
 pub(crate) fn emit_block<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &Module<'ctx>,
     block: &IRBasicBlock,
-    seed: ValueMap<'ctx>,
+    block_map: &BlockMap<'ctx>,
+    values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let (values, terminator) = emit_instructions(context, builder, module, block, seed)?;
-    emit_terminator_default(builder, terminator, &values)
+    for instruction in &block.instructions {
+        emit_instruction(context, builder, module, instruction, values)?;
+    }
+    emit_terminator_default(builder, &block.terminator, values, block_map)
 }
 
-/// Emit `block`'s instructions only; return the populated value map
-/// (starting from `seed`) plus a borrow of the block's terminator
-/// so the caller can emit it (or substitute a different one).
+/// Emit `block`'s instructions only; return a borrow of the block's
+/// terminator so the caller can emit it (or substitute a different
+/// one). The instruction walker mutates `values` in place — callers
+/// pass an owned map to avoid the borrow / aliasing complications a
+/// `&mut` would cause when interleaved with the returned terminator
+/// borrow.
 pub(crate) fn emit_instructions<'ctx, 'block>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -67,15 +80,42 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
     Ok((values, &block.terminator))
 }
 
-/// Emit `terminator` to its natural LLVM form. Today that's just
-/// `Return` → `ret`; branch / unconditional-jump terminators land
-/// alongside multi-block emission.
+/// Emit `terminator` to its natural LLVM form: `Return` -> `ret`,
+/// `Branch` -> `br label %target`, `CondBranch` -> `br i1 %cond,
+/// label %then, label %else`. Branch targets resolve through the
+/// caller-provided `block_map`; misses are a compiler bug (the seal
+/// pass guarantees every target is a registered IR block).
 pub(crate) fn emit_terminator_default<'ctx>(
     builder: &Builder<'ctx>,
     terminator: &IRTerminator,
     values: &ValueMap<'ctx>,
+    block_map: &BlockMap<'ctx>,
 ) -> Result<(), LlvmError> {
     match terminator {
+        IRTerminator::Branch(target) => {
+            let llvm_target = lookup_block(block_map, *target)?;
+            builder
+                .build_unconditional_branch(llvm_target)
+                .map(|_| ())
+                .map_err(|e| {
+                    LlvmError::Codegen(format!("inkwell rejected build_unconditional_branch: {e}"))
+                })
+        }
+        IRTerminator::CondBranch {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            let cond_value = lookup(values, *cond)?;
+            let then_target = lookup_block(block_map, *then_block)?;
+            let else_target = lookup_block(block_map, *else_block)?;
+            builder
+                .build_conditional_branch(cond_value, then_target, else_target)
+                .map(|_| ())
+                .map_err(|e| {
+                    LlvmError::Codegen(format!("inkwell rejected build_conditional_branch: {e}"))
+                })
+        }
         IRTerminator::Return { value: None } => Err(LlvmError::Codegen(
             "alpha LLVM does not yet emit Unit-returning functions".to_string(),
         )),
@@ -99,6 +139,16 @@ pub(crate) fn lookup<'ctx>(
         .ok_or_else(|| LlvmError::Codegen(format!("undefined SSA value {id} during emission")))
 }
 
+fn lookup_block<'ctx>(
+    block_map: &BlockMap<'ctx>,
+    id: IRBlockId,
+) -> Result<BasicBlock<'ctx>, LlvmError> {
+    block_map
+        .get(&id)
+        .copied()
+        .ok_or_else(|| LlvmError::Codegen(format!("undefined IR block {id} during emission")))
+}
+
 fn emit_instruction<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -120,6 +170,22 @@ fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::Const { dest, value } => {
+            // `Unit` has no machine-level representation — the
+            // merge block of an `if` / `unless` emits a `Const::Unit`
+            // as the conditional's "value" so the surrounding
+            // expression has a `ValueId` to thread, but in practice
+            // nothing downstream consumes it (the if/unless
+            // expression is Unit-typed and the function's actual
+            // return is the trailing Int / Bool expression that
+            // follows the conditional). Skip emission entirely; if
+            // some caller does reference the Unit value, the
+            // resulting `lookup` miss surfaces as an explicit
+            // "undefined SSA value" error rather than a half-shaped
+            // i1 / i8 placeholder that papers over a real feature
+            // gap.
+            if matches!(value, ConstValue::Unit) {
+                return Ok(());
+            }
             let constant = emit_const(context, value)?;
             values.insert(*dest, constant);
             Ok(())

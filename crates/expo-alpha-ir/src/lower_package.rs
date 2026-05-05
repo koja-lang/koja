@@ -5,21 +5,21 @@
 //! lowering helpers contract — every reference into the AST should
 //! already be resolvable thanks to the upstream seal.
 //!
-//! Today's scope: every fn body must lower to a single basic block
-//! holding `Const` / `BinaryOp` / `UnaryOp` / `Call` instructions and
-//! ending in `Return`. Anything richer surfaces as a [`Diagnostic`]
-//! and the offending function is dropped from the package
-//! (per-function fail-fast). Seal invariant violations — e.g. a call
-//! callee with `Unresolved` resolution after typecheck seal — remain
+//! Today's scope: every fn body lowers to a control-flow graph of
+//! basic blocks holding `Const` / `BinaryOp` / `UnaryOp` / `Call`
+//! instructions and terminating in `Return` / `Branch` / `CondBranch`.
+//! `if` / `unless` introduce extra blocks; everything else still
+//! produces a single-block body. Anything richer surfaces as a
+//! [`Diagnostic`] and the offending function is dropped from the
+//! package (per-function fail-fast). Seal invariant violations remain
 //! panics per northstar (compiler bugs, not user errors).
 //!
-//! Type tracking: the [`BlockBuilder`] tracks an [`IRType`] for every
-//! emitted [`ValueId`]. Each lowering helper that produces a fresh
-//! value records its result type at push time, so the trailing
-//! expression's type is available for stamping on
-//! [`IRFunction::return_type`] without re-querying the typecheck
-//! registry. `Call` is the one helper that does query the registry —
-//! callee return types live on the [`FunctionSignature`].
+//! Lowering threads `&mut FnLowerCtx` plus the currently-open
+//! `IRBlockId` through every recursive helper. Each `lower_*`
+//! returns either a [`FlowResult::Open`] carrying the produced
+//! [`ValueId`] and the block to continue from, or [`FlowResult::Closed`]
+//! signaling that flow already terminated (e.g. via an early `return`).
+//! See [`crate::cfg`] for the [`CFGBuilder`] this context wraps.
 
 use std::collections::BTreeMap;
 
@@ -30,8 +30,9 @@ use expo_ast::ast::{
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
+use crate::cfg::CFGBuilder;
 use crate::function::{
-    IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
+    IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::package::IRPackage;
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
@@ -80,7 +81,11 @@ fn lower_function(
         return None;
     };
 
-    let mut builder = BlockBuilder::default();
+    let signature = lookup_signature(registry, &identifier);
+    let return_type = resolved_type_to_ir_type(&signature.return_type, registry);
+
+    let mut ctx = FnLowerCtx::new();
+    let entry = ctx.fresh_block("entry");
 
     // Allocate one `ValueId` per regular parameter in declaration
     // order, paired with its IRType pulled from the lifted function
@@ -89,7 +94,6 @@ fn lower_function(
     // stays naturally topological on the sealed AST. `self` receivers
     // are a feature gap, not a compiler bug: record a diagnostic and
     // bail on this function.
-    let signature = lookup_signature(registry, &identifier);
     let mut params = Vec::with_capacity(function.params.len());
     let mut signature_index = 0;
     for param in &function.params {
@@ -98,10 +102,8 @@ fn lower_function(
                 let resolved = &signature.params[signature_index].ty;
                 let ty = resolved_type_to_ir_type(resolved, registry);
                 signature_index += 1;
-                params.push(IRFunctionParam {
-                    id: builder.fresh(),
-                    ty,
-                });
+                let id = ctx.fresh_value(ty.clone());
+                params.push(IRFunctionParam { id, ty });
             }
             Param::Self_ { span, .. } => {
                 diagnostics.push(Diagnostic::error(
@@ -113,9 +115,10 @@ fn lower_function(
         }
     }
 
-    let (blocks, return_type) =
-        lower_body_to_blocks(body, &mut builder, registry, diagnostics).ok()?;
+    let flow = lower_body(body, &mut ctx, entry, registry, diagnostics).ok()?;
+    finalize_open_flow(&mut ctx, flow);
 
+    let blocks = ctx.into_blocks();
     Some(IRFunction {
         blocks,
         params,
@@ -148,15 +151,13 @@ fn lookup_signature<'a>(
     }
 }
 
-/// Lower a sequence of statements into the single-block, single-return
-/// IR shape that both function bodies and script bodies share today.
-///
-/// The caller owns the [`BlockBuilder`]; this lets `lower_function`
-/// pre-allocate parameter `ValueId`s before any body-emitted id is
-/// allocated, while `lower_script` can pass a fresh builder. On
-/// success the builder is consumed into a single [`IRBasicBlock`]
-/// terminated by `Return` with the trailing expression's value (or
-/// `Unit`, if the body has no trailing expression value).
+/// Lower a sequence of statements into a CFG fragment, starting in
+/// `entry`. Both function bodies and script bodies share this path;
+/// the caller owns the [`FnLowerCtx`] so it can pre-allocate
+/// parameter `ValueId`s before any body-emitted id is allocated, and
+/// inspect the trailing flow to decide how to finalize the entry
+/// block (`Return` for `lower_function`; same for `lower_script`,
+/// using the trailing-value type as the script's return type).
 ///
 /// `Err(())` means "a feature-gap diagnostic was already pushed and
 /// the caller should drop this body / function from the surrounding
@@ -165,56 +166,92 @@ fn lookup_signature<'a>(
 /// the implicit script body.
 pub(crate) fn lower_body_to_blocks(
     body: &[Statement],
-    builder: &mut BlockBuilder,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(Vec<IRBasicBlock>, IRType), ()> {
-    let return_value = lower_body(body, builder, registry, diagnostics)?;
-    let return_type = match return_value {
-        Some(id) => builder.type_of(id),
-        None => IRType::Unit,
+    let mut ctx = FnLowerCtx::new();
+    let entry = ctx.fresh_block("entry");
+    let flow = lower_body(body, &mut ctx, entry, registry, diagnostics)?;
+    let return_type = match &flow {
+        FlowResult::Open {
+            value: Some(id), ..
+        } => ctx.type_of(*id),
+        FlowResult::Open { value: None, .. } => IRType::Unit,
+        // Closed-flow on a script body means an explicit `return`
+        // exited the script. `Unit` is a defensible default here —
+        // the auto-print wrapper inspects this type to pick a
+        // printer, and a script that returns explicitly today only
+        // does so via `return_value: Option<expr>` whose type the
+        // body lowering already plumbed through `Return.value`.
+        // Tightening this to "type of the returned value" is a
+        // follow-up if/when scripts care.
+        FlowResult::Closed => IRType::Unit,
     };
-    let block = IRBasicBlock {
-        instructions: std::mem::take(&mut builder.instructions),
-        terminator: IRTerminator::Return {
-            value: return_value,
-        },
-    };
-    Ok((vec![block], return_type))
+    finalize_open_flow(&mut ctx, flow);
+    Ok((ctx.into_blocks(), return_type))
 }
 
-/// Walk a sequence of statements, lowering each through the existing
-/// statement helper. Returns the trailing statement's `ValueId` or
-/// `None` for an empty body / a body that ends in a non-expression
-/// statement.
-///
-/// `Err(())` is just an abort signal: a single error means "stop
-/// walking; a diagnostic has been pushed".
+/// Walk a sequence of statements, threading the open block through
+/// each one. Returns the trailing statement's flow result; an
+/// empty body returns `Open { value: None, block: entry }`.
 fn lower_body(
     body: &[Statement],
-    builder: &mut BlockBuilder,
+    ctx: &mut FnLowerCtx,
+    mut block: IRBlockId,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<Option<ValueId>, ()> {
-    let mut last_value = None;
+) -> Result<FlowResult, ()> {
+    let mut last_value: Option<ValueId> = None;
     for stmt in body {
-        last_value = lower_statement(stmt, builder, registry, diagnostics)?;
+        match lower_statement(stmt, ctx, block, registry, diagnostics)? {
+            FlowResult::Open { value, block: next } => {
+                last_value = value;
+                block = next;
+            }
+            FlowResult::Closed => return Ok(FlowResult::Closed),
+        }
     }
-    Ok(last_value)
+    Ok(FlowResult::Open {
+        value: last_value,
+        block,
+    })
 }
 
 fn lower_statement(
     stmt: &Statement,
-    builder: &mut BlockBuilder,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<Option<ValueId>, ()> {
+) -> Result<FlowResult, ()> {
     match stmt {
-        Statement::Expr(expr) => Ok(Some(lower_expr(expr, builder, registry, diagnostics)?)),
-        Statement::Return { value, .. } => match value.as_ref() {
-            Some(expr) => Ok(Some(lower_expr(expr, builder, registry, diagnostics)?)),
-            None => Ok(None),
-        },
+        Statement::Expr(expr) => {
+            let (value, next) = lower_expr(expr, ctx, block, registry, diagnostics)?;
+            Ok(FlowResult::Open {
+                value: Some(value),
+                block: next,
+            })
+        }
+        Statement::Return { value, .. } => {
+            let return_value = match value.as_ref() {
+                Some(expr) => {
+                    let (id, next) = lower_expr(expr, ctx, block, registry, diagnostics)?;
+                    ctx.cfg
+                        .set_terminator(next, IRTerminator::Return { value: Some(id) });
+                    Some(id)
+                }
+                None => {
+                    ctx.cfg
+                        .set_terminator(block, IRTerminator::Return { value: None });
+                    None
+                }
+            };
+            // Suppress the unused-binding warning while keeping the
+            // shape parallel to the `if` / `unless` branches that
+            // care about the returned value.
+            let _ = return_value;
+            Ok(FlowResult::Closed)
+        }
         Statement::Assignment { span, .. } => {
             diagnostics.push(Diagnostic::error(
                 "alpha IR does not yet lower `=` assignment statements",
@@ -241,60 +278,77 @@ fn lower_statement(
 
 fn lower_expr(
     expr: &Expr,
-    builder: &mut BlockBuilder,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<ValueId, ()> {
+) -> Result<(ValueId, IRBlockId), ()> {
     match &expr.kind {
         ExprKind::Binary { op, left, right } => {
-            let lhs = lower_expr(left, builder, registry, diagnostics)?;
-            let rhs = lower_expr(right, builder, registry, diagnostics)?;
+            let (lhs, block) = lower_expr(left, ctx, block, registry, diagnostics)?;
+            let (rhs, block) = lower_expr(right, ctx, block, registry, diagnostics)?;
             let ir_op = lower_bin_op(*op, expr.span, diagnostics)?;
-            let result_ty = bin_op_result_type(ir_op, builder.type_of(lhs));
-            let dest = builder.fresh();
-            builder.push_typed(
+            let result_ty = bin_op_result_type(ir_op, ctx.type_of(lhs));
+            let dest = ctx.fresh_value(result_ty);
+            ctx.cfg.append(
+                block,
                 IRInstruction::BinaryOp {
                     dest,
                     lhs,
                     op: ir_op,
                     rhs,
                 },
-                dest,
-                result_ty,
             );
-            Ok(dest)
+            Ok((dest, block))
         }
-        ExprKind::Call { callee, args } => lower_call(callee, args, builder, registry, diagnostics),
-        ExprKind::Group { expr: inner } => lower_expr(inner, builder, registry, diagnostics),
+        ExprKind::Call { callee, args } => {
+            lower_call(callee, args, ctx, block, registry, diagnostics)
+        }
+        ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block, registry, diagnostics),
+        ExprKind::If {
+            condition,
+            then_body,
+            else_body,
+        } => {
+            if else_body.is_some() {
+                diagnostics.push(Diagnostic::error(
+                    "alpha IR does not yet lower `else` branches",
+                    expr.span,
+                ));
+                return Err(());
+            }
+            lower_if(condition, then_body, ctx, block, registry, diagnostics)
+        }
         ExprKind::Literal { value } => {
             let const_value = lower_literal(value, expr.span, diagnostics)?;
             let ty = const_value_type(&const_value);
-            let dest = builder.fresh();
-            builder.push_typed(
+            let dest = ctx.fresh_value(ty);
+            ctx.cfg.append(
+                block,
                 IRInstruction::Const {
                     dest,
                     value: const_value,
                 },
-                dest,
-                ty,
             );
-            Ok(dest)
+            Ok((dest, block))
         }
         ExprKind::Unary { op, operand } => {
-            let operand = lower_expr(operand, builder, registry, diagnostics)?;
+            let (operand, block) = lower_expr(operand, ctx, block, registry, diagnostics)?;
             let ir_op = lower_unary_op(*op);
-            let result_ty = unary_op_result_type(ir_op, builder.type_of(operand));
-            let dest = builder.fresh();
-            builder.push_typed(
+            let result_ty = unary_op_result_type(ir_op, ctx.type_of(operand));
+            let dest = ctx.fresh_value(result_ty);
+            ctx.cfg.append(
+                block,
                 IRInstruction::UnaryOp {
                     dest,
                     op: ir_op,
                     operand,
                 },
-                dest,
-                result_ty,
             );
-            Ok(dest)
+            Ok((dest, block))
+        }
+        ExprKind::Unless { condition, body } => {
+            lower_unless(condition, body, ctx, block, registry, diagnostics)
         }
         other => {
             diagnostics.push(Diagnostic::error(
@@ -309,6 +363,120 @@ fn lower_expr(
     }
 }
 
+/// Lower an `if cond do then_body end` (no-else). Adds a then-block
+/// and a merge-block; terminates the current block with a
+/// `CondBranch` to those; lowers the then-body inside the then-block
+/// and falls through to merge unless the body closed flow with an
+/// early `return`. Always produces a fresh `Const::Unit` in the
+/// merge block as the if-expression's value. Caller is responsible
+/// for rejecting `else_body.is_some()` upstream — this slice has no
+/// path to lower it (value-producing `if` / `else` lands with the
+/// locals slice).
+fn lower_if(
+    condition: &Expr,
+    then_body: &[Statement],
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let (cond_value, block) = lower_expr(condition, ctx, block, registry, diagnostics)?;
+    let then_block = ctx.fresh_block("if_then");
+    let merge_block = ctx.fresh_block("if_merge");
+    ctx.cfg.set_terminator(
+        block,
+        IRTerminator::CondBranch {
+            cond: cond_value,
+            then_block,
+            else_block: merge_block,
+        },
+    );
+
+    lower_arm_into(
+        then_body,
+        ctx,
+        then_block,
+        merge_block,
+        registry,
+        diagnostics,
+    )?;
+
+    Ok((emit_unit(ctx, merge_block), merge_block))
+}
+
+/// Lower an `unless cond do body end`. Identical wiring to `if` with
+/// the arms swapped: cond=`true` skips to merge, cond=`false` runs
+/// the body.
+fn lower_unless(
+    condition: &Expr,
+    body: &[Statement],
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let (cond_value, block) = lower_expr(condition, ctx, block, registry, diagnostics)?;
+    let body_block = ctx.fresh_block("unless_body");
+    let merge_block = ctx.fresh_block("unless_merge");
+    ctx.cfg.set_terminator(
+        block,
+        IRTerminator::CondBranch {
+            cond: cond_value,
+            then_block: merge_block,
+            else_block: body_block,
+        },
+    );
+
+    lower_arm_into(body, ctx, body_block, merge_block, registry, diagnostics)?;
+
+    Ok((emit_unit(ctx, merge_block), merge_block))
+}
+
+/// Lower an arm of an `if` / `unless`: walk the body in `arm_block`,
+/// then unconditionally jump to `merge_block` if the flow is still
+/// open. Closed flow (early `return` inside the arm) leaves the
+/// terminator already set; we don't overwrite it.
+fn lower_arm_into(
+    body: &[Statement],
+    ctx: &mut FnLowerCtx,
+    arm_block: IRBlockId,
+    merge_block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(), ()> {
+    match lower_body(body, ctx, arm_block, registry, diagnostics)? {
+        FlowResult::Open { block, .. } => {
+            ctx.cfg
+                .set_terminator(block, IRTerminator::Branch(merge_block));
+        }
+        FlowResult::Closed => {}
+    }
+    Ok(())
+}
+
+/// Emit a fresh `Const::Unit` in `block` and return its `ValueId`.
+fn emit_unit(ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+    let dest = ctx.fresh_value(IRType::Unit);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest,
+            value: ConstValue::Unit,
+        },
+    );
+    dest
+}
+
+/// Wire a still-open trailing flow up to its function's `Return`.
+/// Closed flows already set their own terminator (an inner `return`);
+/// nothing to do.
+fn finalize_open_flow(ctx: &mut FnLowerCtx, flow: FlowResult) {
+    if let FlowResult::Open { value, block } = flow {
+        ctx.cfg
+            .set_terminator(block, IRTerminator::Return { value });
+    }
+}
+
 /// Lower a `ExprKind::Call`. The seal contract guarantees the callee
 /// is a bare `Ident` whose inner `Resolution` is `Global(id)` — any
 /// deviation is a compiler bug, not a feature gap, so we panic rather
@@ -316,10 +484,11 @@ fn lower_expr(
 fn lower_call(
     callee: &Expr,
     args: &[Arg],
-    builder: &mut BlockBuilder,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<ValueId, ()> {
+) -> Result<(ValueId, IRBlockId), ()> {
     let ExprKind::Ident { resolution, name } = &callee.kind else {
         panic!(
             "alpha IR lower: call callee must be a bare Ident after typecheck seal (got {:?})",
@@ -348,21 +517,23 @@ fn lower_call(
     let callee_symbol = IRSymbol::from_identifier(&entry.identifier);
 
     let mut lowered_args = Vec::with_capacity(args.len());
+    let mut current = block;
     for arg in args {
-        lowered_args.push(lower_expr(&arg.value, builder, registry, diagnostics)?);
+        let (value, next) = lower_expr(&arg.value, ctx, current, registry, diagnostics)?;
+        lowered_args.push(value);
+        current = next;
     }
 
-    let dest = builder.fresh();
-    builder.push_typed(
+    let dest = ctx.fresh_value(return_ty);
+    ctx.cfg.append(
+        current,
         IRInstruction::Call {
             dest,
             callee: callee_symbol,
             args: lowered_args,
         },
-        dest,
-        return_ty,
     );
-    Ok(dest)
+    Ok((dest, current))
 }
 
 fn lower_literal(
@@ -552,42 +723,90 @@ fn expr_kind_label(kind: &ExprKind) -> &'static str {
     }
 }
 
-/// Builder for a single basic block: tracks the instruction list and
-/// hands out fresh SSA value ids. Reset / replaced when control flow
-/// lands and lower starts emitting multiple blocks.
+/// The shape every `lower_*` helper returns. `Open` carries the
+/// trailing value (when the construct produces one) and the block
+/// where flow continues; `Closed` signals that an inner statement
+/// already terminated the function (the only path today is
+/// `Statement::Return`). Closed branches don't fall through to a
+/// surrounding merge block — the caller's wiring inspects `is_closed`
+/// on the relevant block via the `CFGBuilder`'s closed-set, or sees
+/// `FlowResult::Closed` directly from this enum.
+#[derive(Debug, Clone)]
+enum FlowResult {
+    Open {
+        value: Option<ValueId>,
+        block: IRBlockId,
+    },
+    Closed,
+}
+
+/// Per-function lowering context. Owns the [`CFGBuilder`] plus the
+/// `ValueId` / `IRBlockId` counters and a `value -> IRType` index
+/// callers consult to derive operator result types and the function's
+/// return type without re-querying the typecheck registry.
 ///
-/// Also tracks an [`IRType`] for every emitted [`ValueId`] so callers
-/// can ask "what type does this value have?" at any point during
-/// lowering — used to derive operator result types and stamp
-/// [`IRFunction::return_type`] from the trailing expression.
-#[derive(Default)]
-pub(crate) struct BlockBuilder {
-    pub(crate) instructions: Vec<IRInstruction>,
+/// One context per `IRFunction` (or per script body). Discarded after
+/// the function's blocks are extracted via [`Self::into_blocks`];
+/// downstream consumers (seal, backends) build their own indices.
+pub(crate) struct FnLowerCtx {
+    pub(crate) cfg: CFGBuilder,
     next_value: u32,
+    next_block: u32,
     value_types: BTreeMap<ValueId, IRType>,
 }
 
-impl BlockBuilder {
-    fn fresh(&mut self) -> ValueId {
+impl FnLowerCtx {
+    pub(crate) fn new() -> Self {
+        Self {
+            cfg: CFGBuilder::new(),
+            next_value: 0,
+            next_block: 0,
+            value_types: BTreeMap::new(),
+        }
+    }
+
+    /// Mint a fresh `ValueId` and record its `IRType`.
+    pub(crate) fn fresh_value(&mut self, ty: IRType) -> ValueId {
         let id = ValueId(self.next_value);
         self.next_value += 1;
+        self.value_types.insert(id, ty);
         id
     }
 
-    fn push_typed(&mut self, inst: IRInstruction, dest: ValueId, ty: IRType) {
-        debug_assert_eq!(
-            inst.dest(),
-            dest,
-            "push_typed: instruction dest must match the type-tracker key",
-        );
-        self.value_types.insert(dest, ty);
-        self.instructions.push(inst);
+    /// Mint a fresh `IRBlockId` and add the corresponding empty
+    /// block to the [`CFGBuilder`].
+    pub(crate) fn fresh_block(&mut self, label: impl Into<String>) -> IRBlockId {
+        let id = IRBlockId(self.next_block);
+        self.next_block += 1;
+        self.cfg.add_block(id, label);
+        id
     }
 
-    fn type_of(&self, id: ValueId) -> IRType {
+    /// Lookup the recorded `IRType` for `id`. Panics on a miss —
+    /// every emitted `ValueId` registers its type at allocation time,
+    /// so a miss is a lowering bug.
+    pub(crate) fn type_of(&self, id: ValueId) -> IRType {
         self.value_types
             .get(&id)
             .cloned()
             .unwrap_or_else(|| panic!("alpha IR lower: missing type for {id} — lowering bug"))
+    }
+
+    /// Consume the context and return the accumulated block list.
+    /// Asserts via `CFGBuilder`'s closed-set that every block has had
+    /// a real terminator stamped — an unclosed block reaching the
+    /// caller is a lowering bug.
+    pub(crate) fn into_blocks(self) -> Vec<IRBasicBlock> {
+        let (blocks, closed) = self.cfg.into_blocks_with_closed();
+        for block in &blocks {
+            if !closed.contains_key(&block.id) {
+                panic!(
+                    "alpha IR lower: block {} ({}) was opened but never had its terminator set — \
+                     lowering bug",
+                    block.id, block.label,
+                );
+            }
+        }
+        blocks
     }
 }

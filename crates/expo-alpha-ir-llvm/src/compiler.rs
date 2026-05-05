@@ -9,14 +9,19 @@
 //! before returning 0. That auto-print wrapper is temporary
 //! scaffolding — see the runtime module for the deletion plan.
 
-use expo_alpha_ir::{IRBasicBlock, IRFunction, IRProgram, IRScript, IRTerminator, IRType};
+use std::collections::BTreeMap;
+
+use expo_alpha_ir::{
+    IRBasicBlock, IRBlockId, IRFunction, IRProgram, IRScript, IRTerminator, IRType,
+};
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, FunctionType, IntType};
 use inkwell::values::{FunctionValue, IntValue};
 
-use crate::emit::{self, ValueMap};
+use crate::emit::{self, BlockMap, ValueMap};
 use crate::error::LlvmError;
 use crate::types::ir_int_type;
 
@@ -108,48 +113,121 @@ impl<'ctx> Compiler<'ctx> {
         global.set_constant(true);
     }
 
-    /// Emit `blocks` as the host `main` function: declare `i64 main()`,
-    /// walk the (single) block's instructions, intercept its `Return`
-    /// to insert the auto-print call, then `ret i64 0`. Multi-block
-    /// bodies surface as a feature-gap diagnostic until branch
-    /// terminators land.
+    /// Emit `blocks` as the host `main` function: declare
+    /// `i64 main()`, pre-create one inkwell `BasicBlock` per IR
+    /// block, walk every IR block's instructions in order, and
+    /// intercept the trailing-block's `Return` so we can insert the
+    /// auto-print call before `ret i64 0`. Branch / cond-branch
+    /// terminators are lowered to `br` instructions verbatim.
+    ///
+    /// Empty bodies are illegal (sealed IR guarantees at least one
+    /// block), and the final IR block must end in `Return`. The seal
+    /// pass admits other terminators for non-trailing blocks; only
+    /// the entry function's last block carries the auto-print
+    /// scaffolding.
     fn emit_as_main(&self, blocks: &[IRBasicBlock], return_type: &IRType) -> Result<(), LlvmError> {
-        if blocks.len() != 1 {
-            return Err(LlvmError::Codegen(format!(
-                "alpha LLVM does not yet emit multi-block `main` bodies (got {} blocks)",
-                blocks.len(),
-            )));
-        }
         let i64_type = self.context.i64_type();
         let signature = i64_type.fn_type(&[], false);
         let function = self
             .module
             .add_function(ENTRY_SYMBOL, signature, Some(Linkage::External));
-        let entry_block = self.context.append_basic_block(function, "entry");
-        self.builder.position_at_end(entry_block);
+        let block_map = self.declare_blocks(function, blocks);
+        let return_block_id = self.find_return_block(blocks)?;
+        let return_block = blocks
+            .iter()
+            .find(|b| b.id == return_block_id)
+            .expect("return block must exist in IR");
 
-        let (values, terminator) = emit::emit_instructions(
-            self.context,
-            &self.builder,
-            &self.module,
-            &blocks[0],
-            ValueMap::new(),
-        )?;
-        let body_value = match terminator {
-            IRTerminator::Return { value: Some(id) } => emit::lookup(&values, *id)?,
-            IRTerminator::Return { value: None } => {
-                return Err(LlvmError::Codegen(
-                    "alpha LLVM does not yet emit Unit-returning `main`".to_string(),
-                ));
+        let mut values: ValueMap<'ctx> = ValueMap::new();
+        for block in blocks {
+            let llvm_block = block_map[&block.id];
+            self.builder.position_at_end(llvm_block);
+            if block.id == return_block_id {
+                let (next_values, terminator) = emit::emit_instructions(
+                    self.context,
+                    &self.builder,
+                    &self.module,
+                    block,
+                    std::mem::take(&mut values),
+                )?;
+                values = next_values;
+                let body_value = match terminator {
+                    IRTerminator::Return { value: Some(id) } => emit::lookup(&values, *id)?,
+                    IRTerminator::Return { value: None } => {
+                        return Err(LlvmError::Codegen(
+                            "alpha LLVM does not yet emit Unit-returning `main`".to_string(),
+                        ));
+                    }
+                    other => {
+                        unreachable!("main return-block must terminate in Return; got {other:?}")
+                    }
+                };
+                self.emit_print_call(return_type, body_value)?;
+                self.builder
+                    .build_return(Some(&i64_type.const_int(0, false)))
+                    .map(|_| ())
+                    .map_err(|e| {
+                        LlvmError::Codegen(format!("inkwell rejected build_return for main: {e}"))
+                    })?;
+            } else {
+                emit::emit_block(
+                    self.context,
+                    &self.builder,
+                    &self.module,
+                    block,
+                    &block_map,
+                    &mut values,
+                )?;
             }
-        };
+        }
+        // Suppress the unused-binding warning while keeping the
+        // shape parallel to the helper paths.
+        let _ = return_block;
+        Ok(())
+    }
 
-        self.emit_print_call(return_type, body_value)?;
+    /// Pre-create one inkwell [`BasicBlock`] per IR block on
+    /// `function`, returning the [`IRBlockId`] -> [`BasicBlock`]
+    /// index emit consumes when lowering branch terminators.
+    fn declare_blocks(
+        &self,
+        function: FunctionValue<'ctx>,
+        blocks: &[IRBasicBlock],
+    ) -> BlockMap<'ctx> {
+        let mut block_map: BTreeMap<IRBlockId, BasicBlock<'ctx>> = BTreeMap::new();
+        for block in blocks {
+            let llvm_block = self.context.append_basic_block(function, &block.label);
+            block_map.insert(block.id, llvm_block);
+        }
+        block_map
+    }
 
-        self.builder
-            .build_return(Some(&i64_type.const_int(0, false)))
-            .map(|_| ())
-            .map_err(|e| LlvmError::Codegen(format!("inkwell rejected build_return for main: {e}")))
+    /// The `IRBlockId` of the unique block ending in `Return`. The
+    /// auto-print wrapper around `main` patches in `ret i64 0` after
+    /// executing the body, so we need to know which IR block carries
+    /// the body's value before walking. Today's slice produces
+    /// exactly one `Return`-terminated block per function (the
+    /// merge block of an `if` / `unless` falls through to it via
+    /// `Branch`), so a missing or duplicate `Return` is a lowering
+    /// bug we surface as a codegen error.
+    fn find_return_block(&self, blocks: &[IRBasicBlock]) -> Result<IRBlockId, LlvmError> {
+        let mut found: Option<IRBlockId> = None;
+        for block in blocks {
+            if matches!(block.terminator, IRTerminator::Return { .. }) {
+                if found.is_some() {
+                    return Err(LlvmError::Codegen(
+                        "alpha LLVM expects exactly one Return-terminated block in `main`"
+                            .to_string(),
+                    ));
+                }
+                found = Some(block.id);
+            }
+        }
+        found.ok_or_else(|| {
+            LlvmError::Codegen(
+                "alpha LLVM expects at least one Return-terminated block in `main`".to_string(),
+            )
+        })
     }
 
     /// Pick the runtime printer for `return_type`, extend `body_value`
@@ -239,33 +317,33 @@ impl<'ctx> Compiler<'ctx> {
 
     /// Define a non-entry function's body. Helpers keep the natural
     /// `Return`-to-`ret` emission via [`emit::emit_block`] — only
-    /// `main` gets the auto-print wrapper. The body's `ValueMap` is
-    /// seeded with each [`expo_alpha_ir::IRFunctionParam`] bound to
-    /// the matching `function.get_nth_param(i)` LLVM value, so any
-    /// body reference to a param resolves through the same
-    /// [`emit::lookup`] path as a body-emitted instruction.
+    /// `main` gets the auto-print wrapper. Pre-creates one inkwell
+    /// `BasicBlock` per IR block so `Branch` / `CondBranch`
+    /// terminators can resolve to a real `inkwell::BasicBlock`. The
+    /// body's `ValueMap` is seeded with each
+    /// [`expo_alpha_ir::IRFunctionParam`] bound to the matching
+    /// `function.get_nth_param(i)` LLVM value before walking the
+    /// entry block.
     fn define_function(
         &self,
         function: &IRFunction,
         llvm_function: FunctionValue<'ctx>,
     ) -> Result<(), LlvmError> {
-        if function.blocks.len() != 1 {
-            return Err(LlvmError::Codegen(format!(
-                "alpha LLVM does not yet emit multi-block functions (`{}` has {} blocks)",
-                function.symbol,
-                function.blocks.len(),
-            )));
+        let block_map = self.declare_blocks(llvm_function, &function.blocks);
+        let mut values = self.seed_params(function, llvm_function)?;
+        for block in &function.blocks {
+            let llvm_block = block_map[&block.id];
+            self.builder.position_at_end(llvm_block);
+            emit::emit_block(
+                self.context,
+                &self.builder,
+                &self.module,
+                block,
+                &block_map,
+                &mut values,
+            )?;
         }
-        let entry_block = self.context.append_basic_block(llvm_function, "entry");
-        self.builder.position_at_end(entry_block);
-        let seed = self.seed_params(function, llvm_function)?;
-        emit::emit_block(
-            self.context,
-            &self.builder,
-            &self.module,
-            &function.blocks[0],
-            seed,
-        )
+        Ok(())
     }
 
     /// Seed a fresh [`ValueMap`] with each parameter's LLVM value,

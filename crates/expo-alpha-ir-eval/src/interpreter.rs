@@ -1,18 +1,27 @@
 //! Tree-walking interpreter over a sealed [`IRProgram`] or
 //! [`IRScript`]. The walker is parameterized over a [`CallResolver`]
 //! so both IR shapes share the per-instruction execution / frame
-//! management / terminator follow code; only callee lookup differs.
+//! management / terminator dispatch code; only callee and per-id
+//! block lookup differ.
 //!
 //! `Call` instructions chain through [`execute_function`]: evaluate
 //! the args in the current frame, resolve the callee, seed a fresh
 //! frame with param `ValueId`s bound to arg values, recurse. Call
 //! depth is uncapped — pathological recursion propagates as a native
 //! Rust stack overflow.
+//!
+//! Multi-block bodies are driven by [`execute_blocks`]: walk the
+//! current block's instructions, then dispatch on the terminator —
+//! `Return` exits the function with a value, `Branch` and
+//! `CondBranch` move the cursor to the named target block. The frame
+//! is shared across every block in a single function (per
+//! `IRFunction` boundary), mirroring the IR's "value ids are
+//! function-scoped" contract.
 
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRScript,
+    ConstValue, IRBasicBlock, IRBinOp, IRBlockId, IRFunction, IRInstruction, IRProgram, IRScript,
     IRTerminator, IRUnaryOp, ValueId,
 };
 
@@ -33,12 +42,8 @@ impl Interpreter {
     /// value (or [`Value::Unit`] for an empty / non-expression-trailing
     /// body).
     pub fn run_script(script: IRScript) -> Result<Value, RuntimeError> {
-        let block = script
-            .blocks
-            .first()
-            .expect("sealed IRScript has at least one basic block");
         let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
-        execute_block(block, &mut frame, &script)
+        execute_blocks(&script.blocks, &mut frame, &script)
     }
 }
 
@@ -64,9 +69,8 @@ impl CallResolver for IRScript {
 }
 
 /// Run `function` in a fresh frame with `args` positionally bound to
-/// its param `ValueId`s. Single-block-per-function is the current
-/// invariant, so this just runs the block and returns its terminator
-/// value.
+/// its param `ValueId`s. Multi-block bodies dispatch through
+/// [`execute_blocks`].
 fn execute_function<R: CallResolver>(
     function: &IRFunction,
     args: Vec<Value>,
@@ -85,22 +89,55 @@ fn execute_function<R: CallResolver>(
         frame.insert(param.id, value);
     }
 
-    let block = function
-        .blocks
-        .first()
-        .expect("sealed IRFunction has at least one basic block");
-    execute_block(block, &mut frame, resolver)
+    execute_blocks(&function.blocks, &mut frame, resolver)
 }
 
-fn execute_block<R: CallResolver>(
-    block: &IRBasicBlock,
+/// Drive a function (or script body) starting at `blocks[0]` until a
+/// `Return` terminator exits with a value. `Branch` / `CondBranch`
+/// move the cursor; the frame stays alive across every block in the
+/// function. Unknown branch targets panic per the seal contract — by
+/// the time the IR reaches an interpreter run those have all been
+/// validated.
+fn execute_blocks<R: CallResolver>(
+    blocks: &[IRBasicBlock],
     frame: &mut BTreeMap<ValueId, Value>,
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
-    for instruction in &block.instructions {
-        execute_instruction(instruction, frame, resolver)?;
+    let mut current = blocks
+        .first()
+        .expect("sealed function has at least one basic block")
+        .id;
+    loop {
+        let block = find_block(blocks, current);
+        for instruction in &block.instructions {
+            execute_instruction(instruction, frame, resolver)?;
+        }
+        match &block.terminator {
+            IRTerminator::Branch(target) => current = *target,
+            IRTerminator::CondBranch {
+                cond,
+                then_block,
+                else_block,
+            } => {
+                let cond_value = lookup(frame, *cond)?;
+                let Value::Bool(b) = cond_value else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("cond_branch expects a Bool condition; got {cond_value}",),
+                    });
+                };
+                current = if b { *then_block } else { *else_block };
+            }
+            IRTerminator::Return { value: None } => return Ok(Value::Unit),
+            IRTerminator::Return { value: Some(id) } => return lookup(frame, *id),
+        }
     }
-    follow_terminator(&block.terminator, frame)
+}
+
+fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {
+    blocks
+        .iter()
+        .find(|b| b.id == id)
+        .unwrap_or_else(|| panic!("interpreter: block `{id}` missing — seal invariant violation"))
 }
 
 fn execute_instruction<R: CallResolver>(
@@ -141,16 +178,6 @@ fn execute_instruction<R: CallResolver>(
             frame.insert(*dest, result);
             Ok(())
         }
-    }
-}
-
-fn follow_terminator(
-    terminator: &IRTerminator,
-    frame: &BTreeMap<ValueId, Value>,
-) -> Result<Value, RuntimeError> {
-    match terminator {
-        IRTerminator::Return { value: None } => Ok(Value::Unit),
-        IRTerminator::Return { value: Some(id) } => lookup(frame, *id),
     }
 }
 

@@ -101,6 +101,22 @@ fn resolve_expr(
             resolve_expr(inner, package, registry, diagnostics);
             inner.resolution.clone()
         }
+        ExprKind::If {
+            condition,
+            then_body,
+            else_body,
+        } => resolve_if(
+            condition,
+            then_body,
+            else_body.as_deref_mut(),
+            expr.span,
+            package,
+            registry,
+            diagnostics,
+        ),
+        ExprKind::Unless { condition, body } => {
+            resolve_unless(condition, body, expr.span, package, registry, diagnostics)
+        }
         ExprKind::Literal { value } => literal_type(value, registry),
         ExprKind::Call { callee, args } => {
             resolve_call(callee, args, expr.span, package, registry, diagnostics)
@@ -240,6 +256,80 @@ fn resolve_call(
     }
 
     return_type
+}
+
+/// Resolve `if cond do then_body end` (no `else` in this slice).
+/// Restricts the condition to `Bool`, recursively resolves the body
+/// statements, and types the whole expression as `Unit`. `else`
+/// branches surface as a feature-gap diagnostic — value-producing
+/// `if` / `else` lands with the locals slice once alloca-style
+/// result slots are available.
+fn resolve_if(
+    condition: &mut Expr,
+    then_body: &mut [Statement],
+    else_body: Option<&mut [Statement]>,
+    span: Span,
+    package: &str,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    resolve_expr(condition, package, registry, diagnostics);
+    require_bool_condition("if", condition, registry, diagnostics);
+    for stmt in then_body.iter_mut() {
+        resolve_statement(stmt, package, registry, diagnostics);
+    }
+    if let Some(else_body) = else_body {
+        diagnostics.push(Diagnostic::error(
+            "alpha typecheck does not yet support `else` branches",
+            span,
+        ));
+        for stmt in else_body.iter_mut() {
+            resolve_statement(stmt, package, registry, diagnostics);
+        }
+    }
+    primitive(registry, "Unit")
+}
+
+/// Resolve `unless cond do body end`. Same shape as `if` minus the
+/// `else` carve-out (the parser doesn't admit `else` on `unless`),
+/// always Unit-typed.
+fn resolve_unless(
+    condition: &mut Expr,
+    body: &mut [Statement],
+    _span: Span,
+    package: &str,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    resolve_expr(condition, package, registry, diagnostics);
+    require_bool_condition("unless", condition, registry, diagnostics);
+    for stmt in body.iter_mut() {
+        resolve_statement(stmt, package, registry, diagnostics);
+    }
+    primitive(registry, "Unit")
+}
+
+/// Diagnose a non-Bool condition on an `if` / `unless`. Skips the
+/// check when the condition itself failed to resolve — its own
+/// diagnostic is already in flight.
+fn require_bool_condition(
+    keyword: &str,
+    condition: &Expr,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !condition.resolution.is_resolved() {
+        return;
+    }
+    if !is_primitive(&condition.resolution, registry, "Bool") {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`{keyword}` condition must be `Bool`, got `{}`",
+                display_resolution(&condition.resolution, registry),
+            ),
+            condition.span,
+        ));
+    }
 }
 
 fn literal_type(value: &Literal, registry: &GlobalRegistry) -> ResolvedType {

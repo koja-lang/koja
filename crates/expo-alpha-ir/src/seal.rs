@@ -12,16 +12,21 @@
 //! 2. Every function in every package keys at its own symbol
 //!    (`pkg.functions[sym].symbol == sym`).
 //! 3. Every function has at least one basic block.
-//! 4. Within each function: every value reference (instruction operand
-//!    or terminator value) points at a `ValueId` defined earlier in
-//!    the same function. Parameter `ValueId`s are seeded into the
-//!    defined set before the first block, so body references to
-//!    params are valid without having a distinct "definition"
-//!    instruction.
-//! 5. Every `IRInstruction::Call`'s `callee` symbol resolves to a
+//! 4. Every basic-block id is unique within its function.
+//! 5. Every operand referenced by an instruction or terminator points
+//!    at a `ValueId` defined earlier in the same basic block.
+//!    Parameter `ValueId`s are seeded into the entry block's defined
+//!    set so body references to params are valid without a distinct
+//!    "definition" instruction. Cross-block value flow doesn't appear
+//!    in this slice — the assignment / locals slice introduces it via
+//!    `StoreLocal` / `LoadLocal` (alloca-backed memory, not raw SSA
+//!    use across blocks).
+//! 6. Every `IRTerminator::Branch` / `CondBranch` target is a block
+//!    that exists in the same function.
+//! 7. Every `IRInstruction::Call`'s `callee` symbol resolves to a
 //!    function that actually exists somewhere in the `IRProgram` /
 //!    `IRScript`.
-//! 6. **Transient slice invariant**: every [`ConstValue`] and
+//! 8. **Transient slice invariant**: every [`ConstValue`] and
 //!    [`IRType`] that flows through the IR is one of `Bool`,
 //!    `Int64`, or `Unit`. The narrower / unsigned width variants
 //!    (`Int8` / `Int16` / `Int32` / `UInt8` / `UInt16` / `UInt32` /
@@ -32,14 +37,14 @@
 //!    stdlib stubs. Applies to function return types, parameter
 //!    types, and every value-flow [`IRType`] alike.
 //!
-//! The script path ([`seal_script`]) re-asserts (3)–(6) on the
+//! The script path ([`seal_script`]) re-asserts (3)–(8) on the
 //! implicit-function shape ([`IRScript::blocks`] +
-//! [`IRScript::return_type`]), and re-asserts (5) using
+//! [`IRScript::return_type`]), and re-asserts (7) using
 //! [`IRScript::packages`] as the call-target lookup.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
-use crate::function::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator};
+use crate::function::{IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRTerminator};
 use crate::script::IRScript;
 use crate::types::{ConstValue, IRType, ValueId};
 use crate::{IRProgram, package::IRPackage};
@@ -66,9 +71,10 @@ pub(crate) fn seal_script(script: &IRScript) {
         seal_panic(&format!("{owner} has no basic blocks"));
     }
     require_supported_type(&script.return_type, &|| format!("{owner} return type"));
-    let mut defined: BTreeSet<ValueId> = BTreeSet::new();
+    let block_ids = collect_block_ids(&script.blocks, owner);
+    let seeded: BTreeSet<ValueId> = BTreeSet::new();
     for block in &script.blocks {
-        seal_block(block, owner, &mut defined);
+        seal_block(block, owner, &seeded, &block_ids);
     }
     seal_script_calls(script);
 }
@@ -92,29 +98,53 @@ fn seal_function(function: &IRFunction) {
     }
     require_supported_type(&function.return_type, &|| format!("{owner} return type"));
     // Parameter `ValueId`s count as definitions for the purposes of
-    // downstream operand references. Seed them first so the rest of
-    // the block walk treats them as already-defined.
-    let mut defined: BTreeSet<ValueId> = BTreeSet::new();
+    // operand references inside the entry block. Seed them once and
+    // pass the seed by reference into every block walk; per-block
+    // defined-set composes onto the seed without mutating it across
+    // blocks (cross-block value flow doesn't appear in this slice).
+    let mut seeded: BTreeSet<ValueId> = BTreeSet::new();
     for (index, param) in function.params.iter().enumerate() {
         require_supported_type(&param.ty, &|| {
             format!("{owner} parameter #{index} ({}) type", param.id)
         });
-        if !defined.insert(param.id) {
+        if !seeded.insert(param.id) {
             seal_panic(&format!(
                 "{owner} lists duplicate parameter value `{}`",
                 param.id,
             ));
         }
     }
+    let block_ids = collect_block_ids(&function.blocks, &owner);
     for block in &function.blocks {
-        seal_block(block, &owner, &mut defined);
+        seal_block(block, &owner, &seeded, &block_ids);
     }
 }
 
-fn seal_block(block: &IRBasicBlock, owner: &str, defined: &mut BTreeSet<ValueId>) {
+/// Build the per-function block-id set used to validate every
+/// terminator target. Asserts uniqueness en route.
+fn collect_block_ids(blocks: &[IRBasicBlock], owner: &str) -> HashSet<IRBlockId> {
+    let mut ids = HashSet::with_capacity(blocks.len());
+    for block in blocks {
+        if !ids.insert(block.id) {
+            seal_panic(&format!(
+                "{owner} contains duplicate block id `{}`",
+                block.id,
+            ));
+        }
+    }
+    ids
+}
+
+fn seal_block(
+    block: &IRBasicBlock,
+    owner: &str,
+    seeded: &BTreeSet<ValueId>,
+    block_ids: &HashSet<IRBlockId>,
+) {
+    let mut defined = seeded.clone();
     for inst in &block.instructions {
         for operand in instruction_operands(inst) {
-            require_defined(operand, owner, defined);
+            require_defined(operand, owner, &defined);
         }
         if let IRInstruction::Const { value, .. } = inst {
             require_supported_const(value, &|| {
@@ -126,12 +156,20 @@ fn seal_block(block: &IRBasicBlock, owner: &str, defined: &mut BTreeSet<ValueId>
         }
     }
     for operand in terminator_operands(&block.terminator) {
-        require_defined(operand, owner, defined);
+        require_defined(operand, owner, &defined);
+    }
+    for target in terminator_targets(&block.terminator) {
+        if !block_ids.contains(&target) {
+            seal_panic(&format!(
+                "{owner} block {} terminator targets unknown block `{target}`",
+                block.id,
+            ));
+        }
     }
 }
 
 /// Transient slice invariant: only `Bool` / `Int64` / `Unit` flow
-/// through the IR. See module docstring invariant 6.
+/// through the IR. See module docstring invariant 8.
 fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
         IRType::Bool | IRType::Int64 | IRType::Unit => {}
@@ -165,7 +203,21 @@ fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
 
 fn terminator_operands(term: &IRTerminator) -> Vec<ValueId> {
     match term {
+        IRTerminator::Branch(_) => vec![],
+        IRTerminator::CondBranch { cond, .. } => vec![*cond],
         IRTerminator::Return { value } => value.iter().copied().collect(),
+    }
+}
+
+fn terminator_targets(term: &IRTerminator) -> Vec<IRBlockId> {
+    match term {
+        IRTerminator::Branch(target) => vec![*target],
+        IRTerminator::CondBranch {
+            then_block,
+            else_block,
+            ..
+        } => vec![*then_block, *else_block],
+        IRTerminator::Return { .. } => vec![],
     }
 }
 
