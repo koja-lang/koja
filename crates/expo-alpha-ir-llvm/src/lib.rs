@@ -37,11 +37,32 @@
 //!
 //! `compile_*` writes a native object file at the requested path;
 //! linking lives in `expo-driver`.
+//!
+//! # Module layout
+//!
+//! - [`ctx`] — [`ctx::EmitCtx`] bundle (inkwell context + module +
+//!   builder), the value threaded through every emit operation.
+//! - [`emit`] — block / instruction / terminator / operator
+//!   emission. Sub-split into `mod.rs` (block seams + lookups),
+//!   `instruction.rs` (dispatch + const + call), `ops.rs` (binary +
+//!   unary).
+//! - [`function`] — non-entry function declare + define +
+//!   param/block seeding.
+//! - [`main_wrapper`] — `i64 main()` synthesis + auto-print + the
+//!   `__expo_app_name` global. **All temporary scaffolding**; this
+//!   file is the deletion target when `IO.puts` lands.
+//! - [`object`] — native `.o` emission via inkwell's `TargetMachine`.
+//! - [`program`] / [`script`] — orchestrators for the two IR shapes.
+//! - [`types`] — `IRType` -> inkwell `IntType` mapping.
 
-mod compiler;
+mod ctx;
 mod emit;
 mod error;
+mod function;
+mod main_wrapper;
 mod object;
+mod program;
+mod script;
 mod types;
 
 pub use error::LlvmError;
@@ -50,6 +71,8 @@ use std::path::Path;
 
 use expo_alpha_ir::{IRProgram, IRScript};
 use inkwell::context::Context;
+
+use crate::ctx::EmitCtx;
 
 /// Compile a sealed [`IRProgram`] to a native object file at
 /// `output`. `app_name` is embedded as the runtime's
@@ -61,33 +84,33 @@ pub fn compile_program(
     output: &Path,
 ) -> Result<(), LlvmError> {
     let context = Context::create();
-    let compiler = compiler::Compiler::new(&context);
-    compiler.compile_program(program, app_name)?;
-    object::emit_object_file(compiler.module(), output)
+    let ctx = EmitCtx::new(&context);
+    program::compile_program(&ctx, program, app_name)?;
+    object::emit_object_file(&ctx.module, output)
 }
 
 /// Compile a sealed [`IRProgram`] and return its LLVM IR text — for
-/// snapshot-style coverage in `tests/emit.rs`. No linking, no
+/// snapshot-style coverage in `tests/program.rs`. No linking, no
 /// subprocess.
 pub fn emit_llvm_ir(program: &IRProgram, app_name: &str) -> Result<String, LlvmError> {
     let context = Context::create();
-    let compiler = compiler::Compiler::new(&context);
-    compiler.compile_program(program, app_name)?;
-    Ok(compiler.module().print_to_string().to_string())
+    let ctx = EmitCtx::new(&context);
+    program::compile_program(&ctx, program, app_name)?;
+    Ok(ctx.module.print_to_string().to_string())
 }
 
 /// Counterpart to [`compile_program`] for script-mode sources.
 pub fn compile_script(script: &IRScript, app_name: &str, output: &Path) -> Result<(), LlvmError> {
     let context = Context::create();
-    let compiler = compiler::Compiler::new(&context);
-    compiler.compile_script(script, app_name)?;
-    object::emit_object_file(compiler.module(), output)
+    let ctx = EmitCtx::new(&context);
+    script::compile_script(&ctx, script, app_name)?;
+    object::emit_object_file(&ctx.module, output)
 }
 
 /// Counterpart to [`emit_llvm_ir`] for script-mode sources.
 pub fn emit_script_llvm_ir(script: &IRScript, app_name: &str) -> Result<String, LlvmError> {
     let context = Context::create();
-    let compiler = compiler::Compiler::new(&context);
-    compiler.compile_script(script, app_name)?;
-    Ok(compiler.module().print_to_string().to_string())
+    let ctx = EmitCtx::new(&context);
+    script::compile_script(&ctx, script, app_name)?;
+    Ok(ctx.module.print_to_string().to_string())
 }

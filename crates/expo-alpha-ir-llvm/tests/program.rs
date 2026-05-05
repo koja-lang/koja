@@ -1,8 +1,10 @@
-//! IR-text snapshot tests for the alpha LLVM backend.
+//! IR-text snapshot tests for the program-mode entry points
+//! ([`compile_program`] / [`emit_llvm_ir`]). Pairs with
+//! `src/program.rs` in source.
 //!
-//! Each test drives the full alpha pipeline on a tiny fixture and
-//! asserts substrings of the produced module text. No linking, no
-//! subprocess — driver e2e tests cover that path.
+//! Each test drives the full alpha pipeline on a tiny `fn main`
+//! fixture and asserts substrings of the produced module text. No
+//! linking, no subprocess — driver e2e tests cover that path.
 //!
 //! Every emitted `main` returns `i64 0`; the body's value is fed to
 //! a runtime printer first (temporary scaffolding, see
@@ -12,40 +14,38 @@
 //!
 //! Substring (not full-text) assertions because inkwell may adjust
 //! attribute ordering between LLVM patch versions.
+//!
+//! [`compile_program`]: expo_alpha_ir_llvm::compile_program
+//! [`emit_llvm_ir`]: expo_alpha_ir_llvm::emit_llvm_ir
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{IRProgram, IRScript, lower_program, lower_script};
-use expo_alpha_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
+use expo_alpha_ir::{IRProgram, lower_program};
+use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
 const APP_NAME: &str = "emit_test";
+const PACKAGE: &str = "TestApp";
 
-fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
+fn typecheck(source: &str) -> CheckedProgram {
     let parsed = parse_program(
         vec![SourceFile {
             package: PACKAGE.to_string(),
-            path: PathBuf::from("emit.expo"),
+            path: PathBuf::from("program.expo"),
             source: source.to_string(),
         }],
-        mode,
+        ParseMode::File,
     );
     check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
 }
 
 fn lower(source: &str) -> IRProgram {
-    let checked = typecheck(source, ParseMode::File);
+    let checked = typecheck(source);
     let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
     lower_program(&checked, entry).expect("lowering should succeed")
-}
-
-fn lower_as_script(source: &str) -> IRScript {
-    let checked = typecheck(source, ParseMode::Script);
-    lower_script(&checked).expect("script lowering should succeed")
 }
 
 fn assert_contains(ir_text: &str, needle: &str) {
@@ -58,18 +58,18 @@ fn assert_contains(ir_text: &str, needle: &str) {
 fn assert_main_shape(ir_text: &str) {
     assert_contains(ir_text, "define i64 @main()");
     assert_contains(ir_text, "ret i64 0");
-    // `__expo_app_name` is required by `expo-runtime`'s panic.rs; the
-    // alpha backend must emit it on every module so the runtime
+    // `__expo_app_name` is required by `expo-runtime`'s panic.rs;
+    // the alpha backend must emit it on every module so the runtime
     // archive links cleanly regardless of cgu partitioning.
     assert_contains(ir_text, "@__expo_app_name");
 }
 
 // ---------------------------------------------------------------------------
-// Program-mode (`fn main -> ...`) coverage
+// `fn main` body: literals, arithmetic, boolean, comparison
 // ---------------------------------------------------------------------------
 
 #[test]
-fn program_fn_main_two_plus_two_prints_four() {
+fn fn_main_two_plus_two_prints_four() {
     let source = "
         fn main -> Int
           2 + 2
@@ -86,7 +86,7 @@ fn program_fn_main_two_plus_two_prints_four() {
 }
 
 #[test]
-fn program_large_int_literal_prints_i64_constant() {
+fn large_int_literal_prints_i64_constant() {
     let source = "
         fn main -> Int
           5000000000
@@ -104,7 +104,7 @@ fn program_large_int_literal_prints_i64_constant() {
 }
 
 #[test]
-fn program_neg_unary_prints_negative_int() {
+fn neg_unary_prints_negative_int() {
     let source = "
         fn main -> Int
           -7
@@ -119,7 +119,7 @@ fn program_neg_unary_prints_negative_int() {
 }
 
 #[test]
-fn program_logical_and_prints_false() {
+fn logical_and_prints_false() {
     let source = "
         fn main -> Bool
           true and false
@@ -135,7 +135,7 @@ fn program_logical_and_prints_false() {
 }
 
 #[test]
-fn program_logical_or_prints_true() {
+fn logical_or_prints_true() {
     let source = "
         fn main -> Bool
           true or false
@@ -150,7 +150,7 @@ fn program_logical_or_prints_true() {
 }
 
 #[test]
-fn program_not_unary_prints_false() {
+fn not_unary_prints_false() {
     let source = "
         fn main -> Bool
           not true
@@ -165,7 +165,7 @@ fn program_not_unary_prints_false() {
 }
 
 #[test]
-fn program_int_lt_prints_true() {
+fn int_lt_prints_true() {
     let source = "
         fn main -> Bool
           1 < 2
@@ -180,7 +180,7 @@ fn program_int_lt_prints_true() {
 }
 
 #[test]
-fn program_int_eq_prints_true() {
+fn int_eq_prints_true() {
     let source = "
         fn main -> Bool
           1 == 1
@@ -195,11 +195,12 @@ fn program_int_eq_prints_true() {
 }
 
 // ---------------------------------------------------------------------------
-// Function-definition + call coverage
+// Helper-function definition + call coverage
 //
 // Pin three things per scenario:
 //   1. The helper's `define` line — confirms the IR's
-//      [`IRSymbol::mangled`] flows directly through `add_function`.
+//      [`expo_alpha_ir::IRSymbol::mangled`] flows directly through
+//      `add_function`.
 //   2. The body's `call ...` line — confirms callee lookup and
 //      argument plumbing.
 //   3. The trailing print-then-exit-0 shape via `assert_main_shape`.
@@ -210,7 +211,7 @@ fn program_int_eq_prints_true() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn program_zero_arg_call_emits_helper_define_and_call() {
+fn zero_arg_call_emits_helper_define_and_call() {
     let source = "
         fn answer -> Int
           42
@@ -234,7 +235,7 @@ fn program_zero_arg_call_emits_helper_define_and_call() {
 }
 
 #[test]
-fn program_one_arg_call_threads_int_through_helper_signature() {
+fn one_arg_call_threads_int_through_helper_signature() {
     // The helper ignores its param (typecheck won't yet lower a
     // body reference to it), but the param shape still has to be
     // emitted on both sides of the call: `define i64 @id(i64 ...)`
@@ -258,7 +259,7 @@ fn program_one_arg_call_threads_int_through_helper_signature() {
 }
 
 #[test]
-fn program_multi_arg_call_threads_each_int_in_declared_order() {
+fn multi_arg_call_threads_each_int_in_declared_order() {
     let source = "
         fn pair(a: Int, b: Int) -> Int
           11
@@ -275,82 +276,4 @@ fn program_multi_arg_call_threads_each_int_in_declared_order() {
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "define i64 @TestApp.pair(i64");
     assert_contains(&ir_text, "call i64 @TestApp.pair(i64 2, i64 3)");
-}
-
-#[test]
-fn script_call_to_helper_emits_call_in_main_body() {
-    // Script mode wires the same helper-declare-then-call shape
-    // through `emit_script_llvm_ir`: helper lives in a package
-    // fragment, the implicit `main` body issues the call and feeds
-    // the result through arithmetic before printing.
-    let source = "
-        fn answer -> Int
-          42
-        end
-
-        answer() + 1
-        ";
-
-    let script = lower_as_script(&dedent(source));
-    let ir_text =
-        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-
-    assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "define i64 @TestApp.answer()");
-    assert_contains(&ir_text, "call i64 @TestApp.answer()");
-    // inkwell does not const-fold across the call boundary: the
-    // callee's return value lands in a fresh SSA name (`%call`),
-    // gets `add`-ed against `i64 1`, and the resulting `%add` is
-    // what the printer receives. Pin the SSA-shaped invocation
-    // rather than the value `43`.
-    assert_contains(&ir_text, "%add = add i64 %call, 1");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 %add)");
-}
-
-// ---------------------------------------------------------------------------
-// Script-mode (top-level expression) coverage
-// ---------------------------------------------------------------------------
-
-#[test]
-fn script_bare_two_plus_two_prints_four() {
-    let script = lower_as_script("2 + 2\n");
-    let ir_text =
-        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-
-    assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 4)");
-}
-
-#[test]
-fn script_large_int_literal_prints_i64_constant() {
-    let script = lower_as_script("5000000000\n");
-    let ir_text =
-        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-
-    assert_main_shape(&ir_text);
-    assert_contains(
-        &ir_text,
-        "call void @__expo_alpha_print_i64(i64 5000000000)",
-    );
-}
-
-#[test]
-fn script_bare_not_true_prints_false() {
-    let script = lower_as_script("not true\n");
-    let ir_text =
-        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-
-    assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "declare void @__expo_alpha_print_bool(i64)");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 0)");
-}
-
-#[test]
-fn script_int_compare_prints_true() {
-    let script = lower_as_script("1 < 2\n");
-    let ir_text =
-        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-
-    assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 1)");
 }
