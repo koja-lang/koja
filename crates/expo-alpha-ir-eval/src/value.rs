@@ -9,6 +9,7 @@ use std::fmt;
 pub enum Value {
     Bool(bool),
     Int(i64),
+    String(String),
     Unit,
 }
 
@@ -26,6 +27,13 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            Value::String(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Value {
@@ -33,6 +41,7 @@ impl fmt::Display for Value {
         match self {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Int(i) => write!(f, "{i}"),
+            Value::String(s) => f.write_str(s),
             Value::Unit => write!(f, "()"),
         }
     }

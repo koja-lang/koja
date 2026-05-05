@@ -5,7 +5,7 @@
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../../design/COMPILER-NORTHSTAR.md
 
-use expo_ast::ast::{Expr, ExprKind, File, Function, Item, Statement};
+use expo_ast::ast::{Expr, ExprKind, File, Function, Item, Statement, StringPart};
 use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
 
@@ -103,6 +103,13 @@ fn seal_expr(expr: &Expr) {
             }
         }
         ExprKind::Literal { .. } => {}
+        ExprKind::String { parts, .. } => {
+            for part in parts {
+                if let StringPart::Interpolation { expr, .. } = part {
+                    seal_expr(expr);
+                }
+            }
+        }
         ExprKind::Unary { operand, .. } => seal_expr(operand),
         ExprKind::Unless { condition, body } => {
             seal_expr(condition);

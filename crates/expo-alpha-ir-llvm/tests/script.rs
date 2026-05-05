@@ -97,6 +97,39 @@ fn int_compare_prints_true() {
 }
 
 #[test]
+fn string_literal_emits_v1_header_layout_and_print_string_call() {
+    let script = lower_as_script("\"hello\"\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    // Private constant matches expo-codegen's create_string_global:
+    // `{ i64 bit_length, [N+1 x i8] c"<bytes>\00" }`. For "hello":
+    // bit_length = 40, payload = 6 bytes (5 utf8 + trailing NUL).
+    assert_contains(&ir_text, "@alpha_str.0 = private constant");
+    assert_contains(&ir_text, "{ i64 40, [6 x i8] c\"hello\\00\" }");
+    assert_contains(&ir_text, "declare void @__expo_alpha_print_string(ptr)");
+    assert_contains(&ir_text, "call void @__expo_alpha_print_string(ptr ");
+}
+
+#[test]
+fn empty_string_literal_uses_zero_bit_length() {
+    let script = lower_as_script("\"\"\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    // Empty UTF-8 payload: bit_length = 0, payload array length = 1
+    // (just the trailing NUL). LLVM renders the all-zero initializer
+    // as `zeroinitializer`, and the type appears in the global's
+    // declaration line instead.
+    assert_contains(
+        &ir_text,
+        "@alpha_str.0 = private constant { i64, [1 x i8] } zeroinitializer",
+    );
+}
+
+#[test]
 fn call_to_helper_emits_call_in_main_body() {
     // Script mode wires the same helper-declare-then-call shape
     // through `emit_script_llvm_ir`: helper lives in a package

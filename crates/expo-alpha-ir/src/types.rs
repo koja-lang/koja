@@ -18,10 +18,8 @@ impl std::fmt::Display for ValueId {
 ///
 /// Integer variants mirror Expo's stdlib `Int8`..`Int64` and
 /// `UInt8`..`UInt64` primitive structs 1:1 — width and signedness are
-/// part of the variant identity, not separate fields. The carried Rust
-/// primitive (`i8`, `u8`, …) is sized to exactly what the variant
-/// admits, so e.g. `Int8(i8)` cannot construct an out-of-range value
-/// at the type level.
+/// part of the variant identity, not separate fields. `String` carries
+/// raw UTF-8; backends materialize per [`IRType::String`].
 ///
 /// **Transient invariant**: the seal pass currently asserts only
 /// `Int64` flows through. The other width variants exist in the
@@ -34,6 +32,7 @@ pub enum ConstValue {
     Int16(i16),
     Int32(i32),
     Int64(i64),
+    String(String),
     UInt8(u8),
     UInt16(u16),
     UInt32(u32),
@@ -82,6 +81,15 @@ pub enum IRUnaryOp {
 /// struct gets its own variant. Width and signedness are part of the
 /// variant identity, not separate fields, so illegal states (e.g.
 /// `bits: 7`) are unrepresentable.
+///
+/// `String` is the first member of the bit-length-header family
+/// shared with `Binary` / `Bits` (future variants). Layout matches
+/// `expo-codegen`: the LLVM value is a single `i8*` whose pointee is
+/// `[i64 bit_length][payload bytes]`, with the `i64` placed 8 bytes
+/// **before** the pointer. `String`-specific rules: UTF-8 payload,
+/// trailing `NUL`, `bit_length = byte_length * 8`. Move type per
+/// `LANGUAGE.md`; this slice only emits unowned literal globals.
+/// `CString` is a struct, not a member of this family.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IRType {
     Bool,
@@ -89,6 +97,7 @@ pub enum IRType {
     Int16,
     Int32,
     Int64,
+    String,
     UInt8,
     UInt16,
     UInt32,

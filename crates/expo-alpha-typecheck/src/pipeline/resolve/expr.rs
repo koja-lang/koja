@@ -14,7 +14,7 @@
 //!
 //! [`GlobalRegistryId`]: expo_ast::identifier::GlobalRegistryId
 
-use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
+use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, StringPart};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
@@ -71,6 +71,7 @@ pub(super) fn resolve_expr(
             diagnostics,
         ),
         ExprKind::Literal { value } => literal_type(value, registry),
+        ExprKind::String { parts, .. } => resolve_string(parts, expr.span, registry, diagnostics),
         ExprKind::Unary { op, operand } => {
             resolve_expr(operand, package, registry, diagnostics);
             unary_type(*op, operand, expr.span, registry, diagnostics)
@@ -200,4 +201,23 @@ fn resolve_call(
     }
 
     return_type
+}
+
+fn resolve_string(
+    parts: &[StringPart],
+    span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    if parts
+        .iter()
+        .any(|part| matches!(part, StringPart::Interpolation { .. }))
+    {
+        diagnostics.push(Diagnostic::error(
+            "alpha typecheck does not yet support string interpolation",
+            span,
+        ));
+        return ResolvedType::unresolved();
+    }
+    registry.primitive("String")
 }

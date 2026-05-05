@@ -13,20 +13,19 @@ use std::collections::BTreeMap;
 use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRFunction};
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
-use inkwell::types::{BasicMetadataTypeEnum, FunctionType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitCtx;
 use crate::emit::{self, BlockMap, ValueMap};
 use crate::error::LlvmError;
-use crate::types::ir_int_type;
+use crate::types::ir_basic_type;
 
 /// Declare an LLVM function for `function` under its mangled
-/// [`expo_alpha_ir::IRSymbol`]. The signature mirrors the IR
-/// exactly: each [`expo_alpha_ir::IRFunctionParam::ty`] becomes an
-/// LLVM `iN` parameter, and the return type does the same.
-/// Non-integer types still surface as feature-gap diagnostics through
-/// [`ir_int_type`] until non-scalar lowering lands.
+/// [`expo_alpha_ir::IRSymbol`]. The signature mirrors the IR exactly:
+/// each [`expo_alpha_ir::IRFunctionParam::ty`] becomes its LLVM basic
+/// type and the return type does the same. `Unit` returns / params
+/// surface as feature-gap diagnostics through [`ir_basic_type`].
 pub(crate) fn declare_function<'ctx>(
     ctx: &EmitCtx<'ctx>,
     function: &IRFunction,
@@ -46,10 +45,10 @@ fn function_signature<'ctx>(
     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
         Vec::with_capacity(function.params.len());
     for param in &function.params {
-        param_types.push(ir_int_type(ctx.context, &param.ty)?.into());
+        param_types.push(ir_basic_type(ctx.context, &param.ty)?.into());
     }
-    let return_int = ir_int_type(ctx.context, &function.return_type)?;
-    Ok(return_int.fn_type(&param_types, false))
+    let return_type = ir_basic_type(ctx.context, &function.return_type)?;
+    Ok(return_type.fn_type(&param_types, false))
 }
 
 /// Define a non-entry function's body. Helpers keep the natural
@@ -110,7 +109,7 @@ fn seed_params<'ctx>(function: &IRFunction, llvm_function: FunctionValue<'ctx>) 
                     function.symbol,
                 )
             });
-        seed.insert(param.id, llvm_param.into_int_value());
+        seed.insert(param.id, llvm_param);
     }
     seed
 }

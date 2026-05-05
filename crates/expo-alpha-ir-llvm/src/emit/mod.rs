@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 
 use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRTerminator, ValueId};
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::IntValue;
+use inkwell::values::{BasicValueEnum, IntValue};
 
 use crate::ctx::EmitCtx;
 use crate::error::LlvmError;
@@ -35,7 +35,11 @@ use crate::error::LlvmError;
 mod instruction;
 mod ops;
 
-pub(crate) type ValueMap<'ctx> = BTreeMap<ValueId, IntValue<'ctx>>;
+/// Per-function SSA index. The migration to [`BasicValueEnum`] (from
+/// `IntValue`) is what lets pointer-typed values (e.g. `IRType::String`
+/// payload pointers) flow alongside ints; op sites that need the int
+/// narrow at the seam through [`lookup_int`].
+pub(crate) type ValueMap<'ctx> = BTreeMap<ValueId, BasicValueEnum<'ctx>>;
 pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
 
 /// Emit `block` (instructions + terminator) into the builder's
@@ -99,7 +103,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
             then_block,
             else_block,
         } => {
-            let cond_value = lookup(values, *cond)?;
+            let cond_value = lookup_int(values, *cond)?;
             let then_target = lookup_block(block_map, *then_block)?;
             let else_target = lookup_block(block_map, *else_block)?;
             ctx.builder
@@ -125,11 +129,23 @@ pub(crate) fn emit_terminator_default<'ctx>(
 pub(crate) fn lookup<'ctx>(
     values: &ValueMap<'ctx>,
     id: ValueId,
-) -> Result<IntValue<'ctx>, LlvmError> {
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     values
         .get(&id)
         .copied()
         .ok_or_else(|| LlvmError::Codegen(format!("undefined SSA value {id} during emission")))
+}
+
+/// Narrow [`lookup`] to an [`IntValue`] for op sites whose IR type is
+/// guaranteed integer-family (binary / unary ops, branch conditions,
+/// the int / bool printer paths). Misses surface as a codegen panic
+/// because they indicate an upstream type-checker / lowering bug, not
+/// a feature gap.
+pub(crate) fn lookup_int<'ctx>(
+    values: &ValueMap<'ctx>,
+    id: ValueId,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    Ok(lookup(values, id)?.into_int_value())
 }
 
 pub(super) fn lookup_block<'ctx>(

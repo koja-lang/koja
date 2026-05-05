@@ -96,7 +96,7 @@ pub(super) fn lower_unary_op(op: UnaryOp) -> IRUnaryOp {
 
 /// Map a [`ConstValue`] variant to its [`IRType`]. Pure
 /// transliteration — each integer width gets its mirroring type, and
-/// `Bool` / `Unit` round-trip directly.
+/// `Bool` / `String` / `Unit` round-trip directly.
 pub(super) fn const_value_type(value: &ConstValue) -> IRType {
     match value {
         ConstValue::Bool(_) => IRType::Bool,
@@ -104,6 +104,7 @@ pub(super) fn const_value_type(value: &ConstValue) -> IRType {
         ConstValue::Int16(_) => IRType::Int16,
         ConstValue::Int32(_) => IRType::Int32,
         ConstValue::Int64(_) => IRType::Int64,
+        ConstValue::String(_) => IRType::String,
         ConstValue::UInt8(_) => IRType::UInt8,
         ConstValue::UInt16(_) => IRType::UInt16,
         ConstValue::UInt32(_) => IRType::UInt32,

@@ -35,3 +35,25 @@ pub extern "C" fn __expo_alpha_print_bool(value: i64) {
     let rendered = if value != 0 { "true" } else { "false" };
     let _ = writeln!(io::stdout(), "{rendered}");
 }
+
+/// Print a `String`-flavored body value followed by a newline.
+/// Reads the `i64` bit-length 8 bytes before `payload` (the v1 header
+/// layout shared with `Binary` / `Bits`; see `IRType::String`) and
+/// writes that many UTF-8 bytes to stdout.
+///
+/// # Safety
+///
+/// `payload` must point at the body of an alpha-emitted string global
+/// (`emit_const_string` in `expo-alpha-ir-llvm`), i.e. the byte right
+/// after the `i64 bit_length` header. Calling with any other pointer
+/// is undefined behavior.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __expo_alpha_print_string(payload: *const u8) {
+    let header = unsafe { payload.offset(-8).cast::<i64>() };
+    let bit_length = unsafe { *header };
+    let byte_length = (bit_length / 8) as usize;
+    let bytes = unsafe { std::slice::from_raw_parts(payload, byte_length) };
+    let mut stdout = io::stdout().lock();
+    let _ = stdout.write_all(bytes);
+    let _ = stdout.write_all(b"\n");
+}

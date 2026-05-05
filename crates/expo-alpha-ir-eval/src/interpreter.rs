@@ -205,6 +205,7 @@ fn materialize_const(value: &ConstValue) -> Value {
         ConstValue::Int16(v) => Value::Int(*v as i64),
         ConstValue::Int32(v) => Value::Int(*v as i64),
         ConstValue::Int64(v) => Value::Int(*v),
+        ConstValue::String(s) => Value::String(s.clone()),
         ConstValue::UInt8(v) => Value::Int(*v as i64),
         ConstValue::UInt16(v) => Value::Int(*v as i64),
         ConstValue::UInt32(v) => Value::Int(*v as i64),

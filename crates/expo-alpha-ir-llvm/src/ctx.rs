@@ -13,6 +13,8 @@
 //! visual collision with [`inkwell::context::Context`] (which we
 //! borrow inside).
 
+use std::cell::Cell;
+
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -23,6 +25,10 @@ pub(crate) struct EmitCtx<'ctx> {
     pub(crate) builder: Builder<'ctx>,
     pub(crate) context: &'ctx Context,
     pub(crate) module: Module<'ctx>,
+    /// Counter for `alpha_str.<n>` global names. `Cell<u32>` because
+    /// emission walks `&EmitCtx` immutably; mirrors v1's
+    /// `string_const.<n>` pattern in `expo-codegen`.
+    string_counter: Cell<u32>,
 }
 
 impl<'ctx> EmitCtx<'ctx> {
@@ -31,6 +37,13 @@ impl<'ctx> EmitCtx<'ctx> {
             builder: context.create_builder(),
             context,
             module: context.create_module("expo_alpha_module"),
+            string_counter: Cell::new(0),
         }
+    }
+
+    pub(crate) fn next_string_symbol(&self) -> String {
+        let n = self.string_counter.get();
+        self.string_counter.set(n + 1);
+        format!("alpha_str.{n}")
     }
 }

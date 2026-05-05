@@ -160,12 +160,13 @@ pub(super) fn resolved_type_to_ir_type(ty: &ResolvedType, registry: &GlobalRegis
         );
     }
     match entry.identifier.last() {
-        "Int" => IRType::Int64,
         "Bool" => IRType::Bool,
+        "Int" => IRType::Int64,
+        "String" => IRType::String,
         "Unit" => IRType::Unit,
         other => panic!(
             "alpha IR lower: cannot translate `Global.{other}` to IRType yet \
-             (Float / String / width-explicit ints land in follow-up slices)",
+             (Float / width-explicit ints land in follow-up slices)",
         ),
     }
 }

@@ -49,13 +49,13 @@
 //!    `IRScript`.
 //! 8. **Transient slice invariant**: every [`ConstValue`] and
 //!    [`IRType`] that flows through the IR is one of `Bool`,
-//!    `Int64`, or `Unit`. The narrower / unsigned width variants
-//!    (`Int8` / `Int16` / `Int32` / `UInt8` / `UInt16` / `UInt32` /
-//!    `UInt64`) exist in the IR vocabulary so future stdlib stub
-//!    expansion + literal width inference can stamp them without
-//!    reshuffling, but they're forbidden until those upstream pieces
-//!    land. Loosen this invariant when adding `Int8` / etc. to the
-//!    stdlib stubs. Applies to function return types, parameter
+//!    `Int64`, `String`, or `Unit`. The narrower / unsigned width
+//!    variants (`Int8` / `Int16` / `Int32` / `UInt8` / `UInt16` /
+//!    `UInt32` / `UInt64`) exist in the IR vocabulary so future
+//!    stdlib stub expansion + literal width inference can stamp them
+//!    without reshuffling, but they're forbidden until those upstream
+//!    pieces land. Loosen this invariant when adding `Int8` / etc. to
+//!    the stdlib stubs. Applies to function return types, parameter
 //!    types, and every value-flow [`IRType`] alike.
 //!
 //! The script path ([`seal_script`]) re-asserts (3)–(8) on the
@@ -75,14 +75,14 @@ mod script;
 pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
 
-/// Transient slice invariant: only `Bool` / `Int64` / `Unit` flow
-/// through the IR. See module docstring invariant 8.
+/// Transient slice invariant: only `Bool` / `Int64` / `String` /
+/// `Unit` flow through the IR. See module docstring invariant 8.
 pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
-        IRType::Bool | IRType::Int64 | IRType::Unit => {}
+        IRType::Bool | IRType::Int64 | IRType::String | IRType::Unit => {}
         other => seal_panic(&format!(
             "{}: IRType `{other:?}` is not yet supported (alpha slice admits only \
-             Bool / Int64 / Unit until stdlib stub expansion lands)",
+             Bool / Int64 / String / Unit until stdlib stub expansion lands)",
             location(),
         )),
     }
@@ -90,10 +90,10 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
 
 pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() -> String) {
     match value {
-        ConstValue::Bool(_) | ConstValue::Int64(_) | ConstValue::Unit => {}
+        ConstValue::Bool(_) | ConstValue::Int64(_) | ConstValue::String(_) | ConstValue::Unit => {}
         other => seal_panic(&format!(
             "{}: ConstValue `{other:?}` is not yet supported (alpha slice admits only \
-             Bool / Int64 / Unit until stdlib stub expansion lands)",
+             Bool / Int64 / String / Unit until stdlib stub expansion lands)",
             location(),
         )),
     }

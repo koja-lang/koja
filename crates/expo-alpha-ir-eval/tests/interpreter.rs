@@ -96,6 +96,39 @@ fn empty_main_returns_unit() {
     assert_eq!(evaluate("fn main\nend\n").unwrap(), Value::Unit,);
 }
 
+// -- string literals -----------------------------------------------
+
+#[test]
+fn string_literal_evaluates_to_value_string() {
+    let source = "fn main -> String\n  \"hello\"\nend\n";
+    assert_eq!(
+        evaluate(source).unwrap(),
+        Value::String("hello".to_string()),
+    );
+}
+
+#[test]
+fn string_literal_in_script_mode_evaluates_to_value_string() {
+    assert_eq!(
+        evaluate_script("\"hello\"\n").unwrap(),
+        Value::String("hello".to_string()),
+    );
+}
+
+#[test]
+fn empty_string_literal_evaluates_to_empty_value_string() {
+    assert_eq!(
+        evaluate("fn main -> String\n  \"\"\nend\n").unwrap(),
+        Value::String(String::new()),
+    );
+}
+
+#[test]
+fn value_string_displays_without_quotes() {
+    let value = Value::String("hello".to_string());
+    assert_eq!(format!("{value}"), "hello");
+}
+
 // -- Call instruction dispatch -------------------------------------
 
 #[test]

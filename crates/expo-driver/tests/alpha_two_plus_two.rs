@@ -97,6 +97,18 @@ const IF_BRANCH_SCRIPT_SOURCE: &str = "
     pick_then() + pick_merge()
 ";
 
+/// Script-mode fixture exercising the string-literal slice. Bare
+/// `"hello"` lowers to `IRInstruction::Const { ConstValue::String }`
+/// with return type `IRType::String`; the LLVM emit produces a
+/// private constant matching expo-codegen's
+/// `[i64 bit_length][payload bytes][NUL]` layout, and the auto-print
+/// wrapper hands the payload pointer to `__expo_alpha_print_string`.
+/// Stdout is `hello\n`. Pins the full alpha pipeline + runtime
+/// printer for `IRType::String`.
+const STRING_LITERAL_SCRIPT_SOURCE: &str = "
+    \"hello\"
+";
+
 /// Script-mode fixture exercising `unless` lowering through both
 /// backends. `unless cond` runs its body when the cond is `false`,
 /// the inverse of `if`. `pick_body` runs the early `return 1`
@@ -384,6 +396,69 @@ fn alpha_run_interpreter_script_if_branch_prints_three() {
         stdout.trim(),
         "3",
         "expected interpreter to print `3`, got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_string_literal_prints_hello() {
+    let scratch = scratch_dir("run_llvm_string_literal");
+    let fixture = write_fixture(
+        &scratch,
+        "string_literal.exps",
+        &dedent(STRING_LITERAL_SCRIPT_SOURCE),
+    );
+
+    // Pins the full alpha string-literal slice through the LLVM
+    // backend: `"hello"` lowers to `Const(ConstValue::String)`,
+    // emit_const_string lays out a private constant with the v1
+    // header (`{ i64 40, [6 x i8] c"hello\00" }`), the auto-print
+    // wrapper hands the payload pointer to
+    // `__expo_alpha_print_string`, and the runtime printer reads
+    // the bit-length 8 bytes back, writes the bytes, and a newline.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (string literal) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"hello\n",
+        "expected LLVM backend to print `hello\\n`, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_string_literal_prints_hello() {
+    let scratch = scratch_dir("run_interpreter_string_literal");
+    let fixture = write_fixture(
+        &scratch,
+        "string_literal.exps",
+        &dedent(STRING_LITERAL_SCRIPT_SOURCE),
+    );
+
+    // Backend symmetry with the LLVM test above. The interpreter
+    // produces `Value::String("hello")`; its `Display` writes the
+    // inner bytes verbatim followed by a newline so stdout matches
+    // the LLVM path byte-for-byte.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, string literal) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"hello\n",
+        "expected interpreter to print `hello\\n`, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
     );
 
     let _ = fs::remove_dir_all(&scratch);

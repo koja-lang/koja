@@ -8,11 +8,12 @@
 //! type-side adapters in [`super::package`].
 
 use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
-use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
+use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, StringPart};
 use expo_ast::identifier::Resolution;
+use expo_ast::span::Span;
 
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
-use crate::types::ValueId;
+use crate::types::{ConstValue, IRType, ValueId};
 
 use super::control_flow::{lower_if, lower_unless};
 use super::ctx::FnLowerCtx;
@@ -78,6 +79,7 @@ pub(super) fn lower_expr(
             );
             Ok((dest, block))
         }
+        ExprKind::String { parts, .. } => lower_string(parts, expr.span, ctx, block, diagnostics),
         ExprKind::Unary { op, operand } => {
             let (operand, block) = lower_expr(operand, ctx, block, registry, diagnostics)?;
             let ir_op = lower_unary_op(*op);
@@ -168,6 +170,33 @@ fn lower_call(
     Ok((dest, current))
 }
 
+fn lower_string(
+    parts: &[StringPart],
+    span: Span,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ValueId, IRBlockId), ()> {
+    // Typecheck rejects interpolation upstream; this is the parallel
+    // gate so a typecheck-failure-then-lower path can't sneak past.
+    let [StringPart::Literal { value, .. }] = parts else {
+        diagnostics.push(Diagnostic::error(
+            "alpha IR does not yet lower string interpolation",
+            span,
+        ));
+        return Err(());
+    };
+    let dest = ctx.fresh_value(IRType::String);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest,
+            value: ConstValue::String(value.clone()),
+        },
+    );
+    Ok((dest, block))
+}
+
 /// Short, user-facing label for an [`ExprKind`] that the alpha IR
 /// cannot yet lower. Kept local because it only serves feature-gap
 /// diagnostics; a public `ExprKind::label()` would imply stability
@@ -195,7 +224,7 @@ fn expr_kind_label(kind: &ExprKind) -> &'static str {
         ExprKind::Self_ => "self reference",
         ExprKind::ShortClosure { .. } => "short closure",
         ExprKind::Spawn { .. } => "spawn",
-        ExprKind::String { .. } => "string interpolation",
+        ExprKind::String { .. } => "string",
         ExprKind::StructConstruction { .. } => "struct construction",
         ExprKind::Ternary { .. } => "ternary",
         ExprKind::Unary { .. } => "unary",

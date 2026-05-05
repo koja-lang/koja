@@ -14,9 +14,10 @@
 //! for the runtime side of these conventions.
 
 use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRTerminator, IRType};
+use inkwell::AddressSpace;
 use inkwell::module::Linkage;
-use inkwell::types::IntType;
-use inkwell::values::{FunctionValue, IntValue};
+use inkwell::types::BasicMetadataTypeEnum;
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 
 use crate::ctx::EmitCtx;
 use crate::emit::{self, ValueMap};
@@ -27,6 +28,7 @@ const APP_NAME_SYMBOL: &str = "__expo_app_name";
 const ENTRY_SYMBOL: &str = "main";
 const PRINT_BOOL_SYMBOL: &str = "__expo_alpha_print_bool";
 const PRINT_INT_SYMBOL: &str = "__expo_alpha_print_i64";
+const PRINT_STRING_SYMBOL: &str = "__expo_alpha_print_string";
 
 /// Emit `__expo_app_name` as a null-terminated C-string constant.
 /// The `expo-runtime` panic handler reads it for backtrace labels
@@ -126,33 +128,63 @@ fn find_return_block(blocks: &[IRBasicBlock]) -> Result<IRBlockId, LlvmError> {
     })
 }
 
-/// Pick the runtime printer for `return_type`, extend `body_value`
-/// to `i64` (sign-extended for signed widths, zero-extended for
-/// unsigned widths and `Bool`), and emit the call.
+/// Pick the runtime printer for `return_type` and emit the call.
+/// Integer / `Bool` widths extend to `i64` (sign- or zero-extended
+/// per signedness); `String` flows the payload pointer through
+/// unchanged. The runtime side reads the v1 header at `ptr - 8` to
+/// compute byte length.
 fn emit_print_call<'ctx>(
     ctx: &EmitCtx<'ctx>,
     return_type: &IRType,
-    body_value: IntValue<'ctx>,
+    body_value: BasicValueEnum<'ctx>,
 ) -> Result<(), LlvmError> {
-    let i64_type = ctx.context.i64_type();
-    let (printer_symbol, argument) = match return_type {
-        IRType::Bool => (PRINT_BOOL_SYMBOL, zext_to_i64(ctx, body_value)?),
+    let (printer_symbol, argument_type, argument) = match return_type {
+        IRType::Bool => {
+            let int = body_value.into_int_value();
+            let extended = zext_to_i64(ctx, int)?;
+            (
+                PRINT_BOOL_SYMBOL,
+                ctx.context.i64_type().into(),
+                extended.into(),
+            )
+        }
         IRType::Int8 | IRType::Int16 | IRType::Int32 => {
-            (PRINT_INT_SYMBOL, sext_to_i64(ctx, body_value)?)
+            let int = body_value.into_int_value();
+            let extended = sext_to_i64(ctx, int)?;
+            (
+                PRINT_INT_SYMBOL,
+                ctx.context.i64_type().into(),
+                extended.into(),
+            )
         }
-        IRType::Int64 | IRType::UInt64 => (PRINT_INT_SYMBOL, body_value),
+        IRType::Int64 | IRType::UInt64 => (
+            PRINT_INT_SYMBOL,
+            ctx.context.i64_type().into(),
+            body_value.into_int_value().into(),
+        ),
         IRType::UInt8 | IRType::UInt16 | IRType::UInt32 => {
-            (PRINT_INT_SYMBOL, zext_to_i64(ctx, body_value)?)
+            let int = body_value.into_int_value();
+            let extended = zext_to_i64(ctx, int)?;
+            (
+                PRINT_INT_SYMBOL,
+                ctx.context.i64_type().into(),
+                extended.into(),
+            )
         }
+        IRType::String => (
+            PRINT_STRING_SYMBOL,
+            ctx.context.ptr_type(AddressSpace::default()).into(),
+            body_value.into_pointer_value().into(),
+        ),
         IRType::Unit => {
             return Err(LlvmError::Codegen(
                 "alpha LLVM does not yet emit Unit-typed main bodies".to_string(),
             ));
         }
     };
-    let printer = declare_runtime_printer(ctx, printer_symbol, i64_type);
+    let printer = declare_runtime_printer(ctx, printer_symbol, argument_type);
     ctx.builder
-        .build_call(printer, &[argument.into()], "")
+        .build_call(printer, &[argument], "")
         .map(|_| ())
         .map_err(|e| LlvmError::Codegen(format!("inkwell rejected print call: {e}")))
 }
@@ -160,15 +192,12 @@ fn emit_print_call<'ctx>(
 fn declare_runtime_printer<'ctx>(
     ctx: &EmitCtx<'ctx>,
     symbol: &str,
-    argument_type: IntType<'ctx>,
+    argument_type: BasicMetadataTypeEnum<'ctx>,
 ) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(symbol) {
         return existing;
     }
-    let signature = ctx
-        .context
-        .void_type()
-        .fn_type(&[argument_type.into()], false);
+    let signature = ctx.context.void_type().fn_type(&[argument_type], false);
     ctx.module
         .add_function(symbol, signature, Some(Linkage::External))
 }

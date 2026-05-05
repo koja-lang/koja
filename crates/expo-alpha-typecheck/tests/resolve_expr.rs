@@ -339,6 +339,38 @@ fn param_reference_in_body_diagnoses() {
 }
 
 #[test]
+fn string_literal_resolves_to_global_string() {
+    let source = "
+        fn greeting -> String
+          \"hello\"
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let string = global_leaf(&checked, "String");
+    let greeting = find_function(&checked, "greeting");
+    let trailing = trailing_expr(greeting);
+    assert_eq!(trailing.resolution, string);
+    assert!(matches!(trailing.kind, ExprKind::String { .. }));
+}
+
+#[test]
+fn string_interpolation_diagnoses() {
+    let source = "
+        fn greeting -> String
+          \"hello #{1}\"
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains("string interpolation")),
+        "expected interpolation diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
 fn return_type_propagates_through_arithmetic() {
     // Exercises `resolve_call` returning a `ResolvedType` that the
     // surrounding expression (`+ 1`) then type-checks against.
