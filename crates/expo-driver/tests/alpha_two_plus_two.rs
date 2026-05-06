@@ -298,6 +298,29 @@ const INSTANCE_METHOD_SCRIPT_SOURCE: &str = "
     Counter{n: 10}.add(5)
 ";
 
+/// Script-mode fixture for the non-generic protocols slice. The
+/// `impl Greeter for Point` registers `Point.greet` like any other
+/// instance method; dispatch goes through the same path as inline
+/// or inherent-impl methods. Stdout is `Point\n`.
+const PROTOCOL_METHOD_SCRIPT_SOURCE: &str = "
+    protocol Greeter
+      fn greet(self) -> String
+    end
+
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    impl Greeter for Point
+      fn greet(self) -> String
+        \"Point\"
+      end
+    end
+
+    Point{x: 1, y: 2}.greet()
+";
+
 fn expo_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_expo"))
 }
@@ -1066,6 +1089,26 @@ fn alpha_run_interpreter_script_instance_method_prints_fifteen() {
         INSTANCE_METHOD_SCRIPT_SOURCE,
         None,
         "15",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_protocol_method_prints_point() {
+    assert_script_prints(
+        "run_llvm_protocol_method",
+        PROTOCOL_METHOD_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Point",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_protocol_method_prints_point() {
+    assert_script_prints(
+        "run_interpreter_protocol_method",
+        PROTOCOL_METHOD_SCRIPT_SOURCE,
+        None,
+        "Point",
     );
 }
 

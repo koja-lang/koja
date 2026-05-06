@@ -29,6 +29,7 @@ mod registry;
 pub use error::CheckFailure;
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
-    Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, InsertOutcome, RegistryEntry,
-    ResolvedParam, ResolvedStructField, StructDefinition, format_registry,
+    Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition,
+    RegistryEntry, ResolvedParam, ResolvedProtocolMethod, ResolvedStructField, StructDefinition,
+    format_registry,
 };

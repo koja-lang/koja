@@ -76,11 +76,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         }
     }
 
-    for pkg in &packages {
-        for file in &pkg.files {
-            lift_signatures::lift_signatures(file, &pkg.package, &mut registry, &mut diagnostics);
-        }
-    }
+    lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);
 
     for pkg in &mut packages {
         for file in &mut pkg.files {

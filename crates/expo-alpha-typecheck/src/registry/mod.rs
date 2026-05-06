@@ -94,6 +94,25 @@ pub struct StructDefinition {
     pub fields: Vec<ResolvedStructField>,
 }
 
+/// Method roster for a user-declared protocol, stamped by
+/// `lift_signatures`. Method order matches declaration order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProtocolDefinition {
+    pub methods: Vec<ResolvedProtocolMethod>,
+}
+
+/// One method on a [`ProtocolDefinition`]. `has_default` flags whether
+/// a default body exists in lift's body sidecar; the body itself is
+/// not stored here (registry holds resolved types only).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedProtocolMethod {
+    pub dispatch: Dispatch,
+    pub has_default: bool,
+    pub name: String,
+    pub non_self_params: Vec<ResolvedParam>,
+    pub return_type: ResolvedType,
+}
+
 impl StructDefinition {
     /// Lookup a field by name; returns `Some((index, &field))` for a
     /// match, `None` otherwise. Linear scan — struct field counts
@@ -111,18 +130,17 @@ impl StructDefinition {
 
 /// What kind of declaration a registry entry points at.
 ///
-/// `Function` entries carry their signature inline (`None` until
-/// `lift_signatures` stamps it in). `Struct` does the same for its
-/// field layout: `None` is the "collected but not yet lifted" state
-/// (and the permanent state for stdlib stub primitives that have no
-/// declared fields), `Some(definition)` the lifted state. Other
-/// kinds grow per-variant metadata as features land (enum variants,
-/// protocol methods, ...).
+/// `Function`, `Protocol`, and `Struct` entries carry their lifted
+/// payload inline as `Option<_>`: `None` is the "collected but not
+/// yet lifted" state (and the permanent state for stdlib stub
+/// primitives), `Some(_)` the lifted state reached after
+/// `lift_signatures` runs. `Enum` grows per-variant metadata as
+/// features land.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalKind {
     Enum,
     Function(Option<FunctionSignature>),
-    Protocol,
+    Protocol(Option<ProtocolDefinition>),
     Struct(Option<StructDefinition>),
 }
 
@@ -131,7 +149,7 @@ impl GlobalKind {
         match self {
             GlobalKind::Enum => "enum",
             GlobalKind::Function(_) => "function",
-            GlobalKind::Protocol => "protocol",
+            GlobalKind::Protocol(_) => "protocol",
             GlobalKind::Struct(_) => "struct",
         }
     }
@@ -203,8 +221,10 @@ impl GlobalRegistry {
         self.insert(identifier, GlobalKind::Function(None), span)
     }
 
+    /// Register a protocol in the `Protocol(None)` state. Method
+    /// roster is stamped later by [`Self::set_protocol_definition`].
     pub fn insert_protocol(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Protocol, span)
+        self.insert(identifier, GlobalKind::Protocol(None), span)
     }
 
     /// Register a struct in the `Struct(None)` state. The
@@ -213,6 +233,40 @@ impl GlobalRegistry {
     /// primitives stay in `Struct(None)` permanently.
     pub fn insert_struct(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
         self.insert(identifier, GlobalKind::Struct(None), span)
+    }
+
+    /// Stamp a resolved method roster. Panics unless the entry's
+    /// kind is exactly `Protocol(None)`.
+    pub fn set_protocol_definition(
+        &mut self,
+        id: GlobalRegistryId,
+        definition: ProtocolDefinition,
+    ) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!(
+                "set_protocol_definition on missing registry id {id} — collect invariant violation"
+            )
+        });
+        match &entry.kind {
+            GlobalKind::Protocol(None) => {
+                entry.kind = GlobalKind::Protocol(Some(definition));
+            }
+            GlobalKind::Protocol(Some(_)) => {
+                panic!(
+                    "set_protocol_definition called twice on `{}` — lift_signatures must stamp \
+                     each protocol exactly once",
+                    entry.identifier,
+                );
+            }
+            other => {
+                panic!(
+                    "set_protocol_definition called on non-protocol entry `{}` ({}) — \
+                     only Protocol entries carry definitions",
+                    entry.identifier,
+                    other.label(),
+                );
+            }
+        }
     }
 
     /// Stamp a resolved field layout onto a struct entry. Panics

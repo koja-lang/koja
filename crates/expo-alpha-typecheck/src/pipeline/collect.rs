@@ -21,14 +21,14 @@
 //! never see those shapes.
 
 use expo_ast::ast::{
-    Annotation, Diagnostic, File, Function, ImplBlock, ImplMember, Item, Param, StructDecl,
-    StructField, TypeExpr,
+    Annotation, Diagnostic, File, Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl,
+    ProtocolMethod, StructDecl, StructField, TypeExpr,
 };
 use expo_ast::identifier::Identifier;
+use expo_ast::labels::{item_label, item_span};
 use expo_ast::span::Span;
 
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome};
-use expo_ast::labels::{item_label, item_span};
 
 pub(crate) fn collect_file(
     file: &File,
@@ -36,9 +36,10 @@ pub(crate) fn collect_file(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Pass 1: top-level functions, structs, and inline static methods.
-    // Every type name a later impl block could target is registered
-    // before pass 2 starts looking up impl targets.
+    // Pass 1: top-level functions, structs, protocols, and inline
+    // static/instance methods. Every type / protocol name a later
+    // impl block could target is registered before pass 2 starts
+    // looking up impl targets.
     for item in &file.items {
         match item {
             Item::Function(function) => {
@@ -51,6 +52,9 @@ pub(crate) fn collect_file(
                     diagnostics,
                 );
             }
+            Item::Protocol(decl) => {
+                register_protocol(decl, package, registry, diagnostics);
+            }
             Item::Struct(decl) => {
                 register_struct(decl, package, registry, diagnostics);
             }
@@ -58,11 +62,7 @@ pub(crate) fn collect_file(
             // Other Item variants land as alpha grows. Reject them
             // explicitly so unsupported shapes diagnose instead of
             // round-tripping silently.
-            Item::Alias(_)
-            | Item::Constant(_)
-            | Item::Enum(_)
-            | Item::Protocol(_)
-            | Item::TypeAlias(_) => {
+            Item::Alias(_) | Item::Constant(_) | Item::Enum(_) | Item::TypeAlias(_) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "alpha typecheck does not yet support `{}` items",
@@ -190,12 +190,18 @@ fn register_struct(
     }
 }
 
-/// Register every static method declared in an `impl Type ... end`
-/// block under `(package, [type_name, fn_name])`. Diagnoses every
-/// out-of-scope shape (trait impls, generic targets, `TypeAlias`
-/// members, unknown / non-struct targets) and skips registration when
-/// any of them apply — the methods inside an unsupported impl never
-/// reach lift / resolve / lower.
+/// Register every method declared in an `impl Type ... end` block
+/// (inherent or `impl Protocol for Type`) under
+/// `(package, [type_name, fn_name])`. Diagnoses out-of-scope shapes
+/// (generic targets, generic trait_expr, `TypeAlias` members,
+/// unknown / non-struct targets) and skips registration when any of
+/// them apply — methods inside an unsupported impl never reach
+/// lift / resolve / lower.
+///
+/// The `trait_expr` itself is only validated for *shape* here (no
+/// generics, simple named path); it isn't dereferenced. Protocol
+/// conformance checking lives in lift_signatures, after both the
+/// protocol and the impl methods have lifted signatures to compare.
 fn register_impl(
     impl_block: &ImplBlock,
     package: &str,
@@ -203,10 +209,12 @@ fn register_impl(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_impl_member_feature_gaps(impl_block, diagnostics);
-    if let Some(span) = impl_block.trait_expr.as_ref().map(type_expr_span) {
+    if let Some(trait_expr) = &impl_block.trait_expr
+        && simple_named_target(trait_expr).is_none()
+    {
         diagnostics.push(Diagnostic::error(
-            "alpha typecheck does not yet support `impl Trait for Type`".to_string(),
-            span,
+            "alpha typecheck does not yet support generic `impl Trait for Type`".to_string(),
+            type_expr_span(trait_expr),
         ));
         return;
     }
@@ -250,6 +258,30 @@ fn register_impl(
             registry,
             diagnostics,
         );
+    }
+}
+
+/// Register a protocol decl. Diagnoses every out-of-scope shape
+/// (generics on the decl or its methods, annotations, `Self` in
+/// non-self position) up front so later passes never see them.
+fn register_protocol(
+    decl: &ProtocolDecl,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnose_protocol_feature_gaps(decl, diagnostics);
+    let identifier = Identifier::new(package, vec![decl.name.clone()]);
+    if let InsertOutcome::Collision { existing } = registry.insert_protocol(identifier, decl.span) {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("`{}` is already defined", existing.identifier),
+            format!(
+                "previous {} definition is at line {}",
+                existing.kind.label(),
+                existing.span.start.line
+            ),
+            decl.span,
+        ));
     }
 }
 
@@ -344,5 +376,106 @@ fn diagnose_impl_member_feature_gaps(impl_block: &ImplBlock, diagnostics: &mut V
                 alias.span,
             ));
         }
+    }
+}
+
+/// Diagnose every feature gap on a protocol decl up front (generics,
+/// annotations, generic methods, and `Self` in non-self position).
+/// The protocol still registers so impl blocks targeting it produce
+/// useful conformance diagnostics rather than "unknown protocol".
+fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Diagnostic>) {
+    if !decl.type_params.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support generic protocols \
+                 (`{}` has type parameters)",
+                decl.name,
+            ),
+            decl.span,
+        ));
+    }
+    for annotation in &decl.annotations {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support annotations on protocols \
+                 (`@{}` on `{}`)",
+                annotation.name, decl.name,
+            ),
+            annotation.span,
+        ));
+    }
+    for method in &decl.methods {
+        diagnose_protocol_method_feature_gaps(&decl.name, method, diagnostics);
+    }
+}
+
+fn diagnose_protocol_method_feature_gaps(
+    protocol_name: &str,
+    method: &ProtocolMethod,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !method.type_params.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support generic protocol methods \
+                 (`{protocol_name}.{}` has type parameters)",
+                method.name,
+            ),
+            method.span,
+        ));
+    }
+    for annotation in &method.annotations {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support annotations on protocol methods \
+                 (`@{}` on `{protocol_name}.{}`)",
+                annotation.name, method.name,
+            ),
+            annotation.span,
+        ));
+    }
+    if let Some(return_type) = &method.return_type
+        && contains_self(return_type)
+    {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support `Self` in protocol method return types \
+                 (on `{protocol_name}.{}`)",
+                method.name,
+            ),
+            type_expr_span(return_type),
+        ));
+    }
+    for param in &method.params {
+        if let Param::Regular { type_expr, .. } = param
+            && contains_self(type_expr)
+        {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alpha typecheck does not yet support `Self` in protocol method parameter \
+                     types (on `{protocol_name}.{}`)",
+                    method.name,
+                ),
+                type_expr_span(type_expr),
+            ));
+        }
+    }
+}
+
+/// True when `ty` (or a transitive component of it) is `TypeExpr::Self_`.
+/// `Self` as a *receiver type* is captured separately by `Param::Self_`,
+/// so this only fires on type annotations the protocol can't yet
+/// represent in alpha.
+fn contains_self(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Self_ { .. } => true,
+        TypeExpr::Named { .. } | TypeExpr::Unit { .. } => false,
+        TypeExpr::Generic { args, .. } => args.iter().any(contains_self),
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => params.iter().any(contains_self) || contains_self(return_type),
+        TypeExpr::Union { types, .. } => types.iter().any(contains_self),
     }
 }

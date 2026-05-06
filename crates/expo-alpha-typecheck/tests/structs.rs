@@ -1039,14 +1039,18 @@ fn instance_method_with_args_validates_explicit_args() {
 }
 
 #[test]
-fn impl_trait_for_diagnoses_feature_gap() {
+fn generic_impl_trait_diagnoses_feature_gap() {
     let source = "
+        protocol Greeter
+          fn greet(self) -> Int
+        end
+
         struct Point
           x: Int
         end
 
-        impl Greeter for Point
-          fn greet -> Int
+        impl Greeter<String> for Point
+          fn greet(self) -> Int
             0
           end
         end
@@ -1059,8 +1063,10 @@ fn impl_trait_for_diagnoses_feature_gap() {
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     assert!(
-        messages.iter().any(|m| m.contains("`impl Trait for Type`")),
-        "expected trait-impl gap diagnostic, got {messages:?}",
+        messages
+            .iter()
+            .any(|m| m.contains("generic `impl Trait for Type`")),
+        "expected generic trait-impl gap diagnostic, got {messages:?}",
     );
 }
 

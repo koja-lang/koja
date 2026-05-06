@@ -15,7 +15,10 @@ use std::fmt::Write as _;
 
 use expo_ast::identifier::{Resolution, ResolvedType};
 
-use super::{FunctionSignature, GlobalKind, GlobalRegistry, StructDefinition};
+use super::{
+    FunctionSignature, GlobalKind, GlobalRegistry, ProtocolDefinition, ResolvedProtocolMethod,
+    StructDefinition,
+};
 
 pub fn format_registry(registry: &GlobalRegistry) -> String {
     let count = registry.len();
@@ -41,10 +44,45 @@ fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
         GlobalKind::Enum => "enum".to_string(),
         GlobalKind::Function(None) => "fn <unlifted>".to_string(),
         GlobalKind::Function(Some(sig)) => format_signature(sig, registry),
-        GlobalKind::Protocol => "protocol".to_string(),
+        GlobalKind::Protocol(None) => "protocol".to_string(),
+        GlobalKind::Protocol(Some(def)) => format_protocol(def, registry),
         GlobalKind::Struct(None) => "struct".to_string(),
         GlobalKind::Struct(Some(def)) => format_struct(def, registry),
     }
+}
+
+fn format_protocol(def: &ProtocolDefinition, registry: &GlobalRegistry) -> String {
+    let methods = def
+        .methods
+        .iter()
+        .map(|method| format_protocol_method(method, registry))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("protocol {{{methods}}}")
+}
+
+fn format_protocol_method(method: &ResolvedProtocolMethod, registry: &GlobalRegistry) -> String {
+    let suffix = if method.has_default { " = default" } else { "" };
+    let receiver = match method.dispatch {
+        super::Dispatch::Instance => "self",
+        super::Dispatch::Static => "",
+    };
+    let non_self = method
+        .non_self_params
+        .iter()
+        .map(|p| format!("{}: {}", p.name, format_resolved(&p.ty, registry)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let params = match (receiver, non_self.as_str()) {
+        ("", rest) => rest.to_string(),
+        (recv, "") => recv.to_string(),
+        (recv, rest) => format!("{recv}, {rest}"),
+    };
+    format!(
+        "fn {}({params}) -> {}{suffix}",
+        method.name,
+        format_resolved(&method.return_type, registry),
+    )
 }
 
 fn format_struct(def: &StructDefinition, registry: &GlobalRegistry) -> String {

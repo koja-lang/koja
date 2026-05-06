@@ -85,9 +85,12 @@ pub(crate) fn lower_package(
     }
 }
 
-/// Lower static methods declared in an `impl Type ... end` block.
-/// Trait impls and unsupported targets already errored upstream; IR
-/// silently skips them.
+/// Lower methods declared in an `impl Type ... end` or
+/// `impl Trait for Type ... end` block. Unsupported targets already
+/// errored upstream; IR silently skips them. Trait-impl members
+/// (including synthesized default-method bodies) lower the same as
+/// inherent ones — both register at `Package.Type.method` and the
+/// IR doesn't model the trait link.
 fn lower_impl(
     impl_block: &ImplBlock,
     package: &str,
@@ -95,9 +98,6 @@ fn lower_impl(
     diagnostics: &mut Vec<Diagnostic>,
     functions: &mut BTreeMap<IRSymbol, IRFunction>,
 ) {
-    if impl_block.trait_expr.is_some() {
-        return;
-    }
     let Some(target_name) = impl_target_name(&impl_block.target) else {
         return;
     };
