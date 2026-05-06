@@ -266,6 +266,24 @@ const LOCALS_SCRIPT_SOURCE: &str = "
     x + add_one(4)
 ";
 
+/// Script-mode fixture exercising the alpha compound-assignment
+/// slice end-to-end. Declares `x = 10`, applies `x += 5`, and the
+/// auto-print wrapper renders `15\n`. Pins the desugar:
+///
+/// - typecheck-resolve binds the target's `local_id` against the
+///   prior decl's slot and rejects any non-arithmetic / type-
+///   mismatched / undeclared rhs upstream;
+/// - IR lower expands `x += 5` to `LocalRead + BinaryOp(Add) +
+///   LocalWrite` against the existing slot — no new `LocalDecl`;
+/// - LLVM and the eval interpreter need zero compound-aware code;
+///   the desugared instructions go through the same paths
+///   `LOCALS_SCRIPT_SOURCE` already covers.
+const COMPOUND_ASSIGN_SCRIPT_SOURCE: &str = "
+    x = 10
+    x += 5
+    x
+";
+
 /// Script-mode fixture exercising the alpha instance-method slice
 /// end-to-end. `Counter{n: 10}.add(5)` constructs a struct, calls an
 /// inline-form instance method whose body reads `self.n` and adds
@@ -1070,6 +1088,26 @@ fn alpha_run_llvm_script_locals_prints_fifteen() {
 #[test]
 fn alpha_run_interpreter_script_locals_prints_fifteen() {
     assert_script_prints("run_interpreter_locals", LOCALS_SCRIPT_SOURCE, None, "15");
+}
+
+#[test]
+fn alpha_run_llvm_script_compound_assign_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_compound_assign",
+        COMPOUND_ASSIGN_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_compound_assign_prints_fifteen() {
+    assert_script_prints(
+        "run_interpreter_compound_assign",
+        COMPOUND_ASSIGN_SCRIPT_SOURCE,
+        None,
+        "15",
+    );
 }
 
 #[test]

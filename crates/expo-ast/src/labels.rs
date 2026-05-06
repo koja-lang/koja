@@ -2,7 +2,7 @@
 //! `expr_kind_label` / `item_label` return compact kind names ("binary",
 //! "fn"); `bin_op_label` renders the literal source token ("+", "and").
 
-use crate::ast::{BinOp, ExprKind, Item};
+use crate::ast::{BinOp, CompoundOp, ExprKind, Item};
 use crate::span::Span;
 
 pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
@@ -79,5 +79,16 @@ pub fn bin_op_label(op: BinOp) -> &'static str {
         BinOp::NotEq => "!=",
         BinOp::Or => "or",
         BinOp::Sub => "-",
+    }
+}
+
+/// Source-token rendering of the binary part of a compound operator
+/// (so `+=` reports as `+`, matching `bin_op_label`).
+pub fn compound_op_label(op: CompoundOp) -> &'static str {
+    match op {
+        CompoundOp::Add => "+",
+        CompoundOp::Div => "/",
+        CompoundOp::Mul => "*",
+        CompoundOp::Sub => "-",
     }
 }

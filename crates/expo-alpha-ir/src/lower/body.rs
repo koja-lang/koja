@@ -14,15 +14,16 @@
 //! `lower_script` via the shared `diagnostics` accumulator.
 
 use expo_alpha_typecheck::GlobalRegistry;
-use expo_ast::ast::{AssignTarget, Diagnostic, Expr, Statement};
+use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, Statement};
 use expo_ast::identifier::LocalId;
 
 use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRTerminator};
 use crate::local::IRLocalId;
-use crate::types::{IRType, ValueId};
+use crate::types::{IRBinOp, IRType, ValueId};
 
 use super::ctx::{FlowResult, FnLowerCtx};
 use super::expr::lower_expr;
+use super::ops::bin_op_result_type;
 
 /// Lower a sequence of statements into a CFG fragment, starting in a
 /// fresh `entry` block. Used by [`crate::lower_script`] to lower a
@@ -125,13 +126,9 @@ fn lower_statement(
         Statement::Assignment { target, value, .. } => {
             lower_assignment(target, value, ctx, block, registry, diagnostics)
         }
-        Statement::CompoundAssign { span, .. } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha IR does not yet lower compound assignment statements",
-                *span,
-            ));
-            Err(())
-        }
+        Statement::CompoundAssign {
+            target, op, value, ..
+        } => lower_compound_assignment(target, *op, value, ctx, block, registry, diagnostics),
         Statement::Break { span } => {
             diagnostics.push(Diagnostic::error(
                 "alpha IR does not yet lower `break` statements",
@@ -199,11 +196,75 @@ fn lower_assignment(
     })
 }
 
+/// Lower `target op= value` to `LocalRead + BinaryOp + LocalWrite`.
+/// Typecheck-resolve guarantees the local was already declared with
+/// an arithmetic type and that the rhs's type matches, so this
+/// helper assumes a well-typed shape and panics on deviation. Unlike
+/// [`lower_assignment`], we never emit a `LocalDecl` — compound
+/// assignment is reassignment-only.
+fn lower_compound_assignment(
+    target: &LValue,
+    op: CompoundOp,
+    value: &Expr,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<FlowResult, ()> {
+    let local_id = single_segment_lvalue(target);
+    let ir_local = IRLocalId::from_local_id(local_id);
+
+    let (rhs, current) = lower_expr(value, ctx, block, registry, diagnostics)?;
+    let ty = ctx.type_of(rhs);
+
+    let read_dest = ctx.fresh_value(ty.clone());
+    ctx.cfg.append(
+        current,
+        IRInstruction::LocalRead {
+            dest: read_dest,
+            local: ir_local,
+            ty: ty.clone(),
+        },
+    );
+
+    let ir_op = compound_to_ir(op);
+    let result = ctx.fresh_value(bin_op_result_type(ir_op, ty));
+    ctx.cfg.append(
+        current,
+        IRInstruction::BinaryOp {
+            dest: result,
+            lhs: read_dest,
+            op: ir_op,
+            rhs,
+        },
+    );
+    ctx.cfg.append(
+        current,
+        IRInstruction::LocalWrite {
+            local: ir_local,
+            value: result,
+        },
+    );
+
+    Ok(FlowResult::Open {
+        value: None,
+        block: current,
+    })
+}
+
+fn compound_to_ir(op: CompoundOp) -> IRBinOp {
+    match op {
+        CompoundOp::Add => IRBinOp::Add,
+        CompoundOp::Div => IRBinOp::Div,
+        CompoundOp::Mul => IRBinOp::Mul,
+        CompoundOp::Sub => IRBinOp::Sub,
+    }
+}
+
 /// Pull the [`LocalId`] off a sealed assignment target. Typecheck
-/// rejects pattern destructuring and multi-segment lvalues, so by
-/// the time this runs the target is an [`AssignTarget::LValue`] with
-/// exactly one segment whose resolver-stamped `local_id` is `Some(_)`.
-/// Any deviation is an upstream seal violation, not a feature gap.
+/// rejects pattern destructuring, so by the time this runs the
+/// target is an [`AssignTarget::LValue`] whose [`LValue`] passes
+/// `single_segment_lvalue`'s checks.
 fn single_segment_local(target: &AssignTarget) -> LocalId {
     let AssignTarget::LValue(lvalue) = target else {
         panic!(
@@ -211,6 +272,14 @@ fn single_segment_local(target: &AssignTarget) -> LocalId {
              (got {target:?})",
         );
     };
+    single_segment_lvalue(lvalue)
+}
+
+/// Validate a sealed compound-assign / regular-assign LValue and
+/// return its [`LocalId`]. Single-segment shape and a stamped
+/// `local_id` are typecheck-seal invariants; deviation is an
+/// upstream bug.
+fn single_segment_lvalue(lvalue: &LValue) -> LocalId {
     if lvalue.segments.len() != 1 {
         panic!(
             "alpha IR lower: assignment target must be single-segment after typecheck seal \

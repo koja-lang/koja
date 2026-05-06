@@ -6,7 +6,7 @@
 //! [`COMPILER-NORTHSTAR.md`]: ../../../design/COMPILER-NORTHSTAR.md
 
 use expo_ast::ast::{
-    AssignTarget, Expr, ExprKind, File, Function, ImplMember, Item, Statement, StringPart,
+    AssignTarget, Expr, ExprKind, File, Function, ImplMember, Item, LValue, Statement, StringPart,
 };
 use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
@@ -73,7 +73,15 @@ fn seal_statement(stmt: &Statement) {
             seal_expr(value);
         }
         Statement::Break { .. } | Statement::Return { value: None, .. } => {}
-        Statement::CompoundAssign { value, .. } => seal_expr(value),
+        Statement::CompoundAssign {
+            target,
+            value,
+            span,
+            ..
+        } => {
+            seal_compound_target(target, *span);
+            seal_expr(value);
+        }
         Statement::Expr(expr) => seal_expr(expr),
         Statement::Return {
             value: Some(value), ..
@@ -102,6 +110,34 @@ fn seal_assign_target(target: &AssignTarget, statement_span: Span) {
             "assignment target is a destructuring pattern; resolver rejects this shape",
             statement_span,
         ),
+    }
+}
+
+/// Compound-assign targets are bare `LValue`s (the AST shape only
+/// admits the single-segment case as a happy-path; the resolver
+/// rejects multi-segment forms and undeclared names). Past resolve,
+/// a compound-assign target must carry both single-segment shape
+/// *and* a stamped `local_id`.
+fn seal_compound_target(target: &LValue, statement_span: Span) {
+    if target.segments.len() != 1 {
+        seal_panic(
+            &format!(
+                "compound-assign target has {} segments; resolver rejects multi-segment \
+                 targets",
+                target.segments.len(),
+            ),
+            target.span,
+        );
+    }
+    if target.local_id.is_none() {
+        seal_panic(
+            &format!(
+                "compound-assign target `{}` carries no LocalId; resolver should have \
+                 stamped it on success or diagnosed otherwise",
+                target.segments[0],
+            ),
+            statement_span,
+        );
     }
 }
 

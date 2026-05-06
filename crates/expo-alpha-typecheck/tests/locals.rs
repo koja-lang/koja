@@ -1,9 +1,9 @@
 //! Typecheck coverage for the alpha locals slice: variable
-//! declaration, reassignment, parameter references, and the
-//! feature-gap diagnostics that fence off out-of-scope shapes
-//! (compound assignment, multi-segment lvalues, pattern
-//! destructuring, type annotations on reassignment, type-changing
-//! reassignment).
+//! declaration, reassignment, parameter references, compound
+//! assignment (`+=`, `-=`, `*=`, `/=`), and the feature-gap
+//! diagnostics that fence off out-of-scope shapes (multi-segment
+//! lvalues, pattern destructuring, type annotations on reassignment,
+//! type-changing reassignment).
 //!
 //! Per-function locals are addressed by [`LocalId`], so on success
 //! the resolver stamps two AST nodes:
@@ -21,7 +21,7 @@
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
 use expo_alpha_typecheck::CheckedProgram;
-use expo_ast::ast::{AssignTarget, ExprKind, Item, Statement};
+use expo_ast::ast::{AssignTarget, CompoundOp, ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 
@@ -264,12 +264,151 @@ fn decl_with_mismatched_annotation_diagnoses() {
     );
 }
 
+/// Helper: ensure a function body's i-th statement is a
+/// `CompoundAssign` with the given op, the target stamps a `local_id`
+/// matching the prior `Assignment`'s decl, and the rhs has the
+/// expected primitive type. Used by the four happy-path arithmetic
+/// cases to keep them small.
+fn assert_compound_op(
+    checked: &CheckedProgram,
+    body_index: usize,
+    expected_op: CompoundOp,
+    expected_primitive: &str,
+) {
+    let body = function_body(checked, "main");
+    let Statement::Assignment { target, .. } = &body[0] else {
+        panic!(
+            "expected first statement to be Assignment, got {:?}",
+            body[0]
+        );
+    };
+    let AssignTarget::LValue(decl_lvalue) = target else {
+        panic!("expected LValue decl target, got {target:?}");
+    };
+    let decl_id = decl_lvalue
+        .local_id
+        .expect("decl should stamp local_id on LValue");
+
+    let Statement::CompoundAssign {
+        target: compound_target,
+        op,
+        value,
+        ..
+    } = &body[body_index]
+    else {
+        panic!(
+            "expected statement {body_index} to be CompoundAssign, got {:?}",
+            body[body_index],
+        );
+    };
+    assert_eq!(*op, expected_op, "wrong compound op");
+    assert_eq!(
+        compound_target.local_id,
+        Some(decl_id),
+        "compound-assign target should reference the existing local",
+    );
+    assert_eq!(
+        value.resolution,
+        global_leaf(checked, expected_primitive),
+        "rhs should resolve to `{expected_primitive}`",
+    );
+}
+
 #[test]
-fn compound_assignment_diagnoses_feature_gap() {
+fn compound_assign_add_int_resolves() {
     let source = "
         fn main
           x = 1
+          x += 2
+          x
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert_compound_op(&checked, 1, CompoundOp::Add, "Int");
+}
+
+#[test]
+fn compound_assign_sub_int_resolves() {
+    let source = "
+        fn main
+          x = 5
+          x -= 2
+          x
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert_compound_op(&checked, 1, CompoundOp::Sub, "Int");
+}
+
+#[test]
+fn compound_assign_mul_int_resolves() {
+    let source = "
+        fn main
+          x = 3
+          x *= 4
+          x
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert_compound_op(&checked, 1, CompoundOp::Mul, "Int");
+}
+
+#[test]
+fn compound_assign_div_int_resolves() {
+    let source = "
+        fn main
+          x = 8
+          x /= 2
+          x
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert_compound_op(&checked, 1, CompoundOp::Div, "Int");
+}
+
+#[test]
+fn compound_assign_float_resolves() {
+    let source = "
+        fn main
+          x = 1.0
+          x += 2.5
+          x
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert_compound_op(&checked, 1, CompoundOp::Add, "Float");
+}
+
+#[test]
+fn compound_assign_undeclared_diagnoses() {
+    let source = "
+        fn main
           x += 1
+          0
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("undeclared variable") && m.contains("`x`")),
+        "expected undeclared-target diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn compound_assign_type_mismatch_diagnoses() {
+    let source = "
+        fn main
+          x = 1
+          x += 1.0
           x
         end
         ";
@@ -279,8 +418,53 @@ fn compound_assignment_diagnoses_feature_gap() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("compound assignment") || m.contains("+=")),
-        "expected compound-assignment feature-gap diagnostic, got {messages:?}",
+            .any(|m| m.contains("type mismatch") && m.contains("`x`")),
+        "expected type-mismatch diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn compound_assign_non_arith_lhs_diagnoses() {
+    let source = "
+        fn main
+          b = true
+          b += true
+          b
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("Int") && m.contains("Float") && m.contains("`b`")),
+        "expected non-arithmetic-lhs diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn compound_assign_field_target_diagnoses_feature_gap() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          p = Point{x: 1, y: 2}
+          p.x += 5
+          p
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("field assignment") && m.contains("p.x")),
+        "expected field-assignment gap diagnostic for compound assign, got {messages:?}",
     );
 }
 

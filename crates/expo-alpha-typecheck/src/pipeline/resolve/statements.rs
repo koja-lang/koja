@@ -1,8 +1,9 @@
 //! Statement-level resolution helpers.
 //!
-//! Today this covers `Statement::Assignment` — declaration and
-//! same-type reassignment. Compound assignment, multi-segment
-//! [`LValue`] targets, and pattern destructuring all surface as
+//! Covers `Statement::Assignment` (declaration + same-type
+//! reassignment) and `Statement::CompoundAssign` (`x += rhs`,
+//! reassignment-only on an arithmetic local). Multi-segment
+//! [`LValue`] targets and pattern destructuring still surface as
 //! feature-gap diagnostics here so later passes never see those
 //! shapes.
 //!
@@ -16,18 +17,23 @@
 //!   feature gap (only legal on first decl); rhs type must equal the
 //!   existing local's type; the existing [`LocalId`] stays put.
 //!
+//! [`resolve_compound_assignment`] is the same shape minus the
+//! declaration path: the local must already exist, its type must
+//! be `Int` or `Float`, and the rhs type must match.
+//!
 //! [`LocalId`]: expo_ast::identifier::LocalId
 //! [`LValue`]: expo_ast::ast::LValue
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
-use expo_ast::ast::{AssignTarget, Diagnostic, Expr, LValue, TypeExpr};
+use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, TypeExpr};
+use expo_ast::labels::compound_op_label;
 use expo_ast::span::Span;
 
 use crate::pipeline::lift_signatures::resolve_type_expr;
 
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
-use super::types::display_resolution;
+use super::types::{display_resolution, is_arithmetic_type};
 
 /// Resolve a `target = value` statement. Validates target shape,
 /// resolves the rhs, applies declaration-vs-reassignment rules, and
@@ -128,6 +134,71 @@ pub(super) fn resolve_assignment(
     }
 }
 
+/// Resolve a `target op= value` statement. Reassignment-only — the
+/// target must already be a declared local of arithmetic type
+/// (`Int` or `Float`), and the rhs must match. On success, stamps
+/// `target.local_id` so IR lower can desugar to
+/// `LocalRead + BinaryOp + LocalWrite`.
+pub(super) fn resolve_compound_assignment(
+    target: &mut LValue,
+    op: CompoundOp,
+    value: &mut Expr,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    resolve_expr(value, resolver, diagnostics);
+
+    let Some(name) = single_segment_lvalue(target, diagnostics) else {
+        return;
+    };
+    let name = name.to_string();
+    let op_label = compound_op_label(op);
+
+    let Some((local_id, existing_ty)) = resolver
+        .scope
+        .lookup(&name)
+        .map(|(id, ty)| (id, ty.clone()))
+    else {
+        diagnostics.push(Diagnostic::error(
+            format!("cannot apply `{op_label}=` to undeclared variable `{name}`"),
+            span,
+        ));
+        return;
+    };
+
+    if !is_arithmetic_type(&existing_ty, resolver.registry) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`{op_label}=` requires an `Int` or `Float` lhs (got `{}` for `{name}`)",
+                display_resolution(&existing_ty, resolver.registry),
+            ),
+            span,
+        ));
+        return;
+    }
+
+    let value_ty = value.resolution.clone();
+    if !value_ty.is_resolved() {
+        // The rhs already triggered its own diagnostic — stay quiet
+        // to avoid piling on with a type-mismatch.
+        return;
+    }
+    if value_ty != existing_ty {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "type mismatch on `{op_label}=` for `{name}`: lhs is `{}`, rhs is `{}`",
+                display_resolution(&existing_ty, resolver.registry),
+                display_resolution(&value_ty, resolver.registry),
+            ),
+            span,
+        ));
+        return;
+    }
+
+    target.local_id = Some(local_id);
+}
+
 /// Validate the assignment target shape. The slice supports only
 /// single-segment [`LValue`]s (`x = ...`); pattern destructuring and
 /// dotted lvalues (`point.x = ...`) surface as feature gaps. On
@@ -146,20 +217,31 @@ fn single_segment_target<'a>(
             ));
             None
         }
-        AssignTarget::LValue(lvalue) => {
-            if lvalue.segments.len() == 1 {
-                Some(lvalue.segments[0].as_str())
-            } else {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "alpha typecheck does not yet support field assignment (got `{}`)",
-                        format_lvalue(lvalue),
-                    ),
-                    lvalue.span,
-                ));
-                None
-            }
-        }
+        AssignTarget::LValue(lvalue) => single_segment_lvalue(lvalue, diagnostics),
+    }
+}
+
+/// Validate a bare [`LValue`] target (used by compound assignment,
+/// where the AST already pinned the shape to `LValue`). Multi-segment
+/// targets surface as the same field-assignment feature gap as the
+/// `single_segment_target` LValue arm; pattern destructuring is
+/// unreachable here because the parser only allows an `LValue` on
+/// the lhs of `+=` / `-=` / `*=` / `/=`.
+fn single_segment_lvalue<'a>(
+    lvalue: &'a LValue,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<&'a str> {
+    if lvalue.segments.len() == 1 {
+        Some(lvalue.segments[0].as_str())
+    } else {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support field assignment (got `{}`)",
+                format_lvalue(lvalue),
+            ),
+            lvalue.span,
+        ));
+        None
     }
 }
 

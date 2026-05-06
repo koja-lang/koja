@@ -25,6 +25,14 @@ pub(super) fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &
     entry.identifier.is_in_global() && entry.identifier.last() == name
 }
 
+/// Does `ty` resolve to a primitive admitting `+`, `-`, `*`, `/`?
+/// Used by both binary-arithmetic and compound-assign typechecking;
+/// kept in sync with the operand rule at
+/// [`super::ops::binary_type`]'s `Add | Div | Mul | Sub` arm.
+pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    is_primitive(ty, registry, "Int") || is_primitive(ty, registry, "Float")
+}
+
 /// Human-readable rendering of a [`ResolvedType`] for diagnostics:
 /// dereferences `Global` heads through the registry so users see
 /// `Int` rather than an opaque `#0`.

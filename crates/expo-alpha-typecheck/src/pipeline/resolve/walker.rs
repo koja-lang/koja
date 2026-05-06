@@ -30,7 +30,7 @@ use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::return_type::check_return_type;
-use super::statements::resolve_assignment;
+use super::statements::{resolve_assignment, resolve_compound_assignment};
 
 pub(crate) fn resolve_file(
     file: &mut File,
@@ -181,11 +181,13 @@ pub(super) fn resolve_statement(
             );
         }
         Statement::Break { .. } => {}
-        Statement::CompoundAssign { span, .. } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support compound assignment (`+=`, `-=`, `*=`, `/=`)",
-                *span,
-            ));
+        Statement::CompoundAssign {
+            target,
+            op,
+            value,
+            span,
+        } => {
+            resolve_compound_assignment(target, *op, value, *span, resolver, diagnostics);
         }
         Statement::Expr(expr) => {
             resolve_expr(expr, resolver, diagnostics);
