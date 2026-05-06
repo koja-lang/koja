@@ -94,6 +94,40 @@ pub struct StructDefinition {
     pub fields: Vec<ResolvedStructField>,
 }
 
+/// Variant roster for a user-declared enum. Stamped onto a
+/// [`GlobalKind::Enum`] entry by the `lift_signatures` sub-pass.
+/// Variant order matches declaration order — the IR's discriminant
+/// tag is the variant's position in this vec, and downstream
+/// consumers (IR lower, codegen) index by position.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnumDefinition {
+    pub variants: Vec<ResolvedEnumVariant>,
+}
+
+/// One variant on an [`EnumDefinition`]. `name` is the surface
+/// identifier (`Some` in `Option.Some`); `data` carries the variant's
+/// payload shape — empty for unit variants, positional types for
+/// tuple variants, named fields for struct variants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedEnumVariant {
+    pub data: ResolvedVariantData,
+    pub name: String,
+}
+
+/// Payload shape of an enum variant.
+///
+/// The `Struct` arm reuses [`ResolvedStructField`] verbatim — a
+/// struct variant's payload layout is structurally a struct, and the
+/// shared shape lets the validation helpers in `resolve/structs.rs`
+/// be reused for both struct construction and struct-variant
+/// construction without duplicating the per-field walk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolvedVariantData {
+    Struct(Vec<ResolvedStructField>),
+    Tuple(Vec<ResolvedType>),
+    Unit,
+}
+
 /// Method roster for a user-declared protocol, stamped by
 /// `lift_signatures`. Method order matches declaration order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,17 +162,32 @@ impl StructDefinition {
     }
 }
 
+impl EnumDefinition {
+    /// Lookup a variant by name; returns `Some((index, &variant))`
+    /// for a match, `None` otherwise. Linear scan — variant counts
+    /// are small (single-digit typical, capped at 256 by the `i8`
+    /// discriminant tag width), so the constant factor wins over a
+    /// hashmap. Used by `resolve` to turn `Color.Red` into a tag +
+    /// payload shape and by IR lower to compute the discriminant.
+    pub fn lookup_variant(&self, name: &str) -> Option<(u32, &ResolvedEnumVariant)> {
+        self.variants
+            .iter()
+            .enumerate()
+            .find(|(_, variant)| variant.name == name)
+            .map(|(index, variant)| (index as u32, variant))
+    }
+}
+
 /// What kind of declaration a registry entry points at.
 ///
-/// `Function`, `Protocol`, and `Struct` entries carry their lifted
-/// payload inline as `Option<_>`: `None` is the "collected but not
-/// yet lifted" state (and the permanent state for stdlib stub
-/// primitives), `Some(_)` the lifted state reached after
-/// `lift_signatures` runs. `Enum` grows per-variant metadata as
-/// features land.
+/// `Enum`, `Function`, `Protocol`, and `Struct` entries carry their
+/// lifted payload inline as `Option<_>`: `None` is the "collected
+/// but not yet lifted" state (and the permanent state for stdlib
+/// stub primitives), `Some(_)` the lifted state reached after
+/// `lift_signatures` runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalKind {
-    Enum,
+    Enum(Option<EnumDefinition>),
     Function(Option<FunctionSignature>),
     Protocol(Option<ProtocolDefinition>),
     Struct(Option<StructDefinition>),
@@ -147,7 +196,7 @@ pub enum GlobalKind {
 impl GlobalKind {
     pub fn label(&self) -> &'static str {
         match self {
-            GlobalKind::Enum => "enum",
+            GlobalKind::Enum(_) => "enum",
             GlobalKind::Function(_) => "function",
             GlobalKind::Protocol(_) => "protocol",
             GlobalKind::Struct(_) => "struct",
@@ -211,8 +260,11 @@ impl GlobalRegistry {
         reg
     }
 
+    /// Register an enum in the `Enum(None)` state. The resolved
+    /// variant roster is stamped in later by
+    /// [`Self::set_enum_definition`].
     pub fn insert_enum(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Enum, span)
+        self.insert(identifier, GlobalKind::Enum(None), span)
     }
 
     /// Register a function in the `Function(None)` state. The
@@ -233,6 +285,34 @@ impl GlobalRegistry {
     /// primitives stay in `Struct(None)` permanently.
     pub fn insert_struct(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
         self.insert(identifier, GlobalKind::Struct(None), span)
+    }
+
+    /// Stamp a resolved variant roster onto an enum entry. Panics
+    /// unless the entry's kind is exactly `Enum(None)`.
+    pub fn set_enum_definition(&mut self, id: GlobalRegistryId, definition: EnumDefinition) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!("set_enum_definition on missing registry id {id} — collect invariant violation")
+        });
+        match &entry.kind {
+            GlobalKind::Enum(None) => {
+                entry.kind = GlobalKind::Enum(Some(definition));
+            }
+            GlobalKind::Enum(Some(_)) => {
+                panic!(
+                    "set_enum_definition called twice on `{}` — lift_signatures must stamp \
+                     each enum exactly once",
+                    entry.identifier,
+                );
+            }
+            other => {
+                panic!(
+                    "set_enum_definition called on non-enum entry `{}` ({}) — \
+                     only Enum entries carry definitions",
+                    entry.identifier,
+                    other.label(),
+                );
+            }
+        }
     }
 
     /// Stamp a resolved method roster. Panics unless the entry's

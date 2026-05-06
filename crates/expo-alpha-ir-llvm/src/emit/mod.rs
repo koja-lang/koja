@@ -22,10 +22,10 @@
 //!   plus the const + call helpers it routes to.
 //! - [`ops`]: binary + unary operator emission, parallel to
 //!   `expo-alpha-ir-eval/src/ops.rs`.
-//! - [`structs`]: pre-emit phase that mints LLVM `StructType`s for
-//!   every [`expo_alpha_ir::IRStructDecl`] and registers them on
-//!   the [`EmitCtx`] before any function emission walks an
-//!   [`IRType::Struct`] reference.
+//!
+//! Type-creation pre-emit (struct + enum LLVM types from sealed IR
+//! decls) lives in [`crate::layout`], not here. This module is
+//! reserved for the IR-instruction-to-LLVM-instruction layer.
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -34,12 +34,11 @@ use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRTerminator, ValueId};
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, IntValue};
 
-use crate::ctx::EmitCtx;
+use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 
 mod instruction;
 mod ops;
-pub(crate) mod structs;
 
 /// Per-function SSA index. The migration to [`BasicValueEnum`] (from
 /// `IntValue`) is what lets pointer-typed values (e.g. `IRType::String`
@@ -62,7 +61,7 @@ pub(crate) fn inkwell_err(op: impl Display, e: impl Display) -> LlvmError {
 /// runs and for seeding `values` with any param `ValueId`s before
 /// the entry-block walk.
 pub(crate) fn emit_block<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     block: &IRBasicBlock,
     block_map: &BlockMap<'ctx>,
     values: &mut ValueMap<'ctx>,
@@ -80,7 +79,7 @@ pub(crate) fn emit_block<'ctx>(
 /// `&mut` would cause when interleaved with the returned terminator
 /// borrow.
 pub(crate) fn emit_instructions<'ctx, 'block>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     block: &'block IRBasicBlock,
     seed: ValueMap<'ctx>,
 ) -> Result<(ValueMap<'ctx>, &'block IRTerminator), LlvmError> {
@@ -97,7 +96,7 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
 /// caller-provided `block_map`; misses are a compiler bug (the seal
 /// pass guarantees every target is a registered IR block).
 pub(crate) fn emit_terminator_default<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     terminator: &IRTerminator,
     values: &ValueMap<'ctx>,
     block_map: &BlockMap<'ctx>,

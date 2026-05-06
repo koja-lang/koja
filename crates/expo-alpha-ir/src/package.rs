@@ -4,11 +4,18 @@
 
 use std::collections::BTreeMap;
 
+use crate::enum_decl::IREnumDecl;
 use crate::function::{IRFunction, IRSymbol};
 use crate::struct_decl::IRStructDecl;
 
 #[derive(Debug, Clone)]
 pub struct IRPackage {
+    /// Enum declarations owned by this package, keyed by their
+    /// stable [`IRSymbol`]. Same key shape as [`Self::structs`];
+    /// backends use the symbol to consult the declared variant
+    /// roster for `IRType::Enum(symbol)` /
+    /// `IRInstruction::EnumConstruct`.
+    pub enums: BTreeMap<IRSymbol, IREnumDecl>,
     /// Functions owned by this package, keyed by their stable
     /// [`IRSymbol`]. Each function's `symbol` field equals its key
     /// here by construction. Backends look up by `&str` through the

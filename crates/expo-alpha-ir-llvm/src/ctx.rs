@@ -1,44 +1,50 @@
-//! Bundle of the three inkwell handles every emission step needs:
-//! the borrowed [`Context`], a fresh [`Module`], and a [`Builder`]
-//! tied to the same `'ctx` lifetime.
+//! Bundle of the inkwell handles every emission step needs (the
+//! borrowed [`Context`], a fresh [`Module`], and a [`Builder`] tied
+//! to the same `'ctx` lifetime), the per-emission counters and
+//! per-function slot table, and a handle on the type-layout
+//! registry [`crate::layout::TypeLayouts`].
 //!
 //! Deliberately a passive bundle — no business logic. Every
 //! orchestration concern (program / script entry, function emission,
 //! main-wrapper synthesis, instruction-level emission) lives in its
-//! own module and takes `&EmitCtx` as a parameter, so this struct
-//! never grows into a god object.
+//! own module and takes `&EmitContext` as a parameter, so this struct
+//! never grows into a god object. Type-layout machinery (struct +
+//! enum registries, host `TargetData`) lives in [`crate::layout`]
+//! and is accessed through the [`Self::layouts`] field; emission
+//! call sites that need it go through `ctx.layouts.<method>(…)`
+//! so the layered design stays visible at every reference.
 //!
-//! Named [`EmitCtx`] rather than `LlvmCtx` because the role is
+//! Named [`EmitContext`] rather than `LlvmCtx` because the role is
 //! "context threaded through every emit operation," and to avoid
 //! visual collision with [`inkwell::context::Context`] (which we
 //! borrow inside).
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-use expo_alpha_ir::{IRLocalId, IRSymbol};
+use expo_alpha_ir::IRLocalId;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicType, StructType};
+use inkwell::types::BasicType;
 use inkwell::values::PointerValue;
+
+use crate::layout::TypeLayouts;
 
 /// Fields are `pub(crate)` so sibling emission modules can borrow
 /// them directly; outside the crate the bundle is opaque.
-pub(crate) struct EmitCtx<'ctx> {
+pub(crate) struct EmitContext<'ctx> {
     pub(crate) builder: Builder<'ctx>,
     pub(crate) context: &'ctx Context,
     pub(crate) module: Module<'ctx>,
+    /// Type-layout registry: struct + enum LLVM type handles plus
+    /// the host [`inkwell::targets::TargetData`] used by the enum
+    /// layout computation. See [`crate::layout`].
+    pub(crate) layouts: TypeLayouts<'ctx>,
     /// Counter for `alpha_str.<n>` global names. `Cell<u32>` because
-    /// emission walks `&EmitCtx` immutably; mirrors v1's
+    /// emission walks `&EmitContext` immutably; mirrors v1's
     /// `string_const.<n>` pattern in `expo-codegen`.
     string_counter: Cell<u32>,
-    /// `IRSymbol -> StructType` lookup populated by
-    /// [`crate::emit::structs::emit_struct_decls`] before any
-    /// function bodies are walked. A `RefCell` because emission
-    /// otherwise threads through `&EmitCtx`; only the pre-emit phase
-    /// borrows mutably and every later read is a shared borrow.
-    struct_types: RefCell<BTreeMap<IRSymbol, StructType<'ctx>>>,
     /// Per-function local-variable slot map: `IRLocalId ->
     /// PointerValue` (the LLVM `alloca` materializing the slot).
     /// Populated as `LocalDecl` instructions emit; consumed by
@@ -48,14 +54,22 @@ pub(crate) struct EmitCtx<'ctx> {
     local_slots: RefCell<HashMap<IRLocalId, PointerValue<'ctx>>>,
 }
 
-impl<'ctx> EmitCtx<'ctx> {
-    pub(crate) fn new(context: &'ctx Context) -> Self {
+impl<'ctx> EmitContext<'ctx> {
+    /// Build a fresh emit context against `context`, with an LLVM
+    /// module named `module_name`. Convention is to pass the app
+    /// name (matching the `__expo_app_name` global the runtime
+    /// printer reads) so the generated IR's `; ModuleID = …` line
+    /// identifies the binary that produced it.
+    pub(crate) fn new(context: &'ctx Context, module_name: &str) -> Self {
+        let layouts = TypeLayouts::new();
+        let module = context.create_module(module_name);
+        layouts.pin_module_data_layout(&module);
         Self {
             builder: context.create_builder(),
             context,
-            module: context.create_module("expo_alpha_module"),
+            module,
+            layouts,
             string_counter: Cell::new(0),
-            struct_types: RefCell::new(BTreeMap::new()),
             local_slots: RefCell::new(HashMap::new()),
         }
     }
@@ -64,34 +78,6 @@ impl<'ctx> EmitCtx<'ctx> {
         let n = self.string_counter.get();
         self.string_counter.set(n + 1);
         format!("alpha_str.{n}")
-    }
-
-    /// Insert a `StructType` under `symbol`. Panics on a duplicate
-    /// key — every package emits its struct decls exactly once and
-    /// `merge` deduplicates across packages, so a collision here is
-    /// a compiler bug.
-    pub(crate) fn register_struct_type(&self, symbol: IRSymbol, ty: StructType<'ctx>) {
-        let mut map = self.struct_types.borrow_mut();
-        if map.insert(symbol.clone(), ty).is_some() {
-            panic!(
-                "alpha LLVM emit: struct type `{symbol}` registered twice — \
-                 lower / merge invariant violation",
-            );
-        }
-    }
-
-    /// Lookup a registered `StructType` by its mangled symbol.
-    /// Misses panic — every `IRType::Struct(_)` /
-    /// `IRInstruction::StructInit` / `IRInstruction::FieldGet`
-    /// reaches emission only after the pre-emit phase has registered
-    /// every package's structs.
-    pub(crate) fn struct_type(&self, mangled: &str) -> StructType<'ctx> {
-        *self.struct_types.borrow().get(mangled).unwrap_or_else(|| {
-            panic!(
-                "alpha LLVM emit: struct type `{mangled}` not registered — \
-                     pre-emit ordering violation",
-            )
-        })
     }
 
     /// Register an `alloca` for `local`. Panics on duplicate keys —
@@ -140,13 +126,13 @@ impl<'ctx> EmitCtx<'ctx> {
         let saved = self
             .builder
             .get_insert_block()
-            .expect("EmitCtx::build_entry_alloca called with no insertion block");
+            .expect("EmitContext::build_entry_alloca called with no insertion block");
         let function = saved.get_parent().expect(
-            "EmitCtx::build_entry_alloca called from a basic block with no parent function",
+            "EmitContext::build_entry_alloca called from a basic block with no parent function",
         );
         let entry = function
             .get_first_basic_block()
-            .expect("EmitCtx::build_entry_alloca expects the function to have an entry block");
+            .expect("EmitContext::build_entry_alloca expects the function to have an entry block");
         match entry.get_first_instruction() {
             Some(first) => self.builder.position_before(&first),
             None => self.builder.position_at_end(entry),

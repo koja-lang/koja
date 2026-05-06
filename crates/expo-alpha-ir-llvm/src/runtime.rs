@@ -11,7 +11,7 @@ use inkwell::module::Linkage;
 use inkwell::types::BasicMetadataTypeEnum;
 use inkwell::values::FunctionValue;
 
-use crate::ctx::EmitCtx;
+use crate::ctx::EmitContext;
 
 pub(crate) const PRINT_BOOL_SYMBOL: &str = "__expo_alpha_print_bool";
 pub(crate) const PRINT_F32_SYMBOL: &str = "__expo_alpha_print_f32";
@@ -23,7 +23,7 @@ pub(crate) const PRINT_STRING_SYMBOL: &str = "__expo_alpha_print_string";
 /// `void(arg_type)` external one. Idempotent so callers can declare
 /// the same printer from multiple emit sites without duplicating.
 pub(crate) fn declare_runtime_printer<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     symbol: &str,
     argument_type: BasicMetadataTypeEnum<'ctx>,
 ) -> FunctionValue<'ctx> {

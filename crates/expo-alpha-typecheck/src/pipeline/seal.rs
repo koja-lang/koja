@@ -6,7 +6,8 @@
 //! [`COMPILER-NORTHSTAR.md`]: ../../../design/COMPILER-NORTHSTAR.md
 
 use expo_ast::ast::{
-    AssignTarget, Expr, ExprKind, File, Function, ImplMember, Item, LValue, Statement, StringPart,
+    AssignTarget, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember, Item, LValue,
+    Statement, StringPart,
 };
 use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
@@ -28,6 +29,11 @@ fn seal_file(file: &File) {
         match item {
             Item::Function(function) => seal_function(function),
             Item::Struct(decl) => {
+                for function in &decl.functions {
+                    seal_function(function);
+                }
+            }
+            Item::Enum(decl) => {
                 for function in &decl.functions {
                     seal_function(function);
                 }
@@ -160,6 +166,19 @@ fn seal_expr(expr: &Expr) {
                 seal_expr(&arg.value);
             }
         }
+        ExprKind::EnumConstruction { data, .. } => match data {
+            EnumConstructionData::Struct(fields) => {
+                for field in fields {
+                    seal_expr(&field.value);
+                }
+            }
+            EnumConstructionData::Tuple(exprs) => {
+                for expr in exprs {
+                    seal_expr(expr);
+                }
+            }
+            EnumConstructionData::Unit => {}
+        },
         ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver),
         ExprKind::Group { expr: inner } => seal_expr(inner),
         ExprKind::Ident { name, resolution } => {

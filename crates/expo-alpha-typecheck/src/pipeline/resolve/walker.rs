@@ -51,6 +51,13 @@ pub(crate) fn resolve_file(
                     resolve_function(function, &identifier, package, registry, diagnostics);
                 }
             }
+            Item::Enum(decl) => {
+                for function in &mut decl.functions {
+                    let identifier =
+                        Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+                    resolve_function(function, &identifier, package, registry, diagnostics);
+                }
+            }
             Item::Impl(impl_block) => {
                 let Some(target_name) = impl_target_name(&impl_block.target) else {
                     continue;

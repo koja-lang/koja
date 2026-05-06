@@ -6,6 +6,7 @@
 use crate::IRProgram;
 use crate::function::IRInstruction;
 
+use super::enums::seal_enum_ops;
 use super::function::seal_package;
 use super::seal_panic;
 use super::structs::{package_instructions, seal_struct_ops};
@@ -22,6 +23,18 @@ pub(crate) fn seal_program(program: &IRProgram) {
     }
     seal_program_calls(program);
     seal_program_struct_ops(program);
+    seal_program_enum_ops(program);
+}
+
+/// Cross-package enum check: every `EnumConstruct::ty` must name an
+/// enum decl registered in some package, and the supplied tag +
+/// payload shape must match the variant. See
+/// [`super::enums::seal_enum_ops`] for the full rule list.
+fn seal_program_enum_ops(program: &IRProgram) {
+    let lookup = |mangled: &str| program.enum_decl(mangled);
+    for pkg in &program.packages {
+        seal_enum_ops(package_instructions(pkg), &lookup);
+    }
 }
 
 /// Cross-package struct check: every `StructInit::ty` and

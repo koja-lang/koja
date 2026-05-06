@@ -19,6 +19,7 @@ use crate::types::{ConstValue, IRType, ValueId};
 
 use super::control_flow::{lower_if, lower_unless};
 use super::ctx::FnLowerCtx;
+use super::enums::lower_enum_construction;
 use super::ops::{
     bin_op_result_type, const_value_type, lower_bin_op, lower_literal, lower_unary_op,
     unary_op_result_type,
@@ -54,6 +55,15 @@ pub(super) fn lower_expr(
         ExprKind::Call { callee, args } => {
             lower_call(callee, args, ctx, block, registry, diagnostics)
         }
+        ExprKind::EnumConstruction { variant, data, .. } => lower_enum_construction(
+            variant,
+            data,
+            &expr.resolution,
+            ctx,
+            block,
+            registry,
+            diagnostics,
+        ),
         ExprKind::FieldAccess { receiver, field } => lower_field_access(
             receiver,
             field,
@@ -263,16 +273,16 @@ fn lower_method_call(
     )
 }
 
-/// A bare `Ident` resolving to a struct names the struct itself
-/// (static dispatch); anything else is a value receiver (instance
-/// dispatch).
+/// A bare `Ident` resolving to a struct or enum names the type
+/// itself (static dispatch); anything else is a value receiver
+/// (instance dispatch).
 fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch {
     if let ExprKind::Ident {
         resolution: Resolution::Global(id),
         ..
     } = &receiver.kind
         && let Some(entry) = registry.get(*id)
-        && matches!(entry.kind, GlobalKind::Struct(_))
+        && matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_))
     {
         return Dispatch::Static;
     }

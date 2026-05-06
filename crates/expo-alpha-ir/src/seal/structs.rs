@@ -22,7 +22,7 @@ use std::collections::HashSet;
 
 use crate::function::{IRFunction, IRInstruction, IRSymbol};
 use crate::package::IRPackage;
-use crate::struct_decl::IRStructDecl;
+use crate::struct_decl::{IRStructDecl, IRStructField};
 
 use super::{require_supported_type, seal_panic};
 
@@ -40,8 +40,22 @@ pub(super) fn seal_struct_decls(pkg: &IRPackage) {
 
 fn seal_struct_decl(decl: &IRStructDecl) {
     let owner = format!("struct `{}`", decl.symbol);
-    let mut seen_names: HashSet<&str> = HashSet::with_capacity(decl.fields.len());
-    for (position, field) in decl.fields.iter().enumerate() {
+    seal_named_field_layout(&owner, &decl.fields);
+}
+
+/// Validate a named-field layout (struct decl or enum struct-variant
+/// payload) against the shared invariants: dense, declaration-order
+/// `index`es; unique field names; every `ir_type` in the alpha
+/// supported set.
+///
+/// Shared helper because both [`IRStructDecl`] and
+/// [`crate::IRVariantPayload::Struct`] reuse the same
+/// [`IRStructField`] vocabulary — the alpha enum slice's struct
+/// variants are structurally a struct's field roster, and the seal
+/// surface should be identical.
+pub(super) fn seal_named_field_layout(owner: &str, fields: &[IRStructField]) {
+    let mut seen_names: HashSet<&str> = HashSet::with_capacity(fields.len());
+    for (position, field) in fields.iter().enumerate() {
         if field.index as usize != position {
             seal_panic(&format!(
                 "{owner} field `{name}` has index {index} at position {position}; \
@@ -125,6 +139,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             IRInstruction::BinaryOp { .. }
             | IRInstruction::Call { .. }
             | IRInstruction::Const { .. }
+            | IRInstruction::EnumConstruct { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalRead { .. }
             | IRInstruction::LocalWrite { .. }
@@ -232,8 +247,9 @@ mod tests {
         let mut structs = BTreeMap::new();
         structs.insert(decl.symbol.clone(), decl);
         IRPackage {
-            package: "TestApp".to_string(),
+            enums: BTreeMap::new(),
             functions: BTreeMap::new(),
+            package: "TestApp".to_string(),
             structs,
         }
     }
@@ -273,8 +289,9 @@ mod tests {
         let mut structs = BTreeMap::new();
         structs.insert(symbol("Misnamed"), decl);
         let pkg = IRPackage {
-            package: "TestApp".to_string(),
+            enums: BTreeMap::new(),
             functions: BTreeMap::new(),
+            package: "TestApp".to_string(),
             structs,
         };
         seal_struct_decls(&pkg);

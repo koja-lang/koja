@@ -10,13 +10,13 @@ use expo_alpha_ir::IRFunction;
 use inkwell::AddressSpace;
 use inkwell::values::FunctionValue;
 
-use crate::ctx::EmitCtx;
+use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::runtime::{PRINT_STRING_SYMBOL, declare_runtime_printer};
 
 pub(super) fn emit_global_print<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {

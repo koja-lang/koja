@@ -88,11 +88,11 @@ fn lift_param(
 ) -> ResolvedParam {
     match param {
         Param::Self_ { span, .. } => {
-            let SelfContext::Struct(struct_identifier) = self_context else {
+            let SelfContext::Receiver(receiver_identifier) = self_context else {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "`self` receiver is only valid inside `struct` or `impl` blocks \
-                         (on `{identifier}`)"
+                        "`self` receiver is only valid inside `struct`, `enum`, or `impl` \
+                         blocks (on `{identifier}`)"
                     ),
                     *span,
                 ));
@@ -101,16 +101,16 @@ fn lift_param(
                     ty: ResolvedType::unresolved(),
                 };
             };
-            let Some((struct_id, _)) = registry.lookup(struct_identifier) else {
+            let Some((receiver_id, _)) = registry.lookup(receiver_identifier) else {
                 panic!(
-                    "lift_signatures: enclosing struct `{struct_identifier}` missing from \
+                    "lift_signatures: enclosing receiver `{receiver_identifier}` missing from \
                      registry while lifting `self` on `{identifier}` — collect invariant \
                      violation",
                 );
             };
             ResolvedParam {
                 name: "self".to_string(),
-                ty: ResolvedType::leaf(Resolution::Global(struct_id)),
+                ty: ResolvedType::leaf(Resolution::Global(receiver_id)),
             }
         }
         Param::Regular {

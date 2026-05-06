@@ -10,6 +10,7 @@ use crate::function::IRInstruction;
 use crate::script::IRScript;
 use crate::types::ValueId;
 
+use super::enums::seal_enum_ops;
 use super::function::{collect_block_ids, seal_block, seal_package};
 use super::structs::{package_instructions, script_body_instructions, seal_struct_ops};
 use super::{require_supported_type, seal_panic};
@@ -30,6 +31,7 @@ pub(crate) fn seal_script(script: &IRScript) {
     }
     seal_script_calls(script);
     seal_script_struct_ops(script);
+    seal_script_enum_ops(script);
 }
 
 /// Cross-IR struct check for script-shaped output. Mirrors
@@ -41,6 +43,18 @@ fn seal_script_struct_ops(script: &IRScript) {
     seal_struct_ops(script_body_instructions(&script.blocks), &lookup);
     for pkg in &script.packages {
         seal_struct_ops(package_instructions(pkg), &lookup);
+    }
+}
+
+/// Cross-IR enum check for script-shaped output. Mirrors
+/// [`super::program::seal_program_struct_ops`] / `seal_program_enum_ops`:
+/// walks both the implicit script body and every package fragment,
+/// validating each `EnumConstruct` against the assembled enum lookup.
+fn seal_script_enum_ops(script: &IRScript) {
+    let lookup = |mangled: &str| script.enum_decl(mangled);
+    seal_enum_ops(script_body_instructions(&script.blocks), &lookup);
+    for pkg in &script.packages {
+        seal_enum_ops(package_instructions(pkg), &lookup);
     }
 }
 

@@ -16,7 +16,9 @@
 
 use std::collections::BTreeMap;
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, RegistryEntry, StructDefinition};
+use expo_alpha_typecheck::{
+    GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, StructDefinition,
+};
 use expo_ast::ast::{Diagnostic, Expr, FieldInit, StructDecl, StructField};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 
@@ -83,28 +85,14 @@ pub(super) fn lower_struct_construction(
     let entry = struct_entry_from_resolution(expr_resolution, registry, "construction");
     let symbol = IRSymbol::from_identifier(&entry.identifier);
 
-    let mut current = block;
-    let mut values_by_name: BTreeMap<String, ValueId> = BTreeMap::new();
-    for field in fields {
-        let (value, next) = lower_expr(&field.value, ctx, current, registry, diagnostics)?;
-        values_by_name.insert(field.name.clone(), value);
-        current = next;
-    }
-
-    let mut field_inits = Vec::with_capacity(definition.fields.len());
-    for (index, declared) in definition.fields.iter().enumerate() {
-        let value = values_by_name.remove(&declared.name).unwrap_or_else(|| {
-            panic!(
-                "alpha IR lower: struct construction missing field `{}` after typecheck seal — \
-                 resolve invariant violation",
-                declared.name,
-            )
-        });
-        field_inits.push(StructFieldInit {
-            index: index as u32,
-            value,
-        });
-    }
+    let (field_inits, current) = canonicalize_struct_inits(
+        &definition.fields,
+        fields,
+        ctx,
+        block,
+        registry,
+        diagnostics,
+    )?;
 
     let dest = ctx.fresh_value(IRType::Struct(symbol.clone()));
     ctx.cfg.append(
@@ -116,6 +104,50 @@ pub(super) fn lower_struct_construction(
         },
     );
     Ok((dest, current))
+}
+
+/// Lower each field-init expression and re-order the results into
+/// declaration order. Shared by struct-literal construction and
+/// enum struct-variant construction — both want the same
+/// "lower in source order, threading control flow, then canonicalize
+/// to declaration order" pipeline. The struct slice owns the helper
+/// because structs own the "named field layout" concept; the enum
+/// lowering module imports.
+///
+/// Panics if a declared field has no corresponding init (typecheck
+/// seal forbids this; reaching it here is an invariant violation,
+/// not a feature gap).
+pub(super) fn canonicalize_struct_inits(
+    declared: &[ResolvedStructField],
+    fields: &[FieldInit],
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(Vec<StructFieldInit>, IRBlockId), ()> {
+    let mut current = block;
+    let mut values_by_name: BTreeMap<String, ValueId> = BTreeMap::new();
+    for field in fields {
+        let (value, next) = lower_expr(&field.value, ctx, current, registry, diagnostics)?;
+        values_by_name.insert(field.name.clone(), value);
+        current = next;
+    }
+
+    let mut field_inits = Vec::with_capacity(declared.len());
+    for (index, decl_field) in declared.iter().enumerate() {
+        let value = values_by_name.remove(&decl_field.name).unwrap_or_else(|| {
+            panic!(
+                "alpha IR lower: named-field construction missing field `{}` after typecheck \
+                 seal — resolve invariant violation",
+                decl_field.name,
+            )
+        });
+        field_inits.push(StructFieldInit {
+            index: index as u32,
+            value,
+        });
+    }
+    Ok((field_inits, current))
 }
 
 /// Lower an `expr.field` access. The receiver's `ResolvedType` keys

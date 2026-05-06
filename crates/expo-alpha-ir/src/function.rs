@@ -7,6 +7,7 @@ use std::fmt;
 
 use expo_ast::identifier::Identifier;
 
+use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::local::IRLocalId;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
@@ -133,6 +134,26 @@ pub enum IRInstruction {
     },
     /// `dest = <constant>`.
     Const { dest: ValueId, value: ConstValue },
+    /// `dest = <ty>.<variant>(<payload>)`. `tag` is the variant's
+    /// 0-based position in [`crate::IREnumDecl::variants`] (also
+    /// the wire byte of the LLVM tag field); `payload` carries the
+    /// already-lowered init values for the variant's payload fields
+    /// (Unit/Tuple/Struct shapes; struct-variant inits are
+    /// canonicalized to declaration order, mirroring
+    /// [`Self::StructInit`]).
+    ///
+    /// Seal asserts:
+    /// - `ty` resolves to a registered enum.
+    /// - `tag.0 < variants.len()`.
+    /// - `payload`'s shape matches the variant's
+    ///   [`crate::IRVariantPayload`] (Unit ↔ Unit, Tuple arity match,
+    ///   Struct len + canonicalization match).
+    EnumConstruct {
+        dest: ValueId,
+        payload: EnumPayloadInit,
+        tag: IRVariantTag,
+        ty: IRSymbol,
+    },
     /// `dest = base.<field_index>`. Backends emit GEP + load.
     /// `field_type` is the projected field's [`IRType`] (cached from
     /// the [`crate::IRStructDecl`] at lower time); `struct_symbol`
@@ -188,6 +209,7 @@ impl IRInstruction {
             IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
             | IRInstruction::Const { dest, .. }
+            | IRInstruction::EnumConstruct { dest, .. }
             | IRInstruction::FieldGet { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
             | IRInstruction::StructInit { dest, .. }

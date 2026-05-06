@@ -7,11 +7,11 @@
 //!   `%Pkg.Name = type { ... }` with the field list translated by
 //!   [`crate::types::ir_basic_type`]. Mutually-referential types
 //!   resolve through the two-phase `declare → set_body` loop in
-//!   [`crate::emit::structs`].
+//!   [`crate::layout::structs`].
 //! - **`StructInit` lowering**: a `Type{...}` literal lowers to
 //!   `alloca → store-per-field via getelementptr → load`. The alloca
 //!   lives in the function's entry block (per
-//!   [`EmitCtx::build_entry_alloca`]) so the canonicalized field-init
+//!   [`EmitContext::build_entry_alloca`]) so the canonicalized field-init
 //!   order in the IR layer flows straight into linear `store`
 //!   sequences in the bitcode.
 //! - **`FieldGet` lowering**: a `recv.field` projection lowers to

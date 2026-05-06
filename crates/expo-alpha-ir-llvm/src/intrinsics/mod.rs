@@ -12,7 +12,7 @@
 use expo_alpha_ir::IRFunction;
 use inkwell::values::FunctionValue;
 
-use crate::ctx::EmitCtx;
+use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 
 mod print;
@@ -20,11 +20,11 @@ mod print;
 use print::emit_global_print;
 
 /// Function pointer type for an intrinsic's LLVM emitter. The
-/// emitter receives the [`EmitCtx`], the IR function (for params /
+/// emitter receives the [`EmitContext`], the IR function (for params /
 /// return type), and the already-declared `FunctionValue` whose body
 /// it should fill in.
 type IntrinsicEmitter<'ctx> =
-    fn(&EmitCtx<'ctx>, &IRFunction, FunctionValue<'ctx>) -> Result<(), LlvmError>;
+    fn(&EmitContext<'ctx>, &IRFunction, FunctionValue<'ctx>) -> Result<(), LlvmError>;
 
 /// Synthesize the body of an `@intrinsic` function. Looks up
 /// `function.symbol.mangled()` in the dispatch table and forwards to
@@ -32,7 +32,7 @@ type IntrinsicEmitter<'ctx> =
 /// "unknown intrinsic" codegen error so a missing registration
 /// fails loudly instead of producing a function with no body.
 pub(crate) fn emit_intrinsic_body<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {

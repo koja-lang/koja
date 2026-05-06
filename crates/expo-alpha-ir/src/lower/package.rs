@@ -14,6 +14,7 @@ use expo_ast::ast::{
 };
 use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 
+use crate::enum_decl::IREnumDecl;
 use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
 use crate::local::IRLocalId;
 use crate::package::IRPackage;
@@ -22,6 +23,7 @@ use crate::types::IRType;
 
 use super::body::{finalize_open_flow, lower_body};
 use super::ctx::FnLowerCtx;
+use super::enums::lower_enum_decl;
 use super::structs::lower_struct_decl;
 
 use std::collections::BTreeMap;
@@ -31,11 +33,33 @@ pub(crate) fn lower_package(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> IRPackage {
+    let mut enums: BTreeMap<IRSymbol, IREnumDecl> = BTreeMap::new();
     let mut functions: BTreeMap<IRSymbol, IRFunction> = BTreeMap::new();
     let mut structs: BTreeMap<IRSymbol, IRStructDecl> = BTreeMap::new();
     for file in &pkg.files {
         for item in &file.items {
             match item {
+                Item::Enum(decl) => {
+                    if let Some(lowered) =
+                        lower_enum_decl(decl, &pkg.package, registry, diagnostics)
+                    {
+                        enums.insert(lowered.symbol.clone(), lowered);
+                    }
+                    for function in &decl.functions {
+                        let identifier = Identifier::new(
+                            &pkg.package,
+                            vec![decl.name.clone(), function.name.clone()],
+                        );
+                        if let Some(lowered) = lower_function_with_identifier(
+                            function,
+                            identifier,
+                            registry,
+                            diagnostics,
+                        ) {
+                            functions.insert(lowered.symbol.clone(), lowered);
+                        }
+                    }
+                }
                 Item::Function(function) => {
                     let identifier = Identifier::new(&pkg.package, vec![function.name.clone()]);
                     if let Some(lowered) =
@@ -79,6 +103,7 @@ pub(crate) fn lower_package(
         }
     }
     IRPackage {
+        enums,
         functions,
         package: pkg.package.clone(),
         structs,
@@ -330,6 +355,7 @@ pub(super) fn resolved_type_to_ir_type(ty: &ResolvedType, registry: &GlobalRegis
         };
     }
     match &entry.kind {
+        GlobalKind::Enum(_) => IRType::Enum(IRSymbol::from_identifier(&entry.identifier)),
         GlobalKind::Struct(_) => IRType::Struct(IRSymbol::from_identifier(&entry.identifier)),
         other => panic!(
             "alpha IR lower: cannot translate `{}` ({}) to IRType yet",

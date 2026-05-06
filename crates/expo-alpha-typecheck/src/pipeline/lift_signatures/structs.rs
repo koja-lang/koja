@@ -25,7 +25,7 @@ pub(super) fn lift_struct(
         lift_function_with_identifier(
             function,
             method_identifier,
-            SelfContext::Struct(&struct_identifier),
+            SelfContext::Receiver(&struct_identifier),
             package,
             registry,
             diagnostics,
