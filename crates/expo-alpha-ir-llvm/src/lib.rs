@@ -40,12 +40,17 @@
 //!
 //! # Module layout
 //!
-//! - [`ctx`] — [`ctx::EmitCtx`] bundle (inkwell context + module +
-//!   builder), the value threaded through every emit operation.
-//! - [`emit`] — block / instruction / terminator / operator
-//!   emission. Sub-split into `mod.rs` (block seams + lookups),
-//!   `instruction.rs` (dispatch + const + call), `ops.rs` (binary +
-//!   unary).
+//! - [`ctx`] — [`ctx::EmitContext`] bundle (inkwell context + module +
+//!   builder + per-emission counters + per-function slot table),
+//!   the value threaded through every emit operation.
+//! - [`layout`] — type-layout registry + host `TargetData` plus the
+//!   pre-emit submodules (`layout::structs`, `layout::enums`) that
+//!   mint LLVM types from sealed IR decls. Held as
+//!   `EmitContext::layouts`.
+//! - [`emit`] — IR-instruction-to-LLVM-instruction layer:
+//!   `mod.rs` (block seams + lookups), `instruction.rs` (dispatch +
+//!   const + call), `ops.rs` (binary + unary). Type creation lives
+//!   in [`layout`].
 //! - [`function`] — non-entry function declare + define +
 //!   param/block seeding.
 //! - [`main_wrapper`] — `i64 main()` synthesis + auto-print + the
@@ -60,6 +65,7 @@ mod emit;
 mod error;
 mod function;
 mod intrinsics;
+mod layout;
 mod main_wrapper;
 mod object;
 mod program;
@@ -74,7 +80,7 @@ use std::path::Path;
 use expo_alpha_ir::{IRProgram, IRScript};
 use inkwell::context::Context;
 
-use crate::ctx::EmitCtx;
+use crate::ctx::EmitContext;
 
 /// Compile a sealed [`IRProgram`] to a native object file at
 /// `output`. `app_name` is embedded as the runtime's
@@ -86,7 +92,7 @@ pub fn compile_program(
     output: &Path,
 ) -> Result<(), LlvmError> {
     let context = Context::create();
-    let ctx = EmitCtx::new(&context);
+    let ctx = EmitContext::new(&context, app_name);
     program::compile_program(&ctx, program, app_name)?;
     object::emit_object_file(&ctx.module, output)
 }
@@ -96,7 +102,7 @@ pub fn compile_program(
 /// subprocess.
 pub fn emit_llvm_ir(program: &IRProgram, app_name: &str) -> Result<String, LlvmError> {
     let context = Context::create();
-    let ctx = EmitCtx::new(&context);
+    let ctx = EmitContext::new(&context, app_name);
     program::compile_program(&ctx, program, app_name)?;
     Ok(ctx.module.print_to_string().to_string())
 }
@@ -104,7 +110,7 @@ pub fn emit_llvm_ir(program: &IRProgram, app_name: &str) -> Result<String, LlvmE
 /// Counterpart to [`compile_program`] for script-mode sources.
 pub fn compile_script(script: &IRScript, app_name: &str, output: &Path) -> Result<(), LlvmError> {
     let context = Context::create();
-    let ctx = EmitCtx::new(&context);
+    let ctx = EmitContext::new(&context, app_name);
     script::compile_script(&ctx, script, app_name)?;
     object::emit_object_file(&ctx.module, output)
 }
@@ -112,7 +118,7 @@ pub fn compile_script(script: &IRScript, app_name: &str, output: &Path) -> Resul
 /// Counterpart to [`emit_llvm_ir`] for script-mode sources.
 pub fn emit_script_llvm_ir(script: &IRScript, app_name: &str) -> Result<String, LlvmError> {
     let context = Context::create();
-    let ctx = EmitCtx::new(&context);
+    let ctx = EmitContext::new(&context, app_name);
     script::compile_script(&ctx, script, app_name)?;
     Ok(ctx.module.print_to_string().to_string())
 }

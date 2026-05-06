@@ -37,6 +37,7 @@
 mod calls;
 mod control_flow;
 mod ctx;
+mod enums;
 mod expr;
 mod idents;
 mod ops;

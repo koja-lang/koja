@@ -15,7 +15,7 @@ use crate::registry::{
 
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
-use super::structs::lookup_struct;
+use super::structs::lookup_type;
 use super::types::display_resolution;
 
 /// Receiver classification for method-call dispatch. Captures only
@@ -187,8 +187,11 @@ fn classify_receiver(
     if let Some(receiver_name) = bare_ident_name(&receiver.kind) {
         let receiver_path = [receiver_name.to_string()];
         if let Some((struct_id, struct_entry)) =
-            lookup_struct(&receiver_path, resolver.package, resolver.registry)
-            && matches!(struct_entry.kind, GlobalKind::Struct(_))
+            lookup_type(&receiver_path, resolver.package, resolver.registry)
+            && matches!(
+                struct_entry.kind,
+                GlobalKind::Enum(_) | GlobalKind::Struct(_)
+            )
         {
             if let ExprKind::Ident {
                 resolution: receiver_resolution,
@@ -209,16 +212,16 @@ fn classify_receiver(
     }
     let Resolution::Global(struct_id) = receiver.resolution.resolution else {
         diagnostics.push(Diagnostic::error(
-            "instance method receiver must have a struct type".to_string(),
+            "instance method receiver must have a struct or enum type".to_string(),
             receiver.span,
         ));
         return None;
     };
     let entry = resolver.registry.get(struct_id)?;
-    if !matches!(entry.kind, GlobalKind::Struct(_)) {
+    if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "instance method receiver must be a struct value (`{}` is a {})",
+                "instance method receiver must be a struct or enum value (`{}` is a {})",
                 entry.identifier,
                 entry.kind.label(),
             ),

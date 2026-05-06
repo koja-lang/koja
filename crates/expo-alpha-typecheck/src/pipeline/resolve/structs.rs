@@ -1,12 +1,16 @@
-//! Struct-literal construction and field-access resolution.
-//! `lookup_struct` is also reused by [`super::calls`] for static
-//! dispatch (`Type.method(...)`).
+//! Struct-literal construction and field-access resolution. Also
+//! owns `lookup_type` (used by [`super::calls`] for static dispatch
+//! and by [`super::enums`] for enum-variant construction) and
+//! `validate_named_fields` (the shared name/type-checked field-init
+//! walk used by both struct construction and struct-variant
+//! construction). Structs own the "named field layout" concept; the
+//! enum module imports rather than duplicating.
 
 use expo_ast::ast::{Diagnostic, Expr, FieldInit};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, StructDefinition};
+use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
 
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
@@ -31,7 +35,7 @@ pub(super) fn resolve_struct_construction(
     }
 
     let Some((struct_id, struct_entry)) =
-        lookup_struct(type_path, resolver.package, resolver.registry)
+        lookup_type(type_path, resolver.package, resolver.registry)
     else {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -65,10 +69,10 @@ pub(super) fn resolve_struct_construction(
         return ResolvedType::leaf(Resolution::Global(struct_id));
     };
 
-    let struct_name = struct_entry.identifier.clone();
-    validate_struct_fields(
-        &struct_name,
-        definition,
+    let owner = struct_entry.identifier.to_string();
+    validate_named_fields(
+        &owner,
+        &definition.fields,
         fields,
         span,
         resolver.registry,
@@ -78,19 +82,31 @@ pub(super) fn resolve_struct_construction(
     ResolvedType::leaf(Resolution::Global(struct_id))
 }
 
-fn validate_struct_fields(
-    struct_name: &Identifier,
-    definition: &StructDefinition,
+/// Validate a [`FieldInit`] list against a declared
+/// [`ResolvedStructField`] roster. Shared by struct literal
+/// construction and enum struct-variant construction — both share
+/// the same shape and the same diagnostic surface (unknown field,
+/// duplicate initialization, missing field, wrong-typed init).
+///
+/// `owner_label` is the prefix used in diagnostics
+/// (`MyApp.MyStruct` for structs, `MyApp.MyEnum.MyVariant` for
+/// enum struct variants). Each `FieldInit.value` must already have
+/// `resolution` populated (either resolved or `Unresolved`); inits
+/// with unresolved values skip the type-equality check (their own
+/// upstream diagnostic already fired).
+pub(super) fn validate_named_fields(
+    owner_label: &str,
+    declared: &[ResolvedStructField],
     fields: &[FieldInit],
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut seen: Vec<bool> = vec![false; definition.fields.len()];
+    let mut seen: Vec<bool> = vec![false; declared.len()];
     for field in fields {
-        let Some((index, declared)) = definition.lookup_field(&field.name) else {
+        let Some((index, declared_field)) = lookup_named_field(declared, &field.name) else {
             diagnostics.push(Diagnostic::error(
-                format!("`{struct_name}` has no field `{}`", field.name,),
+                format!("`{owner_label}` has no field `{}`", field.name),
                 field.span,
             ));
             continue;
@@ -98,7 +114,7 @@ fn validate_struct_fields(
         if seen[index as usize] {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "field `{}` of `{struct_name}` initialized twice",
+                    "field `{}` of `{owner_label}` initialized twice",
                     field.name
                 ),
                 field.span,
@@ -111,12 +127,12 @@ fn validate_struct_fields(
         if !actual.is_resolved() {
             continue;
         }
-        if actual != &declared.ty {
+        if actual != &declared_field.ty {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "field `{}` of `{struct_name}` expects `{}`, got `{}`",
+                    "field `{}` of `{owner_label}` expects `{}`, got `{}`",
                     field.name,
-                    display_resolution(&declared.ty, registry),
+                    display_resolution(&declared_field.ty, registry),
                     display_resolution(actual, registry),
                 ),
                 field.span,
@@ -127,13 +143,24 @@ fn validate_struct_fields(
         if !*present {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "missing field `{}` in struct literal for `{struct_name}`",
-                    definition.fields[index].name,
+                    "missing field `{}` in literal for `{owner_label}`",
+                    declared[index].name,
                 ),
                 span,
             ));
         }
     }
+}
+
+fn lookup_named_field<'a>(
+    declared: &'a [ResolvedStructField],
+    name: &str,
+) -> Option<(u32, &'a ResolvedStructField)> {
+    declared
+        .iter()
+        .enumerate()
+        .find(|(_, field)| field.name == name)
+        .map(|(index, field)| (index as u32, field))
 }
 
 pub(super) fn resolve_field_access(
@@ -171,10 +198,15 @@ pub(super) fn resolve_field_access(
     declared.ty.clone()
 }
 
-/// Resolve a single-segment struct path against the in-scope package,
+/// Resolve a single-segment type path against the in-scope package,
 /// falling back to `Global` for stdlib stubs. Multi-segment paths
 /// and aliases are feature gaps.
-pub(super) fn lookup_struct<'a>(
+///
+/// Generalized from the struct-only `lookup_struct` so enum-variant
+/// construction (`Color.Red`) and static method dispatch on enums
+/// (`Color.method(...)`) can share the same path-resolution logic.
+/// Callers narrow on `entry.kind` if they care about kind.
+pub(super) fn lookup_type<'a>(
     type_path: &[String],
     package: &str,
     registry: &'a GlobalRegistry,

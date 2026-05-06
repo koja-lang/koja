@@ -19,6 +19,7 @@
 use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
 
+use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRFunction, IRSymbol};
 use crate::package::IRPackage;
@@ -64,6 +65,15 @@ impl IRProgram {
         self.packages
             .iter()
             .find_map(|pkg| pkg.structs.get(mangled))
+    }
+
+    /// Lookup an enum declaration across every package by its
+    /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
+    /// a `&IRSymbol` from `IRType::Enum` /
+    /// `IRInstruction::EnumConstruct` directly through the
+    /// `IRSymbol: Borrow<str>` impl.
+    pub fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
+        self.packages.iter().find_map(|pkg| pkg.enums.get(mangled))
     }
 
     /// The function the entry point resolves to. Panics if missing —

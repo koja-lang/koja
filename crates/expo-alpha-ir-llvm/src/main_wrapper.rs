@@ -18,7 +18,7 @@ use inkwell::AddressSpace;
 use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, IntValue};
 
-use crate::ctx::EmitCtx;
+use crate::ctx::EmitContext;
 use crate::emit::{self, ValueMap, inkwell_err};
 use crate::error::LlvmError;
 use crate::function::declare_blocks;
@@ -35,7 +35,7 @@ const ENTRY_SYMBOL: &str = "main";
 /// (declared there as `extern static [c_char; 0]`); every
 /// alpha-compiled binary defines it so the runtime archive links
 /// cleanly regardless of codegen-unit partitioning.
-pub(crate) fn emit_app_name_global(ctx: &EmitCtx<'_>, app_name: &str) {
+pub(crate) fn emit_app_name_global(ctx: &EmitContext<'_>, app_name: &str) {
     let value = ctx.context.const_string(app_name.as_bytes(), true);
     let global = ctx
         .module
@@ -62,7 +62,7 @@ pub(crate) fn emit_app_name_global(ctx: &EmitCtx<'_>, app_name: &str) {
 /// pass admits other terminators for non-trailing blocks; only the
 /// entry function's last block carries the auto-print scaffolding.
 pub(crate) fn emit_as_main<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     blocks: &[IRBasicBlock],
     return_type: &IRType,
 ) -> Result<(), LlvmError> {
@@ -100,7 +100,7 @@ pub(crate) fn emit_as_main<'ctx>(
 /// [`emit_print_call`]. Both paths finish with `ret i64 0` per the
 /// host-runtime contract.
 fn emit_main_return<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     return_type: &IRType,
     terminator: &IRTerminator,
     values: &ValueMap<'ctx>,
@@ -157,7 +157,7 @@ fn find_return_block(blocks: &[IRBasicBlock]) -> Result<IRBlockId, LlvmError> {
 /// `String` flows the payload pointer through unchanged (runtime
 /// reads the v1 header at `ptr - 8` for byte length).
 fn emit_print_call<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     return_type: &IRType,
     body_value: BasicValueEnum<'ctx>,
 ) -> Result<(), LlvmError> {
@@ -209,6 +209,14 @@ fn emit_print_call<'ctx>(
             ctx.context.ptr_type(AddressSpace::default()).into(),
             body_value.into_pointer_value().into(),
         ),
+        IRType::Enum(symbol) => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM does not yet auto-print enum values (return type \
+                 `Enum({symbol})`); follow-up slice — until then, return a primitive \
+                 (e.g. project a tag-discriminated `Bool` / `Int64`) from the trailing \
+                 expression",
+            )));
+        }
         IRType::Struct(symbol) => {
             return Err(LlvmError::Codegen(format!(
                 "alpha LLVM does not yet auto-print struct values (return type \
@@ -232,7 +240,7 @@ fn emit_print_call<'ctx>(
 }
 
 fn sext_to_i64<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     value: IntValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     ctx.builder
@@ -241,7 +249,7 @@ fn sext_to_i64<'ctx>(
 }
 
 fn zext_to_i64<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     value: IntValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     ctx.builder

@@ -25,6 +25,7 @@
 use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::Diagnostic;
 
+use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRBasicBlock, IRFunction};
 use crate::lower::{lower_body_to_blocks, lower_package};
@@ -75,6 +76,12 @@ impl IRScript {
         self.packages
             .iter()
             .find_map(|pkg| pkg.structs.get(mangled))
+    }
+
+    /// Lookup an enum declaration across every package by its
+    /// mangled symbol. Mirrors [`crate::IRProgram::enum_decl`].
+    pub fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
+        self.packages.iter().find_map(|pkg| pkg.enums.get(mangled))
     }
 }
 

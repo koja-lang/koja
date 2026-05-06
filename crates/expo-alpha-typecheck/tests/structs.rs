@@ -133,10 +133,6 @@ fn struct_decl_registers_with_lifted_definition() {
           x: Int
           y: Int
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -159,10 +155,6 @@ fn empty_struct_lifts_with_zero_fields() {
     let source = "
         struct Marker
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -181,10 +173,6 @@ fn struct_with_mixed_field_types_lifts_each_field_independently() {
           flag: Bool
           name: String
           count: Int
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -211,10 +199,6 @@ fn nested_struct_field_resolves_to_inner_struct_id() {
         struct Outer
           inner: Inner
           tag: Bool
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -342,10 +326,6 @@ fn generic_struct_diagnoses_feature_gap() {
         struct Wrapper<T>
           value: Int
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -365,10 +345,6 @@ fn annotated_struct_diagnoses_feature_gap() {
         struct Point
           x: Int
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -387,10 +363,6 @@ fn default_field_value_diagnoses_feature_gap() {
         struct Point
           x: Int = 0
           y: Int
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -617,10 +589,6 @@ fn inline_static_method_registers_under_qualified_identifier() {
             Point{x: 0, y: 0}
           end
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -641,10 +609,6 @@ fn impl_block_static_method_registers_under_qualified_identifier() {
           fn origin -> Point
             Point{x: 0, y: 0}
           end
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -671,10 +635,6 @@ fn impl_block_before_struct_in_file_still_registers_methods() {
           x: Int
           y: Int
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -697,10 +657,6 @@ fn inline_and_impl_static_method_with_same_name_collide() {
           fn origin -> Int
             1
           end
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -855,10 +811,6 @@ fn instance_method_in_struct_body_lifts_with_dispatch_instance() {
             self.x
           end
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -886,10 +838,6 @@ fn instance_method_in_impl_block_lifts_with_dispatch_instance() {
             self.x
           end
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -912,10 +860,6 @@ fn static_method_self_return_type_diagnoses_feature_gap() {
           fn origin -> Self
             Point{x: 0}
           end
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -1054,10 +998,6 @@ fn generic_impl_trait_diagnoses_feature_gap() {
             0
           end
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -1080,10 +1020,6 @@ fn impl_with_type_alias_member_diagnoses_feature_gap() {
         impl Point
           type Coord = Int
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -1103,10 +1039,6 @@ fn impl_on_unknown_type_diagnoses() {
           fn zero -> Int
             0
           end
-        end
-
-        fn main
-          1
         end
         ";
 

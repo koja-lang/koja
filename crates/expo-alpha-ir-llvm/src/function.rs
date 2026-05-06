@@ -16,7 +16,7 @@ use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 
-use crate::ctx::EmitCtx;
+use crate::ctx::EmitContext;
 use crate::emit::{self, BlockMap, ValueMap};
 use crate::error::LlvmError;
 use crate::intrinsics;
@@ -28,7 +28,7 @@ use crate::types::ir_basic_type;
 /// type and the return type does the same. `Unit` returns / params
 /// surface as feature-gap diagnostics through [`ir_basic_type`].
 pub(crate) fn declare_function<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     function: &IRFunction,
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
     let signature = function_signature(ctx, function)?;
@@ -40,7 +40,7 @@ pub(crate) fn declare_function<'ctx>(
 }
 
 fn function_signature<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     function: &IRFunction,
 ) -> Result<FunctionType<'ctx>, LlvmError> {
     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
@@ -68,7 +68,7 @@ fn function_signature<'ctx>(
 /// bound to the matching `function.get_nth_param(i)` LLVM value
 /// before walking the entry block.
 pub(crate) fn define_function<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
@@ -94,7 +94,7 @@ pub(crate) fn define_function<'ctx>(
 /// helper used by both the main-wrapper synthesis and helper
 /// function definition.
 pub(crate) fn declare_blocks<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
     blocks: &[IRBasicBlock],
 ) -> BlockMap<'ctx> {

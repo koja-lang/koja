@@ -15,12 +15,12 @@ use expo_alpha_ir::{IRBinOp, IRUnaryOp};
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
-use crate::ctx::EmitCtx;
+use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 
 pub(super) fn emit_binary_op<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     op: IRBinOp,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
@@ -39,7 +39,7 @@ pub(super) fn emit_binary_op<'ctx>(
 /// Match-arm order tracks `IRBinOp`'s declaration order in
 /// [`expo_alpha_ir`].
 fn emit_int_binary_op<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     op: IRBinOp,
     lhs: IntValue<'ctx>,
     rhs: IntValue<'ctx>,
@@ -81,7 +81,7 @@ fn emit_int_binary_op<'ctx>(
 /// returns `false`, matching the `expo-alpha-ir-eval` interpreter
 /// and v1 codegen.
 fn emit_float_binary_op<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     op: IRBinOp,
     lhs: FloatValue<'ctx>,
     rhs: FloatValue<'ctx>,
@@ -145,7 +145,7 @@ fn float_predicate(op: IRBinOp) -> FloatPredicate {
 /// Unary op dispatcher: `Neg` on float operands routes to
 /// `build_float_neg`; integer / `Bool` operands keep the int helper.
 pub(super) fn emit_unary_op<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     op: IRUnaryOp,
     operand: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
@@ -161,7 +161,7 @@ pub(super) fn emit_unary_op<'ctx>(
 /// only flows `Not` for `Bool`, so `i1` logical-not falls out for
 /// free.
 fn emit_int_unary_op<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     op: IRUnaryOp,
     operand: IntValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
@@ -176,7 +176,7 @@ fn emit_int_unary_op<'ctx>(
 /// `Neg` is the only float-applicable unary; `Not` is Bool-only and
 /// rejects (typecheck guarantees Bool operands never reach here).
 fn emit_float_unary_op<'ctx>(
-    ctx: &EmitCtx<'ctx>,
+    ctx: &EmitContext<'ctx>,
     op: IRUnaryOp,
     operand: FloatValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {

@@ -21,6 +21,7 @@ use expo_ast::identifier::{GlobalRegistryId, Identifier};
 use crate::program::CheckedPackage;
 use crate::registry::GlobalRegistry;
 
+mod enums;
 mod functions;
 mod impls;
 mod protocols;
@@ -34,14 +35,18 @@ pub(crate) use types::resolve_type_expr;
 pub(super) type ProtocolBodies = HashMap<GlobalRegistryId, HashMap<String, ProtocolMethod>>;
 
 /// Whether a function being lifted may declare a `self` receiver. When
-/// `Struct(_)`, [`functions::lift_param`] lifts `Param::Self_` to a
+/// `Receiver(_)`, [`functions::lift_param`] lifts `Param::Self_` to a
 /// real [`crate::registry::ResolvedParam`] typed by the enclosing
-/// struct and marks the signature as
-/// [`crate::registry::Dispatch::Instance`].
+/// type (struct or enum) and marks the signature as
+/// [`crate::registry::Dispatch::Instance`]. The discriminator is
+/// type-agnostic on purpose — `lift_param` only needs the receiver's
+/// `Identifier` to type the implicit `self` parameter; whether the
+/// receiver is a struct or an enum matters only at the call site
+/// during `resolve`.
 #[derive(Clone, Copy)]
 pub(super) enum SelfContext<'a> {
     None,
-    Struct(&'a Identifier),
+    Receiver(&'a Identifier),
 }
 
 pub(crate) fn lift_signatures(
@@ -50,13 +55,17 @@ pub(crate) fn lift_signatures(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let bodies = collect_protocol_bodies(packages, registry);
-    // Pass 1: protocols, structs, top-level functions. Impls run in
-    // pass 2 so trait-impl conformance can rely on every protocol /
-    // struct in the program being fully lifted, even across files.
+    // Pass 1: protocols, structs, enums, top-level functions. Impls
+    // run in pass 2 so trait-impl conformance can rely on every
+    // protocol / struct / enum in the program being fully lifted,
+    // even across files.
     for pkg in packages.iter() {
         for file in &pkg.files {
             for item in &file.items {
                 match item {
+                    Item::Enum(decl) => {
+                        enums::lift_enum(decl, &pkg.package, registry, diagnostics);
+                    }
                     Item::Function(function) => {
                         let identifier = Identifier::new(&pkg.package, vec![function.name.clone()]);
                         functions::lift_function_with_identifier(

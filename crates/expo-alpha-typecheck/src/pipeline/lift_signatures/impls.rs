@@ -40,7 +40,7 @@ pub(super) fn lift_impl(
     let target_identifier = Identifier::new(package, vec![target_name.clone()]);
     if !matches!(
         registry.lookup(&target_identifier).map(|(_, e)| &e.kind),
-        Some(GlobalKind::Struct(_))
+        Some(GlobalKind::Enum(_) | GlobalKind::Struct(_))
     ) {
         // Collect already diagnosed; nothing was registered.
         return;
@@ -54,7 +54,7 @@ pub(super) fn lift_impl(
         lift_function_with_identifier(
             function,
             method_identifier,
-            SelfContext::Struct(&target_identifier),
+            SelfContext::Receiver(&target_identifier),
             package,
             registry,
             diagnostics,
@@ -189,7 +189,7 @@ fn synthesize_default_method(
     lift_function_with_identifier(
         &function,
         method_identifier,
-        SelfContext::Struct(ctx.target_identifier),
+        SelfContext::Receiver(ctx.target_identifier),
         ctx.package,
         registry,
         diagnostics,

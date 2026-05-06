@@ -14,6 +14,7 @@ use expo_ast::labels::expr_kind_label;
 use super::calls::{resolve_call, resolve_method_call};
 use super::control_flow::{resolve_if, resolve_unless};
 use super::ctx::Resolver;
+use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
 use super::ops::{binary_type, literal_type, unary_type};
 use super::strings::resolve_string;
@@ -33,6 +34,11 @@ pub(super) fn resolve_expr(
         ExprKind::Call { callee, args } => {
             resolve_call(callee, args, expr.span, resolver, diagnostics)
         }
+        ExprKind::EnumConstruction {
+            type_path,
+            variant,
+            data,
+        } => resolve_enum_construction(type_path, variant, data, expr.span, resolver, diagnostics),
         ExprKind::FieldAccess { receiver, field } => {
             resolve_field_access(receiver, field, expr.span, resolver, diagnostics)
         }

@@ -16,8 +16,8 @@ use std::fmt::Write as _;
 use expo_ast::identifier::{Resolution, ResolvedType};
 
 use super::{
-    FunctionSignature, GlobalKind, GlobalRegistry, ProtocolDefinition, ResolvedProtocolMethod,
-    StructDefinition,
+    EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, ProtocolDefinition,
+    ResolvedEnumVariant, ResolvedProtocolMethod, ResolvedVariantData, StructDefinition,
 };
 
 pub fn format_registry(registry: &GlobalRegistry) -> String {
@@ -41,13 +41,46 @@ pub fn format_registry(registry: &GlobalRegistry) -> String {
 
 fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
     match kind {
-        GlobalKind::Enum => "enum".to_string(),
+        GlobalKind::Enum(None) => "enum".to_string(),
+        GlobalKind::Enum(Some(def)) => format_enum(def, registry),
         GlobalKind::Function(None) => "fn <unlifted>".to_string(),
         GlobalKind::Function(Some(sig)) => format_signature(sig, registry),
         GlobalKind::Protocol(None) => "protocol".to_string(),
         GlobalKind::Protocol(Some(def)) => format_protocol(def, registry),
         GlobalKind::Struct(None) => "struct".to_string(),
         GlobalKind::Struct(Some(def)) => format_struct(def, registry),
+    }
+}
+
+fn format_enum(def: &EnumDefinition, registry: &GlobalRegistry) -> String {
+    let variants = def
+        .variants
+        .iter()
+        .map(|v| format_variant(v, registry))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("enum {{{variants}}}")
+}
+
+fn format_variant(variant: &ResolvedEnumVariant, registry: &GlobalRegistry) -> String {
+    match &variant.data {
+        ResolvedVariantData::Struct(fields) => {
+            let payload = fields
+                .iter()
+                .map(|f| format!("{}: {}", f.name, format_resolved(&f.ty, registry)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}{{{payload}}}", variant.name)
+        }
+        ResolvedVariantData::Tuple(types) => {
+            let payload = types
+                .iter()
+                .map(|ty| format_resolved(ty, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}({payload})", variant.name)
+        }
+        ResolvedVariantData::Unit => variant.name.clone(),
     }
 }
 

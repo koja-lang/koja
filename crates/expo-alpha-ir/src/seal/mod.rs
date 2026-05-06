@@ -82,9 +82,11 @@
 
 use std::collections::BTreeSet;
 
+use crate::enum_decl::EnumPayloadInit;
 use crate::function::{IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};
 
+mod enums;
 mod function;
 mod program;
 mod script;
@@ -93,12 +95,13 @@ mod structs;
 pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
 
-/// Transient slice invariant: only `Bool` / `Float64` / `Int64` /
-/// `String` / `Unit` / `Struct(_)` flow through the IR. See module
-/// docstring invariant 8.
+/// Transient slice invariant: only `Bool` / `Enum(_)` / `Float64` /
+/// `Int64` / `String` / `Struct(_)` / `Unit` flow through the IR.
+/// See module docstring invariant 8.
 pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
         IRType::Bool
+        | IRType::Enum(_)
         | IRType::Float64
         | IRType::Int64
         | IRType::String
@@ -106,7 +109,8 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
         | IRType::Unit => {}
         other => seal_panic(&format!(
             "{}: IRType `{other:?}` is not yet supported (alpha slice admits only \
-             Bool / Float64 / Int64 / String / Struct / Unit until stdlib stub expansion lands)",
+             Bool / Enum / Float64 / Int64 / String / Struct / Unit until stdlib stub \
+             expansion lands)",
             location(),
         )),
     }
@@ -132,6 +136,11 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::BinaryOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Call { args, .. } => args.clone(),
         IRInstruction::Const { .. } => vec![],
+        IRInstruction::EnumConstruct { payload, .. } => match payload {
+            EnumPayloadInit::Struct(fields) => fields.iter().map(|f| f.value).collect(),
+            EnumPayloadInit::Tuple(values) => values.clone(),
+            EnumPayloadInit::Unit => vec![],
+        },
         IRInstruction::FieldGet { base, .. } => vec![*base],
         // `LocalDecl` declares the slot; nothing in scope yet to read.
         // `LocalRead` reads the slot named by `local`, not a `ValueId`,

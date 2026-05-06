@@ -62,10 +62,6 @@ fn default_body_synthesizes_when_impl_omits() {
 
         impl Labeler for Tag
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -119,10 +115,6 @@ fn default_body_does_not_synthesize_when_impl_overrides() {
             \"override\"
           end
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -163,10 +155,6 @@ fn missing_required_method_diagnoses() {
 
         impl Greeter for Point
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -198,10 +186,6 @@ fn extra_impl_method_diagnoses() {
             \"surprise\"
           end
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -228,10 +212,6 @@ fn return_type_mismatch_diagnoses() {
           fn greet(self) -> Int
             0
           end
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -260,10 +240,6 @@ fn param_type_mismatch_diagnoses() {
             0
           end
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -290,10 +266,6 @@ fn dispatch_mismatch_diagnoses() {
           fn make(self) -> Int
             0
           end
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -327,10 +299,6 @@ fn inherent_and_trait_impl_collide_on_same_method_name() {
           fn greet(self) -> String
             \"trait\"
           end
-        end
-
-        fn main
-          1
         end
         ";
 

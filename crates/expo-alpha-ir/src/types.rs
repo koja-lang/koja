@@ -108,9 +108,17 @@ pub enum IRUnaryOp {
 /// the matching [`crate::IRStructDecl`]; backends that need the
 /// per-field width / offset thread that lookup directly. Generic
 /// instantiations get a richer key in the follow-up generics slice.
+///
+/// `Enum(symbol)` names a user-declared (non-generic) enum by the
+/// same mangled [`IRSymbol`] used as the key on
+/// [`crate::IRPackage::enums`]. Variant layout is recovered through
+/// the matching [`crate::IREnumDecl`]; the LLVM backend lays it out
+/// as an outer opaque blob with per-variant complete + payload
+/// structs (see [`crate::IREnumDecl`]'s module-level docs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IRType {
     Bool,
+    Enum(IRSymbol),
     Float32,
     Float64,
     Int8,

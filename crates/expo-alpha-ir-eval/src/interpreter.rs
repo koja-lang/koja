@@ -7,14 +7,15 @@
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRLocalId,
-    IRProgram, IRScript, IRTerminator, ValueId,
+    ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId, IREnumDecl, IRFunction,
+    IRInstruction, IRLocalId, IRProgram, IRScript, IRSymbol, IRTerminator, IRVariantPayload,
+    IRVariantTag, ValueId,
 };
 
 use crate::error::RuntimeError;
 use crate::intrinsics;
 use crate::ops::{apply_binary_op, apply_unary_op};
-use crate::value::Value;
+use crate::value::{EnumPayload, Value};
 
 pub struct Interpreter;
 
@@ -50,21 +51,35 @@ impl Frame {
     }
 }
 
-/// Dereferences a `Call` callee by mangled symbol. Implemented by
-/// both [`IRProgram`] and [`IRScript`] so one walker drives either.
+/// Lookup seam used by the per-instruction walker. Both
+/// [`IRProgram`] and [`IRScript`] implement this so the same body
+/// driver runs over either IR shape; only the underlying maps
+/// differ. Function-call resolution + enum-decl lookup share the
+/// same trait so each `EnumConstruct` arm has a registry-equivalent
+/// handle for materializing the variant's `name` and (for struct
+/// payloads) per-field names.
 trait CallResolver {
     fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
+    fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
 }
 
 impl CallResolver for IRProgram {
     fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
         self.function(mangled)
     }
+
+    fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
+        IRProgram::enum_decl(self, mangled)
+    }
 }
 
 impl CallResolver for IRScript {
     fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
         self.function(mangled)
+    }
+
+    fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
+        IRScript::enum_decl(self, mangled)
     }
 }
 
@@ -175,6 +190,16 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, materialize_const(value));
             Ok(())
         }
+        IRInstruction::EnumConstruct {
+            dest,
+            payload,
+            tag,
+            ty,
+        } => {
+            let value = materialize_enum(ty, *tag, payload, frame, resolver)?;
+            frame.values.insert(*dest, value);
+            Ok(())
+        }
         IRInstruction::FieldGet {
             base,
             dest,
@@ -247,6 +272,70 @@ fn lookup(values: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, Runti
         .get(&id)
         .cloned()
         .ok_or(RuntimeError::ValueUndefined { id })
+}
+
+/// Materialize a [`Value::Enum`] from an `EnumConstruct` payload init.
+/// Looks up the enum decl through the resolver, fetches the variant
+/// at `tag.0` (constant-time index — seal asserts the tag is in
+/// range and matches the payload shape), and zips the init values
+/// with the variant's declared shape into an [`EnumPayload`].
+///
+/// Per-shape:
+/// - Unit → `EnumPayload::Unit`.
+/// - Tuple → materialize each `ValueId` against `frame.values`.
+/// - Struct → zip the (canonicalized, declaration-order) inits with
+///   the variant's declared `IRStructField`s so each materialized
+///   value pairs with its declared field name in the resulting
+///   `Vec<(String, Value)>`.
+fn materialize_enum<R: CallResolver>(
+    symbol: &IRSymbol,
+    tag: IRVariantTag,
+    payload: &EnumPayloadInit,
+    frame: &Frame,
+    resolver: &R,
+) -> Result<Value, RuntimeError> {
+    let decl = resolver.enum_decl(symbol.mangled()).unwrap_or_else(|| {
+        panic!(
+            "interpreter: enum `{symbol}` missing from IR — \
+             seal invariant violation",
+        )
+    });
+    let variant = decl.variants.get(usize::from(tag.0)).unwrap_or_else(|| {
+        panic!(
+            "interpreter: EnumConstruct on `{symbol}` references tag {tag} but the decl only \
+             declares {} variant(s) — seal invariant violation",
+            decl.variants.len(),
+        )
+    });
+    let materialized = match (payload, &variant.payload) {
+        (EnumPayloadInit::Unit, IRVariantPayload::Unit) => EnumPayload::Unit,
+        (EnumPayloadInit::Tuple(ids), IRVariantPayload::Tuple(_)) => {
+            let mut values = Vec::with_capacity(ids.len());
+            for id in ids {
+                values.push(lookup(&frame.values, *id)?);
+            }
+            EnumPayload::Tuple(values)
+        }
+        (EnumPayloadInit::Struct(inits), IRVariantPayload::Struct(declared)) => {
+            let mut fields = Vec::with_capacity(inits.len());
+            for (init, decl_field) in inits.iter().zip(declared.iter()) {
+                let value = lookup(&frame.values, init.value)?;
+                fields.push((decl_field.name.clone(), value));
+            }
+            EnumPayload::Struct(fields)
+        }
+        (init, declared) => panic!(
+            "interpreter: EnumConstruct payload shape mismatch on `{symbol}.{}` \
+             (declared {declared:?}, supplied {init:?}) — seal invariant violation",
+            variant.name,
+        ),
+    };
+    Ok(Value::Enum {
+        name: variant.name.clone(),
+        payload: materialized,
+        symbol: symbol.clone(),
+        tag,
+    })
 }
 
 /// Materialize a `ConstValue` as a runtime [`Value`]. Every int

@@ -21,8 +21,8 @@
 //! never see those shapes.
 
 use expo_ast::ast::{
-    Annotation, Diagnostic, File, Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl,
-    ProtocolMethod, StructDecl, StructField, TypeExpr,
+    Annotation, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File, Function, ImplBlock,
+    ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl, StructField, TypeExpr,
 };
 use expo_ast::identifier::Identifier;
 use expo_ast::labels::{item_label, item_span};
@@ -36,12 +36,15 @@ pub(crate) fn collect_file(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Pass 1: top-level functions, structs, protocols, and inline
-    // static/instance methods. Every type / protocol name a later
-    // impl block could target is registered before pass 2 starts
-    // looking up impl targets.
+    // Pass 1: top-level functions, structs, enums, protocols, and
+    // inline static/instance methods. Every type / protocol name a
+    // later impl block could target is registered before pass 2
+    // starts looking up impl targets.
     for item in &file.items {
         match item {
+            Item::Enum(decl) => {
+                register_enum(decl, package, registry, diagnostics);
+            }
             Item::Function(function) => {
                 let identifier = Identifier::new(package, vec![function.name.clone()]);
                 register_function_with_identifier(
@@ -62,7 +65,7 @@ pub(crate) fn collect_file(
             // Other Item variants land as alpha grows. Reject them
             // explicitly so unsupported shapes diagnose instead of
             // round-tripping silently.
-            Item::Alias(_) | Item::Constant(_) | Item::Enum(_) | Item::TypeAlias(_) => {
+            Item::Alias(_) | Item::Constant(_) | Item::TypeAlias(_) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "alpha typecheck does not yet support `{}` items",
@@ -190,6 +193,46 @@ fn register_struct(
     }
 }
 
+/// Register an enum decl + every inline method on it, and surface
+/// every feature-gap diagnostic up front. Mirrors [`register_struct`]:
+/// the decl always registers (even on collision or in the presence
+/// of feature gaps) so downstream resolve sees a populated registry
+/// for diagnostic-friendly error messages.
+fn register_enum(
+    decl: &EnumDecl,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnose_enum_feature_gaps(decl, diagnostics);
+    let identifier = Identifier::new(package, vec![decl.name.clone()]);
+    match registry.insert_enum(identifier, decl.span) {
+        InsertOutcome::Fresh(_) => {}
+        InsertOutcome::Collision { existing } => {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("`{}` is already defined", existing.identifier),
+                format!(
+                    "previous {} definition is at line {}",
+                    existing.kind.label(),
+                    existing.span.start.line
+                ),
+                decl.span,
+            ));
+        }
+    }
+    for function in &decl.functions {
+        let method_identifier =
+            Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+        register_function_with_identifier(
+            function,
+            method_identifier,
+            SelfContext::AllowSelf,
+            registry,
+            diagnostics,
+        );
+    }
+}
+
 /// Register every method declared in an `impl Type ... end` block
 /// (inherent or `impl Protocol for Type`) under
 /// `(package, [type_name, fn_name])`. Diagnoses out-of-scope shapes
@@ -233,10 +276,11 @@ fn register_impl(
         ));
         return;
     };
-    if !matches!(entry.kind, GlobalKind::Struct(_)) {
+    if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck only supports `impl` on structs (`{target_name}` is a {})",
+                "alpha typecheck only supports `impl` on structs and enums \
+                 (`{target_name}` is a {})",
                 entry.kind.label(),
             ),
             type_expr_span(&impl_block.target),
@@ -359,6 +403,55 @@ fn diagnose_struct_field_gaps(
             ),
             field.span,
         ));
+    }
+}
+
+/// Diagnose every feature gap on an enum decl up front so collect is
+/// the single seam covering them. Mirrors [`diagnose_struct_feature_gaps`]
+/// — the decl still registers in the presence of any gap so resolve
+/// sees a populated registry.
+fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) {
+    if !decl.type_params.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support generic enums (`{}` has type parameters)",
+                decl.name,
+            ),
+            decl.span,
+        ));
+    }
+    for annotation in &decl.annotations {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support annotations on enum items \
+                 (`@{}` on `{}`)",
+                annotation.name, decl.name,
+            ),
+            annotation.span,
+        ));
+    }
+    for variant in &decl.variants {
+        diagnose_enum_variant_gaps(&decl.name, variant, diagnostics);
+    }
+}
+
+/// Diagnose feature gaps on a single enum variant. Reuses
+/// [`diagnose_struct_field_gaps`] for the per-field walk on struct
+/// variants so the diagnostic wording stays identical between
+/// `struct Foo { ... }` and `enum E { Foo { ... } }`.
+fn diagnose_enum_variant_gaps(
+    enum_name: &str,
+    variant: &EnumVariant,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match &variant.data {
+        EnumVariantData::Struct(fields) => {
+            let owner = format!("{enum_name}.{}", variant.name);
+            for field in fields {
+                diagnose_struct_field_gaps(&owner, field, diagnostics);
+            }
+        }
+        EnumVariantData::Tuple(_) | EnumVariantData::Unit => {}
     }
 }
 
