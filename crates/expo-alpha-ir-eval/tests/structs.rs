@@ -157,3 +157,74 @@ fn nested_struct_field_chain_projects_inner_int() {
     let value = evaluate_script(&dedent(source));
     assert_eq!(value, Value::Int(42));
 }
+
+// ---------------------------------------------------------------------------
+// Static methods (inline + impl-block forms)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_static_method_call_then_field_get_evaluates() {
+    // Inline-form static method: `Point.origin()` returns the
+    // struct, then the trailing `.x` field-projects to `0`.
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        Point.origin().x
+        ";
+
+    let value = evaluate_script(&dedent(source));
+    assert_eq!(value, Value::Int(0));
+}
+
+#[test]
+fn impl_block_static_method_call_then_field_get_evaluates() {
+    // Impl-form: same source as above, just declared in an
+    // `impl Point` block. Same runtime answer pins that the two
+    // surface forms produce identical IR (and therefore identical
+    // eval behavior).
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        impl Point
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        Point.origin().x
+        ";
+
+    let value = evaluate_script(&dedent(source));
+    assert_eq!(value, Value::Int(0));
+}
+
+#[test]
+fn static_method_returning_int_evaluates_to_constant() {
+    // Const-bodied method (param refs in bodies aren't supported
+    // until the locals slice). Pin that the call dispatches to
+    // the right symbol and the return value flows back.
+    let source = "
+        struct Point
+          x: Int
+
+          fn answer -> Int
+            42
+          end
+        end
+
+        Point.answer()
+        ";
+
+    let value = evaluate_script(&dedent(source));
+    assert_eq!(value, Value::Int(42));
+}

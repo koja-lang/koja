@@ -1,11 +1,20 @@
 //! Typecheck coverage for the alpha struct slice: declaration
-//! registration, signature lifting, struct-literal construction, and
-//! field-access resolution. Includes the per-feature gap diagnostics
-//! (generics, methods, annotations, default field values) plus the
+//! registration, signature lifting, struct-literal construction,
+//! field-access resolution, and static method dispatch. Includes
+//! per-feature gap diagnostics (generics, instance methods,
+//! annotations, default field values, trait impls, type aliases in
+//! impl blocks, impl on unknown / non-struct types) plus the
 //! per-construction-site validation diagnostics (unknown / extra /
 //! missing / duplicate / wrong-typed field, non-struct receiver).
+//!
+//! Static methods are tested in *both* declaration forms — inline in
+//! the struct body and in an `impl` block — to pin that the two
+//! surface forms produce identical registry entries and resolution
+//! shape.
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind, ResolvedStructField, StructDefinition};
+use expo_alpha_typecheck::{
+    CheckedProgram, FunctionSignature, GlobalKind, ResolvedStructField, StructDefinition,
+};
 use expo_ast::ast::{Expr, ExprKind, Item, Statement, StructDecl};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
@@ -324,33 +333,6 @@ fn generic_struct_diagnoses_feature_gap() {
 }
 
 #[test]
-fn struct_with_inline_function_diagnoses_feature_gap() {
-    let source = "
-        struct Point
-          x: Int
-          y: Int
-
-          fn origin -> Int
-            0
-          end
-        end
-
-        fn main
-          1
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("functions inside `struct ... end`")),
-        "expected struct-fn gap diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
 fn annotated_struct_diagnoses_feature_gap() {
     let source = "
         @derive
@@ -573,4 +555,467 @@ fn field_access_on_non_struct_diagnoses() {
 
 fn field_name(field: &ResolvedStructField) -> &str {
     field.name.as_str()
+}
+
+// ---------------------------------------------------------------------------
+// Static methods (inline + impl-block forms)
+// ---------------------------------------------------------------------------
+
+fn method_signature<'a>(
+    checked: &'a CheckedProgram,
+    type_name: &str,
+    method_name: &str,
+) -> &'a FunctionSignature {
+    let identifier = Identifier::new(
+        PACKAGE,
+        vec![type_name.to_string(), method_name.to_string()],
+    );
+    let (_, entry) = checked
+        .registry
+        .lookup(&identifier)
+        .unwrap_or_else(|| panic!("`{identifier}` not registered"));
+    match &entry.kind {
+        GlobalKind::Function(Some(signature)) => signature,
+        other => panic!("expected lifted Function for `{identifier}`, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_static_method_registers_under_qualified_identifier() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let signature = method_signature(&checked, "Point", "origin");
+    assert!(signature.params.is_empty());
+    assert_eq!(signature.return_type, package_leaf(&checked, "Point"));
+}
+
+#[test]
+fn impl_block_static_method_registers_under_qualified_identifier() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        impl Point
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let signature = method_signature(&checked, "Point", "origin");
+    assert!(signature.params.is_empty());
+    assert_eq!(signature.return_type, package_leaf(&checked, "Point"));
+}
+
+#[test]
+fn impl_block_before_struct_in_file_still_registers_methods() {
+    // Two-pass collect: pass 1 registers `struct Point`, pass 2
+    // registers methods inside `impl Point`. Source order between
+    // the two declarations doesn't matter — matches the language
+    // rule "all top-level decls visible everywhere".
+    let source = "
+        impl Point
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let signature = method_signature(&checked, "Point", "origin");
+    assert_eq!(signature.return_type, package_leaf(&checked, "Point"));
+}
+
+#[test]
+fn inline_and_impl_static_method_with_same_name_collide() {
+    let source = "
+        struct Point
+          x: Int
+
+          fn origin -> Int
+            0
+          end
+        end
+
+        impl Point
+          fn origin -> Int
+            1
+          end
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`TestApp.Point.origin`") && m.contains("already defined")),
+        "expected duplicate-method diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn static_method_call_resolves_to_method_return_type() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        fn main
+          Point.origin()
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let trailing = body_trailing_expr(&checked, "main");
+    assert_eq!(trailing.resolution, package_leaf(&checked, "Point"));
+
+    let ExprKind::MethodCall {
+        receiver, method, ..
+    } = &trailing.kind
+    else {
+        panic!("expected MethodCall, got {:?}", trailing.kind);
+    };
+    assert_eq!(method, "origin");
+    assert_eq!(receiver.resolution, package_leaf(&checked, "Point"));
+}
+
+#[test]
+fn static_method_with_args_validates_arity_and_types() {
+    // Bodies don't reference parameter names — the locals slice
+    // hasn't landed yet. The signature still pins arity/types so
+    // the call site goes through the validation we want to test.
+    let source = "
+        struct Point
+          x: Int
+
+          fn make(initial: Int, _scale: Int) -> Int
+            42
+          end
+        end
+
+        fn main
+          Point.make(1, 2)
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let trailing = body_trailing_expr(&checked, "main");
+    assert_eq!(trailing.resolution, global_leaf(&checked, "Int"));
+}
+
+#[test]
+fn static_method_call_arity_mismatch_diagnoses() {
+    let source = "
+        struct Point
+          x: Int
+
+          fn make(initial: Int, _scale: Int) -> Int
+            42
+          end
+        end
+
+        fn main
+          Point.make(1)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`TestApp.Point.make`") && m.contains("expects 2 arguments")),
+        "expected arity-mismatch diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn static_method_call_arg_type_mismatch_diagnoses() {
+    let source = "
+        struct Point
+          x: Int
+
+          fn make(value: Int) -> Int
+            42
+          end
+        end
+
+        fn main
+          Point.make(true)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains("argument `value`")
+            && m.contains("`TestApp.Point.make`")
+            && m.contains("expects `Int`")
+            && m.contains("got `Bool`")),
+        "expected arg-type-mismatch diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn nonexistent_static_method_diagnoses() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          Point.frobnicate()
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`TestApp.Point` has no static method `frobnicate`")),
+        "expected nonexistent-method diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn instance_method_in_struct_body_diagnoses_feature_gap() {
+    let source = "
+        struct Point
+          x: Int
+
+          fn distance(self) -> Int
+            self.x
+          end
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("instance methods") && m.contains("`TestApp.Point.distance`")),
+        "expected instance-method gap diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn instance_method_in_impl_block_diagnoses_feature_gap() {
+    let source = "
+        struct Point
+          x: Int
+        end
+
+        impl Point
+          fn distance(self) -> Int
+            self.x
+          end
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("instance methods") && m.contains("`TestApp.Point.distance`")),
+        "expected instance-method gap diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn static_method_self_return_type_diagnoses_feature_gap() {
+    let source = "
+        struct Point
+          x: Int
+
+          fn origin -> Self
+            Point{x: 0}
+          end
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`Self` type annotations")),
+        "expected Self-return gap diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn instance_method_call_diagnoses_feature_gap() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          Point{x: 1, y: 2}.x
+        end
+        ";
+
+    // Field access on a struct value is supported (existing test
+    // covers it). What's NOT supported is a *call* on a value
+    // receiver: pin that the method-call resolver still rejects it.
+    // This source uses a separate top-level `helper` so the script
+    // body has a non-`Ident` receiver to dispatch on.
+    typecheck(&dedent(source));
+
+    let failing = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn helper -> Point
+          Point{x: 1, y: 2}
+        end
+
+        fn main
+          helper().distance()
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(failing));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("does not yet support instance method calls")),
+        "expected instance-method-call gap diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn impl_trait_for_diagnoses_feature_gap() {
+    let source = "
+        struct Point
+          x: Int
+        end
+
+        impl Greeter for Point
+          fn greet -> Int
+            0
+          end
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains("`impl Trait for Type`")),
+        "expected trait-impl gap diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn impl_with_type_alias_member_diagnoses_feature_gap() {
+    let source = "
+        struct Point
+          x: Int
+        end
+
+        impl Point
+          type Coord = Int
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`type` aliases inside `impl` blocks")),
+        "expected impl-typealias gap diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn impl_on_unknown_type_diagnoses() {
+    let source = "
+        impl Vector
+          fn zero -> Int
+            0
+          end
+        end
+
+        fn main
+          1
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot extend unknown type `Vector`")),
+        "expected impl-unknown-type diagnostic, got {messages:?}",
+    );
 }

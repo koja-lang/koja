@@ -7,9 +7,9 @@
 //! variant that interacts with the [`GlobalRegistry`] beyond the
 //! type-side adapters in [`super::package`].
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
+use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, RegistryEntry};
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, StringPart};
-use expo_ast::identifier::Resolution;
+use expo_ast::identifier::{Identifier, Resolution};
 use expo_ast::span::Span;
 
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
@@ -89,6 +89,11 @@ pub(super) fn lower_expr(
             );
             Ok((dest, block))
         }
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => lower_method_call(receiver, method, args, ctx, block, registry, diagnostics),
         ExprKind::String { parts, .. } => lower_string(parts, expr.span, ctx, block, diagnostics),
         ExprKind::StructConstruction { fields, .. } => {
             lower_struct_construction(fields, &expr.resolution, ctx, block, registry, diagnostics)
@@ -151,6 +156,70 @@ fn lower_call(
              seal invariant violation",
         )
     });
+    emit_call(entry, args, ctx, block, registry, diagnostics)
+}
+
+/// Lower a `ExprKind::MethodCall` of the static-dispatch shape
+/// (`Type.method(args)`). The seal contract guarantees the receiver
+/// is a bare `Ident` carrying the struct's `Resolution::Global(_)`;
+/// we rebuild the method's qualified [`Identifier`] by appending
+/// `method` to the struct entry's path, then thread through the same
+/// call-emission helper as bare calls.
+fn lower_method_call(
+    receiver: &Expr,
+    method: &str,
+    args: &[Arg],
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let ExprKind::Ident {
+        resolution, name, ..
+    } = &receiver.kind
+    else {
+        panic!(
+            "alpha IR lower: method call receiver must be a bare Ident after typecheck seal \
+             (got {:?})",
+            receiver.kind,
+        );
+    };
+    let Resolution::Global(struct_id) = resolution else {
+        panic!(
+            "alpha IR lower: method call receiver `{name}` has Unresolved resolution after \
+             typecheck seal",
+        );
+    };
+    let struct_entry = registry.get(*struct_id).unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: method call receiver id {struct_id} not present in the registry — \
+             seal invariant violation",
+        )
+    });
+    let mut method_path = struct_entry.identifier.path().to_vec();
+    method_path.push(method.to_string());
+    let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
+    let (_, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: method `{method_identifier}` missing from registry — \
+             seal invariant violation",
+        )
+    });
+    emit_call(method_entry, args, ctx, block, registry, diagnostics)
+}
+
+/// Shared tail of `lower_call` / `lower_method_call`: read the lifted
+/// signature off `entry`, lower each argument left-to-right, then
+/// append the `Call` instruction. Returns the destination value and
+/// the (possibly forked) trailing block.
+fn emit_call(
+    entry: &RegistryEntry,
+    args: &[Arg],
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ValueId, IRBlockId), ()> {
     let signature = match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig,
         other => panic!(

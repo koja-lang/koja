@@ -9,6 +9,12 @@
 //! `resolve` (so call sites + struct construction / field access
 //! see callee signatures and field layouts).
 //!
+//! Static methods declared inline in a struct body or in an `impl`
+//! block lift the same way as top-level functions, just under a
+//! two-segment identifier (`Pkg.Type.method`). The shared
+//! [`lift_function_with_identifier`] keeps the per-function logic in
+//! one place.
+//!
 //! `TypeExpr::Named` resolves either against a preloaded stdlib
 //! primitive (`Int`/`Bool`/`Unit`/`Float`/`String`) or against a
 //! user struct registered earlier in the current package. Richer
@@ -16,7 +22,9 @@
 //! signature / struct shape (arity, param / field names) stays
 //! accurate downstream.
 
-use expo_ast::ast::{Diagnostic, File, Function, Item, Param, PassMode, StructDecl, TypeExpr};
+use expo_ast::ast::{
+    Diagnostic, File, Function, ImplBlock, ImplMember, Item, Param, PassMode, StructDecl, TypeExpr,
+};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
@@ -34,10 +42,14 @@ pub(crate) fn lift_signatures(
     for item in &file.items {
         match item {
             Item::Function(function) => {
-                lift_function(function, package, registry, diagnostics);
+                let identifier = Identifier::new(package, vec![function.name.clone()]);
+                lift_function_with_identifier(function, identifier, package, registry, diagnostics);
             }
             Item::Struct(decl) => {
                 lift_struct(decl, package, registry, diagnostics);
+            }
+            Item::Impl(impl_block) => {
+                lift_impl(impl_block, package, registry, diagnostics);
             }
             _ => {}
         }
@@ -45,6 +57,20 @@ pub(crate) fn lift_signatures(
 }
 
 fn lift_struct(
+    decl: &StructDecl,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    lift_struct_definition(decl, package, registry, diagnostics);
+    for function in &decl.functions {
+        let method_identifier =
+            Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+        lift_function_with_identifier(function, method_identifier, package, registry, diagnostics);
+    }
+}
+
+fn lift_struct_definition(
     decl: &StructDecl,
     package: &str,
     registry: &mut GlobalRegistry,
@@ -75,8 +101,54 @@ fn lift_struct(
     registry.set_struct_definition(id, StructDefinition { fields });
 }
 
-fn lift_function(
+fn lift_impl(
+    impl_block: &ImplBlock,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if impl_block.trait_expr.is_some() {
+        // Collect already diagnosed; skip lifting members because
+        // they were never registered.
+        return;
+    }
+    let Some(target_name) = impl_target_name(&impl_block.target) else {
+        return;
+    };
+    let target_identifier = Identifier::new(package, vec![target_name.to_string()]);
+    if !matches!(
+        registry.lookup(&target_identifier).map(|(_, e)| &e.kind),
+        Some(GlobalKind::Struct(_))
+    ) {
+        // Collect already diagnosed; nothing was registered.
+        return;
+    }
+    for member in &impl_block.members {
+        let ImplMember::Function(function) = member else {
+            continue;
+        };
+        let method_identifier = Identifier::new(
+            package,
+            vec![target_name.to_string(), function.name.clone()],
+        );
+        lift_function_with_identifier(function, method_identifier, package, registry, diagnostics);
+    }
+}
+
+fn impl_target_name(target: &TypeExpr) -> Option<&str> {
+    match target {
+        TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
+        _ => None,
+    }
+}
+
+/// Resolve a function's param + return types and stamp the lifted
+/// [`FunctionSignature`] onto its registry entry. Shared by all three
+/// sources of functions (top-level, inline static methods, impl-block
+/// static methods). The caller picks the [`Identifier`].
+fn lift_function_with_identifier(
     function: &Function,
+    identifier: Identifier,
     package: &str,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -84,8 +156,8 @@ fn lift_function(
     if !function.type_params.is_empty() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support generic functions (`{}` has type parameters)",
-                function.name,
+                "alpha typecheck does not yet support generic functions \
+                 (`{identifier}` has type parameters)",
             ),
             function.span,
         ));
@@ -95,7 +167,7 @@ fn lift_function(
     for param in &function.params {
         params.push(lift_param(
             param,
-            function.name.as_str(),
+            &identifier,
             package,
             registry,
             diagnostics,
@@ -112,20 +184,17 @@ fn lift_function(
         return_type,
     };
 
-    let identifier = Identifier::new(package, vec![function.name.clone()]);
     let Some((id, entry)) = registry.lookup(&identifier) else {
-        panic!(
-            "lift_signatures: function `{identifier}` missing from registry — \
-             collect invariant violation",
-        );
+        // Collect rejected this function (e.g. `self` receiver,
+        // collision); nothing to stamp a signature on.
+        return;
     };
     // A duplicate function declaration in the same package is
     // already diagnosed by `collect`; the registry keeps the first
-    // entry. If we still see a second `Item::Function` for this
-    // identifier, its signature has already been stamped by the
-    // first walk — skip to avoid tripping `set_signature`'s
-    // panic-on-double-set invariant. The downstream diagnostic
-    // surface stays the "already defined" message from collect.
+    // entry. If we still see a second function for this identifier,
+    // its signature has already been stamped by the first walk —
+    // skip to avoid tripping `set_signature`'s panic-on-double-set
+    // invariant.
     if matches!(entry.kind, GlobalKind::Function(Some(_))) {
         return;
     }
@@ -134,7 +203,7 @@ fn lift_function(
 
 fn lift_param(
     param: &Param,
-    function_name: &str,
+    identifier: &Identifier,
     package: &str,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -142,9 +211,7 @@ fn lift_param(
     match param {
         Param::Self_ { span, .. } => {
             diagnostics.push(Diagnostic::error(
-                format!(
-                    "alpha typecheck does not yet support `self` receivers (`{function_name}`)",
-                ),
+                format!("alpha typecheck does not yet support `self` receivers (`{identifier}`)",),
                 *span,
             ));
             ResolvedParam {
@@ -163,7 +230,7 @@ fn lift_param(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "alpha typecheck does not yet support `move` parameters \
-                         (`{function_name}.{name}`)",
+                         (`{identifier}.{name}`)",
                     ),
                     *span,
                 ));
@@ -172,7 +239,7 @@ fn lift_param(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "alpha typecheck does not yet support default parameter values \
-                         (`{function_name}.{name}`)",
+                         (`{identifier}.{name}`)",
                     ),
                     *span,
                 ));

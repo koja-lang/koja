@@ -1,16 +1,24 @@
 //! Expression dispatch: pattern-matches `ExprKind` and routes to the
 //! per-shape resolver in [`super::control_flow`] (if/unless),
 //! [`super::ops`] (literal/binary/unary), or this module (calls,
-//! groups, idents). Every successful arm returns the
-//! [`ResolvedType`] to stamp on `expr.resolution`.
+//! groups, idents, static method calls). Every successful arm returns
+//! the [`ResolvedType`] to stamp on `expr.resolution`.
 //!
 //! # Call resolution
 //!
-//! Calls accept only bare-`Ident` callees. The inner `Ident.resolution`
-//! is stamped with the callee's [`GlobalRegistryId`]; the outer callee
-//! `Expr.resolution` stays `Unresolved` (seal carves this out) because
-//! function names aren't first-class values yet. The call-site
-//! `Expr.resolution` takes the callee's return type.
+//! Bare `f(args)` accepts only `Ident` callees. The inner
+//! `Ident.resolution` is stamped with the callee's
+//! [`GlobalRegistryId`]; the outer callee `Expr.resolution` stays
+//! `Unresolved` (seal carves this out) because function names aren't
+//! first-class values yet. The call-site `Expr.resolution` takes the
+//! callee's return type.
+//!
+//! `Type.method(args)` parses as a [`ExprKind::MethodCall`] whose
+//! receiver is `Ident { name: "Type" }`. We dispatch on the receiver
+//! shape: when `Type` resolves to a registered struct, we stamp the
+//! struct id on the receiver's `Ident.resolution` and look up
+//! `(package, [Type, method])` in the registry. Anything else is an
+//! instance method call, which is still a feature gap.
 //!
 //! [`GlobalRegistryId`]: expo_ast::identifier::GlobalRegistryId
 
@@ -19,7 +27,9 @@ use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedTyp
 use expo_ast::span::Span;
 
 use crate::labels::expr_kind_label;
-use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, StructDefinition};
+use crate::registry::{
+    FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, StructDefinition,
+};
 
 use super::control_flow::{resolve_if, resolve_unless};
 use super::ops::{binary_type, literal_type, unary_type};
@@ -74,6 +84,19 @@ pub(super) fn resolve_expr(
             diagnostics,
         ),
         ExprKind::Literal { value } => literal_type(value, registry),
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => resolve_method_call(
+            receiver,
+            method,
+            args,
+            expr.span,
+            package,
+            registry,
+            diagnostics,
+        ),
         ExprKind::String { parts, .. } => resolve_string(parts, expr.span, registry, diagnostics),
         ExprKind::StructConstruction { type_path, fields } => resolve_struct_construction(
             type_path,
@@ -116,18 +139,7 @@ fn resolve_call(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    // Resolve arguments first regardless of whether the callee is
-    // well-formed, so nested errors surface and `seal_expr` has
-    // resolutions to walk on each arg.
-    for arg in args.iter_mut() {
-        if let Some(name) = arg.name.as_ref() {
-            diagnostics.push(Diagnostic::error(
-                format!("alpha typecheck does not yet support named arguments (got `{name}`)",),
-                arg.span,
-            ));
-        }
-        resolve_expr(&mut arg.value, package, registry, diagnostics);
-    }
+    resolve_args(args, package, registry, diagnostics);
 
     let ExprKind::Ident {
         name,
@@ -173,21 +185,161 @@ fn resolve_call(
     };
 
     *ident_resolution = Resolution::Global(id);
+    validate_arg_signature(
+        args,
+        sig,
+        &entry.identifier,
+        call_span,
+        registry,
+        diagnostics,
+    );
+    sig.return_type.clone()
+}
 
-    let return_type = sig.return_type.clone();
+/// Resolve a static method call `Type.method(args)`. Receiver shape
+/// must be a bare `Ident` whose `name` resolves to a registered
+/// struct in `package` (or in `Global` for stdlib stubs); anything
+/// else surfaces the instance-method feature gap.
+///
+/// On the success path we stamp the receiver `Ident.resolution` with
+/// the struct's id (so seal sees a non-`Unresolved` receiver) and
+/// look up `(struct_pkg, [...struct_path, method])` in the registry.
+/// IR lower then reads the same identifier off the receiver to
+/// rebuild the method's `IRSymbol` without re-running this lookup.
+fn resolve_method_call(
+    receiver: &mut Expr,
+    method: &str,
+    args: &mut [Arg],
+    call_span: Span,
+    package: &str,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    resolve_args(args, package, registry, diagnostics);
 
+    let ExprKind::Ident {
+        name: receiver_name,
+        resolution: receiver_resolution,
+    } = &mut receiver.kind
+    else {
+        diagnostics.push(Diagnostic::error(
+            "alpha typecheck does not yet support instance method calls".to_string(),
+            receiver.span,
+        ));
+        return ResolvedType::unresolved();
+    };
+
+    let receiver_path = [receiver_name.clone()];
+    let Some((struct_id, struct_entry)) = lookup_struct(&receiver_path, package, registry) else {
+        diagnostics.push(Diagnostic::error(
+            "alpha typecheck does not yet support instance method calls".to_string(),
+            receiver.span,
+        ));
+        return ResolvedType::unresolved();
+    };
+    if !matches!(struct_entry.kind, GlobalKind::Struct(_)) {
+        diagnostics.push(Diagnostic::error(
+            "alpha typecheck does not yet support instance method calls".to_string(),
+            receiver.span,
+        ));
+        return ResolvedType::unresolved();
+    }
+
+    *receiver_resolution = Resolution::Global(struct_id);
+    // Stamp the receiver's *outer* Expr.resolution as well so seal
+    // can walk it as a regular Ident reference (the Call carve-out
+    // for `Unresolved` callees doesn't apply here — the receiver of
+    // a static method call is "the struct type", which is a stable
+    // referent the same way any other type-leaf is).
+    receiver.resolution = ResolvedType::leaf(Resolution::Global(struct_id));
+
+    let mut method_path = struct_entry.identifier.path().to_vec();
+    method_path.push(method.to_string());
+    let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
+    let Some((_, method_entry)) = registry.lookup(&method_identifier) else {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`{}` has no static method `{method}`",
+                struct_entry.identifier,
+            ),
+            call_span,
+        ));
+        return ResolvedType::unresolved();
+    };
+    let sig = match &method_entry.kind {
+        GlobalKind::Function(Some(sig)) => sig,
+        GlobalKind::Function(None) => panic!(
+            "resolve_method_call: method `{}` has no lifted signature — \
+             lift_signatures must run before resolve",
+            method_entry.identifier,
+        ),
+        other => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "cannot call `{}.{method}`: it is a {}, not a function",
+                    struct_entry.identifier,
+                    other.label(),
+                ),
+                call_span,
+            ));
+            return ResolvedType::unresolved();
+        }
+    };
+
+    validate_arg_signature(
+        args,
+        sig,
+        &method_entry.identifier,
+        call_span,
+        registry,
+        diagnostics,
+    );
+    sig.return_type.clone()
+}
+
+/// Resolve every call/method-call argument expression. Named
+/// arguments diagnose up front so nested resolution still proceeds
+/// (gives `seal_expr` a populated tree to walk).
+fn resolve_args(
+    args: &mut [Arg],
+    package: &str,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for arg in args.iter_mut() {
+        if let Some(name) = arg.name.as_ref() {
+            diagnostics.push(Diagnostic::error(
+                format!("alpha typecheck does not yet support named arguments (got `{name}`)",),
+                arg.span,
+            ));
+        }
+        resolve_expr(&mut arg.value, package, registry, diagnostics);
+    }
+}
+
+/// Check argument arity + per-position type compatibility against a
+/// lifted [`FunctionSignature`]. Diagnostics use the callee's
+/// fully-qualified [`Identifier`] so the user sees `TestApp.Point.at`
+/// rather than just `at`.
+fn validate_arg_signature(
+    args: &[Arg],
+    sig: &FunctionSignature,
+    callee: &Identifier,
+    call_span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     if args.len() != sig.params.len() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "`{}` expects {} argument{}, got {}",
-                entry.identifier,
+                "`{callee}` expects {} argument{}, got {}",
                 sig.params.len(),
                 if sig.params.len() == 1 { "" } else { "s" },
                 args.len(),
             ),
             call_span,
         ));
-        return return_type;
+        return;
     }
 
     for (arg, param) in args.iter().zip(sig.params.iter()) {
@@ -200,9 +352,8 @@ fn resolve_call(
         if actual != &param.ty {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "argument `{}` to `{}` expects `{}`, got `{}`",
+                    "argument `{}` to `{callee}` expects `{}`, got `{}`",
                     param.name,
-                    entry.identifier,
                     display_resolution(&param.ty, registry),
                     display_resolution(actual, registry),
                 ),
@@ -210,8 +361,6 @@ fn resolve_call(
             ));
         }
     }
-
-    return_type
 }
 
 fn resolve_string(

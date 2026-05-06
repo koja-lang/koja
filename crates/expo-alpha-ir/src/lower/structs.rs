@@ -200,16 +200,6 @@ fn has_feature_gap(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) -> bool
         ));
         gapped = true;
     }
-    if !decl.functions.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha IR does not yet lower functions inside `struct ... end` (on `{}`)",
-                decl.name,
-            ),
-            decl.span,
-        ));
-        gapped = true;
-    }
     for annotation in &decl.annotations {
         diagnostics.push(Diagnostic::error(
             format!(

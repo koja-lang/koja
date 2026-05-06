@@ -149,3 +149,86 @@ fn nested_struct_emits_inner_type_inside_outer_field_layout() {
     assert_contains(&ir_text, "store %TestApp.Inner");
     assert_contains(&ir_text, "call void @__expo_alpha_print_i64");
 }
+
+// ---------------------------------------------------------------------------
+// Static methods (inline + impl-block forms)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_static_method_emits_named_function_definition() {
+    // Inline-form static method: a `define %TestApp.Point @TestApp.Point.origin()`
+    // function should appear alongside the `main` wrapper, with the
+    // call site dispatching to it by mangled symbol.
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        Point.origin().x
+        ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "define %TestApp.Point @TestApp.Point.origin()");
+    assert_contains(&ir_text, "call %TestApp.Point @TestApp.Point.origin()");
+}
+
+#[test]
+fn impl_block_static_method_emits_named_function_definition() {
+    // Impl-form mirror of the inline test: same expected emit
+    // because both surface forms register under the same qualified
+    // identifier and lower to the same `IRSymbol`.
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        impl Point
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        Point.origin().x
+        ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "define %TestApp.Point @TestApp.Point.origin()");
+    assert_contains(&ir_text, "call %TestApp.Point @TestApp.Point.origin()");
+}
+
+#[test]
+fn static_method_with_args_emits_typed_signature_and_call() {
+    let source = "
+        struct Point
+          x: Int
+
+          fn at(seed: Int, _scale: Int) -> Int
+            42
+          end
+        end
+
+        Point.at(7, 3)
+        ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "define i64 @TestApp.Point.at(i64");
+    assert_contains(&ir_text, "call i64 @TestApp.Point.at(i64 7, i64 3)");
+}

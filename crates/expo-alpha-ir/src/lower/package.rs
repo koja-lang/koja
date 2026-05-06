@@ -7,9 +7,19 @@
 //! [`resolved_type_to_ir_type`] (typecheck `ResolvedType` → `IRType`).
 //! Keeping them here lets `body.rs` / `expr.rs` import a stable
 //! seam without re-coding the registry shape.
+//!
+//! Static methods declared inline in `struct ... end` or in
+//! `impl Type ... end` blocks lower through the same
+//! [`lower_function_with_identifier`] helper as top-level functions —
+//! the only difference is the [`Identifier`] (and therefore the
+//! [`IRSymbol`]) the caller picks. Both forms land in the package's
+//! shared `functions: BTreeMap<IRSymbol, IRFunction>` map, so
+//! downstream consumers can't tell which surface form declared them.
 
 use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
-use expo_ast::ast::{Diagnostic, Function, Item, Param, is_intrinsic};
+use expo_ast::ast::{
+    Diagnostic, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_intrinsic,
+};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 
 use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSymbol};
@@ -28,14 +38,15 @@ pub(crate) fn lower_package(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> IRPackage {
-    let mut functions = BTreeMap::new();
+    let mut functions: BTreeMap<IRSymbol, IRFunction> = BTreeMap::new();
     let mut structs: BTreeMap<IRSymbol, IRStructDecl> = BTreeMap::new();
     for file in &pkg.files {
         for item in &file.items {
             match item {
                 Item::Function(function) => {
+                    let identifier = Identifier::new(&pkg.package, vec![function.name.clone()]);
                     if let Some(lowered) =
-                        lower_function(function, &pkg.package, registry, diagnostics)
+                        lower_function_with_identifier(function, identifier, registry, diagnostics)
                     {
                         functions.insert(lowered.symbol.clone(), lowered);
                     }
@@ -46,6 +57,29 @@ pub(crate) fn lower_package(
                     {
                         structs.insert(lowered.symbol.clone(), lowered);
                     }
+                    for function in &decl.functions {
+                        let identifier = Identifier::new(
+                            &pkg.package,
+                            vec![decl.name.clone(), function.name.clone()],
+                        );
+                        if let Some(lowered) = lower_function_with_identifier(
+                            function,
+                            identifier,
+                            registry,
+                            diagnostics,
+                        ) {
+                            functions.insert(lowered.symbol.clone(), lowered);
+                        }
+                    }
+                }
+                Item::Impl(impl_block) => {
+                    lower_impl(
+                        impl_block,
+                        &pkg.package,
+                        registry,
+                        diagnostics,
+                        &mut functions,
+                    );
                 }
                 _ => {}
             }
@@ -58,11 +92,50 @@ pub(crate) fn lower_package(
     }
 }
 
-/// Lower a single [`Function`] or return `None` if any feature-gap
-/// diagnostic surfaced while lowering it. The function is simply
-/// omitted from the package in that case; `lower_program` will turn
-/// the accumulated diagnostics into a [`crate::LowerError::Diagnostics`]
-/// before seal runs.
+/// Lower every static method declared in an `impl Type ... end`
+/// block. Trait impls, generic targets, and `TypeAlias` members are
+/// already diagnosed by typecheck collect / lift; reaching IR with
+/// any of them would be a seal violation, so we silently skip.
+fn lower_impl(
+    impl_block: &ImplBlock,
+    package: &str,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+    functions: &mut BTreeMap<IRSymbol, IRFunction>,
+) {
+    if impl_block.trait_expr.is_some() {
+        return;
+    }
+    let Some(target_name) = impl_target_name(&impl_block.target) else {
+        return;
+    };
+    for member in &impl_block.members {
+        let ImplMember::Function(function) = member else {
+            continue;
+        };
+        let identifier = Identifier::new(
+            package,
+            vec![target_name.to_string(), function.name.clone()],
+        );
+        if let Some(lowered) =
+            lower_function_with_identifier(function, identifier, registry, diagnostics)
+        {
+            functions.insert(lowered.symbol.clone(), lowered);
+        }
+    }
+}
+
+fn impl_target_name(target: &TypeExpr) -> Option<&str> {
+    match target {
+        TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
+        _ => None,
+    }
+}
+
+/// Lower a single [`Function`] under `identifier` (top-level, inline
+/// struct method, or impl-block method — all three flow through
+/// here). Returns `None` if any feature-gap diagnostic surfaced; the
+/// function is omitted from the package in that case.
 ///
 /// Three shapes flow through here, distinguished by annotation +
 /// body presence (mutually exclusive at the source level; mixing
@@ -76,23 +149,19 @@ pub(crate) fn lower_package(
 ///   today it surfaces a feature-gap diagnostic.
 /// - Regular `fn name(...)` (body present) lowers to
 ///   [`FunctionKind::Regular`] with at least one basic block.
-fn lower_function(
+pub(super) fn lower_function_with_identifier(
     function: &Function,
-    package: &str,
+    identifier: Identifier,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<IRFunction> {
-    let identifier = Identifier::new(package, vec![function.name.clone()]);
-    let signature = lookup_signature(registry, &identifier);
+    let signature = lookup_signature(registry, &identifier)?;
     let return_type = resolved_type_to_ir_type(&signature.return_type, registry);
     let intrinsic = is_intrinsic(&function.annotations);
 
     if intrinsic && function.body.is_some() {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "`@intrinsic` and a function body are mutually exclusive (on `{}`)",
-                function.name,
-            ),
+            format!("`@intrinsic` and a function body are mutually exclusive (on `{identifier}`)",),
             function.span,
         ));
         return None;
@@ -120,10 +189,7 @@ fn lower_function(
 
     let Some(body) = function.body.as_ref() else {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha IR does not yet lower extern fn `{}` (no body to lower)",
-                function.name,
-            ),
+            format!("alpha IR does not yet lower extern fn `{identifier}` (no body to lower)",),
             function.span,
         ));
         return None;
@@ -150,6 +216,8 @@ fn lower_function(
 /// naturally topological on the sealed AST. `self` receivers are a
 /// feature gap, not a compiler bug: record a diagnostic and bail on
 /// this function.
+///
+/// [`ValueId`]: crate::types::ValueId
 fn lower_params(
     function: &Function,
     identifier: &Identifier,
@@ -182,21 +250,18 @@ fn lower_params(
 }
 
 /// Lookup the lifted [`FunctionSignature`] for `identifier` in the
-/// registry. The seal contract guarantees a registered function has
-/// a `Some(_)` signature stamped by `lift_signatures`, so a miss or
-/// `None` here is a compiler bug, not a feature gap.
+/// registry. Returns `None` if the registry doesn't carry an entry —
+/// typecheck collect / lift may have rejected this function (e.g.
+/// `self` receiver, impl on unknown type), in which case IR silently
+/// skips it. A registered entry without a `Some(_)` signature is a
+/// compiler bug, not a feature gap.
 pub(super) fn lookup_signature<'a>(
     registry: &'a GlobalRegistry,
     identifier: &Identifier,
-) -> &'a FunctionSignature {
-    let entry = registry.lookup(identifier).unwrap_or_else(|| {
-        panic!(
-            "alpha IR lower: function `{identifier}` not in registry — \
-             collect/seal invariant violation",
-        );
-    });
-    match &entry.1.kind {
-        GlobalKind::Function(Some(sig)) => sig,
+) -> Option<&'a FunctionSignature> {
+    let (_, entry) = registry.lookup(identifier)?;
+    match &entry.kind {
+        GlobalKind::Function(Some(sig)) => Some(sig),
         other => panic!(
             "alpha IR lower: function `{identifier}` has no lifted signature \
              ({}) — lift_signatures invariant violation",

@@ -197,6 +197,45 @@ const STRUCT_FIELD_SCRIPT_SOURCE: &str = "
     Point{x: 5, y: 10}.x
 ";
 
+/// Script-mode fixture exercising the alpha static-method slice
+/// end-to-end with an inline-form declaration. `Point.origin()`
+/// dispatches to a method declared inside the struct body, the
+/// returned struct flows through `IRInstruction::FieldGet` for
+/// `.x`, and stdout is `0\n`.
+const STATIC_METHOD_INLINE_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+
+      fn origin -> Point
+        Point{x: 0, y: 0}
+      end
+    end
+
+    Point.origin().x
+";
+
+/// Script-mode fixture mirroring `STATIC_METHOD_INLINE_SCRIPT_SOURCE`
+/// in impl-block form. Both surface forms register under
+/// `TestApp.Point.origin` and lower to the same `IRSymbol`, so the
+/// observable behavior is identical (`0\n`); the dual-fixture e2e
+/// pair pins that the parser → typecheck → IR → backend chain
+/// treats both forms uniformly all the way down to the linker.
+const STATIC_METHOD_IMPL_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    impl Point
+      fn origin -> Point
+        Point{x: 0, y: 0}
+      end
+    end
+
+    Point.origin().x
+";
+
 fn expo_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_expo"))
 }
@@ -812,6 +851,93 @@ fn alpha_run_interpreter_script_struct_field_prints_five() {
     );
 
     let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Run the static-method script through `expo alpha run` and assert
+/// its stdout trims to `0`. Shared between the inline / impl + LLVM /
+/// interpreter pairs to keep each individual test case down to its
+/// distinguishing setup (which fixture, which backend).
+fn assert_static_method_script_prints_zero(label: &str, source: &str, backend: Option<&str>) {
+    let scratch = scratch_dir(label);
+    let fixture = write_fixture(&scratch, "static_method.exps", &dedent(source));
+
+    let mut args = vec!["alpha", "run"];
+    if let Some(backend) = backend {
+        args.push(backend);
+    }
+    args.push(fixture.to_str().unwrap());
+
+    let output = run_expo(&args);
+    assert!(
+        output.status.success(),
+        "expected `expo {}` to exit 0, got {:?}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "0",
+        "expected stdout `0` (Point.origin().x), got:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_static_method_inline_prints_zero() {
+    // Drives the inline-form static-method slice through the LLVM
+    // backend end-to-end. `Point.origin()` lowers to a
+    // `define %TestApp.Point @TestApp.Point.origin()` body, the
+    // call site issues a matching `call %TestApp.Point @...`, the
+    // returned struct flows through `IRInstruction::FieldGet` for
+    // `.x`, and the auto-print wrapper emits `0\n`.
+    assert_static_method_script_prints_zero(
+        "run_llvm_static_method_inline",
+        STATIC_METHOD_INLINE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_static_method_inline_prints_zero() {
+    // Backend symmetry with the LLVM test above for inline-form
+    // declarations. The interpreter dispatches the `Call` to the
+    // method's `IRSymbol`, evaluates the body, and projects field 0
+    // off the returned `Value::Struct`. Output matches `0\n`.
+    assert_static_method_script_prints_zero(
+        "run_interpreter_static_method_inline",
+        STATIC_METHOD_INLINE_SCRIPT_SOURCE,
+        None,
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_static_method_impl_prints_zero() {
+    // Impl-form mirror of the inline LLVM test. Both surface forms
+    // register under the same `Identifier` and lower to the same
+    // `IRSymbol`, so the LLVM emit + observable stdout are
+    // byte-identical to the inline-form test above.
+    assert_static_method_script_prints_zero(
+        "run_llvm_static_method_impl",
+        STATIC_METHOD_IMPL_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_static_method_impl_prints_zero() {
+    // Impl-form mirror of the inline interpreter test. The `Call` /
+    // `FieldGet` instruction stream the interpreter consumes is
+    // identical between the two forms, so this test pins the
+    // contract that nothing further down the pipeline can tell
+    // declaration form apart.
+    assert_static_method_script_prints_zero(
+        "run_interpreter_static_method_impl",
+        STATIC_METHOD_IMPL_SCRIPT_SOURCE,
+        None,
+    );
 }
 
 #[test]

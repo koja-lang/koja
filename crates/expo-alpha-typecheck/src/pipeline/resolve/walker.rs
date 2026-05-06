@@ -4,7 +4,7 @@
 //! resolved value (assignments, breaks, returns) just thread through
 //! to [`super::expr::resolve_expr`] for any expressions they wrap.
 
-use expo_ast::ast::{Diagnostic, File, Function, Item, Statement};
+use expo_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Statement};
 
 use crate::registry::GlobalRegistry;
 
@@ -17,8 +17,23 @@ pub(crate) fn resolve_file(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for item in &mut file.items {
-        if let Item::Function(function) = item {
-            resolve_function(function, package, registry, diagnostics);
+        match item {
+            Item::Function(function) => {
+                resolve_function(function, package, registry, diagnostics);
+            }
+            Item::Struct(decl) => {
+                for function in &mut decl.functions {
+                    resolve_function(function, package, registry, diagnostics);
+                }
+            }
+            Item::Impl(impl_block) => {
+                for member in &mut impl_block.members {
+                    if let ImplMember::Function(function) = member {
+                        resolve_function(function, package, registry, diagnostics);
+                    }
+                }
+            }
+            _ => {}
         }
     }
     if let Some(body) = file.body.as_mut() {

@@ -5,7 +5,7 @@
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../../design/COMPILER-NORTHSTAR.md
 
-use expo_ast::ast::{Expr, ExprKind, File, Function, Item, Statement, StringPart};
+use expo_ast::ast::{Expr, ExprKind, File, Function, ImplMember, Item, Statement, StringPart};
 use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
 
@@ -23,8 +23,21 @@ pub(crate) fn seal_ast(program: &CheckedProgram) {
 
 fn seal_file(file: &File) {
     for item in &file.items {
-        if let Item::Function(function) = item {
-            seal_function(function);
+        match item {
+            Item::Function(function) => seal_function(function),
+            Item::Struct(decl) => {
+                for function in &decl.functions {
+                    seal_function(function);
+                }
+            }
+            Item::Impl(impl_block) => {
+                for member in &impl_block.members {
+                    if let ImplMember::Function(function) = member {
+                        seal_function(function);
+                    }
+                }
+            }
+            _ => {}
         }
     }
     if let Some(body) = file.body.as_ref() {
@@ -104,6 +117,18 @@ fn seal_expr(expr: &Expr) {
             }
         }
         ExprKind::Literal { .. } => {}
+        ExprKind::MethodCall { receiver, args, .. } => {
+            // Static method calls: receiver must resolve like any
+            // other `Ident` reference (its `resolution` is the
+            // struct id, populated by resolve). Args follow the same
+            // rule as `Call`. The outer `Expr.resolution` is the
+            // method's return type, already enforced by the
+            // top-of-fn check.
+            seal_expr(receiver);
+            for arg in args {
+                seal_expr(&arg.value);
+            }
+        }
         ExprKind::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {

@@ -238,3 +238,132 @@ fn nested_field_access_chains_two_field_gets() {
 // for any future caller that bypasses typecheck (e.g. tooling that constructs
 // a CheckedProgram by hand); the typecheck-side gaps are covered by
 // `expo-alpha-typecheck/tests/structs.rs`.
+
+// ---------------------------------------------------------------------------
+// Static methods (inline + impl-block forms)
+// ---------------------------------------------------------------------------
+
+use expo_alpha_ir::FunctionKind;
+
+#[test]
+fn inline_static_method_lowers_into_package_function_map() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        fn main -> Int
+          Point.origin().x
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let function = program
+        .function("TestApp.Point.origin")
+        .expect("inline static method missing from program");
+    assert_eq!(function.kind, FunctionKind::Regular);
+    assert!(!function.blocks.is_empty(), "method should have a body");
+}
+
+#[test]
+fn impl_block_static_method_lowers_into_package_function_map() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        impl Point
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        fn main -> Int
+          Point.origin().x
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let function = program
+        .function("TestApp.Point.origin")
+        .expect("impl-block static method missing from program");
+    assert_eq!(function.kind, FunctionKind::Regular);
+    assert!(!function.blocks.is_empty(), "method should have a body");
+}
+
+#[test]
+fn static_method_call_emits_call_against_qualified_symbol() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        Point.origin().x
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let block = script.blocks.first().expect("script has one entry block");
+
+    let call_callee = block
+        .instructions
+        .iter()
+        .find_map(|inst| match inst {
+            IRInstruction::Call { callee, .. } => Some(callee.clone()),
+            _ => None,
+        })
+        .expect("expected one Call instruction");
+    assert_eq!(call_callee.mangled(), "TestApp.Point.origin");
+
+    let field_get = block
+        .instructions
+        .iter()
+        .find_map(|inst| match inst {
+            IRInstruction::FieldGet {
+                field_index,
+                struct_symbol,
+                ..
+            } => Some((*field_index, struct_symbol.mangled().to_string())),
+            _ => None,
+        })
+        .expect("expected one FieldGet after the Call");
+    assert_eq!(field_get, (0, "TestApp.Point".to_string()));
+}
+
+#[test]
+fn static_method_with_args_lowers_call_with_lowered_args() {
+    let source = "
+        struct Point
+          x: Int
+
+          fn at(seed: Int, _scale: Int) -> Int
+            42
+          end
+        end
+
+        Point.at(7, 3)
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let block = script.blocks.first().expect("script has one entry block");
+    let (callee, arg_count) = block
+        .instructions
+        .iter()
+        .find_map(|inst| match inst {
+            IRInstruction::Call { callee, args, .. } => Some((callee.clone(), args.len())),
+            _ => None,
+        })
+        .expect("expected one Call instruction");
+    assert_eq!(callee.mangled(), "TestApp.Point.at");
+    assert_eq!(arg_count, 2);
+}

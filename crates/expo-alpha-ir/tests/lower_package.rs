@@ -192,7 +192,7 @@ fn extern_fn_without_body_surfaces_feature_gap_diagnostic() {
     let messages = expect_diagnostics(lower_err(&program, "missing"));
     assert_eq!(messages.len(), 1);
     assert!(
-        messages[0].contains("extern fn `missing`"),
+        messages[0].contains("extern fn `TestApp.missing`"),
         "expected extern-fn diagnostic, got: {messages:?}",
     );
 }
