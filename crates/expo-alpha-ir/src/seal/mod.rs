@@ -133,6 +133,13 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::Call { args, .. } => args.clone(),
         IRInstruction::Const { .. } => vec![],
         IRInstruction::FieldGet { base, .. } => vec![*base],
+        // `LocalDecl` declares the slot; nothing in scope yet to read.
+        // `LocalRead` reads the slot named by `local`, not a `ValueId`,
+        // so the per-block defined-set walk has nothing to validate
+        // here — `local` is checked against the per-function decl set
+        // by `seal_locals_in_function`.
+        IRInstruction::LocalDecl { .. } | IRInstruction::LocalRead { .. } => vec![],
+        IRInstruction::LocalWrite { value, .. } => vec![*value],
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
     }

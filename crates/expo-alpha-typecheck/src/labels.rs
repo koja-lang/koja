@@ -33,7 +33,7 @@ pub(crate) fn expr_kind_label(kind: &ExprKind) -> &'static str {
         ExprKind::Match { .. } => "match",
         ExprKind::MethodCall { .. } => "method-call",
         ExprKind::Receive { .. } => "receive",
-        ExprKind::Self_ => "self",
+        ExprKind::Self_ { .. } => "self",
         ExprKind::ShortClosure { .. } => "short-closure",
         ExprKind::Spawn { .. } => "spawn",
         ExprKind::String { .. } => "string",

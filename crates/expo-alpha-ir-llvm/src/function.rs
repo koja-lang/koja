@@ -75,6 +75,9 @@ pub(crate) fn define_function<'ctx>(
     if function.kind == FunctionKind::Intrinsic {
         return intrinsics::emit_intrinsic_body(ctx, function, llvm_function);
     }
+    // Slot table is per-function — flush any leftovers from the
+    // previous helper before walking this body.
+    ctx.reset_locals();
     let block_map = declare_blocks(ctx, llvm_function, &function.blocks);
     let mut values = seed_params(function, llvm_function);
     for block in &function.blocks {

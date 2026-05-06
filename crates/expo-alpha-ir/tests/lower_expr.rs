@@ -88,17 +88,20 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
         IRType::Int64,
         "alpha lowering should stamp the param's IRType from the lifted signature",
     );
-    let body_const = take
+    // The entry block emits `LocalDecl` + `LocalWrite` for param
+    // promotion ahead of the body's const; both produce no `dest`,
+    // so we walk past them to find the first body-produced value.
+    let body_dest = take
         .blocks
         .first()
         .expect("take has one block")
         .instructions
-        .first()
-        .expect("take body has at least one instruction");
+        .iter()
+        .find_map(|inst| inst.dest())
+        .expect("take body has at least one value-producing instruction");
     assert!(
-        body_const.dest().0 > param.id.0,
-        "body-produced value ({}) should be allocated after param value ({})",
-        body_const.dest(),
+        body_dest.0 > param.id.0,
+        "body-produced value ({body_dest}) should be allocated after param value ({})",
         param.id,
     );
 

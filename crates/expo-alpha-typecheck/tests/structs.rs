@@ -13,9 +13,10 @@
 //! shape.
 
 use expo_alpha_typecheck::{
-    CheckedProgram, FunctionSignature, GlobalKind, ResolvedStructField, StructDefinition,
+    CheckedProgram, Dispatch, FunctionSignature, GlobalKind, ResolvedStructField, StructDefinition,
 };
 use expo_ast::ast::{Expr, ExprKind, Item, Statement, StructDecl};
+use expo_ast::identifier::GlobalRegistryId;
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 
@@ -94,6 +95,31 @@ fn package_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
         .lookup(&ident)
         .unwrap_or_else(|| panic!("`{ident}` missing from registry"));
     ResolvedType::leaf(Resolution::Global(id))
+}
+
+fn lookup_function_signature<'a>(
+    checked: &'a CheckedProgram,
+    package: &str,
+    path: &[&str],
+) -> &'a FunctionSignature {
+    let ident = Identifier::new(package, path.iter().map(|s| (*s).to_string()).collect());
+    let (_, entry) = checked
+        .registry
+        .lookup(&ident)
+        .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
+    match &entry.kind {
+        GlobalKind::Function(Some(sig)) => sig,
+        other => panic!("expected lifted Function(Some(_)) for `{ident}`, got {other:?}"),
+    }
+}
+
+fn lookup_struct_id(checked: &CheckedProgram, package: &str, name: &str) -> GlobalRegistryId {
+    let ident = Identifier::new(package, vec![name.to_string()]);
+    let (id, _) = checked
+        .registry
+        .lookup(&ident)
+        .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
+    id
 }
 
 // ---------------------------------------------------------------------------
@@ -820,7 +846,7 @@ fn nonexistent_static_method_diagnoses() {
 }
 
 #[test]
-fn instance_method_in_struct_body_diagnoses_feature_gap() {
+fn instance_method_in_struct_body_lifts_with_dispatch_instance() {
     let source = "
         struct Point
           x: Int
@@ -835,18 +861,21 @@ fn instance_method_in_struct_body_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("instance methods") && m.contains("`TestApp.Point.distance`")),
-        "expected instance-method gap diagnostic, got {messages:?}",
+    let checked = typecheck(&dedent(source));
+    let signature = lookup_function_signature(&checked, "TestApp", &["Point", "distance"]);
+    assert_eq!(signature.dispatch, Dispatch::Instance);
+    assert_eq!(signature.params.len(), 1, "self lifts as a real param");
+    assert_eq!(signature.params[0].name, "self");
+    let receiver_id = lookup_struct_id(&checked, "TestApp", "Point");
+    assert_eq!(
+        signature.params[0].ty.resolution,
+        Resolution::Global(receiver_id),
+        "self carries the enclosing struct's identifier",
     );
 }
 
 #[test]
-fn instance_method_in_impl_block_diagnoses_feature_gap() {
+fn instance_method_in_impl_block_lifts_with_dispatch_instance() {
     let source = "
         struct Point
           x: Int
@@ -863,13 +892,14 @@ fn instance_method_in_impl_block_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("instance methods") && m.contains("`TestApp.Point.distance`")),
-        "expected instance-method gap diagnostic, got {messages:?}",
+    let checked = typecheck(&dedent(source));
+    let signature = lookup_function_signature(&checked, "TestApp", &["Point", "distance"]);
+    assert_eq!(signature.dispatch, Dispatch::Instance);
+    assert_eq!(signature.params.len(), 1);
+    let receiver_id = lookup_struct_id(&checked, "TestApp", "Point");
+    assert_eq!(
+        signature.params[0].ty.resolution,
+        Resolution::Global(receiver_id),
     );
 }
 
@@ -900,47 +930,111 @@ fn static_method_self_return_type_diagnoses_feature_gap() {
 }
 
 #[test]
-fn instance_method_call_diagnoses_feature_gap() {
+fn instance_method_call_resolves_to_method_return_type() {
     let source = "
         struct Point
           x: Int
           y: Int
+
+          fn first(self) -> Int
+            self.x
+          end
         end
 
         fn main
-          Point{x: 1, y: 2}.x
+          Point{x: 1, y: 2}.first()
         end
         ";
 
-    // Field access on a struct value is supported (existing test
-    // covers it). What's NOT supported is a *call* on a value
-    // receiver: pin that the method-call resolver still rejects it.
-    // This source uses a separate top-level `helper` so the script
-    // body has a non-`Ident` receiver to dispatch on.
-    typecheck(&dedent(source));
+    let checked = typecheck(&dedent(source));
+    let trailing = body_trailing_expr(&checked, "main");
+    assert_eq!(
+        trailing.resolution,
+        global_leaf(&checked, "Int"),
+        "trailing instance call's resolution should match the method's return type",
+    );
+    let ExprKind::MethodCall { method, .. } = &trailing.kind else {
+        panic!("expected MethodCall, got {:?}", trailing.kind);
+    };
+    assert_eq!(method, "first");
+}
 
-    let failing = "
+#[test]
+fn instance_method_called_as_static_diagnoses() {
+    let source = "
         struct Point
           x: Int
-          y: Int
-        end
 
-        fn helper -> Point
-          Point{x: 1, y: 2}
+          fn distance(self) -> Int
+            self.x
+          end
         end
 
         fn main
-          helper().distance()
+          Point.distance()
         end
         ";
 
-    let failure = typecheck_fail(&dedent(failing));
+    let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("does not yet support instance method calls")),
-        "expected instance-method-call gap diagnostic, got {messages:?}",
+            .any(|m| m.contains("instance method") && m.contains("static")),
+        "expected instance-as-static diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn static_method_called_on_instance_diagnoses() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn origin -> Point
+            Point{x: 0, y: 0}
+          end
+        end
+
+        fn main
+          Point{x: 1, y: 2}.origin()
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("static method") && m.contains("on a value")),
+        "expected static-on-instance diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn instance_method_with_args_validates_explicit_args() {
+    let source = "
+        struct Point
+          x: Int
+
+          fn shifted(self, by: Int) -> Int
+            self.x
+          end
+        end
+
+        fn main
+          Point{x: 1}.shifted()
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains("expects 1 argument")
+            || m.contains("expected 1 argument")
+            || (m.contains("`shifted`") && m.contains("argument"))),
+        "expected arity diagnostic for explicit args (self excluded), got {messages:?}",
     );
 }
 

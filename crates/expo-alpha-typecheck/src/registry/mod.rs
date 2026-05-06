@@ -35,6 +35,25 @@ mod format;
 
 pub use format::format_registry;
 
+/// How a function call dispatches on its callee.
+///
+/// `Static` is the default — direct lookup by qualified name; the
+/// argument list is exactly what the caller wrote. `Instance` requires
+/// a receiver value whose static type matches the enclosing struct;
+/// the receiver becomes the implicit first argument and the caller's
+/// explicit args populate `params[1..]`.
+///
+/// Orthogonal to [`crate::FunctionKind`] (which describes how a body
+/// is materialized at codegen — `Regular` vs `Intrinsic`). A function
+/// is one of `{Regular, Intrinsic} × {Static, Instance}`; keeping the
+/// axes as separate enums avoids combinatorial pattern matches at
+/// every call site that cares about only one dimension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dispatch {
+    Instance,
+    Static,
+}
+
 /// A single resolved parameter: surface-syntax name plus resolved type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedParam {
@@ -54,8 +73,14 @@ pub struct ResolvedStructField {
 /// [`GlobalKind::Function`] entries by the `lift_signatures` sub-pass.
 /// Params and return carry registry-backed [`ResolvedType`]s, so a
 /// signature stays valid as long as its referents do.
+///
+/// `dispatch` distinguishes static (free or `Type.method`) calls from
+/// instance (`receiver.method`) calls. `lift_signatures` sets
+/// [`Dispatch::Instance`] when the function declares a `Param::Self_`
+/// first parameter; everything else stays [`Dispatch::Static`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionSignature {
+    pub dispatch: Dispatch,
     pub params: Vec<ResolvedParam>,
     pub return_type: ResolvedType,
 }

@@ -43,7 +43,13 @@ pub(crate) fn collect_file(
         match item {
             Item::Function(function) => {
                 let identifier = Identifier::new(package, vec![function.name.clone()]);
-                register_function_with_identifier(function, identifier, registry, diagnostics);
+                register_function_with_identifier(
+                    function,
+                    identifier,
+                    SelfContext::RejectSelf,
+                    registry,
+                    diagnostics,
+                );
             }
             Item::Struct(decl) => {
                 register_struct(decl, package, registry, diagnostics);
@@ -77,17 +83,28 @@ pub(crate) fn collect_file(
     }
 }
 
+/// Whether the registration site (top-level vs inside a `struct` /
+/// `impl` body) accepts a `self` receiver. Lift_signatures carries a
+/// richer struct-aware variant; collect only needs to know "is `self`
+/// allowed here?" so a flat enum suffices.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelfContext {
+    AllowSelf,
+    RejectSelf,
+}
+
 /// Register a function under `identifier`. Shared by all three callers
-/// (top-level fns, inline static methods, impl-block static methods)
-/// so the duplicate-detection / `self` rejection / collision-message
-/// paths stay in one place.
+/// (top-level fns, inline static or instance methods, impl-block
+/// static or instance methods) so the duplicate-detection /
+/// collision-message / `self`-context paths stay in one place.
 fn register_function_with_identifier(
     function: &Function,
     identifier: Identifier,
+    self_context: SelfContext,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if reject_self_param(function, &identifier, diagnostics) {
+    if reject_self_param(function, &identifier, self_context, diagnostics) {
         return;
     }
     match registry.insert_function(identifier, function.span) {
@@ -106,22 +123,29 @@ fn register_function_with_identifier(
     }
 }
 
-/// Diagnose a `self` receiver and return `true` so the caller can skip
-/// registration — the slice supports static methods only.
+/// Reject a `self` receiver only when registration is happening
+/// outside a struct/impl context (top-level functions); inside a
+/// struct or `impl Type` block, `self` is the receiver for an
+/// instance method and lift_signatures will lift it to a real
+/// parameter typed by the enclosing struct.
 fn reject_self_param(
     function: &Function,
     identifier: &Identifier,
+    self_context: SelfContext,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> bool {
+    if self_context == SelfContext::AllowSelf {
+        return false;
+    }
     let Some(self_span) = function.params.iter().find_map(|param| match param {
-        Param::Self_ { span, .. } => Some(*span),
         Param::Regular { .. } => None,
+        Param::Self_ { span, .. } => Some(*span),
     }) else {
         return false;
     };
     diagnostics.push(Diagnostic::error(
         format!(
-            "alpha typecheck does not yet support instance methods (`self` receiver on `{identifier}`)",
+            "`self` receiver is only valid inside `struct` or `impl` blocks (on `{identifier}`)"
         ),
         self_span,
     ));
@@ -136,7 +160,7 @@ fn register_struct(
 ) {
     diagnose_struct_feature_gaps(decl, diagnostics);
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    match registry.insert_struct(identifier.clone(), decl.span) {
+    match registry.insert_struct(identifier, decl.span) {
         InsertOutcome::Fresh(_) => {}
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
@@ -156,7 +180,13 @@ fn register_struct(
     for function in &decl.functions {
         let method_identifier =
             Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
-        register_function_with_identifier(function, method_identifier, registry, diagnostics);
+        register_function_with_identifier(
+            function,
+            method_identifier,
+            SelfContext::AllowSelf,
+            registry,
+            diagnostics,
+        );
     }
 }
 
@@ -213,7 +243,13 @@ fn register_impl(
             package,
             vec![target_name.to_string(), function.name.clone()],
         );
-        register_function_with_identifier(function, method_identifier, registry, diagnostics);
+        register_function_with_identifier(
+            function,
+            method_identifier,
+            SelfContext::AllowSelf,
+            registry,
+            diagnostics,
+        );
     }
 }
 

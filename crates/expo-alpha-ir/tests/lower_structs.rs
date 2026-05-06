@@ -367,3 +367,146 @@ fn static_method_with_args_lowers_call_with_lowered_args() {
     assert_eq!(callee.mangled(), "TestApp.Point.at");
     assert_eq!(arg_count, 2);
 }
+
+// ---------------------------------------------------------------------------
+// Instance methods (inline + impl-block forms)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_instance_method_lowers_with_self_param_promoted() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn first(self) -> Int
+            self.x
+          end
+        end
+
+        fn main -> Int
+          Point{x: 1, y: 2}.first()
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let method = program
+        .function("TestApp.Point.first")
+        .expect("inline instance method missing from program");
+    assert_eq!(method.kind, FunctionKind::Regular);
+    assert_eq!(
+        method.params.len(),
+        1,
+        "instance method should carry exactly one IR param (self)",
+    );
+    let self_param = &method.params[0];
+    assert_eq!(
+        self_param.ty,
+        IRType::Struct(struct_decl(&program, "Point").symbol.clone()),
+        "self's IRType should be the receiver struct",
+    );
+
+    let entry = method
+        .blocks
+        .first()
+        .expect("instance method has at least one block");
+    assert!(
+        entry.instructions.iter().any(
+            |i| matches!(i, IRInstruction::LocalDecl { local, .. } if *local == self_param.local_id),
+        ),
+        "entry block should declare a slot for self: {:?}",
+        entry.instructions,
+    );
+    assert!(
+        entry.instructions.iter().any(|i| matches!(
+            i,
+            IRInstruction::LocalWrite { local, value }
+                if *local == self_param.local_id && *value == self_param.id,
+        )),
+        "entry block should mirror self's value into its slot: {:?}",
+        entry.instructions,
+    );
+}
+
+#[test]
+fn impl_block_instance_method_lowers_with_self_param_promoted() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        impl Point
+          fn first(self) -> Int
+            self.x
+          end
+        end
+
+        fn main -> Int
+          Point{x: 1, y: 2}.first()
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let method = program
+        .function("TestApp.Point.first")
+        .expect("impl-block instance method missing from program");
+    assert_eq!(method.kind, FunctionKind::Regular);
+    assert_eq!(method.params.len(), 1);
+    assert_eq!(
+        method.params[0].ty,
+        IRType::Struct(struct_decl(&program, "Point").symbol.clone()),
+    );
+}
+
+#[test]
+fn instance_method_call_prepends_receiver_to_call_args() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn shift(self, dx: Int) -> Int
+            self.x
+          end
+        end
+
+        fn main -> Int
+          Point{x: 1, y: 2}.shift(7)
+        end
+        ";
+
+    let program = lower_program_source(&dedent(source));
+    let main = function(&program, "main");
+    let block = main.blocks.first().expect("main has one block");
+
+    let (callee, args) = block
+        .instructions
+        .iter()
+        .find_map(|i| match i {
+            IRInstruction::Call { callee, args, .. } => Some((callee.clone(), args.clone())),
+            _ => None,
+        })
+        .expect("expected an instance Call in main");
+    assert_eq!(callee.mangled(), "TestApp.Point.shift");
+    assert_eq!(args.len(), 2, "instance call passes (self, dx) — 2 args");
+
+    // The first arg should be the receiver value — the StructInit's
+    // dest — the second the lowered explicit `7` Const.
+    let init_dest = block
+        .instructions
+        .iter()
+        .find_map(|i| match i {
+            IRInstruction::StructInit { dest, .. } => Some(*dest),
+            _ => None,
+        })
+        .expect("expected a StructInit for the receiver");
+    assert_eq!(
+        args[0], init_dest,
+        "first arg of an instance Call must be the receiver value",
+    );
+}
+
+// `function` is private to the common helper module via its
+// re-export; pull it in here without re-importing common.
+use common::function;

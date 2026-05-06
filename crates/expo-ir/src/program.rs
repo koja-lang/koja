@@ -205,7 +205,7 @@ pub fn expr_kind_name(kind: &expo_ast::ast::ExprKind) -> &'static str {
         ExprKind::Match { .. } => "Match",
         ExprKind::MethodCall { .. } => "MethodCall",
         ExprKind::Receive { .. } => "Receive",
-        ExprKind::Self_ => "Self_",
+        ExprKind::Self_ { .. } => "Self_",
         ExprKind::ShortClosure { .. } => "ShortClosure",
         ExprKind::Spawn { .. } => "Spawn",
         ExprKind::String { .. } => "String",

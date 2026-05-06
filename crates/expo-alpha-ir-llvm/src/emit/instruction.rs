@@ -1,7 +1,9 @@
 //! Per-instruction dispatch + the const + call helpers it routes
 //! to. Operator emission lives in the sibling [`super::ops`] module.
 
-use expo_alpha_ir::{ConstValue, IRInstruction, IRSymbol, IRType, StructFieldInit, ValueId};
+use expo_alpha_ir::{
+    ConstValue, IRInstruction, IRLocalId, IRSymbol, IRType, StructFieldInit, ValueId,
+};
 use inkwell::module::Linkage;
 use inkwell::types::StructType;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
@@ -64,6 +66,16 @@ pub(super) fn emit_instruction<'ctx>(
             let result = emit_field_get(ctx, struct_type, base_value, *field_index, field_type)?;
             values.insert(*dest, result);
             Ok(())
+        }
+        IRInstruction::LocalDecl { local, ty } => emit_local_decl(ctx, *local, ty),
+        IRInstruction::LocalRead { dest, local, ty } => {
+            let value = emit_local_read(ctx, *local, ty)?;
+            values.insert(*dest, value);
+            Ok(())
+        }
+        IRInstruction::LocalWrite { local, value } => {
+            let resolved = lookup(values, *value)?;
+            emit_local_write(ctx, *local, resolved)
         }
         IRInstruction::StructInit { dest, fields, ty } => {
             let struct_type = ctx.struct_type(ty.mangled());
@@ -201,6 +213,55 @@ fn emit_call<'ctx>(
             LlvmError::Codegen(format!("inkwell rejected build_call for `{mangled}`: {e}"))
         })?;
     Ok(call_site.try_as_basic_value().basic())
+}
+
+/// Materialize a `LocalDecl` as an entry-block `alloca`. The slot's
+/// LLVM pointer is stashed on the [`EmitCtx`] keyed by [`IRLocalId`];
+/// `LocalRead` / `LocalWrite` recover it for `load` / `store`.
+/// Mirrors v1 codegen's per-variable `build_alloca` shape.
+fn emit_local_decl<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    local: IRLocalId,
+    ty: &IRType,
+) -> Result<(), LlvmError> {
+    let llvm_ty = ir_basic_type(ctx, ty)?;
+    let name = local.to_string();
+    let slot = ctx.build_entry_alloca(llvm_ty, &name);
+    ctx.register_local_slot(local, slot);
+    Ok(())
+}
+
+/// Lower a `LocalRead` to an LLVM `load`. The pointer comes from the
+/// per-function slot table (registered by the matching
+/// `LocalDecl`); the load type comes from the IR's static type slot
+/// so opaque pointers don't need a separate type query.
+fn emit_local_read<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    local: IRLocalId,
+    ty: &IRType,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let slot = ctx.local_slot(local);
+    let llvm_ty = ir_basic_type(ctx, ty)?;
+    ctx.builder
+        .build_load(llvm_ty, slot, &local.to_string())
+        .map_err(|e| LlvmError::Codegen(format!("inkwell rejected build_load for `{local}`: {e}",)))
+}
+
+/// Lower a `LocalWrite` to an LLVM `store`. The slot pointer comes
+/// from the per-function slot table; the rhs's `BasicValueEnum`
+/// comes from the SSA value map the caller already resolved.
+fn emit_local_write<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    local: IRLocalId,
+    value: BasicValueEnum<'ctx>,
+) -> Result<(), LlvmError> {
+    let slot = ctx.local_slot(local);
+    ctx.builder
+        .build_store(slot, value)
+        .map(|_| ())
+        .map_err(|e| {
+            LlvmError::Codegen(format!("inkwell rejected build_store for `{local}`: {e}",))
+        })
 }
 
 fn emit_const<'ctx>(

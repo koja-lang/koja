@@ -236,6 +236,68 @@ const STATIC_METHOD_IMPL_SCRIPT_SOURCE: &str = "
     Point.origin().x
 ";
 
+/// Script-mode fixture exercising the alpha locals slice end-to-end.
+/// Declares a local `x`, reassigns it inside an `if` arm, calls a
+/// helper that takes a parameter, and adds the helper's result to
+/// the reassigned local. Pins the full chain:
+///
+/// - typecheck stamps `Resolution::Local` on each `x`/`n` reference,
+///   threads the rhs type through reassignment, and validates the
+///   declared return types against the trailing expressions;
+/// - IR lowering emits `LocalDecl` + `LocalWrite` per slot in the
+///   entry block, `LocalWrite` for reassignments, `LocalRead`
+///   wherever a local is read, and promotes function parameters to
+///   matching slots;
+/// - LLVM emits per-slot `alloca` + `store`/`load` (no mem2reg in
+///   the alpha pipeline), the helper takes its param by value, and
+///   the auto-print wrapper renders `15\n`;
+/// - the eval interpreter's per-frame `locals` map handles the same
+///   instructions and produces matching output byte-for-byte.
+const LOCALS_SCRIPT_SOURCE: &str = "
+    fn add_one(n: Int) -> Int
+      n = n + 1
+      n
+    end
+
+    x = 4
+    if true
+      x = 10
+    end
+    x + add_one(4)
+";
+
+/// Script-mode fixture exercising the alpha instance-method slice
+/// end-to-end. `Counter{n: 10}.add(5)` constructs a struct, calls an
+/// inline-form instance method whose body reads `self.n` and adds
+/// the explicit `delta`, and the auto-print wrapper renders `15\n`.
+/// Pins the full chain:
+///
+/// - typecheck registers `TestApp.Counter.add` with `dispatch =
+///   Instance`, lifts `self` as a real param, and resolves the call
+///   site through the instance-dispatch path;
+/// - IR lowering promotes `self` into its own slot, prepends the
+///   receiver to the lowered call's arg list, and threads
+///   `self.n` through `IRInstruction::FieldGet` against the
+///   receiver's slot;
+/// - LLVM emits `define i64 @TestApp.Counter.add(%TestApp.Counter,
+///   i64)` with the receiver as the first parameter, and the call
+///   site issues a matching `call i64 @TestApp.Counter.add` passing
+///   the constructed struct value first;
+/// - the eval interpreter routes the `Call` through its function
+///   map, the body sums `self.n + delta`, and the trailing value
+///   prints as `15\n`.
+const INSTANCE_METHOD_SCRIPT_SOURCE: &str = "
+    struct Counter
+      n: Int
+
+      fn add(self, delta: Int) -> Int
+        self.n + delta
+      end
+    end
+
+    Counter{n: 10}.add(5)
+";
+
 fn expo_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_expo"))
 }
@@ -937,6 +999,73 @@ fn alpha_run_interpreter_script_static_method_impl_prints_zero() {
         "run_interpreter_static_method_impl",
         STATIC_METHOD_IMPL_SCRIPT_SOURCE,
         None,
+    );
+}
+
+/// Run a script through `expo alpha run` and assert its stdout
+/// (after trim) matches `expected`. Used by the locals + instance-
+/// method dual-backend pairs; each `#[test]` only needs to specify
+/// the fixture, the backend flag, and the expected line.
+fn assert_script_prints(label: &str, source: &str, backend: Option<&str>, expected: &str) {
+    let scratch = scratch_dir(label);
+    let fixture = write_fixture(&scratch, "fixture.exps", &dedent(source));
+
+    let mut args = vec!["alpha", "run"];
+    if let Some(backend) = backend {
+        args.push(backend);
+    }
+    args.push(fixture.to_str().unwrap());
+
+    let output = run_expo(&args);
+    assert!(
+        output.status.success(),
+        "expected `expo {}` to exit 0, got {:?}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        expected,
+        "expected stdout `{expected}`, got:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_locals_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_locals",
+        LOCALS_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_locals_prints_fifteen() {
+    assert_script_prints("run_interpreter_locals", LOCALS_SCRIPT_SOURCE, None, "15");
+}
+
+#[test]
+fn alpha_run_llvm_script_instance_method_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_instance_method",
+        INSTANCE_METHOD_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_instance_method_prints_fifteen() {
+    assert_script_prints(
+        "run_interpreter_instance_method",
+        INSTANCE_METHOD_SCRIPT_SOURCE,
+        None,
+        "15",
     );
 }
 

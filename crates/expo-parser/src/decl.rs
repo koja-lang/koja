@@ -536,6 +536,7 @@ impl Parser {
                 } else {
                     PassMode::Borrow
                 },
+                local_id: None,
                 span: self.span_from(start),
             };
         }
@@ -559,6 +560,7 @@ impl Parser {
             name,
             type_expr,
             default,
+            local_id: None,
             span: self.span_from(start),
         }
     }

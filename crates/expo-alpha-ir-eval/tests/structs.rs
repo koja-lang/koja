@@ -210,9 +210,8 @@ fn impl_block_static_method_call_then_field_get_evaluates() {
 
 #[test]
 fn static_method_returning_int_evaluates_to_constant() {
-    // Const-bodied method (param refs in bodies aren't supported
-    // until the locals slice). Pin that the call dispatches to
-    // the right symbol and the return value flows back.
+    // Const-bodied method. Pin that the call dispatches to the
+    // right symbol and the return value flows back.
     let source = "
         struct Point
           x: Int
@@ -223,6 +222,90 @@ fn static_method_returning_int_evaluates_to_constant() {
         end
 
         Point.answer()
+        ";
+
+    let value = evaluate_script(&dedent(source));
+    assert_eq!(value, Value::Int(42));
+}
+
+// ---------------------------------------------------------------------------
+// Instance methods (inline + impl-block forms)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_instance_method_reads_self_field() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+
+          fn first(self) -> Int
+            self.x
+          end
+        end
+
+        Point{x: 7, y: 3}.first()
+        ";
+
+    let value = evaluate_script(&dedent(source));
+    assert_eq!(value, Value::Int(7));
+}
+
+#[test]
+fn impl_block_instance_method_reads_self_field() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        impl Point
+          fn second(self) -> Int
+            self.y
+          end
+        end
+
+        Point{x: 7, y: 3}.second()
+        ";
+
+    let value = evaluate_script(&dedent(source));
+    assert_eq!(value, Value::Int(3));
+}
+
+#[test]
+fn instance_method_with_explicit_arg_combines_self_and_arg() {
+    let source = "
+        struct Counter
+          n: Int
+
+          fn add(self, delta: Int) -> Int
+            self.n + delta
+          end
+        end
+
+        Counter{n: 10}.add(5)
+        ";
+
+    let value = evaluate_script(&dedent(source));
+    assert_eq!(value, Value::Int(15));
+}
+
+#[test]
+fn instance_method_self_field_then_field_get_chains() {
+    let source = "
+        struct Inner
+          n: Int
+        end
+
+        struct Outer
+          inner: Inner
+
+          fn unwrap(self) -> Inner
+            self.inner
+          end
+        end
+
+        Outer{inner: Inner{n: 42}}.unwrap().n
         ";
 
     let value = evaluate_script(&dedent(source));

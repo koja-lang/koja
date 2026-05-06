@@ -18,5 +18,6 @@
 
 pub(crate) mod collect;
 pub(crate) mod lift_signatures;
+pub(crate) mod local_scope;
 pub(crate) mod resolve;
 pub(crate) mod seal;

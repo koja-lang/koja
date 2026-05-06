@@ -206,7 +206,7 @@ impl<'a> Lowerer<'a> {
                     return Ok((open, operand, ty));
                 }
             }
-            ExprKind::Self_ => {
+            ExprKind::Self_ { .. } => {
                 if let Some((operand, ty)) = self.lower_local_load_or_stub(builder, open, "self") {
                     return Ok((Some(open), operand, ty));
                 }

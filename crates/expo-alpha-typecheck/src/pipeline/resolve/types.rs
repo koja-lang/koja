@@ -30,10 +30,11 @@ pub(super) fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &
 /// `Int` rather than an opaque `#0`.
 pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     match ty.resolution {
-        Resolution::Unresolved => "<unresolved>".to_string(),
         Resolution::Global(id) => match registry.get(id) {
             Some(entry) => entry.identifier.last().to_string(),
             None => format!("<id {id}>"),
         },
+        Resolution::Local(local_id) => format!("<local {local_id}>"),
+        Resolution::Unresolved => "<unresolved>".to_string(),
     }
 }

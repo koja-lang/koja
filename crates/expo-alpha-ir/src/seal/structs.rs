@@ -125,6 +125,9 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             IRInstruction::BinaryOp { .. }
             | IRInstruction::Call { .. }
             | IRInstruction::Const { .. }
+            | IRInstruction::LocalDecl { .. }
+            | IRInstruction::LocalRead { .. }
+            | IRInstruction::LocalWrite { .. }
             | IRInstruction::UnaryOp { .. } => {}
         }
     }

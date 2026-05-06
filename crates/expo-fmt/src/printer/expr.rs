@@ -16,7 +16,7 @@ impl<'a> Printer<'a> {
         match &expr.kind {
             ExprKind::Literal { value } => literal_to_doc(value),
             ExprKind::Ident { name, .. } => text(name.clone()),
-            ExprKind::Self_ => text("self"),
+            ExprKind::Self_ { .. } => text("self"),
 
             ExprKind::Binary {
                 op: op @ (BinOp::Or | BinOp::And),

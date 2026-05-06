@@ -31,6 +31,7 @@
 mod cfg;
 mod error;
 mod function;
+mod local;
 mod lower;
 mod merge;
 mod package;
@@ -45,6 +46,7 @@ pub use function::{
     FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
     IRTerminator,
 };
+pub use local::IRLocalId;
 pub use package::IRPackage;
 pub use program::{IRProgram, lower_program};
 pub use script::{IRScript, lower_script};

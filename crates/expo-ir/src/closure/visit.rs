@@ -190,7 +190,7 @@ where
             }
             visit_statements(after_body, visitor);
         }
-        ExprKind::Self_ => {}
+        ExprKind::Self_ { .. } => {}
         ExprKind::ShortClosure { body, .. } => visit_expr(body, visitor),
         ExprKind::Spawn { expr: inner } => visit_expr(inner, visitor),
         ExprKind::String { parts, .. } => {

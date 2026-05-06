@@ -26,8 +26,8 @@
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRProgram,
-    IRScript, IRTerminator, ValueId,
+    ConstValue, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRLocalId,
+    IRProgram, IRScript, IRTerminator, ValueId,
 };
 
 use crate::error::RuntimeError;
@@ -49,8 +49,29 @@ impl Interpreter {
     /// value (or [`Value::Unit`] for an empty / non-expression-trailing
     /// body).
     pub fn run_script(script: IRScript) -> Result<Value, RuntimeError> {
-        let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
+        let mut frame = Frame::new();
         execute_blocks(&script.blocks, &mut frame, &script)
+    }
+}
+
+/// Per-call execution frame. `values` is the SSA `ValueId -> Value`
+/// table the per-instruction handlers thread through; `locals` is
+/// the `IRLocalId -> Value` storage `LocalRead` / `LocalWrite` go
+/// through. Splitting them keeps the two namespaces honest — slot
+/// identity (a `LocalRead` of slot `local_3`) never collides with
+/// SSA identity (a `BinaryOp` defining `v3`), even though both
+/// happen to be tiny `u32` keys today.
+struct Frame {
+    values: BTreeMap<ValueId, Value>,
+    locals: BTreeMap<IRLocalId, Value>,
+}
+
+impl Frame {
+    fn new() -> Self {
+        Self {
+            values: BTreeMap::new(),
+            locals: BTreeMap::new(),
+        }
     }
 }
 
@@ -79,6 +100,12 @@ impl CallResolver for IRScript {
 /// its param `ValueId`s. Multi-block bodies dispatch through
 /// [`execute_blocks`]; `@intrinsic`-tagged functions short-circuit
 /// to the hand-written handler in [`crate::intrinsics`].
+///
+/// Param promotion (the entry block's `LocalDecl` + `LocalWrite` per
+/// param) means the body never reads the raw `param.id` directly —
+/// it reads the `IRLocalId` slot the promotion populates. Seeding
+/// the SSA `values` map is still required so the entry block's
+/// `LocalWrite { value: param.id }` can resolve.
 fn execute_function<R: CallResolver>(
     function: &IRFunction,
     args: Vec<Value>,
@@ -95,9 +122,9 @@ fn execute_function<R: CallResolver>(
     if function.kind == FunctionKind::Intrinsic {
         return intrinsics::dispatch(function.symbol.mangled(), &args);
     }
-    let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
+    let mut frame = Frame::new();
     for (param, value) in function.params.iter().zip(args.into_iter()) {
-        frame.insert(param.id, value);
+        frame.values.insert(param.id, value);
     }
 
     execute_blocks(&function.blocks, &mut frame, resolver)
@@ -111,7 +138,7 @@ fn execute_function<R: CallResolver>(
 /// validated.
 fn execute_blocks<R: CallResolver>(
     blocks: &[IRBasicBlock],
-    frame: &mut BTreeMap<ValueId, Value>,
+    frame: &mut Frame,
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     let mut current = blocks
@@ -130,7 +157,7 @@ fn execute_blocks<R: CallResolver>(
                 then_block,
                 else_block,
             } => {
-                let cond_value = lookup(frame, *cond)?;
+                let cond_value = lookup(&frame.values, *cond)?;
                 let Value::Bool(b) = cond_value else {
                     return Err(RuntimeError::TypeMismatch {
                         detail: format!("cond_branch expects a Bool condition; got {cond_value}",),
@@ -139,7 +166,7 @@ fn execute_blocks<R: CallResolver>(
                 current = if b { *then_block } else { *else_block };
             }
             IRTerminator::Return { value: None } => return Ok(Value::Unit),
-            IRTerminator::Return { value: Some(id) } => return lookup(frame, *id),
+            IRTerminator::Return { value: Some(id) } => return lookup(&frame.values, *id),
         }
     }
 }
@@ -153,21 +180,21 @@ fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {
 
 fn execute_instruction<R: CallResolver>(
     instruction: &IRInstruction,
-    frame: &mut BTreeMap<ValueId, Value>,
+    frame: &mut Frame,
     resolver: &R,
 ) -> Result<(), RuntimeError> {
     match instruction {
         IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
-            let lhs_value = lookup(frame, *lhs)?;
-            let rhs_value = lookup(frame, *rhs)?;
+            let lhs_value = lookup(&frame.values, *lhs)?;
+            let rhs_value = lookup(&frame.values, *rhs)?;
             let result = apply_binary_op(*op, lhs_value, rhs_value)?;
-            frame.insert(*dest, result);
+            frame.values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::Call { dest, callee, args } => {
             let mut arg_values = Vec::with_capacity(args.len());
             for arg in args {
-                arg_values.push(lookup(frame, *arg)?);
+                arg_values.push(lookup(&frame.values, *arg)?);
             }
             let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
                 panic!(
@@ -176,11 +203,11 @@ fn execute_instruction<R: CallResolver>(
                 )
             });
             let result = execute_function(callee_fn, arg_values, resolver)?;
-            frame.insert(*dest, result);
+            frame.values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::Const { dest, value } => {
-            frame.insert(*dest, materialize_const(value));
+            frame.values.insert(*dest, materialize_const(value));
             Ok(())
         }
         IRInstruction::FieldGet {
@@ -190,7 +217,7 @@ fn execute_instruction<R: CallResolver>(
             field_type: _,
             struct_symbol: _,
         } => {
-            let base_value = lookup(frame, *base)?;
+            let base_value = lookup(&frame.values, *base)?;
             let Value::Struct { fields, .. } = base_value else {
                 return Err(RuntimeError::TypeMismatch {
                     detail: format!("field_get expects a Struct receiver; got {base_value}",),
@@ -205,15 +232,35 @@ fn execute_instruction<R: CallResolver>(
                          seal invariant violation",
                     )
                 });
-            frame.insert(*dest, field);
+            frame.values.insert(*dest, field);
+            Ok(())
+        }
+        // Slot identity is established by `LocalWrite`; no map entry
+        // is required up front. The seal pass guarantees a `LocalWrite`
+        // always runs before the matching `LocalRead`, so a missing
+        // slot here would be a compiler bug.
+        IRInstruction::LocalDecl { .. } => Ok(()),
+        IRInstruction::LocalRead { dest, local, .. } => {
+            let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
+                panic!(
+                    "interpreter: `LocalRead` of `{local}` before its `LocalWrite` — \
+                     seal invariant violation",
+                )
+            });
+            frame.values.insert(*dest, value);
+            Ok(())
+        }
+        IRInstruction::LocalWrite { local, value } => {
+            let resolved = lookup(&frame.values, *value)?;
+            frame.locals.insert(*local, resolved);
             Ok(())
         }
         IRInstruction::StructInit { dest, fields, ty } => {
             let mut materialized = Vec::with_capacity(fields.len());
             for field in fields {
-                materialized.push(lookup(frame, field.value)?);
+                materialized.push(lookup(&frame.values, field.value)?);
             }
-            frame.insert(
+            frame.values.insert(
                 *dest,
                 Value::Struct {
                     symbol: ty.clone(),
@@ -223,16 +270,16 @@ fn execute_instruction<R: CallResolver>(
             Ok(())
         }
         IRInstruction::UnaryOp { dest, op, operand } => {
-            let operand_value = lookup(frame, *operand)?;
+            let operand_value = lookup(&frame.values, *operand)?;
             let result = apply_unary_op(*op, operand_value)?;
-            frame.insert(*dest, result);
+            frame.values.insert(*dest, result);
             Ok(())
         }
     }
 }
 
-fn lookup(frame: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, RuntimeError> {
-    frame
+fn lookup(values: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, RuntimeError> {
+    values
         .get(&id)
         .cloned()
         .ok_or(RuntimeError::ValueUndefined { id })

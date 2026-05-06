@@ -555,7 +555,7 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 }
             }
         }
-        ExprKind::Literal { .. } | ExprKind::Self_ => {}
+        ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
     }
     None
 }
@@ -776,7 +776,7 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
                 .find_map(|f| find_expr_at_inner(&f.value, line, col)),
             EnumConstructionData::Unit => None,
         },
-        ExprKind::Literal { .. } | ExprKind::Self_ | ExprKind::Ident { .. } => None,
+        ExprKind::Literal { .. } | ExprKind::Self_ { .. } | ExprKind::Ident { .. } => None,
     };
 
     Some(child.unwrap_or(expr))

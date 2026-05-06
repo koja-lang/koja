@@ -202,7 +202,9 @@ fn extern_fn_without_body_surfaces_feature_gap_diagnostic() {
 /// the final [`LowerError::Diagnostics`] carries *only* the diagnostic
 /// from the function that actually failed. Pins the per-function
 /// fail-fast contract so a single bad function doesn't mask issues in
-/// other ones and doesn't spew spurious errors either.
+/// other ones and doesn't spew spurious errors either. Uses `break`
+/// (still an IR-only feature gap that passes alpha typecheck) so
+/// `broken` trips at lower while `main` lowers cleanly.
 #[test]
 fn partial_failure_reports_only_the_failing_function_diagnostic() {
     let source = "
@@ -211,7 +213,7 @@ fn partial_failure_reports_only_the_failing_function_diagnostic() {
         end
 
         fn broken
-          x = 1
+          break
         end
         ";
 
@@ -223,7 +225,7 @@ fn partial_failure_reports_only_the_failing_function_diagnostic() {
         "expected a single diagnostic from the failing fn, got: {messages:?}",
     );
     assert!(
-        messages[0].contains("assignment statements"),
-        "expected assignment-statement diagnostic from `broken`, got: {messages:?}",
+        messages[0].contains("`break` statements"),
+        "expected break diagnostic from `broken`, got: {messages:?}",
     );
 }

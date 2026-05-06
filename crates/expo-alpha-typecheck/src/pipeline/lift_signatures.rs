@@ -29,7 +29,7 @@ use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::registry::{
-    FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam, ResolvedStructField,
+    Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam, ResolvedStructField,
     StructDefinition,
 };
 
@@ -43,7 +43,14 @@ pub(crate) fn lift_signatures(
         match item {
             Item::Function(function) => {
                 let identifier = Identifier::new(package, vec![function.name.clone()]);
-                lift_function_with_identifier(function, identifier, package, registry, diagnostics);
+                lift_function_with_identifier(
+                    function,
+                    identifier,
+                    SelfContext::None,
+                    package,
+                    registry,
+                    diagnostics,
+                );
             }
             Item::Struct(decl) => {
                 lift_struct(decl, package, registry, diagnostics);
@@ -56,6 +63,16 @@ pub(crate) fn lift_signatures(
     }
 }
 
+/// Whether a function being lifted may declare a `self` receiver. When
+/// `Struct(_)`, `lift_param` lifts `Param::Self_` to a real
+/// [`ResolvedParam`] typed by the enclosing struct and marks the
+/// signature as [`Dispatch::Instance`].
+#[derive(Clone, Copy)]
+enum SelfContext<'a> {
+    None,
+    Struct(&'a Identifier),
+}
+
 fn lift_struct(
     decl: &StructDecl,
     package: &str,
@@ -63,10 +80,18 @@ fn lift_struct(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     lift_struct_definition(decl, package, registry, diagnostics);
+    let struct_identifier = Identifier::new(package, vec![decl.name.clone()]);
     for function in &decl.functions {
         let method_identifier =
             Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
-        lift_function_with_identifier(function, method_identifier, package, registry, diagnostics);
+        lift_function_with_identifier(
+            function,
+            method_identifier,
+            SelfContext::Struct(&struct_identifier),
+            package,
+            registry,
+            diagnostics,
+        );
     }
 }
 
@@ -131,7 +156,14 @@ fn lift_impl(
             package,
             vec![target_name.to_string(), function.name.clone()],
         );
-        lift_function_with_identifier(function, method_identifier, package, registry, diagnostics);
+        lift_function_with_identifier(
+            function,
+            method_identifier,
+            SelfContext::Struct(&target_identifier),
+            package,
+            registry,
+            diagnostics,
+        );
     }
 }
 
@@ -144,11 +176,14 @@ fn impl_target_name(target: &TypeExpr) -> Option<&str> {
 
 /// Resolve a function's param + return types and stamp the lifted
 /// [`FunctionSignature`] onto its registry entry. Shared by all three
-/// sources of functions (top-level, inline static methods, impl-block
-/// static methods). The caller picks the [`Identifier`].
+/// sources of functions (top-level, inline methods, impl-block
+/// methods). The caller picks the [`Identifier`] and supplies a
+/// `self_context` so [`lift_param`] knows whether `Param::Self_` is
+/// legal in this position and which struct identity types it.
 fn lift_function_with_identifier(
     function: &Function,
     identifier: Identifier,
+    self_context: SelfContext<'_>,
     package: &str,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -168,6 +203,7 @@ fn lift_function_with_identifier(
         params.push(lift_param(
             param,
             &identifier,
+            self_context,
             package,
             registry,
             diagnostics,
@@ -179,14 +215,20 @@ fn lift_function_with_identifier(
         None => registry.primitive("Unit"),
     };
 
+    let dispatch = match function.params.first() {
+        Some(Param::Self_ { .. }) => Dispatch::Instance,
+        _ => Dispatch::Static,
+    };
+
     let signature = FunctionSignature {
+        dispatch,
         params,
         return_type,
     };
 
     let Some((id, entry)) = registry.lookup(&identifier) else {
-        // Collect rejected this function (e.g. `self` receiver,
-        // collision); nothing to stamp a signature on.
+        // Collect rejected this function (e.g. `self` receiver on a
+        // top-level fn, collision); nothing to stamp a signature on.
         return;
     };
     // A duplicate function declaration in the same package is
@@ -204,19 +246,36 @@ fn lift_function_with_identifier(
 fn lift_param(
     param: &Param,
     identifier: &Identifier,
+    self_context: SelfContext<'_>,
     package: &str,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedParam {
     match param {
         Param::Self_ { span, .. } => {
-            diagnostics.push(Diagnostic::error(
-                format!("alpha typecheck does not yet support `self` receivers (`{identifier}`)",),
-                *span,
-            ));
+            let SelfContext::Struct(struct_identifier) = self_context else {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "`self` receiver is only valid inside `struct` or `impl` blocks \
+                         (on `{identifier}`)"
+                    ),
+                    *span,
+                ));
+                return ResolvedParam {
+                    name: "self".to_string(),
+                    ty: ResolvedType::unresolved(),
+                };
+            };
+            let Some((struct_id, _)) = registry.lookup(struct_identifier) else {
+                panic!(
+                    "lift_signatures: enclosing struct `{struct_identifier}` missing from \
+                     registry while lifting `self` on `{identifier}` — collect invariant \
+                     violation",
+                );
+            };
             ResolvedParam {
                 name: "self".to_string(),
-                ty: ResolvedType::unresolved(),
+                ty: ResolvedType::leaf(Resolution::Global(struct_id)),
             }
         }
         Param::Regular {
@@ -225,6 +284,7 @@ fn lift_param(
             type_expr,
             default,
             span,
+            ..
         } => {
             if !matches!(mode, PassMode::Borrow) {
                 diagnostics.push(Diagnostic::error(
@@ -259,7 +319,7 @@ fn lift_param(
 /// `package`. Everything else diagnoses and returns
 /// [`ResolvedType::unresolved`] so the surrounding signature shape
 /// (arity, param / field names) stays accurate.
-pub(super) fn resolve_type_expr(
+pub(crate) fn resolve_type_expr(
     type_expr: &TypeExpr,
     package: &str,
     registry: &GlobalRegistry,

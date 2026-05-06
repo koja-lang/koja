@@ -5,7 +5,9 @@
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../../design/COMPILER-NORTHSTAR.md
 
-use expo_ast::ast::{Expr, ExprKind, File, Function, ImplMember, Item, Statement, StringPart};
+use expo_ast::ast::{
+    AssignTarget, Expr, ExprKind, File, Function, ImplMember, Item, Statement, StringPart,
+};
 use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
 
@@ -61,14 +63,45 @@ fn seal_function(function: &Function) {
 
 fn seal_statement(stmt: &Statement) {
     match stmt {
-        Statement::Assignment { value, .. } | Statement::CompoundAssign { value, .. } => {
+        Statement::Assignment {
+            span,
+            target,
+            value,
+            ..
+        } => {
+            seal_assign_target(target, *span);
             seal_expr(value);
         }
         Statement::Break { .. } | Statement::Return { value: None, .. } => {}
+        Statement::CompoundAssign { value, .. } => seal_expr(value),
         Statement::Expr(expr) => seal_expr(expr),
         Statement::Return {
             value: Some(value), ..
         } => seal_expr(value),
+    }
+}
+
+/// Assignment targets must be single-segment [`AssignTarget::LValue`]s
+/// — the resolver rejected pattern destructuring and dotted lvalues
+/// upstream, so reaching seal with anything else is a compiler bug.
+fn seal_assign_target(target: &AssignTarget, statement_span: Span) {
+    match target {
+        AssignTarget::LValue(lvalue) => {
+            if lvalue.segments.len() != 1 {
+                seal_panic(
+                    &format!(
+                        "assignment target has {} segments; resolver rejects multi-segment \
+                         targets",
+                        lvalue.segments.len(),
+                    ),
+                    lvalue.span,
+                );
+            }
+        }
+        AssignTarget::Pattern(_) => seal_panic(
+            "assignment target is a destructuring pattern; resolver rejects this shape",
+            statement_span,
+        ),
     }
 }
 
@@ -94,6 +127,9 @@ fn seal_expr(expr: &Expr) {
         ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver),
         ExprKind::Group { expr: inner } => seal_expr(inner),
         ExprKind::Ident { name, resolution } => {
+            // Both `Resolution::Global` (struct names, callees) and
+            // `Resolution::Local` (param/local references) satisfy seal.
+            // Only `Resolution::Unresolved` is a violation.
             if matches!(resolution, Resolution::Unresolved) {
                 seal_panic(
                     &format!("identifier `{name}` has Unresolved resolution after typecheck"),
@@ -117,6 +153,7 @@ fn seal_expr(expr: &Expr) {
             }
         }
         ExprKind::Literal { .. } => {}
+        ExprKind::Self_ { .. } => {}
         ExprKind::MethodCall { receiver, args, .. } => {
             // Static method calls: receiver must resolve like any
             // other `Ident` reference (its `resolution` is the

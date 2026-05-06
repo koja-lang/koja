@@ -71,6 +71,10 @@ pub(crate) fn emit_as_main<'ctx>(
     let function = ctx
         .module
         .add_function(ENTRY_SYMBOL, signature, Some(Linkage::External));
+    // The script-mode body is its own function from a slot-identity
+    // perspective; flush any stragglers from a prior compile or
+    // helper so `LocalDecl` registers cleanly here.
+    ctx.reset_locals();
     let block_map = declare_blocks(ctx, function, blocks);
     let return_block_id = find_return_block(blocks)?;
 

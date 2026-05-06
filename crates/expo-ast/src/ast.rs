@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use crate::identifier::{Resolution, ResolvedType, TypeIdentifier};
+use crate::identifier::{LocalId, Resolution, ResolvedType, TypeIdentifier};
 use crate::span::Span;
 use crate::types::Type;
 
@@ -313,12 +313,16 @@ pub struct ProtocolMethod {
 }
 
 /// A function parameter: either a `self` receiver or a named parameter.
+///
+/// Both variants carry a `local_id: Option<LocalId>` slot the parser
+/// leaves as `None`; alpha typecheck's `resolve_function` stamps it in
+/// when the param enters the per-function `LocalScope`. IR lower reads
+/// the stamped id (translating to `IRLocalId`) so body references and
+/// param-promotion `LocalDecl`/`LocalWrite`s share the same handle
+/// without crate-boundary leakage.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Param {
-    /// The `self` receiver: `self` ([`PassMode::Borrow`]) or `move self`
-    /// ([`PassMode::Move`]).
-    Self_ { mode: PassMode, span: Span },
     /// A regular named parameter with an optional default value.
     /// `move name: Type` uses [`PassMode::Move`]; plain `name: Type` uses
     /// [`PassMode::Borrow`].
@@ -327,6 +331,14 @@ pub enum Param {
         name: String,
         type_expr: TypeExpr,
         default: Option<Expr>,
+        local_id: Option<LocalId>,
+        span: Span,
+    },
+    /// The `self` receiver: `self` ([`PassMode::Borrow`]) or `move self`
+    /// ([`PassMode::Move`]).
+    Self_ {
+        mode: PassMode,
+        local_id: Option<LocalId>,
         span: Span,
     },
 }
@@ -421,8 +433,17 @@ pub enum CompoundOp {
 }
 
 /// A dotted lvalue path used in assignments: `x`, `point.x`, `self.name`.
+///
+/// `local_id` is `None` after parse and stamped by typecheck-resolve
+/// when the segments resolve to a single-segment local binding (`x`,
+/// not `point.x`). The IR lower path keys its `LocalDecl` /
+/// `LocalWrite` instructions on the [`LocalId`] and never reaches
+/// back into [`Self::segments`] — keeps the seam clean and lets a
+/// future block-scoping slice rename via the id without the surface
+/// `String` going stale.
 #[derive(Debug, Clone)]
 pub struct LValue {
+    pub local_id: Option<LocalId>,
     pub segments: Vec<String>,
     pub span: Span,
 }
@@ -633,8 +654,12 @@ pub enum ExprKind {
         after_timeout: Option<Box<Expr>>,
         after_body: Vec<Statement>,
     },
-    /// A self reference: `self`.
-    Self_,
+    /// A self reference: `self`. `local_id` is `None` after parse and
+    /// stamped by typecheck-resolve to the enclosing instance method's
+    /// `self` slot. IR lower keys its `LocalRead` on the same id, so
+    /// `self.field` and `self` references thread through the same
+    /// local-slot vocabulary as body-declared locals.
+    Self_ { local_id: Option<LocalId> },
     /// An inline closure: `x -> x * 2`.
     ShortClosure {
         params: Vec<ClosureParam>,

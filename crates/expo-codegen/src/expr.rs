@@ -232,7 +232,7 @@ pub fn compile_expr<'ctx>(
             condition, body, ..
         } => compile_while(compiler, condition, body, function),
 
-        ExprKind::Self_ => {
+        ExprKind::Self_ { .. } => {
             let (ptr, ty, _) = compiler
                 .fn_state
                 .variables

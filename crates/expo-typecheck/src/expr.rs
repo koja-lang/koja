@@ -491,7 +491,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
 
         ExprKind::BinaryLiteral { segments } => infer_binary_literal(segments, span, ctx, ce),
 
-        ExprKind::Self_ => {
+        ExprKind::Self_ { .. } => {
             if let Some(ty) = ce.get_type("self") {
                 ty.clone()
             } else {

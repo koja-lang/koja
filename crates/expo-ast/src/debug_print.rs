@@ -557,7 +557,7 @@ impl<'a> Printer<'a> {
                     });
                 }
             }
-            ExprKind::Self_ => {}
+            ExprKind::Self_ { .. } => {}
             ExprKind::ShortClosure { params, body } => {
                 if !params.is_empty() {
                     self.section("params", |p| {
@@ -685,7 +685,7 @@ impl<'a> Printer<'a> {
 
     fn param(&mut self, param: &Param) {
         match param {
-            Param::Self_ { mode, span } => {
+            Param::Self_ { mode, span, .. } => {
                 self.header(&format!("Self ({})", format_pass_mode(*mode)), *span);
             }
             Param::Regular {
@@ -694,6 +694,7 @@ impl<'a> Printer<'a> {
                 type_expr,
                 default,
                 span,
+                ..
             } => {
                 let header = format!(
                     "Regular {}: {} ({})",
@@ -909,8 +910,9 @@ fn expr_header(expr: &Expr) -> String {
         ExprKind::For { .. } => String::from("For"),
         ExprKind::Group { .. } => String::from("Group"),
         ExprKind::Ident { name, resolution } => match resolution {
-            Resolution::Unresolved => format!("Ident {name}"),
             Resolution::Global(id) => format!("Ident {name} -> {id}"),
+            Resolution::Local(local_id) => format!("Ident {name} -> local {local_id}"),
+            Resolution::Unresolved => format!("Ident {name}"),
         },
         ExprKind::If { .. } => String::from("If"),
         ExprKind::List { elements } => format!("List ({} elems)", elements.len()),
@@ -920,7 +922,7 @@ fn expr_header(expr: &Expr) -> String {
         ExprKind::Match { .. } => String::from("Match"),
         ExprKind::MethodCall { method, .. } => format!("MethodCall .{method}"),
         ExprKind::Receive { .. } => String::from("Receive"),
-        ExprKind::Self_ => String::from("Self"),
+        ExprKind::Self_ { .. } => String::from("Self"),
         ExprKind::ShortClosure { .. } => String::from("ShortClosure"),
         ExprKind::Spawn { .. } => String::from("Spawn"),
         ExprKind::String { multiline, .. } => {
@@ -954,8 +956,9 @@ fn expr_header(expr: &Expr) -> String {
 /// states are visible during development.
 fn format_resolved_type(ty: &ResolvedType) -> String {
     let head = match ty.resolution {
-        Resolution::Unresolved => String::from("?"),
         Resolution::Global(id) => id.to_string(),
+        Resolution::Local(local_id) => format!("local {local_id}"),
+        Resolution::Unresolved => String::from("?"),
     };
     if ty.type_args.is_empty() {
         head
@@ -991,7 +994,7 @@ fn expr_has_children(kind: &ExprKind) -> bool {
         ExprKind::Map { entries } => !entries.is_empty(),
         ExprKind::String { parts, .. } => !parts.is_empty(),
         ExprKind::StructConstruction { fields, .. } => !fields.is_empty(),
-        ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ => false,
+        ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => false,
     }
 }
 

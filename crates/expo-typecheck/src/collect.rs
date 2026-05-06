@@ -1468,7 +1468,7 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
         }
         ExprKind::Ident { .. }
         | ExprKind::Literal { .. }
-        | ExprKind::Self_
+        | ExprKind::Self_ { .. }
         | ExprKind::EnumConstruction { .. } => {}
     }
 }
@@ -1709,7 +1709,7 @@ fn substitute_self_in_expr(expr: &mut Expr, target: &str) {
         }
         ExprKind::Ident { .. }
         | ExprKind::Literal { .. }
-        | ExprKind::Self_
+        | ExprKind::Self_ { .. }
         | ExprKind::EnumConstruction { .. } => {}
     }
 }

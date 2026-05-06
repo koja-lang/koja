@@ -611,7 +611,7 @@ impl<'a> Lowerer<'a> {
 pub fn receiver_variable_name(receiver: &Expr) -> Option<String> {
     match &receiver.kind {
         ExprKind::Ident { name, .. } => Some(name.clone()),
-        ExprKind::Self_ => Some("self".to_string()),
+        ExprKind::Self_ { .. } => Some("self".to_string()),
         _ => None,
     }
 }

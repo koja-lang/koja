@@ -20,9 +20,10 @@ use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, Global
 use expo_ast::ast::{
     Diagnostic, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_intrinsic,
 };
-use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 
-use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSymbol};
+use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
+use crate::local::IRLocalId;
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
@@ -168,16 +169,13 @@ pub(super) fn lower_function_with_identifier(
     }
 
     let mut ctx = FnLowerCtx::new();
-    let params = lower_params(
-        function,
-        &identifier,
-        signature,
-        registry,
-        diagnostics,
-        &mut ctx,
-    )?;
 
+    // Intrinsic bodies are synthesized at emit time — no entry block
+    // and no parameter promotion. Mint the params (still need the
+    // SSA `ValueId`s and `local_id`s for backend signatures) and
+    // exit before opening the entry block.
     if intrinsic {
+        let params = lower_intrinsic_params(function, signature, registry, &mut ctx)?;
         return Some(IRFunction {
             blocks: Vec::new(),
             kind: FunctionKind::Intrinsic,
@@ -195,7 +193,21 @@ pub(super) fn lower_function_with_identifier(
         return None;
     };
 
+    // Open the entry block FIRST so parameter promotion has a target
+    // to append `LocalDecl` + `LocalWrite` into. Body lowering
+    // continues in the same entry block (or forks off it via control
+    // flow); subsequent `LocalDecl`s emitted from nested blocks
+    // append back here through `ctx.entry_block()`.
     let entry = ctx.fresh_block("entry");
+    let params = lower_params(
+        function,
+        &identifier,
+        signature,
+        registry,
+        diagnostics,
+        &mut ctx,
+    )?;
+
     let flow = lower_body(body, &mut ctx, entry, registry, diagnostics).ok()?;
     finalize_open_flow(&mut ctx, flow);
 
@@ -209,13 +221,21 @@ pub(super) fn lower_function_with_identifier(
     })
 }
 
-/// Allocate one [`ValueId`] per regular parameter in declaration
-/// order, paired with its IRType pulled from the lifted function
-/// signature on the registry. Pre-allocation ensures every param id
-/// is strictly less than any body-produced id — body lowering stays
-/// naturally topological on the sealed AST. `self` receivers are a
-/// feature gap, not a compiler bug: record a diagnostic and bail on
-/// this function.
+/// Allocate one [`ValueId`] per parameter in declaration order
+/// (regular and `self` alike), paired with its IRType pulled from
+/// the lifted function signature on the registry, and promote each
+/// param into a local-variable slot via a `LocalDecl` + `LocalWrite`
+/// pair appended to the entry block. Pre-allocation ensures every
+/// param id is strictly less than any body-produced id — body
+/// lowering stays naturally topological on the sealed AST.
+///
+/// `self` is treated identically to a regular param at this layer:
+/// it carries the struct's [`IRType`] in the lifted signature, the
+/// AST has stamped a `local_id` on `Param::Self_`, and the body's
+/// `ExprKind::Self_` references resolve through the same `LocalRead`
+/// path body-declared locals use. Returns `None` only when the AST
+/// is missing a `local_id` on a param — that's a typecheck-resolve
+/// invariant violation, not a feature gap.
 ///
 /// [`ValueId`]: crate::types::ValueId
 fn lower_params(
@@ -227,26 +247,81 @@ fn lower_params(
     ctx: &mut FnLowerCtx,
 ) -> Option<Vec<IRFunctionParam>> {
     let mut params = Vec::with_capacity(function.params.len());
-    let mut signature_index = 0;
-    for param in &function.params {
-        match param {
-            Param::Regular { .. } => {
-                let resolved = &signature.params[signature_index].ty;
-                let ty = resolved_type_to_ir_type(resolved, registry);
-                signature_index += 1;
-                let id = ctx.fresh_value(ty.clone());
-                params.push(IRFunctionParam { id, ty });
-            }
-            Param::Self_ { span, .. } => {
-                diagnostics.push(Diagnostic::error(
-                    format!("alpha IR does not yet lower `self` receivers (on `{identifier}`)",),
-                    *span,
-                ));
-                return None;
-            }
-        }
+    for (index, param) in function.params.iter().enumerate() {
+        let local_id = param_local_id(param).unwrap_or_else(|| {
+            panic!(
+                "alpha IR lower: `{identifier}` parameter #{index} carries no `LocalId` — \
+                 typecheck resolve must stamp one for every param before lower runs",
+            )
+        });
+        let resolved = &signature.params[index].ty;
+        let ty = resolved_type_to_ir_type(resolved, registry);
+        let id = ctx.fresh_value(ty.clone());
+        let ir_local = IRLocalId::from_local_id(local_id);
+        let entry = ctx.entry_block();
+        ctx.cfg.append(
+            entry,
+            IRInstruction::LocalDecl {
+                local: ir_local,
+                ty: ty.clone(),
+            },
+        );
+        ctx.cfg.append(
+            entry,
+            IRInstruction::LocalWrite {
+                local: ir_local,
+                value: id,
+            },
+        );
+        ctx.mark_local_declared(ir_local);
+        params.push(IRFunctionParam {
+            id,
+            local_id: ir_local,
+            ty,
+        });
+    }
+    let _ = diagnostics;
+    Some(params)
+}
+
+/// Mint param `IRFunctionParam`s for an `@intrinsic`-tagged function
+/// without opening an entry block or emitting promotion instructions.
+/// Backends look the body up by mangled symbol and synthesize one
+/// from a hand-written emitter — they don't walk the (empty) blocks,
+/// so promotion would be dead vocabulary.
+fn lower_intrinsic_params(
+    function: &Function,
+    signature: &FunctionSignature,
+    registry: &GlobalRegistry,
+    ctx: &mut FnLowerCtx,
+) -> Option<Vec<IRFunctionParam>> {
+    let mut params = Vec::with_capacity(function.params.len());
+    for (index, param) in function.params.iter().enumerate() {
+        let local_id = param_local_id(param).unwrap_or_else(|| {
+            panic!(
+                "alpha IR lower: intrinsic parameter #{index} carries no `LocalId` — \
+                 typecheck resolve invariant violation",
+            )
+        });
+        let resolved = &signature.params[index].ty;
+        let ty = resolved_type_to_ir_type(resolved, registry);
+        let id = ctx.fresh_value(ty.clone());
+        params.push(IRFunctionParam {
+            id,
+            local_id: IRLocalId::from_local_id(local_id),
+            ty,
+        });
     }
     Some(params)
+}
+
+/// Pluck the AST [`LocalId`] off a param. Resolve stamps every param
+/// — `Some(_)` is the post-typecheck contract; `None` indicates an
+/// upstream invariant violation.
+fn param_local_id(param: &Param) -> Option<LocalId> {
+    match param {
+        Param::Regular { local_id, .. } | Param::Self_ { local_id, .. } => *local_id,
+    }
 }
 
 /// Lookup the lifted [`FunctionSignature`] for `identifier` in the

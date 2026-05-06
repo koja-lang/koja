@@ -8,6 +8,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::function::{FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction};
+use crate::local::IRLocalId;
 use crate::package::IRPackage;
 use crate::types::ValueId;
 
@@ -70,6 +71,64 @@ fn seal_function(function: &IRFunction) {
     for block in &function.blocks {
         seal_block(block, &owner, &seeded, &block_ids);
     }
+    seal_locals(function, &owner);
+}
+
+/// Per-function local-slot invariants:
+///
+/// - Every [`IRLocalId`] is `LocalDecl`'d exactly once. Two declarations
+///   for the same id would imply two slots claiming the same identity,
+///   which the lower pass should never emit.
+/// - Every `LocalRead` / `LocalWrite` references a previously declared
+///   `IRLocalId`. Block-local flow analysis is a follow-up; today the
+///   lower pass guarantees the `LocalDecl` lands in the entry block
+///   ahead of any read/write, so a function-wide membership check is
+///   tight enough.
+/// - Every parameter's [`crate::IRFunctionParam::local_id`] is among
+///   the declared set; param promotion at function entry must emit
+///   the matching `LocalDecl` so body references work uniformly with
+///   body-declared locals.
+fn seal_locals(function: &IRFunction, owner: &str) {
+    let mut declared: HashSet<IRLocalId> = HashSet::new();
+    for block in &function.blocks {
+        for inst in &block.instructions {
+            if let IRInstruction::LocalDecl { local, .. } = inst
+                && !declared.insert(*local)
+            {
+                seal_panic(&format!(
+                    "{owner} declares local slot `{local}` more than once",
+                ));
+            }
+        }
+    }
+    // Intrinsics carry params for backend signature shape but emit no
+    // body and therefore no `LocalDecl`s. Param promotion is a body
+    // concern; skip the membership check on the empty-blocks shape.
+    if function.kind == FunctionKind::Regular {
+        for param in &function.params {
+            if !declared.contains(&param.local_id) {
+                seal_panic(&format!(
+                    "{owner} parameter slot `{}` was never `LocalDecl`'d",
+                    param.local_id,
+                ));
+            }
+        }
+    }
+    for block in &function.blocks {
+        for inst in &block.instructions {
+            match inst {
+                IRInstruction::LocalRead { local, .. }
+                | IRInstruction::LocalWrite { local, .. }
+                    if !declared.contains(local) =>
+                {
+                    seal_panic(&format!(
+                        "{owner} references undeclared local slot `{local}`",
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Build the per-function block-id set used to validate every
@@ -98,13 +157,17 @@ pub(super) fn seal_block(
         for operand in instruction_operands(inst) {
             require_defined(operand, owner, &defined);
         }
-        if let IRInstruction::Const { value, .. } = inst {
-            require_supported_const(value, &|| {
-                format!("{owner} const instruction at {}", inst.dest())
-            });
+        if let IRInstruction::Const { value, dest } = inst {
+            require_supported_const(value, &|| format!("{owner} const instruction at {dest}"));
         }
-        if !defined.insert(inst.dest()) {
-            seal_panic(&format!("{owner} redefines value `{}`", inst.dest()));
+        // Local-slot instructions don't define a `ValueId` and so
+        // don't participate in the per-block defined-set walk; the
+        // slot-identity invariants (one decl per slot, etc.) are
+        // checked function-wide in `seal_locals`.
+        if let Some(dest) = inst.dest()
+            && !defined.insert(dest)
+        {
+            seal_panic(&format!("{owner} redefines value `{dest}`"));
         }
     }
     for operand in terminator_operands(&block.terminator) {

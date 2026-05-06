@@ -7,12 +7,13 @@
 //! variant that interacts with the [`GlobalRegistry`] beyond the
 //! type-side adapters in [`super::package`].
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, RegistryEntry};
+use expo_alpha_typecheck::{Dispatch, GlobalKind, GlobalRegistry, RegistryEntry};
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, StringPart};
-use expo_ast::identifier::{Identifier, Resolution};
+use expo_ast::identifier::{Identifier, LocalId, Resolution};
 use expo_ast::span::Span;
 
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
+use crate::local::IRLocalId;
 use crate::types::{ConstValue, IRType, ValueId};
 
 use super::control_flow::{lower_if, lower_unless};
@@ -62,6 +63,36 @@ pub(super) fn lower_expr(
             diagnostics,
         ),
         ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block, registry, diagnostics),
+        ExprKind::Ident { resolution, name } => {
+            let Resolution::Local(local_id) = resolution else {
+                panic!(
+                    "alpha IR lower: bare `Ident` `{name}` reaches lower with non-Local \
+                     resolution {resolution:?} — typecheck seal must have rejected this",
+                );
+            };
+            Ok(lower_local_read(
+                *local_id,
+                &expr.resolution,
+                ctx,
+                block,
+                registry,
+            ))
+        }
+        ExprKind::Self_ { local_id } => {
+            let local_id = local_id.unwrap_or_else(|| {
+                panic!(
+                    "alpha IR lower: `self` reaches lower without a stamped LocalId — \
+                     typecheck resolve invariant violation",
+                );
+            });
+            Ok(lower_local_read(
+                local_id,
+                &expr.resolution,
+                ctx,
+                block,
+                registry,
+            ))
+        }
         ExprKind::If {
             condition,
             then_body,
@@ -129,6 +160,32 @@ pub(super) fn lower_expr(
     }
 }
 
+/// Materialize a local-slot read. Translates the AST [`LocalId`] to
+/// the matching [`IRLocalId`], mints a fresh [`ValueId`] of the
+/// expression's static type, and appends the `LocalRead` to the
+/// open block. Used for both bare-`Ident` references and `self`
+/// references — both flow through the same per-function slot table.
+fn lower_local_read(
+    local_id: LocalId,
+    resolution: &expo_ast::identifier::ResolvedType,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+) -> (ValueId, IRBlockId) {
+    let ir_local = IRLocalId::from_local_id(local_id);
+    let ty = resolved_type_to_ir_type(resolution, registry);
+    let dest = ctx.fresh_value(ty.clone());
+    ctx.cfg.append(
+        block,
+        IRInstruction::LocalRead {
+            dest,
+            local: ir_local,
+            ty,
+        },
+    );
+    (dest, block)
+}
+
 /// Lower a `ExprKind::Call`. The seal contract guarantees the callee
 /// is a bare `Ident` whose inner `Resolution` is `Global(id)` — any
 /// deviation is a compiler bug, not a feature gap, so we panic rather
@@ -156,15 +213,23 @@ fn lower_call(
              seal invariant violation",
         )
     });
-    emit_call(entry, args, ctx, block, registry, diagnostics)
+    emit_call(entry, args, None, ctx, block, registry, diagnostics)
 }
 
-/// Lower a `ExprKind::MethodCall` of the static-dispatch shape
-/// (`Type.method(args)`). The seal contract guarantees the receiver
-/// is a bare `Ident` carrying the struct's `Resolution::Global(_)`;
-/// we rebuild the method's qualified [`Identifier`] by appending
-/// `method` to the struct entry's path, then thread through the same
-/// call-emission helper as bare calls.
+/// Lower a `ExprKind::MethodCall`. Branches on the receiver's
+/// resolved [`Dispatch`]:
+///
+/// - `Static` (`Type.method(args)`): the receiver is a bare `Ident`
+///   carrying the struct's `Resolution::Global(_)`. Rebuild the
+///   method's qualified [`Identifier`] by appending `method` to the
+///   struct entry's path; thread through `emit_call` with no
+///   prepended receiver.
+/// - `Instance` (`recv.method(args)`): lower the receiver expression
+///   to a `ValueId`, derive the struct id from its static type
+///   (`receiver.resolution`), look up `<Type>.<method>`, and thread
+///   through `emit_call` with the receiver `ValueId` prepended to
+///   the user's explicit args. The prepended id fills the method's
+///   `params[0]` (`self`).
 fn lower_method_call(
     receiver: &Expr,
     method: &str,
@@ -174,23 +239,19 @@ fn lower_method_call(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let ExprKind::Ident {
-        resolution, name, ..
-    } = &receiver.kind
-    else {
-        panic!(
-            "alpha IR lower: method call receiver must be a bare Ident after typecheck seal \
-             (got {:?})",
-            receiver.kind,
-        );
+    let (struct_id, prepend, current_block) = match method_dispatch_kind(receiver, registry) {
+        Dispatch::Static => {
+            let struct_id = receiver_struct_id_static(receiver);
+            (struct_id, None, block)
+        }
+        Dispatch::Instance => {
+            let (recv_id, next_block) = lower_expr(receiver, ctx, block, registry, diagnostics)?;
+            let struct_id = receiver_struct_id_instance(&receiver.resolution);
+            (struct_id, Some(recv_id), next_block)
+        }
     };
-    let Resolution::Global(struct_id) = resolution else {
-        panic!(
-            "alpha IR lower: method call receiver `{name}` has Unresolved resolution after \
-             typecheck seal",
-        );
-    };
-    let struct_entry = registry.get(*struct_id).unwrap_or_else(|| {
+
+    let struct_entry = registry.get(struct_id).unwrap_or_else(|| {
         panic!(
             "alpha IR lower: method call receiver id {struct_id} not present in the registry — \
              seal invariant violation",
@@ -205,16 +266,83 @@ fn lower_method_call(
              seal invariant violation",
         )
     });
-    emit_call(method_entry, args, ctx, block, registry, diagnostics)
+    emit_call(
+        method_entry,
+        args,
+        prepend,
+        ctx,
+        current_block,
+        registry,
+        diagnostics,
+    )
+}
+
+/// Decide the dispatch path by inspecting the receiver's shape.
+/// A bare `Ident` resolving to a struct names the struct itself
+/// (static dispatch); anything else is a value receiver
+/// (instance dispatch). Mirrors typecheck's `classify_receiver`
+/// without a typecheck-side dependency.
+fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch {
+    if let ExprKind::Ident {
+        resolution: Resolution::Global(id),
+        ..
+    } = &receiver.kind
+        && let Some(entry) = registry.get(*id)
+        && matches!(entry.kind, GlobalKind::Struct(_))
+    {
+        return Dispatch::Static;
+    }
+    Dispatch::Instance
+}
+
+/// Pull the struct's `GlobalRegistryId` off a static-dispatch
+/// receiver (a bare `Ident` whose `resolution` is the struct's id).
+fn receiver_struct_id_static(receiver: &Expr) -> expo_ast::identifier::GlobalRegistryId {
+    let ExprKind::Ident {
+        resolution, name, ..
+    } = &receiver.kind
+    else {
+        panic!(
+            "alpha IR lower: static method call receiver must be a bare Ident after typecheck \
+             seal (got {:?})",
+            receiver.kind,
+        );
+    };
+    let Resolution::Global(struct_id) = resolution else {
+        panic!(
+            "alpha IR lower: static method call receiver `{name}` has Unresolved resolution \
+             after typecheck seal",
+        );
+    };
+    *struct_id
+}
+
+/// Pull the struct's `GlobalRegistryId` off an instance-dispatch
+/// receiver's resolved type. Typecheck guarantees instance receivers
+/// resolve to a struct value; anything else is a seal violation.
+fn receiver_struct_id_instance(
+    resolution: &expo_ast::identifier::ResolvedType,
+) -> expo_ast::identifier::GlobalRegistryId {
+    let Resolution::Global(struct_id) = resolution.resolution else {
+        panic!(
+            "alpha IR lower: instance method receiver resolved to non-Global type \
+             ({resolution:?}) — typecheck seal must have rejected this",
+        );
+    };
+    struct_id
 }
 
 /// Shared tail of `lower_call` / `lower_method_call`: read the lifted
 /// signature off `entry`, lower each argument left-to-right, then
-/// append the `Call` instruction. Returns the destination value and
-/// the (possibly forked) trailing block.
+/// append the `Call` instruction. `prepend` is the receiver
+/// `ValueId` for instance dispatch (filling `params[0]` /
+/// `self`); `None` for bare calls and static method dispatch.
+/// Returns the destination value and the (possibly forked) trailing
+/// block.
 fn emit_call(
     entry: &RegistryEntry,
     args: &[Arg],
+    prepend: Option<ValueId>,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
@@ -232,7 +360,10 @@ fn emit_call(
     let return_ty = resolved_type_to_ir_type(&signature.return_type, registry);
     let callee_symbol = IRSymbol::from_identifier(&entry.identifier);
 
-    let mut lowered_args = Vec::with_capacity(args.len());
+    let mut lowered_args = Vec::with_capacity(args.len() + usize::from(prepend.is_some()));
+    if let Some(receiver) = prepend {
+        lowered_args.push(receiver);
+    }
     let mut current = block;
     for arg in args {
         let (value, next) = lower_expr(&arg.value, ctx, current, registry, diagnostics)?;
@@ -303,7 +434,7 @@ fn expr_kind_label(kind: &ExprKind) -> &'static str {
         ExprKind::Match { .. } => "match",
         ExprKind::MethodCall { .. } => "method call",
         ExprKind::Receive { .. } => "receive",
-        ExprKind::Self_ => "self reference",
+        ExprKind::Self_ { .. } => "self reference",
         ExprKind::ShortClosure { .. } => "short closure",
         ExprKind::Spawn { .. } => "spawn",
         ExprKind::String { .. } => "string",

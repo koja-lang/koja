@@ -304,7 +304,7 @@ impl Parser {
             TokenKind::Self_ => {
                 let start = self.current_span();
                 self.advance();
-                Expr::new(ExprKind::Self_, self.span_from(start))
+                Expr::new(ExprKind::Self_ { local_id: None }, self.span_from(start))
             }
 
             TokenKind::LParen => self.parse_paren_expr(),

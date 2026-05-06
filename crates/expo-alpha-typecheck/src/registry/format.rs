@@ -72,11 +72,12 @@ fn format_signature(sig: &FunctionSignature, registry: &GlobalRegistry) -> Strin
 
 fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     let head = match ty.resolution {
-        Resolution::Unresolved => "<unresolved>".to_string(),
         Resolution::Global(id) => match registry.get(id) {
             Some(entry) => entry.identifier.qualified_name(),
             None => format!("<id {id}>"),
         },
+        Resolution::Local(local_id) => format!("<local {local_id}>"),
+        Resolution::Unresolved => "<unresolved>".to_string(),
     };
     if ty.type_args.is_empty() {
         head

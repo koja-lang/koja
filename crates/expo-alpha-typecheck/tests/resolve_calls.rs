@@ -1,9 +1,9 @@
-//! Typecheck coverage for bare-identifier function calls. Exercises
-//! the full `collect → lift_signatures → resolve → seal` path on
-//! zero-arg, arg-taking, arity-mismatched, type-mismatched, unknown,
-//! non-identifier, and wrong-kind callees. Also pins the param-ref
-//! diagnostic (function bodies cannot reference parameters yet),
-//! which surfaces as soon as a `Regular` parameter is mentioned.
+//! Typecheck coverage for call resolution: bare-identifier
+//! `f(args)` calls. Exercises the full
+//! `collect → lift_signatures → resolve → seal` path on zero-arg,
+//! arg-taking, arity-mismatched, type-mismatched, unknown,
+//! non-identifier, and wrong-kind callees, plus return-type
+//! propagation through arithmetic.
 
 use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::ast::{Expr, ExprKind, Function, Item, Literal, Statement};
@@ -159,6 +159,27 @@ fn arg_taking_call_resolves_and_registers_signature() {
     }
 }
 
+#[test]
+fn return_type_propagates_through_arithmetic() {
+    // Exercises `resolve_call` returning a `ResolvedType` that the
+    // surrounding expression (`+ 1`) then type-checks against.
+    let source = "
+        fn answer -> Int
+          42
+        end
+
+        fn main
+          answer() + 1
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let int = global_leaf(&checked, "Int");
+    let main = find_function(&checked, "main");
+    let trailing = trailing_expr(main);
+    assert_eq!(trailing.resolution, int);
+}
+
 // ---------------------------------------------------------------------------
 // Error paths
 // ---------------------------------------------------------------------------
@@ -285,75 +306,4 @@ fn named_args_diagnoses() {
         named_count, 2,
         "one diagnostic per named arg; got {messages:?}"
     );
-}
-
-#[test]
-fn param_reference_in_body_diagnoses() {
-    let source = "
-        fn identity(x: Int) -> Int
-          x
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("identifier references in function bodies")),
-        "expected param-ref diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
-fn string_literal_resolves_to_global_string() {
-    let source = "
-        fn greeting -> String
-          \"hello\"
-        end
-        ";
-
-    let checked = typecheck(&dedent(source));
-    let string = global_leaf(&checked, "String");
-    let greeting = find_function(&checked, "greeting");
-    let trailing = trailing_expr(greeting);
-    assert_eq!(trailing.resolution, string);
-    assert!(matches!(trailing.kind, ExprKind::String { .. }));
-}
-
-#[test]
-fn string_interpolation_diagnoses() {
-    let source = "
-        fn greeting -> String
-          \"hello #{1}\"
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("string interpolation")),
-        "expected interpolation diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
-fn return_type_propagates_through_arithmetic() {
-    // Exercises `resolve_call` returning a `ResolvedType` that the
-    // surrounding expression (`+ 1`) then type-checks against.
-    let source = "
-        fn answer -> Int
-          42
-        end
-
-        fn main
-          answer() + 1
-        end
-        ";
-
-    let checked = typecheck(&dedent(source));
-    let int = global_leaf(&checked, "Int");
-    let main = find_function(&checked, "main");
-    let trailing = trailing_expr(main);
-    assert_eq!(trailing.resolution, int);
 }

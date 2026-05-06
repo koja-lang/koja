@@ -56,7 +56,7 @@ pub fn resolve_subject_ty(
     {
         return ty;
     }
-    if matches!(subject.kind, ExprKind::Self_)
+    if matches!(subject.kind, ExprKind::Self_ { .. })
         && let Some(ty) = var_type("self")
     {
         return ty;

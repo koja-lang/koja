@@ -7,6 +7,7 @@ use std::fmt;
 
 use expo_ast::identifier::Identifier;
 
+use crate::local::IRLocalId;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
 
@@ -75,7 +76,12 @@ impl fmt::Display for IRSymbol {
 /// first ids of the function are reserved for params, in declaration
 /// order); `ty` is the parameter's static [`IRType`] so backends can
 /// size the LLVM signature and the seeded SSA value map without
-/// re-querying the typecheck registry.
+/// re-querying the typecheck registry; `local_id` is the slot the
+/// param is promoted into at function entry — the lower pass emits a
+/// matching [`IRInstruction::LocalDecl`] + [`IRInstruction::LocalWrite`]
+/// pair so body references read through the same `LocalRead` path
+/// body-declared locals use, and so reassignment of params works
+/// uniformly with reassignment of any other local.
 ///
 /// Distinct from v1's `expo_ir::IRParam` enum — same crate-namespace
 /// concept, different shape. Renaming this struct here keeps cross-crate
@@ -84,6 +90,7 @@ impl fmt::Display for IRSymbol {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IRFunctionParam {
     pub id: ValueId,
+    pub local_id: IRLocalId,
     pub ty: IRType,
 }
 
@@ -173,8 +180,12 @@ pub struct IRBasicBlock {
     pub terminator: IRTerminator,
 }
 
-/// A single SSA-style instruction. Every variant defines a fresh value
-/// (`dest: ValueId`) and references operands by their `ValueId`.
+/// A single SSA-style instruction. Most variants define a fresh
+/// value (`dest: ValueId`) and reference operands by their `ValueId`;
+/// the local-slot variants ([`IRInstruction::LocalDecl`] /
+/// [`IRInstruction::LocalWrite`]) instead carry an [`IRLocalId`]
+/// naming a storage slot and produce no value of their own — see
+/// [`IRInstruction::dest`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum IRInstruction {
     /// `dest = lhs <op> rhs`.
@@ -211,6 +222,34 @@ pub enum IRInstruction {
         field_type: IRType,
         struct_symbol: IRSymbol,
     },
+    /// Declare a local-variable storage slot. Emitted exactly once
+    /// per [`IRLocalId`] per function, always in the entry block, so
+    /// LLVM can hoist a single `alloca` regardless of where the
+    /// surface-syntax declaration lives. Backends pick the strategy:
+    /// LLVM allocates a stack slot of `ty`; eval inserts a fresh
+    /// hashmap entry. Produces no value (the slot is identified by
+    /// `local`, not a `ValueId`) — see [`IRInstruction::dest`].
+    ///
+    /// Seal pins one `LocalDecl` per `local` per function (multiple
+    /// would imply two slots claiming the same identity).
+    LocalDecl { local: IRLocalId, ty: IRType },
+    /// Read the current contents of `local` into a fresh `ValueId`.
+    /// `ty` matches the declaring `LocalDecl`'s `ty`; carrying it
+    /// here lets the SSA value-flow checker thread the read's type
+    /// without consulting the (slot-keyed) decl table on every read.
+    /// LLVM lowers to `load`; eval clones the hashmap entry.
+    LocalRead {
+        dest: ValueId,
+        local: IRLocalId,
+        ty: IRType,
+    },
+    /// Write `value` into the slot named by `local`. Used both for
+    /// surface-level assignments (`x = expr` after lowering its rhs)
+    /// and for parameter promotion at function entry (one `LocalWrite`
+    /// per [`IRFunctionParam`] mirroring its `id` into its `local_id`
+    /// slot). LLVM lowers to `store`; eval inserts the cloned value
+    /// into the hashmap. Produces no value — see [`IRInstruction::dest`].
+    LocalWrite { local: IRLocalId, value: ValueId },
     /// `dest = <ty>{<fields>}`. `ty` names the [`crate::IRStructDecl`]
     /// being constructed (mangled symbol); `fields` are pre-canonicalized
     /// to declaration order and carry one [`StructFieldInit`] per
@@ -230,15 +269,26 @@ pub enum IRInstruction {
 }
 
 impl IRInstruction {
-    /// The `ValueId` this instruction defines.
-    pub fn dest(&self) -> ValueId {
+    /// The `ValueId` this instruction defines, if any.
+    ///
+    /// Most variants produce one ([`IRInstruction::BinaryOp`],
+    /// [`IRInstruction::Call`], [`IRInstruction::Const`],
+    /// [`IRInstruction::FieldGet`], [`IRInstruction::LocalRead`],
+    /// [`IRInstruction::StructInit`], [`IRInstruction::UnaryOp`]).
+    /// [`IRInstruction::LocalDecl`] and [`IRInstruction::LocalWrite`]
+    /// touch slots rather than the SSA value-flow, so they return
+    /// `None` — the slot is identified by [`IRLocalId`], no fresh
+    /// `ValueId` is minted.
+    pub fn dest(&self) -> Option<ValueId> {
         match self {
             IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
             | IRInstruction::Const { dest, .. }
             | IRInstruction::FieldGet { dest, .. }
+            | IRInstruction::LocalRead { dest, .. }
             | IRInstruction::StructInit { dest, .. }
-            | IRInstruction::UnaryOp { dest, .. } => *dest,
+            | IRInstruction::UnaryOp { dest, .. } => Some(*dest),
+            IRInstruction::LocalDecl { .. } | IRInstruction::LocalWrite { .. } => None,
         }
     }
 }

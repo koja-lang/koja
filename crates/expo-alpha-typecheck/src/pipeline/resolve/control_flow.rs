@@ -5,8 +5,7 @@
 //! `else` is parser-recognized but not yet typecheckable —
 //! [`resolve_if`] emits a feature-gap diagnostic and walks the branch
 //! anyway so per-statement diagnostics still surface. Value-producing
-//! `if` / `else` lands with the locals slice once alloca-style result
-//! slots are available.
+//! `if` / `else` lands once the IR has block-result vocabulary.
 
 use expo_ast::ast::{Diagnostic, Expr, Statement};
 use expo_ast::identifier::ResolvedType;
@@ -14,6 +13,7 @@ use expo_ast::span::Span;
 
 use crate::registry::GlobalRegistry;
 
+use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::types::{display_resolution, is_primitive};
 use super::walker::resolve_statement;
@@ -23,14 +23,13 @@ pub(super) fn resolve_if(
     then_body: &mut [Statement],
     else_body: Option<&mut [Statement]>,
     span: Span,
-    package: &str,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    resolve_expr(condition, package, registry, diagnostics);
-    require_bool_condition("if", condition, registry, diagnostics);
+    resolve_expr(condition, resolver, diagnostics);
+    require_bool_condition("if", condition, resolver.registry, diagnostics);
     for stmt in then_body.iter_mut() {
-        resolve_statement(stmt, package, registry, diagnostics);
+        resolve_statement(stmt, resolver, diagnostics);
     }
     if let Some(else_body) = else_body {
         diagnostics.push(Diagnostic::error(
@@ -38,25 +37,24 @@ pub(super) fn resolve_if(
             span,
         ));
         for stmt in else_body.iter_mut() {
-            resolve_statement(stmt, package, registry, diagnostics);
+            resolve_statement(stmt, resolver, diagnostics);
         }
     }
-    registry.primitive("Unit")
+    resolver.registry.primitive("Unit")
 }
 
 pub(super) fn resolve_unless(
     condition: &mut Expr,
     body: &mut [Statement],
-    package: &str,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    resolve_expr(condition, package, registry, diagnostics);
-    require_bool_condition("unless", condition, registry, diagnostics);
+    resolve_expr(condition, resolver, diagnostics);
+    require_bool_condition("unless", condition, resolver.registry, diagnostics);
     for stmt in body.iter_mut() {
-        resolve_statement(stmt, package, registry, diagnostics);
+        resolve_statement(stmt, resolver, diagnostics);
     }
-    registry.primitive("Unit")
+    resolver.registry.primitive("Unit")
 }
 
 /// Diagnose a non-Bool condition on an `if` / `unless`. Skips the

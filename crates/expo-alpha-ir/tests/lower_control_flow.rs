@@ -85,7 +85,7 @@ fn if_lowers_to_three_blocks_with_cond_branch_terminator() {
             )
         })
         .expect("merge should hold a Const::Unit");
-    let dest = unit_inst.dest();
+    let dest = unit_inst.dest().expect("Const produces a value");
     assert_eq!(
         merge.terminator,
         IRTerminator::Return { value: Some(dest) },

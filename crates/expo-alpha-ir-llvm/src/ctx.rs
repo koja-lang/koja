@@ -14,9 +14,9 @@
 //! borrow inside).
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use expo_alpha_ir::IRSymbol;
+use expo_alpha_ir::{IRLocalId, IRSymbol};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -39,6 +39,13 @@ pub(crate) struct EmitCtx<'ctx> {
     /// otherwise threads through `&EmitCtx`; only the pre-emit phase
     /// borrows mutably and every later read is a shared borrow.
     struct_types: RefCell<BTreeMap<IRSymbol, StructType<'ctx>>>,
+    /// Per-function local-variable slot map: `IRLocalId ->
+    /// PointerValue` (the LLVM `alloca` materializing the slot).
+    /// Populated as `LocalDecl` instructions emit; consumed by
+    /// `LocalRead` / `LocalWrite` to recover the stack pointer for
+    /// `load` / `store`. Reset between functions through
+    /// [`Self::reset_locals`] — slot identity is per-function.
+    local_slots: RefCell<HashMap<IRLocalId, PointerValue<'ctx>>>,
 }
 
 impl<'ctx> EmitCtx<'ctx> {
@@ -49,6 +56,7 @@ impl<'ctx> EmitCtx<'ctx> {
             module: context.create_module("expo_alpha_module"),
             string_counter: Cell::new(0),
             struct_types: RefCell::new(BTreeMap::new()),
+            local_slots: RefCell::new(HashMap::new()),
         }
     }
 
@@ -84,6 +92,38 @@ impl<'ctx> EmitCtx<'ctx> {
                      pre-emit ordering violation",
             )
         })
+    }
+
+    /// Register an `alloca` for `local`. Panics on duplicate keys —
+    /// the IR seal pass guarantees one `LocalDecl` per `IRLocalId`
+    /// per function, so a collision indicates an upstream bug.
+    pub(crate) fn register_local_slot(&self, local: IRLocalId, ptr: PointerValue<'ctx>) {
+        let mut slots = self.local_slots.borrow_mut();
+        if slots.insert(local, ptr).is_some() {
+            panic!(
+                "alpha LLVM emit: local slot `{local}` registered twice — \
+                 IR seal invariant violation",
+            );
+        }
+    }
+
+    /// Resolve `local` to its registered `alloca`. Misses panic — the
+    /// IR seal guarantees every `LocalRead` / `LocalWrite` is preceded
+    /// by a matching `LocalDecl` in the same function.
+    pub(crate) fn local_slot(&self, local: IRLocalId) -> PointerValue<'ctx> {
+        *self.local_slots.borrow().get(&local).unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: local slot `{local}` not registered — \
+                 IR seal / lower invariant violation",
+            )
+        })
+    }
+
+    /// Drop every registered slot. Called between function emissions
+    /// so the per-function slot table doesn't bleed across `IRSymbol`
+    /// boundaries.
+    pub(crate) fn reset_locals(&self) {
+        self.local_slots.borrow_mut().clear();
     }
 
     /// Build an alloca at the head of the current function's entry
