@@ -8,6 +8,7 @@ use crate::function::IRInstruction;
 
 use super::function::seal_package;
 use super::seal_panic;
+use super::structs::{package_instructions, seal_struct_ops};
 
 pub(crate) fn seal_program(program: &IRProgram) {
     if program.function(program.entry_point.mangled()).is_none() {
@@ -20,6 +21,19 @@ pub(crate) fn seal_program(program: &IRProgram) {
         seal_package(pkg);
     }
     seal_program_calls(program);
+    seal_program_struct_ops(program);
+}
+
+/// Cross-package struct check: every `StructInit::ty` and
+/// `FieldGet::struct_symbol` must name a struct decl registered in
+/// some package. Field-init counts/positions and field-index/type
+/// matches are validated against the resolved decl. See
+/// [`super::structs::seal_struct_ops`] for the full rule list.
+fn seal_program_struct_ops(program: &IRProgram) {
+    let lookup = |mangled: &str| program.struct_decl(mangled);
+    for pkg in &program.packages {
+        seal_struct_ops(package_instructions(pkg), &lookup);
+    }
 }
 
 /// Cross-function check: every `IRInstruction::Call` must name a

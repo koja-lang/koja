@@ -12,7 +12,7 @@
 //!   `value -> IRType` index.
 //! - [`package`] — entry points: [`lower_package`] /
 //!   [`lower_function`] plus the registry adapters
-//!   ([`lookup_signature`], [`resolved_type_to_ir_type`]) that bridge
+//!   ([`function_signature`], [`resolved_type_to_ir_type`]) that bridge
 //!   the typecheck-resolved AST to the IR vocabulary.
 //! - [`body`] — statement-list driver: [`lower_body_to_blocks`],
 //!   [`lower_body`], [`lower_statement`], [`finalize_open_flow`].
@@ -22,11 +22,13 @@
 //!   then/merge (or body/merge) blocks, stamps `CondBranch` /
 //!   `Branch` terminators, and emits the merge `Const::Unit`
 //!   placeholder for the conditional's value.
-//! - [`expr`] — expression dispatch: [`lower_expr`] + [`lower_call`]
-//!   plus the [`expr_kind_label`] used in feature-gap diagnostics.
+//! - [`expr`] — expression dispatch: [`lower_expr`] + [`lower_call`].
 //! - [`ops`] — operator / literal translation: [`lower_literal`],
 //!   [`lower_bin_op`], [`lower_unary_op`], plus the small
 //!   `IRType`-shaped result-type helpers.
+//! - [`structs`] — struct decl, struct-literal construction, and
+//!   field-access lowering: [`lower_struct_decl`],
+//!   [`lower_struct_construction`], [`lower_field_access`].
 
 mod body;
 mod control_flow;
@@ -34,6 +36,7 @@ mod ctx;
 mod expr;
 mod ops;
 mod package;
+mod structs;
 
 pub(crate) use body::lower_body_to_blocks;
 pub(crate) use package::lower_package;

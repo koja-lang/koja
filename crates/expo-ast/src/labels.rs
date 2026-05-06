@@ -1,19 +1,11 @@
-//! Short, stable, human-readable labels for AST shapes. Used by every
-//! pipeline pass that needs to mention an [`ExprKind`] / [`Item`] /
-//! [`BinOp`] in a diagnostic or panic message, so the same vocabulary
-//! surfaces from `collect`, `lift_signatures`, `resolve`, and `seal`.
-//!
-//! The split between [`expr_kind_label`] / [`item_label`] (compact
-//! kind names like `"binary"` / `"fn"`) and [`bin_op_label`] (surface
-//! syntax like `"+"` / `"and"`) is deliberate: the former describe
-//! the AST node *kind*, the latter render the *literal source token*
-//! a user would have typed. Both flavors live here because they're
-//! the same audience (diagnostics) and same shape (AST → `&'static str`).
+//! Short, stable labels for AST shapes used in diagnostics and panics.
+//! `expr_kind_label` / `item_label` return compact kind names ("binary",
+//! "fn"); `bin_op_label` renders the literal source token ("+", "and").
 
-use expo_ast::ast::{BinOp, ExprKind, Item};
-use expo_ast::span::Span;
+use crate::ast::{BinOp, ExprKind, Item};
+use crate::span::Span;
 
-pub(crate) fn expr_kind_label(kind: &ExprKind) -> &'static str {
+pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
     match kind {
         ExprKind::Binary { .. } => "binary",
         ExprKind::BinaryLiteral { .. } => "binary-literal",
@@ -33,7 +25,7 @@ pub(crate) fn expr_kind_label(kind: &ExprKind) -> &'static str {
         ExprKind::Match { .. } => "match",
         ExprKind::MethodCall { .. } => "method-call",
         ExprKind::Receive { .. } => "receive",
-        ExprKind::Self_ => "self",
+        ExprKind::Self_ { .. } => "self",
         ExprKind::ShortClosure { .. } => "short-closure",
         ExprKind::Spawn { .. } => "spawn",
         ExprKind::String { .. } => "string",
@@ -45,7 +37,7 @@ pub(crate) fn expr_kind_label(kind: &ExprKind) -> &'static str {
     }
 }
 
-pub(crate) fn item_label(item: &Item) -> &'static str {
+pub fn item_label(item: &Item) -> &'static str {
     match item {
         Item::Alias(_) => "alias",
         Item::Constant(_) => "const",
@@ -58,7 +50,7 @@ pub(crate) fn item_label(item: &Item) -> &'static str {
     }
 }
 
-pub(crate) fn item_span(item: &Item) -> Span {
+pub fn item_span(item: &Item) -> Span {
     match item {
         Item::Alias(decl) => decl.span,
         Item::Constant(c) => c.span,
@@ -71,11 +63,7 @@ pub(crate) fn item_span(item: &Item) -> Span {
     }
 }
 
-/// Surface-syntax rendering of a binary operator for user-facing
-/// diagnostic messages (`"+"`, `"and"`, `"<>"`, …). Distinct from
-/// [`expr_kind_label`]: the latter returns the kind name (`"binary"`),
-/// this returns what the user actually typed.
-pub(crate) fn bin_op_label(op: BinOp) -> &'static str {
+pub fn bin_op_label(op: BinOp) -> &'static str {
     match op {
         BinOp::Add => "+",
         BinOp::And => "and",

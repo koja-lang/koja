@@ -13,10 +13,11 @@
 //!   this value" from "flow terminated already (e.g. via early
 //!   `return`)".
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::cfg::CFGBuilder;
 use crate::function::{IRBasicBlock, IRBlockId};
+use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
 
 /// The shape every `lower_*` helper returns. `Open` carries the
@@ -41,6 +42,15 @@ pub(crate) enum FlowResult {
 /// callers consult to derive operator result types and the function's
 /// return type without re-querying the typecheck registry.
 ///
+/// `entry_block` is set as soon as the function's first block is
+/// created (before parameter promotion), so any later body lowering
+/// step can append [`crate::function::IRInstruction::LocalDecl`]s
+/// into the entry regardless of the currently-open block.
+/// `declared_locals` is the per-function set of [`IRLocalId`]s that
+/// have already been declared, so reassignments emit a single `LocalDecl`
+/// followed by repeated `LocalWrite`s rather than a fresh decl per
+/// write.
+///
 /// One context per `IRFunction` (or per script body). Discarded after
 /// the function's blocks are extracted via [`Self::into_blocks`];
 /// downstream consumers (seal, backends) build their own indices.
@@ -49,6 +59,8 @@ pub(crate) struct FnLowerCtx {
     next_value: u32,
     next_block: u32,
     value_types: BTreeMap<ValueId, IRType>,
+    entry_block: Option<IRBlockId>,
+    declared_locals: HashSet<IRLocalId>,
 }
 
 impl FnLowerCtx {
@@ -58,6 +70,8 @@ impl FnLowerCtx {
             next_value: 0,
             next_block: 0,
             value_types: BTreeMap::new(),
+            entry_block: None,
+            declared_locals: HashSet::new(),
         }
     }
 
@@ -70,12 +84,43 @@ impl FnLowerCtx {
     }
 
     /// Mint a fresh `IRBlockId` and add the corresponding empty
-    /// block to the [`CFGBuilder`].
+    /// block to the [`CFGBuilder`]. The first block created against
+    /// this context is recorded as [`Self::entry_block`] so later
+    /// body lowering can append `LocalDecl`s back into the entry
+    /// regardless of the currently-open block.
     pub(crate) fn fresh_block(&mut self, label: impl Into<String>) -> IRBlockId {
         let id = IRBlockId(self.next_block);
         self.next_block += 1;
         self.cfg.add_block(id, label);
+        if self.entry_block.is_none() {
+            self.entry_block = Some(id);
+        }
         id
+    }
+
+    /// The entry block of the function being lowered. Panics if
+    /// called before [`Self::fresh_block`] — every consumer (param
+    /// promotion, body-assignment lowering) sequences after entry
+    /// creation.
+    pub(crate) fn entry_block(&self) -> IRBlockId {
+        self.entry_block.expect(
+            "alpha IR lower: entry_block consulted before any block was opened — \
+             lower_function ordering bug",
+        )
+    }
+
+    /// Has `local` been declared yet in this function? `LocalWrite`s
+    /// without a prior `LocalDecl` need to seed one in the entry
+    /// block; subsequent writes skip the seed.
+    pub(crate) fn local_is_declared(&self, local: IRLocalId) -> bool {
+        self.declared_locals.contains(&local)
+    }
+
+    /// Record that `local` has been declared. Returns `true` if this
+    /// is the first declaration (so the caller should emit the
+    /// `LocalDecl`); `false` if `local` was already in the set.
+    pub(crate) fn mark_local_declared(&mut self, local: IRLocalId) -> bool {
+        self.declared_locals.insert(local)
     }
 
     /// Lookup the recorded `IRType` for `id`. Panics on a miss —

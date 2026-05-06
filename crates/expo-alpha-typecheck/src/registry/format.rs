@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 
 use expo_ast::identifier::{Resolution, ResolvedType};
 
-use super::{FunctionSignature, GlobalKind, GlobalRegistry};
+use super::{FunctionSignature, GlobalKind, GlobalRegistry, StructDefinition};
 
 pub fn format_registry(registry: &GlobalRegistry) -> String {
     let count = registry.len();
@@ -42,8 +42,19 @@ fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
         GlobalKind::Function(None) => "fn <unlifted>".to_string(),
         GlobalKind::Function(Some(sig)) => format_signature(sig, registry),
         GlobalKind::Protocol => "protocol".to_string(),
-        GlobalKind::Struct => "struct".to_string(),
+        GlobalKind::Struct(None) => "struct".to_string(),
+        GlobalKind::Struct(Some(def)) => format_struct(def, registry),
     }
+}
+
+fn format_struct(def: &StructDefinition, registry: &GlobalRegistry) -> String {
+    let fields = def
+        .fields
+        .iter()
+        .map(|f| format!("{}: {}", f.name, format_resolved(&f.ty, registry)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("struct {{{fields}}}")
 }
 
 fn format_signature(sig: &FunctionSignature, registry: &GlobalRegistry) -> String {
@@ -61,11 +72,12 @@ fn format_signature(sig: &FunctionSignature, registry: &GlobalRegistry) -> Strin
 
 fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     let head = match ty.resolution {
-        Resolution::Unresolved => "<unresolved>".to_string(),
         Resolution::Global(id) => match registry.get(id) {
             Some(entry) => entry.identifier.qualified_name(),
             None => format!("<id {id}>"),
         },
+        Resolution::Local(local_id) => format!("<local {local_id}>"),
+        Resolution::Unresolved => "<unresolved>".to_string(),
     };
     if ty.type_args.is_empty() {
         head

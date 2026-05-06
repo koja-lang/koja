@@ -7,12 +7,14 @@
 //! variant that interacts with the [`GlobalRegistry`] beyond the
 //! type-side adapters in [`super::package`].
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
+use expo_alpha_typecheck::{Dispatch, GlobalKind, GlobalRegistry, RegistryEntry};
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, StringPart};
-use expo_ast::identifier::Resolution;
+use expo_ast::identifier::{Identifier, LocalId, Resolution};
+use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
 
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
+use crate::local::IRLocalId;
 use crate::types::{ConstValue, IRType, ValueId};
 
 use super::control_flow::{lower_if, lower_unless};
@@ -22,6 +24,7 @@ use super::ops::{
     unary_op_result_type,
 };
 use super::package::resolved_type_to_ir_type;
+use super::structs::{lower_field_access, lower_struct_construction};
 
 pub(super) fn lower_expr(
     expr: &Expr,
@@ -51,7 +54,46 @@ pub(super) fn lower_expr(
         ExprKind::Call { callee, args } => {
             lower_call(callee, args, ctx, block, registry, diagnostics)
         }
+        ExprKind::FieldAccess { receiver, field } => lower_field_access(
+            receiver,
+            field,
+            &expr.resolution,
+            ctx,
+            block,
+            registry,
+            diagnostics,
+        ),
         ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block, registry, diagnostics),
+        ExprKind::Ident { resolution, name } => {
+            let Resolution::Local(local_id) = resolution else {
+                panic!(
+                    "alpha IR lower: bare `Ident` `{name}` reaches lower with non-Local \
+                     resolution {resolution:?} — typecheck seal must have rejected this",
+                );
+            };
+            Ok(lower_local_read(
+                *local_id,
+                &expr.resolution,
+                ctx,
+                block,
+                registry,
+            ))
+        }
+        ExprKind::Self_ { local_id } => {
+            let local_id = local_id.unwrap_or_else(|| {
+                panic!(
+                    "alpha IR lower: `self` reaches lower without a stamped LocalId — \
+                     typecheck resolve invariant violation",
+                );
+            });
+            Ok(lower_local_read(
+                local_id,
+                &expr.resolution,
+                ctx,
+                block,
+                registry,
+            ))
+        }
         ExprKind::If {
             condition,
             then_body,
@@ -79,7 +121,15 @@ pub(super) fn lower_expr(
             );
             Ok((dest, block))
         }
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => lower_method_call(receiver, method, args, ctx, block, registry, diagnostics),
         ExprKind::String { parts, .. } => lower_string(parts, expr.span, ctx, block, diagnostics),
+        ExprKind::StructConstruction { fields, .. } => {
+            lower_struct_construction(fields, &expr.resolution, ctx, block, registry, diagnostics)
+        }
         ExprKind::Unary { op, operand } => {
             let (operand, block) = lower_expr(operand, ctx, block, registry, diagnostics)?;
             let ir_op = lower_unary_op(*op);
@@ -111,10 +161,32 @@ pub(super) fn lower_expr(
     }
 }
 
-/// Lower a `ExprKind::Call`. The seal contract guarantees the callee
-/// is a bare `Ident` whose inner `Resolution` is `Global(id)` — any
-/// deviation is a compiler bug, not a feature gap, so we panic rather
-/// than emit a diagnostic.
+/// Materialize a local-slot read. Used for both bare-`Ident` and
+/// `self` references — both flow through the same per-function slot
+/// table.
+fn lower_local_read(
+    local_id: LocalId,
+    resolution: &expo_ast::identifier::ResolvedType,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+) -> (ValueId, IRBlockId) {
+    let ir_local = IRLocalId::from_local_id(local_id);
+    let ty = resolved_type_to_ir_type(resolution, registry);
+    let dest = ctx.fresh_value(ty.clone());
+    ctx.cfg.append(
+        block,
+        IRInstruction::LocalRead {
+            dest,
+            local: ir_local,
+            ty,
+        },
+    );
+    (dest, block)
+}
+
+/// Lower a `ExprKind::Call`. Seal guarantees the callee is a bare
+/// `Ident` resolving to `Global(id)`; anything else panics.
 fn lower_call(
     callee: &Expr,
     args: &[Arg],
@@ -138,6 +210,127 @@ fn lower_call(
              seal invariant violation",
         )
     });
+    emit_call(entry, args, None, ctx, block, registry, diagnostics)
+}
+
+/// Lower `ExprKind::MethodCall`. Static dispatch (`Type.method(...)`)
+/// reads the struct id off the receiver's `Resolution::Global`;
+/// instance dispatch (`recv.method(...)`) lowers the receiver to a
+/// `ValueId`, derives the struct id from its resolved value type,
+/// and prepends the receiver to fill `params[0]` (`self`).
+fn lower_method_call(
+    receiver: &Expr,
+    method: &str,
+    args: &[Arg],
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let dispatch = method_dispatch_kind(receiver, registry);
+    let (prepend, current_block) = match dispatch {
+        Dispatch::Static => (None, block),
+        Dispatch::Instance => {
+            let (recv_id, next_block) = lower_expr(receiver, ctx, block, registry, diagnostics)?;
+            (Some(recv_id), next_block)
+        }
+    };
+    let struct_id = receiver_struct_id(receiver, dispatch);
+
+    let struct_entry = registry.get(struct_id).unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: method call receiver id {struct_id} not present in the registry — \
+             seal invariant violation",
+        )
+    });
+    let mut method_path = struct_entry.identifier.path().to_vec();
+    method_path.push(method.to_string());
+    let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
+    let (_, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: method `{method_identifier}` missing from registry — \
+             seal invariant violation",
+        )
+    });
+    emit_call(
+        method_entry,
+        args,
+        prepend,
+        ctx,
+        current_block,
+        registry,
+        diagnostics,
+    )
+}
+
+/// A bare `Ident` resolving to a struct names the struct itself
+/// (static dispatch); anything else is a value receiver (instance
+/// dispatch).
+fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch {
+    if let ExprKind::Ident {
+        resolution: Resolution::Global(id),
+        ..
+    } = &receiver.kind
+        && let Some(entry) = registry.get(*id)
+        && matches!(entry.kind, GlobalKind::Struct(_))
+    {
+        return Dispatch::Static;
+    }
+    Dispatch::Instance
+}
+
+/// Pull the struct's `GlobalRegistryId` off a method-call receiver.
+/// Static reads from `receiver.kind`'s `Resolution::Global`; instance
+/// reads from `receiver.resolution`'s resolved value type.
+fn receiver_struct_id(
+    receiver: &Expr,
+    dispatch: Dispatch,
+) -> expo_ast::identifier::GlobalRegistryId {
+    match dispatch {
+        Dispatch::Static => {
+            let ExprKind::Ident {
+                resolution, name, ..
+            } = &receiver.kind
+            else {
+                panic!(
+                    "alpha IR lower: static method call receiver must be a bare Ident after \
+                     typecheck seal (got {:?})",
+                    receiver.kind,
+                );
+            };
+            let Resolution::Global(struct_id) = resolution else {
+                panic!(
+                    "alpha IR lower: static method call receiver `{name}` has Unresolved \
+                     resolution after typecheck seal",
+                );
+            };
+            *struct_id
+        }
+        Dispatch::Instance => {
+            let resolution = &receiver.resolution;
+            let Resolution::Global(struct_id) = resolution.resolution else {
+                panic!(
+                    "alpha IR lower: instance method receiver resolved to non-Global type \
+                     ({resolution:?}) — typecheck seal must have rejected this",
+                );
+            };
+            struct_id
+        }
+    }
+}
+
+/// Shared tail of `lower_call` / `lower_method_call`. `prepend` is
+/// the receiver `ValueId` for instance dispatch (filling `params[0]` /
+/// `self`); `None` for bare calls and static method dispatch.
+fn emit_call(
+    entry: &RegistryEntry,
+    args: &[Arg],
+    prepend: Option<ValueId>,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ValueId, IRBlockId), ()> {
     let signature = match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig,
         other => panic!(
@@ -150,7 +343,10 @@ fn lower_call(
     let return_ty = resolved_type_to_ir_type(&signature.return_type, registry);
     let callee_symbol = IRSymbol::from_identifier(&entry.identifier);
 
-    let mut lowered_args = Vec::with_capacity(args.len());
+    let mut lowered_args = Vec::with_capacity(args.len() + usize::from(prepend.is_some()));
+    if let Some(receiver) = prepend {
+        lowered_args.push(receiver);
+    }
     let mut current = block;
     for arg in args {
         let (value, next) = lower_expr(&arg.value, ctx, current, registry, diagnostics)?;
@@ -177,8 +373,6 @@ fn lower_string(
     block: IRBlockId,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    // Typecheck rejects interpolation upstream; this is the parallel
-    // gate so a typecheck-failure-then-lower path can't sneak past.
     let [StringPart::Literal { value, .. }] = parts else {
         diagnostics.push(Diagnostic::error(
             "alpha IR does not yet lower string interpolation",
@@ -195,40 +389,4 @@ fn lower_string(
         },
     );
     Ok((dest, block))
-}
-
-/// Short, user-facing label for an [`ExprKind`] that the alpha IR
-/// cannot yet lower. Kept local because it only serves feature-gap
-/// diagnostics; a public `ExprKind::label()` would imply stability
-/// guarantees we aren't ready to make.
-fn expr_kind_label(kind: &ExprKind) -> &'static str {
-    match kind {
-        ExprKind::Binary { .. } => "binary expression",
-        ExprKind::BinaryLiteral { .. } => "binary literal",
-        ExprKind::Call { .. } => "call",
-        ExprKind::Closure { .. } => "closure",
-        ExprKind::Cond { .. } => "cond",
-        ExprKind::EnumConstruction { .. } => "enum construction",
-        ExprKind::FieldAccess { .. } => "field access",
-        ExprKind::For { .. } => "for",
-        ExprKind::Group { .. } => "group",
-        ExprKind::Ident { .. } => "identifier reference",
-        ExprKind::If { .. } => "if",
-        ExprKind::List { .. } => "list literal",
-        ExprKind::Literal { .. } => "literal",
-        ExprKind::Loop { .. } => "loop",
-        ExprKind::Map { .. } => "map literal",
-        ExprKind::Match { .. } => "match",
-        ExprKind::MethodCall { .. } => "method call",
-        ExprKind::Receive { .. } => "receive",
-        ExprKind::Self_ => "self reference",
-        ExprKind::ShortClosure { .. } => "short closure",
-        ExprKind::Spawn { .. } => "spawn",
-        ExprKind::String { .. } => "string",
-        ExprKind::StructConstruction { .. } => "struct construction",
-        ExprKind::Ternary { .. } => "ternary",
-        ExprKind::Unary { .. } => "unary",
-        ExprKind::Unless { .. } => "unless",
-        ExprKind::While { .. } => "while",
-    }
 }

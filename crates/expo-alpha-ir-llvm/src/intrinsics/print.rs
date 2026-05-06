@@ -11,6 +11,7 @@ use inkwell::AddressSpace;
 use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitCtx;
+use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::runtime::{PRINT_STRING_SYMBOL, declare_runtime_printer};
 
@@ -36,16 +37,9 @@ pub(super) fn emit_global_print<'ctx>(
     });
     ctx.builder
         .build_call(printer, &[payload.into()], "")
-        .map_err(|e| {
-            LlvmError::Codegen(format!(
-                "inkwell rejected build_call for `{}`: {e}",
-                function.symbol,
-            ))
-        })?;
-    ctx.builder.build_return(None).map(|_| ()).map_err(|e| {
-        LlvmError::Codegen(format!(
-            "inkwell rejected build_return for `{}`: {e}",
-            function.symbol,
-        ))
-    })
+        .map_err(|e| inkwell_err(format_args!("build_call for `{}`", function.symbol), e))?;
+    ctx.builder
+        .build_return(None)
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }

@@ -18,6 +18,7 @@
 pub mod ast;
 mod debug_print;
 pub mod identifier;
+pub mod labels;
 pub mod span;
 pub mod token;
 pub mod types;

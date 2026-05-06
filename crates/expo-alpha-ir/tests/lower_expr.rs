@@ -8,36 +8,12 @@
 //! variants get their dedicated test files (literals + ops in
 //! `lower_ops.rs`, `if`/`unless` in `lower_control_flow.rs`).
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{IRFunction, IRInstruction, IRProgram, IRTerminator, IRType, lower_program};
-use expo_alpha_typecheck::check_program;
-use expo_ast::identifier::Identifier;
+use expo_alpha_ir::{IRFunction, IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn lower(source: &str) -> IRProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_expr.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
-}
-
-fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
-    let mangled = format!("{PACKAGE}.{name}");
-    program
-        .function(&mangled)
-        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
-}
+use common::{PACKAGE, function, lower_program_source as lower};
 
 fn count_calls(function: &IRFunction) -> usize {
     function
@@ -112,17 +88,20 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
         IRType::Int64,
         "alpha lowering should stamp the param's IRType from the lifted signature",
     );
-    let body_const = take
+    // The entry block emits `LocalDecl` + `LocalWrite` for param
+    // promotion ahead of the body's const; both produce no `dest`,
+    // so we walk past them to find the first body-produced value.
+    let body_dest = take
         .blocks
         .first()
         .expect("take has one block")
         .instructions
-        .first()
-        .expect("take body has at least one instruction");
+        .iter()
+        .find_map(|inst| inst.dest())
+        .expect("take body has at least one value-producing instruction");
     assert!(
-        body_const.dest().0 > param.id.0,
-        "body-produced value ({}) should be allocated after param value ({})",
-        body_const.dest(),
+        body_dest.0 > param.id.0,
+        "body-produced value ({body_dest}) should be allocated after param value ({})",
         param.id,
     );
 

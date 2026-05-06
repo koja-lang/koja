@@ -8,55 +8,14 @@
 //!   diagnostic, and a body that mixes feature-gaps emits exactly
 //!   one diagnostic for whichever gap trips first (no cascading).
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{
-    IRFunction, IRInstruction, IRProgram, IRTerminator, IRType, LowerError, lower_program,
-};
-use expo_alpha_typecheck::{CheckedProgram, check_program};
-use expo_ast::identifier::Identifier;
+use expo_alpha_ir::{IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_body.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
-}
-
-fn lower(source: &str) -> IRProgram {
-    let checked = typecheck(source);
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
-}
-
-fn lower_err(source: &str, entry: &str) -> LowerError {
-    let checked = typecheck(source);
-    let entry_id = Identifier::new(PACKAGE, vec![entry.to_string()]);
-    lower_program(&checked, entry_id).expect_err("lowering should surface diagnostics")
-}
-
-fn expect_diagnostics(err: LowerError) -> Vec<String> {
-    match err {
-        LowerError::Diagnostics(d) => d.into_iter().map(|diag| diag.message).collect(),
-        other => panic!("expected Diagnostics, got {other:?}"),
-    }
-}
-
-fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
-    let mangled = format!("{PACKAGE}.{name}");
-    program
-        .function(&mangled)
-        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
-}
+use common::{
+    expect_diagnostics, function, lower_program_err as lower_err, lower_program_source as lower,
+};
 
 #[test]
 fn explicit_return_with_value_terminates_block() {
@@ -76,7 +35,7 @@ fn explicit_return_with_value_terminates_block() {
 
     let block = &main.blocks[0];
     let last = block.instructions.last().expect("expected a Const for `7`");
-    let dest = last.dest();
+    let dest = last.dest().expect("Const produces a value");
     assert!(
         matches!(last, IRInstruction::Const { .. }),
         "trailing instruction should be Const(7); got {last:?}",
@@ -103,34 +62,18 @@ fn empty_main_body_returns_unit_with_no_value() {
     assert_eq!(block.terminator, IRTerminator::Return { value: None });
 }
 
-#[test]
-fn assignment_statement_surfaces_feature_gap_diagnostic() {
-    let source = "
-        fn main
-          x = 1
-        end
-        ";
-
-    let program = dedent(source);
-    let messages = expect_diagnostics(lower_err(&program, "main"));
-    assert_eq!(messages.len(), 1);
-    assert!(
-        messages[0].contains("assignment statements"),
-        "expected assignment diagnostic, got: {messages:?}",
-    );
-}
-
 /// Multiple feature gaps inside a single function should emit *one*
 /// diagnostic — the first one seen — and abort walking that function.
-/// Pins the fail-fast-per-function contract explicitly: two
-/// assignment statements would trip the gap twice, but lowering
-/// stops after the first.
+/// `break` still passes typecheck (no loop context check in alpha
+/// yet) but is an IR-level feature gap, so it's the lowest-friction
+/// way to trip the fail-fast contract through IR lower without
+/// short-circuiting at typecheck.
 #[test]
 fn fail_fast_within_function_emits_single_diagnostic() {
     let source = "
         fn main
-          x = 1
-          y = 2
+          break
+          break
         end
         ";
 
@@ -142,7 +85,7 @@ fn fail_fast_within_function_emits_single_diagnostic() {
         "expected fail-fast within a function, got: {messages:?}",
     );
     assert!(
-        messages[0].contains("assignment statements"),
-        "expected first diagnostic to be the assignment gap, got: {messages:?}",
+        messages[0].contains("`break` statements"),
+        "expected first diagnostic to be the break gap, got: {messages:?}",
     );
 }

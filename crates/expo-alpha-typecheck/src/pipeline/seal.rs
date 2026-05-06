@@ -5,12 +5,14 @@
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../../design/COMPILER-NORTHSTAR.md
 
-use expo_ast::ast::{Expr, ExprKind, File, Function, Item, Statement, StringPart};
+use expo_ast::ast::{
+    AssignTarget, Expr, ExprKind, File, Function, ImplMember, Item, Statement, StringPart,
+};
 use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
 
-use crate::labels::expr_kind_label;
 use crate::program::CheckedProgram;
+use expo_ast::labels::expr_kind_label;
 
 /// Asserts the sealed-AST invariants on `program`. Panics on violation.
 pub(crate) fn seal_ast(program: &CheckedProgram) {
@@ -23,8 +25,21 @@ pub(crate) fn seal_ast(program: &CheckedProgram) {
 
 fn seal_file(file: &File) {
     for item in &file.items {
-        if let Item::Function(function) = item {
-            seal_function(function);
+        match item {
+            Item::Function(function) => seal_function(function),
+            Item::Struct(decl) => {
+                for function in &decl.functions {
+                    seal_function(function);
+                }
+            }
+            Item::Impl(impl_block) => {
+                for member in &impl_block.members {
+                    if let ImplMember::Function(function) = member {
+                        seal_function(function);
+                    }
+                }
+            }
+            _ => {}
         }
     }
     if let Some(body) = file.body.as_ref() {
@@ -48,14 +63,45 @@ fn seal_function(function: &Function) {
 
 fn seal_statement(stmt: &Statement) {
     match stmt {
-        Statement::Assignment { value, .. } | Statement::CompoundAssign { value, .. } => {
+        Statement::Assignment {
+            span,
+            target,
+            value,
+            ..
+        } => {
+            seal_assign_target(target, *span);
             seal_expr(value);
         }
         Statement::Break { .. } | Statement::Return { value: None, .. } => {}
+        Statement::CompoundAssign { value, .. } => seal_expr(value),
         Statement::Expr(expr) => seal_expr(expr),
         Statement::Return {
             value: Some(value), ..
         } => seal_expr(value),
+    }
+}
+
+/// Assignment targets must be single-segment [`AssignTarget::LValue`]s
+/// — the resolver rejected pattern destructuring and dotted lvalues
+/// upstream, so reaching seal with anything else is a compiler bug.
+fn seal_assign_target(target: &AssignTarget, statement_span: Span) {
+    match target {
+        AssignTarget::LValue(lvalue) => {
+            if lvalue.segments.len() != 1 {
+                seal_panic(
+                    &format!(
+                        "assignment target has {} segments; resolver rejects multi-segment \
+                         targets",
+                        lvalue.segments.len(),
+                    ),
+                    lvalue.span,
+                );
+            }
+        }
+        AssignTarget::Pattern(_) => seal_panic(
+            "assignment target is a destructuring pattern; resolver rejects this shape",
+            statement_span,
+        ),
     }
 }
 
@@ -78,8 +124,12 @@ fn seal_expr(expr: &Expr) {
                 seal_expr(&arg.value);
             }
         }
+        ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver),
         ExprKind::Group { expr: inner } => seal_expr(inner),
         ExprKind::Ident { name, resolution } => {
+            // Both `Resolution::Global` (struct names, callees) and
+            // `Resolution::Local` (param/local references) satisfy seal.
+            // Only `Resolution::Unresolved` is a violation.
             if matches!(resolution, Resolution::Unresolved) {
                 seal_panic(
                     &format!("identifier `{name}` has Unresolved resolution after typecheck"),
@@ -103,11 +153,29 @@ fn seal_expr(expr: &Expr) {
             }
         }
         ExprKind::Literal { .. } => {}
+        ExprKind::Self_ { .. } => {}
+        ExprKind::MethodCall { receiver, args, .. } => {
+            // Static method calls: receiver must resolve like any
+            // other `Ident` reference (its `resolution` is the
+            // struct id, populated by resolve). Args follow the same
+            // rule as `Call`. The outer `Expr.resolution` is the
+            // method's return type, already enforced by the
+            // top-of-fn check.
+            seal_expr(receiver);
+            for arg in args {
+                seal_expr(&arg.value);
+            }
+        }
         ExprKind::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {
                     seal_expr(expr);
                 }
+            }
+        }
+        ExprKind::StructConstruction { fields, .. } => {
+            for field in fields {
+                seal_expr(&field.value);
             }
         }
         ExprKind::Unary { operand, .. } => seal_expr(operand),

@@ -19,41 +19,12 @@
 //! Operator math (`apply_binary_op` / `apply_unary_op`) lives in
 //! `tests/ops.rs`, paired with `src/ops.rs`.
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{lower_program, lower_script};
-use expo_alpha_ir_eval::{Interpreter, RuntimeError, Value};
-use expo_alpha_typecheck::{CheckedProgram, check_program};
-use expo_ast::identifier::Identifier;
+use expo_alpha_ir_eval::{RuntimeError, Value};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("interpreter.expo"),
-            source: source.to_string(),
-        }],
-        mode,
-    );
-    check_program(parsed).unwrap_or_else(|failure| panic!("alpha typecheck failed:\n{failure}"))
-}
-
-fn evaluate(source: &str) -> Result<Value, RuntimeError> {
-    let checked = typecheck(source, ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    let program = lower_program(&checked, entry).expect("alpha lowering should succeed");
-    Interpreter::run_program(program)
-}
-
-fn evaluate_script(source: &str) -> Result<Value, RuntimeError> {
-    let checked = typecheck(source, ParseMode::Script);
-    let script = lower_script(&checked).expect("alpha script lowering should succeed");
-    Interpreter::run_script(script)
-}
+use common::{evaluate_program as evaluate, evaluate_script};
 
 // -- basic dispatch -------------------------------------------------
 

@@ -20,6 +20,10 @@
 //!   both apply the same per-block invariants (operand
 //!   defined-before-use, terminator-target validity, supported
 //!   `ConstValue` / `IRType` widths).
+//! - [`structs`] — `seal_struct_decls` (per-package decl shape)
+//!   plus `seal_struct_ops` (cross-instruction `StructInit` /
+//!   `FieldGet` validation, fed by an `IRSymbol -> IRStructDecl`
+//!   closure the program / script paths supply).
 //! - This module ([`mod.rs`]) — shared helpers used by all
 //!   submodules: [`seal_panic`], [`require_supported_type`],
 //!   [`require_supported_const`], [`require_defined`],
@@ -52,17 +56,26 @@
 //!    `IRScript`.
 //! 8. **Transient slice invariant**: every [`ConstValue`] and
 //!    [`IRType`] that flows through the IR is one of `Bool`,
-//!    `Float64`, `Int64`, `String`, or `Unit`. The narrower /
-//!    unsigned / `Float32` width variants (`Int8` / `Int16` /
-//!    `Int32` / `UInt8` / `UInt16` / `UInt32` / `UInt64` /
-//!    `Float32`) exist in the IR vocabulary so future stdlib stub
-//!    expansion + literal width inference can stamp them without
-//!    reshuffling, but they're forbidden until those upstream pieces
-//!    land. Loosen this invariant when adding `Int8` / `Float32` /
-//!    etc. to the stdlib stubs. Applies to function return types,
-//!    parameter types, and every value-flow [`IRType`] alike.
+//!    `Float64`, `Int64`, `String`, `Struct(_)`, or `Unit`. The
+//!    narrower / unsigned / `Float32` width variants (`Int8` /
+//!    `Int16` / `Int32` / `UInt8` / `UInt16` / `UInt32` /
+//!    `UInt64` / `Float32`) exist in the IR vocabulary so future
+//!    stdlib stub expansion + literal width inference can stamp
+//!    them without reshuffling, but they're forbidden until those
+//!    upstream pieces land. Loosen this invariant when adding
+//!    `Int8` / `Float32` / etc. to the stdlib stubs. Applies to
+//!    function return types, parameter types, and every
+//!    value-flow [`IRType`] alike.
+//! 9. Every struct declaration has dense, declaration-order field
+//!    indices (`0..n`), unique field names, and field types in the
+//!    transient set. Every `IRInstruction::StructInit` carries
+//!    exactly the decl's field count, field-init indices match
+//!    declaration positions, and `ty` resolves to a registered
+//!    decl. Every `IRInstruction::FieldGet` has a `field_index`
+//!    in range and a `field_type` that matches
+//!    `IRStructField::ir_type` on the resolved decl.
 //!
-//! The script path ([`seal_script`]) re-asserts (3)–(8) on the
+//! The script path ([`seal_script`]) re-asserts (3)–(9) on the
 //! implicit-function shape ([`crate::IRScript::blocks`] +
 //! [`crate::IRScript::return_type`]), and re-asserts (7) using
 //! [`crate::IRScript::packages`] as the call-target lookup.
@@ -75,19 +88,25 @@ use crate::types::{ConstValue, IRType, ValueId};
 mod function;
 mod program;
 mod script;
+mod structs;
 
 pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
 
 /// Transient slice invariant: only `Bool` / `Float64` / `Int64` /
-/// `String` / `Unit` flow through the IR. See module docstring
-/// invariant 8.
+/// `String` / `Unit` / `Struct(_)` flow through the IR. See module
+/// docstring invariant 8.
 pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
-        IRType::Bool | IRType::Float64 | IRType::Int64 | IRType::String | IRType::Unit => {}
+        IRType::Bool
+        | IRType::Float64
+        | IRType::Int64
+        | IRType::String
+        | IRType::Struct(_)
+        | IRType::Unit => {}
         other => seal_panic(&format!(
             "{}: IRType `{other:?}` is not yet supported (alpha slice admits only \
-             Bool / Float64 / Int64 / String / Unit until stdlib stub expansion lands)",
+             Bool / Float64 / Int64 / String / Struct / Unit until stdlib stub expansion lands)",
             location(),
         )),
     }
@@ -113,6 +132,15 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::BinaryOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Call { args, .. } => args.clone(),
         IRInstruction::Const { .. } => vec![],
+        IRInstruction::FieldGet { base, .. } => vec![*base],
+        // `LocalDecl` declares the slot; nothing in scope yet to read.
+        // `LocalRead` reads the slot named by `local`, not a `ValueId`,
+        // so the per-block defined-set walk has nothing to validate
+        // here — `local` is checked against the per-function decl set
+        // by `seal_locals_in_function`.
+        IRInstruction::LocalDecl { .. } | IRInstruction::LocalRead { .. } => vec![],
+        IRInstruction::LocalWrite { value, .. } => vec![*value],
+        IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
     }
 }

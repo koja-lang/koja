@@ -11,46 +11,14 @@
 //! [`compile_script`]: expo_alpha_ir_llvm::compile_script
 //! [`emit_script_llvm_ir`]: expo_alpha_ir_llvm::emit_script_llvm_ir
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{IRScript, lower_script};
 use expo_alpha_ir_llvm::emit_script_llvm_ir;
-use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const APP_NAME: &str = "emit_test";
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("script.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::Script,
-    );
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
-}
-
-fn lower_as_script(source: &str) -> IRScript {
-    let checked = typecheck(source);
-    lower_script(&checked).expect("script lowering should succeed")
-}
-
-fn assert_contains(ir_text: &str, needle: &str) {
-    assert!(
-        ir_text.contains(needle),
-        "expected `{needle}` in:\n{ir_text}",
-    );
-}
-
-fn assert_main_shape(ir_text: &str) {
-    assert_contains(ir_text, "define i64 @main()");
-    assert_contains(ir_text, "ret i64 0");
-    assert_contains(ir_text, "@__expo_app_name");
-}
+use common::{
+    APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower_as_script,
+};
 
 #[test]
 fn bare_two_plus_two_prints_four() {

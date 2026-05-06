@@ -70,6 +70,7 @@ impl Parser {
 
                 Statement::Assignment {
                     target: AssignTarget::LValue(LValue {
+                        local_id: None,
                         segments: vec![name],
                         span: start_span,
                     }),
@@ -94,6 +95,7 @@ impl Parser {
                         start_span,
                     );
                     AssignTarget::LValue(LValue {
+                        local_id: None,
                         segments: vec!["<error>".to_string()],
                         span: start_span,
                     })
@@ -127,6 +129,7 @@ impl Parser {
                         start_span,
                     );
                     LValue {
+                        local_id: None,
                         segments: vec!["<error>".to_string()],
                         span: start_span,
                     }
@@ -160,10 +163,12 @@ impl Parser {
 fn try_expr_to_lvalue(expr: &Expr) -> Option<LValue> {
     match &expr.kind {
         ExprKind::Ident { name, .. } => Some(LValue {
+            local_id: None,
             segments: vec![name.clone()],
             span: expr.span,
         }),
-        ExprKind::Self_ => Some(LValue {
+        ExprKind::Self_ { .. } => Some(LValue {
+            local_id: None,
             segments: vec!["self".to_string()],
             span: expr.span,
         }),

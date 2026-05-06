@@ -1,61 +1,47 @@
-//! Expression dispatch: pattern-matches `ExprKind` and routes to the
-//! per-shape resolver in [`super::control_flow`] (if/unless),
-//! [`super::ops`] (literal/binary/unary), or this module (calls,
-//! groups, idents). Every successful arm returns the
-//! [`ResolvedType`] to stamp on `expr.resolution`.
-//!
-//! # Call resolution
-//!
-//! Calls accept only bare-`Ident` callees. The inner `Ident.resolution`
-//! is stamped with the callee's [`GlobalRegistryId`]; the outer callee
-//! `Expr.resolution` stays `Unresolved` (seal carves this out) because
-//! function names aren't first-class values yet. The call-site
-//! `Expr.resolution` takes the callee's return type.
-//!
-//! [`GlobalRegistryId`]: expo_ast::identifier::GlobalRegistryId
+//! Expression dispatch. Pattern-matches `ExprKind` and routes to the
+//! per-shape resolver in [`super::calls`] (call / method-call),
+//! [`super::structs`] (struct literal / field access),
+//! [`super::idents`] (bare identifier / `self`), [`super::strings`]
+//! (string literal), [`super::control_flow`] (`if` / `unless`), or
+//! [`super::ops`] (literal / binary / unary). Every successful arm
+//! returns the [`ResolvedType`] to stamp on `expr.resolution`.
 
-use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, StringPart};
-use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
-use expo_ast::span::Span;
+use expo_ast::ast::{Diagnostic, Expr, ExprKind};
+use expo_ast::identifier::ResolvedType;
 
-use crate::labels::expr_kind_label;
-use crate::registry::{GlobalKind, GlobalRegistry};
+use expo_ast::labels::expr_kind_label;
 
+use super::calls::{resolve_call, resolve_method_call};
 use super::control_flow::{resolve_if, resolve_unless};
+use super::ctx::Resolver;
+use super::idents::{resolve_ident, resolve_self};
 use super::ops::{binary_type, literal_type, unary_type};
-use super::types::display_resolution;
+use super::strings::resolve_string;
+use super::structs::{resolve_field_access, resolve_struct_construction};
 
 pub(super) fn resolve_expr(
     expr: &mut Expr,
-    package: &str,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let ty = match &mut expr.kind {
         ExprKind::Binary { op, left, right } => {
-            resolve_expr(left, package, registry, diagnostics);
-            resolve_expr(right, package, registry, diagnostics);
-            binary_type(*op, left, right, expr.span, registry, diagnostics)
+            resolve_expr(left, resolver, diagnostics);
+            resolve_expr(right, resolver, diagnostics);
+            binary_type(*op, left, right, expr.span, resolver.registry, diagnostics)
         }
         ExprKind::Call { callee, args } => {
-            resolve_call(callee, args, expr.span, package, registry, diagnostics)
+            resolve_call(callee, args, expr.span, resolver, diagnostics)
+        }
+        ExprKind::FieldAccess { receiver, field } => {
+            resolve_field_access(receiver, field, expr.span, resolver, diagnostics)
         }
         ExprKind::Group { expr: inner } => {
-            resolve_expr(inner, package, registry, diagnostics);
+            resolve_expr(inner, resolver, diagnostics);
             inner.resolution.clone()
         }
-        ExprKind::Ident { name, .. } => {
-            // Local references (including parameter uses) are not yet
-            // supported. `Resolution::Local` lands with the follow-up
-            // slice; until then emit a dedicated diagnostic.
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "alpha typecheck does not yet support identifier references in function \
-                     bodies (got `{name}`)",
-                ),
-                expr.span,
-            ));
-            ResolvedType::unresolved()
+        ExprKind::Ident { name, resolution } => {
+            resolve_ident(name, resolution, expr.span, resolver, diagnostics)
         }
         ExprKind::If {
             condition,
@@ -66,18 +52,26 @@ pub(super) fn resolve_expr(
             then_body,
             else_body.as_deref_mut(),
             expr.span,
-            package,
-            registry,
+            resolver,
             diagnostics,
         ),
-        ExprKind::Literal { value } => literal_type(value, registry),
-        ExprKind::String { parts, .. } => resolve_string(parts, expr.span, registry, diagnostics),
+        ExprKind::Literal { value } => literal_type(value, resolver.registry),
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => resolve_method_call(receiver, method, args, expr.span, resolver, diagnostics),
+        ExprKind::Self_ { local_id } => resolve_self(local_id, expr.span, resolver, diagnostics),
+        ExprKind::String { parts, .. } => resolve_string(parts, expr.span, resolver, diagnostics),
+        ExprKind::StructConstruction { type_path, fields } => {
+            resolve_struct_construction(type_path, fields, expr.span, resolver, diagnostics)
+        }
         ExprKind::Unary { op, operand } => {
-            resolve_expr(operand, package, registry, diagnostics);
-            unary_type(*op, operand, expr.span, registry, diagnostics)
+            resolve_expr(operand, resolver, diagnostics);
+            unary_type(*op, operand, expr.span, resolver.registry, diagnostics)
         }
         ExprKind::Unless { condition, body } => {
-            resolve_unless(condition, body, package, registry, diagnostics)
+            resolve_unless(condition, body, resolver, diagnostics)
         }
         // Unsupported shapes diagnose and leave the expression
         // unresolved. Seal runs only on the success path, so an
@@ -95,129 +89,4 @@ pub(super) fn resolve_expr(
         }
     };
     expr.resolution = ty;
-}
-
-fn resolve_call(
-    callee: &mut Expr,
-    args: &mut [Arg],
-    call_span: Span,
-    package: &str,
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    // Resolve arguments first regardless of whether the callee is
-    // well-formed, so nested errors surface and `seal_expr` has
-    // resolutions to walk on each arg.
-    for arg in args.iter_mut() {
-        if let Some(name) = arg.name.as_ref() {
-            diagnostics.push(Diagnostic::error(
-                format!("alpha typecheck does not yet support named arguments (got `{name}`)",),
-                arg.span,
-            ));
-        }
-        resolve_expr(&mut arg.value, package, registry, diagnostics);
-    }
-
-    let ExprKind::Ident {
-        name,
-        resolution: ident_resolution,
-    } = &mut callee.kind
-    else {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha typecheck only supports bare-identifier callees (got `{}`)",
-                expr_kind_label(&callee.kind),
-            ),
-            callee.span,
-        ));
-        return ResolvedType::unresolved();
-    };
-
-    let candidate = Identifier::new(package, vec![name.clone()]);
-    let Some((id, entry)) = registry.lookup(&candidate) else {
-        diagnostics.push(Diagnostic::error(
-            format!("unknown function `{name}`"),
-            callee.span,
-        ));
-        return ResolvedType::unresolved();
-    };
-
-    let sig = match &entry.kind {
-        GlobalKind::Function(Some(sig)) => sig,
-        GlobalKind::Function(None) => panic!(
-            "resolve_call: function `{}` has no lifted signature — \
-             lift_signatures must run before resolve",
-            entry.identifier,
-        ),
-        other => {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "cannot call `{name}`: it is a {}, not a function",
-                    other.label(),
-                ),
-                callee.span,
-            ));
-            return ResolvedType::unresolved();
-        }
-    };
-
-    *ident_resolution = Resolution::Global(id);
-
-    let return_type = sig.return_type.clone();
-
-    if args.len() != sig.params.len() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "`{}` expects {} argument{}, got {}",
-                entry.identifier,
-                sig.params.len(),
-                if sig.params.len() == 1 { "" } else { "s" },
-                args.len(),
-            ),
-            call_span,
-        ));
-        return return_type;
-    }
-
-    for (arg, param) in args.iter().zip(sig.params.iter()) {
-        let actual = &arg.value.resolution;
-        if !actual.is_resolved() {
-            // Arg already triggered its own diagnostic; skip the
-            // follow-up to avoid noise.
-            continue;
-        }
-        if actual != &param.ty {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "argument `{}` to `{}` expects `{}`, got `{}`",
-                    param.name,
-                    entry.identifier,
-                    display_resolution(&param.ty, registry),
-                    display_resolution(actual, registry),
-                ),
-                arg.span,
-            ));
-        }
-    }
-
-    return_type
-}
-
-fn resolve_string(
-    parts: &[StringPart],
-    span: Span,
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    if parts
-        .iter()
-        .any(|part| matches!(part, StringPart::Interpolation { .. }))
-    {
-        diagnostics.push(Diagnostic::error(
-            "alpha typecheck does not yet support string interpolation",
-            span,
-        ));
-        return ResolvedType::unresolved();
-    }
-    registry.primitive("String")
 }

@@ -46,12 +46,12 @@ fn function_signature<'ctx>(
     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
         Vec::with_capacity(function.params.len());
     for param in &function.params {
-        param_types.push(ir_basic_type(ctx.context, &param.ty)?.into());
+        param_types.push(ir_basic_type(ctx, &param.ty)?.into());
     }
     Ok(if matches!(function.return_type, IRType::Unit) {
         ctx.context.void_type().fn_type(&param_types, false)
     } else {
-        ir_basic_type(ctx.context, &function.return_type)?.fn_type(&param_types, false)
+        ir_basic_type(ctx, &function.return_type)?.fn_type(&param_types, false)
     })
 }
 
@@ -75,6 +75,9 @@ pub(crate) fn define_function<'ctx>(
     if function.kind == FunctionKind::Intrinsic {
         return intrinsics::emit_intrinsic_body(ctx, function, llvm_function);
     }
+    // Slot table is per-function — flush any leftovers from the
+    // previous helper before walking this body.
+    ctx.reset_locals();
     let block_map = declare_blocks(ctx, llvm_function, &function.blocks);
     let mut values = seed_params(function, llvm_function);
     for block in &function.blocks {

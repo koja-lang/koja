@@ -1,14 +1,18 @@
 //! Per-instruction dispatch + the const + call helpers it routes
 //! to. Operator emission lives in the sibling [`super::ops`] module.
 
-use expo_alpha_ir::{ConstValue, IRInstruction, IRSymbol, ValueId};
+use expo_alpha_ir::{
+    ConstValue, IRInstruction, IRLocalId, IRSymbol, IRType, StructFieldInit, ValueId,
+};
 use inkwell::module::Linkage;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use inkwell::types::StructType;
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
 
 use crate::ctx::EmitCtx;
 use crate::error::LlvmError;
+use crate::types::ir_basic_type;
 
-use super::{ValueMap, lookup, ops};
+use super::{ValueMap, inkwell_err, lookup, ops};
 
 pub(super) fn emit_instruction<'ctx>(
     ctx: &EmitCtx<'ctx>,
@@ -50,6 +54,35 @@ pub(super) fn emit_instruction<'ctx>(
             values.insert(*dest, constant);
             Ok(())
         }
+        IRInstruction::FieldGet {
+            base,
+            dest,
+            field_index,
+            field_type,
+            struct_symbol,
+        } => {
+            let base_value = lookup(values, *base)?;
+            let struct_type = ctx.struct_type(struct_symbol.mangled());
+            let result = emit_field_get(ctx, struct_type, base_value, *field_index, field_type)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::LocalDecl { local, ty } => emit_local_decl(ctx, *local, ty),
+        IRInstruction::LocalRead { dest, local, ty } => {
+            let value = emit_local_read(ctx, *local, ty)?;
+            values.insert(*dest, value);
+            Ok(())
+        }
+        IRInstruction::LocalWrite { local, value } => {
+            let resolved = lookup(values, *value)?;
+            emit_local_write(ctx, *local, resolved)
+        }
+        IRInstruction::StructInit { dest, fields, ty } => {
+            let struct_type = ctx.struct_type(ty.mangled());
+            let result = emit_struct_init(ctx, struct_type, ty, fields, values)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
         IRInstruction::UnaryOp { dest, op, operand } => {
             let operand_value = lookup(values, *operand)?;
             let result = ops::emit_unary_op(ctx, *op, operand_value)?;
@@ -59,16 +92,95 @@ pub(super) fn emit_instruction<'ctx>(
     }
 }
 
-/// Emit a call to the helper function registered on `ctx.module`
-/// under the callee's mangled symbol. Returns the call's basic value
-/// for non-`Unit` callees and `None` for `Unit`-returning ones (the
-/// underlying LLVM call returns `void`); the caller skips the value
-/// map insert in that case.
-///
-/// Every non-entry function is declared before any body emission
-/// and the IR seal pass guarantees every `IRInstruction::Call::callee`
-/// resolves to a registered function — so a miss here is a compiler
-/// bug, not a feature gap.
+/// Materialize a struct literal: hoist a scratch alloca to the
+/// entry block, store each field through a `getelementptr`, then
+/// load the populated struct out as the instruction's SSA value.
+fn emit_struct_init<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    struct_type: StructType<'ctx>,
+    symbol: &IRSymbol,
+    fields: &[StructFieldInit],
+    values: &ValueMap<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let alloca = ctx.build_entry_alloca(struct_type, &format!("{symbol}_tmp"));
+    for field in fields {
+        let field_value = lookup(values, field.value)?;
+        let field_ptr = build_field_gep(ctx, struct_type, alloca, field.index, symbol)?;
+        ctx.builder
+            .build_store(field_ptr, field_value)
+            .map_err(|e| {
+                inkwell_err(
+                    format_args!("build_store for `{symbol}` field #{}", field.index),
+                    e,
+                )
+            })?;
+    }
+    ctx.builder
+        .build_load(struct_type, alloca, symbol.mangled())
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_load for `{symbol}` after StructInit"),
+                e,
+            )
+        })
+}
+
+/// Project a single field out of a struct-typed SSA value via a
+/// scratch entry-block alloca + GEP + load.
+fn emit_field_get<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    struct_type: StructType<'ctx>,
+    base: BasicValueEnum<'ctx>,
+    field_index: u32,
+    field_type: &IRType,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let struct_value = base.into_struct_value();
+    let alloca = ctx.build_entry_alloca(struct_type, "field_tmp");
+    ctx.builder
+        .build_store(alloca, struct_value)
+        .map_err(|e| inkwell_err("build_store for FieldGet", e))?;
+    let label = format!("field_{field_index}");
+    let field_ptr = ctx
+        .builder
+        .build_struct_gep(struct_type, alloca, field_index, &label)
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_struct_gep for FieldGet field #{field_index}"),
+                e,
+            )
+        })?;
+    let field_llvm_type = ir_basic_type(ctx, field_type)?;
+    ctx.builder
+        .build_load(field_llvm_type, field_ptr, &label)
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_load for FieldGet field #{field_index}"),
+                e,
+            )
+        })
+}
+
+fn build_field_gep<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    struct_type: StructType<'ctx>,
+    base_ptr: PointerValue<'ctx>,
+    field_index: u32,
+    symbol: &IRSymbol,
+) -> Result<PointerValue<'ctx>, LlvmError> {
+    let label = format!("{symbol}_field_{field_index}");
+    ctx.builder
+        .build_struct_gep(struct_type, base_ptr, field_index, &label)
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_struct_gep for `{symbol}` field #{field_index}"),
+                e,
+            )
+        })
+}
+
+/// Call the function registered on `ctx.module` under the callee's
+/// mangled symbol. Returns `None` for `Unit`-returning callees (LLVM
+/// `void` calls); the caller skips the value-map insert in that case.
 fn emit_call<'ctx>(
     ctx: &EmitCtx<'ctx>,
     callee: &IRSymbol,
@@ -89,10 +201,51 @@ fn emit_call<'ctx>(
     let call_site = ctx
         .builder
         .build_call(function, &arg_values, "call")
-        .map_err(|e| {
-            LlvmError::Codegen(format!("inkwell rejected build_call for `{mangled}`: {e}"))
-        })?;
+        .map_err(|e| inkwell_err(format_args!("build_call for `{mangled}`"), e))?;
     Ok(call_site.try_as_basic_value().basic())
+}
+
+/// Materialize a `LocalDecl` as an entry-block `alloca`, stashed on
+/// the [`EmitCtx`] keyed by [`IRLocalId`] for later `load` / `store`.
+fn emit_local_decl<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    local: IRLocalId,
+    ty: &IRType,
+) -> Result<(), LlvmError> {
+    let llvm_ty = ir_basic_type(ctx, ty)?;
+    let name = local.to_string();
+    let slot = ctx.build_entry_alloca(llvm_ty, &name);
+    ctx.register_local_slot(local, slot);
+    Ok(())
+}
+
+/// Lower a `LocalRead` to an LLVM `load`. Pointer comes from the
+/// per-function slot table; load type comes from the IR's static
+/// type slot.
+fn emit_local_read<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    local: IRLocalId,
+    ty: &IRType,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let slot = ctx.local_slot(local);
+    let llvm_ty = ir_basic_type(ctx, ty)?;
+    ctx.builder
+        .build_load(llvm_ty, slot, &local.to_string())
+        .map_err(|e| inkwell_err(format_args!("build_load for `{local}`"), e))
+}
+
+/// Lower a `LocalWrite` to an LLVM `store` into the slot table's
+/// pointer for `local`.
+fn emit_local_write<'ctx>(
+    ctx: &EmitCtx<'ctx>,
+    local: IRLocalId,
+    value: BasicValueEnum<'ctx>,
+) -> Result<(), LlvmError> {
+    let slot = ctx.local_slot(local);
+    ctx.builder
+        .build_store(slot, value)
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("build_store for `{local}`"), e))
 }
 
 fn emit_const<'ctx>(
@@ -106,7 +259,7 @@ fn emit_const<'ctx>(
             .const_int(u64::from(*b), false)
             .into()),
         // `const_float` always takes f64; the f32 type narrows on
-        // its own. Bit-exact since `f32` widens losslessly.
+        // its own (bit-exact since f32 widens losslessly).
         ConstValue::Float32(v) => Ok(ctx.context.f32_type().const_float(f64::from(*v)).into()),
         ConstValue::Float64(v) => Ok(ctx.context.f64_type().const_float(*v).into()),
         ConstValue::Int8(v) => Ok(ctx.context.i8_type().const_int(*v as u64, true).into()),

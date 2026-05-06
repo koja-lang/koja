@@ -16,6 +16,7 @@ use inkwell::values::{BasicValueEnum, FloatValue, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::ctx::EmitCtx;
+use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 
 pub(super) fn emit_binary_op<'ctx>(
@@ -70,7 +71,7 @@ fn emit_int_binary_op<'ctx>(
         IRBinOp::Or => ctx.builder.build_or(lhs, rhs, "or"),
         IRBinOp::Sub => ctx.builder.build_int_sub(lhs, rhs, "sub"),
     }
-    .map_err(|e| LlvmError::Codegen(format!("inkwell rejected emit for {op:?}: {e}")))?;
+    .map_err(|e| inkwell_err(format_args!("emit for {op:?}"), e))?;
     Ok(result.into())
 }
 
@@ -85,7 +86,7 @@ fn emit_float_binary_op<'ctx>(
     lhs: FloatValue<'ctx>,
     rhs: FloatValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let to_err = |e| LlvmError::Codegen(format!("inkwell rejected emit for {op:?}: {e}"));
+    let to_err = |e| inkwell_err(format_args!("emit for {op:?}"), e);
     match op {
         IRBinOp::Add => ctx
             .builder
@@ -168,7 +169,7 @@ fn emit_int_unary_op<'ctx>(
         IRUnaryOp::Neg => ctx.builder.build_int_neg(operand, "neg"),
         IRUnaryOp::Not => ctx.builder.build_not(operand, "not"),
     }
-    .map_err(|e| LlvmError::Codegen(format!("inkwell rejected emit for {op:?}: {e}")))?;
+    .map_err(|e| inkwell_err(format_args!("emit for {op:?}"), e))?;
     Ok(result.into())
 }
 
@@ -184,7 +185,7 @@ fn emit_float_unary_op<'ctx>(
             .builder
             .build_float_neg(operand, "fneg")
             .map(Into::into)
-            .map_err(|e| LlvmError::Codegen(format!("inkwell rejected emit for fneg: {e}"))),
+            .map_err(|e| inkwell_err("emit for fneg", e)),
         IRUnaryOp::Not => Err(LlvmError::Codegen(
             "alpha LLVM emit: `not` is Bool-only — float operand should never reach this path \
              (typecheck violation)"

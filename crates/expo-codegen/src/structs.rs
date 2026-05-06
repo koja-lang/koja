@@ -471,7 +471,7 @@ pub fn compile_method_call_with_tail<'ctx>(
     if resolved.is_move {
         let recv_name = match &receiver.kind {
             ExprKind::Ident { name, .. } => Some(name.as_str()),
-            ExprKind::Self_ => Some("self"),
+            ExprKind::Self_ { .. } => Some("self"),
             _ => None,
         };
         if let Some(name) = recv_name

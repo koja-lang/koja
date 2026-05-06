@@ -1,6 +1,8 @@
 //! Small value types used throughout the IR vocabulary: value handles,
 //! constant payloads, binary-op kinds, and the IR type lattice.
 
+use crate::function::IRSymbol;
+
 /// Identifier of an SSA value within a single function. Values are
 /// numbered in definition order starting from 0; the same `ValueId`
 /// has no meaning across functions.
@@ -99,6 +101,13 @@ pub enum IRUnaryOp {
 /// trailing `NUL`, `bit_length = byte_length * 8`. Move type per
 /// `LANGUAGE.md`; this slice only emits unowned literal globals.
 /// `CString` is a struct, not a member of this family.
+///
+/// `Struct(symbol)` names a user-declared (non-generic) struct by
+/// the same mangled [`IRSymbol`] used as the key on
+/// [`crate::IRPackage::structs`]. Field layout is recovered through
+/// the matching [`crate::IRStructDecl`]; backends that need the
+/// per-field width / offset thread that lookup directly. Generic
+/// instantiations get a richer key in the follow-up generics slice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IRType {
     Bool,
@@ -109,6 +118,7 @@ pub enum IRType {
     Int32,
     Int64,
     String,
+    Struct(IRSymbol),
     UInt8,
     UInt16,
     UInt32,

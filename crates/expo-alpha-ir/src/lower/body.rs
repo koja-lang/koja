@@ -14,9 +14,11 @@
 //! `lower_script` via the shared `diagnostics` accumulator.
 
 use expo_alpha_typecheck::GlobalRegistry;
-use expo_ast::ast::{Diagnostic, Statement};
+use expo_ast::ast::{AssignTarget, Diagnostic, Expr, Statement};
+use expo_ast::identifier::LocalId;
 
-use crate::function::{IRBasicBlock, IRBlockId, IRTerminator};
+use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRTerminator};
+use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
 
 use super::ctx::{FlowResult, FnLowerCtx};
@@ -120,12 +122,8 @@ fn lower_statement(
             let _ = return_value;
             Ok(FlowResult::Closed)
         }
-        Statement::Assignment { span, .. } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha IR does not yet lower `=` assignment statements",
-                *span,
-            ));
-            Err(())
+        Statement::Assignment { target, value, .. } => {
+            lower_assignment(target, value, ctx, block, registry, diagnostics)
         }
         Statement::CompoundAssign { span, .. } => {
             diagnostics.push(Diagnostic::error(
@@ -142,6 +140,91 @@ fn lower_statement(
             Err(())
         }
     }
+}
+
+/// Lower a `Statement::Assignment` to (optional) `LocalDecl` + `LocalWrite`.
+/// Typecheck-resolve has already stamped the target Ident with
+/// [`Resolution::Local`] (carrying the AST [`LocalId`]) and rejected
+/// every shape that doesn't fit a single-segment local name, so this
+/// helper assumes the well-typed shape and panics on deviation.
+///
+/// First write of a local emits a `LocalDecl` into the function's
+/// entry block (regardless of which block the assignment statement
+/// surface-syntactically lives in) so backends see a single decl per
+/// slot at the canonical entry-block position. Subsequent writes
+/// just emit the `LocalWrite` in the currently-open block.
+///
+/// Returns `Open { value: None, ... }` because assignment is
+/// statement-level vocabulary — its trailing value is the rhs's
+/// [`ValueId`], but no surface syntax in this slice consumes it
+/// directly. (Trailing-expression-of-body checking runs on the
+/// trailing `Statement::Expr`, not on assignments.)
+///
+/// [`LocalId`]: expo_ast::identifier::LocalId
+fn lower_assignment(
+    target: &AssignTarget,
+    value: &Expr,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<FlowResult, ()> {
+    let local_id = single_segment_local(target);
+    let ir_local = IRLocalId::from_local_id(local_id);
+
+    let (value_id, current) = lower_expr(value, ctx, block, registry, diagnostics)?;
+    let value_ty = ctx.type_of(value_id);
+
+    if !ctx.local_is_declared(ir_local) {
+        let entry = ctx.entry_block();
+        ctx.cfg.append(
+            entry,
+            IRInstruction::LocalDecl {
+                local: ir_local,
+                ty: value_ty,
+            },
+        );
+        ctx.mark_local_declared(ir_local);
+    }
+    ctx.cfg.append(
+        current,
+        IRInstruction::LocalWrite {
+            local: ir_local,
+            value: value_id,
+        },
+    );
+    Ok(FlowResult::Open {
+        value: None,
+        block: current,
+    })
+}
+
+/// Pull the [`LocalId`] off a sealed assignment target. Typecheck
+/// rejects pattern destructuring and multi-segment lvalues, so by
+/// the time this runs the target is an [`AssignTarget::LValue`] with
+/// exactly one segment whose resolver-stamped `local_id` is `Some(_)`.
+/// Any deviation is an upstream seal violation, not a feature gap.
+fn single_segment_local(target: &AssignTarget) -> LocalId {
+    let AssignTarget::LValue(lvalue) = target else {
+        panic!(
+            "alpha IR lower: assignment target must be an LValue after typecheck seal \
+             (got {target:?})",
+        );
+    };
+    if lvalue.segments.len() != 1 {
+        panic!(
+            "alpha IR lower: assignment target must be single-segment after typecheck seal \
+             (got {} segments)",
+            lvalue.segments.len(),
+        );
+    }
+    lvalue.local_id.unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: single-segment assignment target `{}` carries no LocalId — \
+             typecheck resolve invariant violation",
+            lvalue.segments[0],
+        )
+    })
 }
 
 /// Wire a still-open trailing flow up to its function's `Return`.

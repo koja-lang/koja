@@ -6,44 +6,14 @@
 //! The eager-lowering contract: both operands first, then a single
 //! `BinaryOp` / `UnaryOp` for the result.
 
-use std::path::PathBuf;
-
 use expo_alpha_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRScript,
-    IRTerminator, IRUnaryOp, ValueId, lower_program, lower_script,
+    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRTerminator,
+    IRUnaryOp, ValueId,
 };
-use expo_alpha_typecheck::check_program;
-use expo_ast::identifier::Identifier;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn lower(source: &str) -> IRProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_ops.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
-}
-
-fn lower_as_script(source: &str) -> IRScript {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_ops.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::Script,
-    );
-    let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
-    lower_script(&checked).expect("script lowering should succeed")
-}
+use common::{lower_program_source as lower, lower_script_source as lower_as_script};
 
 fn entry_block(program: &IRProgram) -> &IRBasicBlock {
     let main: &IRFunction = program.entry_function();

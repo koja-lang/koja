@@ -5,41 +5,13 @@
 //! `resolution`. Error paths assert a diagnostic on ill-typed
 //! programs.
 
-use std::path::PathBuf;
-
-use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
+use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn typecheck(source: &str) -> CheckedProgram {
-    parse_and_check(source).unwrap_or_else(|failure| {
-        panic!(
-            "alpha typecheck failed on `{source}`: {} diagnostic(s):\n{failure}",
-            failure.diagnostics.len()
-        )
-    })
-}
-
-fn typecheck_fail(source: &str) -> CheckFailure {
-    parse_and_check(source).expect_err(
-        "expected alpha typecheck to fail; it succeeded (test source must produce a diagnostic)",
-    )
-}
-
-fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("resolve_ops.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    check_program(parsed)
-}
+use common::{PACKAGE, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail};
 
 fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
     let pkg = checked

@@ -22,6 +22,7 @@ use expo_ast::identifier::Identifier;
 use crate::error::LowerError;
 use crate::function::{IRFunction, IRSymbol};
 use crate::package::IRPackage;
+use crate::struct_decl::IRStructDecl;
 use crate::{lower, merge, seal};
 
 /// Sealed output of [`lower_program`]'s success path. Backends consume
@@ -52,6 +53,17 @@ impl IRProgram {
         self.packages
             .iter()
             .find_map(|pkg| pkg.functions.get(mangled))
+    }
+
+    /// Lookup a struct declaration across every package by its
+    /// mangled symbol. Mirrors [`Self::function`]; backends pass a
+    /// `&IRSymbol` from `IRType::Struct` / `IRInstruction::StructInit`
+    /// / `IRInstruction::FieldGet` directly through the
+    /// `IRSymbol: Borrow<str>` impl.
+    pub fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
+        self.packages
+            .iter()
+            .find_map(|pkg| pkg.structs.get(mangled))
     }
 
     /// The function the entry point resolves to. Panics if missing —

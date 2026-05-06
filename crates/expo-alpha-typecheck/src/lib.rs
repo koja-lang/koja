@@ -16,15 +16,12 @@
 //! # Module layout
 //!
 //! - [`error`] — user-actionable failure type ([`CheckFailure`]).
-//! - [`labels`] — short, stable labels for AST shapes (used by every
-//!   pass that mentions a node kind in a diagnostic).
 //! - [`pipeline`] — sub-passes (collect, lift_signatures, resolve, seal).
 //! - [`program`] — public entry point and program-level types.
 //! - [`registry`] — [`GlobalRegistry`] of decls + diagnostic-friendly
 //!   [`format_registry`] rendering.
 
 mod error;
-mod labels;
 mod pipeline;
 mod program;
 mod registry;
@@ -32,6 +29,6 @@ mod registry;
 pub use error::CheckFailure;
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
-    FunctionSignature, GlobalKind, GlobalRegistry, InsertOutcome, RegistryEntry, ResolvedParam,
-    format_registry,
+    Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, InsertOutcome, RegistryEntry,
+    ResolvedParam, ResolvedStructField, StructDefinition, format_registry,
 };

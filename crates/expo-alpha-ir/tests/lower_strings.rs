@@ -3,38 +3,12 @@
 //! return type `IRType::String`. Interpolation surfaces as a
 //! feature-gap diagnostic.
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{
-    ConstValue, IRFunction, IRInstruction, IRProgram, IRTerminator, IRType, lower_program,
-};
-use expo_alpha_typecheck::check_program;
-use expo_ast::identifier::Identifier;
+use expo_alpha_ir::{ConstValue, IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-fn lower(source: &str) -> IRProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("lower_strings.expo"),
-            source: source.to_string(),
-        }],
-        ParseMode::File,
-    );
-    let checked = check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"));
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
-}
-
-fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
-    let mangled = format!("{PACKAGE}.{name}");
-    program
-        .function(&mangled)
-        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
-}
+use common::{function, lower_program_source as lower};
 
 #[test]
 fn string_literal_lowers_to_const_string() {

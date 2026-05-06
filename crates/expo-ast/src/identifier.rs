@@ -134,6 +134,40 @@ impl fmt::Display for GlobalRegistryId {
     }
 }
 
+/// Opaque per-function handle for a local binding (parameter or
+/// `let`-introduced variable). Minted by alpha typecheck's `LocalScope`
+/// when a fresh name enters scope; carried by [`Resolution::Local`] on
+/// every reference site to that binding within the same function.
+///
+/// Mirrors [`GlobalRegistryId`]: a public [`Self::new`] ctor (so the
+/// typecheck crate can mint ids), a public [`Self::as_u32`] accessor
+/// (so the IR-side translator can derive its parallel handle), and
+/// nothing else. Outside of those two seams the handle is opaque.
+///
+/// `LocalId` does **not** cross the IR boundary. The IR crate defines
+/// a sibling `IRLocalId` and translates one-to-one at lower time, so
+/// eval and codegen consume only IR types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LocalId(u32);
+
+impl LocalId {
+    /// Wraps a raw `u32`. Intended for typecheck `LocalScope` internals only.
+    pub fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw `u32` for the IR-side translator and diagnostic rendering.
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Display for LocalId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Resolution attached to an AST reference site by typecheck.
 ///
 /// `Global` carries a [`GlobalRegistryId`] handle into the typecheck
@@ -142,24 +176,28 @@ impl fmt::Display for GlobalRegistryId {
 /// than the full `Identifier`) keeps AST annotations small and lets the
 /// registry stay the single source of truth for what each id names.
 ///
-/// `Unresolved` is the in-flight state before resolve runs. The seal
-/// contract asserts every reference site carries `Global(_)` once
-/// typecheck completes (subject to the carve-outs in
-/// [`COMPILER-NORTHSTAR.md`]).
+/// `Local` carries a [`LocalId`] handle into the per-function
+/// `LocalScope` typecheck builds when resolving a function body.
+/// Locals never cross function boundaries, so the id is only meaningful
+/// within the enclosing function; downstream consumers (IR lower,
+/// eval, codegen) read it via the function-scoped lookup that produced
+/// it.
 ///
-/// Single-variant for resolved references today. Adding a future
-/// variant -- e.g. `Local(LocalId)` -- becomes a compiler-enforced
-/// migration thanks to exhaustiveness checks.
+/// `Unresolved` is the in-flight state before resolve runs. The seal
+/// contract asserts every reference site carries `Global(_)` or
+/// `Local(_)` once typecheck completes (subject to the carve-outs in
+/// [`COMPILER-NORTHSTAR.md`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Resolution {
+    Global(GlobalRegistryId),
+    Local(LocalId),
     #[default]
     Unresolved,
-    Global(GlobalRegistryId),
 }
 
 impl Resolution {
     pub fn is_resolved(&self) -> bool {
-        matches!(self, Resolution::Global(_))
+        matches!(self, Resolution::Global(_) | Resolution::Local(_))
     }
 }
 
@@ -198,13 +236,12 @@ impl ResolvedType {
         }
     }
 
-    /// Returns `true` iff the head is `Global(_)` **and** every nested
-    /// type argument is also fully resolved. Seal uses this as its
-    /// whole-tree invariant — a single `Unresolved` hole anywhere in
-    /// the tree fails the check.
+    /// Returns `true` iff the head is resolved (either `Global(_)` or
+    /// `Local(_)`) **and** every nested type argument is also fully
+    /// resolved. Seal uses this as its whole-tree invariant — a single
+    /// `Unresolved` hole anywhere in the tree fails the check.
     pub fn is_resolved(&self) -> bool {
-        matches!(self.resolution, Resolution::Global(_))
-            && self.type_args.iter().all(ResolvedType::is_resolved)
+        self.resolution.is_resolved() && self.type_args.iter().all(ResolvedType::is_resolved)
     }
 }
 

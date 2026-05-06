@@ -1,22 +1,23 @@
-//! Per-function and per-block invariants. Both
-//! [`super::program::seal_program`] and [`super::script::seal_script`]
-//! call into [`seal_package`] / [`seal_block`] — the actual block
-//! validation is identical for fn-shaped and script-shaped IR; the
-//! only difference is what the surrounding seeded-set looks like
-//! (function params seeded for fns, empty for scripts).
+//! Per-function and per-block invariants. [`seal_package`] /
+//! [`seal_block`] are reused for both function- and script-shaped IR;
+//! only the seeded `ValueId` set differs (params for fns, empty for
+//! scripts).
 
 use std::collections::{BTreeSet, HashSet};
 
 use crate::function::{FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction};
+use crate::local::IRLocalId;
 use crate::package::IRPackage;
 use crate::types::ValueId;
 
+use super::structs::seal_struct_decls;
 use super::{
     instruction_operands, require_defined, require_supported_const, require_supported_type,
     seal_panic, terminator_operands, terminator_targets,
 };
 
 pub(super) fn seal_package(pkg: &IRPackage) {
+    seal_struct_decls(pkg);
     for (sym, function) in &pkg.functions {
         if sym != &function.symbol {
             seal_panic(&format!(
@@ -47,11 +48,7 @@ fn seal_function(function: &IRFunction) {
         }
     }
     require_supported_type(&function.return_type, &|| format!("{owner} return type"));
-    // Parameter `ValueId`s count as definitions for the purposes of
-    // operand references inside the entry block. Seed them once and
-    // pass the seed by reference into every block walk; per-block
-    // defined-set composes onto the seed without mutating it across
-    // blocks (cross-block value flow doesn't appear in this slice).
+    // Param `ValueId`s seed every block's operand-defined set.
     let mut seeded: BTreeSet<ValueId> = BTreeSet::new();
     for (index, param) in function.params.iter().enumerate() {
         require_supported_type(&param.ty, &|| {
@@ -68,10 +65,56 @@ fn seal_function(function: &IRFunction) {
     for block in &function.blocks {
         seal_block(block, &owner, &seeded, &block_ids);
     }
+    seal_locals(function, &owner);
 }
 
-/// Build the per-function block-id set used to validate every
-/// terminator target. Asserts uniqueness en route.
+/// Per-function local-slot invariants: each [`IRLocalId`] is
+/// `LocalDecl`'d exactly once, every read/write references a declared
+/// id, and every param's `local_id` lands in the declared set
+/// (param promotion emits the matching `LocalDecl`).
+fn seal_locals(function: &IRFunction, owner: &str) {
+    let mut declared: HashSet<IRLocalId> = HashSet::new();
+    for block in &function.blocks {
+        for inst in &block.instructions {
+            if let IRInstruction::LocalDecl { local, .. } = inst
+                && !declared.insert(*local)
+            {
+                seal_panic(&format!(
+                    "{owner} declares local slot `{local}` more than once",
+                ));
+            }
+        }
+    }
+    // Intrinsics carry params for backend signature shape but emit
+    // no body, so they have no matching `LocalDecl`s to check.
+    if function.kind == FunctionKind::Regular {
+        for param in &function.params {
+            if !declared.contains(&param.local_id) {
+                seal_panic(&format!(
+                    "{owner} parameter slot `{}` was never `LocalDecl`'d",
+                    param.local_id,
+                ));
+            }
+        }
+    }
+    for block in &function.blocks {
+        for inst in &block.instructions {
+            match inst {
+                IRInstruction::LocalRead { local, .. }
+                | IRInstruction::LocalWrite { local, .. }
+                    if !declared.contains(local) =>
+                {
+                    seal_panic(&format!(
+                        "{owner} references undeclared local slot `{local}`",
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Block-id set for terminator-target validation. Asserts uniqueness.
 pub(super) fn collect_block_ids(blocks: &[IRBasicBlock], owner: &str) -> HashSet<IRBlockId> {
     let mut ids = HashSet::with_capacity(blocks.len());
     for block in blocks {
@@ -96,13 +139,15 @@ pub(super) fn seal_block(
         for operand in instruction_operands(inst) {
             require_defined(operand, owner, &defined);
         }
-        if let IRInstruction::Const { value, .. } = inst {
-            require_supported_const(value, &|| {
-                format!("{owner} const instruction at {}", inst.dest())
-            });
+        if let IRInstruction::Const { value, dest } = inst {
+            require_supported_const(value, &|| format!("{owner} const instruction at {dest}"));
         }
-        if !defined.insert(inst.dest()) {
-            seal_panic(&format!("{owner} redefines value `{}`", inst.dest()));
+        // Local-slot instructions don't define a `ValueId`; their
+        // slot-identity invariants are checked in `seal_locals`.
+        if let Some(dest) = inst.dest()
+            && !defined.insert(dest)
+        {
+            seal_panic(&format!("{owner} redefines value `{dest}`"));
         }
     }
     for operand in terminator_operands(&block.terminator) {

@@ -170,6 +170,134 @@ const UNLESS_BRANCH_SCRIPT_SOURCE: &str = "
     pick_body() + pick_skip()
 ";
 
+/// Script-mode fixture exercising the alpha struct slice end-to-end:
+/// a `struct Point` decl, a struct literal `Point { x: 5, y: 10 }`,
+/// and a field-read `.x` projecting the literal-5 leaf. Pins the
+/// full pipeline contract:
+///
+/// - typecheck registers `TestApp.Point` with two `Int` fields and
+///   resolves the literal + projection;
+/// - IR lowering stamps an `IRStructDecl` on `IRPackage::structs`,
+///   produces an `IRInstruction::StructInit` with canonicalized
+///   field-init order, and threads an `IRInstruction::FieldGet`
+///   through the script body;
+/// - LLVM emits `%TestApp.Point = type { i64, i64 }`, materializes
+///   the literal through alloca + GEP + store, projects `.x` via a
+///   second alloca + GEP + load, and the auto-print wrapper
+///   dispatches to `__expo_alpha_print_i64`;
+/// - the eval interpreter constructs a `Value::Struct { symbol,
+///   fields }`, indexes field 0, and the driver's auto-print emits
+///   the same `5\n`.
+const STRUCT_FIELD_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    Point{x: 5, y: 10}.x
+";
+
+/// Script-mode fixture exercising the alpha static-method slice
+/// end-to-end with an inline-form declaration. `Point.origin()`
+/// dispatches to a method declared inside the struct body, the
+/// returned struct flows through `IRInstruction::FieldGet` for
+/// `.x`, and stdout is `0\n`.
+const STATIC_METHOD_INLINE_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+
+      fn origin -> Point
+        Point{x: 0, y: 0}
+      end
+    end
+
+    Point.origin().x
+";
+
+/// Script-mode fixture mirroring `STATIC_METHOD_INLINE_SCRIPT_SOURCE`
+/// in impl-block form. Both surface forms register under
+/// `TestApp.Point.origin` and lower to the same `IRSymbol`, so the
+/// observable behavior is identical (`0\n`); the dual-fixture e2e
+/// pair pins that the parser → typecheck → IR → backend chain
+/// treats both forms uniformly all the way down to the linker.
+const STATIC_METHOD_IMPL_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    impl Point
+      fn origin -> Point
+        Point{x: 0, y: 0}
+      end
+    end
+
+    Point.origin().x
+";
+
+/// Script-mode fixture exercising the alpha locals slice end-to-end.
+/// Declares a local `x`, reassigns it inside an `if` arm, calls a
+/// helper that takes a parameter, and adds the helper's result to
+/// the reassigned local. Pins the full chain:
+///
+/// - typecheck stamps `Resolution::Local` on each `x`/`n` reference,
+///   threads the rhs type through reassignment, and validates the
+///   declared return types against the trailing expressions;
+/// - IR lowering emits `LocalDecl` + `LocalWrite` per slot in the
+///   entry block, `LocalWrite` for reassignments, `LocalRead`
+///   wherever a local is read, and promotes function parameters to
+///   matching slots;
+/// - LLVM emits per-slot `alloca` + `store`/`load` (no mem2reg in
+///   the alpha pipeline), the helper takes its param by value, and
+///   the auto-print wrapper renders `15\n`;
+/// - the eval interpreter's per-frame `locals` map handles the same
+///   instructions and produces matching output byte-for-byte.
+const LOCALS_SCRIPT_SOURCE: &str = "
+    fn add_one(n: Int) -> Int
+      n = n + 1
+      n
+    end
+
+    x = 4
+    if true
+      x = 10
+    end
+    x + add_one(4)
+";
+
+/// Script-mode fixture exercising the alpha instance-method slice
+/// end-to-end. `Counter{n: 10}.add(5)` constructs a struct, calls an
+/// inline-form instance method whose body reads `self.n` and adds
+/// the explicit `delta`, and the auto-print wrapper renders `15\n`.
+/// Pins the full chain:
+///
+/// - typecheck registers `TestApp.Counter.add` with `dispatch =
+///   Instance`, lifts `self` as a real param, and resolves the call
+///   site through the instance-dispatch path;
+/// - IR lowering promotes `self` into its own slot, prepends the
+///   receiver to the lowered call's arg list, and threads
+///   `self.n` through `IRInstruction::FieldGet` against the
+///   receiver's slot;
+/// - LLVM emits `define i64 @TestApp.Counter.add(%TestApp.Counter,
+///   i64)` with the receiver as the first parameter, and the call
+///   site issues a matching `call i64 @TestApp.Counter.add` passing
+///   the constructed struct value first;
+/// - the eval interpreter routes the `Call` through its function
+///   map, the body sums `self.n + delta`, and the trailing value
+///   prints as `15\n`.
+const INSTANCE_METHOD_SCRIPT_SOURCE: &str = "
+    struct Counter
+      n: Int
+
+      fn add(self, delta: Int) -> Int
+        self.n + delta
+      end
+    end
+
+    Counter{n: 10}.add(5)
+";
+
 fn expo_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_expo"))
 }
@@ -722,6 +850,223 @@ fn alpha_run_interpreter_script_intrinsic_print_prints_hello() {
     );
 
     let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_struct_field_prints_five() {
+    let scratch = scratch_dir("run_llvm_struct_field");
+    let fixture = write_fixture(
+        &scratch,
+        "struct_field.exps",
+        &dedent(STRUCT_FIELD_SCRIPT_SOURCE),
+    );
+
+    // Drives the alpha struct slice through the LLVM backend
+    // end-to-end. The trailing `Point { x: 5, y: 10 }.x` lowers
+    // through `IRInstruction::StructInit` (alloca + per-field
+    // store) and `IRInstruction::FieldGet` (alloca + GEP + load),
+    // the auto-print wrapper hands the loaded i64 to
+    // `__expo_alpha_print_i64`, and stdout is `5\n`.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (struct field) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "5",
+        "expected LLVM backend to print `5` (Point.x), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_struct_field_prints_five() {
+    let scratch = scratch_dir("run_interpreter_struct_field");
+    let fixture = write_fixture(
+        &scratch,
+        "struct_field.exps",
+        &dedent(STRUCT_FIELD_SCRIPT_SOURCE),
+    );
+
+    // Backend symmetry with the LLVM test above. The interpreter
+    // builds a `Value::Struct { symbol: TestApp.Point, fields:
+    // [Int(5), Int(10)] }` for the literal, projects field 0
+    // through `IRInstruction::FieldGet`, and the driver's
+    // auto-print emits `5\n`.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, struct field) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "5",
+        "expected interpreter to print `5` (Point.x), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Run the static-method script through `expo alpha run` and assert
+/// its stdout trims to `0`. Shared between the inline / impl + LLVM /
+/// interpreter pairs to keep each individual test case down to its
+/// distinguishing setup (which fixture, which backend).
+fn assert_static_method_script_prints_zero(label: &str, source: &str, backend: Option<&str>) {
+    let scratch = scratch_dir(label);
+    let fixture = write_fixture(&scratch, "static_method.exps", &dedent(source));
+
+    let mut args = vec!["alpha", "run"];
+    if let Some(backend) = backend {
+        args.push(backend);
+    }
+    args.push(fixture.to_str().unwrap());
+
+    let output = run_expo(&args);
+    assert!(
+        output.status.success(),
+        "expected `expo {}` to exit 0, got {:?}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "0",
+        "expected stdout `0` (Point.origin().x), got:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_static_method_inline_prints_zero() {
+    // Drives the inline-form static-method slice through the LLVM
+    // backend end-to-end. `Point.origin()` lowers to a
+    // `define %TestApp.Point @TestApp.Point.origin()` body, the
+    // call site issues a matching `call %TestApp.Point @...`, the
+    // returned struct flows through `IRInstruction::FieldGet` for
+    // `.x`, and the auto-print wrapper emits `0\n`.
+    assert_static_method_script_prints_zero(
+        "run_llvm_static_method_inline",
+        STATIC_METHOD_INLINE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_static_method_inline_prints_zero() {
+    // Backend symmetry with the LLVM test above for inline-form
+    // declarations. The interpreter dispatches the `Call` to the
+    // method's `IRSymbol`, evaluates the body, and projects field 0
+    // off the returned `Value::Struct`. Output matches `0\n`.
+    assert_static_method_script_prints_zero(
+        "run_interpreter_static_method_inline",
+        STATIC_METHOD_INLINE_SCRIPT_SOURCE,
+        None,
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_static_method_impl_prints_zero() {
+    // Impl-form mirror of the inline LLVM test. Both surface forms
+    // register under the same `Identifier` and lower to the same
+    // `IRSymbol`, so the LLVM emit + observable stdout are
+    // byte-identical to the inline-form test above.
+    assert_static_method_script_prints_zero(
+        "run_llvm_static_method_impl",
+        STATIC_METHOD_IMPL_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_static_method_impl_prints_zero() {
+    // Impl-form mirror of the inline interpreter test. The `Call` /
+    // `FieldGet` instruction stream the interpreter consumes is
+    // identical between the two forms, so this test pins the
+    // contract that nothing further down the pipeline can tell
+    // declaration form apart.
+    assert_static_method_script_prints_zero(
+        "run_interpreter_static_method_impl",
+        STATIC_METHOD_IMPL_SCRIPT_SOURCE,
+        None,
+    );
+}
+
+/// Run a script through `expo alpha run` and assert its stdout
+/// (after trim) matches `expected`. Used by the locals + instance-
+/// method dual-backend pairs; each `#[test]` only needs to specify
+/// the fixture, the backend flag, and the expected line.
+fn assert_script_prints(label: &str, source: &str, backend: Option<&str>, expected: &str) {
+    let scratch = scratch_dir(label);
+    let fixture = write_fixture(&scratch, "fixture.exps", &dedent(source));
+
+    let mut args = vec!["alpha", "run"];
+    if let Some(backend) = backend {
+        args.push(backend);
+    }
+    args.push(fixture.to_str().unwrap());
+
+    let output = run_expo(&args);
+    assert!(
+        output.status.success(),
+        "expected `expo {}` to exit 0, got {:?}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        expected,
+        "expected stdout `{expected}`, got:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_locals_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_locals",
+        LOCALS_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_locals_prints_fifteen() {
+    assert_script_prints("run_interpreter_locals", LOCALS_SCRIPT_SOURCE, None, "15");
+}
+
+#[test]
+fn alpha_run_llvm_script_instance_method_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_instance_method",
+        INSTANCE_METHOD_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_instance_method_prints_fifteen() {
+    assert_script_prints(
+        "run_interpreter_instance_method",
+        INSTANCE_METHOD_SCRIPT_SOURCE,
+        None,
+        "15",
+    );
 }
 
 #[test]

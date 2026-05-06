@@ -30,6 +30,7 @@ use crate::function::{IRBasicBlock, IRFunction};
 use crate::lower::{lower_body_to_blocks, lower_package};
 use crate::package::IRPackage;
 use crate::seal;
+use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
 /// Sealed output of [`lower_script`]'s success path.
@@ -66,6 +67,14 @@ impl IRScript {
         self.packages
             .iter()
             .find_map(|pkg| pkg.functions.get(mangled))
+    }
+
+    /// Lookup a struct declaration across every package by its
+    /// mangled symbol. Mirrors [`crate::IRProgram::struct_decl`].
+    pub fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
+        self.packages
+            .iter()
+            .find_map(|pkg| pkg.structs.get(mangled))
     }
 }
 

@@ -143,7 +143,7 @@ pub fn resolve_chain_steps(
             let ty = var_type(name)?;
             (name.clone(), ty, Vec::new())
         }
-        ExprKind::Self_ => {
+        ExprKind::Self_ { .. } => {
             let ty = var_type("self")?;
             ("self".to_string(), ty, Vec::new())
         }

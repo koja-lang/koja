@@ -22,8 +22,13 @@
 //!   plus the const + call helpers it routes to.
 //! - [`ops`]: binary + unary operator emission, parallel to
 //!   `expo-alpha-ir-eval/src/ops.rs`.
+//! - [`structs`]: pre-emit phase that mints LLVM `StructType`s for
+//!   every [`expo_alpha_ir::IRStructDecl`] and registers them on
+//!   the [`EmitCtx`] before any function emission walks an
+//!   [`IRType::Struct`] reference.
 
 use std::collections::BTreeMap;
+use std::fmt::Display;
 
 use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRTerminator, ValueId};
 use inkwell::basic_block::BasicBlock;
@@ -34,6 +39,7 @@ use crate::error::LlvmError;
 
 mod instruction;
 mod ops;
+pub(crate) mod structs;
 
 /// Per-function SSA index. The migration to [`BasicValueEnum`] (from
 /// `IntValue`) is what lets pointer-typed values (e.g. `IRType::String`
@@ -41,6 +47,14 @@ mod ops;
 /// narrow at the seam through [`lookup_int`].
 pub(crate) type ValueMap<'ctx> = BTreeMap<ValueId, BasicValueEnum<'ctx>>;
 pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
+
+/// Wrap an inkwell builder error into [`LlvmError::Codegen`]. `op`
+/// names the operation that failed (e.g. `"build_store"`,
+/// `"build_call for `Foo`"`); pair with `format_args!` when the
+/// operation needs runtime context.
+pub(crate) fn inkwell_err(op: impl Display, e: impl Display) -> LlvmError {
+    LlvmError::Codegen(format!("inkwell rejected {op}: {e}"))
+}
 
 /// Emit `block` (instructions + terminator) into the builder's
 /// current insert position. The caller is responsible for having
@@ -94,9 +108,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
             ctx.builder
                 .build_unconditional_branch(llvm_target)
                 .map(|_| ())
-                .map_err(|e| {
-                    LlvmError::Codegen(format!("inkwell rejected build_unconditional_branch: {e}"))
-                })
+                .map_err(|e| inkwell_err("build_unconditional_branch", e))
         }
         IRTerminator::CondBranch {
             cond,
@@ -109,9 +121,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
             ctx.builder
                 .build_conditional_branch(cond_value, then_target, else_target)
                 .map(|_| ())
-                .map_err(|e| {
-                    LlvmError::Codegen(format!("inkwell rejected build_conditional_branch: {e}"))
-                })
+                .map_err(|e| inkwell_err("build_conditional_branch", e))
         }
         IRTerminator::Return { value: None } => Err(LlvmError::Codegen(
             "alpha LLVM does not yet emit Unit-returning functions".to_string(),
@@ -121,7 +131,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
             ctx.builder
                 .build_return(Some(&return_value))
                 .map(|_| ())
-                .map_err(|e| LlvmError::Codegen(format!("inkwell rejected build_return: {e}")))
+                .map_err(|e| inkwell_err("build_return", e))
         }
     }
 }

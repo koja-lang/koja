@@ -205,6 +205,7 @@ fn format_function(body_expr: Expr, span: Span) -> Function {
         type_params: Vec::new(),
         params: vec![Param::Self_ {
             mode: PassMode::Borrow,
+            local_id: None,
             span,
         }],
         return_type: Some(named_type(STRING_TYPE, span)),
@@ -236,6 +237,7 @@ fn print_function(span: Span) -> Function {
         type_params: Vec::new(),
         params: vec![Param::Self_ {
             mode: PassMode::Borrow,
+            local_id: None,
             span,
         }],
         return_type: None,
@@ -256,6 +258,7 @@ fn inspect_function(span: Span) -> Function {
         type_params: Vec::new(),
         params: vec![Param::Self_ {
             mode: PassMode::Move,
+            local_id: None,
             span,
         }],
         return_type: Some(TypeExpr::Self_ { span }),
@@ -496,7 +499,7 @@ fn binding_format_part(name: &str, ty: &TypeExpr, span: Span) -> StringPart {
 // ----- low-level AST helpers ----------------------------------------------
 
 fn self_expr(span: Span) -> Expr {
-    Expr::new(ExprKind::Self_, span)
+    Expr::new(ExprKind::Self_ { local_id: None }, span)
 }
 
 fn literal_part(value: String, span: Span) -> StringPart {

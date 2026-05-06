@@ -14,39 +14,19 @@
 //! Byte-for-byte stdout coverage lives in the `expo-driver` e2e
 //! suite; here we pin the static IR shape.
 
-use std::path::PathBuf;
-
-use expo_alpha_ir::{IRScript, lower_script};
+use expo_alpha_ir::IRScript;
 use expo_alpha_ir_llvm::emit_script_llvm_ir;
-use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::util::dedent;
-use expo_parser::{ParseMode, SourceFile, parse_program};
+
+mod common;
+
+use common::assert_contains;
 
 const APP_NAME: &str = "intrinsics_test";
 const PACKAGE: &str = "Global";
 
-fn typecheck(source: &str) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("intrinsics.exps"),
-            source: source.to_string(),
-        }],
-        ParseMode::Script,
-    );
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
-}
-
 fn lower_as_script(source: &str) -> IRScript {
-    let checked = typecheck(source);
-    lower_script(&checked).expect("script lowering should succeed")
-}
-
-fn assert_contains(ir_text: &str, needle: &str) {
-    assert!(
-        ir_text.contains(needle),
-        "expected `{needle}` in:\n{ir_text}",
-    );
+    common::lower_script_source_in(PACKAGE, source)
 }
 
 #[test]

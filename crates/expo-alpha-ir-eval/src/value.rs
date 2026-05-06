@@ -1,9 +1,13 @@
 //! Runtime values produced by the [`crate::Interpreter`] — variants
-//! map 1:1 onto [`expo_alpha_ir::ConstValue`]. New variants (lists,
-//! strings, structs, enums, closures, …) land as the IR vocabulary
-//! grows.
+//! map 1:1 onto [`expo_alpha_ir::ConstValue`] for primitives, plus a
+//! [`Value::Struct`] variant carrying the receiver's
+//! [`expo_alpha_ir::IRSymbol`] and a positional `fields` vector
+//! (indexed by [`expo_alpha_ir::IRStructField::index`]). New variants
+//! (lists, enums, closures, …) land as the IR vocabulary grows.
 
 use std::fmt;
+
+use expo_alpha_ir::IRSymbol;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -12,6 +16,10 @@ pub enum Value {
     Float64(f64),
     Int(i64),
     String(String),
+    Struct {
+        symbol: IRSymbol,
+        fields: Vec<Value>,
+    },
     Unit,
 }
 
@@ -56,6 +64,16 @@ impl fmt::Display for Value {
             Value::Float64(v) => write!(f, "{v:?}"),
             Value::Int(i) => write!(f, "{i}"),
             Value::String(s) => f.write_str(s),
+            Value::Struct { symbol, fields } => {
+                write!(f, "{symbol}(")?;
+                for (index, field) in fields.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{field}")?;
+                }
+                write!(f, ")")
+            }
             Value::Unit => write!(f, "()"),
         }
     }

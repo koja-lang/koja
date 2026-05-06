@@ -19,7 +19,7 @@ use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, IntValue};
 
 use crate::ctx::EmitCtx;
-use crate::emit::{self, ValueMap};
+use crate::emit::{self, ValueMap, inkwell_err};
 use crate::error::LlvmError;
 use crate::function::declare_blocks;
 use crate::runtime::{
@@ -71,6 +71,10 @@ pub(crate) fn emit_as_main<'ctx>(
     let function = ctx
         .module
         .add_function(ENTRY_SYMBOL, signature, Some(Linkage::External));
+    // The script-mode body is its own function from a slot-identity
+    // perspective; flush any stragglers from a prior compile or
+    // helper so `LocalDecl` registers cleanly here.
+    ctx.reset_locals();
     let block_map = declare_blocks(ctx, function, blocks);
     let return_block_id = find_return_block(blocks)?;
 
@@ -117,7 +121,7 @@ fn emit_main_return<'ctx>(
     ctx.builder
         .build_return(Some(&i64_type.const_int(0, false)))
         .map(|_| ())
-        .map_err(|e| LlvmError::Codegen(format!("inkwell rejected build_return for main: {e}")))
+        .map_err(|e| inkwell_err("build_return for main", e))
 }
 
 /// The [`IRBlockId`] of the unique block ending in `Return`. The
@@ -205,6 +209,13 @@ fn emit_print_call<'ctx>(
             ctx.context.ptr_type(AddressSpace::default()).into(),
             body_value.into_pointer_value().into(),
         ),
+        IRType::Struct(symbol) => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM does not yet auto-print struct values (return type \
+                 `Struct({symbol})`); project a primitive field with `value.field` or \
+                 wrap the call site so the trailing expression is a primitive",
+            )));
+        }
         IRType::Unit => {
             return Err(LlvmError::Codegen(
                 "emit_print_call invoked with `IRType::Unit` — the Unit-typed trailing path \
@@ -217,7 +228,7 @@ fn emit_print_call<'ctx>(
     ctx.builder
         .build_call(printer, &[argument], "")
         .map(|_| ())
-        .map_err(|e| LlvmError::Codegen(format!("inkwell rejected print call: {e}")))
+        .map_err(|e| inkwell_err("print call", e))
 }
 
 fn sext_to_i64<'ctx>(
@@ -226,7 +237,7 @@ fn sext_to_i64<'ctx>(
 ) -> Result<IntValue<'ctx>, LlvmError> {
     ctx.builder
         .build_int_s_extend(value, ctx.context.i64_type(), "print_arg")
-        .map_err(|e| LlvmError::Codegen(format!("inkwell rejected sext for print arg: {e}")))
+        .map_err(|e| inkwell_err("sext for print arg", e))
 }
 
 fn zext_to_i64<'ctx>(
@@ -235,5 +246,5 @@ fn zext_to_i64<'ctx>(
 ) -> Result<IntValue<'ctx>, LlvmError> {
     ctx.builder
         .build_int_z_extend(value, ctx.context.i64_type(), "print_arg")
-        .map_err(|e| LlvmError::Codegen(format!("inkwell rejected zext for print arg: {e}")))
+        .map_err(|e| inkwell_err("zext for print arg", e))
 }

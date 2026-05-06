@@ -31,12 +31,14 @@
 mod cfg;
 mod error;
 mod function;
+mod local;
 mod lower;
 mod merge;
 mod package;
 mod program;
 mod script;
 mod seal;
+mod struct_decl;
 mod types;
 
 pub use error::LowerError;
@@ -44,7 +46,9 @@ pub use function::{
     FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
     IRTerminator,
 };
+pub use local::IRLocalId;
 pub use package::IRPackage;
 pub use program::{IRProgram, lower_program};
 pub use script::{IRScript, lower_script};
+pub use struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
 pub use types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};

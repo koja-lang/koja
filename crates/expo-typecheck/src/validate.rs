@@ -194,7 +194,7 @@ fn validate_expr(expr: &Expr, ctx: &mut TypeContext) {
         }
         ExprKind::Unary { operand, .. } => validate_expr(operand, ctx),
 
-        ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ => {}
+        ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
     }
 }
 

@@ -1,33 +1,14 @@
-//! Tree-walking interpreter over a sealed [`IRProgram`] or
-//! [`IRScript`]. The walker is parameterized over a [`CallResolver`]
-//! so both IR shapes share the per-instruction execution / frame
-//! management / terminator dispatch code; only callee and per-id
-//! block lookup differ.
-//!
-//! `Call` instructions chain through [`execute_function`]: evaluate
-//! the args in the current frame, resolve the callee, seed a fresh
-//! frame with param `ValueId`s bound to arg values, recurse. Call
-//! depth is uncapped — pathological recursion propagates as a native
-//! Rust stack overflow.
-//!
-//! Multi-block bodies are driven by [`execute_blocks`]: walk the
-//! current block's instructions, then dispatch on the terminator —
-//! `Return` exits the function with a value, `Branch` and
-//! `CondBranch` move the cursor to the named target block. The frame
-//! is shared across every block in a single function (per
-//! `IRFunction` boundary), mirroring the IR's "value ids are
-//! function-scoped" contract.
-//!
-//! Operator math (`apply_binary_op`, `apply_unary_op`) lives in the
-//! sibling [`crate::ops`] module — pure functions over already-resolved
-//! [`Value`] operands. This file owns the IR walking, frame
-//! management, and resolver wiring; nothing else.
+//! Tree-walking interpreter over a sealed [`IRProgram`] / [`IRScript`].
+//! Parameterized over a [`CallResolver`] so both IR shapes share the
+//! per-instruction execution, frame management, and terminator
+//! dispatch code; only callee lookup differs. Operator math lives in
+//! [`crate::ops`].
 
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRProgram,
-    IRScript, IRTerminator, ValueId,
+    ConstValue, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRLocalId,
+    IRProgram, IRScript, IRTerminator, ValueId,
 };
 
 use crate::error::RuntimeError;
@@ -38,27 +19,39 @@ use crate::value::Value;
 pub struct Interpreter;
 
 impl Interpreter {
-    /// Execute the project-mode entry function and return the value
-    /// it produces (or [`Value::Unit`] if the entry returns nothing).
+    /// Execute the project-mode entry function and return its result.
     pub fn run_program(program: IRProgram) -> Result<Value, RuntimeError> {
         let entry = program.entry_function();
         execute_function(entry, Vec::new(), &program)
     }
 
     /// Execute the script-mode implicit body and return its trailing
-    /// value (or [`Value::Unit`] for an empty / non-expression-trailing
-    /// body).
+    /// value.
     pub fn run_script(script: IRScript) -> Result<Value, RuntimeError> {
-        let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
+        let mut frame = Frame::new();
         execute_blocks(&script.blocks, &mut frame, &script)
     }
 }
 
-/// Dereferences a `Call` callee to its target [`IRFunction`] by
-/// mangled symbol. Implemented by both [`IRProgram`] and [`IRScript`]
-/// so one walker drives either; the IR's stable
-/// [`expo_alpha_ir::IRSymbol`] is the only handle the interpreter
-/// needs — no AST [`expo_ast`] types here.
+/// Per-call execution frame. SSA values and local-slot storage live
+/// in separate maps so slot identity never collides with SSA
+/// identity even though both keys happen to be `u32`.
+struct Frame {
+    values: BTreeMap<ValueId, Value>,
+    locals: BTreeMap<IRLocalId, Value>,
+}
+
+impl Frame {
+    fn new() -> Self {
+        Self {
+            values: BTreeMap::new(),
+            locals: BTreeMap::new(),
+        }
+    }
+}
+
+/// Dereferences a `Call` callee by mangled symbol. Implemented by
+/// both [`IRProgram`] and [`IRScript`] so one walker drives either.
 trait CallResolver {
     fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
 }
@@ -76,9 +69,11 @@ impl CallResolver for IRScript {
 }
 
 /// Run `function` in a fresh frame with `args` positionally bound to
-/// its param `ValueId`s. Multi-block bodies dispatch through
-/// [`execute_blocks`]; `@intrinsic`-tagged functions short-circuit
-/// to the hand-written handler in [`crate::intrinsics`].
+/// its param `ValueId`s. Param promotion (entry-block `LocalDecl` +
+/// `LocalWrite`) means the body reads from the slot, not the raw
+/// param id; seeding `frame.values` keeps the promotion's
+/// `LocalWrite { value: param.id }` resolvable. `@intrinsic`-tagged
+/// functions route to [`crate::intrinsics`].
 fn execute_function<R: CallResolver>(
     function: &IRFunction,
     args: Vec<Value>,
@@ -95,23 +90,20 @@ fn execute_function<R: CallResolver>(
     if function.kind == FunctionKind::Intrinsic {
         return intrinsics::dispatch(function.symbol.mangled(), &args);
     }
-    let mut frame: BTreeMap<ValueId, Value> = BTreeMap::new();
+    let mut frame = Frame::new();
     for (param, value) in function.params.iter().zip(args.into_iter()) {
-        frame.insert(param.id, value);
+        frame.values.insert(param.id, value);
     }
 
     execute_blocks(&function.blocks, &mut frame, resolver)
 }
 
-/// Drive a function (or script body) starting at `blocks[0]` until a
-/// `Return` terminator exits with a value. `Branch` / `CondBranch`
-/// move the cursor; the frame stays alive across every block in the
-/// function. Unknown branch targets panic per the seal contract — by
-/// the time the IR reaches an interpreter run those have all been
-/// validated.
+/// Drive a function body starting at `blocks[0]` until a `Return`
+/// exits. The frame is shared across every block; unknown branch
+/// targets panic per the seal contract.
 fn execute_blocks<R: CallResolver>(
     blocks: &[IRBasicBlock],
-    frame: &mut BTreeMap<ValueId, Value>,
+    frame: &mut Frame,
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     let mut current = blocks
@@ -130,7 +122,7 @@ fn execute_blocks<R: CallResolver>(
                 then_block,
                 else_block,
             } => {
-                let cond_value = lookup(frame, *cond)?;
+                let cond_value = lookup(&frame.values, *cond)?;
                 let Value::Bool(b) = cond_value else {
                     return Err(RuntimeError::TypeMismatch {
                         detail: format!("cond_branch expects a Bool condition; got {cond_value}",),
@@ -139,7 +131,7 @@ fn execute_blocks<R: CallResolver>(
                 current = if b { *then_block } else { *else_block };
             }
             IRTerminator::Return { value: None } => return Ok(Value::Unit),
-            IRTerminator::Return { value: Some(id) } => return lookup(frame, *id),
+            IRTerminator::Return { value: Some(id) } => return lookup(&frame.values, *id),
         }
     }
 }
@@ -153,21 +145,21 @@ fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {
 
 fn execute_instruction<R: CallResolver>(
     instruction: &IRInstruction,
-    frame: &mut BTreeMap<ValueId, Value>,
+    frame: &mut Frame,
     resolver: &R,
 ) -> Result<(), RuntimeError> {
     match instruction {
         IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
-            let lhs_value = lookup(frame, *lhs)?;
-            let rhs_value = lookup(frame, *rhs)?;
+            let lhs_value = lookup(&frame.values, *lhs)?;
+            let rhs_value = lookup(&frame.values, *rhs)?;
             let result = apply_binary_op(*op, lhs_value, rhs_value)?;
-            frame.insert(*dest, result);
+            frame.values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::Call { dest, callee, args } => {
             let mut arg_values = Vec::with_capacity(args.len());
             for arg in args {
-                arg_values.push(lookup(frame, *arg)?);
+                arg_values.push(lookup(&frame.values, *arg)?);
             }
             let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
                 panic!(
@@ -176,33 +168,90 @@ fn execute_instruction<R: CallResolver>(
                 )
             });
             let result = execute_function(callee_fn, arg_values, resolver)?;
-            frame.insert(*dest, result);
+            frame.values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::Const { dest, value } => {
-            frame.insert(*dest, materialize_const(value));
+            frame.values.insert(*dest, materialize_const(value));
+            Ok(())
+        }
+        IRInstruction::FieldGet {
+            base,
+            dest,
+            field_index,
+            field_type: _,
+            struct_symbol: _,
+        } => {
+            let base_value = lookup(&frame.values, *base)?;
+            let Value::Struct { fields, .. } = base_value else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("field_get expects a Struct receiver; got {base_value}",),
+                });
+            };
+            let field = fields
+                .into_iter()
+                .nth(*field_index as usize)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: FieldGet index {field_index} out of range — \
+                         seal invariant violation",
+                    )
+                });
+            frame.values.insert(*dest, field);
+            Ok(())
+        }
+        // Slot identity comes from `LocalWrite`; `LocalDecl` is a
+        // no-op for the interpreter (the LLVM backend uses it to
+        // emit an entry-block alloca).
+        IRInstruction::LocalDecl { .. } => Ok(()),
+        IRInstruction::LocalRead { dest, local, .. } => {
+            let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
+                panic!(
+                    "interpreter: `LocalRead` of `{local}` before its `LocalWrite` — \
+                     seal invariant violation",
+                )
+            });
+            frame.values.insert(*dest, value);
+            Ok(())
+        }
+        IRInstruction::LocalWrite { local, value } => {
+            let resolved = lookup(&frame.values, *value)?;
+            frame.locals.insert(*local, resolved);
+            Ok(())
+        }
+        IRInstruction::StructInit { dest, fields, ty } => {
+            let mut materialized = Vec::with_capacity(fields.len());
+            for field in fields {
+                materialized.push(lookup(&frame.values, field.value)?);
+            }
+            frame.values.insert(
+                *dest,
+                Value::Struct {
+                    symbol: ty.clone(),
+                    fields: materialized,
+                },
+            );
             Ok(())
         }
         IRInstruction::UnaryOp { dest, op, operand } => {
-            let operand_value = lookup(frame, *operand)?;
+            let operand_value = lookup(&frame.values, *operand)?;
             let result = apply_unary_op(*op, operand_value)?;
-            frame.insert(*dest, result);
+            frame.values.insert(*dest, result);
             Ok(())
         }
     }
 }
 
-fn lookup(frame: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, RuntimeError> {
-    frame
+fn lookup(values: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, RuntimeError> {
+    values
         .get(&id)
         .cloned()
         .ok_or(RuntimeError::ValueUndefined { id })
 }
 
-/// Materialize a `ConstValue` as a runtime [`Value`]. `Value::Int`
-/// is a single `i64` slot; `UInt64` is reinterpreted as `i64` (the
-/// seal pass forbids it from flowing through today, but the arm
-/// stays exhaustive).
+/// Materialize a `ConstValue` as a runtime [`Value`]. Every int
+/// width collapses to `Value::Int(i64)` (the seal pass keeps
+/// width-mismatched flows out, but the arms stay exhaustive).
 fn materialize_const(value: &ConstValue) -> Value {
     match value {
         ConstValue::Bool(b) => Value::Bool(*b),

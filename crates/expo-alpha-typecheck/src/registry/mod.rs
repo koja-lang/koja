@@ -35,9 +35,36 @@ mod format;
 
 pub use format::format_registry;
 
+/// How a function call dispatches on its callee.
+///
+/// `Static` is the default — direct lookup by qualified name; the
+/// argument list is exactly what the caller wrote. `Instance` requires
+/// a receiver value whose static type matches the enclosing struct;
+/// the receiver becomes the implicit first argument and the caller's
+/// explicit args populate `params[1..]`.
+///
+/// Orthogonal to [`crate::FunctionKind`] (which describes how a body
+/// is materialized at codegen — `Regular` vs `Intrinsic`). A function
+/// is one of `{Regular, Intrinsic} × {Static, Instance}`; keeping the
+/// axes as separate enums avoids combinatorial pattern matches at
+/// every call site that cares about only one dimension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dispatch {
+    Instance,
+    Static,
+}
+
 /// A single resolved parameter: surface-syntax name plus resolved type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedParam {
+    pub name: String,
+    pub ty: ResolvedType,
+}
+
+/// One field of a [`StructDefinition`]. Surface-syntax name plus the
+/// fully-resolved field type as stamped by `lift_signatures`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedStructField {
     pub name: String,
     pub ty: ResolvedType,
 }
@@ -46,22 +73,57 @@ pub struct ResolvedParam {
 /// [`GlobalKind::Function`] entries by the `lift_signatures` sub-pass.
 /// Params and return carry registry-backed [`ResolvedType`]s, so a
 /// signature stays valid as long as its referents do.
+///
+/// `dispatch` distinguishes static (free or `Type.method`) calls from
+/// instance (`receiver.method`) calls. `lift_signatures` sets
+/// [`Dispatch::Instance`] when the function declares a `Param::Self_`
+/// first parameter; everything else stays [`Dispatch::Static`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionSignature {
+    pub dispatch: Dispatch,
     pub params: Vec<ResolvedParam>,
     pub return_type: ResolvedType,
 }
 
-/// What kind of declaration a registry entry points at. Function
-/// entries carry their signature inline (`None` until `lift_signatures`
-/// stamps it in). Other kinds grow per-variant metadata as features
-/// land (struct fields, enum variants, protocol methods, ...).
+/// Field layout for a user-declared struct. Stamped onto a
+/// [`GlobalKind::Struct`] entry by the `lift_signatures` sub-pass.
+/// Field order matches declaration order — downstream consumers
+/// (IR lower, codegen) index by position.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructDefinition {
+    pub fields: Vec<ResolvedStructField>,
+}
+
+impl StructDefinition {
+    /// Lookup a field by name; returns `Some((index, &field))` for a
+    /// match, `None` otherwise. Linear scan — struct field counts
+    /// are small (single-digit typical, two-digit max), so the
+    /// constant factor wins over a hashmap. Used by `resolve` to
+    /// turn `expr.field` into an index + type.
+    pub fn lookup_field(&self, name: &str) -> Option<(u32, &ResolvedStructField)> {
+        self.fields
+            .iter()
+            .enumerate()
+            .find(|(_, field)| field.name == name)
+            .map(|(index, field)| (index as u32, field))
+    }
+}
+
+/// What kind of declaration a registry entry points at.
+///
+/// `Function` entries carry their signature inline (`None` until
+/// `lift_signatures` stamps it in). `Struct` does the same for its
+/// field layout: `None` is the "collected but not yet lifted" state
+/// (and the permanent state for stdlib stub primitives that have no
+/// declared fields), `Some(definition)` the lifted state. Other
+/// kinds grow per-variant metadata as features land (enum variants,
+/// protocol methods, ...).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalKind {
     Enum,
     Function(Option<FunctionSignature>),
     Protocol,
-    Struct,
+    Struct(Option<StructDefinition>),
 }
 
 impl GlobalKind {
@@ -70,7 +132,7 @@ impl GlobalKind {
             GlobalKind::Enum => "enum",
             GlobalKind::Function(_) => "function",
             GlobalKind::Protocol => "protocol",
-            GlobalKind::Struct => "struct",
+            GlobalKind::Struct(_) => "struct",
         }
     }
 }
@@ -145,8 +207,43 @@ impl GlobalRegistry {
         self.insert(identifier, GlobalKind::Protocol, span)
     }
 
+    /// Register a struct in the `Struct(None)` state. The
+    /// resolved field layout is stamped in later by
+    /// [`Self::set_struct_definition`]; preloaded stdlib stub
+    /// primitives stay in `Struct(None)` permanently.
     pub fn insert_struct(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Struct, span)
+        self.insert(identifier, GlobalKind::Struct(None), span)
+    }
+
+    /// Stamp a resolved field layout onto a struct entry. Panics
+    /// unless the entry's kind is exactly `Struct(None)` — preloaded
+    /// stdlib stubs are bare markers and don't accept a definition.
+    pub fn set_struct_definition(&mut self, id: GlobalRegistryId, definition: StructDefinition) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!(
+                "set_struct_definition on missing registry id {id} — collect invariant violation"
+            )
+        });
+        match &entry.kind {
+            GlobalKind::Struct(None) => {
+                entry.kind = GlobalKind::Struct(Some(definition));
+            }
+            GlobalKind::Struct(Some(_)) => {
+                panic!(
+                    "set_struct_definition called twice on `{}` — lift_signatures must stamp \
+                     each struct exactly once",
+                    entry.identifier,
+                );
+            }
+            other => {
+                panic!(
+                    "set_struct_definition called on non-struct entry `{}` ({}) — \
+                     only Struct entries carry definitions",
+                    entry.identifier,
+                    other.label(),
+                );
+            }
+        }
     }
 
     fn insert(

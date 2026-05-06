@@ -7,31 +7,17 @@
 //! post-cutover because stubs and real entries share the same shape
 //! (`Global.<name>` struct in the registry).
 
-use std::path::PathBuf;
-
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind, check_program};
+use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::identifier::Identifier;
-use expo_parser::{ParseMode, SourceFile, parse_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
+
+use common::{PACKAGE, typecheck_file};
 
 const STDLIB_STUBS: &[&str] = &["Int", "Bool", "Unit", "Float", "String"];
 
 fn check_empty_main() -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("registry.expo"),
-            source: "fn main\n  1\nend\n".to_string(),
-        }],
-        ParseMode::File,
-    );
-    check_program(parsed).unwrap_or_else(|failure| {
-        panic!(
-            "alpha typecheck failed on minimal program: {} diagnostic(s):\n{failure}",
-            failure.diagnostics.len()
-        )
-    })
+    typecheck_file("fn main\n  1\nend\n")
 }
 
 #[test]
@@ -46,7 +32,7 @@ fn stdlib_stubs_land_in_registry_as_structs() {
 
         assert_eq!(
             entry.kind,
-            GlobalKind::Struct,
+            GlobalKind::Struct(None),
             "Global.{name} registered with wrong kind: {:?}",
             entry.kind,
         );

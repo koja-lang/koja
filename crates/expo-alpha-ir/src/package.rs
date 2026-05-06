@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::function::{IRFunction, IRSymbol};
+use crate::struct_decl::IRStructDecl;
 
 #[derive(Debug, Clone)]
 pub struct IRPackage {
@@ -17,4 +18,10 @@ pub struct IRPackage {
     /// The package label (e.g. `"TestApp"`, `"Global"`). Matches
     /// `CheckedPackage::package` from `expo-alpha-typecheck`.
     pub package: String,
+    /// Struct declarations owned by this package, keyed by their
+    /// stable [`IRSymbol`]. Same key shape as
+    /// [`Self::functions`]; backends use the symbol to consult the
+    /// declared field layout for `IRType::Struct(symbol)` /
+    /// `IRInstruction::StructInit` / `IRInstruction::FieldGet`.
+    pub structs: BTreeMap<IRSymbol, IRStructDecl>,
 }
