@@ -100,10 +100,6 @@ fn unit_only_enum_lifts_with_unit_variants_in_declaration_order() {
           Green
           Blue
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -131,10 +127,6 @@ fn mixed_shape_enum_lifts_each_variant_with_its_payload() {
           Circle(Int)
           Rect{w: Int, h: Int}
           Empty
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -176,10 +168,6 @@ fn tuple_variant_with_user_struct_payload_resolves_through_registry() {
         enum Wrap
           Some(Inner)
           None
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -505,10 +493,6 @@ fn generic_enum_diagnoses_feature_gap() {
           Some(Int)
           None
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -528,10 +512,6 @@ fn annotated_enum_diagnoses_feature_gap() {
         enum Color
           Red
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -549,10 +529,6 @@ fn default_field_on_struct_variant_diagnoses_feature_gap() {
     let source = "
         enum Shape
           Rect{w: Int = 1, h: Int}
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -606,10 +582,6 @@ fn inline_static_method_on_enum_registers_under_qualified_identifier() {
           fn primary -> Color
             Color.Red
           end
-        end
-
-        fn main
-          1
         end
         ";
 

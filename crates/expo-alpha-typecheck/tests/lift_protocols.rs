@@ -45,10 +45,6 @@ fn protocol_decl_registers_with_lifted_definition() {
         protocol Greeter
           fn greet(self) -> String
         end
-
-        fn main
-          1
-        end
         ";
 
     let checked = typecheck(&dedent(source));
@@ -65,10 +61,6 @@ fn protocol_static_method_lifts_with_static_dispatch() {
     let source = "
         protocol Maker
           fn make() -> Int
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -88,10 +80,6 @@ fn duplicate_protocol_decl_diagnoses() {
         protocol Greeter
           fn greet(self) -> Int
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -110,10 +98,6 @@ fn generic_protocol_decl_diagnoses_feature_gap() {
         protocol Greeter<T>
           fn greet(self) -> T
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -129,10 +113,6 @@ fn generic_protocol_method_diagnoses_feature_gap() {
     let source = "
         protocol Greeter
           fn greet<U>(self, u: U) -> U
-        end
-
-        fn main
-          1
         end
         ";
 
@@ -152,10 +132,6 @@ fn self_in_protocol_return_type_diagnoses_feature_gap() {
         protocol Cloner
           fn clone(self) -> Self
         end
-
-        fn main
-          1
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -174,10 +150,6 @@ fn protocol_annotation_diagnoses_feature_gap() {
         @inline
         protocol Greeter
           fn greet(self) -> String
-        end
-
-        fn main
-          1
         end
         ";
 
